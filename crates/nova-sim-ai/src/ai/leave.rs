@@ -32,7 +32,7 @@
 //!
 //! The decision and the flight up to sub 4 are here and in
 //! [`leave_flight`](crate::traffic::leave_flight); sub 4 itself, the warp
-//! out, is rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
+//! out, is [`warp_out`](crate::traffic::warp_out)'s.
 
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;

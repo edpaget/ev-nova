@@ -101,8 +101,10 @@ impl PilotCatalog for Courier {
     }
 
     fn ship_fields(&self, _id: ShipId) -> Result<ShipFields, String> {
+        // 0.9 a tick led: slow enough to land as the jump arrives at its
+        // top speed.
         Ok(ShipFields {
-            speed: 100,
+            speed: 60,
             accel: 900,
             maneuver: 30,
             fuel: 300,
@@ -131,7 +133,7 @@ impl PilotCatalog for Courier {
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
         match system {
             SystemId(130) => vec![planet(128, 1100.0)],
-            SystemId(131) => vec![planet(140, -1000.0)],
+            SystemId(131) => vec![planet(140, -1350.0)],
             _ => Vec::new(),
         }
     }

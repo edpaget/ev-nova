@@ -17,7 +17,9 @@
 //! active ranks the blessing table is built from (@0xc8be-0xc981; see
 //! the `ranks` module), and turns the player's repair inhibit off
 //! (`_playerRepairInhibit` = -1.0 @0xc998; see the `player_repair`
-//! module). The trim is not idempotent: it cuts only the
+//! module). It also invalidates `_ShipFuelCapacity`'s cache (`*0x3b508c`,
+//! @0xc397), whose only reader the engine models is the fuel "Use As My
+//! Ship" draws (see the `capture` module). The trim is not idempotent: it cuts only the
 //! commodities, by the holds over everything held, so with any `jünk` or
 //! mission cargo aboard the cargo is still past the holds after it, and
 //! each reset cuts again, as the original's does.
@@ -136,6 +138,9 @@ impl Session {
         }
         self.blessing_ranks.clone_from(&self.pilot.ranks);
         self.repair_inhibit = crate::self_repair::RepairInhibit::OFF;
+        // `_ShipFuelCapacity`'s cache (`*0x3b508c`) invalidated (@0xc397;
+        // see the `capture` module).
+        self.fuel_cap_cached = false;
     }
 
     /// Whether the reset for `cause` trims the commodities: never through

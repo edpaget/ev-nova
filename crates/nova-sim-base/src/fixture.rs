@@ -28,6 +28,8 @@ pub const FAST: ShipFields = ShipFields {
     armor_rech: 0,
     flags: 0,
     flags2: 0,
+    ionize_max: 0,
+    deionize: 0,
 };
 
 /// A [`Chance`] that answers and rolls from a script (no, and 0, once it
@@ -90,11 +92,13 @@ impl Chance for Scripted {
 }
 
 /// A [`Chance`] whose draws come from a queue (the last outcome, `n - 1`,
-/// once it runs out, so no roll fires) and that records each `n` it is
-/// asked. It never fires a percentage.
+/// once it runs out, so no roll fires), but for the ranges keyed to an
+/// outcome of their own, and that records each `n` it is asked. It never
+/// fires a percentage.
 #[derive(Debug, Default)]
 pub struct Draws {
     queue: VecDeque<u32>,
+    keyed: Vec<(u32, u32)>,
     /// Each `n` it was asked to draw below, in order.
     pub asked: Vec<u32>,
 }
@@ -105,8 +109,24 @@ impl Draws {
     pub fn of(draws: &[u32]) -> Self {
         Self {
             queue: draws.iter().copied().collect(),
+            keyed: Vec::new(),
             asked: Vec::new(),
         }
+    }
+
+    /// These draws, but each draw below `n` gives `outcome`, wherever it
+    /// falls among them, and takes nothing from the queue.
+    #[must_use]
+    pub fn keyed(mut self, n: u32, outcome: u32) -> Self {
+        assert!(outcome < n, "drew {outcome} below {n}");
+        self.keyed.push((n, outcome));
+        self
+    }
+
+    /// How many draws below `n` it was asked.
+    #[must_use]
+    pub fn times_asked(&self, n: u32) -> usize {
+        self.asked.iter().filter(|&&asked| asked == n).count()
     }
 }
 
@@ -115,9 +135,13 @@ impl Chance for Draws {
         false
     }
 
-    /// The next draw queued; one outside `0..n` is a mistake in the test.
+    /// The outcome keyed to `n`, or else the next draw queued; one outside
+    /// `0..n` is a mistake in the test.
     fn below(&mut self, n: u32) -> u32 {
         self.asked.push(n);
+        if let Some(&(_, outcome)) = self.keyed.iter().find(|&&(range, _)| range == n) {
+            return outcome;
+        }
         match self.queue.pop_front() {
             Some(draw) => {
                 assert!(draw < n, "drew {draw} below {n}");
@@ -177,6 +201,15 @@ impl Chance for Ranged {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_keyed_range_draws_its_outcome_and_leaves_the_queue_to_the_rest() {
+        let mut chance = Draws::of(&[3, 4]).keyed(75, 70);
+        let draws = [10, 75, 10, 75, 10].map(|n| chance.below(n));
+        assert_eq!(draws, [3, 70, 4, 70, 9]);
+        assert_eq!(chance.times_asked(75), 2);
+        assert_eq!(chance.times_asked(10), 3);
+    }
 
     #[test]
     fn a_script_answers_in_order_then_no_recording_each_percent() {

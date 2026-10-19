@@ -30,7 +30,12 @@ fn stock_npc(data: &GameData, arsenal: &Arsenal, ship: ShipId) -> Npc {
         .into_iter()
         .find(|record| record.id == ship)
         .expect("the ship type reads");
-    let kind = kind(&record, &data.outfits(), arsenal);
+    let kind = kind(
+        &record,
+        &data.outfits(),
+        arsenal,
+        nova_sim::RuleSource::Engine,
+    );
     let mut npc = nova_sim::traffic::fixture::npc(1, kind.stats);
     npc.ship = ship;
     npc.class_fuel = kind.class_fuel;

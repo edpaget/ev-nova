@@ -174,9 +174,10 @@ use crate::reserves::shield_points;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::ship_layer::Slot;
+use crate::skill::random_skill_level;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use crate::traffic::table;
+use crate::traffic::ship_display::{NpcDisplay, Spawn};
 
 impl Session {
     /// Holds the eject chord, Command and the eject key down together, or
@@ -269,7 +270,8 @@ impl Session {
     fn eject(&mut self, old: &ShipRecord, hulk: Condition, again: bool, chance: &mut dyn Chance) {
         self.collapse_jump(again);
         let save_due = self.save_due;
-        let hulk = self.traffic.add_npc(self.hulk(old, hulk));
+        let hulk = self.hulk(old, hulk, chance);
+        let hulk = self.traffic.add_npc(hulk);
         if let Some(slot) = self.npc(hulk).map(slot_of) {
             self.slot_sprites.frames.clone_frames(slot, old.id);
         }
@@ -353,13 +355,20 @@ impl Session {
     }
 
     /// The hulk the player leaves in `condition`, a ship of class `old`
-    /// (see the module docs).
-    fn hulk(&self, old: &ShipRecord, condition: Condition) -> Npc {
-        let kind = table::kind(old, &self.outfits, &self.arsenal);
+    /// (see the module docs), of no government, its skill rolled on
+    /// `chance` as its spawn rolls it.
+    fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
+        let kind = self.ship_kind(old);
+        // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
+        // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
+        // anim set and timer after (@0x6f3a3, @0x6f3bb; see
+        // `nova_sim::traffic::ship_display`).
+        // A spawn of no origin rolls none (`AnimRoll::None`).
+        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
         let mut reserves = kind.stats.full();
         reserves.shield = self.pilot.reserves.shield;
         reserves.armor = self.pilot.reserves.armor;
-        Npc {
+        let mut hulk = Npc {
             id: NpcId::default(),
             berth: 0,
             ship: old.id,
@@ -377,7 +386,7 @@ impl Session {
             goal: Goal::Idle,
             condition,
             hull: kind.hull,
-            armament: kind.armament,
+            armament: kind.armament.with_fold(fold),
             rounds: kind.rounds,
             trigger: Trigger::default(),
             pick: None,
@@ -403,6 +412,10 @@ impl Session {
             travel_set: false,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
+            // `_GenericRandomShipSpawn` rolls it (@0x3cad1).
+            skill: random_skill_level(kind.skill_var, chance),
+            skill_mult: 1.0,
+            still: kind.still,
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
@@ -420,11 +433,15 @@ impl Session {
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
             pods_left: kind.hull.pod_count,
+            warp: crate::traffic::warp_out::Warp::default(),
+            display,
             // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
             odds: crate::traffic::odds_cache::STALE,
             // AI type -1 (@0x6f31f).
             no_ai: true,
-        }
+        };
+        hulk.independent();
+        hulk
     }
 
     /// Every NPC that targets, fights or inspects the player lets it go
@@ -741,12 +758,55 @@ mod tests {
         let ionized = Ion {
             charge: 40.0,
             colour: 0x00ff_0000,
+            ..Ion::default()
         };
         session.ion = ionized;
         to_the_breakup(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
+    }
+
+    #[test]
+    fn the_players_hulk_holds_its_classs_fuel_alone_by_the_engine() {
+        // The player's class carries a tank (+100) by default.
+        let mut catalog = ejecting(100);
+        catalog
+            .outfits
+            .push(outfit(340, &[(crate::stats::MORE_FUEL, 100)]));
+        for ship in &mut catalog.ship_records {
+            if ship.id == ShipId(128) {
+                ship.defaults = vec![(OutfitId(340), 1)];
+            }
+        }
+        for (items, fuel) in [(RuleSource::Engine, 300.0), (RuleSource::Bible, 400.0)] {
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::rulebook::RuleKey::NpcDefaultItems, items),
+            );
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(hulk(&session).reserves.fuel.max, fuel, "{items:?}");
+        }
+    }
+
+    #[test]
+    fn the_players_hulk_rolls_its_skill_of_no_government() {
+        let mut catalog = ejecting(100);
+        for ship in &mut catalog.ship_records {
+            if ship.id == ShipId(128) {
+                ship.skill_var = 37;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        // The fight's chance never fires: its roll is the first outcome.
+        let hulk = hulk(&session);
+        assert_eq!(
+            (hulk.skill, hulk.skill_mult),
+            ((f64::from(100 - 37) * 0.01) as f32, 1.0)
+        );
     }
 
     #[test]
@@ -770,6 +830,36 @@ mod tests {
         to_the_breakup(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(hulk(&session).pods_left, 3);
+    }
+
+    #[test]
+    fn the_players_hulk_spawns_glowing_and_folded_to_its_last_set() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.display = Some(crate::catalog::ShipDisplay {
+                    flags: crate::combat::ship_frames::FOLDS,
+                    base_sets: 4,
+                    ..crate::catalog::ShipDisplay::default()
+                });
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        let hulk = hulk(&session);
+        let fold = hulk.armament.fold();
+        assert_eq!((fold.set, fold.dir), (3, 0), "BaseSets - 1");
+        assert_eq!(
+            hulk.display.glow,
+            crate::traffic::ship_display::GLOW_SPAWN,
+            "`_GenericRandomShipSpawn`'s"
+        );
+        assert_eq!(
+            hulk.display.rolls.anim,
+            crate::traffic::ship_display::AnimRoll::None,
+            "its anim set and timer zeroed"
+        );
     }
 
     #[test]

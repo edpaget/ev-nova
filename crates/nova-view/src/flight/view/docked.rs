@@ -19,7 +19,7 @@ use nova_sim::{
 use crate::flight::catalog::StatusBars;
 use crate::flight::jump::JumpEffect;
 use crate::galaxy::GalaxyMap;
-use crate::time::ticks;
+use crate::time::{sixtieths, ticks};
 use crate::ui::PlunderShown;
 use crate::{Key, Point};
 
@@ -77,9 +77,8 @@ impl<C> FlightView<C> {
         self.map.zoom()
     }
 
-    /// The jump's effect, while it plays: the streak and the fade-out
-    /// that hold flight, or else the arrival's fade-in (or flash) that
-    /// flight goes on under.
+    /// The jump's effect, while it plays: the warp and its fade to white
+    /// until the ship arrives, or else the arrival's fade-in (or flash).
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
         self.jump.as_ref().or(self.fade_in.as_ref())
@@ -271,12 +270,25 @@ impl<C> FlightView<C> {
     /// Presses `take` in the plunder dialog, through the session
     /// ([`Session::plunder`]), and says what it did. The target panel is
     /// taken afresh, as `_HandlePlayer` redraws it once the dialog closes
-    /// (@0x6eb97, @0x6eda6).
+    /// (@0x6eb97, @0x6eda6). A press made as the dialog opens: see
+    /// [`FlightView::plunder_held`].
     pub fn plunder(&mut self, take: Take) -> Taken {
+        self.plunder_held(take, Duration::ZERO)
+    }
+
+    /// [`FlightView::plunder`] with the dialog open for `held`, real time.
+    /// A press that leaves the dialog open ends the loop's pass with
+    /// `_HandleComm` (@0x949a1): the message line counts down one tick,
+    /// a take's own line after `_DisplayComm` sets it, so it shows 239,
+    /// and the floating map is hidden once more than 500 ticks have
+    /// passed since it was shown, `TickCount` moving on under the dialog
+    /// (@0x30262-0x30285).
+    pub fn plunder_held(&mut self, take: Take, held: Duration) -> Taken {
         let Ok(session) = &mut self.session else {
             return Taken::Nothing;
         };
         let taken = session.plunder(take, &*self.boarding_rule, &mut self.chance);
+        let open = session.boarding().is_some();
         let (good, outfit) = match taken {
             Taken::Cargo { good, .. } => names(session, Some(good), None),
             Taken::Ammo { outfit, .. } => names(session, None, Some(outfit)),
@@ -284,9 +296,30 @@ impl<C> FlightView<C> {
         };
         if let Some(text) = plunder_message(taken, good, outfit) {
             self.say_for(text, MESSAGE_TICKS);
+            // The session's pass counted the line it had; the take's own
+            // comes first in the original (`_DisplayComm`, then
+            // `_HandleComm`).
+            if open && let Ok(session) = &mut self.session {
+                session.comm_ticked();
+            }
+        }
+        if open {
+            if let Some(message) = &mut self.message {
+                message.ticks = message.ticks.saturating_sub(1);
+            }
+            self.floating.expire(sixtieths(self.elapsed + held));
         }
         self.retake_target();
         taken
+    }
+
+    /// Lets the boarding under way go with no dialog shown and no sound
+    /// ([`Session::let_go_of_boarding`]): the router's way out when it
+    /// cannot lay the plunder dialog out.
+    pub fn let_go_of_boarding(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.let_go_of_boarding();
+        }
     }
 
     /// Shows the session's messages since they were last taken, each in

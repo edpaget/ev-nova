@@ -33,6 +33,12 @@
 //! another `ShipBehav` never joins: the swap's `_AIMakeEscortFlyInForm`
 //! (@0x62509) follows its leader, which `_GenericRandomShipSpawn` left at
 //! -1 (@0x3c9cd), so it never forms on the player.
+//! A mission's special ship captured for an escort, of any `ShipBehav`,
+//! is a mission escort too: the escort path makes it AI type 6 led by the
+//! player and never writes its mark (`_DoPlunderDialog` @0x9459b-0x947cf,
+//! `_AIShipCapturedByPlayer` @0x89693-0x89780), so it joins with its
+//! class's order and no record (see the
+//! [`captured_mission_ship`](super::captured_mission_ship) module).
 //! Because the join comes before its type's AI decides, a `ShipBehav` 1
 //! ship never thinks as a warship or interceptor while its mission is
 //! active, so `_SelectWarshipTarget`'s `ShipBehav` 1 branch
@@ -339,6 +345,8 @@ mod tests {
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+        // Held still, as the jump arrives at the escorts' own top speed.
+        session.player.velocity = crate::geometry::Vec2::ZERO;
         let off_slot = |session: &Session| {
             let player = session.player;
             mission_escorts(session)
@@ -621,14 +629,22 @@ mod tests {
             braking += 1;
             assert!(braking < 1000, "the jump never began");
         }
-        let frozen = led_offsets(&session);
-        assert_eq!(frozen.len(), 3, "all still led");
+        assert_eq!(led_offsets(&session).len(), 3, "all still led");
         for _ in 0..30 {
             session.tick(crate::flight::Controls::default());
             session.tick_traffic(&catalog, &ai, &mut NeverFires);
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
-            assert_eq!(led_offsets(&session), frozen, "held beside the player");
-            assert!(session.traffic.departed().is_empty());
+            for npc in session.player_led() {
+                assert_eq!(
+                    npc.warp.goal,
+                    Some(crate::traffic::warp_out::WarpGoal::Follow(
+                        crate::combat::ShipRef::Player
+                    )),
+                    "on the player's jump: {:?}",
+                    npc.id
+                );
+            }
+            assert!(session.traffic.departed().is_empty(), "none leaves alone");
         }
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -704,6 +720,38 @@ mod tests {
             BTreeMap::from([(FOOD, 6), (OPALS, 2)]),
             "its 10 of the player's 20 and its own 10"
         );
+    }
+
+    #[test]
+    fn a_mission_escort_a_deadly_stellar_kills_leaves_the_rest_to_re_form() {
+        let kept = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        let shared = BTreeMap::from([(FOOD, 5), (OPALS, 2)]);
+        for (reading, cargo, destroyed) in [
+            (RuleSource::Engine, kept, 0),
+            (RuleSource::Bible, shared, 1),
+        ] {
+            let mut session = laden(1, RuleSource::Engine);
+            session.rules = session
+                .rules
+                .with_override(RuleKey::DeadlyStellarKill, reading);
+            assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+            // Apart from the other escort and the player.
+            let at = crate::geometry::Vec2::new(3000.0, 3000.0);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.state.position = at;
+            let id = npc.id;
+            session.sites = vec![crate::catalog::LandingSite {
+                flags2: crate::deadly_stellar::DEADLY_STELLAR,
+                frame_size: Some((2, 2)),
+                ..crate::testkit::planet(160, at.x, at.y)
+            }];
+            session.listed = session.sites.clone();
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
+            assert_eq!(session.pilot.cargo, cargo, "{reading:?}");
+            assert_eq!(ships_of(&session).destroyed, destroyed, "{reading:?}");
+        }
     }
 
     #[test]
@@ -1145,6 +1193,7 @@ mod tests {
         assert!(session.take_pay_notes().is_empty());
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "none defected");
         session.player.position = session.sites[0].position;
+        session.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(&mut session).expect("lands");
         take_off(&mut session, &catalog);
         assert!(session.take_pay_notes().is_empty());
@@ -1407,7 +1456,9 @@ mod tests {
     fn attack_copies_a_strangers_target_to_mission_escorts() {
         let catalog = ships_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
-        let stranger = session.place_escort(0).expect("a ship");
+        let stranger = session
+            .place_escort(0, &mut crate::chance::NeverFires)
+            .expect("a ship");
         session.npc_mut(stranger).expect("here").escort = None;
         session.target = Some(stranger);
         let done = session

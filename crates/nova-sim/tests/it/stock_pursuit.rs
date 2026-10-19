@@ -47,7 +47,12 @@ fn kinds(data: &GameData) -> Vec<(ShipId, ShipKind)> {
     let arsenal = Arsenal::read(data);
     data.ships()
         .iter()
-        .map(|record| (record.id, kind(record, &outfits, &arsenal)))
+        .map(|record| {
+            (
+                record.id,
+                kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine),
+            )
+        })
         .collect()
 }
 
@@ -148,6 +153,7 @@ fn player(at: Vec2) -> PlayerSide {
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }
 

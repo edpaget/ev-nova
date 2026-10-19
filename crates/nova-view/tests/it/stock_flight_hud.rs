@@ -343,6 +343,40 @@ fn the_sabotage_notices_read_their_stock_strings() {
     );
 }
 
+/// The self-destruct's lines are built from `STR#` 2002 #385-#390 and
+/// #395, as the stock strings read; #388 is the other reading's alone.
+#[test]
+fn the_self_destructs_lines_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        HAVE_A_NICE_DAY, SECOND, SECONDS, SELF_DESTRUCT_IN, SELF_DESTRUCT_LEAD, SEQUENCE_CANCELLED,
+        SEQUENCE_INITIATED,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        [
+            &strings[384],
+            &strings[385],
+            &strings[386],
+            &strings[387],
+            &strings[388],
+            &strings[389],
+            &strings[394],
+        ],
+        [
+            SELF_DESTRUCT_LEAD,
+            SEQUENCE_INITIATED,
+            SEQUENCE_CANCELLED,
+            SECOND,
+            SECONDS,
+            HAVE_A_NICE_DAY,
+            SELF_DESTRUCT_IN,
+        ]
+    );
+}
+
 /// A disabled player's jump collapse says `STR#` 2002 #35, as the stock
 /// string reads.
 #[test]
@@ -353,6 +387,18 @@ fn the_jump_collapse_notice_reads_its_stock_string() {
     };
     let strings = nova_sim::CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[34], JUMP_COLLAPSED);
+}
+
+/// A jump refused while a tractor beam holds the player says `STR#` 2002
+/// #36, as the stock strings read.
+#[test]
+fn a_tractored_jump_says_its_stock_string() {
+    use nova_view::flight::view::TRACTORED;
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[35], TRACTORED);
 }
 
 /// The player's Repair Droids repairing it say `STR#` 2002 #37, as the

@@ -1340,7 +1340,7 @@ pub(super) mod tests {
     #[test]
     fn by_the_engine_a_captured_ships_slot_names_nobody() {
         let (_, mut session) = offered(0);
-        session.lose_captured(NpcId(0));
+        session.lose_captured(NpcId(0), true);
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "[Error]",

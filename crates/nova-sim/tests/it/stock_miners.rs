@@ -23,7 +23,12 @@ fn stock_miners(data: &GameData) -> Vec<(i16, u16, bool)> {
     let arsenal = Arsenal::read(data);
     data.ships()
         .iter()
-        .map(|record| (record.id, kind(record, &outfits, &arsenal)))
+        .map(|record| {
+            (
+                record.id,
+                kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine),
+            )
+        })
         .filter(|(_, kind): &(ShipId, ShipKind)| kind.miner != 0)
         .map(|(id, kind)| (id.0, kind.miner, kind.can_scoop))
         .collect()

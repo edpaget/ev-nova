@@ -181,7 +181,8 @@ impl Traffic {
         let mut order: Vec<usize> = (0..self.npcs.len())
             .filter(|&at| {
                 due.get(at).copied().unwrap_or(false)
-                    && plunder::high_level(&self.npcs[at], &around) == HighLevel::Refuels
+                    && plunder::high_level(&self.npcs[at], &around, world.flight.inertial_dampener)
+                        == HighLevel::Refuels
             })
             .collect();
         order.sort_by_key(|&at| self.npcs[at].berth);

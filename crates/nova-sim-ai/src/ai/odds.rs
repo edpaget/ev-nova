@@ -304,9 +304,11 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
-            Some(other) if matches!(other.goal, Goal::Flee(_)) => {
-                (other.state, other.stats.handling, other.hull.class_speed)
-            }
+            Some(other) if matches!(other.goal, Goal::Flee(_)) => (
+                other.state,
+                other.ionized_handling(),
+                other.hull.class_speed,
+            ),
             _ => return false,
         },
     };
@@ -486,6 +488,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         }
     }
 
@@ -1155,6 +1158,31 @@ mod tests {
         wont.flags2 = crate::combat::weapon::AI_WONT_USE;
         chaser.armament = Armament::new([(wont, 1)]);
         assert!(hopeless(&chaser, target));
+    }
+
+    #[test]
+    fn a_missile_suits_a_fleeing_npc_its_ionization_slows() {
+        let (mut chaser, _) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        // A fleeing NPC 100 above, turning 6° a tick: too agile for the
+        // missile, unless slowed to 3 at a factor of 0.5.
+        let hopeless = |charge: f32| {
+            let mut quarry = ship(2, 142, 0.0);
+            quarry.hull.class_speed = 6.0;
+            quarry.state.position = Vec2::new(0.0, -100.0);
+            quarry.state.velocity = Vec2::new(0.0, -1.0);
+            quarry.goal = Goal::Flee(n(1));
+            quarry.stats.handling.turn_rate = 6.0;
+            quarry.stats.ion.class_capacity = 400.0;
+            quarry.ion.charge = charge;
+            let npcs = [chaser.clone(), quarry];
+            let around = Surroundings::new(&[], &npcs);
+            hopeless_chase(&chaser, n(2), &around)
+        };
+        assert!(hopeless(0.0), "too agile: out of reach");
+        assert!(!hopeless(200.0), "slowed: in reach");
     }
 
     #[test]

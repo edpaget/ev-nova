@@ -115,6 +115,34 @@ fn every_stock_rled_decodes_its_frames_at_the_header_size() {
     });
 }
 
+/// Of the stock `rlëD`, only 1930, the Aurora Thunderforge's weapon
+/// layer, holds runs of one colour (opcode 4), which the original draws
+/// raw: all white, among them frame 13's on row 119, x 179 to 194.
+#[test]
+fn only_stock_rled_1930_holds_solid_runs() {
+    let Some(dir) = nova_data() else { return };
+    let mut with_runs = Vec::new();
+    for (_, file) in stock_files(&dir) {
+        for res in file.resources(code("rlëD")) {
+            let sheet = decode_rled(res.data(), None).expect("decodes");
+            if let Some(solid) = sheet.into_solid_frames() {
+                with_runs.push((res.id(), solid));
+            }
+        }
+    }
+    let ids: Vec<i16> = with_runs.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, [1930]);
+    let frame = &with_runs[0].1[13];
+    let white = [255, 255, 255, 255];
+    let lit: Vec<(u32, u32)> = (0..frame.height())
+        .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
+        .filter(|&(x, y)| frame.pixel(x, y).is_some_and(|p| p[3] > 0))
+        .collect();
+    let row_119: Vec<(u32, u32)> = (179..=194).map(|x| (x, 119)).collect();
+    assert_eq!(lit, row_119);
+    assert!(lit.iter().all(|&(x, y)| frame.pixel(x, y) == Some(white)));
+}
+
 #[test]
 fn every_stock_cicn_decodes_at_its_bounds_with_its_mask_as_alpha() {
     let mut masked = 0;

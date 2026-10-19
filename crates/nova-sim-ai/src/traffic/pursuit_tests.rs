@@ -3,8 +3,6 @@
 //! the fire commands, for each NPC whose decision is due, its frame then
 //! flown.
 
-use std::collections::BTreeSet;
-
 use super::{Traffic, World};
 use crate::ai::fire::Manoeuvre;
 use crate::ai::pursuit::{Kept, frame_of};
@@ -55,13 +53,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         ..World::new(&[])
     };
     // The bearing up and a little left, within 30 of its heading of 0.
-    traffic.tick_holding(
-        &Attacking,
-        world,
-        &[],
-        &BTreeSet::new(),
-        &mut Ranged::of(&[]),
-    );
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.pursuit.kept, Some(Kept::Rush));
     let frame =
@@ -71,13 +63,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         [Manoeuvre::Approach]
     );
     let speed = ship.state.velocity.length();
-    traffic.tick_holding(
-        &Attacking,
-        world,
-        &[],
-        &BTreeSet::new(),
-        &mut Ranged::of(&[]),
-    );
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
     let ship = &traffic.npcs()[0];
     let frame =
         frame_of(ship, &player.state, false, None, &crate::ai::NO_WEAPONS).expect("a fight");
@@ -129,6 +115,7 @@ fn a_swarmer_whose_step_did_not_run_flies_at_its_own_swarm_leaders_aim_not_the_a
             }),
             None,
         ],
+        speed_cap: None,
     });
     let mut on_right = swarming(5, 4);
     on_right.goal = Goal::Attack(ShipRef::Player);
@@ -195,13 +182,7 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
             weapons: &records,
             ..World::new(&[])
         };
-        traffic.tick_holding(
-            &Attacking,
-            world,
-            &[],
-            &BTreeSet::new(),
-            &mut Ranged::of(&[]),
-        );
+        traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
         traffic.npcs()[0]
             .pursuit
             .frame
@@ -211,6 +192,40 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
     let (by_pick, by_last_gun) = (heading(RuleSource::Engine), heading(RuleSource::Bible));
     assert!(by_pick.is_some_and(|heading| heading > 0));
     assert!(by_last_gun > by_pick, "{by_last_gun:?} {by_pick:?}");
+}
+
+#[test]
+fn a_dampened_fighter_breaking_off_keeps_it_facing_only_when_the_worlds_rule_counts_its_dampener() {
+    use crate::flight::FlightRules;
+    use crate::inertialess::InertialDampener;
+    // Facing its break heading, its target 100 above: an inertial ship
+    // drops back to dogfight, an inertialess one keeps breaking off. The
+    // traffic's pursuit reads the world's flight rule.
+    let kept = |rule: InertialDampener| {
+        let mut traffic = traffic();
+        let ship = &mut traffic.npcs[0];
+        ship.afterburner = false;
+        ship.stats.dampener = true;
+        ship.hull.inherent_ai = 3;
+        ship.hull.mass = 100.0;
+        ship.state.heading = 135.0;
+        ship.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let world = World {
+            player: Some(player_at(Vec2::new(0.0, -100.0))),
+            flight: FlightRules {
+                inertial_dampener: rule,
+                ..FlightRules::default()
+            },
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
+        traffic.npcs()[0].pursuit.kept
+    };
+    assert_eq!(
+        kept(InertialDampener::AnyShip),
+        Some(Kept::BreakOff { heading: 135 })
+    );
+    assert_eq!(kept(InertialDampener::PlayerOnly), None);
 }
 
 #[test]
@@ -242,13 +257,7 @@ fn the_traffic_step_leads_with_the_worlds_weapon_records() {
             weapons,
             ..World::new(&[])
         };
-        traffic.tick_holding(
-            &Attacking,
-            world,
-            &[],
-            &BTreeSet::new(),
-            &mut Ranged::of(&[]),
-        );
+        traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
         traffic.npcs()[0]
             .pursuit
             .frame

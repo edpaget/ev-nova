@@ -312,6 +312,7 @@ mod tests {
                     }),
                     None,
                 ],
+                speed_cap: None,
             }),
         };
         assert!(counts(band.clone()), "a stand-off ship in its band");
@@ -597,6 +598,7 @@ mod tests {
                     }),
                     None,
                 ],
+                speed_cap: None,
             }),
         };
         let mut traffic = traffic_of(vec![fighting, ship(2, 2, plunder(n(9))), victim()]);

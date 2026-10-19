@@ -41,12 +41,12 @@
 //!   rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. Its cut of
 //!   +0x48, the speed along the heading, with the velocity is
 //!   rdm:task/ai-drags-scale-the-npc-speed's. Nothing here plays a sound.
-//! - [`Leg::Jump`] (sub 4): it leaves the system that tick
-//!   ([`Outcome::JumpedOut`]). Sub 4 is the warp out (`_LowLevelAIHandler`
-//!   @0x8585e-0x859c5), which
-//!   rdm:phase/ship-handling-fidelity/phase-8-warp-out ports; until then the
-//!   ship departs as it reaches sub 4, so only the moment of departure
-//!   differs from the original's. That phase replaces this arm.
+//! - [`Leg::Jump`] (sub 4): it begins its warp out where it is, with no
+//!   move that tick ([`Npc::begin_own_jump`]). Sub 4 itself, the warp out
+//!   (`_LowLevelAIHandler` @0x8585e-0x859c5), is
+//!   [`warp_out`](crate::traffic::warp_out)'s, which flies it from the
+//!   next pass and departs it ([`Outcome::JumpedOut`]) once its stage is
+//!   done.
 
 use crate::ai::fire;
 use crate::ai::leave::{self, Leg};
@@ -76,8 +76,8 @@ pub const SOFT_BRAKE: f32 = 0.5;
 pub const BRAKE_DAMPING: f64 = 0.94;
 
 /// Flies `npc` one tick of `leg` on `handling` under `flight`, as
-/// `inertia` says (see the module docs): flying on, or, on [`Leg::Jump`],
-/// jumped out where it is.
+/// `inertia` says (see the module docs): flying on, on [`Leg::Jump`]
+/// with its warp out begun where it is.
 pub fn fly(
     npc: &mut Npc,
     leg: Leg,
@@ -86,7 +86,10 @@ pub fn fly(
     inertia: Inertia,
 ) -> Outcome {
     let (controls, flown) = match (leg, inertia) {
-        (Leg::Jump, _) => return Outcome::JumpedOut,
+        (Leg::Jump, _) => {
+            npc.begin_own_jump();
+            return Outcome::Flying;
+        }
         (Leg::RunOut, _) => (run_out(&npc.state, handling), *handling),
         (Leg::Brake, _) => stop(&mut npc.state, handling, inertia, false),
     };
@@ -355,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn jumping_it_jumps_out_where_it_is() {
+    fn jumping_it_begins_its_warp_out_where_it_is() {
         let start = braking(0.0, -3.0, 180.0);
         for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 3.0 }] {
             let mut leaver = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
@@ -366,7 +369,8 @@ mod tests {
                 FlightRules::default(),
                 inertia,
             );
-            assert_eq!(outcome, Outcome::JumpedOut);
+            assert_eq!(outcome, Outcome::Flying);
+            assert!(warping(&leaver), "sub-goal 4");
             assert_eq!(leaver.state, start);
         }
     }
@@ -469,9 +473,15 @@ mod tests {
         )
     }
 
-    /// Flies `npc` until it leaves, at most `limit` ticks: each tick's
-    /// starting state, and how it left.
-    fn flown(npc: &mut Npc, other: Option<&ShipState>, limit: u32) -> (Vec<ShipState>, Outcome) {
+    /// Whether `npc` has begun its own warp out, sub-goal 4
+    /// ([`warp_out`](crate::traffic::warp_out)).
+    fn warping(npc: &Npc) -> bool {
+        npc.warp.goal == Some(crate::traffic::warp_out::WarpGoal::Own)
+    }
+
+    /// Flies `npc` until it begins its warp out, at most `limit` ticks:
+    /// each tick's starting state, and whether it began it.
+    fn flown(npc: &mut Npc, other: Option<&ShipState>, limit: u32) -> (Vec<ShipState>, bool) {
         flown_under(npc, other, FlightRules::default(), limit)
     }
 
@@ -481,16 +491,17 @@ mod tests {
         other: Option<&ShipState>,
         flight: FlightRules,
         limit: u32,
-    ) -> (Vec<ShipState>, Outcome) {
+    ) -> (Vec<ShipState>, bool) {
         let mut states = Vec::new();
         for _ in 0..limit {
             states.push(npc.state);
             let outcome = tick_under(npc, other, flight, Readings::default());
-            if outcome != Outcome::Flying {
-                return (states, outcome);
+            assert_eq!(outcome, Outcome::Flying);
+            if warping(npc) {
+                return (states, true);
             }
         }
-        (states, Outcome::Flying)
+        (states, false)
     }
 
     /// Flight rules whose thrust divisor is 1000: the Krypt Pod's `Accel`
@@ -511,8 +522,8 @@ mod tests {
         for heading in [0.0, 180.0] {
             let start = moving(0.0, -1100.0, 0.0, -0.5, heading);
             let mut leaver = ship(krypt, Goal::JumpOut, start);
-            let (ticks, outcome) = flown_under(&mut leaver, None, strong_thrust(), 3000);
-            assert_eq!(outcome, Outcome::JumpedOut, "facing {heading}");
+            let (ticks, warped) = flown_under(&mut leaver, None, strong_thrust(), 3000);
+            assert!(warped, "facing {heading}");
             assert!(below_035(ticks.last().expect("flew")), "facing {heading}");
         }
     }
@@ -526,8 +537,8 @@ mod tests {
             Goal::Flee(ShipRef::Player),
             start,
         );
-        let (states, outcome) = flown_under(&mut runner, Some(&attacker), strong_thrust(), 3000);
-        assert_eq!(outcome, Outcome::JumpedOut);
+        let (states, warped) = flown_under(&mut runner, Some(&attacker), strong_thrust(), 3000);
+        assert!(warped);
         assert!(below_035(states.last().expect("flew")));
     }
 
@@ -557,8 +568,8 @@ mod tests {
         for fields in [average, FAST, KRYPT] {
             let start = moving(0.0, -500.0, 0.0, 0.0, 0.0);
             let mut leaver = ship(ShipStats::new(fields, &[]), Goal::JumpOut, start);
-            let (states, outcome) = flown(&mut leaver, None, 3000);
-            assert_eq!(outcome, Outcome::JumpedOut, "{fields:?}");
+            let (states, warped) = flown(&mut leaver, None, 3000);
+            assert!(warped, "{fields:?}");
             let last = states.last().expect("flew");
             assert!(beyond(last), "past 1000: {last:?}");
             assert!(below_035(last), "braked: {last:?}");
@@ -584,8 +595,8 @@ mod tests {
         };
         let start = moving(0.0, -990.0, 0.0, -6.0, 0.0);
         let mut leaver = ship(ShipStats::new(hull, &[]), Goal::JumpOut, start);
-        let (states, outcome) = flown(&mut leaver, None, 10);
-        assert_eq!(outcome, Outcome::JumpedOut);
+        let (states, warped) = flown(&mut leaver, None, 10);
+        assert!(warped);
         let last = states.last().expect("flew");
         assert!(beyond(last), "{last:?}");
         assert_eq!(
@@ -608,13 +619,15 @@ mod tests {
         let mut leaver = ship(stats, Goal::JumpOut, moving(0.0, -1000.5, 0.0, 0.0, 0.0));
         assert_eq!(
             tick(&mut leaver, None, Readings::default()),
-            Outcome::JumpedOut
+            Outcome::Flying
         );
+        assert!(warping(&leaver));
         let mut inside = ship(stats, Goal::JumpOut, moving(0.0, -1000.0, 0.0, 0.0, 0.0));
         assert_eq!(
             tick(&mut inside, None, Readings::default()),
             Outcome::Flying
         );
+        assert!(!warping(&inside));
     }
 
     #[test]
@@ -636,8 +649,8 @@ mod tests {
         );
         assert!(leaver.speed < 6.0, "it brakes its speed: {}", leaver.speed);
         assert_eq!(leaver.state.heading, first.heading, "with no turn");
-        let (states, outcome) = flown(&mut leaver, None, 3000);
-        assert_eq!(outcome, Outcome::JumpedOut);
+        let (states, warped) = flown(&mut leaver, None, 3000);
+        assert!(warped);
         assert!(below_035(states.last().expect("flew")));
     }
 
@@ -657,8 +670,8 @@ mod tests {
     fn a_ship_fleeing_from_afar_runs_out_and_jumps_with_an_empty_tank_by_its_classs_fuel() {
         let (mut runner, attacker) = fleeing(moving(0.0, -10.0, 0.0, 0.0, 0.0));
         runner.reserves.fuel.now = 0.0;
-        let (states, outcome) = flown(&mut runner, Some(&attacker), 3000);
-        assert_eq!(outcome, Outcome::JumpedOut);
+        let (states, warped) = flown(&mut runner, Some(&attacker), 3000);
+        assert!(warped);
         let last = states.last().expect("flew");
         assert!(beyond(last) && below_035(last), "{last:?}");
         assert!(last.position.x.abs() < 1.0, "straight out: {last:?}");
@@ -684,8 +697,8 @@ mod tests {
             runner.state
         );
         runner.reserves.fuel.now = 100.0;
-        let (_, outcome) = flown(&mut runner, Some(&attacker), 3000);
-        assert_eq!(outcome, Outcome::JumpedOut, "with a jump's fuel it leaves");
+        let (_, warped) = flown(&mut runner, Some(&attacker), 3000);
+        assert!(warped, "with a jump's fuel it leaves");
     }
 
     #[test]
@@ -699,11 +712,10 @@ mod tests {
         for _ in 0..60 {
             assert_eq!(tick(&mut runner, Some(&attacker), bible), Outcome::Flying);
         }
+        assert!(!warping(&runner));
         let (mut fuelled, attacker) = fleeing(moving(0.0, -1001.0, 0.0, 0.0, 0.0));
-        assert_eq!(
-            tick(&mut fuelled, Some(&attacker), bible),
-            Outcome::JumpedOut
-        );
+        assert_eq!(tick(&mut fuelled, Some(&attacker), bible), Outcome::Flying);
+        assert!(warping(&fuelled));
     }
 
     /// `npc` alone in a system with no stellars, ticked once through
@@ -758,17 +770,18 @@ mod tests {
         assert_eq!(runner.class_fuel, 300);
         let player = Some((attacker.position.x, attacker.position.y));
         let (after, departed) = traffic_tick(runner.clone(), player, RuleSource::Engine);
-        assert!(after.is_none(), "it left: {after:?}");
-        assert_eq!(departed, [Outcome::JumpedOut]);
+        assert_eq!(departed, []);
+        assert!(warping(&after.expect("it warps out")), "its warp out began");
         let (after, departed) = traffic_tick(runner, player, RuleSource::Bible);
         assert_eq!(departed, []);
         let after = after.expect("it keeps flying");
+        assert!(!warping(&after));
         assert_eq!(after.goal, Goal::Flee(ShipRef::Player));
         assert!(beyond(&after.state), "{:?}", after.state);
     }
 
     #[test]
-    fn a_hunter_giving_up_on_a_disabled_player_flies_out_past_1000_brakes_and_jumps() {
+    fn a_hunter_giving_up_on_a_disabled_player_flies_out_past_1000_brakes_and_warps_out() {
         use crate::ai::NovaAi;
         use crate::combat::hull::Condition;
         use crate::traffic::npc::MissionMark;
@@ -799,13 +812,17 @@ mod tests {
         let mut last = None;
         for _ in 0..3000 {
             traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
-            if let Some(npc) = traffic.npcs().iter().find(|npc| npc.id == id) {
-                assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
-                assert_eq!(npc.target, None, "its target dropped");
+            let npc = traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("it warps out before it leaves");
+            assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
+            assert_eq!(npc.target, None, "its target dropped");
+            if !warping(npc) {
                 last = Some(npc.state);
                 continue;
             }
-            assert_eq!(traffic.departed(), [(id, Outcome::JumpedOut)]);
             let last = last.expect("it flew");
             assert!(last.position.length() > 1000.0, "{last:?}");
             assert!(below_035(&last), "it braked: {last:?}");

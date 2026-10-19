@@ -14,6 +14,7 @@ pub use nova_data::{
     RankId, ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
+use crate::blink::Blink;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -493,6 +494,10 @@ pub struct ShipRecord {
     /// Its `EscortType`, raw: the class it has as the player's escort
     /// (see [`EscortClass::of`](crate::catalog::EscortClass::of)).
     pub escort_type: i16,
+    /// Its `SkillVar`, raw: how far an NPC's skill, rolled as it spawns,
+    /// strays from 1.0, in hundredths (class +0x9f8, `_RandomSkillLevel`
+    /// @0x6922; see `nova_sim::skill`).
+    pub skill_var: i16,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -1437,6 +1442,32 @@ pub struct ShipExits {
     pub frames: i16,
 }
 
+/// A ship class's display fields, raw from its `shän`: what
+/// `_HandleShipDisplay` picks the frames it draws by (see
+/// `nova_sim::combat::ship_frames`). Its `FramesPer` and compression are
+/// in its [`ShipExits`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipDisplay {
+    /// Its `Flags`: 0x0001 banking, 0x0002 folding, 0x0004 key-carried,
+    /// 0x0008 animated, 0x0010 animation stopped while disabled, 0x0020
+    /// alt layer hidden while disabled, 0x0040 lights out while disabled,
+    /// 0x0080 unfolding to fire, 0x0100 frame-angle table.
+    pub flags: u16,
+    /// Its `BaseSetCount`.
+    pub base_sets: i16,
+    /// Its `AnimDelay`, in frames.
+    pub anim_delay: i16,
+    /// Its `AltSetCount`.
+    pub alt_sets: i16,
+    /// Whether it names an alt image: `AltImageID` above 0.
+    pub alt_image: bool,
+    /// Its `BlinkMode` and `BlinkValA`-`D`, raw.
+    pub blink: Blink,
+    /// Whether it names a lights image: `LightImageID` above 0, without
+    /// which `_HandleShipDisplay` runs no lights block (@0x2b681-0x2b6a2).
+    pub lights_image: bool,
+}
+
 /// An escort's class, which the escort menu groups it by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EscortClass {
@@ -1549,6 +1580,9 @@ pub struct HullRecord {
     /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
     /// that can be read.
     pub exits: Option<ShipExits>,
+    /// Its `shän`'s display fields, or `None` when it has no `shän` that
+    /// can be read.
+    pub display: Option<ShipDisplay>,
     /// Its escort class, from its `EscortType`, `InherentAI` and `Mass`
     /// ([`EscortClass::of`]), which sets which turret shots miss it (see
     /// `nova_sim::combat::hull::HullSpec::miss_class`).
@@ -1628,6 +1662,11 @@ pub struct GovtRecord {
     /// through their `InherentGovt` (`gövt` runtime +0x56; see
     /// `nova_sim::combat::jamming`).
     pub inh_jam: [i16; 4],
+    /// Its `SkillMult`, raw: the factor its ships' top speed and thrust
+    /// take is `SkillMult` / 100, or 1.0 when it is 0 or less (runtime
+    /// +0x64, `_LoadObjectData` @0x7bb69-0x7bb9b; see
+    /// `nova_sim::skill`).
+    pub skill_mult: i16,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

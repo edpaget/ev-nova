@@ -61,6 +61,23 @@ pub struct QuadInstance {
     /// each colour channel's level as a fraction of 32 (`n / 32`, exact in
     /// `f32`), with alpha 1.
     pub tint: [f32; 4],
+    /// Its colorize ([`Colorize`](nova_view::Colorize)): the colour's 5-bit
+    /// red, green and blue, 0 to 31, and the level, 1 to 32 to mix;
+    /// [`NO_COLORIZE`] for a plain quad.
+    pub colorize: [f32; 4],
+}
+
+/// The colorize of a quad that mixes toward no colour.
+pub const NO_COLORIZE: [f32; 4] = [0.0; 4];
+
+/// A quad's colorize for `colorize`: [`NO_COLORIZE`] when it does not mix.
+#[must_use]
+pub fn colorize_instance(colorize: nova_view::Colorize) -> [f32; 4] {
+    if !colorize.mixes() {
+        return NO_COLORIZE;
+    }
+    let [r, g, b] = colorize.rgb5.map(f32::from);
+    [r, g, b, f32::from(colorize.level)]
 }
 
 /// One untextured quadrilateral, for lines and dots.
@@ -240,6 +257,7 @@ mod tests {
                 v1: 1.0,
             },
             tint: [1.0; 4],
+            colorize: crate::gpu::NO_COLORIZE,
         }
     }
 

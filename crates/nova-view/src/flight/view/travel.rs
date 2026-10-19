@@ -28,12 +28,12 @@ use super::dialog_map::{MapOpened, MapOpening};
 use super::{
     EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
     HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
-    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, Said,
-    TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks,
-    comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
-    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
-    point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
-    stellar_name,
+    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY,
+    SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with,
+    assigned_message, assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay,
+    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
+    pay_said, play_area, point, refusal_message, show_combat, show_destroyed, show_gate_frames,
+    shown_scene, stellar_name,
 };
 
 impl<
@@ -497,9 +497,9 @@ impl<
 
     /// Begins a jump, or shows why not when the player is told
     /// ([`Session::jump_refusal_told`]). Starting it clears the message
-    /// line only when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or
-    /// [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9; the
-    /// tractor's #36 has no engine source). The original's second jump
+    /// line only when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`]
+    /// or [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9, #36 at
+    /// @0x6b2ac-0x6b30d). The original's second jump
     /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
     /// the tutorial, which the arrival line replaces anyway. The keys
     /// held stay held: the session flies the jump without them, and a
@@ -508,15 +508,16 @@ impl<
     /// nothing after it: its latch is set on every frame of the jump
     /// ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
+        self.settle_given_up_jump();
         let Ok(session) = &mut self.session else {
             return;
         };
         match session.begin_jump() {
             Ok(_) => {
-                for text in [TOO_CLOSE, FAR_ENOUGH, NOTHING_OUT_HERE] {
+                for text in [TOO_CLOSE, TRACTORED, FAR_ENOUGH, NOTHING_OUT_HERE] {
                     self.clear_message(text);
                 }
-                self.start_streak_if_jumping();
+                self.start_jump_effect();
             }
             Err(refusal) => {
                 if session.jump_refusal_told(&refusal)
@@ -536,8 +537,8 @@ impl<
     /// ([`Session::tick_again`]) with the answers to its hits and their
     /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
-    /// system the session populated afresh. Flight and the warp's lead-in
-    /// under the streak both step this way. The eject chord, the land key
+    /// system the session populated afresh. Flight and the jump's warp
+    /// both step this way. The eject and self-destruct chords, the land key
     /// and double time are held as the keys say, and a pass whose ship
     /// tick brings the escape pod's rescue ends the stepping there, the
     /// view laid out afresh where the rescue put the ship.
@@ -550,6 +551,9 @@ impl<
         let eject = self.takes(PlayerCommand::Eject)
             && self.held.contains(&Key::Command)
             && self.held.contains(&EJECT_KEY);
+        let self_destruct = self.takes(PlayerCommand::SelfDestruct)
+            && self.held.contains(&Key::Command)
+            && self.held.contains(&SELF_DESTRUCT_KEY);
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
@@ -557,7 +561,9 @@ impl<
             session.set_play_area(play_area(self.view));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
+            session.hold_self_destruct(self_destruct);
             session.set_double_time_key(self.double_time);
+            session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));
             'steps: for _ in 0..steps {
                 if !go_on(session) {
@@ -617,7 +623,8 @@ impl<
                     let scene = effects_scene(session);
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
-                    let lit = show_combat(session, &scene, shown, &self.looks, chance);
+                    let sheets = (&self.sheet, &self.npc_sheets);
+                    let lit = show_combat(session, &scene, shown, (&self.looks, sheets), chance);
                     let (player, sheets) = (&self.sheet, &self.npc_sheets);
                     let session_now: &Session = session;
                     self.glows
@@ -651,23 +658,48 @@ impl<
         self.read_npc_sheets();
     }
 
-    /// Starts the jump's streak, from the current system towards the next,
-    /// once the session says the jump has begun, unless it is playing
-    /// already.
-    pub(super) fn start_streak_if_jumping(&mut self) {
+    /// Starts the jump's effect once the session says the jump has begun,
+    /// or lights the screen, unless it is playing already; and starts its
+    /// fade to white once the session's `_hyperGamma` is above 0
+    /// ([`Session::hyper_gamma`]).
+    pub(super) fn start_jump_effect(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        if let (None, Some(next)) = (&self.jump, session.jumping()) {
-            let position = |id| session.star_map().position(id).unwrap_or_default();
-            self.jump = Some(
-                JumpEffect::toward(position(session.system()), position(next))
-                    .with_fades(self.hyperspace_effects),
-            );
+        // `_hyperGamma` goes back to -1 on the first pass after the
+        // arrival, so it lights only a jump still under way.
+        let under_way = session.jumping().is_some() || session.preparing_jump().is_some();
+        let lit = under_way && session.hyper_gamma() > 0.0;
+        if self.jump.is_none() && (session.jumping().is_some() || lit) {
+            self.jump = Some(JumpEffect::warp(self.hyperspace_effects));
+        }
+        if lit && let Some(effect) = &mut self.jump {
+            effect.light();
+        }
+    }
+
+    /// Settles the jump's effect once the session has given its jump up
+    /// before arrival (its warp collapsed under a disabled player, or cut
+    /// by a sabotage kill outfit): lit, the screen fades back from white;
+    /// unlit, the effect is dropped ([`JumpEffect::given_up`]).
+    ///
+    /// It runs at the top of a tick, before the keys, and before a jump
+    /// begins ([`FlightView::jump`]), as `_HandlePlayer` calls
+    /// `_FadeWhiteOut` at the top of its first pass with +0x50 no longer
+    /// above 0 (@0x6840b-0x6841f): the frame drawn after the cancelling
+    /// tick still shows the fade to white where it had got, as the
+    /// original's asynchronous `CGDisplayFade` runs on under it.
+    pub(super) fn settle_given_up_jump(&mut self) {
+        if self.jump.is_none() || self.jump_under_way() {
+            return;
+        }
+        if let Some(fade) = self.jump.take().and_then(JumpEffect::given_up) {
+            self.fade_in = Some(fade);
         }
     }
 
     /// Whether the ship is braking and turning before a jump.
+    #[cfg(test)]
     pub(super) fn preparing_jump(&self) -> bool {
         self.session
             .as_ref()
@@ -912,6 +944,7 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.held_alts.get_mut().clear();
         self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
@@ -1235,6 +1268,7 @@ impl<
                 self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
+                self.held_alts.get_mut().clear();
                 self.glows.clear();
                 self.shot_looks.clear();
                 self.redraw_status();

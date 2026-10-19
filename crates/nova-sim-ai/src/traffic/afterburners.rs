@@ -18,18 +18,18 @@ use crate::traffic::spawn::NewShip;
 use crate::traffic::table::{ShipKind, SpawnPerson};
 
 /// What a spawn rolls afterburners with: the player's combat rating, the
-/// first `shïp` record's `Strength`, the yardstick's reading and the dice.
-pub(crate) struct AfterburnerRoll<'c> {
+/// first `shïp` record's `Strength` and the yardstick's reading.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AfterburnerRoll {
     rating: i64,
     first: i16,
     reading: RuleSource,
-    chance: &'c mut dyn Chance,
 }
 
-impl<'c> AfterburnerRoll<'c> {
-    /// The roll `world` gives, on `chance`: none of a rating or yardstick
-    /// with no player there.
-    pub(crate) fn of(world: &World, chance: &'c mut dyn Chance) -> Self {
+impl AfterburnerRoll {
+    /// The roll `world` gives: none of a rating or yardstick with no
+    /// player there.
+    pub(crate) fn of(world: &World) -> Self {
         let (rating, first) = world
             .player
             .map_or((0, 0), |player| (player.rating, player.yardstick));
@@ -37,19 +37,19 @@ impl<'c> AfterburnerRoll<'c> {
             rating,
             first,
             reading: world.afterburner_yardstick,
-            chance,
         }
     }
 
     /// Whether `ship`, of `kind`, flown by `person` if any, has an
     /// afterburner as it is added at a berth another ship names as its
-    /// swarm leader when `named` ([`swarm::named`]), rolled on this roll,
-    /// or with none never rolled (see the module docs).
+    /// swarm leader when `named` ([`swarm::named`]), rolled on this roll
+    /// and `chance`, or with none never rolled (see the module docs).
     pub(crate) fn has(
-        roll: Option<&mut Self>,
+        roll: Option<Self>,
         ship: &NewShip,
         kind: &ShipKind,
         (person, named): (Option<&SpawnPerson>, bool),
+        chance: &mut dyn Chance,
     ) -> bool {
         // A class's `Strength` is none below none, so in 16 bits.
         #[allow(clippy::cast_possible_truncation)]
@@ -58,7 +58,7 @@ impl<'c> AfterburnerRoll<'c> {
             && !named
             && roll.is_some_and(|roll| {
                 let yardstick = afterburner::yardstick(roll.reading, roll.first, own);
-                afterburner::has_afterburner(&kind.hull, roll.rating, yardstick, roll.chance)
+                afterburner::has_afterburner(&kind.hull, roll.rating, yardstick, chance)
             });
         rolled || person.is_some_and(|person| person.record.flags & PERSON_AFTERBURNER != 0)
     }
@@ -160,7 +160,9 @@ mod tests {
             ships,
             &BTreeSet::new(),
             None,
-            Some(&mut AfterburnerRoll::of(&world, &mut chance)),
+            Some(AfterburnerRoll::of(&world)),
+            world.govts,
+            &mut chance,
         );
         traffic.npcs().iter().map(|npc| npc.afterburner).collect()
     }
@@ -248,7 +250,9 @@ mod tests {
                 vec![ship],
                 &BTreeSet::new(),
                 None,
-                Some(&mut AfterburnerRoll::of(&world, &mut chance)),
+                Some(AfterburnerRoll::of(&world)),
+                world.govts,
+                &mut chance,
             );
             assert!(chance.asked.is_empty(), "no roll");
             let added = &traffic.npcs()[1];
@@ -374,7 +378,12 @@ mod tests {
         };
         // Neither `_MissionDudeSpawn` nor `_SpecificDudeSpawn` asks, even
         // of a ship that would.
-        traffic.bring_in_within(vec![mission, duede(200)], 8);
+        traffic.bring_in_within(
+            vec![mission, duede(200)],
+            8,
+            &crate::govt::Governments::empty(),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(afterburners(&traffic), [false, false]);
     }
 }

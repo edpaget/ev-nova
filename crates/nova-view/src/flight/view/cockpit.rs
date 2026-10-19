@@ -6,10 +6,10 @@ use nova_sim::Drawn as ShipDrawn;
 use nova_sim::PlayerCommand;
 use nova_sim::{
     ClassRow, Condition, Controls, EscortCommand, Face, NavMode, Npc, Reserves, Session, ShipRef,
-    ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level, lights_level,
+    ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level,
 };
 
-use crate::draw::{crossed_box, lights_tint};
+use crate::draw::crossed_box;
 use crate::flight::alert;
 use crate::flight::asteroids::AsteroidShown;
 use crate::flight::boxes::BoxShown;
@@ -20,12 +20,15 @@ use crate::flight::escorts::{
 };
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
+use crate::flight::gate_colorize::gate_colorize;
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
-use crate::flight::murk::{self, murk_tint, sprite_murk};
+use crate::flight::ion_tint::hull_colorize;
+use crate::flight::murk::{self, sprite_murk};
+use crate::flight::ship_layers::{ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
-use crate::flight::weapon_glow::npc_glow_level;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
+use nova_sim::combat::ship_frames::{Drawn, FrameSpec};
 use nova_sim::sprite_layer::SpriteLayer;
 
 use super::sprites::{Sprite, sprite_stack};
@@ -37,16 +40,16 @@ use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::view_shape::classic_offset;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point, UiSound};
+use crate::{Color, DrawList, Input, Key, Point, UiSound};
 
 use super::{
     AFTERBURNER_KEY, BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
     ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView,
     HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
-    OVERLAY_SIZE, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint, shown_heading,
-    shown_position,
+    OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
+    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint,
+    shown_heading, shown_position,
 };
 
 impl<C> FlightView<C> {
@@ -111,9 +114,7 @@ impl<C> FlightView<C> {
     /// hovering as the pointer is over something targetable now
     /// ([`FlightView::hovering`]), once the session's steps have run and
     /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it. While the jump's streak
-    /// and fade-out hold flight no step runs, and the cursor holds, which
-    /// no player sees under the streak.
+    /// last step, or a flight key held, fades it.
     pub(super) fn step_cursor(&mut self, steps: u32) {
         if steps == 0 {
             return;
@@ -206,40 +207,96 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Draws `npc` at `at` facing `heading` with its own ship's sprite, or a
-    /// crossed box when its sheet cannot be read, at the alpha its cloak
+    /// Draws `npc` at `at` facing `heading` with its own ship's sheet, or
+    /// a crossed box when its sheet cannot be read, at the alpha its cloak
     /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
     /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]). Its weapon glow is drawn over
-    /// it while lit ([`weapon_glow`](crate::flight::weapon_glow)), held
-    /// below its murk ([`npc_glow_level`]) and murked.
-    fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
-        let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
+    /// its last ticks there ([`npc_tint`]), washed white by the gate, as
+    /// one entering a gate is ([`gate_colorize`]); with neither, its hull is as
+    /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and
+    /// layers are drawn on the frames its display picked and murked (see
+    /// the [`ship_layers`](crate::flight::ship_layers) module): its engine
+    /// glow from its glow base, rolled on its own, its running lights at
+    /// the level its display drew them, its weapon glow while lit
+    /// ([`weapon_glow`](crate::flight::weapon_glow)), its alt layer, and
+    /// its shield layer while it flashes.
+    pub(super) fn draw_npc(
+        &self,
+        list: &mut DrawList,
+        session: &Session,
+        npc: &Npc,
+        at: Point,
+        heading: f32,
+    ) {
+        let shown = session.cloak_shown(npc);
+        let ship_ref = ShipRef::Npc(npc.id);
+        // Fully faded, a cloak's or a gate's: its held alt is forgotten.
+        let Some(cloak) = cloak_alpha(shown) else {
+            self.held_alts.borrow_mut().forget(ship_ref);
             return;
         };
         let Some(tint) = npc_tint(npc) else {
+            self.held_alts.borrow_mut().forget(ship_ref);
             return;
         };
         let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
-        let tint = Color {
-            a: u8::try_from(alpha).unwrap_or(u8::MAX),
-            ..tint
-        };
+        let gating = matches!(
+            npc.mode,
+            nova_sim::traffic::npc::Mode::Emerging { .. }
+                | nova_sim::traffic::npc::Mode::EnteringGate { .. }
+        );
+        let faded = shown != nova_sim::cloak::CloakShown::Opaque || gating;
         match self.npc_sheets.get(&npc.ship) {
             Some(Ok(sheet)) => {
-                let frame = rotation_frame(heading, sheet.rotations);
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
-                let glow = sheet.weapon.zip(self.glows.drawn(ShipRef::Npc(npc.id)));
-                if let Some((layer, level)) = glow {
-                    let viewer = session.player().position;
-                    let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
-                    let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
-                    let layer_frame = frame % layer.frames.get();
-                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
-                }
+                let alpha = if faded {
+                    u8::try_from(alpha).unwrap_or(u8::MAX)
+                } else {
+                    base_alpha(sheet.base_transp)
+                };
+                let viewer = session.player().position;
+                let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
+                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                let glow_rolls = npc_glow_rolls(npc.id);
+                // A gate writes the hull's colorize after the ion tint, so
+                // while it fades the gate's white shows in place of the
+                // tint and the murk ([`gate_colorize`],
+                // `_HandleShipDisplay` @0x2bfa5-0x2c17b).
+                let colorize = if gating {
+                    gate_colorize(&npc.mode)
+                } else {
+                    hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
+                };
+                let base = nova_sim::glow::drawn_base(npc.display.glow);
+                let ship = ShipDraw {
+                    sheet,
+                    spec: &npc.hull.frames,
+                    drawn: npc.display.drawn,
+                    heading,
+                    tint: Color { a: alpha, ..tint },
+                    hull: true,
+                    murk,
+                    held: true,
+                    glow: glow_level(base, tick, &glow_rolls),
+                    lights: npc.display.drawn.lights,
+                    weapon: self.glows.drawn(ShipRef::Npc(npc.id)),
+                    shield: self.shield_drawn(ShipRef::Npc(npc.id)),
+                    colorize,
+                };
+                let live = ship.live_alt(at);
+                let alt =
+                    self.held_alts
+                        .borrow_mut()
+                        .shown(ship_ref, ship.drawn.alt, live, ship.hull);
+                ship.draw(list, at, alt);
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
+    }
+
+    /// The level `ship`'s shield layer was last drawn at, while it
+    /// flashes ([`ShieldFlash::drawn`]).
+    fn shield_drawn(&self, ship: ShipRef) -> Option<u8> {
+        self.flashes.get(&ship).and_then(ShieldFlash::drawn)
     }
 
     /// The camera, on the ship as drawn, in the view's size.
@@ -282,11 +339,17 @@ impl<C> FlightView<C> {
         Point::new(x, 0.0)
     }
 
-    /// The frame of the ship's sheet drawn, or `None` without a sheet.
+    /// The frame of the ship's sheet drawn, or `None` without a sheet: its
+    /// set's, as its display picked it, at the heading it is drawn at
+    /// (see the [`ship_layers`](crate::flight::ship_layers) module).
     #[must_use]
     pub fn frame(&self) -> Option<u16> {
         let sheet = self.sheet.as_ref().ok()?;
-        Some(rotation_frame(self.shown_heading(), sheet.rotations))
+        let Ok(session) = &self.session else {
+            return Some(rotation_frame(self.shown_heading(), sheet.rotations));
+        };
+        let spec = turning(&session.hull().frames, sheet);
+        Some(spec.index(session.player_drawn().set, self.shown_heading()))
     }
 
     /// What the shield, armour and fuel gauges show this frame: while
@@ -458,14 +521,13 @@ impl<C> FlightView<C> {
         self.nav_keys_frame(nav_off, option, h);
     }
 
-    /// Whether a jump is under way, the pre-jump stage included: the
-    /// original's +0x50 > 0, which its key blocks test.
+    /// Whether the session has a jump under way, the pre-jump stage
+    /// included: the original's +0x50 > 0, which its key blocks test live.
+    /// A jump given up is over at once, whatever its effect still shows.
     pub(super) fn jump_under_way(&self) -> bool {
-        self.jump.is_some()
-            || self
-                .session
-                .as_ref()
-                .is_ok_and(|session| session.preparing_jump().is_some())
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.jumping().is_some() || session.preparing_jump().is_some())
     }
 
     /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
@@ -606,9 +668,8 @@ impl<C> FlightView<C> {
     /// frame, not once a pass: double time's second pass would only show
     /// it again at the same tick.
     pub(super) fn floating_frame(&mut self) {
+        let jumping = self.jump_under_way();
         let session = self.session.as_ref();
-        let jumping =
-            self.jump.is_some() || session.is_ok_and(|session| session.preparing_jump().is_some());
         let mode_3 =
             session.is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)));
         let h =
@@ -666,12 +727,16 @@ impl<C> FlightView<C> {
 
     /// A zoom key's press: while the floating map is up and no key the
     /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. One
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
+    /// held alone doesn't count: `_HandlePlayer` checks it only with
+    /// Command down (@0x6fdc8), so alone it never sets
+    /// `_quickKeyCheckResult`. One
     /// that changes the scale shows the map again and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        if !self.floating.is_up() || !self.held.is_empty() {
+        let holds = self.held.iter().any(|&held| held != SELF_DESTRUCT_KEY);
+        if !self.floating.is_up() || holds {
             return;
         }
         let moved = if key == ZOOM_OUT_KEY {
@@ -850,7 +915,7 @@ impl<C> FlightView<C> {
     }
 
     /// Closes the escort menu once it has timed out or the fleet is empty
-    /// ([`EscortMenu::update`]), every frame, the streak's included, as
+    /// ([`EscortMenu::update`]), every frame, the warp's included, as
     /// the original checks it on every frame of a jump (@0x6df59).
     pub(super) fn update_escort_menu(&mut self) {
         let rows = self.escort_rows();
@@ -885,9 +950,8 @@ impl<C> FlightView<C> {
 
     /// `ship`'s shield-flash timer as the last frame showed it
     /// ([`ShieldFlash::shown`]): 32 on the frame of a hit, then a frame
-    /// less each frame; none once it has run out, or with no hit. Once the
-    /// shän shield layer is drawn (rdm:phase/ship-handling-fidelity/phase-10),
-    /// the layer shows it at [`ShieldFlash::step`]'s level.
+    /// less each frame; none once it has run out, or with no hit. A class
+    /// with a shän shield layer shows it at [`ShieldFlash::step`]'s level.
     #[must_use]
     pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
         self.flashes
@@ -1065,35 +1129,55 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its sprite, engine glow, running
-    /// lights and weapon glow ([`weapon_glow`](crate::flight::weapon_glow),
-    /// never murked), or, when its sheet cannot be read, a crossed box
-    /// and the reason. The box stands in for the sprite and a missing
-    /// sheet has no glow or lights, so only a ship drawn in full has one.
+    /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
+    /// `BaseTransp`, its engine glow, running lights at the level its
+    /// display drew them (`nova_sim::combat::ship_lights`), weapon glow
+    /// ([`weapon_glow`](crate::flight::weapon_glow)), alt layer and shield
+    /// flash, never murked, on the frames its display picked (see the
+    /// [`ship_layers`](crate::flight::ship_layers) module); or, when its
+    /// sheet cannot be read, a crossed box and the reason. The box stands
+    /// in for the sprite and a missing sheet has no layers, so only a ship
+    /// drawn in full has one.
     fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
         if drawn == ShipDrawn::Hidden {
+            self.held_alts.borrow_mut().forget(ShipRef::Player);
             return;
         }
         match &self.sheet {
             Ok(sheet) => {
-                let frame = rotation_frame(self.shown_heading(), sheet.rotations);
-                if drawn == ShipDrawn::Full {
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
-                }
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let base = self.session.as_ref().map_or(0, Session::engine_glow);
-                let glow = sheet
-                    .glow
-                    .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
-                let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
-                let lights = sheet.lights.zip(level.map(lights_tint));
-                let weapon = sheet
-                    .weapon
-                    .zip(self.glows.drawn(ShipRef::Player).map(lights_tint));
-                for (layer, tint) in [glow, lights, weapon].into_iter().flatten() {
-                    let layer_frame = frame % layer.frames.get();
-                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
-                }
+                let session = self.session.as_ref().ok();
+                let base = session.map_or(0, Session::engine_glow);
+                let sets = session.map_or(Drawn::default(), Session::player_drawn);
+                let spec = session.map_or(FrameSpec::NONE, |session| session.hull().frames);
+                let ship = ShipDraw {
+                    sheet,
+                    spec: &spec,
+                    drawn: sets,
+                    heading: self.shown_heading(),
+                    tint: Color {
+                        a: base_alpha(sheet.base_transp),
+                        ..Color::WHITE
+                    },
+                    hull: drawn == ShipDrawn::Full,
+                    murk: 0,
+                    held: false,
+                    glow: glow_level(base, tick, &self.glow_rolls),
+                    lights: sets.lights,
+                    weapon: self.glows.drawn(ShipRef::Player),
+                    shield: self.shield_drawn(ShipRef::Player),
+                    colorize: session.and_then(|session| {
+                        hull_colorize(0, session.player_ion_tint(), session.ion_tint_murk_colour())
+                    }),
+                };
+                let live = ship.live_alt(at);
+                let alt = self.held_alts.borrow_mut().shown(
+                    ShipRef::Player,
+                    ship.drawn.alt,
+                    live,
+                    ship.hull,
+                );
+                ship.draw(list, at, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
             Err(reason) => {

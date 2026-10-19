@@ -24,6 +24,10 @@
 //!   (@0x33ba-0x33db, @0x3441-0x3473).
 //!   These equal the original's float path for whole totals; it is not
 //!   replicated beyond that, in the spirit of not copying word widths.
+//!   The turn and accel are the live `_ShipTurnRate` and `_ShipAccelRate`
+//!   (@0x52cd0, @0x52d90), so an ionized player's are slowed by its charge
+//!   ([`Ionization::slows`]), the accel then read
+//!   `trunc(Accel / 5000 x (1 − slowdown) x 2500)`.
 //!   Its 1.5 speed bonus outside Strict Play is crons-news-ranks-fidelity
 //!   phase 31.
 //! - **Legal Status** ([`legal_status_index`], `_DrawLegalStatusString`
@@ -128,7 +132,8 @@ use std::fmt::Write as _;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
 use crate::flight::Flyer;
-use crate::handling::{MANEUVER_PER_DEGREE_PER_TICK, floored_turn};
+use crate::handling::{Handling, MANEUVER_PER_DEGREE_PER_TICK, floored_turn};
+use crate::ionization::Ionization;
 use crate::outfitter::OutfitFlags;
 use crate::rank::PilotInfoRanks;
 use crate::rulebook::RuleSource;
@@ -974,24 +979,41 @@ pub fn speed_shown(totals: &HandlingTotals) -> i64 {
     totals.speed.max(0)
 }
 
-/// The Accel Rate row: `(Accel + outfits) / 2`, truncated, floored at 0.
+/// `_ShipAccelRate` x [`ACCEL_SHOWN_SCALE`] is the Accel Rate row
+/// (@0x52d90).
+pub const ACCEL_SHOWN_SCALE: f32 = 2500.0;
+
+/// The Accel Rate row: `(Accel + outfits) / 2`, truncated, floored at 0;
+/// for a player ionized as `ion` says, its thrust slowed by the charge
+/// ([`Ionization::slows`]), × [`ACCEL_SHOWN_SCALE`], truncated.
 #[must_use]
-pub fn accel_shown(totals: &HandlingTotals) -> i64 {
-    (totals.accel / 2).max(0)
+pub fn accel_shown(totals: &HandlingTotals, ion: Ionization) -> i64 {
+    if ion.charge <= 0.0 {
+        return (totals.accel / 2).max(0);
+    }
+    let own = Handling::from_totals(0, totals.accel, 0.0);
+    (ion.slows(own).accel * ACCEL_SHOWN_SCALE) as i64
 }
 
 /// The Turn Rate row, in degrees a second: `trunc(_ShipTurnRate x 30)`
 /// (@0x52cd0), the player's turn, `maneuver` / 10, floored as
 /// `_ShipTurnRate` floors the player's ([`floored_turn`]): at 1° a tick,
-/// 30, unless its class turns none, then at 0.
+/// 30, unless its class turns none, then at 0; for a player ionized as
+/// `ion` says, then slowed by its charge ([`Ionization::slows`]).
 #[must_use]
-pub fn turn_shown(totals: &HandlingTotals) -> i64 {
+pub fn turn_shown(totals: &HandlingTotals, ion: Ionization) -> i64 {
     let class = f32::from(totals.class_maneuver) / MANEUVER_PER_DEGREE_PER_TICK;
     let rate = floored_turn(
         class,
         totals.maneuver / MANEUVER_PER_DEGREE_PER_TICK,
         Flyer::Player,
     );
+    let rate = ion
+        .slows(Handling {
+            turn_rate: rate,
+            ..Handling::default()
+        })
+        .turn_rate;
     (rate * 30.0) as i64
 }
 
@@ -1888,38 +1910,81 @@ mod tests {
     fn the_stat_rows_read_the_handling_totals() {
         assert_eq!(speed_shown(&totals(300, 0, 0.0)), 300);
         assert_eq!(speed_shown(&totals(-5, 0, 0.0)), 0);
-        assert_eq!(accel_shown(&totals(0, 300, 0.0)), 150);
-        assert_eq!(accel_shown(&totals(0, 301, 0.0)), 150);
-        assert_eq!(accel_shown(&totals(0, -300, 0.0)), 0);
-        assert_eq!(turn_shown(&totals(0, 0, 10.0)), 30);
         assert_eq!(
-            turn_shown(&totals(0, 0, 20.0)),
+            accel_shown(&totals(0, 300, 0.0), Ionization::default()),
+            150
+        );
+        assert_eq!(
+            accel_shown(&totals(0, 301, 0.0), Ionization::default()),
+            150
+        );
+        assert_eq!(accel_shown(&totals(0, -300, 0.0), Ionization::default()), 0);
+        assert_eq!(turn_shown(&totals(0, 0, 10.0), Ionization::default()), 30);
+        assert_eq!(
+            turn_shown(&totals(0, 0, 20.0), Ionization::default()),
             60,
             "a TURN_CHANGE of 100 adds 30"
         );
-        assert_eq!(turn_shown(&totals(0, 0, 10.5)), 31);
-        assert_eq!(turn_shown(&totals(0, 0, 25.0)), 75);
+        assert_eq!(turn_shown(&totals(0, 0, 10.5), Ionization::default()), 31);
+        assert_eq!(turn_shown(&totals(0, 0, 25.0), Ionization::default()), 75);
+    }
+
+    #[test]
+    fn an_ionized_players_turn_and_accel_rows_read_the_slowed_rates() {
+        let ion = |charge, factor| Ionization {
+            charge,
+            factor,
+            jumping: false,
+        };
+        let ship = totals(0, 300, 20.0);
+        assert_eq!(turn_shown(&ship, ion(100.0, 0.5)), 30);
+        assert_eq!(accel_shown(&ship, ion(100.0, 0.5)), 75);
+        assert_eq!(turn_shown(&ship, ion(900.0, 3.0)), 18, "0.7 at most");
+        assert_eq!(accel_shown(&ship, ion(900.0, 3.0)), 45, "0.7 at most");
+        assert_eq!(accel_shown(&ship, ion(100.0, 0.0)), 150);
+        assert_eq!(turn_shown(&ship, ion(0.0, 0.5)), 60, "no charge");
+        assert_eq!(accel_shown(&ship, ion(0.0, 0.5)), 150, "no charge");
+        assert_eq!(accel_shown(&totals(0, -300, 0.0), ion(10.0, 0.5)), 0);
+        let jumping = Ionization {
+            jumping: true,
+            ..ion(100.0, 0.5)
+        };
+        assert_eq!(turn_shown(&ship, jumping), 60, "spared from J on");
+        assert_eq!(accel_shown(&ship, jumping), 75);
+        assert_eq!(ACCEL_SHOWN_SCALE, 2500.0);
     }
 
     #[test]
     fn the_turn_rate_row_shows_the_players_floor() {
-        assert_eq!(turn_shown(&totals(0, 0, -4.0)), 30, "floored at 1° a tick");
-        assert_eq!(turn_shown(&totals(0, 0, 9.8)), 30);
+        assert_eq!(
+            turn_shown(&totals(0, 0, -4.0), Ionization::default()),
+            30,
+            "floored at 1° a tick"
+        );
+        assert_eq!(turn_shown(&totals(0, 0, 9.8), Ionization::default()), 30);
         let slow = HandlingTotals {
             class_maneuver: 5,
             ..totals(0, 0, 5.0)
         };
-        assert_eq!(turn_shown(&slow), 30, "the player's floor, not an NPC's");
+        assert_eq!(
+            turn_shown(&slow, Ionization::default()),
+            30,
+            "the player's floor, not an NPC's"
+        );
         let rigid = HandlingTotals {
             class_maneuver: 0,
             ..totals(0, 0, -4.0)
         };
-        assert_eq!(turn_shown(&rigid), 0, "a class of none is not floored");
+        assert_eq!(
+            turn_shown(&rigid, Ionization::default()),
+            0,
+            "a class of none is not floored"
+        );
         let lifted = HandlingTotals {
             class_maneuver: 0,
             ..totals(0, 0, 5.0)
         };
-        assert_eq!(turn_shown(&lifted), 15);
+        assert_eq!(turn_shown(&lifted, Ionization::default()), 15);
     }
 
     #[test]
@@ -1938,7 +2003,7 @@ mod tests {
                 count: 1,
             }],
         );
-        assert_eq!(turn_shown(&plus), 60);
+        assert_eq!(turn_shown(&plus, Ionization::default()), 60);
     }
 
     #[test]

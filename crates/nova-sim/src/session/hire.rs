@@ -63,7 +63,6 @@ use std::rc::Rc;
 
 use super::Session;
 use super::control::Facts;
-use crate::board::MAX_ESCORTS;
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
@@ -71,7 +70,7 @@ use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::traffic::{SPAWN_RESERVE, table};
+use crate::traffic::SPAWN_RESERVE;
 use crate::wares::Roll;
 
 /// A port the session keeps, shared: equal to another when it is the
@@ -197,7 +196,7 @@ impl Session {
             site: &site,
             contributed: self.contributed(),
             cash: self.pilot.cash,
-            room: self.pilot.escort_count() < MAX_ESCORTS,
+            room: self.can_hire_escorts(),
             slot: self.hire_berth().is_some()
                 || self.rules.source_for(RuleKey::HireNoSlot) == RuleSource::Engine,
             terms: &*self.hire_terms.0,
@@ -244,9 +243,7 @@ impl Session {
                 .0
                 .charge(&record, &site, self.price_mults().second, self.pilot.cash);
         let wage = self.hire_terms.0.wage(&record);
-        let reserves = table::kind(&record, &self.outfits, &self.arsenal)
-            .stats
-            .full();
+        let reserves = self.ship_kind(&record).stats.full();
         let berth = self.hire_berth();
         self.transact(|pilot| {
             pilot.cash -= fee;
@@ -265,7 +262,7 @@ impl Session {
         if let Some(berth) = berth {
             let index = self.pilot.escorts.len() - 1;
             self.fleet.resize(index, None);
-            let placed = self.place_escort_at(index, Some(berth));
+            let placed = self.place_escort_at(index, Some(berth), None, chance);
             // `_SpawnEscort` rolls its afterburner (@0x3ff51).
             if let Some(id) = placed {
                 self.roll_escort_afterburner(id, chance);
@@ -304,6 +301,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::ai::{Goal, Peaceful};
+    use crate::board::MAX_ESCORTS;
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -319,7 +317,7 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        FAST, FakePilotCatalog, Scripted, bar, catalog, jump, land_now, planet, ship,
+        Draws, FAST, FakePilotCatalog, Scripted, bar, catalog, jump, land_now, planet, ship,
     };
     use crate::traffic::npc::AiType;
 
@@ -789,6 +787,31 @@ mod tests {
         assert_eq!(row(&list, 129).hire, Ok(()));
     }
 
+    /// `_CanHireEscorts` counts the escorts in the system (see the
+    /// session's `capture` module): seven on file with two not placed
+    /// leave room, and a sixth placed fills the fleet; the save keeps all
+    /// seven.
+    #[test]
+    fn the_room_counts_the_escorts_in_the_system_so_a_fleet_can_pass_six() {
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        session.pilot.escorts = vec![escort(false); MAX_ESCORTS + 1];
+        session.fleet = (0..session.pilot.escorts.len())
+            .map(|index| {
+                (index < MAX_ESCORTS - 1)
+                    .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
+                    .flatten()
+            })
+            .collect();
+        assert!(list(&mut session).room, "five of the seven in the system");
+        assert_eq!(row(&list(&mut session), 129).hire, Ok(()));
+        session.fleet[MAX_ESCORTS - 1] =
+            session.place_escort(MAX_ESCORTS - 1, &mut crate::chance::NeverFires);
+        assert!(!list(&mut session).room, "six in the system");
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(saved.escorts().len(), MAX_ESCORTS + 1);
+    }
+
     #[test]
     fn there_is_no_bar_in_flight_or_where_the_stellar_has_none() {
         let catalog = barred(vec![hireable(129, 100)]);
@@ -828,6 +851,58 @@ mod tests {
             }]
         );
         assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_hired_escort_comes_with_its_classs_reserves_alone_by_the_engine() {
+        // Ship 129 carries a tank (+100 fuel) by default.
+        let mut catalog = barred(vec![ShipRecord {
+            defaults: vec![(crate::catalog::OutfitId(330), 1)],
+            ..hireable(129, 100)
+        }]);
+        catalog.outfits.push(crate::testkit::outfit(
+            330,
+            &[(crate::stats::MORE_FUEL, 100)],
+        ));
+        for (items, fuel) in [(RuleSource::Engine, 300.0), (RuleSource::Bible, 400.0)] {
+            let mut session = landed(&catalog, 25_000)
+                .with_rules(Rulebook::default().with_override(RuleKey::NpcDefaultItems, items));
+            assert!(session.hire(ShipId(129), &mut NeverFires).is_ok());
+            let reserves = session.pilot().escorts()[0].reserves;
+            assert_eq!(
+                (reserves.fuel.now, reserves.fuel.max),
+                (fuel, fuel),
+                "{items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hired_escort_rolls_its_skill_and_flies_of_no_government() {
+        // `SkillVar` 37: 75 sides, the first 0.63.
+        let catalog = barred(vec![ShipRecord {
+            skill_var: 37,
+            ..hireable(129, 100)
+        }]);
+        let mut session = landed(&catalog, 25_000);
+        let mut chance = Draws::of(&[]).keyed(75, 0);
+        assert!(session.hire(ShipId(129), &mut chance).is_ok());
+        assert_eq!(chance.times_asked(75), 1);
+        let id = session.fleet[0].expect("placed");
+        let npc = session.npc(id).expect("in the system");
+        assert_eq!((npc.skill, npc.skill_mult), ((0.63_f64) as f32, 1.0));
+    }
+
+    #[test]
+    fn a_hired_escort_spawns_glowing_its_anim_owed_on_the_first_class() {
+        use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN};
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        assert!(session.hire(ShipId(129), &mut NeverFires).is_ok());
+        let id = session.fleet[0].expect("placed");
+        let npc = session.npc(id).expect("in the system");
+        assert_eq!(npc.display.glow, GLOW_SPAWN, "`_SpawnEscort`'s spawn");
+        assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass);
     }
 
     #[test]
@@ -1161,6 +1236,56 @@ mod tests {
         let mut session = payer(1000, payroll(), 2, RuleSource::Engine);
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 200, "two days");
+    }
+
+    /// A deadly stellar over `session`'s escort `index`, listed and
+    /// shown, and the fight's tick that kills it: its NPC.
+    fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
+        let id = session.fleet[index].expect("placed");
+        let at = session.npc(id).expect("there").state.position;
+        session.sites = vec![LandingSite {
+            flags2: crate::deadly_stellar::DEADLY_STELLAR,
+            frame_size: Some((2, 2)),
+            ..crate::testkit::planet(160, at.x, at.y)
+        }];
+        session.listed = session.sites.clone();
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert!(session.npc(id).is_none(), "killed");
+        id
+    }
+
+    /// A hired escort a deadly stellar frees is forgotten for good, as the
+    /// original's save (`_WritePilotData` @0x72604, @0x7265e, @0x72728),
+    /// system setup (`_SetupShipsInSystem` @0x42baf) and pay
+    /// (`_DoEscortPayment` @0x40148) skip its inactive slot.
+    #[test]
+    fn a_hired_escort_a_deadly_stellar_kills_is_not_saved_placed_again_or_paid() {
+        let mut session = payer(1000, payroll(), 1, RuleSource::Engine);
+        kill_by_a_deadly_stellar(&mut session, 0);
+        let left = [
+            (130, Some(300), false),
+            (129, None, false),
+            (129, None, true),
+        ];
+        assert_eq!(ships(&session), left, "gone from the escorts");
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(saved.escorts(), session.pilot().escorts(), "nor saved");
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 700, "only the 300 wage is paid");
+        assert_eq!(ships(&session), left);
+        assert_eq!(placed_ships(&session), [130, 129, 129], "nor placed again");
+    }
+
+    /// The hire limit (`_CanHireEscorts` @0x57ad) counts the active slots
+    /// the player leads, so one a deadly stellar frees makes room.
+    #[test]
+    fn a_hired_escort_a_deadly_stellar_kills_frees_its_place_under_the_hire_limit() {
+        let fleet = vec![paid(129, Some(100), false); MAX_ESCORTS];
+        let mut session = payer(1000, fleet, 1, RuleSource::Engine);
+        assert!(!session.can_hire_escorts(), "full");
+        kill_by_a_deadly_stellar(&mut session, 0);
+        assert!(session.can_hire_escorts());
+        assert_eq!(session.pilot().escorts().len(), MAX_ESCORTS - 1);
     }
 
     #[test]

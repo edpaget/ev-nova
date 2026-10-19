@@ -28,10 +28,13 @@
 //!
 //! Left out: `_LaunchFighter` sets a fighter's wait to its bay's `wëap`
 //! +0x0 (@0x3d85b), which the fighters don't model, so a pod launched from
-//! a bay (no stock bay launches one) is gone on its first tick too; and
+//! a bay (no stock bay launches one) is gone on its first tick too.
+//!
 //! `_HandleShip`'s AI-wait fire gate and countdown skip a pod (@0x34a6c,
-//! @0x3502f), which this branch has neither of
-//! (rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate).
+//! @0x3502f), and so do the engine's: a pod's wait is its [`Mode::Adrift`],
+//! which neither [`Npc::wait_running`] (so `ai::fire::gated`) nor the
+//! fight's countdowns (`plunder::count_down`, `board_wait::count_down`)
+//! read.
 
 use super::autopilot::{Outcome, steer};
 use super::npc::{Mode, Npc, NpcId};
@@ -197,6 +200,24 @@ mod tests {
         let pod = &traffic.npcs()[0];
         assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 }, "no countdown");
         assert!(pod.state.position.y > before.position.y, "it moves down");
+    }
+
+    #[test]
+    fn a_pods_wait_goes_down_one_a_tick_by_its_own_flight_alone() {
+        let behaviour = Recording::default();
+        let mut other = npc(0, ShipStats::new(FAST, &[]));
+        other.state.position = Vec2::new(500.0, 0.0);
+        other.ai_wait = 3;
+        let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3 })]);
+        let waits = |traffic: &Traffic| (traffic.npcs()[0].ai_wait, traffic.npcs()[1].mode);
+        tick(&mut traffic, &behaviour);
+        assert_eq!(waits(&traffic), (2, Mode::Adrift { ticks_left: 2 }));
+        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(
+            waits(&traffic),
+            (1, Mode::Adrift { ticks_left: 2 }),
+            "the fight's countdown runs on both passes, the pod's on the advance pass alone"
+        );
     }
 
     #[test]

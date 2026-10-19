@@ -2,8 +2,13 @@
 //! `shïp`'s fields and the outfits it carries, in one place.
 //!
 //! Every reader of a ship's performance (flight, the exchange, the
-//! outfitter and, later, combat) goes through [`ShipStats::new`]; nothing
-//! else reads the `shïp`'s performance fields. Each outfit is an
+//! outfitter and, later, combat) goes through [`ShipStats::new`], or for
+//! an NPC [`ShipStats::for_npc`], which by the engine reading of
+//! [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) leaves
+//! its default items out of its handling and reserves, as the original's
+//! `_Ship*` functions count the outfits for the player alone (see the
+//! [`class_stats`](crate::class_stats) module); nothing else reads the
+//! `shïp`'s performance fields. Each outfit is an
 //! [`OutfitMod`], its `ModType` and `ModVal` with how many are carried,
 //! and each total is `ModVal` x count summed over every outfit of its
 //! `ModType` (the Bible's `oütf`):
@@ -54,6 +59,13 @@
 //!   as `_ShipIsInertialess` (@0x79c2) counts the outfit for the player
 //!   alone.
 //!
+//! - [`GRAVITY_RESISTANCE`] (41) and [`DEADLY_RESISTANCE`] (42), carried
+//!   at all in any mod slot, whatever their `ModVal`, are recorded as
+//!   [`ShipStats::gravity_resistance`] and
+//!   [`ShipStats::deadly_resistance`]; only the player's count
+//!   (`_ShipResistsGravity` @0x7b10, `_ShipResistsDeadlyStellars`
+//!   @0x7bbe; see `nova_sim_base`'s `gravity` and `deadly_stellar`).
+//!
 //! - [`AFTERBURNER`] (15) is recorded as [`ShipStats::afterburner`], the
 //!   fuel it uses a tick: as `_ShipAfterburnerFuelUsage` (@0x7a82-0x7b0f)
 //!   reads it, the last carried outfit in index order that has a slot of
@@ -62,12 +74,27 @@
 //!   the player (reset in `_ResetPlayerPrecalcedValues` @0xc419), as it
 //!   caches `_HasAfterburner`'s scan (@0xc3ac); the stats are worked out
 //!   afresh whenever the outfits change, so they need no cache.
+//! - [`ION_ABSORBER`] (40) adds `ModVal` x count to the class's
+//!   `IonizeMax`, the capacity the ionization factor divides by
+//!   (`_ShipIonizationFactor` @0x328c-0x32c4), and [`ION_DISSIPATER`] (39)
+//!   adds `ModVal` x 0.01 x count to the class's deionization rate
+//!   (`_ShipDeionizationRate` @0x6f3f-0x6f5e). Both count for the player
+//!   alone: an NPC's capacity and rate are its class's
+//!   ([`IonStats::capacity`], [`IonStats::rate`]), but by the other
+//!   reading of `npc_default_items` ([`IonStats::npc_counts`]). The original caches
+//!   the player's sums (0x3b5068, 0x3b50a8), which the stats, worked out
+//!   afresh, need no copy of.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. Every other `ModType`
+//! outfits can overflow or turn a figure negative, but the ion capacity
+//! and rate, which are summed as the original sums them: a capacity of
+//! none or less makes no factor
+//! ([`factor`](nova_sim_base::ionization::factor)). Every other `ModType`
 //! changes nothing here yet.
 
 use nova_sim_base::afterburner::FUEL_PER_MOD_VAL;
+use nova_sim_base::deadly_stellar::DEADLY_RESISTANCE;
+use nova_sim_base::gravity::GRAVITY_RESISTANCE;
 
 use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
@@ -138,6 +165,17 @@ pub const INERTIAL_DAMPENER: i16 = 38;
 /// uses a second (`cmpw $0xf` over each of an outfit's four `ModType`s,
 /// `_HasAfterburner` @0x3acc and `_ShipAfterburnerFuelUsage` @0x7ad0).
 pub const AFTERBURNER: i16 = 15;
+/// The `oütf` `ModType` of an ion dissipater, whose `ModVal` x 0.01 is
+/// the ion charge it sheds a tick (`cmpw $0x27`, `_ShipDeionizationRate`
+/// @0x6f3f).
+pub const ION_DISSIPATER: i16 = 39;
+/// The `oütf` `ModType` of an ion absorber, whose `ModVal` adds to the
+/// ion charge the ship holds before it is fully ionized (`cmpw $0x28`,
+/// `_ShipIonizationFactor` @0x328c).
+pub const ION_ABSORBER: i16 = 40;
+/// The ion charge shed a tick per unit of `Deionize` or of an
+/// [`ION_DISSIPATER`]'s `ModVal` (the double 0.01 @0xdd098).
+pub const CHARGE_PER_DEIONIZE: f64 = 0.01;
 /// How many mods each outfit carries: an `oütf`'s four `ModType`s and
 /// `ModVal`s, which `nova_sim_catalog::catalog::outfit_mods` lists in
 /// turn for each outfit, in its records' order.
@@ -150,8 +188,11 @@ pub const INERTIALESS_HULL: u16 = 0x0040;
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
 pub const TURN_MOD_PER_MANEUVER: f32 = 10.0;
 
-/// How a ship performs, its outfits included.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// How a ship performs, its outfits included. By default, nothing at
+/// all, of a class with no `Flags`, whose warp factor is 1.3.
+// Each flag is one of the ship's outfit or hull bits, read on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShipStats {
     /// How it flies.
     pub handling: Handling,
@@ -182,9 +223,138 @@ pub struct ShipStats {
     pub inertialess_hull: bool,
     /// Whether it carries an [`INERTIAL_DAMPENER`], whatever its `ModVal`.
     pub dampener: bool,
+    /// Whether it carries a gravity resistance, `ModType`
+    /// [`GRAVITY_RESISTANCE`] in any mod slot, whatever its `ModVal`: the
+    /// player's keeps gravity off it
+    /// ([`resists_gravity`](nova_sim_base::gravity::resists_gravity)).
+    pub gravity_resistance: bool,
+    /// Whether it carries a deadly-stellar resistance, `ModType`
+    /// [`DEADLY_RESISTANCE`] in any mod slot, whatever its `ModVal`: the
+    /// player's keeps a deadly stellar from killing it
+    /// ([`resists_deadly`](nova_sim_base::deadly_stellar::resists_deadly)).
+    pub deadly_resistance: bool,
     /// The fuel its afterburner uses a tick, if it carries an
     /// [`AFTERBURNER`] (see the module docs).
     pub afterburner: Option<f32>,
+    /// Its class's warp factor, class +0x44, from its `Flags`
+    /// ([`warp_factor`](nova_sim_catalog::warp::warp_factor)), which an
+    /// NPC's warp-out reads.
+    pub warp_factor: f32,
+    /// What its ionization's capacity and rate are worked out from.
+    pub ion: IonStats,
+}
+
+/// What a ship's ion capacity and deionization rate are worked out from:
+/// its class's, and its [`ION_ABSORBER`]s' and [`ION_DISSIPATER`]s',
+/// which count for the player alone (see the module docs), or for an NPC
+/// too by the other reading of
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems)
+/// ([`ShipStats::for_npc`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct IonStats {
+    /// Its class's `IonizeMax`, as a float (@0x3246-0x324e).
+    pub class_capacity: f32,
+    /// Its absorbers' `ModVal` x count, summed.
+    pub absorbers: f32,
+    /// Its class's deionization rate, class +0x48: `Deionize` x 0.01 when
+    /// above none, else 1 (`_LoadObjectData` @0x7a5be-0x7a60f).
+    pub class_rate: f32,
+    /// Its dissipaters' `ModVal` x 0.01 x count, summed.
+    pub dissipaters: f64,
+    /// Whether its absorbers and dissipaters count for an NPC too.
+    pub npc_counts: bool,
+}
+
+impl IonStats {
+    /// The ion stats of a ship with `fields`, carrying `outfits`.
+    #[must_use]
+    pub fn new(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        // A total of `i16`s within an `f32`'s exact range for any stock
+        // or plausible outfit list.
+        #[allow(clippy::cast_precision_loss)]
+        let absorbers = mod_total(outfits, ION_ABSORBER) as f32;
+        let dissipaters = outfits
+            .iter()
+            .filter(|slot| slot.mod_type == ION_DISSIPATER)
+            .map(|slot| f64::from(slot.mod_val) * CHARGE_PER_DEIONIZE * f64::from(slot.count))
+            .sum();
+        Self {
+            class_capacity: f32::from(fields.ionize_max),
+            absorbers,
+            class_rate: if fields.deionize > 0 {
+                (f64::from(fields.deionize) * CHARGE_PER_DEIONIZE) as f32
+            } else {
+                1.0
+            },
+            dissipaters,
+            npc_counts: false,
+        }
+    }
+
+    /// Whether a ship flown by `flyer` counts its absorbers and
+    /// dissipaters: the player always, an NPC when
+    /// [`npc_counts`](Self::npc_counts).
+    fn counts(&self, flyer: Flyer) -> bool {
+        flyer == Flyer::Player || self.npc_counts
+    }
+
+    /// The ion charge at which a ship flown by `flyer` is fully ionized,
+    /// the factor's divisor (`_ShipIonizationFactor` @0x3225-0x32f6): its
+    /// class's `IonizeMax`, and for the player its absorbers'.
+    #[must_use]
+    pub fn capacity(&self, flyer: Flyer) -> f32 {
+        if self.counts(flyer) {
+            self.class_capacity + self.absorbers
+        } else {
+            self.class_capacity
+        }
+    }
+
+    /// The ion charge a ship flown by `flyer` sheds a tick
+    /// (`_ShipDeionizationRate` @0x6ec3-0x6f8e): its class's rate, and for
+    /// the player its dissipaters', added in doubles.
+    #[must_use]
+    pub fn rate(&self, flyer: Flyer) -> f32 {
+        if self.counts(flyer) {
+            (f64::from(self.class_rate) + self.dissipaters) as f32
+        } else {
+            self.class_rate
+        }
+    }
+}
+
+impl Default for ShipStats {
+    fn default() -> Self {
+        Self {
+            handling: Handling::default(),
+            shield: 0.0,
+            armor: 0.0,
+            fuel: 0.0,
+            fuel_regen: 0.0,
+            shield_regen: 0.0,
+            armor_regen: 0.0,
+            capacity: 0,
+            jump_distance: 0.0,
+            jump_days: 0,
+            fast_jump: false,
+            multi_jump: 0,
+            inertialess_hull: false,
+            dampener: false,
+            gravity_resistance: false,
+            deadly_resistance: false,
+            afterburner: None,
+            warp_factor: nova_sim_catalog::warp::warp_factor(0),
+            ion: IonStats::default(),
+        }
+    }
+}
+
+/// Whether any of `outfits` carried has a slot of `mod_type`, whatever its
+/// `ModVal`.
+fn carries(outfits: &[OutfitMod], mod_type: i16) -> bool {
+    outfits
+        .iter()
+        .any(|outfit| outfit.mod_type == mod_type && outfit.count > 0)
 }
 
 /// The fuel a tick of the afterburner among `outfits` uses (see the module
@@ -297,7 +467,11 @@ impl ShipStats {
             dampener: outfits
                 .iter()
                 .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
+            gravity_resistance: carries(outfits, GRAVITY_RESISTANCE),
+            deadly_resistance: carries(outfits, DEADLY_RESISTANCE),
             afterburner: afterburner_usage(outfits),
+            warp_factor: nova_sim_catalog::warp::warp_factor(fields.flags),
+            ion: IonStats::new(fields, outfits),
         }
     }
 
@@ -358,6 +532,8 @@ mod tests {
         armor_rech: 0,
         flags: 0,
         flags2: 0,
+        ionize_max: 0,
+        deionize: 0,
     };
 
     fn outfit(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
@@ -366,6 +542,76 @@ mod tests {
             mod_val,
             count,
         }
+    }
+
+    fn ionizing(ionize_max: i16, deionize: i16) -> ShipFields {
+        ShipFields {
+            ionize_max,
+            deionize,
+            ..AVERAGE
+        }
+    }
+
+    #[test]
+    fn the_class_rate_is_deionize_a_hundredth_and_1_at_none_or_less() {
+        for (deionize, rate) in [(100, 1.0), (50, 0.5), (1, 0.01), (0, 1.0), (-5, 1.0)] {
+            let stats = ShipStats::new(ionizing(400, deionize), &[]);
+            assert_eq!(stats.ion.rate(Flyer::Npc), rate, "{deionize}");
+            assert_eq!(stats.ion.rate(Flyer::Player), rate, "{deionize}");
+        }
+        assert_eq!(CHARGE_PER_DEIONIZE, 0.01);
+    }
+
+    #[test]
+    fn the_capacity_is_ionize_max() {
+        for ionize_max in [400, 0, -20] {
+            let stats = ShipStats::new(ionizing(ionize_max, 100), &[]);
+            let capacity = f32::from(ionize_max);
+            assert_eq!(stats.ion.capacity(Flyer::Npc), capacity);
+            assert_eq!(stats.ion.capacity(Flyer::Player), capacity);
+        }
+    }
+
+    /// Two Ion Dissipators, `oütf` 262: `ModType` 40 `ModVal` 200 and 39
+    /// 50.
+    fn dissipators() -> Vec<OutfitMod> {
+        vec![
+            outfit(ION_ABSORBER, 200, 2),
+            outfit(ION_DISSIPATER, 50, 2),
+            outfit(0, 0, 2),
+            outfit(0, 0, 2),
+        ]
+    }
+
+    #[test]
+    fn ion_dissipators_raise_the_players_capacity_and_rate_and_not_an_npcs() {
+        let stats = ShipStats::for_player(ionizing(400, 100), &dissipators());
+        assert_eq!(stats.ion.capacity(Flyer::Player), 800.0);
+        assert_eq!(stats.ion.rate(Flyer::Player), 2.0);
+        assert_eq!(stats.ion.capacity(Flyer::Npc), 400.0);
+        assert_eq!(stats.ion.rate(Flyer::Npc), 1.0);
+        let npc = ShipStats::new(ionizing(400, 100), &dissipators());
+        assert_eq!(npc.ion, stats.ion, "the stats hold both; the flyer picks");
+    }
+
+    #[test]
+    fn a_dissipaters_rate_is_added_in_doubles() {
+        let stats = ShipStats::for_player(ionizing(400, 30), &[outfit(ION_DISSIPATER, 7, 3)]);
+        let expected = (f64::from((30.0_f64 * 0.01) as f32) + 7.0 * 0.01 * 3.0) as f32;
+        assert_eq!(stats.ion.rate(Flyer::Player), expected);
+        assert_eq!(stats.ion.dissipaters, 7.0 * 0.01 * 3.0);
+    }
+
+    #[test]
+    fn other_mods_change_neither_the_capacity_nor_the_rate() {
+        let others: Vec<OutfitMod> = (0..64)
+            .filter(|&mod_type| mod_type != ION_ABSORBER && mod_type != ION_DISSIPATER)
+            .map(|mod_type| outfit(mod_type, 25, 1))
+            .collect();
+        let stats = ShipStats::for_player(ionizing(400, 100), &others);
+        assert_eq!(stats.ion.capacity(Flyer::Player), 400.0);
+        assert_eq!(stats.ion.rate(Flyer::Player), 1.0);
+        assert_eq!((ION_DISSIPATER, ION_ABSORBER), (39, 40));
     }
 
     #[test]
@@ -645,6 +891,20 @@ mod tests {
     }
 
     #[test]
+    fn the_warp_factor_is_the_classs_by_its_flags() {
+        assert_eq!(ShipStats::new(AVERAGE, &[]).warp_factor, 1.3);
+        assert_eq!(ShipStats::default().warp_factor, 1.3, "no Flags");
+        let slow = ShipFields {
+            flags: 0x0001,
+            ..AVERAGE
+        };
+        assert_eq!(
+            ShipStats::new(slow, &[]).warp_factor,
+            nova_sim_catalog::warp::warp_factor(0x0001)
+        );
+    }
+
+    #[test]
     fn a_plain_ship_does_not_fast_jump() {
         assert!(!ShipStats::new(AVERAGE, &[]).fast_jump);
     }
@@ -703,6 +963,42 @@ mod tests {
         assert!(
             !ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 1, 1)]).dampener,
             "another ModType"
+        );
+    }
+
+    #[test]
+    fn the_stellar_resistances_are_carried_in_any_slot_whatever_their_modval() {
+        let plain = ShipStats::new(AVERAGE, &[]);
+        assert!(!plain.gravity_resistance && !plain.deadly_resistance);
+        for mod_val in [0, -7, 300] {
+            let gravity = ShipStats::for_player(AVERAGE, &[outfit(GRAVITY_RESISTANCE, mod_val, 1)]);
+            assert!(gravity.gravity_resistance && !gravity.deadly_resistance);
+            let deadly = ShipStats::new(AVERAGE, &[outfit(DEADLY_RESISTANCE, mod_val, 2)]);
+            assert!(deadly.deadly_resistance && !deadly.gravity_resistance);
+        }
+        let fourth = slots(
+            &[
+                (FAST_JUMP, 1),
+                (FAST_JUMP, 1),
+                (FAST_JUMP, 1),
+                (GRAVITY_RESISTANCE, 1),
+            ],
+            1,
+        );
+        assert!(
+            ShipStats::new(AVERAGE, &fourth).gravity_resistance,
+            "the fourth slot"
+        );
+        let none = ShipStats::new(
+            AVERAGE,
+            &[
+                outfit(GRAVITY_RESISTANCE, 1, 0),
+                outfit(DEADLY_RESISTANCE, 1, 0),
+            ],
+        );
+        assert!(
+            !none.gravity_resistance && !none.deadly_resistance,
+            "none carried"
         );
     }
 
@@ -782,7 +1078,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 39, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 43, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

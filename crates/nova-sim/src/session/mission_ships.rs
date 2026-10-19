@@ -850,12 +850,14 @@ impl Session {
         let Some(dude) = record.ships.dude else {
             return 0;
         };
+        let items = self.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            items,
         );
         let nav = Vec::new();
         let preset = self.uniform_preset_kept(slot, record, kept, None, chance);
@@ -879,9 +881,12 @@ impl Session {
             chance,
         );
         let last = self.last_npc();
-        let came = self
-            .traffic
-            .bring_in_within(ships, self.spawn_reserve(SPAWN_RESERVE));
+        let came = self.traffic.bring_in_within(
+            ships,
+            self.spawn_reserve(SPAWN_RESERVE),
+            &self.govts,
+            &mut *chance,
+        );
         self.mission_ships_came(last);
         i16::try_from(came).unwrap_or(i16::MAX)
     }
@@ -942,12 +947,14 @@ impl Session {
             .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
             .unwrap_or_default();
         let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
+        let items = self.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            items,
         );
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with
@@ -990,7 +997,9 @@ impl Session {
             ship.held = false;
         }
         let last = self.last_npc();
-        let came = self.traffic.bring_in_within(vec![ship], reserve);
+        let came = self
+            .traffic
+            .bring_in_within(vec![ship], reserve, &self.govts, &mut *chance);
         if came == 0 {
             return;
         }
@@ -2478,6 +2487,76 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_destroy_goals_ship_a_deadly_stellar_kills_counts_only_by_the_destroyed_reading() {
+        let catalog = ships_catalog(MissionShip {
+            goal: 0,
+            ..shipping(-1, 0)
+        });
+        for (reading, left, destroyed) in [(RuleSource::Engine, 2, 0), (RuleSource::Bible, 1, 1)] {
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            session.rules = session
+                .rules
+                .with_override(crate::RuleKey::DeadlyStellarKill, reading);
+            // Apart from the other ship and the player.
+            let at = Vec2::new(3000.0, 3000.0);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.state.position = at;
+            let id = npc.id;
+            assert!(npc.mission.is_some(), "a mission ship");
+            session.sites = vec![crate::catalog::LandingSite {
+                flags2: crate::deadly_stellar::DEADLY_STELLAR,
+                frame_size: Some((2, 2)),
+                ..crate::testkit::planet(160, at.x, at.y)
+            }];
+            session.listed = session.sites.clone();
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(session.npcs().len(), 1, "{reading:?}");
+            let ships = ships_of(&session);
+            assert_eq!(
+                (ships.left, ships.destroyed),
+                (left, destroyed),
+                "{reading:?}"
+            );
+            let active = session.pilot().missions().get(0).expect("held");
+            assert_eq!(active.failed, None, "{reading:?}: not failed");
+        }
+    }
+
+    /// A mission ship a shot disables on the tick a deadly stellar kills it
+    /// is counted disabled and raises its disabled fate first, by either
+    /// reading, as the hit's `_DamageShip` counts it before
+    /// `_HandleDeadlyStellars` runs.
+    #[test]
+    fn a_ship_disabled_on_the_tick_a_deadly_stellar_kills_it_is_counted_disabled() {
+        use crate::session::deadly_stellars::tests::{Gunner, disabled_then_killed};
+        let catalog = ships_catalog(shipping(-1, 0));
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            session.rules = session
+                .rules
+                .with_override(crate::RuleKey::DeadlyStellarKill, reading);
+            let id = session.npcs()[0].id;
+            assert!(session.npcs()[0].mission.is_some(), "a mission ship");
+            session.story_raised();
+            disabled_then_killed(&mut session, id, &Gunner::Player);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(ships_of(&session).disabled, 1, "{reading:?}");
+            assert!(
+                session
+                    .story_raised()
+                    .contains(&crate::story::StoryEvent::ShipFate {
+                        ship: id,
+                        fate: crate::story::Fate::Disabled,
+                    }),
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_ship_that_is_not_a_mission_ship_counts_nothing() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
@@ -2591,13 +2670,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_captured_mission_ship_loses_its_mark_and_the_ships_left_stay() {
+    fn a_captured_mission_ship_keeps_its_mark_and_the_ships_left_stay() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
-        session.lose_captured(id);
-        assert_eq!(marked(&session), [0]);
+        session.lose_captured(id, true);
+        assert_eq!(
+            marked(&session),
+            [0, 0],
+            "_DoPlunderDialog @0x9459b-0x947cf"
+        );
         assert_eq!(ships_of(&session).left, 2);
     }
 
@@ -2629,7 +2712,7 @@ pub(super) mod tests {
 
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
-    fn destroy(session: &mut Session, index: usize) {
+    pub(in crate::session) fn destroy(session: &mut Session, index: usize) {
         session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
@@ -2989,12 +3072,20 @@ pub(super) mod tests {
         }
     }
 
-    /// Sends the NPC at `index` out of the system by hyperspace, from far
-    /// out, on one traffic tick.
-    fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+    /// Puts the NPC at `index` at the end of its warp out, far out, its
+    /// clock past d / w (see `nova_sim::traffic::warp_out`).
+    fn warped(session: &mut Session, index: usize) {
         let npc = &mut session.traffic.npcs_mut()[index];
-        npc.goal = Goal::JumpOut;
         npc.state.position = Vec2::new(0.0, -100_000.0);
+        npc.begin_own_jump();
+        npc.warp.stage = 2.0;
+        npc.warp.since = 1_000;
+    }
+
+    /// Sends the NPC at `index` out of the system by hyperspace, at the
+    /// end of its warp out, on one traffic tick.
+    fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+        warped(session, index);
         session.tick_traffic(catalog, &Keeping, &mut NeverFires);
     }
 
@@ -3042,18 +3133,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_out_on_double_times_second_pass_raises_its_departure() {
+    fn a_ship_jumping_out_leaves_on_the_advance_pass_alone() {
+        // Its warp's end is sub-goal 4's, `_LowLevelAIHandler`'s
+        // (@0x8595b), which `_AIDispatch` runs on the advance pass alone.
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
         let id = session.npcs()[0].id;
-        let npc = &mut session.traffic.npcs_mut()[0];
-        npc.goal = Goal::JumpOut;
-        npc.state.position = Vec2::new(0.0, -100_000.0);
+        warped(&mut session, 0);
         session.tick_again(
             crate::flight::Controls::default(),
             crate::Rules::default(),
             &mut NeverFires,
         );
+        assert!(session.npcs().iter().any(|npc| npc.id == id), "still here");
+        assert!(!departed(&session, id));
+        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));
@@ -4943,7 +5037,14 @@ pub(super) mod tests {
             &[(crate::stats::MORE_ARMOR, 500)],
         ));
         catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(300), 1)];
-        let session = in_flight(&catalog);
+        // By the other reading of `npc_default_items` the default armour
+        // counts toward its most, but not toward the cut.
+        let mut session =
+            accepted(&catalog).with_rules(crate::rulebook::Rulebook::default().with_override(
+                crate::rulebook::RuleKey::NpcDefaultItems,
+                crate::rulebook::RuleSource::Bible,
+            ));
+        take_off_unaborted(&mut session, &catalog);
         assert_eq!(conditions(&session), [Condition::Disabled; 2]);
         for npc in session.npcs() {
             assert_eq!(npc.stats.armor, f32::from(FAST.armor) + 500.0);
@@ -4952,6 +5053,11 @@ pub(super) mod tests {
                 "{}",
                 npc.reserves.armor.now
             );
+        }
+        // By the engine its most is its class's alone.
+        let session = in_flight(&catalog);
+        for npc in session.npcs() {
+            assert_eq!(npc.stats.armor, f32::from(FAST.armor));
         }
     }
 

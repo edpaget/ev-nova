@@ -2564,6 +2564,7 @@ mod tests {
     fn kind(command: &DrawCommand) -> &'static str {
         match command {
             DrawCommand::Sprite { .. } => "sprite",
+            DrawCommand::Colorized { .. } => "colorized",
             DrawCommand::Picture { .. } => "picture",
             DrawCommand::StretchedPicture { .. } => "stretched",
             DrawCommand::BlendedPicture { .. } => "blended",

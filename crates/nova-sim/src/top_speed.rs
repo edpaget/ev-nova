@@ -9,17 +9,26 @@
 //!    The cache changes nothing the player can see. The player's branch
 //!    skips steps 2-5.
 //! 2. **An NPC of `shïp` `Flags` 0x0400** gets 0 at once (@0x37b5-0x37bf).
-//!    Left out, to
-//!    rdm:phase/system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
+//!    Ported in [`Npc::class_handling`](crate::traffic::npc::Npc::class_handling)
+//!    ([`STILL_HULL`](crate::skill::STILL_HULL), see the
+//!    [`skill`](crate::traffic::skill) module).
 //! 3. **Any other NPC** starts from the class's bare `Speed`, without its
 //!    outfits, × its skill rolled at spawn (`_RandomSkillLevel`
-//!    @0x6922-0x6984; @0x37c5-0x37d2). Left out, to the same phase: the
-//!    engine flies an NPC at its own handling, outfits counted.
-//! 4. **× its government's `SkillMult` / 100** (@0x37cb-0x37ee). Left out,
-//!    to the same phase.
-//! 5. **× 0.333** (@0xdd0c8) while a tractor beam pulls the ship
-//!    (+0xc8dc, @0x37f4-0x3815). Left out: the engine has no tractor
-//!    beams. Owner: rdm:task/weapon-flags-follow-up.
+//!    @0x6922-0x6984; @0x37c5-0x37d2). Ported: the class's bare `Speed`
+//!    is [`ShipStats::for_npc`](crate::stats::ShipStats::for_npc)'s under
+//!    the engine reading of [`RuleKey::NpcDefaultItems`] (the other
+//!    reading counts its default items), and the skill
+//!    ([`random_skill_level`](crate::skill::random_skill_level)) is rolled
+//!    at every spawn and multiplied in
+//!    [`Npc::class_handling`](crate::traffic::npc::Npc::class_handling).
+//! 4. **× its government's `SkillMult` / 100** (@0x37cb-0x37ee), when it
+//!    has a government. Ported in the same place, the factor kept on the
+//!    NPC as its government changes.
+//! 5. **× 0.333** (@0xdd0c8) while another ship holds the NPC in a
+//!    tractor beam (+0xc8dc, @0x37f4-0x3815). Ported in
+//!    [`Npc::own_handling`](crate::traffic::npc::Npc::own_handling) (see
+//!    the [`tractor_hold`](crate::combat::tractor_hold) module), which
+//!    [`Npc::top_speed`](crate::traffic::npc::Npc::top_speed) reads.
 //! 6. **× 2** for the shareware nag ship (+0xc8d0 0x3ff, @0x381c-0x382a).
 //!    Left out: the nag is out of scope.
 //! 7. **× 1.5** (@0xdd078) for the player, and for every ship whose

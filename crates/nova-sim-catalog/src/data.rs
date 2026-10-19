@@ -42,8 +42,8 @@ use crate::catalog::{
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
+    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
     SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
     WeaponRecord, loaded_mod_val,
 };
@@ -172,6 +172,7 @@ impl PilotCatalog for GameData {
                     inherent_govt: inherent_govt(record.inherent_govt),
                     combat_govt: combat_govt(record.inherent_govt),
                     escort_type: record.escort_type,
+                    skill_var: record.skill_var,
                 })
             })
             .collect()
@@ -1045,13 +1046,14 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let (size, height, exits) = match self.get::<ShipAnim>(id) {
+                let (size, height, exits, display) = match self.get::<ShipAnim>(id) {
                     Some(Ok(anim)) => (
                         Some(anim.record.base_x_size),
                         Some(anim.record.base_y_size),
                         Some(ship_exits(anim.record)),
+                        Some(ship_display(anim.record)),
                     ),
-                    _ => (None, None, None),
+                    _ => (None, None, None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -1071,6 +1073,7 @@ impl CombatCatalog for GameData {
                     cost: record.cost,
                     speed: record.speed,
                     exits,
+                    display,
                     escort_class: EscortClass::of(
                         record.escort_type,
                         record.inherent_ai,
@@ -1111,6 +1114,7 @@ impl CombatCatalog for GameData {
                     news_pic: record.news_pic,
                     require: record.require.bits(),
                     inh_jam: record.inh_jam,
+                    skill_mult: record.skill_mult,
                 })
             })
             .collect()
@@ -1288,6 +1292,19 @@ fn ship_exits(anim: &ShipAnim) -> ShipExits {
     }
 }
 
+/// A `shän`'s display fields, raw.
+fn ship_display(anim: &ShipAnim) -> ShipDisplay {
+    ShipDisplay {
+        flags: anim.flags.bits(),
+        base_sets: anim.base_set_count,
+        anim_delay: anim.anim_delay,
+        alt_sets: anim.alt_set_count,
+        alt_image: anim.alt_image_id > 0,
+        blink: blink_of(anim),
+        lights_image: anim.light_image_id > 0,
+    }
+}
+
 /// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
 fn blink_of(anim: &ShipAnim) -> Blink {
     Blink {
@@ -1327,6 +1344,8 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         armor_rech: ship.armor_rech,
         flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
+        ionize_max: ship.ionize_max,
+        deionize: ship.deionize,
     }
 }
 
@@ -1432,8 +1451,8 @@ mod tests {
     use super::*;
     use crate::catalog::{
         AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, FrameSize, GateSite,
-        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits, StarSystem, StartDate,
-        StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipDisplay, ShipExits, StarSystem,
+        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::control::{Script, Test, TestExpr};
 
@@ -1733,6 +1752,15 @@ mod tests {
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags2), Ok(0x4021));
     }
 
+    #[test]
+    fn a_ships_fields_include_its_deionize_and_ionize_max() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x36A, &[-5, 400]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        let fields = data.ship_fields(ShipId(128)).expect("decodes");
+        assert_eq!((fields.deionize, fields.ionize_max), (-5, 400));
+    }
+
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
     /// 5-8, each an `oütf` ID and a count; every other slot -1.
     fn outfitted(items: &[(i16, i16)], more: &[(i16, i16)]) -> Vec<u8> {
@@ -1814,6 +1842,7 @@ mod tests {
         bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
+        put_i16s(&mut bytes, 0x60, &[15]);
         bytes[0x26A..0x26E].copy_from_slice(b"b300");
         bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
         bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
@@ -1874,6 +1903,7 @@ mod tests {
             inherent_govt: Some(GovtId(129)),
             combat_govt: None,
             escort_type: 2,
+            skill_var: 15,
             on_capture: Script::parse("^b301"),
             on_purchase: Script::parse("b300"),
             on_retire: Script::parse("!b30"),
@@ -3916,6 +3946,7 @@ mod tests {
             cost: -1,
             speed: 2,
             exits,
+            display: exits.map(|_| ShipDisplay::default()),
             escort_class: EscortClass::Fighter,
         };
         assert_eq!(
@@ -3957,6 +3988,60 @@ mod tests {
                 frames: 64,
             })
         );
+    }
+
+    #[test]
+    fn a_hull_carries_its_shäns_display_fields() {
+        // shän 379's: `Flags` 0xc2, six base sets, `AnimDelay` 5, no alt.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x04, &[6]);
+        put_i16s(&mut bytes, 0x0C, &[-1, -1, 0]);
+        bytes[0x2E..0x30].copy_from_slice(&0x00C2_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x30, &[5]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.hulls()[0].display,
+            Some(ShipDisplay {
+                flags: 0x00C2,
+                base_sets: 6,
+                anim_delay: 5,
+                alt_sets: 0,
+                alt_image: false,
+                blink: Blink::STEADY,
+                lights_image: false,
+            })
+        );
+        // shän 380's: `Flags` 0x58, one base set, six alt sets of `rlëD`
+        // 1330.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x04, &[1]);
+        put_i16s(&mut bytes, 0x0C, &[1330, 1331, 6]);
+        bytes[0x2E..0x30].copy_from_slice(&0x0058_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x30, &[5]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        let display = data.hulls()[0].display.expect("a shän");
+        assert_eq!((display.flags, display.base_sets), (0x0058, 1));
+        assert_eq!((display.alt_sets, display.alt_image), (6, true));
+        assert!(!display.lights_image);
+        // A lights image (`LightImageID` 0x1E) blinking the stock triangle.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x1E, &[1400]);
+        put_i16s(&mut bytes, 0x36, &[2, 10, 75, 32, 75]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        let display = data.hulls()[0].display.expect("a shän");
+        assert!(display.lights_image);
+        assert_eq!(
+            display.blink,
+            Blink {
+                mode: 2,
+                a: 10,
+                b: 75,
+                c: 32,
+                d: 75
+            }
+        );
+        let data = store(&[(Ship::TYPE, 128, armed())]);
+        assert_eq!(data.hulls()[0].display, None, "no shän");
     }
 
     #[test]
@@ -4026,6 +4111,7 @@ mod tests {
         put_i16s(&mut bytes, 0x18, &[1, -1, 4, -1]);
         put_i16s(&mut bytes, 0x20, &[0, 1, 12, 13]);
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
+        put_i16s(&mut bytes, 0x30, &[150]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         bytes[0x64..0x73].copy_from_slice(b"the Federation\0");
@@ -4108,6 +4194,7 @@ mod tests {
             news_pic: 9001,
             require: 0x8000_0000_0000_0021,
             inh_jam: [25, 0, -3, 0],
+            skill_mult: 150,
         };
         assert_eq!(
             data.governments(),

@@ -18,11 +18,13 @@
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`flash`]: a ship's shield flash, the timer a hit sets and the level
 //!   its shield layer shows.
+//! - [`held_alt`]: a ship's alt layer as last drawn, which a disabled
+//!   ship of `shän` `Flags` 0x0020 keeps showing where it was.
 //! - [`floating`]: the floating map shown while H or `\` is held: its
 //!   frame, clock, zoom and click boxes, and the pass that clips and
 //!   fades it.
-//! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
-//!   and the screen fading to white and back.
+//! - [`jump`]: the hyperspace jump's [`JumpEffect`], the screen fading to
+//!   white as the ship warps away, and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`lightning`]: a lightning beam's zig-zag.
@@ -60,15 +62,20 @@ pub mod effects;
 pub mod escorts;
 pub mod flash;
 pub mod floating;
+pub mod gate_colorize;
+pub mod held_alt;
 pub mod hud;
+pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
 pub mod murk;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
+pub mod ship_layers;
 pub mod shot_fade;
 pub mod smoke;
+pub mod solid_runs;
 pub mod spin;
 pub mod sprite;
 pub mod target;

@@ -382,8 +382,8 @@ impl Session {
     /// [`SessionEvent::ShipChanged`]. What the change carries, and what
     /// runs between, is the caller's. The exit cursors go on as the refit
     /// carries them, or start at exit 0 by the other reading of
-    /// [`RuleKey::ReusedSlotExits`]; the fold set goes back to 0 by
-    /// either reading.
+    /// [`RuleKey::ReusedSlotExits`]; the fold goes to the new hull's last
+    /// set by either reading.
     pub(super) fn become_class(
         &mut self,
         ship: &ShipRecord,
@@ -403,12 +403,11 @@ impl Session {
         if self.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
             *self.armament.exit_cursors_mut() = ExitCursors::default();
         }
-        // The fold set (+0xc8fc) does not carry: the original's ship change
-        // rewrites it as the new hull's `BaseSets` − 1 (`_HandlePlayer`
-        // @0x6ef3f, @0x6c552/@0x6c55e; `_ResetPlayer`), 0 for a hull of one
-        // set, by either reading. A folding hull's value is
-        // ship-handling-fidelity phase 10's.
-        *self.armament.exits_mut().1 = 0;
+        // The fold does not carry: the original's ship change rewrites it
+        // as the new hull's `BaseSets` − 1 with no direction and its timer
+        // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
+        // by either reading (see the `ship_display` module).
+        self.last_set_fold();
         self.save_due = true;
         self.emit(SessionEvent::ShipChanged);
     }

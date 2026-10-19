@@ -23,6 +23,8 @@ use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
 use crate::traffic::plunder_dock::Docking;
+use crate::traffic::ship_display::NpcDisplay;
+use crate::traffic::warp_out::Warp;
 
 pub use crate::combat::NpcId;
 
@@ -407,6 +409,23 @@ pub struct Npc {
     /// No stock class is; the player's ship never is (`_HandlePlayer` has
     /// no such test).
     pub immobile: bool,
+    /// Its skill (ship +0x40), rolled as it spawns
+    /// ([`random_skill_level`](crate::skill::random_skill_level)) and kept
+    /// until it leaves the system: its top speed and thrust take it (see
+    /// the [`skill`](crate::traffic::skill) module). An escort kept across
+    /// a system entry, and a ship enlisted in place, keep theirs. It is
+    /// not saved: a loaded pilot's escorts roll afresh, as
+    /// `_LoadPilotData` spawns them anew.
+    pub skill: f32,
+    /// Its government's `SkillMult` factor
+    /// ([`Governments::skill_mult`](crate::govt::Governments::skill_mult)),
+    /// kept in step with its [`govt`](Npc::govt) by every write of it
+    /// (see the [`skill`](crate::traffic::skill) module).
+    pub skill_mult: f32,
+    /// Whether its ship class is `shïp` `Flags` 0x0400
+    /// ([`STILL_HULL`](crate::skill::STILL_HULL)): it has no top speed and
+    /// no thrust, its turn untouched.
+    pub still: bool,
     /// Its ship type's miner bits, `shïp` `Flags3` & 0x0003
     /// ([`ShipKind::miner`](crate::traffic::table::ShipKind)): a leaderless
     /// ship with either goes to the miner's AI (see
@@ -434,14 +453,18 @@ pub struct Npc {
     /// along its own (the original's +0xc8dc and +0xb4, see
     /// [`impact`](crate::combat::impact)): none as it spawns or launches,
     /// as the original's spawns and `_LaunchFighter` set it (@0x3c5c8,
-    /// @0x3cb1c, @0x3d71d). The fight sets and touches it.
+    /// @0x3cb1c, @0x3d71d). The fight sets and touches it; its hold pulls
+    /// it, releases it and lets it lapse, and slows it while another ship
+    /// holds it (see the [`tractor_hold`](crate::traffic::tractor_hold)
+    /// module).
     pub tractor: Option<TractorLock>,
     /// Its ionization (the original's +0x5c and +0xb0, see
     /// [`ion`](crate::combat::ion)): none as it spawns, launches or is
     /// left as the player's hulk, as `_RandomShipSpawn`,
     /// `_GenericRandomShipSpawn`, `_LaunchFighter` and the eject set it
     /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
-    /// ship-handling-fidelity phase 11 lowers it. Never saved.
+    /// [`ionization`](crate::traffic::ionization) sheds it and slows the
+    /// ship by it. Never saved.
     pub ion: Ion,
     /// The crew pods it has left to eject as it dies (the original's
     /// +0xc908): its class's `PodCount` as it spawns, launches or is left
@@ -516,6 +539,14 @@ pub struct Npc {
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
     pub marines: ClassMarines,
+    /// Its warp stage, +0x50 and +0xa4, and the sub-goal that drives it
+    /// (see [`warp_out`](crate::traffic::warp_out)): none as it spawns,
+    /// as every spawn clears +0x50. Never saved.
+    pub warp: Warp,
+    /// Its drawn state: its bank, engine glow, display timers and sets,
+    /// and how it was flown this tick (see
+    /// [`ship_display`](crate::traffic::ship_display)). Never saved.
+    pub display: NpcDisplay,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -594,7 +625,10 @@ pub struct MissionMark {
     pub behav: ShipBehav,
     /// Its place in the player's formation once it has joined it as a
     /// mission escort (the original's AI type 6 led by the player): none
-    /// before (see the session's `mission_ships` module). It is never an
+    /// before (see the session's `mission_ships` module). A `ShipBehav` 1
+    /// ship joins on its own; one of any `ShipBehav` captured for an escort
+    /// joins as it is captured, keeping its mark (`_DoPlunderDialog`
+    /// @0x9459b-0x947cf, see `nova_sim::Session::assign`). It is never an
     /// [`EscortDuty`], so every hired-escort path leaves it out.
     pub formation: Option<FormationSlot>,
     /// Its standing order while a mission escort, given by the player's
@@ -661,13 +695,14 @@ impl Npc {
     }
 
     /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
-    /// × `led_speed`, the factor for the player and the ships it leads
-    /// (see `nova_sim::top_speed`), while it
+    /// ([`Npc::own_handling`], a third while another ship holds it in a
+    /// tractor beam) × `led_speed`, the factor for the player and the
+    /// ships it leads (see `nova_sim::top_speed`), while it
     /// [escorts the player](Npc::escorts_player), whose leader (+0x9a) is
     /// then the player; otherwise its own.
     #[must_use]
     pub fn top_speed(&self, led_speed: f32) -> f32 {
-        let own = self.stats.handling.max_speed;
+        let own = self.own_handling().max_speed;
         if self.escorts_player() {
             own * led_speed
         } else {
@@ -676,7 +711,8 @@ impl Npc {
     }
 
     /// Whether it is a mission escort: a mission's special ship that has
-    /// joined the player's formation ([`MissionMark::formation`]).
+    /// joined the player's formation ([`MissionMark::formation`]), a
+    /// `ShipBehav` 1 ship or one captured for an escort.
     #[must_use]
     pub fn mission_escort(&self) -> bool {
         self.mission.is_some_and(|mark| mark.formation.is_some())
@@ -975,10 +1011,12 @@ impl Npc {
     /// fighter bays and point defence, its pick kept
     /// ([`fire::gated`](crate::ai::fire::gated)). So does its AI wait
     /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
-    /// plunder, and a ship a pirate took into its fleet. The waits the
-    /// engine doesn't fly yet (a landed ship's stay, a launched fighter's,
-    /// the warp out after a leader) will count here once built (rdm
-    /// weapons-fidelity phase 17's findings).
+    /// plunder, a ship a pirate took into its fleet, and the wait of a
+    /// ship following its leader's warp out while the leader still turns
+    /// (`_LowLevelAIHandler` @0x85bc3, see
+    /// [`warp_out`](crate::traffic::warp_out)). The waits the engine
+    /// doesn't fly yet (a landed ship's stay, a launched fighter's) will
+    /// count here once built (rdm weapons-fidelity phase 17's findings).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
     /// the original keeps it in +0x4c, read so by
@@ -1073,15 +1111,15 @@ impl Npc {
     /// from its first moving tick (@0x8dd8a), so -999.0 too; on tick 0 its
     /// goal is still 0x15. Waiting in its gate or held there
     /// ([`Mode::Emerging`], [`Mode::HeldAtGate`]) it is -1.0 (@0x89555);
-    /// entering a gate, coasting or flying, 0. The engine has no NPC
-    /// warp-out stage (+0x50 above 0, rdm:phase/ship-handling-fidelity/phase-8-warp-out);
-    /// a ship warping out is in hyperspace too once it has one.
+    /// entering a gate, coasting or flying, 0; a ship whose warp out is
+    /// under way, above 0 ([`Warp::under_way`], see
+    /// [`warp_out`](crate::traffic::warp_out)), is in hyperspace too.
     #[must_use]
     pub fn in_hyperspace(&self) -> bool {
         match self.mode {
             Mode::JumpingIn { .. } => true,
             Mode::LeavingGate { tick } => tick > 0,
-            _ => false,
+            _ => self.warp.under_way(),
         }
     }
 
@@ -1940,6 +1978,15 @@ mod tests {
             let npc = Npc { mode, ..plain(1) };
             assert_eq!(npc.in_hyperspace(), jumping, "{mode:?}");
         }
+    }
+
+    #[test]
+    fn a_ship_whose_warp_is_under_way_is_in_hyperspace() {
+        let mut npc = plain(1);
+        npc.warp.stage = 2.0;
+        assert!(npc.in_hyperspace(), "warping out");
+        npc.warp.stage = 0.0;
+        assert!(!npc.in_hyperspace(), "its warp over");
     }
 
     /// The player's hired escort, NPC `id`.

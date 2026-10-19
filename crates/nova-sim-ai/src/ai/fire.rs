@@ -166,19 +166,16 @@
 //!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17). Under goal 0xd
 //!   it is the only launch, and is built: a hopeless plunderer sniping
 //!   launches its fighters after its passes, the bay its pick.
-//! - The escape pod's (class 0x2ff) exemption from the wait gate
-//!   (@0x34a69-0x34a72): a pod NPC
-//!   ([`pod_flight`](crate::traffic::pod_flight)) counts its wait in its
-//!   mode, which [`Npc::wait_running`] doesn't read, and the gate's own
-//!   test of its class is
-//!   rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate.
-//!   A pirate's count wait (goal 22) is exempt ([`gated`]).
-//! - `_ShipTurnRate`'s own factors but its floor, which
-//!   [`suitable_missile`] reads through the target's turn rate: the
-//!   tractor's hold (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold),
-//!   ionization (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling)
-//!   and an NPC's class rate without its outfits
-//!   (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
+//! - `_ShipTurnRate`'s nag-ship +1, which [`suitable_missile`] would read
+//!   through the target's turn rate: no ship of ours is the nag. Every
+//!   other factor is read: an NPC's rate is its class's alone by the
+//!   engine reading of
+//!   [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems), its
+//!   default items counted by the other
+//!   ([`ShipStats::for_npc`](crate::stats::ShipStats::for_npc)), floored
+//!   ([`floored_turn`](crate::handling::floored_turn)), a third under a
+//!   tractor's hold ([`Npc::own_handling`]) and slowed by its ion charge
+//!   ([`Npc::turn_rate`]).
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
@@ -360,7 +357,7 @@ pub fn off_by(heading: f32, wanted: i16) -> f32 {
 /// call).
 #[must_use]
 pub fn faces(npc: &Npc, wanted: i16, turns: f32) -> bool {
-    off_by(npc.state.heading, wanted) < turns * npc.stats.handling.turn_rate
+    off_by(npc.state.heading, wanted) < turns * npc.turn_rate()
 }
 
 /// The whole-degree lead from `npc`'s centre to a ship at `at` for
@@ -429,6 +426,7 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
         npc: true,
         cloaked: npc.cloak.is_cloaked(),
         key_carried: npc.hull.key_carried,
+        folds: npc.hull.frames.unfolds_to_fire(),
     };
     npc.armament
         .has_ammo(mount, &npc.rounds, npc.reserves.fuel, shooter)
@@ -442,15 +440,18 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
 /// turns [`SLOW_MISSILE_TURN`] or less.
 ///
 /// The original asks `_ShipTurnRate` of the target; here the target's
-/// [`Handling::turn_rate`](crate::handling::Handling) stands in for it,
-/// floored as `_ShipTurnRate` floors it
-/// ([`floored_turn`](crate::handling::floored_turn)). Its other factors
-/// are left out: the tractor's hold
-/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), ionization
-/// (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling), an
-/// NPC's class rate without its outfits
-/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves),
-/// and the nag ship's +1, which no ship of ours is.
+/// [`Handling::turn_rate`](crate::handling::Handling) stands in for it:
+/// an NPC's its class's alone by the engine reading of
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems), with its
+/// default items by the other
+/// ([`ShipStats::for_npc`](crate::stats::ShipStats::for_npc)), floored as
+/// `_ShipTurnRate` floors it
+/// ([`floored_turn`](crate::handling::floored_turn)), a third for an NPC
+/// another ship holds in a tractor beam
+/// ([`Npc::own_handling`](crate::traffic::npc::Npc::own_handling)), and
+/// slowed by its ion charge ([`Npc::turn_rate`],
+/// [`PlayerSide::handling`]). Only the nag ship's +1 is left out, as no
+/// ship of ours is the nag.
 #[must_use]
 pub fn suitable_missile(spec: &WeaponSpec, target_turn_rate: f32) -> bool {
     let fast = target_turn_rate.trunc() > FAST_TARGET_TURN;
@@ -617,6 +618,9 @@ fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
 /// @0x3501f), so the pick is neither fired nor cleared (@0x35012); the
 /// point defence (`_AIFireTurret` → `_HandleShipPointDefense` @0x80b0d)
 /// and `_AILaunchFighter` are the AI's, which the gate does not stop.
+/// An escape pod (class 0x2ff) is exempt too (@0x34a6c): its wait is its
+/// [`Mode::Adrift`](crate::traffic::npc::Mode::Adrift), which
+/// [`Npc::wait_running`] doesn't read, so no test of its class is needed.
 #[must_use]
 pub fn gated(npc: &Npc) -> Trigger {
     let trigger = npc.trigger;
@@ -920,7 +924,7 @@ fn sight_of<'a>(
             .map(|player| (player.handling.turn_rate, player.hull.planet_type)),
         ShipRef::Npc(id) => around
             .npc(id)
-            .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
+            .map(|other| (other.turn_rate(), other.hull.planet_type)),
     }
     .unwrap_or_default();
     Some(Sight {
@@ -1192,6 +1196,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         }
     }
 
@@ -3081,6 +3086,21 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_missile_is_fired_at_an_agile_npc_its_ionization_slows() {
+        let emp = shooter(&[short(128), turning_missile(131, 20, 0)], ATTACK);
+        // 6° a tick, slowed to 3 at a factor of 0.5.
+        let agile = |charge: f32| {
+            move |other: &mut Npc| {
+                other.stats.handling.turn_rate = 6.0;
+                other.stats.ion.class_capacity = 400.0;
+                other.ion.charge = charge;
+            }
+        };
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile(0.0)), None);
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile(200.0)), id(131));
+    }
+
+    #[test]
     fn a_planet_type_missile_flies_only_at_a_planet_type_ship_and_another_only_at_another() {
         use crate::combat::weapon::PLANET_TYPE;
         let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
@@ -3400,6 +3420,28 @@ mod tests {
         assert_eq!(gated(&npc), FULL);
     }
 
+    #[test]
+    fn a_pod_adrift_is_not_held_by_the_wait_gate() {
+        // `_HandleShip` skips class 0x2ff's gate (@0x34a6c): a pod's wait
+        // is its `Mode::Adrift`, which the gate doesn't read.
+        let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
+        npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5 };
+        npc.trigger = FULL;
+        assert!(!npc.wait_running());
+        assert_eq!(gated(&npc), FULL);
+        npc.trigger = Trigger {
+            only: id(128),
+            ..Trigger::default()
+        };
+        after_firing(&mut npc, &gun_and_secondary());
+        assert_eq!(
+            (npc.trigger.only, npc.pick),
+            (None, None),
+            "fired, so cleared"
+        );
+    }
+
     // The snipe.
 
     const SNIPE: Goal = Goal::Snipe(ShipRef::Player);
@@ -3427,6 +3469,29 @@ mod tests {
         let resting = trigger_at_player(&sniper(0.3, 0.3), 0.0, -100.0);
         assert_eq!(resting.only, id(130), "its turret, after its gun");
         assert!(resting.point_defence && resting.bays);
+    }
+
+    #[test]
+    fn a_moving_inertialess_sniper_also_runs_no_pass_and_launches_its_fighters() {
+        // Its brake (@0x8710f-0x87137) jumps to `_AILaunchFighter` too
+        // (@0x8713a → @0x87329).
+        let mut npc = shooter(&[gun(128, 1, 1), guided(130, 4), bay(150)], SNIPE);
+        npc.stats = ShipStats::new(
+            nova_sim_base::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        assert!(npc.flies_inertialess(None, crate::inertialess::InertialDampener::PlayerOnly));
+        npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+        npc.state.velocity = Vec2::new(0.0, -0.36);
+        npc.speed = 0.36;
+        let moving = trigger_at_player(&npc, 0.0, -100.0);
+        assert_eq!(
+            (moving.only, moving.keep, moving.bays, moving.point_defence),
+            (None, id(150), true, false)
+        );
     }
 
     /// What `npc` fires at the player 100 above [`SHOOTER`], crossing right

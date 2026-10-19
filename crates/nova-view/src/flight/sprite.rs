@@ -2,7 +2,9 @@
 //!
 //! A ship's sheet holds one frame per rotation in each set, as many as
 //! its `shän`'s frames per rotation. Frame 0 faces up and the frames turn
-//! clockwise in equal steps, as Nova's ship sheets do. Flight shows set 0.
+//! clockwise in equal steps, as Nova's ship sheets do. Flight draws the
+//! set the session's display picked on top of it (see the
+//! [`ship_layers`](super::ship_layers) module).
 //!
 //! The frame is the simulation's ([`drawn_frame`]): the heading's share of
 //! a turn truncated, as `_HandleShipDisplay` picks it, so the ship is
@@ -16,7 +18,7 @@ use nova_sim::combat::exits::drawn_frame;
 /// up, any value) is drawn on, of a sheet of `rotations` frames a turn.
 #[must_use]
 pub fn rotation_frame(heading_deg: f32, rotations: NonZeroU16) -> u16 {
-    drawn_frame(heading_deg, rotations)
+    drawn_frame(heading_deg, rotations, None)
 }
 
 #[cfg(test)]
@@ -76,7 +78,7 @@ mod tests {
                 let heading = tenth as f32 / 10.0;
                 assert_eq!(
                     rotation_frame(heading, rotations(n)),
-                    nova_sim::combat::exits::drawn_frame(heading, rotations(n)),
+                    nova_sim::combat::exits::drawn_frame(heading, rotations(n), None),
                     "{heading} of {n}"
                 );
             }

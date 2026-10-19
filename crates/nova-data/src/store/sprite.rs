@@ -65,6 +65,11 @@ pub enum ShipLayer {
     /// The weapon glow (`shän` `WeapImageID`), which a `Flags2` 0x0200
     /// weapon lights.
     Weapon,
+    /// The alt layer (`shän` `AltImageID`), drawn over the hull at its own
+    /// set.
+    Alt,
+    /// The shield (`shän` `ShieldImageID`), flashed on a hit.
+    Shield,
 }
 
 impl fmt::Display for ShipLayer {
@@ -73,6 +78,8 @@ impl fmt::Display for ShipLayer {
             Self::Glow => "glow",
             Self::Lights => "lights",
             Self::Weapon => "weapon",
+            Self::Alt => "alt",
+            Self::Shield => "shield",
         })
     }
 }
@@ -114,7 +121,7 @@ pub enum LayerError {
     },
 }
 
-/// A ship's glow, lights and weapon layers. Each is `None` when the `shän` does not
+/// A ship's glow, lights, weapon, alt and shield layers. Each is `None` when the `shän` does not
 /// define it (an image ID of 0 or less), and otherwise resolves or fails on
 /// its own, so one broken layer never hides the other.
 #[derive(Debug)]
@@ -125,10 +132,15 @@ pub struct ShipLayers<'a> {
     pub lights: Option<Result<LayerSprite<'a>, LayerError>>,
     /// The weapon glow.
     pub weapon: Option<Result<LayerSprite<'a>, LayerError>>,
+    /// The alt layer: defined only with an `AltSetCount` above 0 too, as
+    /// `_LoadExtendedShipSprites` loads it (@0x22aec-0x22b1e).
+    pub alt: Option<Result<LayerSprite<'a>, LayerError>>,
+    /// The shield.
+    pub shield: Option<Result<LayerSprite<'a>, LayerError>>,
 }
 
 impl GameData {
-    /// Resolves `ship`'s glow, lights and weapon layers through its `shän` (as
+    /// Resolves `ship`'s glow, lights, weapon, alt and shield layers through its `shän` (as
     /// [`GameData::ship_sprite`] does), each decoded with the base's
     /// layout: the Bible gives one `FramesPer` for every layer.
     ///
@@ -144,6 +156,10 @@ impl GameData {
             glow: layer(ShipLayer::Glow, anim.record.glow_image_id),
             lights: layer(ShipLayer::Lights, anim.record.light_image_id),
             weapon: layer(ShipLayer::Weapon, anim.record.weap_image_id),
+            alt: (anim.record.alt_set_count > 0)
+                .then(|| layer(ShipLayer::Alt, anim.record.alt_image_id))
+                .flatten(),
+            shield: layer(ShipLayer::Shield, anim.record.shield_image_id),
         })
     }
 
@@ -425,6 +441,39 @@ mod tests {
         let plain = store(&[]);
         let layers = plain.ship_layers(ShipId(128)).expect("resolves");
         assert!(layers.weapon.is_none(), "0 is undefined");
+    }
+
+    #[test]
+    fn the_alt_and_shield_layers_resolve_with_the_shans_layout() {
+        let mut bytes = layered_anim(0, 0);
+        // `AltImageID` 1400, `AltSetCount` 2; `ShieldImageID` 1500.
+        bytes[0x0C..0x0E].copy_from_slice(&1400_i16.to_be_bytes());
+        bytes[0x10..0x12].copy_from_slice(&2_i16.to_be_bytes());
+        bytes[0x40..0x42].copy_from_slice(&1500_i16.to_be_bytes());
+        let resources = vec![
+            (ShipAnim::TYPE, 128, bytes.clone()),
+            (RLED, 1400, sheet(8, 0x7C00)),
+            (RLED, 1500, sheet(4, 0x001F)),
+        ];
+        let data = store(&[("Layers", fork(&resources))]);
+        let layers = data.ship_layers(ShipId(128)).expect("resolves");
+        let alt = layers.alt.expect("defined").expect("resolves");
+        assert_eq!((alt.image_id, alt.sheet.frames().len()), (1400, 8));
+        assert_eq!(alt.sheet.layout().columns(), 4);
+        let shield = layers.shield.expect("defined").expect("resolves");
+        assert_eq!((shield.image_id, shield.sheet.frames().len()), (1500, 4));
+        assert_eq!(ShipLayer::Alt.to_string(), "alt");
+        assert_eq!(ShipLayer::Shield.to_string(), "shield");
+        // No alt sets: no alt layer, whatever its image.
+        bytes[0x10..0x12].copy_from_slice(&0_i16.to_be_bytes());
+        let resources = vec![(ShipAnim::TYPE, 128, bytes), (RLED, 1400, sheet(8, 0x7C00))];
+        let data = store(&[("Layers", fork(&resources))]);
+        let layers = data.ship_layers(ShipId(128)).expect("resolves");
+        assert!(layers.alt.is_none());
+        assert!(layers.shield.is_some(), "its shield still named");
+        let plain = store(&[]);
+        let layers = plain.ship_layers(ShipId(128)).expect("resolves");
+        assert!(layers.alt.is_none() && layers.shield.is_none());
     }
 
     #[test]

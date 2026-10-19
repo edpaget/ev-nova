@@ -5,10 +5,12 @@
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
-//! [`put_player_over`], for bringing the player over a ship to board it;
+//! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
+//! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
-//! ship somewhere directly; and
+//! ship somewhere directly; [`sabotage_kill`], for setting off the
+//! player's kill outfit directly; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
@@ -44,11 +46,34 @@ pub fn disable(session: &mut Session, id: NpcId) {
     }
 }
 
+/// Repairs NPC `id` in `session`, if it is in the system, its shield and
+/// armour full and intact: for a test that needs a disabled ship well
+/// again without its repair.
+pub fn repair(session: &mut Session, id: NpcId) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.reserves.shield.now = npc.reserves.shield.max;
+        npc.reserves.armor.now = npc.reserves.armor.max;
+        npc.condition = Condition::Intact;
+    }
+}
+
 /// Sets the player's condition in `session` to `to`: for a test that
 /// needs the player disabled or breaking up, or made intact again,
 /// without a fight.
 pub fn set_player_condition(session: &mut Session, to: Condition) {
     session.set_player_condition(to);
+}
+
+/// Sets the player's ionization in `session` to `ion`: for a test that
+/// needs the player ionized without a fight.
+pub fn set_player_ion(session: &mut Session, ion: crate::combat::ion::Ion) {
+    session.set_player_ion(ion);
+}
+
+/// Sets the player's tractor lock in `session` to `lock`: for a test that
+/// needs the player held without a fight.
+pub fn set_player_tractor(session: &mut Session, lock: Option<crate::combat::impact::TractorLock>) {
+    session.set_player_tractor(lock);
 }
 
 /// Puts the player's ship in `session` over NPC `id`, at its place,
@@ -83,6 +108,14 @@ pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
         npc.state.position = at;
         npc.state.velocity = crate::geometry::Vec2::ZERO;
     }
+}
+
+/// Sets off a sabotage kill outfit on the player in `session` at once, as
+/// its sabotage clock does when it runs out: for a test that needs the
+/// player's jump given up and its ship breaking up without waiting on the
+/// clock.
+pub fn sabotage_kill(session: &mut Session) {
+    session.sabotage_kill();
 }
 
 /// A [`PilotStore`] in memory that records each write and delete. Clones
@@ -261,6 +294,29 @@ mod tests {
         assert_eq!(session.player_condition(), Condition::Disabled);
         set_player_condition(&mut session, Condition::Intact);
         assert_eq!(session.player_condition(), Condition::Intact);
+    }
+
+    #[test]
+    fn setting_the_players_ionization_charges_and_colours_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let ion = crate::combat::ion::Ion {
+            charge: 12.0,
+            colour: 0x0000_80ff,
+            ..crate::combat::ion::Ion::default()
+        };
+        set_player_ion(&mut session, ion);
+        assert_eq!(session.ion(), ion);
+    }
+
+    #[test]
+    fn setting_the_players_tractor_lock_holds_it() {
+        use crate::combat::ShipRef;
+        use crate::combat::impact::TractorLock;
+        let mut session = Session::start(&catalog()).expect("starts");
+        let lock = Some(TractorLock::by(ShipRef::Npc(NpcId(3))));
+        set_player_tractor(&mut session, lock);
+        assert_eq!(session.tractor(), lock);
+        assert!(session.held_by_other());
     }
 
     #[test]

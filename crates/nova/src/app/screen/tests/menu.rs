@@ -549,6 +549,37 @@ fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
     assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
 }
 
+/// A stellar sprite pool whose last slot, 15, was last taken by stellar
+/// 2015 and placed at (-7, 9) from the player, and is owned by none now.
+fn ghost_in_slot_15() -> nova_sim::story::sprite_pool::StellarSpritePool {
+    let mut pool = nova_sim::story::sprite_pool::StellarSpritePool::default();
+    pool.rebuild((2000..2016).map(nova_sim::StellarId));
+    pool.place(nova_sim::StellarId(2015), (-7, 9));
+    pool.rebuild([]);
+    pool
+}
+
+#[test]
+fn a_pilot_created_after_another_carries_on_the_stellar_sprites_it_left() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    screen.flight = screen
+        .flight
+        .take()
+        .map(|flight| flight.with_stellar_sprite_pool(ghost_in_slot_15()));
+    escape_to_menu(&mut screen);
+    assert!(screen.flight_view().is_none(), "put away");
+    create(&mut screen, "Bea");
+    assert_eq!(pilot(&screen).name(), "Bea");
+    let pool = flight(&screen).stellar_sprite_pool().expect("a session");
+    assert_eq!(
+        pool.sprite_of(nova_sim::StellarId(2015), false),
+        nova_sim::story::sprite_pool::SlotSprite::Ghost { top_left: (-7, 9) },
+        "Ada's last slot 15"
+    );
+}
+
 /// Berths whose berth 1 last held a person named Ace, as a flight whose
 /// ship there was flown by one leaves them.
 fn ace_at_berth_1() -> nova_sim::KeptBerths {

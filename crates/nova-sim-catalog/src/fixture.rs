@@ -160,8 +160,8 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
 /// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
-/// requiring nothing, with no default items, no `Flags` or `Flags3` and no inherent
-/// government, hailed as "ship `id`", a wimpy trader whose escort class
+/// requiring nothing, with no default items, no `Flags` or `Flags3`, no
+/// `SkillVar` and no inherent government, hailed as "ship `id`", a wimpy trader whose escort class
 /// is worked out (`EscortType` -1).
 #[must_use]
 pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
@@ -193,6 +193,7 @@ pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         inherent_govt: None,
         combat_govt: None,
         escort_type: -1,
+        skill_var: 0,
         on_capture: crate::control::Script::default(),
         on_purchase: crate::control::Script::default(),
         on_retire: crate::control::Script::default(),
@@ -271,6 +272,7 @@ pub fn hull(id: i16) -> HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
+        display: None,
         escort_class: EscortClass::Freighter,
     }
 }
@@ -311,7 +313,8 @@ pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
 /// "Govt `id`" and named so on the reinforcement line, scanning for
-/// nothing, fining nothing, requiring nothing and jamming nothing.
+/// nothing, fining nothing, requiring nothing, jamming nothing and with no
+/// `SkillMult`.
 #[must_use]
 pub fn govt(id: i16) -> GovtRecord {
     GovtRecord {
@@ -333,6 +336,7 @@ pub fn govt(id: i16) -> GovtRecord {
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }
 }
 

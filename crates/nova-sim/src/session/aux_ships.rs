@@ -113,12 +113,14 @@ impl Session {
         let Some(dude) = aux_dude(&record.aux) else {
             return;
         };
+        let items = self.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            items,
         );
         let spawn = AuxSpawn {
             slot,
@@ -126,9 +128,12 @@ impl Session {
             count: coming,
         };
         let ships = spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.gate(), chance);
-        let came = self
-            .traffic
-            .bring_in_within(ships, self.spawn_reserve(SPAWN_RESERVE));
+        let came = self.traffic.bring_in_within(
+            ships,
+            self.spawn_reserve(SPAWN_RESERVE),
+            &self.govts,
+            &mut *chance,
+        );
         if let Some(active) = self.pilot.missions.get_mut(slot) {
             for _ in 0..came {
                 active.aux.came(record.flags);

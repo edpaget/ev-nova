@@ -267,6 +267,8 @@ pub enum JumpRefusal {
         /// How much it has.
         fuel: f32,
     },
+    /// Another ship holds it in a tractor beam ([`hold_jump`]).
+    Tractored,
 }
 
 /// One system on the map.
@@ -830,6 +832,23 @@ pub fn check_jump(
         return Err(JumpRefusal::TooClose { distance });
     }
     Ok(next)
+}
+
+/// `checked`, what [`check_jump`] says of a jump, for a ship another
+/// ship holds in a tractor beam when `held_by_other`: `_HandlePlayer`
+/// clears "can jump" for it after the selection, the fuel and the
+/// jump-distance tests (@0x6b1fd-0x6b213), so a refusal for no
+/// destination or no fuel stands, and a jump it would make, or one too
+/// close, is [`JumpRefusal::Tractored`] (STR# 2002 #36 over #42,
+/// @0x6b8a4-0x6b8dc). A ship holding itself is not refused.
+pub fn hold_jump(
+    checked: Result<SystemId, JumpRefusal>,
+    held_by_other: bool,
+) -> Result<SystemId, JumpRefusal> {
+    match checked {
+        Ok(_) | Err(JumpRefusal::TooClose { .. }) if held_by_other => Err(JumpRefusal::Tractored),
+        checked => checked,
+    }
 }
 
 /// Where a ship that must be `jump_distance` from the centre to jump
@@ -1721,6 +1740,26 @@ mod tests {
             check_ship(ship(0.0, 5000.0, 300.0), None),
             Err(JumpRefusal::NoDestination)
         );
+    }
+
+    #[test]
+    fn a_held_ship_is_refused_for_the_tractor_over_a_jump_or_too_close_alone() {
+        let too_close = JumpRefusal::TooClose { distance: 1.0 };
+        let no_fuel = JumpRefusal::NoFuel { fuel: 0.0 };
+        for (checked, held, refused) in [
+            (Ok(SystemId(131)), false, Ok(SystemId(131))),
+            (Ok(SystemId(131)), true, Err(JumpRefusal::Tractored)),
+            (Err(too_close), false, Err(too_close)),
+            (Err(too_close), true, Err(JumpRefusal::Tractored)),
+            (Err(no_fuel), true, Err(no_fuel)),
+            (
+                Err(JumpRefusal::NoDestination),
+                true,
+                Err(JumpRefusal::NoDestination),
+            ),
+        ] {
+            assert_eq!(hold_jump(checked, held), refused, "{checked:?} {held}");
+        }
     }
 
     #[test]

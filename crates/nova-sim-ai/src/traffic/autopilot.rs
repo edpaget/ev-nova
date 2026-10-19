@@ -37,9 +37,10 @@
 //!   [`leave_flight`] flies it: within 1000 of the centre (dist² ≤ 1e6),
 //!   it turns out from the centre and thrusts within its turn rate and 3
 //!   whole degrees of that bearing (sub 3); beyond, an expediting ship
-//!   jumps at once, and any other brakes until it moves below 0.35 on
-//!   both axes, then jumps (`_HighLevelAIHandler` state 2,
-//!   @0x8dd99-0x8de57). The 1000 is every NPC's: its outfits' hyperspace
+//!   begins its warp out at once, and any other brakes until it moves
+//!   below 0.35 on both axes, then begins it (`_HighLevelAIHandler` state
+//!   2, @0x8dd99-0x8de57; the warp out is
+//!   [`warp_out`](crate::traffic::warp_out)'s). The 1000 is every NPC's: its outfits' hyperspace
 //!   distance is the player's alone ([`Npc::stats`]' `jump_distance` is
 //!   not read).
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
@@ -74,7 +75,8 @@
 //!   (see [`pursuit`]). It turns to the heading the body wants;
 //!   approaching, it thrusts while off it by less than
 //!   [`APPROACH_THRUST`] turns; dogfighting, by less than a turn and
-//!   [`DOGFIGHT_THRUST`]; fleeing close (sub 5, @0x85c62-0x85d72), turned
+//!   [`DOGFIGHT_THRUST`], an inertialess one up to the speed its frame
+//!   matches ([`pursuit::Frame::speed_cap`]); fleeing close (sub 5, @0x85c62-0x85d72), turned
 //!   to the table bearing from its attacker to itself, by less than a
 //!   turn and [`FLEE_THRUST`], as a stand-off ship backing away inside
 //!   the dogfight box does, never running out to jump (see
@@ -91,7 +93,9 @@
 //!   engine, its target's lead) and thrusting within its turn rate and
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
-//!   sub-goal 0xe, @0x8709d-0x87334).
+//!   sub-goal 0xe, @0x8709d-0x87334). Moving and inertialess, it takes a
+//!   whole tick's acceleration off its speed with no turn
+//!   ([`snipe::inertialess_brake`], @0x8710f-0x8713a).
 //! - [`Goal::Attack`], [`Goal::Snipe`] or [`Goal::Plunder`] while it
 //!   searches for a target it lost sight of
 //!   ([`lost_sight::searching`]): it brakes to a stop, sub 1, as a wait
@@ -228,6 +232,7 @@ use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
+use crate::traffic::ship_display;
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
@@ -311,11 +316,12 @@ pub struct TopSpeeds {
 }
 
 impl TopSpeeds {
-    /// `npc`'s own handling's top speed, with no lead.
+    /// `npc`'s own handling's top speed ([`Npc::own_handling`]), with no
+    /// lead.
     #[must_use]
     pub fn own_of(npc: &Npc) -> Self {
         Self {
-            own: npc.stats.handling.max_speed,
+            own: npc.own_handling().max_speed,
             lead: None,
         }
     }
@@ -393,10 +399,7 @@ fn fly_mobile(
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let snipe_lead = readings.snipe_lead;
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc, &handling);
@@ -423,7 +426,7 @@ fn fly_mobile(
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
-            Some(site) => approach(&state, &handling, site.position, inertia),
+            Some(site) => land_approach(npc, site, &handling, inertia),
             None => brake(&state, &handling, inertia),
         },
         Goal::EnterGate(gate) => {
@@ -447,14 +450,21 @@ fn fly_mobile(
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
-                if let Some(body) = pursuit::frame_of(npc, target, other_disabled, swarm, weapons)
-                    .and_then(|frame| frame.last())
+                if let Some((body, speed_cap)) =
+                    pursuit::frame_of(npc, target, other_disabled, swarm, weapons)
+                        .and_then(|frame| Some((frame.last()?, frame.speed_cap)))
                 {
                     let flown = Flown {
                         handling: &handling,
                         inertia,
                     };
-                    fight(npc, target, body, flown, (flight, snipe_lead, weapons));
+                    fight(
+                        npc,
+                        target,
+                        (body, speed_cap),
+                        flown,
+                        (flight, snipe_lead, weapons),
+                    );
                     return Outcome::Flying;
                 }
                 // Fleeing beyond its attacker's reach: state 3's far branch.
@@ -502,6 +512,7 @@ pub(crate) fn step(
     flight: FlightRules,
     inertia: Inertia,
 ) {
+    ship_display::record(npc, handling, controls, flight, inertia);
     match inertia {
         Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
         Inertia::Inertialess { .. } => {
@@ -682,7 +693,7 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
-/// `handling` by its frame's last `body`, whose writes to the thrust
+/// `handling` by its frame's last `body` and its `speed_cap`, whose writes to the thrust
 /// (+0x30), the cap (+0x34) and the heading (+0x68) win (see
 /// [`pursuit`](crate::ai::pursuit)): it turns to the heading the body
 /// wants, and thrusts approaching (7) while off it by less than
@@ -696,13 +707,15 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// gun turning as `snipe_lead` says, leading by that gun's record in
 /// `weapons`. It flies under `flight` as
 /// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
-/// substate 1 does ([`inertialess::brake`]) until
-/// rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit
-/// ports substate 0xe's inertialess brake.
+/// substate 0xe does ([`snipe::inertialess_brake`]). An inertialess
+/// dogfighter whose frame matches its target's speed
+/// ([`Frame::speed_cap`](pursuit::Frame::speed_cap)) flies at most at
+/// that speed, a cap of none being none, as `_HandleShip` reads +0x34
+/// (@0x34a8a-0x34aab); a later body's cap (0x10's none, 0x11's) wins.
 fn fight(
     npc: &mut Npc,
     target: &ShipState,
-    body: Body,
+    (body, speed_cap): (Body, Option<f32>),
     flown_by: Flown,
     (flight, snipe_lead, weapons): (FlightRules, RuleSource, &Arsenal),
 ) {
@@ -716,8 +729,8 @@ fn fight(
         Manoeuvre::BreakOff | Manoeuvre::Rush => f32::INFINITY,
         Manoeuvre::Snipe => {
             let controls = match flown_by.inertia {
-                Inertia::Inertialess { .. } if inertialess::moving(npc.state.velocity) => {
-                    inertialess::brake(&npc.state)
+                Inertia::Inertialess { .. } if snipe::moving(&npc.state) => {
+                    snipe::inertialess_brake(npc, handling)
                 }
                 _ => snipe::fly(npc, Some(target), handling, snipe_lead, weapons),
             };
@@ -737,6 +750,13 @@ fn fight(
             #[allow(clippy::cast_possible_truncation)]
             max_speed: (f64::from(handling.max_speed) * RUSH_SPEED) as f32,
             ..*handling
+        },
+        Manoeuvre::Dogfight => match (flown_by.inertia, speed_cap) {
+            (Inertia::Inertialess { .. }, Some(cap)) if cap > 0.0 => Handling {
+                max_speed: cap,
+                ..*handling
+            },
+            _ => *handling,
         },
         _ => *handling,
     };
@@ -1032,6 +1052,23 @@ fn over(state: &ShipState, site: &LandingSite) -> bool {
         && state.velocity.length() <= LANDING_SPEED
 }
 
+/// How `npc`, landing on `site` but not over it, flies on `handling` as
+/// `inertia` says: toward it ([`approach`]), a folding ship unfolding
+/// once within its landing radius (`_HighLevelAIHandler` state 1
+/// @0x8da0c-0x8da38, see [`ship_display`]).
+fn land_approach(
+    npc: &mut Npc,
+    site: &LandingSite,
+    handling: &Handling,
+    inertia: Inertia,
+) -> Controls {
+    let state = npc.state;
+    if (site.position - state.position).length() <= landing_radius(site) {
+        ship_display::landing_unfold(npc);
+    }
+    approach(&state, handling, site.position, inertia)
+}
+
 /// Heads for `target` at full speed, and brakes once the ship's stopping
 /// distance reaches the distance left.
 fn approach(state: &ShipState, handling: &Handling, target: Vec2, inertia: Inertia) -> Controls {
@@ -1141,6 +1178,7 @@ fn close_on(
 /// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it: the
 /// thrust `handling` flies it with.
 fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Handling) {
+    npc.display.drive.formation = true;
     let state = &mut npc.state;
     state.velocity = leader.velocity;
     state.heading = leader.heading;
@@ -1215,6 +1253,7 @@ mod tests {
     use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+    use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
     use std::collections::BTreeMap;
@@ -1635,6 +1674,52 @@ mod tests {
             at(61.0, 0.0, 0.0, 0.0, 0.0),
         );
         assert_eq!(fly(&mut far, &sites, None), Outcome::Flying, "too far");
+    }
+
+    #[test]
+    fn a_folding_ship_landing_unfolds_near_its_stellar_too_fast_to_land() {
+        let sites = [planet(140, 10.0, 0.0)];
+        let folding = |x: f32, vx: f32| {
+            let mut ship = npc(FAST, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
+            ship.hull.frames.flags = crate::combat::ship_frames::FOLDS;
+            ship.hull.frames.base_sets = 6;
+            ship.armament.fold_mut().set = 5;
+            ship
+        };
+        let mut near = folding(0.0, 1.5);
+        assert_eq!(fly(&mut near, &sites, None), Outcome::Flying, "too fast");
+        assert_eq!(near.armament.fold().dir, -1, "near: unfolding");
+        let mut far = folding(-80.0, 0.0);
+        fly(&mut far, &sites, None);
+        assert_eq!(far.armament.fold().dir, 0, "too far");
+        // Near a stellar far from the centre.
+        let distant = [planet(140, 600.0, 0.0)];
+        let mut there = folding(600.0, 1.5);
+        fly(&mut there, &distant, None);
+        assert_eq!(there.armament.fold().dir, -1, "near it, wherever it is");
+    }
+
+    #[test]
+    fn a_step_records_its_drive_and_keeping_formation_marks_it() {
+        let mut ship = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 0.0));
+        let flight = FlightRules::default();
+        let handling = flight.handling(ship.stats.handling);
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        step(&mut ship, &handling, controls, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.turn, -1);
+        assert_eq!(ship.display.drive.thrust, ship_display::Thrust::Plain);
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let mut kept = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut kept, &[], Some(&leader));
+        assert!(kept.display.drive.formation, "close formation");
+        let mut far = escort(FAST, at(slot.x + 400.0, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut far, &[], Some(&leader));
+        assert!(!far.display.drive.formation, "rejoining");
     }
 
     #[test]
@@ -2676,12 +2761,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_at_rest_past_1000_jumps_without_moving() {
+    fn a_ship_at_rest_past_1000_begins_its_warp_out_without_moving() {
         let mut ship = npc(FAST, Goal::JumpOut, at(0.0, -1000.5, 0.0, 0.0, 0.0));
-        assert_eq!(fly(&mut ship, &[], None), Outcome::JumpedOut);
+        assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own), "sub-goal 4");
+        assert!(ship.jumping());
         assert_eq!(ship.state.position, Vec2::new(0.0, -1000.5));
         let mut at_1000 = npc(FAST, Goal::JumpOut, at(0.0, -1000.0, 0.0, 0.0, 0.0));
         assert_eq!(fly(&mut at_1000, &[], None), Outcome::Flying);
+        assert_eq!(at_1000.warp.goal, None);
     }
 
     #[test]
@@ -3073,7 +3161,8 @@ mod tests {
         let start = at(300.0, -400.0, 0.0, 0.0, 200.0);
         let mut ship = npc(FAST, Goal::JumpOut, start);
         let mut last = start.position;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
         let off = shortest_turn(heading_of(start.position), heading_of(last));
@@ -3082,7 +3171,8 @@ mod tests {
         // is the table's 0.
         let mut ship = npc(FAST, Goal::JumpOut, at(0.0, 0.0, 0.0, 0.0, 30.0));
         let mut last = Vec2::ZERO;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
         assert!(last.x.abs() < 25.0 && last.y < -1000.0, "{last:?}");
@@ -3235,17 +3325,19 @@ mod tests {
     }
 
     #[test]
-    fn fleeing_from_afar_it_runs_out_from_the_centre_and_jumps_past_1000() {
+    fn fleeing_from_afar_it_runs_out_from_the_centre_and_begins_its_warp_out_past_1000() {
         // The attacker 251 right: run straight out, up from (0, -10).
         let attacker = at(251.0, -10.0, 0.0, 0.0, 0.0);
         let mut runner = npc(FAST, Goal::Flee(FOE), at(0.0, -10.0, 0.0, 0.0, 0.0));
-        let (outcome, _) = (0..1000)
-            .find_map(|tick| {
+        (0..1000)
+            .find(|_| {
                 let outcome = fly(&mut runner, &[planet(140, 0.0, -10.0)], Some(&attacker));
-                (outcome != Outcome::Flying).then_some((outcome, tick))
+                assert_eq!(outcome, Outcome::Flying, "never lands");
+                runner.warp.goal.is_some()
             })
-            .expect("leaves");
-        assert_eq!(outcome, Outcome::JumpedOut, "never lands");
+            .expect("its warp out begins");
+        assert_eq!(runner.goal, Goal::Flee(FOE), "still fleeing");
+        assert!(runner.jumping());
         assert!(runner.state.position.x.abs() < 1.0, "{:?}", runner.state);
         assert!(
             runner.state.position.length() > 1000.0,

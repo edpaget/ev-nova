@@ -194,7 +194,12 @@ mod tests {
                 ships: BTreeMap::from([(ShipId(200), ShipKind::default())]),
                 ..SpawnTable::default()
             };
-            traffic.bring_in_within(vec![arrival()], SPAWN_RESERVE);
+            traffic.bring_in_within(
+                vec![arrival()],
+                SPAWN_RESERVE,
+                &crate::govt::Governments::empty(),
+                &mut crate::chance::NeverFires,
+            );
             assert_eq!(guns(&traffic), [(2, 0), (1, gun)], "{reading:?}");
         }
     }

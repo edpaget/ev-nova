@@ -35,7 +35,9 @@ impl Session {
     /// - Disabled (or dying) is never told: the original's J skips the
     ///   jump block for a disabled player (`_HandlePlayer` @0x6b0f5 →
     ///   0x6bada), saying and beeping nothing.
-    /// - Too close is always told (@0x6b86d-0x6b93c).
+    /// - Too close is always told (@0x6b86d-0x6b93c), and so is the
+    ///   tractor's hold, on the same path (#36 in place of #42,
+    ///   @0x6b8a4-0x6b8dc).
     /// - No destination is told only to a newbie, and never in nav mode 3
     ///   with a selection (@0x6b964-0x6b9a3): a seasoned pilot's J with
     ///   nothing selected is silent.
@@ -47,7 +49,7 @@ impl Session {
     pub fn jump_refusal_told(&self, refusal: &JumpRefusal) -> bool {
         let newbie = self.tutorial.is_newbie();
         match refusal {
-            JumpRefusal::Landed | JumpRefusal::TooClose { .. } => true,
+            JumpRefusal::Landed | JumpRefusal::TooClose { .. } | JumpRefusal::Tractored => true,
             JumpRefusal::Disabled => false,
             JumpRefusal::NoDestination => {
                 newbie && !matches!(self.nav_mode(), NavMode::Hyperspace(Some(_)))
@@ -278,6 +280,8 @@ mod tests {
             (true, true, engine, no_destination, false),
             (false, true, engine, too_close, true),
             (true, true, engine, too_close, true),
+            (false, true, engine, JumpRefusal::Tractored, true),
+            (true, true, engine, JumpRefusal::Tractored, true),
             (false, true, engine, no_fuel, true),
             (false, true, bible, no_fuel, true),
             (true, true, engine, no_fuel, false),

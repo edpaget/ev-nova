@@ -1914,6 +1914,7 @@ pub mod day;
 pub mod dispatch;
 pub mod galaxy;
 pub mod rebuild;
+pub mod sprite_pool;
 pub mod wreck;
 
 pub use dispatch::DuplicateSubscription;

@@ -20,7 +20,8 @@ use crate::stats::ShipStats;
 
 /// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
 /// reserves full, at rest at the centre facing up, flying and idle,
-/// intact and unarmed, its class's `Fuel` its `stats`' tank.
+/// intact and unarmed, of skill 1.0 and no government's factor, its
+/// class's `Fuel` its `stats`' tank.
 #[must_use]
 pub fn npc(id: u32, stats: ShipStats) -> Npc {
     Npc {
@@ -66,6 +67,9 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         travel_set: false,
         self_repair: false,
         immobile: false,
+        skill: 1.0,
+        skill_mult: 1.0,
+        still: false,
         miner: 0,
         can_scoop: false,
         holds: 0,
@@ -81,6 +85,8 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         swarm_leader: None,
         marines: ClassMarines::default(),
         pods_left: 0,
+        warp: crate::traffic::warp_out::Warp::default(),
+        display: crate::traffic::ship_display::NpcDisplay::default(),
         odds: 0.0,
         no_ai: false,
     }

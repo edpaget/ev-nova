@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Take, Taken};
+use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightView, MapOpener};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
@@ -697,11 +697,11 @@ impl AppScreen {
     /// Opens the plunder dialog on `shown` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the boarding is let go, with a warning.
+    /// the boarding is let go silently, with a warning.
     fn open_plunder(&mut self, shown: &PlunderShown) {
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
-                flight.plunder(Take::Abort);
+                flight.let_go_of_boarding();
             }
             self.warnings
                 .push("nova: cannot show the plunder dialog: no metrics to lay it out".to_owned());
@@ -729,18 +729,22 @@ impl AppScreen {
         self.plunder = Some(dialog);
     }
 
-    /// The plunder dialog's input: each press goes through flight, and
-    /// the dialog shows what is still on board, or closes once the
-    /// boarding is over; a capture awaiting its assignment opens the
-    /// assignment dialog.
+    /// The plunder dialog's input: each press goes through flight, a
+    /// miss of every enabled button included, with the time the dialog
+    /// has been open, and the dialog shows what is still on board, or
+    /// closes once the boarding is over; a capture awaiting its
+    /// assignment opens the assignment dialog. Every pointer event goes
+    /// to the dialog, so a click outside its frame is a miss too, as
+    /// `_PlunderFilter` takes every mouse-down (@0x92f20).
     pub(super) fn plunder_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.plunder.as_mut().expect("open");
         dialog.input(input);
         let Some(take) = dialog.take_take() else {
             return ScreenAction::None;
         };
+        let held = dialog.held();
         let flight = self.flight.as_mut().expect(ENTERED);
-        let taken = flight.plunder(take);
+        let taken = flight.plunder_held(take, held);
         match flight.plunder_shown() {
             Some(shown) => {
                 if let Some(dialog) = &mut self.plunder {

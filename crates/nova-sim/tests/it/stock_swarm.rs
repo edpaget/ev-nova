@@ -76,7 +76,12 @@ fn federal(data: &GameData, ship: ShipId, at: Vec2) -> Npc {
         .into_iter()
         .find(|record| record.id == ship)
         .expect("the ship type");
-    let kind = kind(&record, &data.outfits(), &Arsenal::read(data));
+    let kind = kind(
+        &record,
+        &data.outfits(),
+        &Arsenal::read(data),
+        nova_sim::RuleSource::Engine,
+    );
     let mut npc = nova_sim::traffic::fixture::npc(0, kind.stats);
     npc.ship = ship;
     npc.hull = kind.hull;
@@ -109,6 +114,7 @@ fn player() -> PlayerSide {
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }
 

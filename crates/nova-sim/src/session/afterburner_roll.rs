@@ -202,6 +202,7 @@ mod tests {
                 .expect("129"),
             &[],
             &crate::combat::armament::Arsenal::read(catalog),
+            crate::rulebook::RuleSource::Engine,
         )
         .stats
         .full();

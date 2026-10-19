@@ -67,6 +67,40 @@ impl Priority {
     }
 }
 
+/// How fast a sound plays: a 16.16 fraction of its own rate, as
+/// `ST_PlaySoundParam` takes its param block's +8 (`AmbrosiaTools`
+/// @0xe3dfe-0xe3e08, multiplied into the sound's step by
+/// `_UFix32_Multiply` @0xe3fc8). A rate of 0 is its own, as there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaybackRate(u32);
+
+impl PlaybackRate {
+    /// The sound's own rate, 0x10000.
+    pub const NATURAL: Self = Self(0x1_0000);
+
+    /// The rate `fixed`, a 16.16 fraction; 0 is [`PlaybackRate::NATURAL`].
+    #[must_use]
+    pub const fn from_fixed(fixed: u32) -> Self {
+        if fixed == 0 {
+            Self::NATURAL
+        } else {
+            Self(fixed)
+        }
+    }
+
+    /// The rate as a multiple of the sound's own: 1.0 at it.
+    #[must_use]
+    pub fn ratio(self) -> f64 {
+        f64::from(self.0) / f64::from(Self::NATURAL.0)
+    }
+}
+
+impl Default for PlaybackRate {
+    fn default() -> Self {
+        Self::NATURAL
+    }
+}
+
 /// One thing for the audio device to do.
 ///
 /// Every sound played once ([`Play`](Self::Play),
@@ -84,6 +118,20 @@ pub enum AudioCommand {
         volume: Volume,
         /// How much it matters when the voices are full.
         priority: Priority,
+    },
+    /// Plays `sound` once, at `volume` and `rate`, over whatever else is
+    /// playing, as [`AudioCommand::Play`] does at its own rate: the
+    /// warp-up, pitched by the ship class's warp factor
+    /// (`_AdjustWarpSoundSpeed` @0x5ecc).
+    PlayAtRate {
+        /// The `snd `.
+        sound: SoundId,
+        /// How loud.
+        volume: Volume,
+        /// How much it matters when the voices are full.
+        priority: Priority,
+        /// How fast.
+        rate: PlaybackRate,
     },
     /// Plays `sound` once, at `volume`, on the one mission channel: unless
     /// the last sound played there is still playing, when nothing happens.

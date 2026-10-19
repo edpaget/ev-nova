@@ -102,6 +102,13 @@ pub struct SoundTable {
     /// Plays with the line said as a pirate takes a former escort into its
     /// fleet.
     pub ship_stolen: Option<SoundId>,
+    /// Plays as a press in the plunder dialog does something: a take,
+    /// Abort, a take's self-destruct, a capture's successful roll, and a
+    /// person's grant line.
+    pub plunder_beep: Option<SoundId>,
+    /// Plays as either button of the captured-ship assignment dialog is
+    /// pressed.
+    pub capture_assigned: Option<SoundId>,
     /// Plays with the comm line said as a ship repairing the player
     /// finishes.
     pub repairs_complete: Option<SoundId>,
@@ -129,6 +136,14 @@ pub struct SoundTable {
     /// Plays as a key's action is refused, whether or not the player is
     /// told why.
     pub refused: Option<SoundId>,
+    /// Plays as the player begins the self-destruct countdown.
+    pub self_destruct_started: Option<SoundId>,
+    /// Plays with each self-destruct countdown line.
+    pub self_destruct_countdown: Option<SoundId>,
+    /// Plays as the player lets the self-destruct go.
+    pub self_destruct_cancelled: Option<SoundId>,
+    /// Plays as the self-destruct countdown runs out.
+    pub self_destructed: Option<SoundId>,
     /// Plays as any board goes aboard: to plunder, or as a boarded person
     /// offers its mission.
     pub airlock: Option<SoundId>,
@@ -271,6 +286,14 @@ impl SoundTable {
     /// - `cargo_stolen` and `ship_stolen`: 151, `_beepSnd[1]`, which
     ///   `_AIPlunderShipContents` plays with its cargo line (@0x84758) and
     ///   with its stolen-escort line (@0x84908).
+    /// - `plunder_beep`: 152, `_beepSnd[2]`, which `_DoPlunderDialog`
+    ///   plays with each take, Abort, a take's self-destruct, the
+    ///   capture's successful roll and a person's grant line (@0x935cb,
+    ///   @0x93681, @0x937a0, @0x939b9, @0x93b3b, @0x93f10, @0x93f77,
+    ///   @0x94095, @0x94368, @0x933fe).
+    /// - `capture_assigned`: 151, `_beepSnd[1]`, which
+    ///   `_DoCapturedShipAssignmentDialog` plays for either button
+    ///   (@0x5b56b, @0x5b66b).
     /// - `repairs_complete`: 151, `_beepSnd[1]`, which `_LowLevelAIHandler`
     ///   plays with a repairer's "Repairs complete" line (@0x86e0a).
     /// - `energy_transfer_complete`: 151, `_beepSnd[1]`, which
@@ -317,6 +340,15 @@ impl SoundTable {
     ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
     ///   original plays it at priority 5 or 1 by its site (see
     ///   [`priority::REFUSED`](crate::priority::REFUSED)).
+    /// - `self_destruct_started`: 153, "Beep4", `_beepSnd[3]`, which
+    ///   `_HandlePlayer` plays as the self-destruct begins (`PlaySound`
+    ///   @0x6fe33, priority 15). It is not a refusal.
+    /// - `self_destruct_countdown`: 152, "Beep3", `_beepSnd[2]`, with each
+    ///   countdown line (@0x70065, priority 15).
+    /// - `self_destruct_cancelled`: 151, "Beep2", `_beepSnd[1]`, as the
+    ///   chord is let go while counting (@0x700de, priority 15).
+    /// - `self_destructed`: 151, "Beep2", `_beepSnd[1]`, as the countdown
+    ///   runs out (@0x701fb, priority 15).
     /// - `map_open`: 152, "Beep3", `_beepSnd[2]`, which `_HandlePlayer`
     ///   plays as the map key's press passes every gate, just before it
     ///   calls `_DoSystemMap` (`PlaySound` @0x6a7e4-0x6a809). A refused
@@ -383,6 +415,8 @@ impl SoundTable {
         downed_mission_failed: Some(SoundId(151)),
         cargo_stolen: Some(SoundId(151)),
         ship_stolen: Some(SoundId(151)),
+        plunder_beep: Some(SoundId(152)),
+        capture_assigned: Some(SoundId(151)),
         repairs_complete: Some(SoundId(151)),
         energy_transfer_complete: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
@@ -393,6 +427,10 @@ impl SoundTable {
         onboard_explosion: Some(SoundId(300)),
         jump_collapsed: Some(SoundId(151)),
         refused: Some(SoundId(153)),
+        self_destruct_started: Some(SoundId(153)),
+        self_destruct_countdown: Some(SoundId(152)),
+        self_destruct_cancelled: Some(SoundId(151)),
+        self_destructed: Some(SoundId(151)),
         airlock: Some(SoundId(390)),
         map_open: Some(SoundId(152)),
         map_close: Some(SoundId(150)),
@@ -407,6 +445,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one assertion for each of the table's fields
     fn the_original_table_is_pinned_field_by_field() {
         let table = SoundTable::ORIGINAL;
         assert_eq!(table.engine, None, "the original thrusts in silence");
@@ -465,6 +504,8 @@ mod tests {
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.plunder_beep, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.capture_assigned, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.repairs_complete, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(
             table.energy_transfer_complete,
@@ -488,6 +529,22 @@ mod tests {
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(
+            table.self_destruct_started,
+            Some(SoundId(153)),
+            "_beepSnd[3]"
+        );
+        assert_eq!(
+            table.self_destruct_countdown,
+            Some(SoundId(152)),
+            "_beepSnd[2]"
+        );
+        assert_eq!(
+            table.self_destruct_cancelled,
+            Some(SoundId(151)),
+            "_beepSnd[1]"
+        );
+        assert_eq!(table.self_destructed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.airlock, Some(SoundId(390)), "Airlock");
         assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");

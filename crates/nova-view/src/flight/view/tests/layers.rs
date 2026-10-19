@@ -212,13 +212,13 @@ fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
 }
 
 #[test]
-fn the_streaked_stars_are_world_and_the_jumps_fade_overlay() {
-    let [_, streaking] = through_a_jump(flight);
-    let list = drawn(&streaking);
+fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
+    let [_, jumping] = through_a_jump(flight);
+    let list = drawn(&jumping);
     assert_eq!(
         list.layered().next().map(|(layer, _)| layer),
         Some(DrawLayer::World),
-        "the streaks"
+        "the stars"
     );
     assert_world_then_overlay(&list);
 

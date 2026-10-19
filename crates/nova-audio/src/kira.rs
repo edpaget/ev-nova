@@ -37,7 +37,7 @@ use nova_data::sound::{Pcm, decode_snd};
 use nova_data::{GameData, SoundId};
 use nova_rsrc::ResType;
 
-use crate::port::{Audio, AudioCommand, Priority, Volume};
+use crate::port::{Audio, AudioCommand, PlaybackRate, Priority, Volume};
 use crate::voices::{ORIGINAL_VOICES, Placement, Voice, VoiceList};
 
 /// Why the audio device could not be opened.
@@ -171,6 +171,7 @@ enum Role {
 struct Held {
     handle: StaticSoundHandle,
     level: Decibels,
+    rate: PlaybackRate,
     role: Role,
 }
 
@@ -280,6 +281,12 @@ impl<B: Backend> KiraAudio<B> {
         self.held(Role::Effect).map(|held| held.level).collect()
     }
 
+    /// The rate each one-shot effect still on a voice was played at.
+    #[must_use]
+    pub fn effect_rates(&self) -> Vec<PlaybackRate> {
+        self.held(Role::Effect).map(|held| held.rate).collect()
+    }
+
     /// The state of the mission sound on its voice, if one is.
     #[must_use]
     pub fn mission_state(&self) -> Option<PlaybackState> {
@@ -349,6 +356,18 @@ impl<B: Backend> KiraAudio<B> {
     /// stopped. A sound that cannot be played takes no voice, nor does one
     /// kira has no room for.
     fn start(&mut self, sound: SoundId, volume: Volume, priority: Priority, role: Role) {
+        self.start_at(sound, volume, priority, role, PlaybackRate::NATURAL);
+    }
+
+    /// Plays `sound` as [`KiraAudio::start`] does, at `rate`.
+    fn start_at(
+        &mut self,
+        sound: SoundId,
+        volume: Volume,
+        priority: Priority,
+        role: Role,
+        rate: PlaybackRate,
+    ) {
         self.voices.retain(sounding);
         let Placement::At(index) = self.voices.place(priority, volume) else {
             return;
@@ -357,7 +376,10 @@ impl<B: Backend> KiraAudio<B> {
         let Some(data) = self.sound(sound) else {
             return;
         };
-        let Ok(handle) = self.manager.play(data.volume(level)) else {
+        let data = data
+            .volume(level)
+            .playback_rate(::kira::PlaybackRate(rate.ratio()));
+        let Ok(handle) = self.manager.play(data) else {
             return;
         };
         let voice = Voice {
@@ -367,6 +389,7 @@ impl<B: Backend> KiraAudio<B> {
             handle: Held {
                 handle,
                 level,
+                rate,
                 role,
             },
         };
@@ -459,6 +482,12 @@ impl<B: Backend> Audio for KiraAudio<B> {
                 volume,
                 priority,
             } => self.start(sound, volume, priority, Role::Effect),
+            AudioCommand::PlayAtRate {
+                sound,
+                volume,
+                priority,
+                rate,
+            } => self.start_at(sound, volume, priority, Role::Effect, rate),
             AudioCommand::PlayExclusive {
                 sound,
                 volume,
@@ -816,6 +845,26 @@ mod tests {
             [Decibels::IDENTITY, decibels(Volume::new(0.5))],
             "the louder first, as the voice list keeps them"
         );
+        assert_eq!(warnings.text(), "");
+    }
+
+    #[test]
+    fn a_pitched_effect_plays_at_its_rate() {
+        let (mut audio, warnings) = adapter(None);
+        run(&mut audio, play(1, 1.0));
+        let slow = PlaybackRate::from_fixed(0x8000);
+        run(
+            &mut audio,
+            AudioCommand::PlayAtRate {
+                sound: SoundId(1),
+                volume: Volume::new(0.5),
+                priority: Priority::new(1),
+                rate: slow,
+            },
+        );
+        assert_eq!(audio.effect_rates(), [PlaybackRate::NATURAL, slow]);
+        assert_eq!(slow.ratio(), 0.5);
+        assert_eq!(PlaybackRate::from_fixed(0), PlaybackRate::NATURAL);
         assert_eq!(warnings.text(), "");
     }
 

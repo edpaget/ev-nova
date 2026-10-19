@@ -17,8 +17,9 @@
 //! the player: a disabled player boards) (`STR#` 2002 #130); not moving
 //! more than [`MAX_RELATIVE_SPEED`] against it on either axis (#132),
 //! then not off its centre by more than its board reach on either axis
-//! (#131); silently, the player must face within [`FACING_LIMIT`] of its
-//! heading or its reverse; and last, a ship with no mission mark and no
+//! (#131), each axis by its own reach and a NaN offset failing either
+//! test; silently, the player must face within [`FACING_LIMIT`] of its
+//! heading or its reverse, both headings truncated to whole degrees; and last, a ship with no mission mark and no
 //! `Crew` cannot be boarded (#130, @0x65768-0x65789), so a mission's
 //! special ship is boarded whatever its crew. By the other reading of
 //! [`RuleKey::CrewlessMissionShip`], every ship of no crew is refused up
@@ -61,7 +62,9 @@
 //!
 //! **Capture odds** ([`NovaBoarding::capture_odds`]): ten times the ratio
 //! of the player's crew (its ship's `Crew`, a tenth of each warship or
-//! interceptor escort's, and the marines outfits' positive `ModVal`s) to
+//! interceptor escort's in the system, as `_SetPlunderValues` counts the
+//! player's AI type 6 ships of no mission mark, @0x92653-0x926c9, and the
+//! marines outfits' positive `ModVal`s) to
 //! the target's, truncated; a negative marines `ModVal` adds its size in
 //! points, and [`STRENGTH_BONUS`] more when the player's strength (with a
 //! tenth of the escorts') is above [`STRENGTH_RATIO`] times the target's;
@@ -74,10 +77,16 @@
 //! [`Taken`]). The self-destruct threshold starts at [`THRESHOLD_BASE`]
 //! and a draw of [`THRESHOLD_SPREAD`], and each take multiplies it
 //! ([`CARGO_GROWTH`] and the others), truncated, whether it stored
-//! anything or not. The press after a take, before it is handled, blows
-//! the ship up when a draw of [`SELF_DESTRUCT_ROLL`] is at or below the
-//! threshold; Abort never rolls. A self-destruct zeroes the ship's shield
-//! and armour, so the fight breaks it up, and is no crime.
+//! anything or not. A take arms the self-destruct. Every press but
+//! Abort, a [`Take::Miss`] and a take with nothing to take included,
+//! first rolls it while it is armed, blowing the ship up when a draw of
+//! [`SELF_DESTRUCT_ROLL`] is at or below the threshold, and otherwise
+//! disarms it (`_DoPlunderDialog` @0x935e5-0x93613); Abort never rolls.
+//! A self-destruct zeroes the ship's shield, armour and death timer, so
+//! the fight breaks it up, and is no crime. Each press that leaves the
+//! dialog open (a take, a miss, a full fleet) counts the message line
+//! down one tick, as the dialog's loop calls `_HandleComm` once a pass
+//! (@0x949a1). The beeps are the session's (`nova_sim::Session::plunder`).
 //!
 //! **The capture roll** ([`NovaBoarding::captures`], `_DoPlunderDialog`
 //! @0x942ad-0x942d8): a draw of [`CAPTURE_ROLL`] at or below the odds
@@ -87,16 +96,19 @@
 //! to -1 for a derelict government just before the roll. So the button,
 //! greyed at odds of none, and the roll agree. A capture that succeeds
 //! still blows the ship up 1 time in [`CAPTURE_TRIP`]; with the fleet
-//! full ([`MAX_ESCORTS`]) nothing changes and the dialog stays open.
-//! Capturing is no crime.
+//! full ([`MAX_ESCORTS`] in the system, `_CanHireEscorts`) nothing changes
+//! and the dialog stays open. Capturing is no crime.
 //!
 //! **A ship captured** ([`Assignment`]) joins the fleet with its armour at
-//! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
-//! takes it over, while a ship slot below the last of the
-//! [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship (`_DoShipCapture`
-//! leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`] reads), which
-//! joins the fleet with its class's stock loadout, full, and by the engine
-//! reading of [`RuleKey::CaptureCargo`] the player's commodities with it;
+//! [`ESCORT_ARMOR_SHARE`] of its most, its person living on by the engine
+//! reading of [`RuleKey::CapturedPerson`]; or, "Use As My Ship", the
+//! player takes it over and its person is gone, while a ship slot below
+//! the last of the [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship
+//! (`_DoShipCapture` leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`]
+//! reads), which comes in where the player was and flies into formation
+//! with its class's stock loadout, full but for its fuel, its class's bare
+//! `Fuel`; by the engine reading of [`RuleKey::CaptureCargo`] the player's
+//! commodities go to its hold and the player holds the captured ship's;
 //! with no slot free the whole swap is dropped. A player of no crew
 //! captures straight into the fleet. The captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
@@ -121,15 +133,17 @@ use std::fmt::Debug;
 
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::combat::aim::angle_off;
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::{Good, hold_tons};
 use crate::mission::VenueOffer;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::NpcId;
+use nova_sim_base::speed_cap::whole_degree;
+use nova_sim_base::trig::angular_difference;
 
 /// Why the player cannot board its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,16 +174,18 @@ pub struct BoardTarget {
     /// Whether it carries a mission's mark (+0xc8d2 not -1), whether its
     /// mission stands, has failed or has left its slot.
     pub mission: bool,
-    /// How far off its centre, on either axis, the player may be.
-    pub reach: f32,
+    /// How far off its centre the player may be: `x` on the x axis and
+    /// `y` on the y axis (see
+    /// [`HullSpec::board_reach`](crate::combat::hull::HullSpec::board_reach)).
+    pub reach: Vec2,
 }
 
 /// How fast, in pixels a tick on either axis, the player may move against
 /// the ship it boards (the float @0xdd694).
 pub const MAX_RELATIVE_SPEED: f32 = 0.5;
-/// How far off the target's heading, or its reverse, in degrees, the
-/// player may face to board it (@0x6523b, @0x65295).
-pub const FACING_LIMIT: f32 = 30.0;
+/// How far off the target's heading, or its reverse, in whole degrees,
+/// the player may face to board it (@0x6523b, @0x65295).
+pub const FACING_LIMIT: i16 = 30;
 
 impl BoardRefusal {
     /// Whether the player is told nothing: no target, or not facing it.
@@ -364,8 +380,10 @@ fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
     Some((Good::Commodity(commodity), tons))
 }
 
-/// The most escorts the player's fleet holds (`_CanHireEscorts`, counting
-/// those that are not fighters).
+/// How many escorts in the system fill the fleet: `_CanHireEscorts`
+/// (@0x5795-0x57e4) counts the player's AI type 6 ships of no mission
+/// mark, so neither fighters nor escorts out of the system, and is true
+/// while it counts 5 or fewer. The fleet itself has no cap.
 pub const MAX_ESCORTS: usize = 6;
 pub use crate::traffic::MAX_SHIPS_IN_SYSTEM;
 /// How much each take multiplies the self-destruct threshold by, per
@@ -414,14 +432,24 @@ pub enum Take {
     Capture,
     /// "Abort" (item 1), and Return, Enter and Escape.
     Abort,
+    /// A press that reaches no enabled button (item -1): one on a greyed
+    /// button, off every button, or released off the button it began on,
+    /// as `_TrackPlunderButtons` (@0x2732a) hit-tests only the enabled
+    /// buttons (@0x273d3-0x27426) and `_PlunderFilter` maps anything else
+    /// to item -1 and still ends the modal wait (@0x92fdf).
+    Miss,
 }
 
 /// What a press in the plunder dialog did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken {
-    /// The press did nothing: no boarding is under way, or what it takes
-    /// is not on board (its button is greyed).
+    /// No boarding is under way, or a capture awaits its assignment: the
+    /// press is not the dialog's.
     Nothing,
+    /// The press took nothing and the boarding goes on: a [`Take::Miss`],
+    /// or a take whose value is not on board, which beeps its refusal.
+    /// Either still rolls an armed self-destruct first, and disarms it.
+    Missed,
     /// The cargo was taken: `stored` tons of `good`, as much as the hold
     /// had room for.
     Cargo {
@@ -532,7 +560,7 @@ pub struct PlunderView {
 
 impl PlunderView {
     /// Whether `take`'s button is enabled: its value is on board. Abort
-    /// always is.
+    /// always is; a [`Take::Miss`] is no button.
     #[must_use]
     pub fn offers(&self, take: Take) -> bool {
         match take {
@@ -542,6 +570,7 @@ impl PlunderView {
             Take::Energy => self.fuel > 0,
             Take::Capture => self.odds > 0,
             Take::Abort => true,
+            Take::Miss => false,
         }
     }
 }
@@ -615,7 +644,9 @@ pub struct CaptureCrew {
     pub crew: i32,
     /// The player's ship's `Strength`.
     pub strength: i32,
-    /// The player's escorts.
+    /// The player's escorts in the system, as `_SetPlunderValues` counts
+    /// them (@0x92653-0x926c9); only those above [`ESCORT_AI_ABOVE`]
+    /// add their crew.
     pub escorts: Vec<EscortCrew>,
     /// Each marines outfit the player owns (`ModType` [`MARINES`]): its
     /// `ModVal`, and how many.
@@ -626,7 +657,8 @@ pub struct CaptureCrew {
     pub target_strength: i32,
     /// Whether the target's government is derelict.
     pub derelict: bool,
-    /// Whether the fleet has room for one more escort.
+    /// Whether the fleet has room for one more escort
+    /// (`_CanHireEscorts`).
     pub fleet_room: bool,
 }
 
@@ -780,6 +812,13 @@ impl BoardingRule for NovaBoarding {
     }
 }
 
+/// `heading`'s whole degree, as the board check truncates it
+/// ([`whole_degree`]), in the original's 16 bits.
+#[allow(clippy::cast_possible_truncation)]
+fn whole_degrees(heading: f32) -> i16 {
+    whole_degree(heading) as i16
+}
+
 /// Whether the player's ship, at `player` and in `condition`, can board
 /// `target`, a ship of no crew refused as `crewless`, the reading of
 /// [`RuleKey::CrewlessMissionShip`], says; the first refusal that
@@ -806,19 +845,28 @@ pub fn check_board(
     {
         return Err(BoardRefusal::CantBoard);
     }
-    let beyond = |offset: crate::geometry::Vec2, limit: f32| {
-        offset.x.abs() > limit || offset.y.abs() > limit
-    };
-    if beyond(player.velocity - target.state.velocity, MAX_RELATIVE_SPEED) {
+    // Each axis passes only at or within its limit: the original
+    // `ucomiss`es the limit against |Δ| and `jb`s away (speed @0x6514e,
+    // reach @0x651aa and @0x65206), so a NaN offset fails too.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let beyond =
+        |offset: Vec2, limit: Vec2| !(offset.x.abs() <= limit.x) || !(offset.y.abs() <= limit.y);
+    let max_speed = Vec2::new(MAX_RELATIVE_SPEED, MAX_RELATIVE_SPEED);
+    if beyond(player.velocity - target.state.velocity, max_speed) {
         return Err(BoardRefusal::TooFast);
     }
     if beyond(player.position - target.state.position, target.reach) {
         return Err(BoardRefusal::TooFar);
     }
-    // Off the target's heading by 0 to 180 degrees: within the limit of
-    // it, or of its reverse, is facing it.
-    let off = angle_off(player.heading, target.state.heading);
-    if off > FACING_LIMIT && off < 180.0 - FACING_LIMIT {
+    // Both headings in whole degrees (`cvttss2si` @0x65218, @0x65223,
+    // @0x6524c, @0x6527d): within the limit of the target's, or of its
+    // reverse, is facing it (@0x6521f-0x6523b, @0x65279-0x65295).
+    let mine = whole_degrees(player.heading);
+    let theirs = whole_degrees(target.state.heading);
+    let reverse = (theirs + 180) % 360;
+    if angular_difference(mine, theirs).abs() > FACING_LIMIT
+        && angular_difference(mine, reverse).abs() > FACING_LIMIT
+    {
         return Err(BoardRefusal::Misaligned);
     }
     // By the engine, only a ship with no mission mark has its crew
@@ -833,7 +881,6 @@ pub fn check_board(
 #[allow(clippy::float_cmp, clippy::trivially_copy_pass_by_ref)]
 mod tests {
     use super::*;
-    use crate::geometry::Vec2;
     use crate::grant::{COUNT_FLOOR_PERCENT, COUNT_PERCENT, COUNT_SPREAD, GRANT_ROLL};
     use nova_sim_base::fixture::Draws;
 
@@ -846,7 +893,7 @@ mod tests {
             boarded: false,
             crew: 3,
             mission: false,
-            reach: 20.0,
+            reach: Vec2::new(20.0, 20.0),
         }
     }
 
@@ -1083,6 +1130,44 @@ mod tests {
     }
 
     #[test]
+    fn each_axis_is_reached_by_its_own_size() {
+        let wide = BoardTarget {
+            reach: Vec2::new(20.0, 10.0),
+            ..quarry()
+        };
+        for (x, y) in [(20.0, 0.0), (-20.0, 10.0), (0.0, -10.0)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), wide),
+                Ok(()),
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(20.01, 0.0), (0.0, 10.01), (0.0, -10.01), (15.0, 15.0)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), wide),
+                Err(BoardRefusal::TooFar),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nan_offset_is_too_fast_or_too_far() {
+        for (x, y) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), quarry()),
+                Err(BoardRefusal::TooFar),
+                "({x}, {y})"
+            );
+            assert_eq!(
+                board(player((0.0, 0.0), (x, y), 0.0), quarry()),
+                Err(BoardRefusal::TooFast),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
     fn too_fast_is_said_before_too_far() {
         assert_eq!(
             board(player((50.0, 0.0), (3.0, 0.0), 0.0), quarry()),
@@ -1128,7 +1213,41 @@ mod tests {
                 "{mine} on {theirs}"
             );
         }
-        assert_eq!(FACING_LIMIT, 30.0);
+        assert_eq!(FACING_LIMIT, 30);
+    }
+
+    #[test]
+    fn both_headings_face_in_whole_degrees() {
+        let facing = |heading| BoardTarget {
+            state: ShipState {
+                heading,
+                ..ShipState::default()
+            },
+            ..quarry()
+        };
+        // Truncated toward zero (`cvttss2si` @0x65218, @0x65223, @0x6524c,
+        // @0x6527d) before the 30-degree tests.
+        for (mine, theirs) in [
+            (30.9, 0.0),
+            (0.0, 30.9),
+            (330.0, 0.0),
+            (210.9, 0.0),
+            (150.0, 0.0),
+            (30.5, 0.9),
+        ] {
+            assert_eq!(
+                board(player((0.0, 0.0), (0.0, 0.0), mine), facing(theirs)),
+                Ok(()),
+                "{mine} on {theirs}"
+            );
+        }
+        for (mine, theirs) in [(31.0, 0.0), (329.5, 0.0), (211.0, 0.0), (149.5, 0.0)] {
+            assert_eq!(
+                board(player((0.0, 0.0), (0.0, 0.0), mine), facing(theirs)),
+                Err(BoardRefusal::Misaligned),
+                "{mine} on {theirs}"
+            );
+        }
     }
 
     // What is on board.
@@ -1882,6 +2001,8 @@ mod tests {
         ] {
             assert!(full.offers(take), "{take:?}");
         }
+        assert!(!full.offers(Take::Miss), "a miss is no button");
+        assert!(!empty.offers(Take::Miss));
     }
 
     #[test]

@@ -14,6 +14,9 @@
 //!   hull's murk m, and n is held to trunc(32 − 1.5 × m), at least 0
 //!   ([`npc_glow_level`], −1.5 @0xdd570, 32 @0xdd578); the player's has no
 //!   murk.
+//! - A weapon glow sheet's solid runs are drawn raw over it, full white
+//!   whatever its level, murk or colorize
+//!   ([`solid_runs`](super::solid_runs)): the Thunderforge's.
 //! - Then the glow falls by its class's decay, `WeapDecay` × 0.333
 //!   ([`ShipSheet::weapon_decay`](super::catalog::ShipSheet::weapon_decay)),
 //!   to −1.0 at the least ([`WeaponGlow::step`]).

@@ -94,8 +94,9 @@ use crate::traffic::{Leave, Traffic};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Entry {
     /// A hyperspace jump's arrival, having made `hops` hops along the
-    /// course, at its natural end, both warp-ups finished, or not, at its
-    /// fallback end (see [`Session::arrive`]).
+    /// course, at its natural end, both warp-ups finished or halted by the
+    /// fallback's pass before it, or not, a warp-up still playing with no
+    /// fallback pass first (see [`Session::arrive`]).
     Jump { hops: usize, natural_end: bool },
     /// Out of a hypergate or wormhole.
     Gate,
@@ -162,6 +163,16 @@ pub(super) struct Placement {
 pub(super) enum ShipPlacement {
     /// Exactly here, moving and heading as this says.
     Arrive(ShipState),
+    /// Exactly here, moving and heading as `ship` says, at `speed` along
+    /// its heading: the original's jump arrival, where an inertialess
+    /// ship comes in still at its top speed (see the `jump_arrival`
+    /// module).
+    ArriveAtSpeed {
+        /// Where it is, how it moves and which way it faces.
+        ship: ShipState,
+        /// Its speed along its heading.
+        speed: f32,
+    },
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
     /// Where it is, as it is.
@@ -866,6 +877,10 @@ impl Session {
                 self.player = state;
                 self.arrive_at_speed();
             }
+            ShipPlacement::ArriveAtSpeed { ship, speed } => {
+                self.player = ship;
+                self.player_speed = speed;
+            }
             ShipPlacement::AtRest(position) => {
                 self.player.position = position;
                 self.player.velocity = Vec2::ZERO;
@@ -973,14 +988,21 @@ impl Session {
                 let kept = self.traffic.kept_berths();
                 self.traffic = Traffic::new();
                 // A new traffic reads reused slots' picks, exit cursors and
-                // search timers by the rulebook.
+                // blink timers and search timers by the rulebook.
                 self.traffic
                     .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
                 self.traffic
                     .set_reused_slot_exits(self.rules.source_for(RuleKey::ReusedSlotExits));
+                self.traffic.set_reused_slot_blink_timer(
+                    self.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
+                );
+                self.traffic.set_spawn_anim_rolls_first_class(
+                    self.rules.source_for(RuleKey::SpawnAnimRollsFirstClass),
+                );
                 self.traffic
                     .set_reused_slot_search(self.rules.source_for(RuleKey::ReusedSlotSearch));
                 self.traffic.keep_berths(kept);
+                self.set_first_class();
                 self.traffic_due = true;
                 self.fleet.clear();
                 self.story.watched.clear();
@@ -988,10 +1010,20 @@ impl Session {
         }
     }
 
+    /// Plays the warp-out, `snd ` 130 ([`SimSound::Arrived`]), its
+    /// countdown started: on an arrival ([`Session::announce`]) or on the
+    /// warp end's fallback pass (see the `warp_stage` module).
+    pub(super) fn sound_warp_out(&mut self) {
+        self.warp_out.start(self.warp_out_sound);
+        self.sounds.push(SimSound::Arrived);
+    }
+
     /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
     /// natural end only while it is not still playing (`_HandlePlayer`
-    /// @0x6bbe1-0x6bbe9); a jump's fallback end and a gate's or wormhole's
-    /// exit always (@0x6c706, @0x63e57, @0x6443d).
+    /// @0x6bbe1-0x6bbe9); a jump arrived with a warp-up still playing,
+    /// with no fallback pass first, and a gate's or wormhole's exit always
+    /// (@0x6c706, @0x63e57, @0x6443d). The arrival after the warp end's
+    /// fallback is a natural end: the fallback halted the warp-ups.
     fn sounds_warp_out(&self, how: Entry) -> bool {
         !matches!(
             how,
@@ -1020,8 +1052,7 @@ impl Session {
             notes,
         } = heard;
         if resets.has(Reset::ArrivalSound) && self.sounds_warp_out(how) {
-            self.warp_out.start(self.warp_out_sound);
-            self.sounds.push(SimSound::Arrived);
+            self.sound_warp_out();
         }
         if resets.has(Reset::ArrivalMessage) {
             let message = self.arrival_message(system, catalog);
@@ -1478,6 +1509,32 @@ mod tests {
             },
             "at rest, its heading kept"
         );
+    }
+
+    #[test]
+    fn placing_an_arrival_with_a_speed_sets_the_speed_not_the_velocity_length() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let still = ShipState {
+            position: Vec2::new(-1350.0, 0.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        placed(
+            &mut session,
+            ShipPlacement::ArriveAtSpeed {
+                ship: still,
+                speed: 6.0,
+            },
+            false,
+        );
+        assert_eq!(*session.player(), still);
+        assert_eq!(session.player_speed(), 6.0);
+        let moving = ShipState {
+            velocity: Vec2::new(3.0, -4.0),
+            ..still
+        };
+        placed(&mut session, ShipPlacement::Arrive(moving), false);
+        assert_eq!(session.player_speed(), 5.0, "the velocity's length");
     }
 
     #[test]

@@ -316,8 +316,9 @@ mod tests {
         #[test]
         fn a_brave_trader_attacks_where_its_attacker_jumped_out_within_1250_keeping_its_provocation()
          {
-            // A wimpy trader provoked by the player far off runs out and
-            // jumps on its first tick (see `leave_flight`).
+            // A wimpy trader provoked by the player far off runs out,
+            // begins its warp out on its first tick (see `leave_flight`)
+            // and is gone once its warp stage ends (see `warp_out`).
             let mut traffic = Traffic::new();
             let mut runner = ship(0, TRADERS, AiType::WimpyTrader, 0.0, -1001.0);
             runner.goal = Goal::Flee(ShipRef::Player);
@@ -332,7 +333,11 @@ mod tests {
                 player: Some(player(251.0, -10.0)),
                 ..World::new(&[])
             };
-            traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
+            let warped = (0..600).any(|_| {
+                traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
+                !traffic.departed().is_empty()
+            });
+            assert!(warped, "it warps out");
             assert_eq!(traffic.departed(), [(runner, Outcome::JumpedOut)]);
             assert_eq!(
                 trader_of(&traffic, trader).goal,

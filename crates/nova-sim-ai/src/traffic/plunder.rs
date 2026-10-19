@@ -66,7 +66,7 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, FlightRules, ShipState};
 use crate::hail::Help;
-use crate::handling::Handling;
+use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
 use crate::traffic::autopilot::TopSpeeds;
@@ -168,9 +168,10 @@ pub enum HighLevel {
 }
 
 /// What `npc`'s high level does this think among `around` (see the module
-/// docs).
+/// docs), counting a dampener as `rule` says
+/// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
 #[must_use]
-pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
+pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> HighLevel {
     if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift | Goal::CountWait) {
         return HighLevel::Skipped;
     }
@@ -203,7 +204,7 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
     };
     HighLevel::Docks {
         ship,
-        step: plunder_dock::high_level(npc, at.position, boarded),
+        step: plunder_dock::high_level(npc, at.position, boarded, rule),
     }
 }
 
@@ -251,10 +252,7 @@ pub fn fly_docking(
         npc.docking = None;
         return None;
     };
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let handling = npc.flying_handling(speeds.own, flight);
     Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
 }
 
@@ -403,8 +401,9 @@ fn plunder_npc(
             }
         }
     }
-    let govt = npcs[at].govt;
+    let pirate_ship = npcs[at].clone();
     let ship = &mut npcs[into];
+    ship.take_govt_of(&pirate_ship);
     ship.person = None;
     ship.former = None;
     ship.escort = None;
@@ -413,7 +412,6 @@ fn plunder_npc(
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
     ship.boarded = false;
-    ship.govt = govt;
     ship.ai_wait = CAPTURED_WAIT;
     // Doubles, back to a float (@0x849b4-0x849c8).
     #[allow(clippy::cast_possible_truncation)]
@@ -567,6 +565,41 @@ mod tests {
     }
 
     #[test]
+    fn a_dampened_pirate_docks_within_four_times_its_box_only_when_the_worlds_rule_counts_its_dampener()
+     {
+        // Class turn 3: a box of 210, 840 for an inertialess ship. The
+        // pirate's high level reads the world's flight rule.
+        let sub = |rule: InertialDampener| {
+            let mut dampened = pirate(100);
+            dampened.stats.dampener = true;
+            assert!(!dampened.stats.inertialess_hull);
+            let mut far = victim();
+            far.state.position = Vec2::new(840.0, 0.0);
+            let mut traffic = traffic_of(vec![dampened, far]);
+            let world = World {
+                flight: FlightRules {
+                    inertial_dampener: rule,
+                    ..FlightRules::default()
+                },
+                ..World::new(&[])
+            };
+            traffic.tick_in(
+                &PirateWarship::default(),
+                world,
+                &[],
+                &mut Draws::of(&[0; 64]),
+            );
+            ship(&traffic, PIRATE).docking.map(|docking| docking.sub)
+        };
+        assert_eq!(sub(InertialDampener::AnyShip), Some(DockSub::Dock));
+        assert_eq!(
+            sub(InertialDampener::PlayerOnly),
+            Some(DockSub::Approach),
+            "beyond twice 210"
+        );
+    }
+
+    #[test]
     fn the_plunder_comes_on_the_dock_waits_last_tick_and_takes_the_cargo() {
         let mut traffic = traffic_of(vec![pirate(1), victim()]);
         tick(&mut traffic, 0);
@@ -681,14 +714,21 @@ mod tests {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Dock,
         });
+        docked.skill_mult = 2.5;
         let mut boarded = former();
         boarded.boarded = true;
+        boarded.skill = 0.75;
         let mut traffic = traffic_of(vec![docked, boarded, onlooker, wrecked]);
         traffic.set_berth_person(9, "Someone");
         tick(&mut traffic, 0);
         let taken = ship(&traffic, VICTIM);
         assert_eq!(taken.leader, Some(PIRATE));
         assert_eq!(taken.govt, Some(crate::catalog::GovtId(130)));
+        assert_eq!(
+            (taken.skill_mult, taken.skill),
+            (2.5, 0.75),
+            "the pirate's factor, its own skill"
+        );
         assert_eq!(
             (taken.person, taken.former, taken.boarded),
             (None, None, false)
@@ -898,13 +938,13 @@ mod tests {
         };
         let npcs = [helper.clone()];
         assert_eq!(
-            high_level(&npcs[0], &world.around(&npcs)),
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Skipped
         );
         helper.ai_wait = 0;
         let npcs = [helper.clone()];
         assert_eq!(
-            high_level(&npcs[0], &world.around(&npcs)),
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Docks {
                 ship: ShipRef::Player,
                 step: DockStep::Sub(DockSub::Dock)
@@ -913,7 +953,7 @@ mod tests {
         helper.target = None;
         let npcs = [helper];
         assert_eq!(
-            high_level(&npcs[0], &world.around(&npcs)),
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Skipped,
             "no target: nothing changes"
         );
@@ -935,7 +975,7 @@ mod tests {
         };
         let high = |helper: &Npc| {
             let npcs = [helper.clone()];
-            high_level(&npcs[0], &world.around(&npcs))
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly)
         };
         assert_eq!(high(&helper), HighLevel::Skipped);
         helper.ai_wait = 0;
@@ -1147,6 +1187,19 @@ mod tests {
         let moved = ship(&traffic, PIRATE);
         assert_eq!(moved.ai_wait, 4);
         assert_eq!(moved.state.position, Vec2::ZERO, "no high level");
+    }
+
+    #[test]
+    fn the_fights_countdown_leaves_a_pods_adrift_wait_alone() {
+        // `_HandleShip`'s countdown skips class 0x2ff (@0x3502f): a pod's
+        // wait is its own flight's (`pod_flight::count_down`).
+        use crate::traffic::npc::Mode;
+        let mut pod = npc(0, ShipStats::new(FAST, &[]));
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        pod.mode = Mode::Adrift { ticks_left: 3 };
+        let mut npcs = [pod];
+        count_down(&mut npcs);
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3 });
     }
 
     #[test]

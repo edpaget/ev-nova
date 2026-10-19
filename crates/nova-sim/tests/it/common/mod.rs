@@ -47,7 +47,12 @@ pub fn stock_npc(
         .into_iter()
         .find(|record| record.id == ship)
         .expect("the ship type reads");
-    let kind = kind(&record, &data.outfits(), arsenal);
+    let kind = kind(
+        &record,
+        &data.outfits(),
+        arsenal,
+        nova_sim::RuleSource::Engine,
+    );
     let mut npc = nova_sim::traffic::fixture::npc(id, kind.stats);
     npc.berth = id;
     npc.ship = ship;
@@ -79,5 +84,6 @@ pub fn player(condition: Condition) -> PlayerSide {
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }

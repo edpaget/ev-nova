@@ -146,7 +146,11 @@ fn a_ship_and_a_stellar_600_left_of_the_player_are_drawn_on_screen() {
         .filter(|&(_, center)| center == at(82.0, 384.0))
         .map(|(image, _)| image)
         .collect();
-    assert_eq!(at_82.len(), 2, "the stellar and the ship: {list:?}");
+    assert_eq!(
+        at_82.len(),
+        4,
+        "the stellar, and the ship with its glow and lights: {list:?}"
+    );
     let session = view.session().expect("flying");
     assert!(
         session.on_screen(&session.npcs()[0]),
@@ -210,7 +214,8 @@ fn the_jumps_white_fade_covers_the_widened_view() {
     let mut view = widened(view);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1125));
+    tick_until_lit(&mut view);
+    view.tick(ms(500));
     let list = drawn(&view);
     assert!(
         list.iter().any(|command| matches!(

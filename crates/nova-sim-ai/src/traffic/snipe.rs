@@ -23,6 +23,11 @@
 //!   far it is off (strict, @0x871ef-0x87255), with no reverse key. Its
 //!   passes run nothing, and it asks for no point defence: it goes
 //!   straight to `_AILaunchFighter` (@0x87329).
+//! - **Moving and inertialess** ([`inertialess_brake`], @0x8710f-0x8713a):
+//!   its thrust is `_ShipAccelRate` reversed, a whole tick's acceleration
+//!   off its speed, with no turn and no thrust shown; then, as above, it
+//!   runs no pass and goes to the launch (@0x8713a → @0x87329). The
+//!   autopilot chooses it for an inertialess sniper.
 //! - **At rest**: its velocity slows by [`DAMPING`] each tick
 //!   (@0x8725a-0x8728e), it turns to the plain bearing of its target
 //!   (`_CalcInterceptAngle` @0x872aa, not a lead), and never thrusts. It
@@ -32,18 +37,14 @@
 //! Left out (rdm phase weapons-fidelity/phase-30-snipe-left-out-of-phase-17):
 //! the whole-degree headings and `_AngularDifference` the original tests
 //! by (@0x871ef-0x87255, @0x872aa-0x872fe), and the whole-degree modulo
-//! of its retro heading. An inertialess ship's brake (thrust reversed,
-//! @0x8710f-0x8713a): a moving inertialess sniper brakes as substate 1
-//! does instead ([`inertialess::brake`](crate::traffic::inertialess::brake),
-//! see the autopilot), until
-//! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit.
-//! The block calls no `PlaySound` or `_beepSnd`.
+//! of its retro heading. The block calls no `PlaySound` or `_beepSnd`.
 
 use crate::ai::fire::{self, GUN_FACING};
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::armament::Arsenal;
 use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
 use crate::handling::Handling;
+use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
@@ -72,7 +73,19 @@ pub fn moving(state: &ShipState) -> bool {
 #[must_use]
 pub fn facing(npc: &Npc, at: &ShipState) -> bool {
     angle_off(npc.state.heading, bearing(npc.state.position, at.position))
-        < GUN_FACING * npc.stats.handling.turn_rate
+        < GUN_FACING * npc.turn_rate()
+}
+
+/// A moving inertialess sniper's brake (@0x8710f-0x87137): its thrust
+/// +0x30 is `_ShipAccelRate` reversed, which `_HandleShip` takes as a whole
+/// tick's acceleration off its speed, capped at its top speed and floored
+/// at none ([`step_speed`] by [`REVERSE`], @0x34aef-0x34b68). It takes no
+/// heading (+0x68 stays the handler entry's, its own), and a reversed
+/// thrust shows none (@0x34eef-0x34eff), so the controls are none. The
+/// speed is moved here, as no thrust key is held for the step to move it.
+pub fn inertialess_brake(npc: &mut Npc, handling: &Handling) -> Controls {
+    npc.speed = step_speed(npc.speed, REVERSE, handling.accel, handling.max_speed);
+    Controls::default()
 }
 
 /// The controls `npc` snipes by this tick at its target at `target`, on
@@ -356,6 +369,28 @@ mod tests {
         );
         assert_eq!(controls, Controls::default());
         assert_eq!(npc.state.velocity, Vec2::new(0.1, 2.0), "not slowed");
+    }
+
+    #[test]
+    fn an_inertialess_brake_takes_a_whole_ticks_acceleration_off_its_speed_with_no_turn_or_thrust()
+    {
+        // FAST: 0.18 a tick, 6 at most.
+        let handling = ShipStats::new(FAST, &[]).handling;
+        assert_eq!((handling.accel, handling.max_speed), (0.18, 6.0));
+        let braked = |speed: f32| {
+            let start = at(10.0, -20.0, 0.0, -3.0, 40.0);
+            let mut npc = Npc {
+                speed,
+                ..sniper(start)
+            };
+            let controls = inertialess_brake(&mut npc, &handling);
+            assert_eq!(controls, Controls::default());
+            assert_eq!(npc.state, start, "its heading and velocity untouched");
+            npc.speed
+        };
+        assert!((braked(3.0) - 2.82).abs() < 1e-6, "{}", braked(3.0));
+        assert_eq!(braked(0.1), 0.0, "floored");
+        assert_eq!(braked(7.0), 6.0, "capped at its top speed");
     }
 
     #[test]

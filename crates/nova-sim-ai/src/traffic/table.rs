@@ -38,8 +38,10 @@ use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::scoop;
 use crate::self_repair;
+use crate::skill::STILL_HULL;
 use crate::stats::ShipStats;
 use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
 
@@ -237,6 +239,8 @@ pub fn appearing_ship_types<'t>(
 
 /// A ship type the traffic can spawn: how it performs, with its default
 /// items, its `InherentAI`, and what it fights with.
+// Each flag is one of its class's bits or gear, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShipKind {
     /// Its stats.
@@ -292,6 +296,13 @@ pub struct ShipKind {
     /// @0x7a0b3-0x7a0ef), which `_HandleShip` holds still every frame
     /// (@0x34209-0x3423b; see [`Npc::immobile`](crate::traffic::npc::Npc::immobile)).
     pub immobile: bool,
+    /// Its `SkillVar`, raw: what each of its ships rolls its skill on as
+    /// it spawns ([`random_skill_level`](crate::skill::random_skill_level)).
+    pub skill_var: i16,
+    /// Whether its `shïp` `Flags` hold
+    /// [`STILL_HULL`]: its ships neither move
+    /// nor thrust (see the [`skill`](crate::traffic::skill) module).
+    pub still: bool,
     /// Its `Strength` and the marines its default items give a pirate's
     /// plunder ([`ClassMarines::of`]).
     pub marines: ClassMarines,
@@ -364,9 +375,10 @@ impl SpawnTable {
     /// System `system`'s table, governed by `system_govt`, read from
     /// `catalog`, its fleets' links matched with the relations in
     /// `govts`, with each ship type's stats from its record in `ships`
-    /// and its default items, the `oütf`s from `outfits`, as the player's
-    /// are, and its hull and armament from `arsenal`; its persons' links
-    /// and ships as `rules` says. The persons of `fleet`, the player's
+    /// and its default items, the `oütf`s from `outfits`, counted as
+    /// `items`, the [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems)
+    /// reading, says ([`kind`]), and its hull and armament from `arsenal`;
+    /// its persons' links and ships as `rules` says. The persons of `fleet`, the player's
     /// escorts, are kept wherever they are, so each flies as itself in
     /// every system. A system that cannot be read has no traffic, and
     /// keeps only the fleet's persons.
@@ -383,6 +395,7 @@ impl SpawnTable {
         arsenal: &Arsenal,
         rules: &dyn PersonRules,
         fleet: &BTreeSet<PersonId>,
+        items: RuleSource,
     ) -> Self {
         let Some(traffic) = catalog.system_traffic(system) else {
             if fleet.is_empty() {
@@ -392,7 +405,7 @@ impl SpawnTable {
                 catalog,
                 (system, system_govt, govts),
                 (&[], fleet),
-                (ships, outfits, arsenal),
+                (ships, outfits, arsenal, items),
                 rules,
             );
             persons.retain(|id, _| fleet.contains(id));
@@ -401,7 +414,7 @@ impl SpawnTable {
                 .filter_map(|person| person.record.ship)
                 .collect();
             return Self {
-                ships: kinds(ships, &wanted, outfits, arsenal),
+                ships: kinds(ships, &wanted, (outfits, arsenal, items)),
                 persons,
                 ..Self::default()
             };
@@ -439,7 +452,7 @@ impl SpawnTable {
             catalog,
             (system, system_govt, govts),
             (&person_slots, fleet),
-            (ships, outfits, arsenal),
+            (ships, outfits, arsenal, items),
             rules,
         );
         let wanted: BTreeSet<ShipId> = dude_records
@@ -453,7 +466,7 @@ impl SpawnTable {
             }))
             .chain(persons.values().filter_map(|person| person.record.ship))
             .collect();
-        let ships = kinds(ships, &wanted, outfits, arsenal);
+        let ships = kinds(ships, &wanted, (outfits, arsenal, items));
         Self {
             avg_ships: u32::try_from(traffic.avg_ships).unwrap_or(0),
             dudes: decoded.dudes,
@@ -470,7 +483,8 @@ impl SpawnTable {
 
     /// Adds `dudes`, the `düde`s of the active missions' special ships,
     /// read from `catalog`, and the ship types they fly with a record in
-    /// `ships`, resolved as [`SpawnTable::resolve`] resolves them: they
+    /// `ships`, resolved as [`SpawnTable::resolve`] resolves them, their
+    /// default items counted as `items` says: they
     /// join the `düde`s that can be read, not the system's own weights.
     /// A `düde` or ship type the table has already is kept as it is.
     pub fn add_mission_dudes(
@@ -480,6 +494,7 @@ impl SpawnTable {
         ships: &[ShipRecord],
         outfits: &[OutfitRecord],
         arsenal: &Arsenal,
+        items: RuleSource,
     ) {
         for &id in dudes {
             if self.dude_records.contains_key(&id) {
@@ -495,7 +510,8 @@ impl SpawnTable {
             .flat_map(|dude| dude.ships.iter().map(|&(ship, _)| ship))
             .filter(|ship| !self.ships.contains_key(ship))
             .collect();
-        self.ships.extend(kinds(ships, &wanted, outfits, arsenal));
+        self.ships
+            .extend(kinds(ships, &wanted, (outfits, arsenal, items)));
     }
 
     /// The ship types the table can spawn, by ascending ID.
@@ -511,30 +527,31 @@ fn spawn_dude(catalog: &(impl TrafficCatalog + ?Sized), id: DudeId) -> Option<Sp
     catalog.dude(id).as_ref().map(SpawnDude::from)
 }
 
-/// Each of `ships` whose ID is `wanted`, as the traffic flies it.
+/// Each of `ships` whose ID is `wanted`, as the traffic flies it, its
+/// default items from `outfits` counted as `items` says, armed from
+/// `arsenal` ([`kind`]).
 fn kinds(
     ships: &[ShipRecord],
     wanted: &BTreeSet<ShipId>,
-    outfits: &[OutfitRecord],
-    arsenal: &Arsenal,
+    (outfits, arsenal, items): (&[OutfitRecord], &Arsenal, RuleSource),
 ) -> BTreeMap<ShipId, ShipKind> {
     ships
         .iter()
         .filter(|record| wanted.contains(&record.id))
-        .map(|record| (record.id, kind(record, outfits, arsenal)))
+        .map(|record| (record.id, kind(record, outfits, arsenal, items)))
         .collect()
 }
 
 /// The persons of `catalog` linked to `system`, governed by `system_govt`
 /// with the relations in `govts`, named in `slots` or in the player's
 /// `fleet`, whose ship has a record among `ships`, each flying it fitted,
-/// its default items from `outfits` and armed from `arsenal`, as `rules`
-/// say.
+/// its default items from `outfits` counted as `items` says and armed
+/// from `arsenal`, as `rules` say.
 fn persons(
     catalog: &(impl TrafficCatalog + ?Sized),
     (system, system_govt, govts): (SystemId, Option<GovtId>, &Governments),
     (slots, fleet): (&[(PersonId, i16)], &BTreeSet<PersonId>),
-    (ships, outfits, arsenal): (&[ShipRecord], &[OutfitRecord], &Arsenal),
+    (ships, outfits, arsenal, items): (&[ShipRecord], &[OutfitRecord], &Arsenal, RuleSource),
     rules: &dyn PersonRules,
 ) -> BTreeMap<PersonId, SpawnPerson> {
     catalog
@@ -554,7 +571,7 @@ fn persons(
             let ship = ships.iter().find(|ship| Some(ship.id) == record.ship)?;
             let derelict = govts.derelict(record.govt);
             let (kind, reserves, condition) = persons::fit(
-                &kind(ship, outfits, arsenal),
+                &kind(ship, outfits, arsenal, items),
                 &record,
                 arsenal,
                 rules.shield_mod(),
@@ -575,14 +592,22 @@ fn persons(
         .collect()
 }
 
-/// A ship of `record`, carrying its default items, armed from `arsenal`
-/// with its stock weapons alone ([`Arsenal::npc`]).
+/// A ship of `record`, carrying its default items, from `outfits`, armed
+/// from `arsenal` with its stock weapons alone ([`Arsenal::npc`]): its
+/// stats an NPC's as `items`, the
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) reading,
+/// says ([`ShipStats::for_npc`]).
 #[must_use]
-pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
+pub fn kind(
+    record: &ShipRecord,
+    outfits: &[OutfitRecord],
+    arsenal: &Arsenal,
+    items: RuleSource,
+) -> ShipKind {
     let defaults = tally(record.defaults.iter().copied());
     let (armament, rounds) = arsenal.npc(record.id);
     ShipKind {
-        stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
+        stats: ShipStats::for_npc(record.fields, &outfit_mods(&defaults, outfits), items),
         inherent_ai: record.inherent_ai,
         escort_class: EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass),
         hull: HullSpec {
@@ -602,6 +627,8 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         class_fuel: record.fields.fuel,
         base_armor: f32::from(record.fields.armor.max(0)),
         immobile: record.fields.speed == 0 && record.fields.accel == 0,
+        skill_var: record.skill_var,
+        still: record.fields.flags & STILL_HULL != 0,
         marines: ClassMarines::of(record.strength, &record.default_slots, outfits),
     }
 }
@@ -624,6 +651,7 @@ mod tests {
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::MORE_SPEED;
     use crate::traffic::persons::NovaPersons;
+    use crate::traffic::spawn::dude_setup_state;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::{govt, hull, outfit, person, ship, weapon};
 
@@ -1054,6 +1082,7 @@ mod tests {
             &arsenal(),
             &rules,
             fleet,
+            RuleSource::Engine,
         )
     }
 
@@ -1096,6 +1125,7 @@ mod tests {
             &Arsenal::default(),
             &NovaPersons::default(),
             &BTreeSet::new(),
+            RuleSource::Engine,
         );
         table.add_mission_dudes(
             &catalog,
@@ -1103,6 +1133,7 @@ mod tests {
             &records(),
             &[],
             &Arsenal::default(),
+            RuleSource::Engine,
         );
         assert_eq!(
             table.dude_records.keys().copied().collect::<Vec<_>>(),
@@ -1125,7 +1156,14 @@ mod tests {
 
         let mut own = resolved();
         let before = own.clone();
-        own.add_mission_dudes(&catalog, &[DudeId(150)], &records(), &[], &arsenal());
+        own.add_mission_dudes(
+            &catalog,
+            &[DudeId(150)],
+            &records(),
+            &[],
+            &arsenal(),
+            RuleSource::Engine,
+        );
         assert_eq!(own.dudes, before.dudes, "the system's weights kept");
         assert_eq!(
             own.dude_records[&DudeId(128)],
@@ -1147,6 +1185,7 @@ mod tests {
             &Arsenal::default(),
             &NovaPersons::default(),
             &BTreeSet::from([PersonId(601)]),
+            RuleSource::Engine,
         );
         assert_eq!(
             table.persons.keys().copied().collect::<Vec<_>>(),
@@ -1255,23 +1294,148 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_ship_type_named_gets_the_players_stats_and_its_inherent_ai() {
-        let table = resolved();
-        assert_eq!(
-            table.ship_types(),
-            [ShipId(200), ShipId(201), ShipId(202), ShipId(203)],
-            "ships 998 and 999 have no record, and 203 is person 510's"
-        );
-        let boosted = ShipStats::new(
+    /// Ship 200's stats, with its speed booster as a default item,
+    /// `items` reading the key.
+    fn booster_ship(items: RuleSource) -> ShipKind {
+        kind(
+            &records()[0],
+            &[outfit(300, &[(MORE_SPEED, 100)])],
+            &arsenal(),
+            items,
+        )
+    }
+
+    /// `FAST` carrying a speed booster that counts, by the other reading.
+    fn boosted() -> ShipStats {
+        ShipStats::for_npc(
             FAST,
             &[crate::fuel::OutfitMod {
                 mod_type: MORE_SPEED,
                 mod_val: 100,
                 count: 1,
             }],
+            RuleSource::Bible,
+        )
+    }
+
+    #[test]
+    fn a_kind_flies_at_its_classs_alone_by_the_engine_and_with_its_default_items_by_the_other_reading()
+     {
+        assert_eq!(
+            booster_ship(RuleSource::Engine).stats.handling,
+            ShipStats::new(FAST, &[]).handling
         );
-        assert_eq!(table.ships[&ShipId(200)].stats, boosted);
+        assert_eq!(booster_ship(RuleSource::Bible).stats, boosted());
+    }
+
+    #[test]
+    fn a_table_resolves_each_kind_as_the_reading_says() {
+        // Person 601, of the fleet, flies ship 200.
+        let resolve = |items| {
+            SpawnTable::resolve(
+                &Traffic::default(),
+                SystemId(130),
+                Some(GovtId(128)),
+                &relations(),
+                &records(),
+                &[outfit(300, &[(MORE_SPEED, 100)])],
+                &arsenal(),
+                &NovaPersons::default(),
+                &BTreeSet::from([PersonId(601)]),
+                items,
+            )
+        };
+        let bare = ShipStats::new(FAST, &[]).handling;
+        let engine = resolve(RuleSource::Engine);
+        assert_eq!(engine.ships[&ShipId(200)].stats.handling, bare);
+        assert_eq!(
+            engine.persons[&PersonId(601)].kind.stats.handling,
+            bare,
+            "a person's ship too, as its setup speed reads it"
+        );
+        let bible = resolve(RuleSource::Bible);
+        assert_eq!(bible.ships[&ShipId(200)].stats, boosted());
+        assert_eq!(
+            bible.persons[&PersonId(601)].kind.stats.handling,
+            boosted().handling
+        );
+        let mut mission = resolve(RuleSource::Bible);
+        mission.ships.clear();
+        mission.add_mission_dudes(
+            &Traffic::default(),
+            &[DudeId(128)],
+            &records(),
+            &[outfit(300, &[(MORE_SPEED, 100)])],
+            &arsenal(),
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            mission.ships[&ShipId(200)].stats.handling,
+            ShipStats::new(FAST, &[]).handling,
+            "a mission's ship types as the reading says"
+        );
+    }
+
+    #[test]
+    fn the_setup_starts_a_duede_ship_at_its_classs_bare_speed_by_the_engine() {
+        let at = |items| {
+            dude_setup_state(
+                crate::traffic::npc::AiType::WimpyTrader,
+                &booster_ship(items),
+                None,
+                &mut Draws::of(&[0, 0, 0]),
+            )
+            .velocity
+            .length()
+        };
+        assert_eq!(at(RuleSource::Engine), 6.0, "FAST's bare Speed / 100");
+        assert_eq!(at(RuleSource::Bible), 7.0, "with its booster");
+    }
+
+    #[test]
+    fn a_warship_of_no_bare_speed_is_stationary_by_the_engine_whatever_its_items() {
+        let mut record = records()[0].clone();
+        record.fields.speed = 0;
+        let stellar = Some(crate::geometry::Vec2::new(400.0, 0.0));
+        let at = |items| {
+            dude_setup_state(
+                crate::traffic::npc::AiType::Warship,
+                &kind(
+                    &record,
+                    &[outfit(300, &[(MORE_SPEED, 100)])],
+                    &arsenal(),
+                    items,
+                ),
+                stellar,
+                &mut Draws::of(&[0, 0, 0, 0]),
+            )
+        };
+        let still = at(RuleSource::Engine);
+        assert_eq!(still.velocity.length(), 0.0);
+        assert!(
+            (still.position - crate::geometry::Vec2::new(400.0, -100.0)).length() < 1e-3,
+            "{still:?}"
+        );
+        assert_eq!(
+            at(RuleSource::Bible).velocity.length(),
+            1.0,
+            "its booster moves it"
+        );
+    }
+
+    #[test]
+    fn each_ship_type_named_gets_its_classs_stats_and_its_inherent_ai() {
+        let table = resolved();
+        assert_eq!(
+            table.ship_types(),
+            [ShipId(200), ShipId(201), ShipId(202), ShipId(203)],
+            "ships 998 and 999 have no record, and 203 is person 510's"
+        );
+        assert_eq!(
+            table.ships[&ShipId(200)].stats,
+            ShipStats::for_npc(FAST, &[], RuleSource::Engine),
+            "its booster left out by the engine"
+        );
         assert_eq!(table.ships[&ShipId(201)].stats, ShipStats::new(FAST, &[]));
         assert_eq!(
             table
@@ -1300,7 +1464,7 @@ mod tests {
                 inherent_ai: 2,
                 ..ship(200, FAST)
             };
-            let kind = kind(&record, &[], &arsenal());
+            let kind = kind(&record, &[], &arsenal(), RuleSource::Engine);
             assert_eq!(kind.hull.crew, crew, "the pirate's tests read it");
             assert_eq!(kind.hull.inherent_ai, 2);
         }
@@ -1329,7 +1493,7 @@ mod tests {
             ..ship(204, FAST)
         };
         assert_eq!(
-            kind(&heavy, &[], &arsenal()).escort_class,
+            kind(&heavy, &[], &arsenal(), RuleSource::Engine).escort_class,
             EscortClass::Medium,
             "by its mass"
         );
@@ -1346,7 +1510,7 @@ mod tests {
                 },
                 ..ship(204, FAST)
             };
-            kind(&record, &[], &arsenal()).immobile
+            kind(&record, &[], &arsenal(), RuleSource::Engine).immobile
         };
         assert!(of(0, 0), "both none");
         assert!(!of(0, 10), "it can thrust");
@@ -1364,8 +1528,68 @@ mod tests {
             ..ship(204, FAST)
         };
         let outfits = [outfit(300, &[(crate::stats::MORE_ARMOR, 50)])];
-        let kind = kind(&plated, &outfits, &arsenal());
-        assert_eq!((kind.stats.armor, kind.base_armor), (150.0, 100.0));
+        let read = |items| {
+            let kind = kind(&plated, &outfits, &arsenal(), items);
+            (kind.stats.armor, kind.base_armor)
+        };
+        assert_eq!(read(RuleSource::Bible), (150.0, 100.0));
+        assert_eq!(
+            read(RuleSource::Engine),
+            (100.0, 100.0),
+            "the class's alone"
+        );
+    }
+
+    #[test]
+    fn a_persons_shield_mod_scales_its_classs_reserves_alone_by_the_engine() {
+        // Its class carries shield (+50) and armour (+20) by default; its
+        // `ShieldMod` doubles both.
+        let shielded = ShipRecord {
+            defaults: vec![(OutfitId(300), 1)],
+            ..ship(204, FAST)
+        };
+        let outfits = [outfit(
+            300,
+            &[
+                (crate::stats::MORE_SHIELD, 50),
+                (crate::stats::MORE_ARMOR, 20),
+            ],
+        )];
+        let person = PersonRecord {
+            shield_mod: 200,
+            ..person(510, 204)
+        };
+        let fitted = |items| {
+            let (kind, reserves, _) = persons::fit(
+                &kind(&shielded, &outfits, &arsenal(), items),
+                &person,
+                &arsenal(),
+                RuleSource::Engine,
+                false,
+            );
+            assert_eq!(reserves, kind.stats.full());
+            (kind.stats.shield, kind.stats.armor)
+        };
+        assert_eq!(fitted(RuleSource::Engine), (60.0, 90.0));
+        assert_eq!(fitted(RuleSource::Bible), (160.0, 130.0));
+    }
+
+    #[test]
+    fn a_ship_type_of_flags_0x0400_is_still_and_carries_its_skill_var() {
+        let read = |flags: u16| {
+            let record = ShipRecord {
+                fields: ShipFields { flags, ..FAST },
+                skill_var: 25,
+                ..ship(204, FAST)
+            };
+            let kind = kind(&record, &[], &arsenal(), RuleSource::Engine);
+            (kind.still, kind.skill_var)
+        };
+        assert_eq!(read(0x0400), (true, 25));
+        assert_eq!(read(0x0420), (true, 25));
+        assert_eq!(read(0x0000), (false, 25));
+        assert_eq!(read(0x0020), (false, 25), "another bit");
+        assert_eq!(read(0xfbff), (false, 25), "every bit but 0x0400");
     }
 
     #[test]
@@ -1374,7 +1598,10 @@ mod tests {
             appear_on: Test::parse("b7"),
             ..ship(204, FAST)
         };
-        assert_eq!(kind(&gated, &[], &arsenal()).appear_on, Test::parse("b7"));
+        assert_eq!(
+            kind(&gated, &[], &arsenal(), RuleSource::Engine).appear_on,
+            Test::parse("b7")
+        );
         assert_eq!(ShipKind::default().appear_on, Test::default(), "blank");
     }
 
@@ -1387,7 +1614,7 @@ mod tests {
         let mut record = ship(204, FAST);
         record.strength = -3;
         record.default_slots[0] = Some((OutfitId(227), 2));
-        let kind = kind(&record, &outfits, &arsenal());
+        let kind = kind(&record, &outfits, &arsenal(), RuleSource::Engine);
         assert_eq!(
             kind.marines,
             crate::ai::plunder_contents::ClassMarines::of(-3, &record.default_slots, &outfits)
@@ -1401,7 +1628,7 @@ mod tests {
     fn a_ship_type_carries_its_holds_size() {
         let holding = |holds| {
             let record = ship(204, ShipFields { holds, ..FAST });
-            kind(&record, &[], &arsenal()).holds
+            kind(&record, &[], &arsenal(), RuleSource::Engine).holds
         };
         assert_eq!(holding(20), 20);
         assert_eq!(holding(-35), 35, "a negative Holds is its size");
@@ -1411,10 +1638,17 @@ mod tests {
     #[test]
     fn a_ship_type_carries_its_classs_raw_fuel_without_its_default_items() {
         let tank = outfit(150, &[(crate::stats::MORE_FUEL, 200)]);
+        // By the other reading of `NpcDefaultItems`, its default items
+        // count toward its tank.
         let fuelled = |fuel| {
             let mut record = ship(204, ShipFields { fuel, ..FAST });
             record.defaults = vec![(OutfitId(150), 1)];
-            kind(&record, std::slice::from_ref(&tank), &arsenal())
+            kind(
+                &record,
+                std::slice::from_ref(&tank),
+                &arsenal(),
+                RuleSource::Bible,
+            )
         };
         assert_eq!(fuelled(99).class_fuel, 99);
         assert_eq!(fuelled(99).stats.fuel, 299.0, "the item fills the tank");
@@ -1448,7 +1682,7 @@ mod tests {
         };
         let outfits = [outfit(300, &[(crate::cloak::MOD_CLOAK, 0x080b)])];
         assert_eq!(
-            kind(&zephyr, &outfits, &arsenal()).cloak,
+            kind(&zephyr, &outfits, &arsenal(), RuleSource::Engine).cloak,
             CloakGear {
                 device: true,
                 decloaks_when_hit: true,
@@ -1466,7 +1700,7 @@ mod tests {
             &[(crate::cloak::MOD_SCANNER, crate::cloak::SCAN_UNTARGETABLE)],
         )];
         assert!(
-            kind(&scanning, &scanner, &arsenal())
+            kind(&scanning, &scanner, &arsenal(), RuleSource::Engine)
                 .cloak
                 .scanner
                 .untargetable
@@ -1483,7 +1717,9 @@ mod tests {
             defaults,
             ..ship(206, FAST)
         };
-        let repairs = |record: &ShipRecord| kind(record, &outfits, &arsenal()).self_repair;
+        let repairs = |record: &ShipRecord| {
+            kind(record, &outfits, &arsenal(), RuleSource::Engine).self_repair
+        };
         assert!(repairs(&carrying(vec![(OutfitId(437), 1)])));
         assert!(repairs(&carrying(vec![
             (OutfitId(300), 2),
@@ -1515,7 +1751,7 @@ mod tests {
                 ..ship(207, FAST)
             };
             record.flags3 = flags3;
-            kind(&record, &outfits, &arsenal())
+            kind(&record, &outfits, &arsenal(), RuleSource::Engine)
         };
         let scooping = miner(0xff03, vec![(OutfitId(300), 1), (OutfitId(440), 1)]);
         assert_eq!(scooping.miner, 0x0003, "only Flags3's low two bits");
@@ -1589,7 +1825,7 @@ mod tests {
             defaults: vec![(OutfitId(300), 2), (OutfitId(301), 6)],
             ..ship(200, FAST)
         };
-        let armed = kind(&record, &outfits, &arsenal());
+        let armed = kind(&record, &outfits, &arsenal(), RuleSource::Engine);
         assert_eq!(
             armed
                 .armament
@@ -1616,6 +1852,7 @@ mod tests {
             &Arsenal::default(),
             &NovaPersons::default(),
             &BTreeSet::new(),
+            RuleSource::Engine,
         );
         assert_eq!(table, SpawnTable::default());
         assert!(catalog.dudes_asked.borrow().is_empty());
@@ -1675,6 +1912,7 @@ mod tests {
             &Arsenal::default(),
             &NovaPersons::default(),
             &BTreeSet::new(),
+            RuleSource::Engine,
         );
         assert!(table.fleets.contains_key(&FleetId(382)));
         assert!(table.fleets.contains_key(&FleetId(383)));
@@ -1745,6 +1983,7 @@ mod tests {
                 &Arsenal::default(),
                 &NovaPersons::default(),
                 &BTreeSet::new(),
+                RuleSource::Engine,
             )
         };
         let table = resolve(130);
@@ -1795,6 +2034,7 @@ mod tests {
             &Arsenal::default(),
             &NovaPersons::default(),
             &BTreeSet::new(),
+            RuleSource::Engine,
         );
         assert_eq!(table, SpawnTable::default());
     }

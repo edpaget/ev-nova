@@ -157,6 +157,15 @@ impl Session {
         self.comm_line
     }
 
+    /// The flight counts the message line down a tick of a pass it
+    /// shows a line in: the plunder dialog's loop, whose `_HandleComm`
+    /// (@0x949a1) comes after a take's line, which the flight words and
+    /// shows ([`Session::comm_shown`]) after the session's own pass (see
+    /// the session's `plunder_loop` module).
+    pub fn comm_ticked(&mut self) {
+        self.count_down_comm_line();
+    }
+
     /// The frame's countdown of the message line (see the module docs).
     pub(super) fn count_down_comm_line(&mut self) {
         self.comm_line.tick();
