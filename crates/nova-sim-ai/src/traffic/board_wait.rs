@@ -164,6 +164,7 @@ pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::ai::pursuit::{Body, Frame, Kept, Pursuit};
@@ -466,8 +467,10 @@ mod tests {
         enter(&mut idle, Goal::CountWait);
         assert_eq!(idle.ai_wait, BOARD_WAIT, "+0x4c = 120 (@0x8c71c)");
         let mut kept = waiting(2, 7);
+        kept.provoked = 5.0;
         enter(&mut kept, Goal::CountWait);
         assert_eq!(kept.ai_wait, 7, "its think keeps goal 0x16");
+        assert_eq!(kept.provoked, 5.0, "@0x8c713 runs only on the way in");
         let mut turned = waiting(3, 7);
         enter(&mut turned, Goal::Attack(ShipRef::Player));
         assert_eq!(turned.ai_wait, 7, "a new goal writes no +0x4c");
@@ -564,6 +567,17 @@ mod tests {
             [(NpcId(1), CommCall::Reinforcements, 0.0)],
             "the waiting pirate calls for none"
         );
+    }
+
+    #[test]
+    fn a_pirate_already_in_its_count_wait_thinks_again_and_keeps_its_wait_and_provocation() {
+        let mut kept = waiting(1, 50);
+        kept.provoked = 5.0;
+        let mut traffic = traffic_of(vec![kept]);
+        tick(&mut traffic, &Waiter);
+        let npc = &traffic.npcs()[0];
+        assert_eq!((npc.goal, npc.ai_wait), (Goal::CountWait, 49));
+        assert_eq!(npc.provoked, 5.0, "no second zero (@0x8c713)");
     }
 
     #[test]
