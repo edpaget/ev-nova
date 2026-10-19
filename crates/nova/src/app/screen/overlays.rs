@@ -167,31 +167,28 @@ impl AppScreen {
     /// kind picked as it closes, is kept, to be taken once, and the dialog
     /// closes once OK is activated.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
-        let wait = self.weapon_effects_wait();
-        if let Some(dialog) = &mut self.preferences {
-            dialog.input(input);
-            if let Some(prefs) = dialog.take_change() {
-                self.prefs = prefs;
-                self.prefs_change = Some(prefs);
-                self.movies.set_on(prefs.quicktime_movies);
-                let weapon_effects = if wait {
-                    self.launch_weapon_effects
-                } else {
-                    prefs.weapon_effects
-                };
-                if let Some(flight) = &mut self.flight {
-                    flight.set_hyperspace_effects(prefs.hyperspace_effects);
-                    flight.set_smoke_trails(prefs.smoke_trails);
-                    flight.set_weapon_effects(weapon_effects);
-                    flight.set_sound_prefs(prefs.sound);
-                }
-            }
-            if let Some(kind) = dialog.take_display_choice() {
-                self.display_choice = Some(kind);
-            }
-            if dialog.closed() {
-                self.sounds.extend(dialog.take_sounds());
-                self.preferences = None;
+        let Some(dialog) = &mut self.preferences else {
+            return ScreenAction::None;
+        };
+        dialog.input(input);
+        let change = dialog.take_change();
+        if let Some(kind) = dialog.take_display_choice() {
+            self.display_choice = Some(kind);
+        }
+        if dialog.closed() {
+            self.sounds.extend(dialog.take_sounds());
+            self.preferences = None;
+        }
+        if let Some(prefs) = change {
+            self.prefs = prefs;
+            self.prefs_change = Some(prefs);
+            self.movies.set_on(prefs.quicktime_movies);
+            let weapon_effects = self.flight_weapon_effects();
+            if let Some(flight) = &mut self.flight {
+                flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                flight.set_smoke_trails(prefs.smoke_trails);
+                flight.set_weapon_effects(weapon_effects);
+                flight.set_sound_prefs(prefs.sound);
             }
         }
         ScreenAction::None
