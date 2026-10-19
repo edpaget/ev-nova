@@ -2478,6 +2478,43 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_destroy_goals_ship_a_deadly_stellar_kills_counts_only_by_the_destroyed_reading() {
+        let catalog = ships_catalog(MissionShip {
+            goal: 0,
+            ..shipping(-1, 0)
+        });
+        for (reading, left, destroyed) in [(RuleSource::Engine, 2, 0), (RuleSource::Bible, 1, 1)] {
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            session.rules = session
+                .rules
+                .with_override(crate::RuleKey::DeadlyStellarKill, reading);
+            // Apart from the other ship and the player.
+            let at = Vec2::new(3000.0, 3000.0);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.state.position = at;
+            let id = npc.id;
+            assert!(npc.mission.is_some(), "a mission ship");
+            session.sites = vec![crate::catalog::LandingSite {
+                flags2: crate::deadly_stellar::DEADLY_STELLAR,
+                frame_size: Some((2, 2)),
+                ..crate::testkit::planet(160, at.x, at.y)
+            }];
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(session.npcs().len(), 1, "{reading:?}");
+            let ships = ships_of(&session);
+            assert_eq!(
+                (ships.left, ships.destroyed),
+                (left, destroyed),
+                "{reading:?}"
+            );
+            let active = session.pilot().missions().get(0).expect("held");
+            assert_eq!(active.failed, None, "{reading:?}: not failed");
+        }
+    }
+
+    #[test]
     fn a_ship_that_is_not_a_mission_ship_counts_nothing() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
