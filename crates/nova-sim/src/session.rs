@@ -1976,7 +1976,9 @@ impl Session {
     /// which the ship no longer brakes, sounding the warp-up, stops if it
     /// brakes again, and counts on through hyperspace until the ship
     /// arrives (see the [`warp`](crate::warp) module). A landed ship, or one in hyperspace, does
-    /// not move, glows not at all, and gains no fuel. As the jump begins and on every tick in
+    /// not move and glows not at all; a landed one gains no fuel, while one in
+    /// hyperspace regenerates it and has it clamped to its tank, as
+    /// `_HandlePlayer` does through the warp stage (@0x6d96d-0x6d9f2). As the jump begins and on every tick in
     /// hyperspace, the ships the player leads let go of their targets
     /// (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2; see the `escorts`
     /// module). In flight, a mission sound a `P` holds
@@ -2169,6 +2171,11 @@ impl Session {
                     warp: warp.saturating_add(1),
                 });
                 self.let_go_of_led_targets();
+                // `_HandlePlayer` regenerates and clamps the fuel through
+                // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
+                // uncapped add (see the `refuel_dock` module) lasts only
+                // the frame.
+                regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
                 return;
             }
         }
@@ -8452,7 +8459,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn fuel_does_not_regenerate_while_landed_or_jumping() {
+    fn fuel_does_not_regenerate_while_landed() {
         let catalog = edge_lander();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
@@ -8466,13 +8473,33 @@ pub(super) mod tests {
         session.take_off(&catalog, &mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
+    }
 
+    /// `_HandlePlayer` regenerates the fuel and clamps it to the tank on
+    /// every flying frame, the warp stage's included (@0x6d96d-0x6d9f2).
+    #[test]
+    fn fuel_regenerates_and_is_clamped_to_the_tank_through_the_warp_stage() {
+        let catalog = edge_lander();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, &catalog, 132);
+        session.take_off(&catalog, &mut NeverFires);
         begin_jump_now(&mut session).expect("jumps from the edge");
+        assert!(
+            matches!(session.jump, Some(Jump::Hyperspace { .. })),
+            "{:?}",
+            session.jump
+        );
         let leaving = session.reserves().fuel.now;
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.reserves().fuel.now, leaving, "in hyperspace");
+        assert_eq!(session.reserves().fuel.now, leaving + 10.0, "in hyperspace");
+        let max = session.reserves().fuel.max;
+        session.pilot.reserves.fuel.now = max + 5.0;
+        session.tick(Controls::default());
+        assert!(matches!(session.jump, Some(Jump::Hyperspace { .. })));
+        assert_eq!(session.reserves().fuel.now, max, "clamped");
     }
 
     // The pilot.
