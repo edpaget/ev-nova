@@ -31,6 +31,10 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
+# The macOS menu bar, built behind nova-appkit's safe API.
+[target.'cfg(target_os = "macos")'.dependencies]
+nova-appkit.workspace = true
+
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`
 # mock.

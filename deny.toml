@@ -18,6 +18,15 @@ deny = [
     # only from the renderer (a macOS-only dependency of each).
     { crate = "nova-metalfx", wrappers = ["nova-render"], reason = "only the renderer draws the world with MetalFX" },
     { crate = "objc2-metal-fx", wrappers = ["nova-metalfx"], reason = "MetalFX's unsafe bindings are reached only through nova-metalfx's safe API" },
+    # The macOS menu bar is built only through nova-appkit's safe API, and
+    # that only by the game itself (a macOS-only dependency of nova). The
+    # ban on AppKit's bindings is about workspace crates: winit, whose
+    # windowing binds AppKit, is the one third-party crate in the default
+    # build that already depends on them. (Cargo.lock also lists
+    # objc2-link-presentation as depending on them, but only through a
+    # feature the default build leaves off, so it is not in this graph.)
+    { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar" },
+    { crate = "objc2-app-kit", wrappers = ["nova-appkit", "winit"], reason = "AppKit's unsafe bindings are reached, among workspace crates, only through nova-appkit's safe API" },
     # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
     # entry's `wrappers` lists the only crates allowed to depend on it
     # directly: the nova-sim crates above it (and, for the nova-sim facade,

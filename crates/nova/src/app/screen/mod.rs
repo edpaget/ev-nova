@@ -371,7 +371,7 @@ pub const PREFERENCES_KEY: Key = Key::Char(',');
 /// Command-Q, its Preferences key, the entry's held chords and the menu
 /// bar's key equivalents all read it.
 #[must_use]
-pub fn menu_chord(command: MenuCommand) -> Option<Key> {
+pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
     match command {
         MenuCommand::Quit => Some(Key::Char('q')),
         MenuCommand::Preferences => Some(PREFERENCES_KEY),

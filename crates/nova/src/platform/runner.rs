@@ -1,6 +1,12 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
 //!
+//! On macOS, with `Runner::with_menu_proxy`, it installs the game's menu
+//! bar (`nova_appkit::MenuBar`) once the window opens: each pick comes
+//! back through the event loop as a [`MenuCommand`] user event, which the
+//! app takes as [`WindowEvent::Menu`], and after every event the menu
+//! bar is told what the screen now offers (`MenuSync`).
+//!
 //! With [`Runner::with_audio`], the app it opens plays sound, with
 //! [`Runner::with_settings`] it saves the player's settings, and with
 //! [`Runner::with_diagnostics`] it writes out the screen's diagnostics
@@ -29,14 +35,19 @@ use nova_view::devtools::DevOverlay;
 use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource, Upscaler};
+use nova_view::MenuCommand;
 use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent as WinitEvent;
+#[cfg(target_os = "macos")]
+use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use super::window::WinitWindow;
 use super::{text_event, window_events};
+#[cfg(target_os = "macos")]
+use crate::app::MenuSync;
 use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
@@ -50,6 +61,10 @@ struct Running<S> {
     gpu: SurfaceGpu,
     #[cfg(feature = "dev-tools")]
     dev_tools: Option<DevTools>,
+    /// The menu bar, kept for the whole run (its items' target lives in
+    /// it), and what it was last told; none until it is installed.
+    #[cfg(target_os = "macos")]
+    menu: Option<(nova_appkit::MenuBar, MenuSync)>,
     window: WinitWindow,
 }
 
@@ -67,6 +82,9 @@ pub struct Runner<S> {
     settings: Option<GameKeeper>,
     /// Where the diagnostics are written, until the app takes it.
     diagnostics: Option<Box<dyn Write>>,
+    /// Where the menu bar sends its picks, until it is installed.
+    #[cfg(target_os = "macos")]
+    menu_proxy: Option<EventLoopProxy<MenuCommand>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -83,7 +101,18 @@ impl<S: ImageSource> Runner<S> {
             audio: None,
             settings: None,
             diagnostics: None,
+            #[cfg(target_os = "macos")]
+            menu_proxy: None,
         }
+    }
+
+    /// The runner with the macOS menu bar: once the window opens, it
+    /// installs it, sending each pick through `proxy` as a user event.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<MenuCommand>) -> Self {
+        self.menu_proxy = Some(proxy);
+        self
     }
 
     /// The runner with the developer tools, browsing `catalog`; backquote
@@ -161,21 +190,20 @@ fn open(
     Ok((WinitWindow(window), gpu))
 }
 
-/// The event loop the game runs on.
+/// The event loop the game runs on, carrying the menu bar's picks as user
+/// events.
 ///
-/// On macOS it has no default menu. winit 0.30's
+/// On macOS it has no winit menu. winit 0.30's
 /// (`platform_impl/macos/menu.rs`) gives its Quit item, Command-Q, the
-/// action `terminate:`,
-/// which `AppKit` handles before the window sees the key: the process ends
-/// through `applicationWillTerminate:` with no close request and no key
-/// event, so the screen never hears of it and the pilot flying is not
-/// saved. Without that menu Command-Q reaches the router as keys, which
-/// quits at once and saves, as `_HandleQuitEvent` @0xcc958 quits the main
-/// screen. Nothing else on the default menu (Hide, Hide Others, Show All,
-/// Services) is a key the game reads. It needs the OS, so no test runs
-/// it.
-pub fn event_loop() -> Result<EventLoop<()>, EventLoopError> {
-    let mut builder = EventLoop::builder();
+/// action `terminate:`, which `AppKit` handles before the window sees the
+/// key: the process ends through `applicationWillTerminate:` with no close
+/// request and no key event, so the screen never hears of it and the
+/// pilot flying is not saved. The game's own menu bar comes from
+/// `nova_appkit` instead, installed in `resumed` once the window opens:
+/// its Quit sends the game's quit (Command-Q's, which saves), never
+/// `terminate:`. It needs the OS, so no test runs it.
+pub fn event_loop() -> Result<EventLoop<MenuCommand>, EventLoopError> {
+    let mut builder = EventLoop::<MenuCommand>::with_user_event();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
@@ -184,7 +212,7 @@ pub fn event_loop() -> Result<EventLoop<()>, EventLoopError> {
     builder.build()
 }
 
-impl<S: ImageSource> ApplicationHandler for Runner<S> {
+impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some((images, screen, fonts)) = self.pending.take() else {
             return;
@@ -221,13 +249,21 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                     None => (app, None),
                 };
                 crate::app::WindowPort::request_redraw(&mut window);
-                self.running = Some(Running {
+                let mut running = Running {
                     app,
                     gpu,
                     #[cfg(feature = "dev-tools")]
                     dev_tools,
+                    #[cfg(target_os = "macos")]
+                    menu: None,
                     window,
-                });
+                };
+                #[cfg(target_os = "macos")]
+                if let Some(proxy) = self.menu_proxy.take() {
+                    running.install_menu(proxy);
+                }
+                running.sync_menu();
+                self.running = Some(running);
             }
             Err(failure) => {
                 self.failure = Some(failure);
@@ -272,19 +308,59 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         }
         #[cfg(not(feature = "dev-tools"))]
         let _ = handled;
-        for (key, error) in running.app.take_failures() {
-            eprintln!("nova: image {key:?}: {error}");
-        }
-        for warning in running.app.take_warnings() {
-            eprintln!("{warning}");
-        }
-        if exit {
-            event_loop.exit();
-        }
+        running.after_events(event_loop, exit);
+    }
+
+    /// A menu bar pick: the app takes it as [`WindowEvent::Menu`].
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, command: MenuCommand) {
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        let exit = running.handle(WindowEvent::Menu(command)).control == Control::Exit;
+        running.after_events(event_loop, exit);
     }
 }
 
 impl<S: ImageSource> Running<S> {
+    /// After the events of one winit event: prints the image failures and
+    /// the warnings the app kept, tells the menu bar what the screen now
+    /// offers, and ends the event loop when the app exits.
+    fn after_events(&mut self, event_loop: &ActiveEventLoop, exit: bool) {
+        for (key, error) in self.app.take_failures() {
+            eprintln!("nova: image {key:?}: {error}");
+        }
+        for warning in self.app.take_warnings() {
+            eprintln!("{warning}");
+        }
+        self.sync_menu();
+        if exit {
+            event_loop.exit();
+        }
+    }
+
+    /// Installs the menu bar, its picks sent through `proxy`. One that
+    /// can't be installed is a warning, and the game runs without it.
+    #[cfg(target_os = "macos")]
+    fn install_menu(&mut self, proxy: EventLoopProxy<MenuCommand>) {
+        let installed = nova_appkit::MenuBar::install("EV Nova", move |command| {
+            // A closed loop drops the pick: the app is exiting.
+            let _ = proxy.send_event(super::menu_bar::menu_command(command));
+        });
+        match installed {
+            Ok(bar) => self.menu = Some((bar, MenuSync::new())),
+            Err(error) => eprintln!("nova: no menu bar: {error}"),
+        }
+    }
+
+    /// Tells the menu bar, if any, what the screen now offers.
+    #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self))]
+    fn sync_menu(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some((bar, sync)) = &mut self.menu {
+            sync.sync(self.app.screen(), bar);
+        }
+    }
+
     /// Hands the app one event. A redraw while the developer overlay shows
     /// first runs the egui panel over the pilot flying, catching the game
     /// up after an edit, then submits through a GPU that paints it over

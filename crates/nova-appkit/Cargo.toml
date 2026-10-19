@@ -1,0 +1,45 @@
+[package]
+name = "nova-appkit"
+description = "The macOS menu bar, built with AppKit behind a safe API, for macOS only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Every dependency is macOS-only: on any other target the crate is empty.
+[target.'cfg(target_os = "macos")'.dependencies]
+# objc2 0.6, the version wgpu-hal and nova-metalfx lock, not winit 0.30's
+# 0.5: nothing crosses between the two, as this crate takes
+# NSApplication from `sharedApplication` itself.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString"] }
+# The menus alone.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
+
+# Builds the real menu bar on the process's main thread: `harness = false`,
+# so the test binary's own `main` runs there (see `tests/it/main.rs`).
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+
+# Not `workspace = true`: this crate is one of the places unsafe code is
+# allowed, so it denies it (its FFI module allows it) where the workspace
+# forbids it. The clippy table is the workspace's.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"

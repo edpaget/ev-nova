@@ -3,7 +3,8 @@
 //! from the first `chär`; Open Pilot lists the saved pilots and resumes
 //! the one chosen where it was; Quit (or Escape) quits, and so does
 //! Command-Q, at once. Closing the window on the main menu asks whether
-//! to quit first. In flight, Escape
+//! to quit first. On macOS the menu bar has the app menu (About,
+//! Preferences…, Hide, Quit), View (Enter Full Screen) and Window. In flight, Escape
 //! goes back to the menu. I shows the About text in the game's own dialog,
 //! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
@@ -136,6 +137,26 @@ fn run_seed() -> u64 {
         })
 }
 
+/// Runs `runner` on the game's event loop until it exits, the menu bar's
+/// picks sent back through the loop on macOS; gives the runner back.
+fn run(
+    mut runner: Runner<Rc<GameData>>,
+) -> (
+    Runner<Rc<GameData>>,
+    Result<(), winit::error::EventLoopError>,
+) {
+    let event_loop = match event_loop() {
+        Ok(event_loop) => event_loop,
+        Err(error) => return (runner, Err(error)),
+    };
+    #[cfg(target_os = "macos")]
+    {
+        runner = runner.with_menu_proxy(event_loop.create_proxy());
+    }
+    let result = event_loop.run_app(&mut runner);
+    (runner, result)
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let dir = match cli::data_dir(&args, std::env::var_os("NOVA_DATA")) {
@@ -219,8 +240,7 @@ fn main() -> ExitCode {
     };
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
-    let mut runner = runner;
-    let result = event_loop().and_then(|event_loop| event_loop.run_app(&mut runner));
+    let (runner, result) = run(runner);
     match result {
         Ok(()) => {
             let exit = exit::exit(runner.open_failure());

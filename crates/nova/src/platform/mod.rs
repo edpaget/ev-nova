@@ -11,6 +11,8 @@
 //! of every resize, occlusion and redraw, and the app acts only on a
 //! change.
 
+#[cfg(target_os = "macos")]
+mod menu_bar;
 mod runner;
 mod window;
 
