@@ -521,6 +521,61 @@ fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
     assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
 }
 
+/// Berths whose berth 1 last held a person named Ace, as a flight whose
+/// ship there was flown by one leaves them.
+fn ace_at_berth_1() -> nova_sim::KeptBerths {
+    let mut traffic = nova_sim::Traffic::new();
+    traffic.set_berth_person(1, "Ace");
+    traffic.kept_berths()
+}
+
+/// Gives the flight shown `kept` as its berths, as its ticks would.
+fn keep_berths(screen: &mut AppScreen, kept: nova_sim::KeptBerths) {
+    screen.flight = screen
+        .flight
+        .take()
+        .map(|flight| flight.with_kept_berths(kept));
+}
+
+#[test]
+fn a_new_pilot_after_another_starts_from_the_berths_it_left() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    assert_eq!(
+        AppScreen::new(data()).kept_berths,
+        nova_sim::KeptBerths::default(),
+        "a run starts from the launch's empty table"
+    );
+    create(&mut screen, "Ada");
+    keep_berths(&mut screen, ace_at_berth_1());
+    escape_to_menu(&mut screen);
+    create(&mut screen, "Bea");
+    assert_eq!(pilot(&screen).name(), "Bea");
+    assert_eq!(flight(&screen).kept_berths(), Some(ace_at_berth_1()));
+}
+
+#[test]
+fn a_pilot_opened_after_another_starts_from_the_berths_it_left() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    keep_berths(&mut screen, ace_at_berth_1());
+    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+    screen.build_flight(bea, true);
+    assert_eq!(flight(&screen).kept_berths(), Some(ace_at_berth_1()));
+}
+
+#[test]
+fn a_pilot_replaced_while_flying_hands_on_its_berths() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    keep_berths(&mut screen, ace_at_berth_1());
+    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+    screen.start_flight(bea);
+    assert_eq!(flight(&screen).kept_berths(), Some(ace_at_berth_1()));
+}
+
 #[test]
 fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
     let store = MemoryPilots::new();

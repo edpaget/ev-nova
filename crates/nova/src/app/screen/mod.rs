@@ -282,6 +282,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
@@ -436,6 +437,12 @@ pub struct AppScreen {
     /// original's sprites outlive a pilot, `_InitSprites` running once at
     /// launch (see [`nova_sim::ship_layer`]).
     slot_sprites: SlotSprites,
+    /// What the berths of the last flight put away keep, which each new
+    /// flight's traffic starts from: the original's ship table outlives a
+    /// pilot, `_InitArrays` taking it once at launch (see
+    /// [`nova_sim::traffic::kept_berths`]). Empty at launch, as the
+    /// table's fresh pages read 0.
+    kept_berths: KeptBerths,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.
