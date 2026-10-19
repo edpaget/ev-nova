@@ -21,6 +21,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::ai::Surroundings;
+use crate::combat::{ShipRef, Strike};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Npc, NpcId};
 
 #[cfg(doc)]
@@ -43,6 +46,32 @@ pub fn wanted_headings(npcs: &[Npc]) -> BTreeMap<NpcId, i16> {
                 .map(|body| (npc.id, body.heading))
         })
         .collect()
+}
+
+/// The NPC whose person `strike` gives a grudge among `around`, the
+/// NPCs as the strikes before it left them: the victim of an answered
+/// direct hit of the player's, unless, by
+/// [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s engine reading, it
+/// keeps its target against the player
+/// ([`react::keeps_target`](crate::ai::react::keeps_target)), as the
+/// focus test's jump (@0x3bcac) skips the grudge. By the other reading
+/// every answered hit of the player's on an NPC counts. An escort's
+/// shot, a hit by no ship, and a blast or shockwave (never answered)
+/// give none. Whether the victim answers (its arrival, its condition)
+/// is not read, as the grudge's test reads neither.
+#[must_use]
+pub fn grudge(strike: &Strike, around: &Surroundings) -> Option<NpcId> {
+    if strike.by != Some(ShipRef::Player) || !strike.answered {
+        return None;
+    }
+    let ShipRef::Npc(id) = strike.ship else {
+        return None;
+    };
+    let kept = around.hit_focus == RuleSource::Engine
+        && around
+            .npc(id)
+            .is_some_and(|npc| crate::ai::react::keeps_target(npc, npc, ShipRef::Player, around));
+    (!kept).then_some(id)
 }
 
 #[cfg(test)]

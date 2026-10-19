@@ -2399,6 +2399,10 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
         entering: Option<Entrance>,
     ) {
+        // The strikes still unanswered are dropped with the system left:
+        // their grudges are held while its NPCs are still in the traffic.
+        let left = std::mem::take(&mut self.strikes);
+        self.hold_left_grudges(&left);
         let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.fleet_kept();
         self.give_back_aux_ships(&kept);
@@ -2653,6 +2657,15 @@ impl Session {
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         };
         f(&mut self.traffic, world);
+        // The grudges the traffic decided as it answered strikes, in turn
+        // (`Traffic::take_grudges`). The original sets each inside
+        // `_DamageShip` as its hit lands; here it lands right after the
+        // traffic answers, which is after each phase that lands hits
+        // (`Session::answer_strikes`) or at the next traffic tick for the
+        // strikes a caller leaves, and so before any frame is drawn,
+        // dialog opened, landing or jump completed or pilot saved.
+        let grudges = self.traffic.take_grudges();
+        self.hold_grudges(&grudges);
     }
 
     /// The ship-table slots a spawn whose original leaves `reserve` free
@@ -3082,11 +3095,12 @@ impl Session {
 
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
     /// before it: weighing whether each is answered, rolling on `chance`
-    /// (see the `answer_flag` module), refilling the invincible, holding
-    /// persons' grudges, convicting the player by `law`, crediting kills
-    /// by the fleet as it stood before each of the escort `losses` the
-    /// strikes made, and letting each hit NPC's cloak take its hit; then
-    /// keeps them for the app.
+    /// (see the `answer_flag` module), refilling the invincible, convicting
+    /// the player by `law`, crediting kills by the fleet as it stood before
+    /// each of the escort `losses` the strikes made, and letting each hit
+    /// NPC's cloak take its hit; then keeps them for the traffic to answer
+    /// and the app. The persons' grudges are held as the traffic answers
+    /// them, in turn (`Session::step_traffic`).
     fn settle_strikes(
         &mut self,
         (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
@@ -3096,7 +3110,6 @@ impl Session {
     ) {
         self.weigh_strikes(&mut strikes, chance);
         self.refill_invincible(&mut strikes);
-        self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
         self.credit_kills(&strikes, &losses, was);
         self.cloak_hits(&strikes);

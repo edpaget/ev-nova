@@ -635,6 +635,10 @@ pub struct Traffic {
     /// at once, since they were last taken, in order
     /// ([`Traffic::take_attack_quotes`]).
     attack_quotes: Vec<NpcId>,
+    /// The NPCs whose persons a player's answered hit gives a grudge,
+    /// decided in turn as the strikes are answered, since they were last
+    /// taken, in order ([`Traffic::take_grudges`]).
+    grudges: Vec<NpcId>,
     /// The calls the decisions made on the message line since they were
     /// last taken, in NPC order ([`Traffic::take_comm_calls`]).
     comm_calls: Vec<(NpcId, CommCall)>,
@@ -725,6 +729,7 @@ impl Traffic {
             scans: Vec::new(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
+            grudges: Vec::new(),
             comm_calls: Vec::new(),
             pirate_events: Vec::new(),
             strength_timer: StrengthTimer::default(),
@@ -1670,6 +1675,7 @@ impl Traffic {
                     wanted: Some(&wanted),
                     ..world.around(&self.npcs)
                 };
+                self.grudges.extend(in_turn::grudge(strike, &around));
                 self.npcs
                     .iter()
                     .map(|npc| {
@@ -2087,6 +2093,23 @@ impl Traffic {
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
+    }
+
+    /// The NPCs whose persons the player's answered hits give a grudge
+    /// (`_DamageShip` @0x3be83-0x3beb3), decided as each strike is
+    /// answered ([`Traffic::react`], [`in_turn::grudge`]), since they were
+    /// last taken, in order, an NPC once for each such hit; taking them
+    /// empties the list. Whether the person holds grudges (`Flags`
+    /// 0x0001) is the taker's to read.
+    ///
+    /// The original sets the grudge inside `_DamageShip`, as the hit
+    /// lands; the session takes these right after the traffic runs
+    /// (`nova_sim::Session::step_traffic`), so the grudge lands as the
+    /// strike is answered: after each phase that lands hits, or at the
+    /// next traffic tick for the strikes a caller leaves, before any frame
+    /// is drawn, dialog opened, landing or jump completed or pilot saved.
+    pub fn take_grudges(&mut self) -> Vec<NpcId> {
+        std::mem::take(&mut self.grudges)
     }
 
     /// The calls the decisions made on the message line since this was
