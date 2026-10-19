@@ -68,7 +68,7 @@ pub fn moving(state: &ShipState) -> bool {
 #[must_use]
 pub fn facing(npc: &Npc, at: &ShipState) -> bool {
     angle_off(npc.state.heading, bearing(npc.state.position, at.position))
-        < GUN_FACING * npc.stats.handling.turn_rate
+        < GUN_FACING * npc.turn_rate()
 }
 
 /// The controls `npc` snipes by this tick at its target at `target`, on

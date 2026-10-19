@@ -346,7 +346,7 @@ pub fn off_by(heading: f32, wanted: i16) -> f32 {
 /// call).
 #[must_use]
 pub fn faces(npc: &Npc, wanted: i16, turns: f32) -> bool {
-    off_by(npc.state.heading, wanted) < turns * npc.stats.handling.turn_rate
+    off_by(npc.state.heading, wanted) < turns * npc.turn_rate()
 }
 
 /// The whole-degree lead from `npc`'s centre to a ship at `at` for
@@ -899,7 +899,7 @@ fn sight_of<'a>(
             .map(|player| (player.handling.turn_rate, player.hull.planet_type)),
         ShipRef::Npc(id) => around
             .npc(id)
-            .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
+            .map(|other| (other.turn_rate(), other.hull.planet_type)),
     }
     .unwrap_or_default();
     Some(Sight {

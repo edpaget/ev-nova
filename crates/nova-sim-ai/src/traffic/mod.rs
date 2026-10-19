@@ -146,6 +146,7 @@ pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod inertialess;
+pub mod ionization;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
@@ -1207,6 +1208,9 @@ impl Traffic {
                         .map(|(_, state)| *state),
                 });
                 let derelict = world.govts.derelict(npc.govt);
+                // Its ion block, the move's other side (see the
+                // `ionization` module).
+                ionization::deionize(npc, speeds.own);
                 ship_display::settle_spawn(npc, derelict, &mut *chance);
                 let held = ship_display::held(npc);
                 let outcome = Self::fly_one(

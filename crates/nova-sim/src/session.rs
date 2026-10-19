@@ -390,6 +390,7 @@ mod hooks;
 mod hover;
 mod iff_scramblers;
 mod inertialess;
+mod ionization;
 mod jump_collapse;
 mod map;
 mod map_borders;
@@ -2138,6 +2139,7 @@ impl Session {
                     let caps = self.player_caps();
                     player_step(&mut self.player, &handling, controls, aim, caps, flight);
                 }
+                self.ionize_tick();
                 self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
@@ -2151,6 +2153,7 @@ impl Session {
                 });
                 let bearing = self.jump_aim(to);
                 self.fly_warp_stage(bearing, controls);
+                self.ionize_tick();
                 self.burn_afterburner();
                 return;
             }
@@ -2615,7 +2618,9 @@ impl Session {
                 crew: record.map_or(0, |record| record.crew),
                 ..self.hull
             },
-            handling: self.stats.handling,
+            // Its `_ShipTurnRate` and `_ShipAccelRate`, slowed by its ion
+            // charge (see the `ionization` module).
+            handling: self.ionized(self.stats.handling),
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
             untargetable: record
@@ -5528,11 +5533,12 @@ impl Session {
 
     /// How the player's ship flies in flight: its own handling at
     /// [`Session::top_speed`], its thrust under the flight rules
-    /// ([`FlightRules::handling`]).
+    /// ([`FlightRules::handling`]), its turn and thrust slowed by its ion
+    /// charge as it is now (see the `ionization` module).
     fn flying_handling(&self) -> Handling {
         Handling {
             max_speed: self.top_speed(),
-            ..self.flight_rules().handling(self.stats.handling)
+            ..self.ionized(self.flight_rules().handling(self.stats.handling))
         }
     }
 
@@ -19254,7 +19260,12 @@ pub(super) mod tests {
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
         );
-        assert_eq!(session.ion(), IONIZED);
+        // Kept, shedding 1 a tick at `Deionize` 0 (see the `ionization`
+        // module), never cleared.
+        let ion = session.ion();
+        assert_eq!(ion.colour, IONIZED.colour);
+        assert!(ion.charge > 0.0 && ion.charge < IONIZED.charge, "{ion:?}");
+        assert_eq!(ion.charge.fract(), 0.0, "{ion:?}");
     }
 
     #[test]

@@ -339,7 +339,7 @@ fn docking(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool {
         .is_some_and(|docking| docking.sub == DockSub::Dock);
     let repair_dock = victim.goal == Goal::Assist(Help::Repair)
         && around.player.is_some_and(|player| {
-            let reach = assist::reach(Help::Repair, victim.stats.handling.turn_rate);
+            let reach = assist::reach(Help::Repair, victim.turn_rate());
             assist::within(&victim.state, &player.state, reach)
         });
     matches!(attacker, Attacker::Npc(_)) && (plunder_dock || repair_dock)

@@ -371,7 +371,7 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
     let off = i32::from(angular_difference(whole(leader.heading), leader.aim)).abs();
     if off > FOLLOW_ARC {
         #[allow(clippy::cast_precision_loss)]
-        if off as f32 > npc.stats.handling.turn_rate {
+        if off as f32 > npc.turn_rate() {
             npc.warp.stage = -1.0;
             npc.warp.aim = leader.aim;
         } else {
@@ -409,7 +409,7 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld) {
         return;
     }
     let off = f32::from(angular_difference(whole(npc.state.heading), npc.warp.aim).abs());
-    if npc.stats.handling.turn_rate < off {
+    if npc.turn_rate() < off {
         npc.warp.stamp();
         return;
     }
@@ -580,7 +580,9 @@ pub fn fly_jump(
     if !npc.jumping() {
         return None;
     }
-    let handling = world.flight.handling(npc.stats.handling);
+    let handling = npc
+        .ionization()
+        .slows(world.flight.handling(npc.stats.handling));
     let inertia = Inertia::of(npc, None, world.flight);
     fly(npc, &handling, world.flight, inertia);
     warp_block(npc, led(npc, leaders), &world.warp);

@@ -57,7 +57,6 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, FlightRules, ShipState};
-use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
 use crate::traffic::autopilot::TopSpeeds;
@@ -184,10 +183,7 @@ pub fn fly_docking(
         npc.docking = None;
         return None;
     };
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let handling = npc.flying_handling(speeds.own, flight);
     Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
 }
 

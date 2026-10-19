@@ -93,8 +93,8 @@
 // `nova-sim-combat`.
 #[allow(unused_imports)]
 use nova_sim_base::{
-    NeverFires, RuleKey, Rulebook, chance, flight, fuel, geometry, handling, inertialess, reserves,
-    rulebook, trig,
+    NeverFires, RuleKey, Rulebook, chance, flight, fuel, geometry, handling, inertialess,
+    ionization, reserves, rulebook, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, warp};

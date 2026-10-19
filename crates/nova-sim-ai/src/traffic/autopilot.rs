@@ -361,10 +361,7 @@ fn fly_mobile(
     (flight, snipe_lead): (FlightRules, RuleSource),
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc, &handling);

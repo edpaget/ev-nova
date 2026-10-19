@@ -88,7 +88,9 @@
 #[allow(unused_imports)]
 use nova_sim_ai::{ai, escort, gate, traffic};
 #[allow(unused_imports)]
-use nova_sim_base::{RuleKey, chance, flight, fuel, geometry, handling, reserves, rulebook, rules};
+use nova_sim_base::{
+    RuleKey, chance, flight, fuel, geometry, handling, ionization, reserves, rulebook, rules,
+};
 #[allow(unused_imports)]
 use nova_sim_catalog::{catalog, control};
 #[allow(unused_imports)]

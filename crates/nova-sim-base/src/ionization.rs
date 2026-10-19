@@ -95,6 +95,26 @@ pub fn ionized(handling: Handling, charge: f32, factor: f32, jumping: bool) -> H
     }
 }
 
+/// What a ship's handling reads of its ionization: its charge, its
+/// factor and whether its jump is under way. None by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Ionization {
+    /// Its ion charge.
+    pub charge: f32,
+    /// Its ionization factor ([`factor`]).
+    pub factor: f32,
+    /// Whether its jump is under way (+0x50 above 0), sparing its turn.
+    pub jumping: bool,
+}
+
+impl Ionization {
+    /// `handling` slowed by this ionization ([`ionized`]).
+    #[must_use]
+    pub fn slows(self, handling: Handling) -> Handling {
+        ionized(handling, self.charge, self.factor, self.jumping)
+    }
+}
+
 /// The ion `charge` left after a frame shedding `rate` (see the module
 /// docs): a charge above none falls by the rate, in doubles, unfloored,
 /// and the frame's [`pull`] follows; one at or below none is cleared to
@@ -213,6 +233,17 @@ mod tests {
         assert_eq!(ionized(HANDLING, -1.0, 0.5, false), HANDLING);
         // Nor does a negative factor's speed-up on no charge.
         assert_eq!(ionized(HANDLING, -1.0, -0.5, false), HANDLING);
+    }
+
+    #[test]
+    fn an_ionization_slows_as_ionized_does() {
+        let ion = Ionization {
+            charge: 100.0,
+            factor: 0.5,
+            jumping: true,
+        };
+        assert_eq!(ion.slows(HANDLING), ionized(HANDLING, 100.0, 0.5, true));
+        assert_eq!(Ionization::default().slows(HANDLING), HANDLING);
     }
 
     #[test]

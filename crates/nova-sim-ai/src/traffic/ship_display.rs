@@ -248,7 +248,11 @@ pub fn record(
         }
         Turn::None => 0,
     };
-    let own = flight.handling(npc.stats.handling).accel;
+    // Its `_ShipAccelRate`, slowed by its ion charge (@0x34f57).
+    let own = npc
+        .ionization()
+        .slows(flight.handling(npc.stats.handling))
+        .accel;
     let thrust = if !controls.thrust {
         Thrust::None
     } else if own > 0.0 && handling.accel >= RUSH_RATIO * own {

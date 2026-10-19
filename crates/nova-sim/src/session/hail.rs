@@ -641,7 +641,7 @@ impl Session {
             if npc.condition != Condition::Intact || npc.mode != Mode::Flying {
                 continue;
             }
-            let reach = assist::reach(help, npc.stats.handling.turn_rate);
+            let reach = assist::reach(help, npc.turn_rate());
             let within = assist::within(&npc.state, &player, reach);
             let finished = match help {
                 Help::Refuel => {

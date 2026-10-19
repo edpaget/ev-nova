@@ -342,6 +342,7 @@ pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
 pub use nova_sim_base::clock;
+pub use nova_sim_base::ionization;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;
 pub use nova_sim_catalog::control;

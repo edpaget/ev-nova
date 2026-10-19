@@ -322,6 +322,7 @@ impl Session {
                 },
                 controls.thrust,
             );
+            self.ionize_tick();
             self.burn_afterburner();
             self.stage_jump(to, bearing, None);
         } else {
@@ -341,6 +342,7 @@ impl Session {
                 warp: Some(warp),
             });
             self.fly_warp_stage(bearing, controls);
+            self.ionize_tick();
             self.burn_afterburner();
             // Unless its end has already begun the jump.
             if self.preparing_jump().is_some() {

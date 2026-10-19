@@ -264,9 +264,11 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
-            Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => {
-                (other.state, other.stats.handling, other.hull.class_speed)
-            }
+            Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => (
+                other.state,
+                other.ionized_handling(),
+                other.hull.class_speed,
+            ),
             _ => return false,
         },
     };
