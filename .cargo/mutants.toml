@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The board check's reverse heading, (theirs + 180) mod 360: for whole
+    # degrees in 0..=360, theirs - 180 is the same reverse less 360, and
+    # `_AngularDifference`'s two folds give the same distance from it for
+    # every player heading (checked over all 361 x 361 pairs).
+    "board\\.rs:[0-9]+:[0-9]+: replace \\+ with - in check_board",
     # `_RandomSkillLevel`'s side count, 2 x SkillVar + 1, is odd, so never
     # 0: `> 0` and `>= 0` split the signed `_Rand` the same way.
     "nova-sim-base/src/skill\\.rs:49:26: replace > with >= in random_skill_level$",
