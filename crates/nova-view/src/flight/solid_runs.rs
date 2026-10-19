@@ -247,4 +247,48 @@ mod tests {
         assert!(frame > 0);
         assert_eq!(frames, [(SHEET, frame), (RUNS, frame)]);
     }
+
+    /// The solid-run commands `ship` draws with alt layer `alt`, the hull
+    /// turned so its frame isn't 0: each one's image and centre.
+    fn alt_runs(alt: AltLayer) -> Vec<(ImageKey, Point)> {
+        let sheet = sheet(&[1400]);
+        let spec = FrameSpec::NONE;
+        let turned = ShipDraw {
+            heading: 130.0,
+            ..ship(&sheet, &spec)
+        };
+        assert!(turned.frame() > 0);
+        let mut list = DrawList::new();
+        turned.draw(&mut list, AT, Some(alt));
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Sprite { image, center, .. } if image.kind == RUNS => {
+                    Some((image, center))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_alt_layers_runs_are_drawn_at_its_own_place_and_frame() {
+        let held = AltLayer {
+            image: ImageKey::sprite(1400, 7),
+            at: Point::new(55.0, 12.0),
+            tint: Color::WHITE,
+            colorize: None,
+        };
+        assert_eq!(alt_runs(held), [(ImageKey::solid_runs(1400, 7), held.at)]);
+    }
+
+    #[test]
+    fn an_alt_layer_of_another_sheet_draws_no_runs() {
+        let other = AltLayer {
+            image: ImageKey::sprite(1401, 7),
+            at: Point::new(55.0, 12.0),
+            tint: Color::WHITE,
+            colorize: None,
+        };
+        assert_eq!(alt_runs(other), []);
+    }
 }
