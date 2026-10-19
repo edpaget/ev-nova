@@ -6,8 +6,8 @@ use std::rc::Rc;
 use super::*;
 use crate::ai::{Behaviour, CommCall, Decision, Goal, Peaceful, Surroundings, Warship};
 use crate::catalog::{
-    CommCatalog, FleetId, FleetRecord, GovtRecord, OutfitId, ShipId, SystemReinforcements,
-    SystemTraffic,
+    CommCatalog, FleetId, FleetRecord, GovtRecord, MissionRecord, OutfitId, Penalties, ShipId,
+    SystemReinforcements, SystemTraffic,
 };
 use crate::chance::NeverFires;
 use crate::combat::{Rules, ShipRef};
@@ -15,7 +15,9 @@ use crate::control::Test;
 use crate::flight::Controls;
 use crate::govt::WARSHIPS_RETREAT;
 use crate::pilot::Pilot;
-use crate::testkit::{FAST, FakePilotCatalog, catalog, govt, jump, npc, outfit, ship, star};
+use crate::testkit::{
+    Draws, FAST, FakePilotCatalog, carrying, catalog, govt, jump, mission, npc, outfit, ship, star,
+};
 use crate::traffic::npc::{AiType, Npc};
 
 /// The Federation (class 1), whose fleet is system 130's reinforcements.
@@ -703,6 +705,73 @@ fn a_call_held_behind_a_scan_still_starts_the_timer_the_clock_ticks_on_that_fram
         }
     }
     assert_eq!(timer(&session), i32::from(TIME) - 1, "its first tick");
+}
+
+/// The police (class 4), scanning for bit 0x0004 and punishing
+/// smuggling, its fine 500.
+const POLICE: GovtId = GovtId(131);
+
+/// [`reinforced`], with [`POLICE`] and mission 140, its cargo masked
+/// 0x0006.
+fn policed() -> FakePilotCatalog {
+    let mut catalog = reinforced();
+    catalog.govts.push(GovtRecord {
+        classes: [4, -1, -1, -1],
+        scan_mask: 0x0004,
+        scan_fine: 500,
+        penalties: Penalties {
+            smuggle: 5,
+            ..Penalties::default()
+        },
+        ..govt(131)
+    });
+    catalog.missions.push(MissionRecord {
+        scan_mask: 0x0006,
+        ..mission(140)
+    });
+    catalog
+}
+
+#[test]
+fn a_later_slots_call_is_still_made_after_an_earlier_slots_scan_puts_its_find_on_the_line() {
+    let catalog = policed();
+    let mut session = flying(&catalog);
+    session.pilot.missions.put(0, carrying(140, 4));
+    let scanner = add(&mut session, POLICE, 100.0, Goal::Inspect(ShipRef::Player));
+    if let Some(npc) = npc_mut(&mut session, scanner) {
+        npc.ai_type = AiType::Interceptor;
+    }
+    let warship = fight(&mut session, FED, 100.0);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: vec![warship],
+        flees: Vec::new(),
+    };
+    for _ in 0..20 {
+        inspect_again(&mut session, scanner);
+        let mut chance = Draws::of(&[0]);
+        session.tick_traffic(&catalog, &behaviour, &mut chance);
+        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
+        session.tick_combat(Rules::default(), &mut chance);
+        let (messages, sounds) = (session.take_messages(), session.take_sounds());
+        if timer(&session) > 0 {
+            assert!(
+                matches!(
+                    messages.as_slice(),
+                    [SimMessage::Smuggling { fine: 500, .. }]
+                ),
+                "the scan's find on the line: {messages:?}"
+            );
+            assert_eq!(sounds, [SimSound::Smuggling]);
+            assert!(!session.comm_line().free_for_calls(), "the line shows it");
+            break;
+        }
+    }
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME) - 1,
+        "the call made behind the find, and the clock's first tick"
+    );
 }
 
 #[test]
