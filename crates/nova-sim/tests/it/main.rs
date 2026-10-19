@@ -41,6 +41,7 @@ mod stock_plunder;
 mod stock_pursuit;
 mod stock_ranks;
 mod stock_reinforcements;
+mod stock_repair_dock;
 mod stock_scan;
 mod stock_ship_goal_walk;
 mod stock_stand_off;
