@@ -65,9 +65,11 @@
 //! @0x36f4f) and hides its sprite (@0x36f71). So the next pair's
 //! `_ShotCanHitShip` reads the armour every hit before it left: a turret
 //! shot's miss rule asks `_IsDisabled` of the ship as it is now
-//! (@0x448ce-0x448d5, [`Target::disabled`]). Here each hit lands through
-//! [`Combat::land`] as the walk finds it ([`Combat::land_hit`]), and each
-//! ship's [`Target::disabled`] is read again after it.
+//! (@0x448ce-0x448d5,
+//! [`Target::disabled`](super::projectile::Target::disabled)). Here each
+//! hit lands through [`Combat::land`] as the walk finds it
+//! ([`Combat::land_hit`]), and each ship struck is read again after it
+//! ([`Lineup::refresh`]).
 //!
 //! **The proximity pass** (`_CheckShotProximities` @0x371bc-0x37775)
 //! walks the shots by slot (@0x371e0-0x37765); each takes the first ship
@@ -92,8 +94,8 @@
 //!
 //! **Built in phase 42.** An escort's leader is cleared as the hit that
 //! leaves it disabled lands (`_DamageShip` @0x3ae58-0x3afdd, the
-//! `escort_loss` module), and [`Lineup::refresh`] reads its leader and
-//! fleet again, so the rest of the walk reads it unled. A Derelict
+//! `escort_loss` module), and [`Lineup::refresh`] reads it again, so the
+//! rest of the walk reads it unled. A Derelict
 //! government's ships are held disabled at any armour (`_IsDisabled`
 //! @0x2cf1-0x2d14): the session sets [`Fighter::held_disabled`]. A slot
 //! made active since its last display is hidden, so the walk skips it
@@ -121,12 +123,11 @@ use super::asteroid_hit::{self, AsteroidTarget};
 use super::damage::Hit;
 use super::hull::DisableRule;
 use super::ion::Dose;
-use super::projectile::{Shot, ShotLayer, Target};
-use super::sides::{PassThrough, Sides};
+use super::lineup::Lineup;
+use super::projectile::{Shot, ShotLayer};
 use super::{Arsenal, Combat, Fighter, Landed, Push, ShipRef, blasted};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
-use crate::govt::Governments;
 use crate::ship_layer::ShipLayer;
 
 /// Where a ship's slot sprite stands as the collision passes find it: its
@@ -173,70 +174,6 @@ pub(super) fn walk_order(ranks: &[Option<SpriteRank>]) -> Vec<usize> {
         (layer, rank.entry)
     });
     walked.into_iter().map(|(index, _)| index).collect()
-}
-
-/// The fight's ships as the hit pass reads them, one [`Target`] for each
-/// fighter, in the fighters' order: where they are for the fuses, the
-/// blasts and the sub-munitions (`targets`), and where contact meets them
-/// (`touchable`, the player where it stood last tick; see
-/// [`Combat::hit_pass`]). The [`Target::disabled`] of each ship a hit
-/// lands on is read again after it ([`Lineup::refresh`]).
-pub(super) struct Lineup<'a> {
-    /// Each ship where it is.
-    pub(super) targets: Vec<Target>,
-    /// Each ship where contact meets it.
-    pub(super) touchable: Vec<Target>,
-    /// The governments' relations.
-    pub(super) govts: &'a Governments,
-    /// Who counts as the player for the pass-through flags.
-    pub(super) pass_through: PassThrough,
-}
-
-impl Lineup<'_> {
-    /// The hit rules among the ships where they are.
-    pub(super) fn sides(&self) -> Sides<'_> {
-        Sides {
-            targets: &self.targets,
-            govts: self.govts,
-            pass_through: self.pass_through,
-        }
-    }
-
-    /// The hit rules among the ships where contact meets them.
-    pub(super) fn touch(&self) -> Sides<'_> {
-        Sides {
-            targets: &self.touchable,
-            ..self.sides()
-        }
-    }
-
-    /// Reads each ship `hit` again from its fighter among `fighters`
-    /// ([`reread`]), as `rule` says. Only a hit changes a ship's armour or
-    /// clears an escort's leader in the pass, and its condition settles
-    /// after it, so no other ship's can have changed.
-    fn refresh(&mut self, fighters: &[Fighter], hit: &[ShipRef], rule: &dyn DisableRule) {
-        for ((fighter, target), touchable) in fighters
-            .iter()
-            .zip(&mut self.targets)
-            .zip(&mut self.touchable)
-        {
-            if hit.contains(&fighter.ship) {
-                reread(fighter, target, rule);
-                reread(fighter, touchable, rule);
-            }
-        }
-    }
-}
-
-/// Reads again from `fighter` what a hit on it may have changed of
-/// `target`, as `rule` says: whether it is disabled now
-/// ([`Fighter::disabled_now`]), and its leader and fleet, which the hit
-/// that leaves a ship of the player's fleet disabled clears
-/// (`escort_loss`).
-pub(super) fn reread(fighter: &Fighter, target: &mut Target, rule: &dyn DisableRule) {
-    target.disabled = fighter.disabled_now(rule);
-    target.ties.leader = fighter.leader;
-    target.fleet = fighter.fleet;
 }
 
 /// What the walk reads beside the ships: each sub-munition's weapon, and
@@ -302,11 +239,11 @@ impl Combat {
                     let Some(from) = shot.moved_from else {
                         continue;
                     };
-                    let target = &lineup.touchable[ship];
+                    let target = &lineup.seen[ship];
                     let Some(at) = shot.touches(from, target) else {
                         continue;
                     };
-                    if !lineup.touch().shot_can_hit(shot, target) {
+                    if !lineup.seen_sides().shot_can_hit(shot, target) {
                         continue;
                     }
                     spent[index] = true;
@@ -441,7 +378,7 @@ impl Combat {
 
     /// A shot's hit on an asteroid at a point ([`Combat::hit_asteroid`]),
     /// its blast's hits landed at once among the ships, as `rule` says,
-    /// each ship's [`Target::disabled`] read again after them.
+    /// each ship struck read again after them ([`Lineup::refresh`]).
     fn land_on_asteroid(
         &mut self,
         (shot, target, at): (&Shot, &mut AsteroidTarget, Vec2),
@@ -459,9 +396,9 @@ impl Combat {
     /// `_HandleShipHit` lands it (see the module docs): it explodes and
     /// sprays its hit particles there, and its direct hit, its decay
     /// taken off, and its blast's hits on the ships around land
-    /// ([`Combat::land`]), as `rule` says; each ship's
-    /// [`Target::disabled`] is then read again. The shot is left where it
-    /// hit, which its sub-munitions leave from.
+    /// ([`Combat::land`]), as `rule` says; each ship struck is then read
+    /// again ([`Lineup::refresh`]). The shot is left where it hit, which
+    /// its sub-munitions leave from.
     fn land_hit(
         &mut self,
         shot: &mut Shot,
@@ -498,7 +435,7 @@ impl Combat {
         self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
         let mut hits = vec![direct];
         // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
-        hits.extend(blasted(shot, &blast, hit, 0.0, &lineup.targets));
+        hits.extend(blasted(shot, &blast, hit, 0.0, &lineup.stood));
         let hit: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         self.land(fighters, hits, rule);
         lineup.refresh(fighters, &hit, rule);

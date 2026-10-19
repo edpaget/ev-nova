@@ -31,9 +31,8 @@
 //! Here [`Combat::handle_shots`] walks the slots the same way, landing each
 //! blast and each lock at its visit.
 
-use super::collision::reread;
-use super::projectile::{Guide, Sight, Target};
-use super::sides::PassThrough;
+use super::lineup::Lineup;
+use super::projectile::{Guide, Target};
 use super::{Combat, Fighter, Landed, ShipRef, Sides, blasted, lock};
 use crate::chance::Chance;
 use crate::combat::CombatEvent;
@@ -41,66 +40,13 @@ use crate::combat::armament::Arsenal;
 use crate::combat::damage::Hit;
 use crate::combat::hull::DisableRule;
 use crate::combat::projectile::Shot;
-use crate::geometry::Vec2;
 use crate::govt::Governments;
 
-/// The ships as `_HandleShot`'s visits read them, one entry for each
-/// fighter, in the fighters' order: each NPC where it stood as the last
-/// tick ran, which the ends of life meet as the collision passes do
-/// (`stood`), and each ship where it is now, which the moves and the
-/// locks meet (`now`). Each ship a visit's landing strikes is read again
-/// after it ([`Lineup::refresh`]).
-struct Lineup<'a> {
-    /// Where each fighter stood.
-    stood_at: Vec<Vec2>,
-    /// Where each fighter is now.
-    now_at: Vec<Vec2>,
-    /// Each ship where it stood.
-    stood: Vec<Target>,
-    /// Each ship where it is now.
-    now: Vec<Target>,
-    /// Each ship's jamming and sight, which a homing shot reads.
-    sights: Vec<Sight>,
-    /// The governments' relations.
-    govts: &'a Governments,
-    /// Who counts as the player for the pass-through flags.
-    pass_through: PassThrough,
-}
-
-impl Lineup<'_> {
-    /// The hit rules among `targets`.
-    fn sides<'s>(&'s self, targets: &'s [Target]) -> Sides<'s> {
-        Sides {
-            targets,
-            govts: self.govts,
-            pass_through: self.pass_through,
-        }
-    }
-
-    /// Reads each ship among `struck` again from its fighter among
-    /// `fighters`, which stand where they are now: its target, as `rule`
-    /// says ([`reread`]), and its sight.
-    fn refresh(&mut self, fighters: &[Fighter], struck: &[ShipRef], rule: &dyn DisableRule) {
-        for (index, fighter) in fighters.iter().enumerate() {
-            if !struck.contains(&fighter.ship) {
-                continue;
-            }
-            let mut target = fighter.as_target();
-            reread(fighter, &mut target, rule);
-            self.now[index] = target;
-            self.stood[index] = Target {
-                position: self.stood_at[index],
-                ..target
-            };
-            self.sights[index] = fighter.sight();
-        }
-    }
-}
-
-/// Puts each of `fighters` at its place among `at`.
-fn place(fighters: &mut [Fighter], at: &[Vec2]) {
-    for (fighter, &position) in fighters.iter_mut().zip(at) {
-        fighter.state.position = position;
+/// Puts each of `fighters` at its place among `at`, a view of the
+/// [`Lineup`].
+fn place(fighters: &mut [Fighter], at: &[Target]) {
+    for (fighter, target) in fighters.iter_mut().zip(at) {
+        fighter.state.position = target.position;
     }
 }
 
@@ -131,17 +77,18 @@ impl Combat {
     ///   freed (@0x3617c);
     /// - any other shot flies a tick ([`Shot::step`]), homing among the
     ///   ships where they are now, with each ship's jamming and sight as
-    ///   the hits so far left them ([`Sight`]), and runs a spinning
+    ///   the hits so far left them
+    ///   ([`Sight`](super::projectile::Sight)), and runs a spinning
     ///   shot's spin timer in its slot (`ShotSlots::spin_pass`,
     ///   @0x35879-0x358c4); then its missile lock, if it makes one
     ///   ([`lock`]), lands at once (@0x35855), reading the target where it
     ///   is now.
     ///
     /// Each ship a visit's landing strikes settles its condition at once
-    /// (`Combat::settle_struck`), and is read again for the visits after
-    /// it. A sub-munition released into a slot below the visit is not
-    /// visited again this loop, so it sits out the tick's moves; one
-    /// released above it is visited later and moves.
+    /// (`Combat::settle_struck`), and is read again whole for the visits
+    /// after it ([`Lineup::refresh`]). A sub-munition released into a slot
+    /// below the visit is not visited again this loop, so it sits out the
+    /// tick's moves; one released above it is visited later and moves.
     pub(super) fn handle_shots(
         &mut self,
         fighters: &mut [Fighter],
@@ -149,19 +96,12 @@ impl Combat {
         rule: &dyn DisableRule,
         chance: &mut dyn Chance,
     ) {
+        // Each NPC where it stood as the last tick ran, which the ends of
+        // life meet as the collision passes do, and each ship where it is
+        // now, which the moves and the locks meet.
         let now_at = self.stand_where_they_stood(fighters);
-        let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let stood_at: Vec<Vec2> = stood.iter().map(|target| target.position).collect();
-        place(fighters, &now_at);
-        let mut lineup = Lineup {
-            now: fighters.iter().map(Fighter::as_target).collect(),
-            sights: fighters.iter().map(Fighter::sight).collect(),
-            stood,
-            stood_at,
-            now_at,
-            govts,
-            pass_through: self.pass_through,
-        };
+        let mut lineup = Lineup::new(fighters, &now_at, govts, self.pass_through);
+        place(fighters, &lineup.seen);
         let mut visit = 0;
         while visit < self.slot_bound() {
             if self.slots.is_held(visit) {
@@ -171,13 +111,13 @@ impl Combat {
                 if shot.weapon.lifetime == 0 {
                     self.shots.remove(index);
                 } else if shot.moved_from.is_some() && shot.expired() {
-                    let sides = lineup.sides(&lineup.stood);
+                    let sides = lineup.sides();
                     let hits = self.end_life(&shot, fighters, &sides, arsenal, chance);
                     self.shots.retain(|flying| flying.slot != visit);
                     self.land_at_visit(fighters, hits, (&mut lineup, true), rule);
                 } else {
                     self.move_shot(index, &lineup, chance);
-                    let sides = lineup.sides(&lineup.now);
+                    let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
                         lock(&self.shots[index], &sides).into_iter().collect();
                     self.land_at_visit(fighters, locked, (&mut lineup, false), rule);
@@ -203,7 +143,7 @@ impl Combat {
             frame: self.field.frame,
             lock_angle: self.lock_angle,
             bomb_heading_wrap: self.bomb_heading_wrap,
-            ..Guide::among(&lineup.now)
+            ..Guide::among(&lineup.seen)
         };
         let shot = &mut self.shots[index];
         shot.step(&guide, chance);
@@ -230,10 +170,10 @@ impl Combat {
         let first_strike = self.strikes.len();
         let struck: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         if standing {
-            place(fighters, &lineup.stood_at);
+            place(fighters, &lineup.stood);
         }
         self.land(fighters, hits, rule);
-        place(fighters, &lineup.now_at);
+        place(fighters, &lineup.seen);
         self.settle_struck(fighters, first_strike, rule);
         lineup.refresh(fighters, &struck, rule);
     }

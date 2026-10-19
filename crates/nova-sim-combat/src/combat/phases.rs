@@ -6,7 +6,7 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
-use super::collision::reread;
+use super::lineup::reread;
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
     regenerate_player,

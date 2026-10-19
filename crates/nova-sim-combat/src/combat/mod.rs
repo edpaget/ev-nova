@@ -385,6 +385,7 @@ pub mod hull;
 pub mod impact;
 pub mod ion;
 pub mod jamming;
+mod lineup;
 pub mod phases;
 pub mod plunder;
 pub mod projectile;
@@ -417,6 +418,7 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
 use jamming::Jamming;
+use lineup::Lineup;
 pub use phases::Arena;
 use plunder::Plunderer;
 use projectile::{
@@ -2387,30 +2389,21 @@ impl Combat {
         } = scenery;
         let now = self.stand_where_they_stood(fighters);
         let player_stood = self.stood.get(&ShipRef::Player).copied();
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let touchable: Vec<Target> = targets
+        let touchable_at: Vec<Vec2> = fighters
             .iter()
-            .map(|target| match player_stood {
-                Some(position) if target.ship == ShipRef::Player => Target {
-                    position,
-                    ..*target
-                },
-                _ => *target,
+            .map(|fighter| match player_stood {
+                Some(position) if fighter.ship == ShipRef::Player => position,
+                _ => fighter.state.position,
             })
             .collect();
-        let mut lineup = collision::Lineup {
-            targets,
-            touchable,
-            govts,
-            pass_through: self.pass_through,
-        };
-        let camera = position_of(&lineup.touchable, ShipRef::Player).unwrap_or(Vec2::ZERO);
+        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.pass_through);
+        let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
         let first_strike = self.strikes.len();
         let mut gone = vec![false; self.shots.len()];
         let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
         let walked = collision::walk_order(&ranks);
         let entry = self.entry_order();
-        self.intercept(camera, (&lineup.touch(), &walked), &entry, &mut gone);
+        self.intercept(camera, (&lineup.seen_sides(), &walked), &entry, &mut gone);
         let terms = collision::WalkTerms { arsenal, rule };
         self.resolve(
             (fighters, &mut lineup),
@@ -3692,6 +3685,7 @@ mod tests {
     mod escort_lost_in_place;
     mod exit_steps;
     mod hidden_shots;
+    mod lineup;
     mod plunder_fire;
     mod shot_slots;
     mod shot_visits;
