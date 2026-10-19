@@ -431,12 +431,16 @@ impl Session {
     /// and decides again, as the pod's loop clears each +0x70 of 0
     /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
     /// provocation, as the high level's goal-0 drop of an attack with no
-    /// target does (@0x8e731).
+    /// target does (@0x8e731), but for one fleeing the player: state 3
+    /// with no target is state 0 with +0x96 0 (@0x8e228-0x8e23d).
     fn drop_the_player(&mut self) {
         let player = ShipRef::Player;
         for npc in self.traffic.npcs_mut() {
             if npc.target == Some(player) {
                 npc.target = None;
+            }
+            if npc.goal == Goal::Flee(player) {
+                npc.provoked = 0.0;
             }
             if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
                 npc.goal = Goal::Idle;
@@ -1349,6 +1353,12 @@ mod tests {
         );
         session.npc_mut(attacker).expect("here").provoked = 5.0;
         let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
+        let fleeing = aimed(
+            &mut session,
+            Goal::Flee(ShipRef::Player),
+            Some(ShipRef::Player),
+        );
+        session.npc_mut(fleeing).expect("here").provoked = 4.0;
         let inspector = aimed(&mut session, Goal::Inspect(ShipRef::Player), None);
         session.npc_mut(inspector).expect("here").provoked = 3.0;
         let hired = escort(&mut session);
@@ -1397,6 +1407,11 @@ mod tests {
             "the pod's loop writes +0x70 alone (@0x6f67d-0x6f6a9)"
         );
         assert_eq!(npc(aiming).target, None);
+        assert_eq!(
+            (npc(fleeing).goal, npc(fleeing).provoked),
+            (Goal::Idle, 0.0),
+            "a flight with target -1: state 0, +0x96 0 (@0x8e228-0x8e23d)"
+        );
         assert_eq!(
             (npc(inspector).goal, npc(inspector).provoked),
             (Goal::Idle, 3.0),
