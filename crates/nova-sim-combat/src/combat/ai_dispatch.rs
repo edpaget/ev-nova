@@ -43,7 +43,7 @@
 //! An existing NPC in a higher slot still thinks before the loop, blind
 //! to the fighter, and a launched fighter's own launch settles against
 //! the room left after every existing claim
-//! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
+//! (rdm:phase/combat-ai-fidelity/phase-32-left-out-of-weapons-fidelity-phase-44).
 
 use super::defence::Candidate;
 use super::projectile::Target;

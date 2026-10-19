@@ -21,7 +21,7 @@
 //! (see `launch_room`), as every existing carrier's claim was settled
 //! there; the original lets the fighter's launch take a slot before a
 //! higher existing carrier's
-//! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
+//! (rdm:phase/combat-ai-fidelity/phase-32-left-out-of-weapons-fidelity-phase-44).
 
 use std::collections::BTreeSet;
 

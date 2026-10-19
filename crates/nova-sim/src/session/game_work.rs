@@ -82,7 +82,7 @@
 //! launched fighter's after every scan, where each slot's `_AIDispatch`
 //! makes its calls and then its scan, so a scan line keeps a later slot's
 //! call off the line
-//! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
+//! (rdm:phase/combat-ai-fidelity/phase-32-left-out-of-weapons-fidelity-phase-44).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
 //! session ([`Session::with_fighters`]): the player, then every NPC, each
