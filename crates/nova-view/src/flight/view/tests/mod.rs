@@ -1791,6 +1791,7 @@ fn shipbuying() -> FakeCatalog {
             inherent_govt: None,
             combat_govt: None,
             escort_type: -1,
+            skill_var: 0,
             on_capture: nova_sim::Script::default(),
             on_purchase: nova_sim::Script::default(),
             on_retire: nova_sim::Script::default(),
@@ -2044,6 +2045,7 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
         inherent_govt: None,
         combat_govt: None,
         escort_type: -1,
+        skill_var: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -2515,6 +2517,7 @@ fn ship_class(id: i16) -> ShipRecord {
         inherent_govt: None,
         combat_govt: None,
         escort_type: -1,
+        skill_var: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -3310,6 +3313,7 @@ fn granting(count: i16) -> FakeCatalog {
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }];
     for record in &mut catalog.ships {
         record.crew = 3;

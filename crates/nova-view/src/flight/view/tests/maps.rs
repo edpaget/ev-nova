@@ -695,6 +695,7 @@ fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }];
     // One ship of düde 128 (ship 129) attacking the player and
     // following it (`ShipSyst` -6).

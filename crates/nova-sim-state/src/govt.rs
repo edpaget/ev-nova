@@ -32,11 +32,17 @@
 //! - `MaxOdds` ([`Governments::max_odds`]) is a fraction, `MaxOdds / 100`,
 //!   no less than [`MIN_ODDS`] (`_LoadObjectData` @0x7bbb3); an
 //!   independent ship's is even odds, a placeholder.
+//! - `SkillMult` ([`Governments::skill_mult`]) is the factor its ships'
+//!   top speed and thrust take, `SkillMult / 100`, or 1.0 when it is 0 or
+//!   less (`_LoadObjectData` @0x7bb69-0x7bb9b); an independent ship's is
+//!   1.0 (`_ShipMaxSpeed` @0x37d7-0x37ee reads it only for a ship with a
+//!   government).
 
 use std::collections::BTreeMap;
 
 use crate::catalog::{CombatCatalog, GovtId, GovtRecord};
 use crate::legal::Crime;
+use nova_sim_base::skill::skill_mult_factor;
 
 /// `Flags`: xenophobic, the enemy of every other government.
 pub const XENOPHOBIC: u16 = 0x0001;
@@ -224,6 +230,15 @@ impl Governments {
         }
         let raw = self.record(govt).map_or(0, |record| record.max_odds);
         (f32::from(raw) / ODDS_PERCENT).max(MIN_ODDS)
+    }
+
+    /// The factor `govt`'s ships' top speed and thrust take, its
+    /// `SkillMult` / 100 ([`skill_mult_factor`]): 1.0 for an independent
+    /// ship, a government the table does not hold, or a `SkillMult` of 0
+    /// or less.
+    #[must_use]
+    pub fn skill_mult(&self, govt: Option<GovtId>) -> f32 {
+        skill_mult_factor(self.record(govt).map_or(0, |record| record.skill_mult))
     }
 
     /// Whether `a` and `b` are allies (see the module docs).
@@ -574,6 +589,29 @@ mod tests {
         assert!(!govts.npc_enemies(PIRATES, None));
         assert!(!govts.npc_enemies(None, PIRATES));
         assert!(!govts.npc_enemies(FED, CIVVIES));
+    }
+
+    #[test]
+    fn skill_mult_is_a_hundredth_of_the_records_and_1_without_one() {
+        let govts = Governments::new([
+            GovtRecord {
+                skill_mult: 150,
+                ..govt(128)
+            },
+            GovtRecord {
+                skill_mult: 0,
+                ..govt(129)
+            },
+            GovtRecord {
+                skill_mult: 1,
+                ..govt(130)
+            },
+        ]);
+        assert_eq!(govts.skill_mult(Some(GovtId(128))), 1.5);
+        assert_eq!(govts.skill_mult(Some(GovtId(129))), 1.0);
+        assert_eq!(govts.skill_mult(Some(GovtId(130))), 0.01);
+        assert_eq!(govts.skill_mult(Some(GovtId(131))), 1.0, "unknown");
+        assert_eq!(govts.skill_mult(None), 1.0, "independent");
     }
 
     #[test]

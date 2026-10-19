@@ -1189,6 +1189,7 @@ mod on_the_maps {
             news_pic: -1,
             require: 0,
             inh_jam: [0; 4],
+            skill_mult: 0,
         }
     }
 

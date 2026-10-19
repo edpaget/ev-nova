@@ -770,6 +770,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }];
     catalog.missions = vec![MissionRecord {
         cargo_type: 0,

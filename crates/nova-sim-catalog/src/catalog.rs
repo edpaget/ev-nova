@@ -493,6 +493,10 @@ pub struct ShipRecord {
     /// Its `EscortType`, raw: the class it has as the player's escort
     /// (see [`EscortClass::of`](crate::catalog::EscortClass::of)).
     pub escort_type: i16,
+    /// Its `SkillVar`, raw: how far an NPC's skill, rolled as it spawns,
+    /// strays from 1.0, in hundredths (class +0x9f8, `_RandomSkillLevel`
+    /// @0x6922; see `nova_sim::skill`).
+    pub skill_var: i16,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -1652,6 +1656,11 @@ pub struct GovtRecord {
     /// through their `InherentGovt` (`gövt` runtime +0x56; see
     /// `nova_sim::combat::jamming`).
     pub inh_jam: [i16; 4],
+    /// Its `SkillMult`, raw: the factor its ships' top speed and thrust
+    /// take is `SkillMult` / 100, or 1.0 when it is 0 or less (runtime
+    /// +0x64, `_LoadObjectData` @0x7bb69-0x7bb9b; see
+    /// `nova_sim::skill`).
+    pub skill_mult: i16,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

@@ -172,6 +172,7 @@ impl PilotCatalog for GameData {
                     inherent_govt: inherent_govt(record.inherent_govt),
                     combat_govt: combat_govt(record.inherent_govt),
                     escort_type: record.escort_type,
+                    skill_var: record.skill_var,
                 })
             })
             .collect()
@@ -1113,6 +1114,7 @@ impl CombatCatalog for GameData {
                     news_pic: record.news_pic,
                     require: record.require.bits(),
                     inh_jam: record.inh_jam,
+                    skill_mult: record.skill_mult,
                 })
             })
             .collect()
@@ -1838,6 +1840,7 @@ mod tests {
         bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
+        put_i16s(&mut bytes, 0x60, &[15]);
         bytes[0x26A..0x26E].copy_from_slice(b"b300");
         bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
         bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
@@ -1898,6 +1901,7 @@ mod tests {
             inherent_govt: Some(GovtId(129)),
             combat_govt: None,
             escort_type: 2,
+            skill_var: 15,
             on_capture: Script::parse("^b301"),
             on_purchase: Script::parse("b300"),
             on_retire: Script::parse("!b30"),
@@ -4085,6 +4089,7 @@ mod tests {
         put_i16s(&mut bytes, 0x18, &[1, -1, 4, -1]);
         put_i16s(&mut bytes, 0x20, &[0, 1, 12, 13]);
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
+        put_i16s(&mut bytes, 0x30, &[150]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         bytes[0x64..0x73].copy_from_slice(b"the Federation\0");
@@ -4167,6 +4172,7 @@ mod tests {
             news_pic: 9001,
             require: 0x8000_0000_0000_0021,
             inh_jam: [25, 0, -3, 0],
+            skill_mult: 150,
         };
         assert_eq!(
             data.governments(),

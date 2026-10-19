@@ -2929,6 +2929,7 @@ fn damaging() -> FakeCatalog {
             news_pic: -1,
             require: 0,
             inh_jam: [0; 4],
+            skill_mult: 0,
         }],
         ..catalog
     }
