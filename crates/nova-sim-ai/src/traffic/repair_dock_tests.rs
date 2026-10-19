@@ -15,7 +15,7 @@ use crate::hail::Help;
 use crate::stats::ShipStats;
 use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::fixture::npc;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::plunder::{self, PirateEvent};
 use crate::traffic::plunder_dock::{DockSub, Docking};
 use crate::traffic::repair_dock::REPAIR_HOLD;
@@ -249,4 +249,35 @@ fn every_repairer_flies_its_high_level_and_no_other_unprovoked_assister() {
         "a refueller's high level doesn't run"
     );
     assert_eq!(*recording.decided.borrow(), []);
+}
+
+#[test]
+fn a_repairer_coasting_or_disabled_flies_no_high_level() {
+    let mut coasting = repairing(1000.0, 0.0);
+    coasting.npcs[0].mode = Mode::Coasting { ticks_left: 30 };
+    let mut disabled = repairing(1000.0, 0.0);
+    disabled.npcs[0].condition = Condition::Disabled;
+    for (name, mut traffic) in [("coasting", coasting), ("disabled", disabled)] {
+        let recording = Recording::default();
+        tick(&mut traffic, &recording, Condition::Disabled, &[]);
+        let ship = helper(&traffic);
+        assert_eq!(ship.docking, None, "{name}");
+        assert_eq!(ship.goal, Goal::Assist(Help::Repair), "{name}");
+    }
+}
+
+#[test]
+fn a_repairer_flies_its_high_level_only_on_its_due_ticks() {
+    // NPC 1 of traffic deciding every 4 ticks is due on ticks 1, 5, ...
+    let mut traffic = Traffic::with_interval(4);
+    traffic.npcs = repairing(1000.0, 0.0).npcs;
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    assert_eq!(helper(&traffic).docking, None, "tick 0 isn't due");
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    assert_eq!(
+        helper(&traffic).docking.map(|docking| docking.sub),
+        Some(DockSub::Close),
+        "tick 1 is due"
+    );
 }
