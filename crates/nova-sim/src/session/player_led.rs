@@ -104,7 +104,7 @@ impl Session {
     /// beam disabled it after (`_HandleBeams` @0x4453d). A ship its slot
     /// has not yet displayed is left out by either reading, as its slot's
     /// sprites are hidden until then, unless [`RuleKey::UndisplayedShips`]
-    /// reads otherwise ([`Session::is_displayed`]; see the
+    /// reads otherwise (`Session::is_displayed`; see the
     /// `slot_visibility` module).
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {

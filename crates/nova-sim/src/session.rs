@@ -2833,7 +2833,7 @@ impl Session {
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
     /// as it is taken out (see the `story` module's findings). A rescue
     /// mission's ship not yet boarded, and a ship of a Derelict
-    /// government, fight held disabled ([`Session::held_disabled`]; see
+    /// government, fight held disabled (`Session::held_disabled`; see
     /// the `mission_ships` and `derelicts` modules).
     /// The player is convicted of disabling and destroying an NPC, but
     /// not a mission's special ship (see `punish`). Before the fight,

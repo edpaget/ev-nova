@@ -85,7 +85,7 @@ impl Session {
     /// leads it, else the ships' one, and is displayed from now; a hidden
     /// ship's slot keeps its place and displays nothing; a slot with no
     /// ship displays nothing. Each shown slot clones its type's frames
-    /// ([`Session::lay_out_ships`]). See the module docs for where it
+    /// (`Session::lay_out_ships`). See the module docs for where it
     /// runs.
     pub fn prepare_all_sprites(&mut self) {
         let mut slots = vec![(
