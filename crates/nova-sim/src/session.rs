@@ -367,6 +367,7 @@ mod comm_calls;
 mod control;
 mod course;
 mod crons;
+mod derelicts;
 mod double_time;
 mod edit;
 mod eject;
@@ -2421,6 +2422,7 @@ impl Session {
         if entering.is_none() {
             self.snap_mission_escorts();
         }
+        self.hold_derelicts();
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
@@ -2818,8 +2820,9 @@ impl Session {
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
     /// as it is taken out (see the `story` module's findings). A rescue
-    /// mission's ship not yet boarded fights held disabled
-    /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
+    /// mission's ship not yet boarded, and a ship of a Derelict
+    /// government, fight held disabled ([`Session::held_disabled`]; see
+    /// the `mission_ships` and `derelicts` modules).
     /// The player is convicted of disabling and destroying an NPC, but
     /// not a mission's special ship (see `punish`). Before the fight,
     /// unless the ship is landed, each NPC that looked the player over in the
@@ -2989,7 +2992,8 @@ impl Session {
 
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
-    /// ([`Session::mission_ship_held`]; the player never is), its class
+    /// ([`Session::held_disabled`]; the player never is), whether it is a
+    /// ship of the player's fleet, its class
     /// and top speeds, which every push is capped against, the heading it
     /// was last drawn at, its own for a ship new to the fight, how
     /// strongly it jams, and whether it threatens the player, as
@@ -3019,7 +3023,7 @@ impl Session {
             .npcs()
             .iter()
             .map(|npc| FightTerms {
-                held_disabled: self.mission_ship_held(npc),
+                held_disabled: self.held_disabled(npc),
                 fleet_escort: self.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),

@@ -68,7 +68,7 @@ impl Session {
             }
         }
         for id in disabled {
-            let held = self.npc(id).is_some_and(|npc| self.mission_ship_held(npc));
+            let held = self.npc(id).is_some_and(|npc| self.held_disabled(npc));
             let Some(npc) = self.npc_mut(id) else {
                 continue;
             };

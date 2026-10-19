@@ -198,6 +198,8 @@ impl Session {
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
             let marks = self.traffic_think(catalog, behaviour, chance);
+            // The arrivals of a Derelict government come in disabled.
+            self.hold_derelicts();
             self.take_scans(rules.law, chance);
             self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
                 combat.defend_npcs(fighters, arena, chance);
@@ -525,6 +527,7 @@ impl Session {
         self.orphan_fighters();
         self.clear_lost_target();
         self.see_stellars();
+        self.hold_derelicts();
         self.lay_out_ships();
         self.note_drawn();
     }
