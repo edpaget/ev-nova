@@ -44,20 +44,52 @@
 //! record is never carried into another session: every entry into flight
 //! runs `_PrepareAllSprites` again.
 //!
-//! Left out, each with its owner: the rest of `_PrepareAllSprites` (the
-//! frozen display's breakup step and final explosion, and the shots',
-//! stellars', explosions', smoke's, boxes', asteroids', stars', target
-//! sprites' and escape pods' displays), an escape ship's fighter shown in
-//! its launch frame, and the hover over a slot not yet displayed:
-//! rdm:phase/weapons-fidelity/phase-47-left-out-of-phase-42. The cloak
-//! fade step:
+//! **The hover and click box** (rdm weapons-fidelity phase 47).
+//! `_HandleMouse`'s loop (@0x380e3-0x381ec) and the click block
+//! (`_HandlePlayer` @0x6a4ab-0x6a4f4) box each active NPC by its hull
+//! sprite's rect (+0x1a-+0x21, @0x38177), with no visibility test. Only a
+//! display places that rect (`SWSetSpriteLocation` @0x2cd9d, at
+//! `trunc(ship − player)` per axis from the play area's centre,
+//! @0x2cd38-0x2cd8e), shown or hidden alike, and clones its frames
+//! (@0x2b824). So a ship its slot has not displayed (an escape fighter
+//! below its carrier, an arrival after the loop) is hovered and clicked
+//! where the slot's last ship was last laid out, in that ship's frames:
+//! each display records the slot's place
+//! ([`SlotPlaces`](crate::ship_layer::SlotPlaces)) and which ship it laid
+//! out, and [`Session::hover_place`] and [`Session::framed_by`] read them,
+//! by [`RuleKey::UndisplayedShips`].
+//!
+//! **`_PrepareAllSprites`' other parts** change nothing the player sees
+//! (rdm weapons-fidelity phase 47's findings): no site that runs it holds
+//! a dying ship, a live shot, a cargo box or a live asteroid field, and
+//! the rest (stellars, explosions, smoke, stars, target and escape-pod
+//! sprites) is display the view draws from state each frame.
+//!
+//! Left out, each with its owner: the box of a slot never laid out this
+//! run (`_InitSprites`' clone rect @0x1f135, here no box), and
+//! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c):
+//! rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47.
+//! The cloak fade step:
 //! rdm:phase/cloaking-fidelity/phase-7-escort-cloak-through-warp-prepare-and-capture.
 
 use super::Session;
 use super::player_led::slot_of;
 use crate::combat::ShipRef;
+use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_layer::{ShipLayer, Slot, disabled};
+
+/// Where a ship's hover and click box is ([`Session::hover_place`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HoverPlace {
+    /// Where the ship is drawn, or would be when hidden.
+    Own,
+    /// At this whole-pixel offset from where the player is drawn: where
+    /// its slot was last laid out, by another ship.
+    Stale(Vec2),
+    /// Nowhere: its slot has not been laid out this run.
+    Unplaced,
+}
 
 impl Session {
     /// Whether `ship`, at `slot`, is displayed: its slot's last display
@@ -69,13 +101,81 @@ impl Session {
     }
 
     /// Notes `slot`'s display of `ship`: shown, it is displayed from now;
-    /// hidden ([`Session::is_hidden`]), the slot displays nothing.
+    /// hidden ([`Session::is_hidden`]), the slot displays nothing. Either
+    /// way the display lays the slot out at the ship's whole-pixel offset
+    /// from the player (`SWSetSpriteLocation` @0x2cd9d; the player's own
+    /// at none), which its hover box reads ([`Session::hover_place`]).
     pub(super) fn note_display(&mut self, ship: ShipRef, slot: Slot, shown: bool) {
         if shown {
             self.slot_shown.insert(slot, ship);
         } else {
             self.slot_shown.remove(&slot);
         }
+        let offset = match ship {
+            ShipRef::Player => Some(Vec2::ZERO),
+            ShipRef::Npc(id) => self
+                .npc(id)
+                .map(|npc| npc.state.position - self.player.position),
+        };
+        if let Some(offset) = offset {
+            self.slot_placed.insert(slot, ship);
+            self.slot_sprites.places.place(slot, offset);
+        }
+    }
+
+    /// Whether `ship`, at `slot`, was laid out by its slot's last display,
+    /// shown or hidden, as [`RuleKey::UndisplayedShips`]' engine reading
+    /// has it, or always by the other reading.
+    pub(super) fn is_laid_out(&self, ship: ShipRef, slot: Slot) -> bool {
+        self.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
+            || self.slot_placed.get(&slot) == Some(&ship)
+    }
+
+    /// Where `ship`'s hover and click box is: `_HandleMouse` (@0x380e3-0x381ec)
+    /// and the click block (`_HandlePlayer` @0x6a4ab-0x6a4f4) box a slot's
+    /// hull sprite rect (@0x38177), which only a display places (see the
+    /// module docs). A ship its slot's last display laid out, shown or
+    /// hidden, is boxed where it is ([`HoverPlace::Own`]). By
+    /// [`RuleKey::UndisplayedShips`]' engine reading, one its slot has not
+    /// displayed is boxed at the offset from the player its slot was last
+    /// laid out at ([`HoverPlace::Stale`]), in the frames its slot last
+    /// cloned ([`Session::framed_by`]), or has no box in a slot no display
+    /// has laid out this run ([`HoverPlace::Unplaced`]); by the other
+    /// reading every ship is boxed where it is. A ship not here is boxed
+    /// where it is, which is nowhere.
+    #[must_use]
+    pub fn hover_place(&self, ship: ShipRef) -> HoverPlace {
+        let slot = match ship {
+            ShipRef::Player => Slot::Player,
+            ShipRef::Npc(id) => match self.npc(id) {
+                Some(npc) => slot_of(npc),
+                None => return HoverPlace::Own,
+            },
+        };
+        if self.is_laid_out(ship, slot) {
+            return HoverPlace::Own;
+        }
+        self.slot_sprites
+            .places
+            .of(slot)
+            .map_or(HoverPlace::Unplaced, HoverPlace::Stale)
+    }
+
+    /// Takes NPC `id` out and puts a copy of it in its berth at `at`, at
+    /// rest, for [`fixture::refill`](crate::fixture::refill): the copy's
+    /// id, or none for an NPC not in the system.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn refill_berth(
+        &mut self,
+        id: crate::traffic::npc::NpcId,
+        at: Vec2,
+    ) -> Option<crate::traffic::npc::NpcId> {
+        let mut copy = self.npc(id)?.clone();
+        self.traffic.remove(id);
+        copy.state.position = at;
+        copy.state.velocity = Vec2::ZERO;
+        let berth = copy.berth;
+        Some(self.traffic.add_npc_at(copy, berth))
     }
 
     /// `_PrepareAllSprites`' ship part (@0x3a776-0x3a78e): every slot is
@@ -110,6 +210,7 @@ impl Session {
         npcs.sort_by_key(|&(_, slot, _, _)| slot);
         slots.extend(npcs);
         self.slot_shown.clear();
+        self.slot_placed.clear();
         for (ship, slot, disabled, led) in slots {
             let shown = !self.is_hidden(ship);
             self.note_display(ship, slot, shown);
@@ -328,5 +429,78 @@ mod tests {
                     .contains(&(ShipRef::Npc(npc.id), ShipLayer::Disabled))
             );
         }
+    }
+
+    /// In flight by `rules` with A, the first NPC, laid out at
+    /// (100.7, -20.3) from the player, then gone, and B, of another type,
+    /// come into A's slot 500 pixels off since: the session, A's type and
+    /// B.
+    fn refilled(rules: Rulebook) -> (Session, crate::catalog::ShipId, ShipRef) {
+        let (_, mut session) = flying(rules);
+        let a = session.npcs()[0].clone();
+        let at = session.player().position + crate::geometry::Vec2::new(100.7, -20.3);
+        session.npc_mut(a.id).expect("there").state.position = at;
+        session.prepare_all_sprites();
+        let far = session.player().position + crate::geometry::Vec2::new(500.0, 0.0);
+        let b = crate::fixture::refill(&mut session, a.id, far).expect("refilled");
+        assert!(session.npc(a.id).is_none(), "A gone");
+        let copy = session.npc_mut(b).expect("there");
+        assert_eq!((copy.berth, copy.state.position), (a.berth, far));
+        copy.ship = crate::catalog::ShipId(a.ship.0 + 1);
+        (session, a.ship, ShipRef::Npc(b))
+    }
+
+    #[test]
+    fn a_ship_its_slot_has_not_displayed_is_hovered_where_the_slot_last_was() {
+        // `_HandleMouse` boxes a slot's hull sprite rect (@0x38177), which
+        // only a display places (`SWSetSpriteLocation` @0x2cd9d, at the
+        // whole-pixel offset from the player @0x2cd38-0x2cd8e), in the
+        // frames it last cloned (@0x2b824).
+        let (session, a_type, b) = refilled(Rulebook::default());
+        assert_eq!(
+            session.hover_place(b),
+            HoverPlace::Stale(crate::geometry::Vec2::new(100.0, -20.0))
+        );
+        assert_eq!(session.framed_by(b), Some(a_type));
+    }
+
+    #[test]
+    fn a_displayed_ship_is_hovered_where_it_is() {
+        let (_, mut session) = flying(Rulebook::default());
+        let a = ShipRef::Npc(session.npcs()[0].id);
+        assert_eq!(session.hover_place(a), HoverPlace::Own);
+        assert_eq!(session.hover_place(ShipRef::Player), HoverPlace::Own);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.hover_place(a), HoverPlace::Own);
+    }
+
+    #[test]
+    fn a_slot_never_laid_out_has_no_box() {
+        let (_, mut session) = flying(Rulebook::default());
+        let new = ShipRef::Npc(newcomer(&mut session));
+        assert_eq!(session.hover_place(new), HoverPlace::Unplaced);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.hover_place(new), HoverPlace::Own, "once displayed");
+    }
+
+    #[test]
+    fn by_the_other_reading_an_undisplayed_ship_is_hovered_where_it_is() {
+        let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, RuleSource::Bible);
+        let (session, _, b) = refilled(rules);
+        assert_eq!(session.hover_place(b), HoverPlace::Own);
+        let own = session.npcs().iter().find(|npc| ShipRef::Npc(npc.id) == b);
+        assert_eq!(session.framed_by(b), own.map(|npc| npc.ship));
+    }
+
+    #[test]
+    fn lay_out_ships_keeps_an_undisplayed_slots_frames() {
+        // The frames are cloned only at a display (@0x2b824).
+        let (mut session, a_type, b) = refilled(Rulebook::default());
+        session.lay_out_ships();
+        let ShipRef::Npc(id) = b else {
+            unreachable!("an NPC")
+        };
+        let slot = slot_of(session.npc(id).expect("there"));
+        assert_eq!(session.slot_sprites().frames.of(slot), a_type);
     }
 }

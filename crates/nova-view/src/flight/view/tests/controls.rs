@@ -491,6 +491,76 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
     assert!(!hover(own(), 40.0), "boxed by its own sheet");
 }
 
+/// [`flight_with_npc`] by `rules`, its NPC gone once drawn and a copy come
+/// into its berth 200 pixels to the right, not yet displayed there: the
+/// view, the copy, where the first was drawn and where the copy is.
+fn refilled(rules: Rulebook) -> (View, NpcId, Point, Point) {
+    let (view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+    let mut view = view.with_rules(rules);
+    let was = npc_on_screen(&view, id);
+    let session = view.session.as_mut().expect("flying");
+    let at = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.id == id)
+        .expect("there")
+        .state
+        .position
+        + Vec2::new(200.0, 0.0);
+    let copy = nova_sim::fixture::refill(session, id, at).expect("refilled");
+    let now = npc_on_screen(&view, copy);
+    (view, copy, was, now)
+}
+
+/// The id of `view`'s target.
+fn targeted(view: &View) -> Option<NpcId> {
+    view.session().expect("flying").target().map(|npc| npc.id)
+}
+
+/// Where `view` boxes NPC `id` for the hover and the click, on screen.
+fn boxed_at(view: &View, id: NpcId) -> Option<Point> {
+    let ships = ViewShips {
+        view,
+        session: view.session().expect("flying"),
+    };
+    let drawn = ships.npc(id)?;
+    Some(
+        view.camera()
+            .world_to_screen(Point::new(drawn.centre.x, drawn.centre.y)),
+    )
+}
+
+#[test]
+fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_own() {
+    // `_HandleMouse` and the click block box a slot's hull sprite rect
+    // (@0x38177, `_HandlePlayer` @0x6a4ab-0x6a4f4), which only a display
+    // places (@0x2cd9d): where its last ship was last laid out.
+    let (mut view, copy, was, now) = refilled(Rulebook::default());
+    let boxed = boxed_at(&view, copy).expect("boxed");
+    assert!(
+        (boxed.x - was.x).abs() <= 1.0 && (boxed.y - was.y).abs() <= 1.0,
+        "{boxed:?} at {was:?}"
+    );
+    click(&mut view, now);
+    assert_eq!(targeted(&view), None, "not where it is");
+    click(&mut view, was);
+    assert_eq!(targeted(&view), Some(copy), "where its slot was laid out");
+}
+
+#[test]
+fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is() {
+    let rules = Rulebook::default().with_override(
+        nova_sim::RuleKey::UndisplayedShips,
+        nova_sim::RuleSource::Bible,
+    );
+    let (mut view, copy, was, now) = refilled(rules);
+    assert_eq!(boxed_at(&view, copy), Some(now));
+    click(&mut view, was);
+    assert_eq!(targeted(&view), None, "not where its slot was laid out");
+    click(&mut view, now);
+    assert_eq!(targeted(&view), Some(copy), "where it is");
+}
+
 #[test]
 fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
     let mut sprites = SlotSprites::default();

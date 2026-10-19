@@ -182,7 +182,10 @@ impl Session {
     /// slot last cloned: the type last shown there, or `shïp` 128 in a
     /// slot no shown ship has used this run (see
     /// [`SlotFrames`](crate::ship_layer::SlotFrames)); by the other
-    /// reading, its own type's.
+    /// reading, its own type's. A ship its slot's last display did not
+    /// lay out holds, by [`RuleKey::UndisplayedShips`]' engine reading,
+    /// whatever its slot last cloned, as the frames are cloned only at a
+    /// display (@0x2b824; see [`Session::hover_place`]).
     #[must_use]
     pub fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
         let (slot, own, hull) = match ship {
@@ -192,8 +195,9 @@ impl Session {
                 (slot_of(npc), npc.ship, npc.hull)
             }
         };
-        let stale = !self.shown(hull)
+        let hidden = !self.shown(hull)
             && self.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
+        let stale = hidden || !self.is_laid_out(ship, slot);
         Some(if stale {
             self.slot_sprites.frames.of(slot)
         } else {
@@ -285,14 +289,19 @@ impl Session {
     /// its type's frames
     /// ([`SlotFrames::clone_frames`](crate::ship_layer::SlotFrames::clone_frames)),
     /// as `_HandleShipDisplay` does before its layer block (@0x2b824); a
-    /// hidden ship's slot keeps the ones it had. Run at the end of each
-    /// flight tick ([`Session::fight_tail`]). Recording the clones at the
-    /// end of the tick rather than at each ship's display never crosses a
-    /// frame boundary. The layers are put at each display step
-    /// ([`Session::lay_out_displayed`]).
+    /// hidden ship's slot keeps the ones it had, and so, by
+    /// [`RuleKey::UndisplayedShips`]' engine reading, does the slot of a
+    /// ship it has not displayed (`Session::is_displayed`). Run at the
+    /// end of each flight tick ([`Session::fight_tail`]). Recording the
+    /// clones at the end of the tick rather than at each ship's display
+    /// never crosses a frame boundary. The layers are put at each display
+    /// step ([`Session::lay_out_displayed`]).
     pub(super) fn lay_out_ships(&mut self) {
         self.slot_sprites.shots = self.combat.shot_slots();
         for (ship, slot) in self.shown_slots() {
+            if !self.is_displayed(ship, slot) {
+                continue;
+            }
             let ship = match ship {
                 ShipRef::Player => Some(self.pilot.ship),
                 ShipRef::Npc(id) => self.npc(id).map(|npc| npc.ship),
@@ -1252,9 +1261,12 @@ mod tests {
             Rulebook::default().with_override(RuleKey::HiddenShipHoverBox, RuleSource::Bible),
         );
         assert!(session.is_hidden(ShipRef::Npc(hidden)));
+        // Once its slot's display has laid it out (by
+        // `RuleKey::UndisplayedShips`' engine reading, a ship not yet laid
+        // out is framed by its slot's frames whatever its hiding).
+        combat_tick(&mut session);
         assert_eq!(session.framed_by(ShipRef::Npc(hidden)), Some(HIDDEN));
         assert!(session.framed_types().any(|ship| ship == HIDDEN));
-        combat_tick(&mut session);
         assert_eq!(
             session.slot_sprites().frames.of(Slot::Berth(berth)),
             ShipId(200),

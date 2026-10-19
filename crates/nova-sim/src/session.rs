@@ -463,6 +463,7 @@ pub use missions::{AbortError, NotOffered, RefuseShown};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{Departure, ScriptEffectRules, Settled};
+pub use slot_visibility::HoverPlace;
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1161,6 +1162,10 @@ pub struct Session {
     /// [`Session::is_displayed`]); never carried into another session, as
     /// every entry into flight displays every slot again.
     slot_shown: BTreeMap<crate::ship_layer::Slot, ShipRef>,
+    /// The ship each slot last displayed, shown or hidden: the one its
+    /// laid-out place is of (see [`Session::hover_place`]); never carried
+    /// into another session, as `slot_shown`.
+    slot_placed: BTreeMap<crate::ship_layer::Slot, ShipRef>,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -1679,6 +1684,7 @@ impl Session {
             rules: Rulebook::default(),
             slot_sprites: crate::ship_layer::SlotSprites::default(),
             slot_shown: BTreeMap::new(),
+            slot_placed: BTreeMap::new(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()

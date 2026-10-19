@@ -616,7 +616,7 @@ use nova_sim::{
     OutfitRun, PointDefenceRule, Reselection, Reserves, RuleKey, Session, ShipId, ShipRef,
     ShipState, SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{DrawnBox, DrawnShips};
+use nova_sim::{DrawnBox, DrawnShips, HoverPlace};
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
@@ -1351,6 +1351,10 @@ impl std::fmt::Debug for Metrics {
 /// with no sprite (@0x38171), by the frames its slot last cloned, as
 /// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
 /// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
+/// chooses). A ship its slot has not displayed yet is boxed where its
+/// slot was last laid out, at that offset from where the player is drawn,
+/// in its slot's last frames, or has no box in a slot never laid out
+/// ([`Session::hover_place`]; [`nova_sim::RuleKey::UndisplayedShips`]
 /// chooses).
 struct ViewShips<'a, C> {
     /// The flight, which says where each ship is drawn.
@@ -1362,7 +1366,14 @@ struct ViewShips<'a, C> {
 impl<C> DrawnShips for ViewShips<'_, C> {
     fn npc(&self, id: NpcId) -> Option<DrawnBox> {
         let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
-        let (at, _) = self.view.shown_npc(npc);
+        let at = match self.session.hover_place(ShipRef::Npc(id)) {
+            HoverPlace::Own => self.view.shown_npc(npc).0,
+            HoverPlace::Stale(offset) => {
+                let player = self.view.shown_position();
+                Point::new(player.x + offset.x, player.y + offset.y)
+            }
+            HoverPlace::Unplaced => return None,
+        };
         let framed = self.session.framed_by(ShipRef::Npc(id))?;
         let sheet = self.view.npc_sheets.get(&framed);
         Some(drawn_box(at, drawn_size(sheet)))
