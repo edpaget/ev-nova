@@ -54,6 +54,13 @@
 //!   as `_ShipIsInertialess` (@0x79c2) counts the outfit for the player
 //!   alone.
 //!
+//! - [`GRAVITY_RESISTANCE`] (41) and [`DEADLY_RESISTANCE`] (42), carried
+//!   at all in any mod slot, whatever their `ModVal`, are recorded as
+//!   [`ShipStats::gravity_resistance`] and
+//!   [`ShipStats::deadly_resistance`]; only the player's count
+//!   (`_ShipResistsGravity` @0x7b10, `_ShipResistsDeadlyStellars`
+//!   @0x7bbe; see `nova_sim_base`'s `gravity` and `deadly_stellar`).
+//!
 //! - [`AFTERBURNER`] (15) is recorded as [`ShipStats::afterburner`], the
 //!   fuel it uses a tick: as `_ShipAfterburnerFuelUsage` (@0x7a82-0x7b0f)
 //!   reads it, the last carried outfit in index order that has a slot of
@@ -80,6 +87,8 @@
 //! changes nothing here yet.
 
 use nova_sim_base::afterburner::FUEL_PER_MOD_VAL;
+use nova_sim_base::deadly_stellar::DEADLY_RESISTANCE;
+use nova_sim_base::gravity::GRAVITY_RESISTANCE;
 
 use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
@@ -175,6 +184,8 @@ pub const TURN_MOD_PER_MANEUVER: f32 = 10.0;
 
 /// How a ship performs, its outfits included. By default, nothing at
 /// all, of a class with no `Flags`, whose warp factor is 1.3.
+// Each flag is one of the ship's outfit or hull bits, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShipStats {
     /// How it flies.
@@ -206,6 +217,16 @@ pub struct ShipStats {
     pub inertialess_hull: bool,
     /// Whether it carries an [`INERTIAL_DAMPENER`], whatever its `ModVal`.
     pub dampener: bool,
+    /// Whether it carries a gravity resistance, `ModType`
+    /// [`GRAVITY_RESISTANCE`] in any mod slot, whatever its `ModVal`: the
+    /// player's keeps gravity off it
+    /// ([`resists_gravity`](nova_sim_base::gravity::resists_gravity)).
+    pub gravity_resistance: bool,
+    /// Whether it carries a deadly-stellar resistance, `ModType`
+    /// [`DEADLY_RESISTANCE`] in any mod slot, whatever its `ModVal`: the
+    /// player's keeps a deadly stellar from killing it
+    /// ([`resists_deadly`](nova_sim_base::deadly_stellar::resists_deadly)).
+    pub deadly_resistance: bool,
     /// The fuel its afterburner uses a tick, if it carries an
     /// [`AFTERBURNER`] (see the module docs).
     pub afterburner: Option<f32>,
@@ -298,11 +319,21 @@ impl Default for ShipStats {
             multi_jump: 0,
             inertialess_hull: false,
             dampener: false,
+            gravity_resistance: false,
+            deadly_resistance: false,
             afterburner: None,
             warp_factor: nova_sim_catalog::warp::warp_factor(0),
             ion: IonStats::default(),
         }
     }
+}
+
+/// Whether any of `outfits` carried has a slot of `mod_type`, whatever its
+/// `ModVal`.
+fn carries(outfits: &[OutfitMod], mod_type: i16) -> bool {
+    outfits
+        .iter()
+        .any(|outfit| outfit.mod_type == mod_type && outfit.count > 0)
 }
 
 /// The fuel a tick of the afterburner among `outfits` uses (see the module
@@ -415,6 +446,8 @@ impl ShipStats {
             dampener: outfits
                 .iter()
                 .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
+            gravity_resistance: carries(outfits, GRAVITY_RESISTANCE),
+            deadly_resistance: carries(outfits, DEADLY_RESISTANCE),
             afterburner: afterburner_usage(outfits),
             warp_factor: nova_sim_catalog::warp::warp_factor(fields.flags),
             ion: IonStats::new(fields, outfits),
@@ -912,6 +945,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_stellar_resistances_are_carried_in_any_slot_whatever_their_modval() {
+        let plain = ShipStats::new(AVERAGE, &[]);
+        assert!(!plain.gravity_resistance && !plain.deadly_resistance);
+        for mod_val in [0, -7, 300] {
+            let gravity = ShipStats::for_player(AVERAGE, &[outfit(GRAVITY_RESISTANCE, mod_val, 1)]);
+            assert!(gravity.gravity_resistance && !gravity.deadly_resistance);
+            let deadly = ShipStats::new(AVERAGE, &[outfit(DEADLY_RESISTANCE, mod_val, 2)]);
+            assert!(deadly.deadly_resistance && !deadly.gravity_resistance);
+        }
+        let fourth = slots(
+            &[
+                (FAST_JUMP, 1),
+                (FAST_JUMP, 1),
+                (FAST_JUMP, 1),
+                (GRAVITY_RESISTANCE, 1),
+            ],
+            1,
+        );
+        assert!(
+            ShipStats::new(AVERAGE, &fourth).gravity_resistance,
+            "the fourth slot"
+        );
+        let none = ShipStats::new(
+            AVERAGE,
+            &[
+                outfit(GRAVITY_RESISTANCE, 1, 0),
+                outfit(DEADLY_RESISTANCE, 1, 0),
+            ],
+        );
+        assert!(
+            !none.gravity_resistance && !none.deadly_resistance,
+            "none carried"
+        );
+    }
+
     /// An outfit's four slots, `mods` first and blanks after, `count`
     /// carried.
     fn slots(mods: &[(i16, i16)], count: u16) -> Vec<OutfitMod> {
@@ -988,7 +1057,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 41, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 43, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

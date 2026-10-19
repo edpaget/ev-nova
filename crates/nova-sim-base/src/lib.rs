@@ -11,12 +11,16 @@
 //!   the NPC traffic rolls on.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
+//! - [`deadly_stellar`]: which stellars kill the ships that touch them,
+//!   who resists, and the touch.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
+//! - [`gravity`]: a stellar's pull by inverse square, who resists it,
+//!   and which afterburner widenings a gravity source keeps plain.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`ionization`]: what an ion charge does to a ship's handling: its
@@ -50,11 +54,13 @@ pub mod afterburner;
 pub mod blink;
 pub mod chance;
 pub mod clock;
+pub mod deadly_stellar;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod geometry;
+pub mod gravity;
 pub mod handling;
 pub mod inertialess;
 pub mod ionization;

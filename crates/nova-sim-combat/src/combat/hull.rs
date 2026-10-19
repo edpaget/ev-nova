@@ -55,6 +55,7 @@ use super::ship_frames::FrameSpec;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{EscortClass, HullRecord, ShipId};
+use crate::gravity::STELLAR_IMMUNE_HULL;
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -272,6 +273,11 @@ pub struct HullSpec {
     /// [`TURRET_SHOTS_OVER`] (see
     /// [`ShotLayer::spawned`](super::shot_layer::ShotLayer::spawned)).
     pub turret_shots_over: bool,
+    /// Whether neither gravity nor a deadly stellar touches it: its
+    /// `Flags3` [`STELLAR_IMMUNE_HULL`] (class +0x9ec; see
+    /// [`resists_gravity`](crate::gravity::resists_gravity) and
+    /// [`resists_deadly`](crate::deadly_stellar::resists_deadly)).
+    pub stellar_immune: bool,
     /// Its `Flags` afterburner bits, [`AFTERBURNER_ALWAYS`] and
     /// [`AFTERBURNER_BY_RATING`], which decide with [`HullSpec::planet_type`]
     /// whether an AI ship of the type has an afterburner (see
@@ -340,6 +346,7 @@ impl Default for HullSpec {
             frames: FrameSpec::NONE,
             miss_class: miss_class(EscortClass::Freighter),
             turret_shots_over: false,
+            stellar_immune: false,
             afterburner: 0,
             inherent_ai: 0,
             crew: 0,
@@ -388,6 +395,7 @@ impl HullSpec {
             frames,
             miss_class: miss_class(record.escort_class),
             turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
+            stellar_immune: record.flags3 & STELLAR_IMMUNE_HULL != 0,
             afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
             inherent_ai: 0,
             crew: 0,
@@ -588,6 +596,22 @@ mod tests {
         assert!(!under.turret_shots_over);
         assert!(!HullSpec::default().turret_shots_over);
         assert_eq!(TURRET_SHOTS_OVER, 0x0040);
+    }
+
+    #[test]
+    fn a_ship_type_is_stellar_immune_by_its_flags3_0x0020_alone() {
+        let of = |flags3: u16| {
+            HullSpec::new(&HullRecord {
+                flags3,
+                ..hull(140)
+            })
+            .stellar_immune
+        };
+        assert!(of(0x0020));
+        assert!(of(0xFFFF));
+        assert!(!of(0x0040), "the turret shots' bit");
+        assert!(!of(0xFFDF), "every other bit");
+        assert!(!HullSpec::default().stellar_immune);
     }
 
     #[test]

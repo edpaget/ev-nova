@@ -157,6 +157,9 @@
 //!   shipyard shares), the [`ControlBits`] port a ship's `Availability` goes through, what a
 //!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
+//! - [`gravity`]: a stellar's pull by inverse square and who resists it,
+//!   and [`deadly_stellar`]: the stellars that destroy the ships that
+//!   touch them.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`inertialess`]: inertialess flight: who flies it
@@ -342,6 +345,8 @@ pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
 pub use nova_sim_base::clock;
+pub use nova_sim_base::deadly_stellar;
+pub use nova_sim_base::gravity;
 pub use nova_sim_base::ionization;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;

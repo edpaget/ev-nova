@@ -79,8 +79,8 @@
 // `nova-sim-base`, `nova-sim-catalog` and `nova-sim-state`.
 #[allow(unused_imports)]
 use nova_sim_base::{
-    RuleKey, afterburner, chance, flight, fuel, geometry, handling, ionization, reserves, rulebook,
-    rules, speed_cap, trig,
+    RuleKey, afterburner, chance, deadly_stellar, flight, fuel, geometry, gravity, handling,
+    ionization, reserves, rulebook, rules, speed_cap, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, buoy, catalog, control};
