@@ -1569,6 +1569,24 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_of_flags_0x0400_is_still_and_carries_its_skill_var() {
+        let read = |flags: u16| {
+            let record = ShipRecord {
+                fields: ShipFields { flags, ..FAST },
+                skill_var: 25,
+                ..ship(204, FAST)
+            };
+            let kind = kind(&record, &[], &arsenal(), RuleSource::Engine);
+            (kind.still, kind.skill_var)
+        };
+        assert_eq!(read(0x0400), (true, 25));
+        assert_eq!(read(0x0420), (true, 25));
+        assert_eq!(read(0x0000), (false, 25));
+        assert_eq!(read(0x0020), (false, 25), "another bit");
+        assert_eq!(read(0xfbff), (false, 25), "every bit but 0x0400");
+    }
+
+    #[test]
     fn a_ship_type_carries_its_appear_on() {
         let gated = ShipRecord {
             appear_on: Test::parse("b7"),
