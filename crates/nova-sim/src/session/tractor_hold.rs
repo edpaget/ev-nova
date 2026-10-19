@@ -317,12 +317,28 @@ mod tests {
     }
 
     #[test]
-    fn a_jump_accepted_before_the_hold_carries_on() {
+    fn j_again_in_the_pre_jump_after_a_hold_gives_the_same_system() {
         let catalog = catalog();
         let mut session = bound(&catalog, None);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         session.tractor = Some(TractorLock::by(NPC));
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+    }
+
+    #[test]
+    fn a_jump_in_hyperspace_carries_on_whatever_holds_the_ship() {
+        use crate::hyperspace::JumpRefusal;
+        use crate::sound::SimSound;
+        let catalog = catalog();
+        let mut session = bound(&catalog, None);
+        session.begin_jump().expect("jumps");
+        while session.jumping().is_none() {
+            session.tick(Controls::default());
+        }
+        session.tractor = Some(TractorLock::by(NPC));
+        session.take_sounds();
+        assert_ne!(session.begin_jump(), Err(JumpRefusal::Tractored));
+        assert!(!session.take_sounds().contains(&SimSound::Refused));
     }
 
     #[test]
