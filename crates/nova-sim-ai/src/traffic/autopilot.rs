@@ -64,7 +64,8 @@
 //!   (see [`pursuit`]). It turns to the heading the body wants;
 //!   approaching, it thrusts while off it by less than
 //!   [`APPROACH_THRUST`] turns; dogfighting, by less than a turn and
-//!   [`DOGFIGHT_THRUST`]; fleeing close (sub 5, @0x85c62-0x85d72), turned
+//!   [`DOGFIGHT_THRUST`], an inertialess one up to the speed its frame
+//!   matches ([`pursuit::Frame::speed_cap`]); fleeing close (sub 5, @0x85c62-0x85d72), turned
 //!   to the table bearing from its attacker to itself, by less than a
 //!   turn and [`FLEE_THRUST`], as a stand-off ship backing away inside
 //!   the dogfight box does, never running out to jump (see
