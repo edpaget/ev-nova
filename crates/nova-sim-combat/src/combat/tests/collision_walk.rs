@@ -466,6 +466,49 @@ fn point_defence_passes_a_missile_that_touches_a_walked_ship() {
 }
 
 #[test]
+fn a_turret_shot_hits_a_fighter_an_asteroids_blast_disabled_this_pass() {
+    // The player's shot in the shots layer meets a rock beside C, whose
+    // blast (only a player's shot's, @0x3670d) takes C under the line;
+    // D's turret shot over ships, rolling over C's class, is tested after
+    // it.
+    let mut ships = three();
+    ships[0] = Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        ..Ship::at(0, -300.0, 0.0)
+    };
+    let mut rocks = [AsteroidTarget {
+        slot: 0,
+        position: Vec2::new(0.0, -130.0),
+        velocity: Vec2::ZERO,
+        radius: 10.0,
+        strength: 10,
+        mass: 20,
+    }];
+    let shell = WeaponRecord {
+        blast_radius: 50,
+        ..blaster()
+    };
+    let mut combat = Combat::default();
+    let into_rock = (Vec2::new(0.0, -150.0), Vec2::new(0.0, -135.0));
+    fly(
+        &mut combat,
+        (shell, ShipRef::Player, ShotLayer::Shots),
+        into_rock,
+        None,
+    );
+    fly(
+        &mut combat,
+        rolled_over(ShotLayer::OverShips),
+        INTO_C,
+        Some(81),
+    );
+    let arsenal = Arsenal::default();
+    let struck = walk_amid(&mut combat, &mut ships, &mut rocks, &arsenal);
+    assert_eq!(struck, [(C, Some(ShipRef::Player)), (C, Some(D))]);
+}
+
+#[test]
 fn a_fused_shells_sub_munitions_read_their_owners_plunder_as_it_hits() {
     let released = |plundering: bool| {
         let (shell, arsenal) = cluster(0);
