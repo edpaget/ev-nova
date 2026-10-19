@@ -3212,7 +3212,9 @@ impl Session {
     /// victim is taken out, and reads the shooter's leader as the hit
     /// lands (@0x3ad72): a shooter now out of the fleet still counts for
     /// a kill it scored before the strike that lost it, among `losses`
-    /// ([`EscortLoss`]), and not for one after.
+    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
+    /// before the escort block clears the leader, @0x3afdd), and not for
+    /// one after.
     fn credit_kills(&mut self, strikes: &[Strike], losses: &[EscortLoss], was: &[NpcBefore]) {
         for (index, strike) in strikes.iter().enumerate() {
             let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
@@ -3229,10 +3231,10 @@ impl Session {
                 None => false,
                 Some(ShipRef::Player) => true,
                 Some(ShipRef::Npc(by)) => {
-                    let lost_after = losses
+                    let lost_since = losses
                         .iter()
-                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike > index);
-                    lost_after
+                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
+                    lost_since
                         || self
                             .traffic
                             .npcs()
@@ -18205,6 +18207,43 @@ pub(super) mod tests {
     #[test]
     fn a_kill_by_an_npc_outside_the_players_fleet_leaves_the_rating() {
         assert_eq!(rating_after_npc_kills(false), (0, 0));
+    }
+
+    #[test]
+    fn an_escort_lost_by_the_hit_that_kills_it_is_still_the_players_at_that_hit() {
+        // An escort's own blast breaks it up: `_DamageShip`'s crime block
+        // reads its leader (@0x3ad72) before the escort block clears it
+        // (@0x3afdd) in the same call, so the kill counts.
+        let catalog = boardable();
+        let rating_after = |losses: &[EscortLoss]| {
+            let mut session = alongside(&catalog);
+            let was = [NpcBefore {
+                id: NpcId(0),
+                condition: Condition::Disabled,
+                govt: Some(GovtId(140)),
+                marked: false,
+            }];
+            let own_blast = Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: Some(ShipRef::Npc(NpcId(0))),
+                damage: 9.0,
+                downed: Some(Downed::BreakingUp),
+                direct: false,
+                intended: false,
+                lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: false,
+            };
+            session.credit_kills(&[own_blast], losses, &was);
+            session.pilot().combat_rating()
+        };
+        let lost = EscortLoss {
+            ship: ShipRef::Npc(NpcId(0)),
+            strike: 0,
+        };
+        assert_eq!(rating_after(&[lost]), 2, "10 / 5");
+        assert_eq!(rating_after(&[]), 0, "never the player's");
     }
 
     #[test]

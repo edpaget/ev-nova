@@ -435,8 +435,8 @@ impl Session {
     /// keeps, by the shooter's leader at the kill, as `_DamageShip` reads
     /// it as each hit lands (@0x3ad72): the fight notes each escort lost
     /// with the strike that lost it ([`Combat::take_landed`]), so a kill an
-    /// escort scored before that strike in the phase still counts and one
-    /// after does not ([`Session::credit_kills`]).
+    /// escort scored up to that strike in the phase still counts and one
+    /// after it does not ([`Session::credit_kills`]).
     ///
     /// The original's `_DamageShip` settles each hit as it lands; here a
     /// phase's hits settle together after it, before the next phase or
