@@ -29,7 +29,7 @@
 //! | Same leader | @0x3b94e-0x3b978 | cleared for a ship of the same leader |
 //! | Blessing | @0x3b9a9-0x3ba08 | for a stray hit still set: cleared for a governed ship allied with the player (`_AlliedWithPlayer` @0x6985: led by it, or by a ship it leads) whose government blesses it with peace ([`Surroundings::blessed`]) |
 //! | Grand fleet | @0x3ba14-0x3baa1 | cleared when the ship's leader's leader is an NPC attacker's leader's leader, the player included |
-//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders ([`Npc::docking`] in [`DockSub::Dock`]) or one repairing the player ([`Goal::Assist`] with [`Help::Repair`]) within its reach ([`assist::within`]), is not answered |
+//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
 //! Left out, for want of what they read (see
@@ -50,11 +50,12 @@
 //! not the order of the draws. Nothing in the flag, the entry test or the
 //! provocation's ease (`_HandleShip` @0x35374-0x353b2) plays a sound.
 
-use crate::ai::{Goal, Help, Surroundings};
+use crate::ai::Surroundings;
+#[cfg(doc)]
+use crate::ai::{Goal, Help};
 use crate::catalog::EscortClass;
 use crate::chance::Chance;
 use crate::combat::{ShipRef, Strike};
-use crate::hail::assist;
 use crate::legal::Crime;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
@@ -188,7 +189,7 @@ pub fn verdict(
     }
     answers = answers
         && !grand_fleet(victim, attacker, around)
-        && !docking(victim, attacker, around)
+        && !docking(victim, attacker)
         && !entry_test(victim, attacker, around);
     Verdict { answers, stray }
 }
@@ -330,19 +331,15 @@ fn grand_fleet(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool 
 
 /// Docking (@0x3bab7-0x3bb1a): whether an NPC hit `victim` while it docks
 /// (`_AIShipIsDocking` @0x83f95, sub-goal 0xf whatever the goal): with a
-/// ship it plunders, in sub 0xf under goal 0xd or 4 ([`Npc::docking`], see
-/// [`plunder_dock`](crate::traffic::plunder_dock)), or with the player
-/// among `around` to repair it, within its reach (see [`assist`]).
-fn docking(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool {
-    let plunder_dock = victim
-        .docking
-        .is_some_and(|docking| docking.sub == DockSub::Dock);
-    let repair_dock = victim.goal == Goal::Assist(Help::Repair)
-        && around.player.is_some_and(|player| {
-            let reach = assist::reach(Help::Repair, victim.stats.handling.turn_rate);
-            assist::within(&victim.state, &player.state, reach)
-        });
-    matches!(attacker, Attacker::Npc(_)) && (plunder_dock || repair_dock)
+/// ship it plunders, under goal 0xd or 4, or with the player it repairs,
+/// under goal 0xf, in sub 0xf ([`Npc::docking`] in [`DockSub::Dock`], see
+/// [`plunder_dock`](crate::traffic::plunder_dock) and
+/// [`repair_dock`](crate::traffic::repair_dock)).
+fn docking(victim: &Npc, attacker: Attacker) -> bool {
+    matches!(attacker, Attacker::Npc(_))
+        && victim
+            .docking
+            .is_some_and(|docking| docking.sub == DockSub::Dock)
 }
 
 /// The reaction block's entry test (@0x3bb20-0x3bb74): whether a
@@ -1026,30 +1023,31 @@ mod tests {
 
     #[test]
     fn a_ship_repairing_the_player_ignores_an_npcs_hit_but_not_the_players() {
+        use crate::traffic::plunder_dock::{DockSub, Docking};
         let govts = govts(0, 0);
-        let mut helper = at(1, Some(TRADERS), 40.0, 0.0);
-        helper.goal = Goal::Assist(Help::Repair);
-        let npcs = [helper, of(2, Some(PIRATES))];
-        let scene = Scene::new(&npcs, &govts);
+        // Docked with the player in sub 0xf: `_AIShipIsDocking` @0x83f95.
+        let repairing = |docking: Option<DockSub>| {
+            let mut helper = at(1, Some(TRADERS), 40.0, 0.0);
+            helper.goal = Goal::Assist(Help::Repair);
+            helper.docking = docking.map(|sub| Docking { ship: P, sub });
+            [helper, of(2, Some(PIRATES))]
+        };
+        let docked = repairing(Some(DockSub::Dock));
+        let scene = Scene::new(&docked, &govts);
         assert!(!scene.answers(&strike(n(1), n(2))));
         assert!(scene.answers(&strike(n(1), P)), "the player's hit");
-        let mut refuelling = npcs.clone();
-        refuelling[0].goal = Goal::Assist(Help::Refuel);
-        assert!(Scene::new(&refuelling, &govts).answers(&strike(n(1), n(2))));
-        let reach = crate::hail::assist::reach(Help::Repair, npcs[0].stats.handling.turn_rate);
-        for (x, y, inside) in [
-            (reach, -reach, true),
-            (reach + 1.0, 0.0, false),
-            (0.0, reach + 1.0, false),
+        for (npcs, why) in [
+            (repairing(Some(DockSub::Close)), "closing (sub 0xb)"),
+            (repairing(None), "no docking, whatever its reach"),
         ] {
-            let mut moved = npcs.clone();
-            moved[0].state.position = Vec2::new(x, y);
-            assert_eq!(
-                !Scene::new(&moved, &govts).answers(&strike(n(1), n(2))),
-                inside,
-                "({x}, {y})"
+            assert!(
+                Scene::new(&npcs, &govts).answers(&strike(n(1), n(2))),
+                "{why}"
             );
         }
+        let mut refuelling = repairing(None);
+        refuelling[0].goal = Goal::Assist(Help::Refuel);
+        assert!(Scene::new(&refuelling, &govts).answers(&strike(n(1), n(2))));
     }
 
     #[test]

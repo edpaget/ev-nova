@@ -1213,6 +1213,19 @@ mod tests {
     }
 
     #[test]
+    fn docked_with_the_player_to_repair_it_it_never_plunders() {
+        // The plunder test is goal 4 with sub 0xf (`cmpl $0xf0004`
+        // @0x8c74c); a repair is goal 0xf.
+        let mut repairer = docked(
+            holding(Goal::Assist(crate::hail::Help::Repair), Some(P)),
+            P,
+            0,
+        );
+        repairer.provoked = 1.0;
+        assert_eq!(decided(&[repairer]).plunders, None);
+    }
+
+    #[test]
     fn docked_and_dry_it_still_plunders_before_the_dry_drop() {
         let pirate = short_of_ammo(
             docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 0),

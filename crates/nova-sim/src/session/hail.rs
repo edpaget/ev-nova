@@ -607,6 +607,12 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
                 npc.trigger = Trigger::default();
                 npc.provoked = 0.0;
+                // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20): a wait
+                // running is cleared and any docking dropped. Its +0x50,
+                // the hyperspace state, is 0 already for a ship hailed in
+                // flight.
+                npc.ai_wait = 0;
+                npc.docking = None;
             }
         }
     }
@@ -1823,6 +1829,27 @@ mod tests {
         assert_eq!(helper.target, Some(ShipRef::Player));
         let view = press(&mut session, &catalog, 1, 99);
         assert_eq!(view.reply, "Okay, I'm on my way.", "already on its way");
+    }
+
+    #[test]
+    fn a_ship_asked_for_help_drops_its_ai_wait_and_docking() {
+        // `_AIMakeShipRepairPlayer` @0x82df2 and `_AIMakeShipRefuelPlayer`
+        // @0x82dbb: +0x4c = -1.0, sub 0.
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.pilot.reserves.fuel.now = 40.0;
+        let ship = npc(&mut session);
+        ship.ai_wait = 50;
+        ship.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: ShipRef::Npc(NpcId(7)),
+            sub: crate::traffic::plunder_dock::DockSub::Close,
+        });
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 99);
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!((helper.ai_wait, helper.docking), (0, None));
     }
 
     #[test]
