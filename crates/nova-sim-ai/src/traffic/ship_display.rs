@@ -254,10 +254,11 @@ pub fn record(
         }
         Turn::None => 0,
     };
-    // Its `_ShipAccelRate`, slowed by its ion charge (@0x34f57).
+    // Its `_ShipAccelRate`, a sixth while another ship holds it in a
+    // tractor beam and slowed by its ion charge (@0x34f57).
     let own = npc
         .ionization()
-        .slows(flight.handling(npc.stats.handling))
+        .slows(flight.handling(npc.own_handling()))
         .accel;
     let thrust = if !controls.thrust {
         Thrust::None

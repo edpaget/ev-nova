@@ -582,7 +582,7 @@ pub fn fly_jump(
     }
     let handling = npc
         .ionization()
-        .slows(world.flight.handling(npc.stats.handling));
+        .slows(world.flight.handling(npc.own_handling()));
     let inertia = Inertia::of(npc, None, world.flight);
     fly(npc, &handling, world.flight, inertia);
     warp_block(npc, led(npc, leaders), &world.warp);
@@ -1145,6 +1145,30 @@ mod tests {
         assert_eq!(turned(3.0, false), 3.0);
         assert_eq!(turned(0.0, false), 3.0);
         assert_eq!(turned(0.0, true), 1.5, "slowed before its stage runs");
+    }
+
+    #[test]
+    fn a_held_jumper_turns_at_a_third_even_once_its_stage_runs() {
+        use crate::combat::ShipRef;
+        use crate::combat::impact::TractorLock;
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        // Facing up, its jump's aim east: it turns, taking no thrust.
+        let turned = |holder: Option<ShipRef>| {
+            let mut ship = warping(3.0, 0);
+            ship.stats.handling.turn_rate = 12.0;
+            ship.tractor = holder.map(TractorLock::by);
+            ship.state.heading = 0.0;
+            ship.state.velocity = Vec2::ZERO;
+            assert_eq!(
+                fly_jump(&mut ship, &views, &world, false),
+                Some(Outcome::Flying)
+            );
+            ship.state.heading
+        };
+        assert_eq!(turned(None), 12.0);
+        assert_eq!(turned(Some(ShipRef::Player)), (12.0 * 0.333_f64) as f32);
+        assert_eq!(turned(Some(ShipRef::Npc(NpcId(1)))), 12.0, "itself");
     }
 
     #[test]

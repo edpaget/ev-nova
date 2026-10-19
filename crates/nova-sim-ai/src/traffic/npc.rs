@@ -602,13 +602,14 @@ impl Npc {
     }
 
     /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
-    /// × `led_speed`, the factor for the player and the ships it leads
-    /// (see `nova_sim::top_speed`), while it
+    /// ([`Npc::own_handling`], a third while another ship holds it in a
+    /// tractor beam) × `led_speed`, the factor for the player and the
+    /// ships it leads (see `nova_sim::top_speed`), while it
     /// [escorts the player](Npc::escorts_player), whose leader (+0x9a) is
     /// then the player; otherwise its own.
     #[must_use]
     pub fn top_speed(&self, led_speed: f32) -> f32 {
-        let own = self.stats.handling.max_speed;
+        let own = self.own_handling().max_speed;
         if self.escorts_player() {
             own * led_speed
         } else {

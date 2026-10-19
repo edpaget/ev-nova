@@ -274,4 +274,143 @@ mod tests {
         traffic.tick_in(&Keep, pulling(0.5), &[], &mut Draws::of(&[]));
         assert_eq!(velocity(&traffic), drifted(before), "no lock, no pull");
     }
+
+    // The held handling's readers.
+
+    /// NPC 1 of `FAST`, its class turning 3° a tick, held by `holder`.
+    fn holding(holder: Option<ShipRef>) -> Npc {
+        let mut ship = moving(1, Vec2::ZERO);
+        ship.hull.class_turn = 3.0;
+        ship.tractor = holder.map(TractorLock::by);
+        ship
+    }
+
+    fn third(value: f32) -> f32 {
+        (f64::from(value) * 0.333) as f32
+    }
+
+    fn sixth(value: f32) -> f32 {
+        (f64::from(value) * 0.1665) as f32
+    }
+
+    #[test]
+    fn a_held_npcs_own_handling_is_a_third_of_its_speed_and_turn_and_a_sixth_of_its_thrust() {
+        let plain = holding(None);
+        let own = plain.stats.handling;
+        let held = holding(Some(ShipRef::Npc(HOLDER)));
+        assert!(held.held());
+        assert_eq!(
+            held.own_handling(),
+            Handling {
+                max_speed: third(own.max_speed),
+                turn_rate: 1.0,
+                accel: sixth(own.accel),
+            },
+            "3° a tick a third is under the floor"
+        );
+        let self_held = holding(Some(ShipRef::Npc(NpcId(1))));
+        assert!(!self_held.held());
+        assert_eq!(self_held.own_handling(), own);
+        assert_eq!(plain.own_handling(), own);
+    }
+
+    #[test]
+    fn a_held_npcs_top_speed_is_a_third_of_its_own() {
+        use crate::traffic::autopilot::TopSpeeds;
+        let plain = holding(None);
+        let held = holding(Some(ShipRef::Player));
+        let own = plain.stats.handling.max_speed;
+        assert_eq!(held.top_speed(1.5), third(own));
+        assert_eq!(TopSpeeds::own_of(&held).own, third(own));
+        let self_held = holding(Some(ShipRef::Npc(NpcId(1))));
+        assert_eq!(self_held.top_speed(1.5), own);
+        assert_eq!(TopSpeeds::own_of(&self_held).own, own);
+    }
+
+    #[test]
+    fn a_held_npc_turns_and_thrusts_slowed_before_its_ionization() {
+        use crate::flight::FlightRules;
+        let mut held = holding(Some(ShipRef::Player));
+        held.stats.handling.turn_rate = 9.0;
+        held.stats.ion.class_capacity = 400.0;
+        held.ion.charge = 200.0;
+        let own = held.stats.handling;
+        let slowed = held.ionized_handling();
+        assert_eq!(slowed.turn_rate, third(9.0) * 0.5);
+        assert_eq!(slowed.accel, (f64::from(sixth(own.accel)) * 0.5) as f32);
+        assert_eq!(held.turn_rate(), slowed.turn_rate);
+        let divided = FlightRules {
+            thrust_divisor: core::num::NonZeroU32::new(2500).expect("not 0"),
+            ..FlightRules::default()
+        };
+        let flying = held.flying_handling(1.0, divided);
+        let thrust = f64::from(sixth(own.accel)) * 2.0;
+        assert_eq!(flying.accel, (f64::from(thrust as f32) * 0.5) as f32);
+        assert_eq!(flying.turn_rate, slowed.turn_rate);
+    }
+
+    #[test]
+    fn a_held_npc_flown_by_the_autopilot_thrusts_a_sixth_and_turns_a_third() {
+        use crate::flight::FlightRules;
+        use crate::traffic::autopilot::{TopSpeeds, fly};
+        let flown = |holder: Option<ShipRef>, heading: f32| {
+            let mut ship = holding(holder);
+            ship.stats.handling.turn_rate = 9.0;
+            ship.state.position = Vec2::new(0.0, -100.0);
+            ship.state.heading = heading;
+            ship.goal = crate::ai::Goal::JumpOut;
+            let speeds = TopSpeeds::own_of(&ship);
+            fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                None,
+                false,
+                speeds,
+                FlightRules::default(),
+                crate::rulebook::RuleSource::Engine,
+                &mut nova_sim_base::NeverFires,
+            );
+            let turned = crate::flight::shortest_turn(heading, ship.state.heading).abs();
+            (ship.state.velocity.length(), turned)
+        };
+        // Running out up the screen, away from the centre.
+        let other = Some(ShipRef::Npc(HOLDER));
+        let (plain_speed, _) = flown(None, 0.0);
+        let (held_speed, _) = flown(other, 0.0);
+        assert!(plain_speed > 0.0);
+        assert!(
+            (held_speed - plain_speed * 0.1665).abs() < 1e-6,
+            "{held_speed} of {plain_speed}"
+        );
+        let (_, plain_turn) = flown(None, 90.0);
+        let (_, held_turn) = flown(other, 90.0);
+        assert_eq!(plain_turn, 9.0);
+        assert!((held_turn - 9.0 * 0.333).abs() < 1e-4, "{held_turn}");
+        let (self_speed, _) = flown(Some(ShipRef::Npc(NpcId(1))), 0.0);
+        assert_eq!(self_speed, plain_speed, "a self-held ship isn't slowed");
+    }
+
+    #[test]
+    fn a_held_npcs_rush_is_measured_against_its_held_thrust() {
+        use crate::flight::{Controls, FlightRules};
+        use crate::traffic::inertialess::Inertia;
+        use crate::traffic::ship_display::{Thrust, record};
+        let flight = FlightRules::default();
+        let mut ship = holding(Some(ShipRef::Player));
+        let own = flight.handling(ship.own_handling());
+        // A rush, 2.75 times its held thrust: well under its unheld one.
+        let rush = Handling {
+            accel: own.accel * 2.75,
+            ..own
+        };
+        let thrust = Controls {
+            thrust: true,
+            ..Controls::default()
+        };
+        record(&mut ship, &rush, thrust, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.thrust, Thrust::Rush);
+        record(&mut ship, &own, thrust, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.thrust, Thrust::Plain);
+    }
 }

@@ -54,11 +54,13 @@ impl Npc {
         }
     }
 
-    /// Its own handling, its turn and thrust slowed by its charge
-    /// ([`Ionization::slows`]): its `_ShipTurnRate` and `_ShipAccelRate`.
+    /// Its own handling ([`Npc::own_handling`], a third while another
+    /// ship holds it in a tractor beam), its turn and thrust slowed by its
+    /// charge ([`Ionization::slows`]): its `_ShipTurnRate` and
+    /// `_ShipAccelRate`.
     #[must_use]
     pub fn ionized_handling(&self) -> Handling {
-        self.ionization().slows(self.stats.handling)
+        self.ionization().slows(self.own_handling())
     }
 
     /// Its turn rate, `_ShipTurnRate`, slowed by its charge.
@@ -67,15 +69,16 @@ impl Npc {
         self.ionized_handling().turn_rate
     }
 
-    /// How it flies this tick: its handling at top speed `own`, its thrust
-    /// under `flight`, its turn and thrust slowed by its charge.
+    /// How it flies this tick: its own handling ([`Npc::own_handling`])
+    /// at top speed `own`, its thrust under `flight`, its turn and thrust
+    /// slowed by its charge.
     #[must_use]
     pub fn flying_handling(&self, own: f32, flight: FlightRules) -> Handling {
         Handling {
             max_speed: own,
             ..self
                 .ionization()
-                .slows(flight.handling(self.stats.handling))
+                .slows(flight.handling(self.own_handling()))
         }
     }
 }

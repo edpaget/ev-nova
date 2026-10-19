@@ -270,11 +270,12 @@ pub struct TopSpeeds {
 }
 
 impl TopSpeeds {
-    /// `npc`'s own handling's top speed, with no lead.
+    /// `npc`'s own handling's top speed ([`Npc::own_handling`]), with no
+    /// lead.
     #[must_use]
     pub fn own_of(npc: &Npc) -> Self {
         Self {
-            own: npc.stats.handling.max_speed,
+            own: npc.own_handling().max_speed,
             lead: None,
         }
     }
