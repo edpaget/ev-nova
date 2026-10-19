@@ -1244,6 +1244,56 @@ mod tests {
         assert_eq!(session.pilot().cash(), 200, "two days");
     }
 
+    /// A deadly stellar over `session`'s escort `index`, listed and
+    /// shown, and the fight's tick that kills it: its NPC.
+    fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
+        let id = session.fleet[index].expect("placed");
+        let at = session.npc(id).expect("there").state.position;
+        session.sites = vec![LandingSite {
+            flags2: crate::deadly_stellar::DEADLY_STELLAR,
+            frame_size: Some((2, 2)),
+            ..crate::testkit::planet(160, at.x, at.y)
+        }];
+        session.listed = session.sites.clone();
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert!(session.npc(id).is_none(), "killed");
+        id
+    }
+
+    /// A hired escort a deadly stellar frees is forgotten for good, as the
+    /// original's save (`_WritePilotData` @0x72604, @0x7265e, @0x72728),
+    /// system setup (`_SetupShipsInSystem` @0x42baf) and pay
+    /// (`_DoEscortPayment` @0x40148) skip its inactive slot.
+    #[test]
+    fn a_hired_escort_a_deadly_stellar_kills_is_not_saved_placed_again_or_paid() {
+        let mut session = payer(1000, payroll(), 1, RuleSource::Engine);
+        kill_by_a_deadly_stellar(&mut session, 0);
+        let left = [
+            (130, Some(300), false),
+            (129, None, false),
+            (129, None, true),
+        ];
+        assert_eq!(ships(&session), left, "gone from the escorts");
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(saved.escorts(), session.pilot().escorts(), "nor saved");
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 700, "only the 300 wage is paid");
+        assert_eq!(ships(&session), left);
+        assert_eq!(placed_ships(&session), [130, 129, 129], "nor placed again");
+    }
+
+    /// The hire limit (`_CanHireEscorts` @0x57ad) counts the active slots
+    /// the player leads, so one a deadly stellar frees makes room.
+    #[test]
+    fn a_hired_escort_a_deadly_stellar_kills_frees_its_place_under_the_hire_limit() {
+        let fleet = vec![paid(129, Some(100), false); MAX_ESCORTS];
+        let mut session = payer(1000, fleet, 1, RuleSource::Engine);
+        assert!(!session.can_hire_escorts(), "full");
+        kill_by_a_deadly_stellar(&mut session, 0);
+        assert!(session.can_hire_escorts());
+        assert_eq!(session.pilot().escorts().len(), MAX_ESCORTS - 1);
+    }
+
     #[test]
     fn cash_equal_to_the_wages_pays_them_leaving_none() {
         let mut session = payer(400, payroll(), 1, RuleSource::Engine);

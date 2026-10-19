@@ -43,13 +43,32 @@
 //!   takes no share of the fleet's cargo, as the original reaches
 //!   `_DestroyPartialFleetCargo` only from the death branch (@0x2dc37);
 //!   by the other reading, destroyed, it takes its share as any escort
-//!   destroyed. How the original's escort roster forgets a slot freed with
-//!   no death is not checked: see the phase's follow-up.
+//!   destroyed. It is forgotten for good: the original has no roster
+//!   apart from the ship table, an escort being an active slot (+0xb8)
+//!   the player leads, and every reader skips the slot it frees: the
+//!   save's escort loops (`_WritePilotData` @0x72604, @0x7265e,
+//!   @0x72728), the next system's setup (`_SetupShipsInSystem`
+//!   @0x42baf), the daily pay (`_DoEscortPayment` @0x40148), the hire
+//!   limit (`_CanHireEscorts` @0x57ad) and the formation
+//!   (`_AICalcFormationPositions` @0x8515d). `_DeleteAllComputerShips(0)`
+//!   keeps the slot's stale fields (@0x3bf7e-0x3bfa9), which the next
+//!   spawn into it overwrites. So it is not saved, placed again, paid or
+//!   counted, as the engine's dropped record is not.
 //! - **The player** goes destroyed and the hold before the game's end
 //!   starts, as `_HandlePlayer`'s dead branch starts it on its next pass
 //!   (the "goes inactive" test @0x68700). There is no klaxon and no halted
 //!   sound, which belong to the breakup. A player in its escape pod is
-//!   killed too, and its pod's countdown ends.
+//!   killed too, and its pod's countdown ends: the dead branch is taken
+//!   before anything else on the ship (@0x68700, jumping to the active
+//!   path @0x68891 only for an active ship), and the pod's countdown
+//!   (+0xc908, @0x68d95-0x68ddd) and rescue (@0x68de3) are on the active
+//!   path, so a killed pod is never rescued and the hold runs from 0. A
+//!   pod whose countdown runs out on a pass is rescued inside
+//!   `_HandlePlayer`, before `_HandleDeadlyStellars` that pass, so it is
+//!   never killed: the view rescues ([`Session::rescue_if_due`]) before the
+//!   fight's tick, and double time's second pass
+//!   ([`Session::tick_again`]) stops before its fight once a rescue is
+//!   due.
 //!
 //! - **A mission escort** leaves the formation, and the ships the player
 //!   leads re-form without it, by either reading: `_AICalcFormationPositions`
@@ -562,6 +581,46 @@ mod tests {
                 fight(&mut session);
                 assert!(!session.rescue_due, "never rescued");
             }
+        }
+    }
+
+    /// The pod's countdown runs out on the tick a deadly stellar covers
+    /// it: `_HandlePlayer` rescues it (@0x68de3) before
+    /// `_HandleDeadlyStellars` runs that pass, so it is never killed. The
+    /// view rescues ([`Session::rescue_if_due`]) after the tick and before
+    /// the fight.
+    #[test]
+    fn a_pod_rescued_on_the_tick_a_deadly_stellar_covers_it_is_not_killed() {
+        for rules in readings() {
+            let catalog = armed();
+            let on_the_player = deadly_at(140, 0.0, 40.0);
+            let mut session = among(&catalog, &[on_the_player], 1, rules);
+            session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+            session.pod = Some(1);
+            session.tick(Controls::default());
+            assert!(session.rescue_due, "its countdown ran out");
+            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+            fight(&mut session);
+            assert_ne!(session.condition, Condition::Destroyed);
+            assert_eq!(session.player_end, None);
+            assert_eq!(exploded(&session.take_combat_events()), []);
+        }
+    }
+
+    #[test]
+    fn a_pod_whose_countdown_runs_out_on_the_second_pass_is_not_killed() {
+        for rules in readings() {
+            let catalog = armed();
+            let on_the_player = deadly_at(140, 0.0, 40.0);
+            let mut session = among(&catalog, &[on_the_player], 1, rules);
+            session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+            session.pod = Some(1);
+            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            assert!(session.rescue_due, "its countdown ran out");
+            assert_eq!(session.pod, Some(0), "not killed");
+            assert_ne!(session.condition, Condition::Destroyed);
+            assert_eq!(exploded(&session.take_combat_events()), []);
+            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         }
     }
 
