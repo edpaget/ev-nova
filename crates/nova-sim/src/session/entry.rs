@@ -982,12 +982,15 @@ impl Session {
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
                 self.traffic = Traffic::new();
-                // A new traffic reads reused slots' picks and exit cursors by the
-                // rulebook.
+                // A new traffic reads reused slots' picks, exit cursors and
+                // blink timers by the rulebook.
                 self.traffic
                     .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
                 self.traffic
                     .set_reused_slot_exits(self.rules.source_for(RuleKey::ReusedSlotExits));
+                self.traffic.set_reused_slot_blink_timer(
+                    self.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
+                );
                 self.traffic_due = true;
                 self.fleet.clear();
                 self.story.watched.clear();

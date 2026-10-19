@@ -466,7 +466,8 @@ impl Traffic {
     /// Every NPC's display this frame ([`display`]) by `rules`, after the
     /// flight and the fight: a ship of a government `derelict` says is
     /// derelict glowing 0 from its spawn, its spawn's rolls and its random
-    /// lights rolled on `chance`.
+    /// lights rolled on `chance`; then each blink timer kept as its
+    /// berth's ([`Traffic::keep_berth_blink`]).
     pub fn display_ships(
         &mut self,
         derelict: impl Fn(Option<GovtId>) -> bool,
@@ -477,6 +478,7 @@ impl Traffic {
             let derelict = derelict(npc.govt);
             display(npc, derelict, rules, &mut *chance);
         }
+        self.keep_berth_blink();
     }
 }
 

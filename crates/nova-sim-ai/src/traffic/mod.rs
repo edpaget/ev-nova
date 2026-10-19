@@ -130,6 +130,7 @@
 
 mod afterburners;
 pub mod autopilot;
+pub mod berth_blink;
 pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
@@ -193,6 +194,7 @@ use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use crate::skill::random_skill_level;
 use autopilot::{Outcome, TopSpeeds};
+use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use nova_sim_combat::asteroid::Asteroid;
@@ -653,6 +655,10 @@ pub struct Traffic {
     /// which a new ship there takes ([`berth_exits`]): written after each
     /// fight, kept as it dies or leaves, and across systems.
     berth_exits: BerthExits,
+    /// The blink timer (+0xc8ec) of the ship last at each berth, which a
+    /// new ship there takes ([`berth_blink`]): written after each display,
+    /// kept as it dies or leaves, and across systems.
+    berth_blink: BerthBlink,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -721,6 +727,7 @@ impl Traffic {
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
             berth_exits: BerthExits::default(),
+            berth_blink: BerthBlink::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -1824,8 +1831,10 @@ impl Traffic {
             pick,
             ..npc
         };
-        // Nor the exit cursors (+0xc8fe-+0xc905): they are the berth's.
+        // Nor the exit cursors (+0xc8fe-+0xc905) or the blink timer
+        // (+0xc8ec): they are the berth's.
         *npc.armament.exit_cursors_mut() = self.berth_cursors(berth);
+        npc.display.frames.lights.timer = self.berth_blink_timer(berth);
         self.npcs.push(npc);
         id
     }
@@ -2164,10 +2173,12 @@ impl Traffic {
             let skill = random_skill_level(kind.skill_var, &mut *chance);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
-            let (display, fold) = ship_display::NpcDisplay::spawned(
+            let (mut display, fold) = ship_display::NpcDisplay::spawned(
                 &kind.hull.frames,
                 ship_display::Spawn::of(&ship),
             );
+            // No spawn writes the blink timer (+0xc8ec): it is the berth's.
+            display.frames.lights.timer = self.berth_blink_timer(berth);
             let mut npc = Npc {
                 id,
                 berth,

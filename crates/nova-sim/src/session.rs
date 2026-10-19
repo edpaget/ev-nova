@@ -1876,6 +1876,8 @@ impl Session {
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic
             .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
+        self.traffic
+            .set_reused_slot_blink_timer(rules.source_for(RuleKey::ReusedSlotBlinkTimer));
         self.rules = rules;
         self
     }

@@ -672,11 +672,15 @@ mod tests {
         npc.armament.fold_mut().dir = -1;
         npc.display.frames.anim_set = 2;
         npc.display.glow = 20;
+        // Its berth keeps a timer of 9; its own, carried, is 3.
+        npc.display.frames.lights.timer = 9.0;
+        session.traffic.keep_berth_blink();
         let lights = crate::combat::ship_lights::ShipLights {
             intensity: 12.5,
             count: 1,
             timer: 3.0,
         };
+        let npc = session.npc_mut(id).expect("in the system");
         npc.display.frames.lights = lights;
         session.populate(&catalog, &mut NeverFires);
         let id = session.fleet[0].expect("placed");
@@ -684,7 +688,10 @@ mod tests {
         let fold = escort.armament.fold();
         assert_eq!((fold.set, fold.dir), (1, -1), "kept");
         assert_eq!(escort.display.frames.anim_set, 2);
-        assert_eq!(escort.display.frames.lights, lights, "its lights too");
+        assert_eq!(
+            escort.display.frames.lights, lights,
+            "its lights too, its own timer over its berth's"
+        );
         assert_eq!(escort.display.glow, 0, "cleared again");
     }
 
@@ -760,6 +767,25 @@ mod tests {
             Some(SystemId(131))
         );
         assert_eq!(session.ship_display.frames.lights, lights, "a jump");
+    }
+
+    #[test]
+    fn the_reused_slot_blink_timer_reading_is_set_by_the_rulebook_and_outlives_a_new_traffic() {
+        let catalog = displaying(0, 1);
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ReusedSlotBlinkTimer, reading);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            assert_eq!(session.traffic.reused_slot_blink_timer(), reading);
+            let stellar = session.sites[0].id;
+            session
+                .land_at(&catalog, session.pilot.system, stellar)
+                .expect("relocates");
+            assert_eq!(
+                session.traffic.reused_slot_blink_timer(),
+                reading,
+                "re-applied"
+            );
+        }
     }
 
     #[test]
