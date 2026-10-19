@@ -38,8 +38,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::MAX_SHOTS;
+use super::projectile::{Shot, Source};
 use super::shot_layer::ShotLayer;
+use super::{Combat, MAX_SHOTS};
+use crate::rulebook::RuleSource;
 
 /// The original's shot slots (see the module docs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -158,6 +160,111 @@ impl ShotSlots {
     /// place in its layer and its roll (see the module docs).
     pub fn clear(&mut self) {
         self.held.clear();
+    }
+}
+
+impl Combat {
+    /// The slot a shot spawned now takes ([`ShotSlots::first_free`]), the
+    /// shots in flight taking theirs.
+    pub(super) fn first_free_slot(&self) -> Option<usize> {
+        let taken = self.shots.iter().map(|shot| shot.slot);
+        self.slots.first_free(taken, self.capped)
+    }
+
+    /// Puts `shot` in flight at the first free slot, as `_SpawnShot` does
+    /// (@0x3e5ab-0x3e5ce), keeping the shots in slot order: its slot's
+    /// sprite is put in its layer ([`ShotSlots::put`]). A ship's own shot
+    /// (a ship source, not a sub-munition) writes its miss roll into the
+    /// slot (@0x3e5e1-0x3e5f7, @0x3e89e); any other writes none, and by
+    /// [`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)'s
+    /// engine reading carries the roll the slot's last ship-fired shot
+    /// left ([`ShotSlots::roll`]). The slot it took, if it found one.
+    pub(super) fn put_in_flight(&mut self, mut shot: Shot) -> Option<usize> {
+        let free = self.first_free_slot()?;
+        shot.slot = free;
+        self.slots.put(free, shot.layer);
+        if shot.generation == 0 && matches!(shot.source, Source::Ship(_)) {
+            self.slots.write_roll(free, shot.miss_roll);
+        } else if self.reused_roll == RuleSource::Engine {
+            shot.miss_roll = self.slots.roll(free);
+        }
+        let at = self.shots.partition_point(|flying| flying.slot < free);
+        self.shots.insert(at, shot);
+        Some(free)
+    }
+
+    /// Moves the shot in flight in `slot` to `layer`, as
+    /// `_PutSpriteInLayer` does ([`ShotSlots::put`]).
+    pub(super) fn move_to_layer(&mut self, slot: usize, layer: ShotLayer) {
+        self.slots.put(slot, layer);
+        for shot in self.shots.iter_mut().filter(|shot| shot.slot == slot) {
+            shot.layer = layer;
+        }
+    }
+
+    /// The indices of the shots in flight in the order each layer keeps
+    /// them, layer by layer, bottom first: by
+    /// [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
+    /// reading, the order their slots entered the layer
+    /// ([`ShotSlots::rank`]); by the other, firing order.
+    pub(super) fn entry_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.shots.len()).collect();
+        let by_entry = self.shot_overlap == RuleSource::Engine;
+        order.sort_by_key(|&index| {
+            let shot = &self.shots[index];
+            let entry = if by_entry {
+                self.slots
+                    .rank(shot.slot)
+                    .map_or(i64::MAX, |(_, entry)| entry)
+            } else {
+                i64::from(shot.id.0)
+            };
+            (shot.layer, entry)
+        });
+        order
+    }
+
+    /// The shots in flight in the order they are drawn, bottom first: by
+    /// layer ([`SpriteLayer`](crate::sprite_layer::SpriteLayer)), each
+    /// layer in the order it keeps them (see the module docs).
+    #[must_use]
+    pub fn shots_drawn(&self) -> Vec<&Shot> {
+        self.entry_order()
+            .into_iter()
+            .map(|index| &self.shots[index])
+            .collect()
+    }
+
+    /// Has each shot layer drawn and walked in the order `source` reads
+    /// ([`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)): by default,
+    /// the engine's, the order its slots entered it.
+    pub fn set_shot_overlap(&mut self, source: RuleSource) {
+        self.shot_overlap = source;
+    }
+
+    /// The shot slots' history, each slot's place in its layer and its
+    /// leftover roll, none held: what outlives the fight
+    /// ([`SlotSprites::shots`](crate::ship_layer::SlotSprites::shots)).
+    #[must_use]
+    pub fn shot_slots(&self) -> ShotSlots {
+        let mut history = self.slots.clone();
+        history.clear();
+        history
+    }
+
+    /// Starts the shot slots from `history`, the places and rolls a fight
+    /// earlier in the run left ([`Combat::shot_slots`]), none held.
+    pub fn set_shot_slots(&mut self, history: ShotSlots) {
+        self.slots = history;
+        self.slots.clear();
+    }
+
+    /// Has a sub-munition carry its slot's leftover miss roll as `source`
+    /// reads
+    /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
+    /// by default, the engine's, it does; by the other reading, none.
+    pub fn set_reused_shot_slot_roll(&mut self, source: RuleSource) {
+        self.reused_roll = source;
     }
 }
 
