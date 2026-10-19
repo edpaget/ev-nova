@@ -184,8 +184,8 @@ pub struct Hail<'a> {
     /// the ship's (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5, see
     /// [`Hail::new`]).
     pub threatened_by_enemy: bool,
-    /// Every NPC in the system, the ship hailed among them: what battle
-    /// help picks its target from ([`Hail::threats_to_player`]).
+    /// Every NPC in the system, the ship hailed among them: what a helper
+    /// picks its target from (see [`battle`]).
     pub npcs: &'a [Npc],
     /// The help the player needs, if any.
     pub need: Option<Help>,
@@ -217,13 +217,26 @@ impl Hail<'_> {
         self.npc.escort.is_some()
     }
 
-    /// Whether the ship hailed is a mission escort
-    /// ([`Npc::mission_escort`]): not the player's hired escort, but, as
-    /// the original's AI type above 4, "just an escort" to Request
-    /// Assistance.
+    /// Whether the ship hailed is of the original's AI type above 4, which
+    /// Request Assistance answers as an escort: "just an escort" when busy
+    /// (`_DoCommDialog` @0x962ee-0x96304), free help at any threat
+    /// (@0x964f8-0x9650f), and no refuel or repair (@0x96564-0x9656c).
+    /// The writers of +0x88 above 4 are a carried fighter's launch (5,
+    /// `_LaunchFighter` @0x3d771) and an escort's (6): a fleet's escorts
+    /// (`_HyperSpawnFleet` @0x421dc, `_SetupShipsInSystem` @0x430b6,
+    /// `_AICheckParentExists` @0x89491), a pirate's taken ship
+    /// (`_AIPlunderShipContents` @0x8495c), a mission escort (`_AIDispatch`
+    /// @0x8fc19) and the player's own (`_SpawnEscort` @0x3fed1, captures).
+    /// So: a ship that [escorts the player](Npc::escorts_player), escorts
+    /// a fleet lead ([`Npc::leader`]), or was launched from a carrier
+    /// ([`Npc::carrier`]); not one the player has paid off, which the
+    /// bribe made a wimpy trader (@0x961f8). AI types above 4 from data
+    /// are folded into the wimpy trader at the spawn
+    /// ([`AiType::from_raw`](crate::traffic::npc::AiType::from_raw)).
     #[must_use]
-    pub fn mission_escort(&self) -> bool {
-        self.npc.mission_escort()
+    pub fn escort_ai(&self) -> bool {
+        let npc = self.npc;
+        !npc.spared && (npc.escorts_player() || npc.leader.is_some() || npc.carrier.is_some())
     }
 
     /// Whether the ship hailed is a fighter out of a bay (see
@@ -237,7 +250,10 @@ impl Hail<'_> {
 impl<'a> Hail<'a> {
     /// Every NPC but the ship hailed that threatens the player
     /// ([`Npc::threatens_player`]), in the system's order: the ships
-    /// `_AIFightEnemyThreatToPlayer` (@0x82c9f-0x82d11) picks among.
+    /// `_AIFightEnemyThreatToPlayer` (@0x82c9f-0x82d11) picks among, by
+    /// its inline test (+0x70 == 0, AI state 3 or 4, @0x82cda-0x82cef), so
+    /// not a ship attacking one the player leads. Rank battle help and a
+    /// paid helper pick from these ([`battle`]).
     pub fn threats_to_player(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
         let me = self.npc.id;
         self.npcs
@@ -571,8 +587,10 @@ impl HailOptions {
     /// Nova's five, Greetings, Request Assistance, Beg For Mercy, Release
     /// and Use As Escort, as `rulebook` chooses: the first three's
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
-    /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) and Use As
-    /// Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
+    /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice), Request
+    /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget)
+    /// and [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp),
+    /// and Use As Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
     /// entries. Release is for the player's escorts and Use As Escort for
     /// the rest, so the two are never listed together.
     #[must_use]
