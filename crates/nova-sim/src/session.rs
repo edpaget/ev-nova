@@ -394,6 +394,7 @@ mod iff_scramblers;
 mod inertialess;
 mod jump_collapse;
 mod launch_frame;
+mod lost_target;
 mod map;
 mod map_borders;
 mod map_click;
@@ -2081,12 +2082,14 @@ impl Session {
         self.player_move(controls, pass);
     }
 
-    /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: the
+    /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
+    /// its lost-target check (see the `lost_target` module), then the
     /// tribbles and perishables on a due frame, the Red Alert's check, and
     /// its blink on the advance pass alone, as `_HandleAlertSprite` runs
     /// on it alone, the tutorial's hints, the target brackets, and the
     /// cargo boxes scooped and aged.
     fn before_move(&mut self, frame: i16, pass: GamePass) {
+        self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
@@ -2443,7 +2446,7 @@ impl Session {
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
@@ -2580,7 +2583,7 @@ impl Session {
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// The NPCs answer the fight's strikes since the last traffic tick
@@ -3269,22 +3272,6 @@ impl Session {
             };
             let strength = i64::from(self.arsenal.strength(victim.ship));
             self.pilot.combat_rating = rating::credit(self.pilot.combat_rating, strength);
-        }
-    }
-
-    /// Lets go of the target once it is no longer in the system (it was
-    /// destroyed, landed or jumped out, or the system was populated
-    /// afresh) or no longer targetable (it is breaking up, or cloaked and
-    /// the player cannot target cloaked ships), as the original does every
-    /// frame. A target of an untargetable type is kept: the original's
-    /// check (`_HandlePlayer` @0x686a4-0x686ee) never reads the bit.
-    fn clear_lost_target(&mut self) {
-        let cloaked_ok = self.scanner().targets;
-        if self
-            .target()
-            .is_none_or(|npc| !targeting::targetable(npc, cloaked_ok))
-        {
-            self.target = None;
         }
     }
 
@@ -6199,7 +6186,7 @@ impl Session {
     fn leave(&mut self, id: NpcId) {
         self.drop_quarry(id);
         self.traffic.remove(id);
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// Assigns the ship captured, as `choice` says, and gives what it
@@ -18637,14 +18624,16 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.target = Some(NpcId(0));
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        // `_HandlePlayer`'s check, at the head of the pass (see the
+        // `lost_target` module).
+        session.tick(Controls::default());
         assert_eq!(session.target, None);
         assert_eq!(session.select_target(TargetPick::Nearest), None, "unpicked");
         let targets = scanning(crate::cloak::SCAN_TARGET);
         let mut session = holding_260(&targets);
         session.target = Some(NpcId(0));
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
-        session.tick_traffic(&targets, &Peaceful, &mut NeverFires);
+        session.tick(Controls::default());
         assert_eq!(session.target, Some(NpcId(0)), "it can");
         session.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
@@ -18763,7 +18752,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.target = Some(NpcId(0));
         untargetable_attacker(&mut session);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        session.tick(Controls::default());
         assert_eq!(session.target, Some(NpcId(0)));
     }
 
@@ -21081,29 +21070,6 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         assert_eq!(target_id(&session), Some(NpcId(0)), "a disabled target");
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
-    }
-
-    #[test]
-    fn the_target_is_cleared_as_soon_as_it_starts_breaking_up() {
-        let catalog = armed();
-        let mut session = facing_an_npc(&catalog, 180);
-        session.select_target(TargetPick::Next);
-        session.hold_trigger(FIRE);
-        for _ in 0..200 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
-            let events = session.take_combat_events();
-            if events
-                .iter()
-                .any(|event| matches!(event, CombatEvent::BreakingUp { .. }))
-            {
-                assert_eq!(npc_ids(&session), [NpcId(0)], "still breaking up");
-                assert_eq!(target_id(&session), None);
-                assert_eq!(session.target, None);
-                return;
-            }
-            assert_eq!(target_id(&session), Some(NpcId(0)));
-        }
-        panic!("never broke up: {:?}", session.npcs());
     }
 
     #[test]

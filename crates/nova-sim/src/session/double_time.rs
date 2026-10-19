@@ -850,7 +850,10 @@ mod tests {
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
-        session.target = Some(NpcId(0));
+        // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
+        // @0x686a4), so the hit is a stray one: provoked past forgiving
+        // through the passes before it.
+        npc.stray = 2.0 * crate::ai::answer_flag::STRAY_THRESHOLD;
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()

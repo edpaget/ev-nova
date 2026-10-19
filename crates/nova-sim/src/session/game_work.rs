@@ -89,8 +89,10 @@
 //! on the terms the session works out for it. A phase that lands hits is
 //! settled at once ([`Session::settle_landed`]): the player's downing
 //! lines, the pushes, the NPCs' fates, the strikes' answers, crimes and
-//! kills, and a target lost. What the whole pass leaves is settled once,
-//! after its last phase ([`Session::fight_tail`]).
+//! kills. A target that starts breaking up, emerging or cloaked in a
+//! phase stays the target through the pass and is let go at the next
+//! pass's head (see the `lost_target` module). What the whole pass leaves
+//! is settled once, after its last phase ([`Session::fight_tail`]).
 
 use super::{FightTerms, NpcBefore, Session, TrafficMarks};
 use crate::ai::Behaviour;
@@ -440,7 +442,8 @@ impl Session {
     /// ship (see the `player_downed` module); the pushes; each NPC newly
     /// downed raising its fate; the strikes weighed, answered for crimes
     /// and kills ([`Session::settle_strikes`]) and kept for the NPCs'
-    /// answers; and a target lost let go.
+    /// answers. A target the phase left dying or cloaked is kept: the next
+    /// pass's head lets go of it (see the `lost_target` module).
     ///
     /// Between the fates and the strikes, every escort the phase left
     /// disabled leaves the fleet ([`Session::lose_escorts`]): its record,
@@ -474,7 +477,6 @@ impl Session {
         self.sync_fleet();
         self.lose_escorts();
         self.settle_strikes((strikes, losses), was, rules.law, chance);
-        self.clear_lost_target();
     }
 
     /// Runs `phase`, one that lands hits, as [`Session::with_fighters`]
@@ -523,7 +525,7 @@ impl Session {
     /// bays put in the system (see the `fighters` module); each dying
     /// NPC's escape pods (see the `npc_escape` module); the fleet kept in
     /// step; the escorts lost; the NPCs' self-repair; each NPC destroyed
-    /// taken out; the fighters orphaned; a target lost let go; the
+    /// taken out; the fighters orphaned; a target gone let go; the
     /// stellars seen; the ships laid out; and the heading each ship is
     /// drawn at noted, which its next tick's shots leave from.
     pub(super) fn fight_tail(&mut self, start: &PassStart, rules: Rules, chance: &mut dyn Chance) {
@@ -542,7 +544,7 @@ impl Session {
         self.self_repair(rules, &mut *chance);
         self.take_out_the_destroyed(chance);
         self.orphan_fighters();
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
         self.see_stellars();
         self.hold_derelicts();
         self.lay_out_ships();
@@ -700,7 +702,10 @@ mod tests {
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.mode = Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
-        session.target = Some(NpcId(0));
+        // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
+        // @0x686a4), so the hit is a stray one: provoked past forgiving
+        // through the passes before it.
+        npc.stray = 2.0 * crate::ai::answer_flag::STRAY_THRESHOLD;
         let behaviour = Recording::default();
         until_hit(&mut session, &catalog, &behaviour);
         assert_eq!(session.npcs()[0].mode, Mode::HeldAtGate { ticks_left: 19 });

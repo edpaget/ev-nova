@@ -1024,7 +1024,7 @@ mod tests {
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_err(), "{hailed:?}");
         assert!(asked.is_empty());
-        session.clear_lost_target();
+        session.let_go_of_lost_target();
         assert_eq!(
             session.target, None,
             "as the original lets it go (@0x686a4)"
