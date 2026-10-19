@@ -84,7 +84,7 @@ fn a_breakup_the_collision_passes_begin_starts_at_that_ticks_display() {
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
     assert_eq!(*fighters[0].condition, starting(0), "unset by the passes");
-    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
     combat.fly_shots(&mut fighters, arena, &mut NeverFires);
     combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
     assert_eq!(*fighters[0].condition, starting(5), "set at its display");

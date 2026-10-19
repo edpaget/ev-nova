@@ -393,6 +393,7 @@ mod hover;
 mod iff_scramblers;
 mod inertialess;
 mod jump_collapse;
+mod launch_frame;
 mod map;
 mod map_borders;
 mod map_click;
@@ -2544,6 +2545,13 @@ impl Session {
 
     /// The session's work after the traffic's AI, drawing on `chance`: the
     /// fleets announced and the comm calls answered.
+    ///
+    /// In [`Session::game_work`] it runs after `_AIDispatch`'s whole loop
+    /// (`Session::dispatch_npcs`), so a fighter launched and thinking in
+    /// the loop has its calls answered with the rest; the original says
+    /// each in its own slot's `_AIDispatch`. Nothing between the think and
+    /// this draws a frame, opens a dialog, lands, jumps or saves the
+    /// pilot, so the deferral crosses no boundary the player sees.
     fn after_traffic_ai(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.announce_fleets(chance);
         self.answer_comm_calls(chance);
@@ -2930,7 +2938,7 @@ impl Session {
         self.player_display_step(pass, rules, chance);
         self.collision_passes(pass, rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, chance);
+            combat.defend_npcs(fighters, arena, None, false, chance);
         });
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fly_shots(fighters, arena, chance);

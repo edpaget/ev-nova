@@ -105,7 +105,7 @@ fn a_spent_shots_slot_is_held_through_the_npcs_point_defence_and_freed_by_handle
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
-    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
     assert_eq!(slots(&combat), [0], "spent");
     assert!(combat.slots.is_held(1), "held through point defence");
     assert_eq!(combat.first_free_slot(), Some(2));
@@ -153,7 +153,7 @@ fn a_shot_spent_on_a_stellar_holds_its_slot_through_the_npcs_point_defence() {
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
-    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
     assert_eq!(slots(&combat), [0], "spent on the stellar");
     assert!(combat.slots.is_held(1), "held through point defence");
     assert_eq!(combat.first_free_slot(), Some(2));

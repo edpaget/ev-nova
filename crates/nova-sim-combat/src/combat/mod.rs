@@ -1323,7 +1323,7 @@ impl Combat {
         }
         self.display_player(fighters, arena);
         self.test_hits(fighters, arena, scenery, chance);
-        self.defend_npcs(fighters, arena, chance);
+        self.defend_npcs(fighters, arena, None, false, chance);
         self.fly_shots(fighters, arena, chance);
         self.handle_npcs(fighters, arena, chance);
         self.close_tick(fighters, arena, chance);

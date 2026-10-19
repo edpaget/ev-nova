@@ -19,6 +19,13 @@
 //! second launch on a snipe frame (@0x8732f), when its first left a bay
 //! ready, takes the next free slot before any higher slot's AI runs.
 //!
+//! The room the think leaves is kept for the tick: a fighter launched in
+//! the AI loop that thinks at its launch ([`Traffic::think_launched`])
+//! claims from it, after every existing carrier's claim. The original
+//! lets that fighter's launch take a slot before a higher existing
+//! carrier's (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44);
+//! no stock fighter carries a bay.
+//!
 //! [`Surroundings::fighter_room`]: crate::ai::Surroundings::fighter_room
 
 use std::collections::BTreeSet;

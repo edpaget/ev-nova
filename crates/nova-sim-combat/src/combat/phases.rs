@@ -14,6 +14,7 @@ use super::{
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
 use crate::govt::Governments;
+use crate::ship_layer::Slot;
 
 /// What a fight's phase is fought by besides its ships: the pass, each
 /// sub-munition's weapon, the relations between governments, the rules,
@@ -104,18 +105,32 @@ impl Combat {
     /// ([`GamePass::Again`]), as `_AIDispatch` runs on the advance pass
     /// alone (@0x4402a).
     ///
+    /// The loop is resumable: it takes only the slots above `after`, and
+    /// with `stop` set it stops right after the first slot whose turn
+    /// launched a fighter, returning that slot; it returns none once it
+    /// reaches the end. `_LaunchFighter` marks the fighter's slot active
+    /// at once (`_GenericRandomShipSpawn` @0x3c90b, @0x3d680) and the loop
+    /// rereads each slot as it comes, so the session puts the fighter in
+    /// the system and resumes after that slot with it among `fighters`, a
+    /// candidate of every later slot's point defence and, in a slot above
+    /// its carrier's, taking its own turn
+    /// (`nova_sim::Session::dispatch_npcs`).
+    ///
     /// The original interleaves each NPC's point defence and launches with
-    /// its decision, slot by slot; the session runs every decision first
-    /// (`nova_sim::Session::game_work`). Both settle before the frame is
-    /// drawn.
+    /// its decision, slot by slot; the session runs every existing NPC's
+    /// decision first and a launched fighter's at its launch
+    /// (`nova_sim::Session::dispatch_npcs`). Both settle before the frame
+    /// is drawn.
     pub fn defend_npcs(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        after: Option<Slot>,
+        stop: bool,
         chance: &mut (impl Chance + ?Sized),
-    ) {
+    ) -> Option<Slot> {
         if arena.pass == GamePass::Again {
-            return;
+            return None;
         }
         self.field = arena.field;
         self.note_slots(fighters);
@@ -123,7 +138,7 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let defence = (arena.rules.defence, arena.govts);
-        self.dispatch_npcs(fighters, &targets, defence, chance);
+        self.dispatch_npcs(fighters, &targets, defence, (after, stop), chance)
     }
 
     /// The player's shields and armour regenerate, as `_HandlePlayer` runs

@@ -28,10 +28,22 @@
 //!
 //! A launch shares no shot slot or exit cursor with point defence:
 //! `_LaunchFighter` spawns a ship (`_GenericRandomShipSpawn`) and writes
-//! nothing of its carrier's exits. The fighter, placed after the whole
-//! loop, neither thinks nor is a later slot's candidate until the next
-//! tick, where the original's loop reaches its slot in its launch frame
-//! (rdm:phase/weapons-fidelity/phase-44-fighter-launched-into-a-later-slot-thinks-on-its-launch-frame).
+//! nothing of its carrier's exits.
+//!
+//! **The fighter in the loop.** `_LaunchFighter` marks the fighter's slot
+//! active at once (`_GenericRandomShipSpawn` @0x3c90b, @0x3d680), and the
+//! loop rereads each slot as it comes, so the loop is resumable
+//! ([`Combat::defend_npcs`]'s `after` and `stop`): the session stops it
+//! after the slot that launched, puts the fighter in the system, gives a
+//! fighter in a slot above its carrier's its think, and resumes after
+//! that slot with the fighter among the ships, a candidate of every later
+//! slot's point defence and, above its carrier, taking its own turn
+//! (`nova_sim::Session::dispatch_npcs`, by
+//! [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)).
+//! An existing NPC in a higher slot still thinks before the loop, blind
+//! to the fighter, and a launched fighter's own launch settles against
+//! the room left after every existing claim
+//! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
 
 use super::defence::Candidate;
 use super::projectile::Target;
@@ -39,28 +51,35 @@ use super::{BAY_LAUNCH_PRIORITY, Combat, Fighter, FireSound, PointDefenceRule, S
 use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::rulebook::RuleSource;
+use crate::ship_layer::Slot;
 
 impl Combat {
-    /// `_AIDispatch`'s loop over the NPCs among `fighters` (see the module
-    /// docs): by slot, each one's goal-4 launch, its point defence
-    /// ([`Combat::defend_ship`]) at the ships as they were when the step
-    /// began, then the snipe's launch, aimed among `targets`, point
-    /// defence asking `rule` as [`Combat::defend_ship`] does, drawing on
-    /// `chance`.
+    /// `_AIDispatch`'s loop over the NPCs among `fighters` in slots above
+    /// `run`'s first (see the module docs): by slot, each one's goal-4
+    /// launch, its point defence ([`Combat::defend_ship`]) at the ships as
+    /// they were when the run began, then the snipe's launch, aimed among
+    /// `targets`, point defence asking `rule` as [`Combat::defend_ship`]
+    /// does, drawing on `chance`. With `run`'s second set, it stops right
+    /// after a slot whose turn launched a fighter: that slot, or none once
+    /// it reaches the end.
     pub(super) fn dispatch_npcs(
         &mut self,
         fighters: &mut [Fighter],
         targets: &[Target],
         defence: (&dyn PointDefenceRule, &Governments),
+        run: (Option<Slot>, bool),
         chance: &mut dyn Chance,
-    ) {
+    ) -> Option<Slot> {
+        let (after, stop) = run;
         let candidates: Vec<Candidate> = fighters.iter().map(Fighter::as_candidate).collect();
         let mut order: Vec<usize> = (0..fighters.len())
             .filter(|&index| fighters[index].ship != ShipRef::Player)
+            .filter(|&index| after.is_none_or(|after| fighters[index].slot > after))
             .collect();
         order.sort_by_key(|&index| fighters[index].slot);
         for index in order {
             let fighter = &mut fighters[index];
+            let launched = self.sorties.len();
             let trigger = fighter.trigger;
             if trigger.bays {
                 self.launch_bay(fighter, targets, chance);
@@ -71,7 +90,11 @@ impl Combat {
             if trigger.bays_after {
                 self.launch_bay(fighter, targets, chance);
             }
+            if stop && self.sorties.len() > launched {
+                return Some(fighter.slot);
+            }
         }
+        None
     }
 
     /// One `_AILaunchFighter` of `fighter`'s

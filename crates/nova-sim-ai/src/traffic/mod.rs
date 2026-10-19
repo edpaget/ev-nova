@@ -157,6 +157,7 @@ pub mod gate_entry;
 mod hit_goal_tests;
 pub mod inertialess;
 mod launch_room;
+mod launch_think;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
@@ -661,6 +662,10 @@ pub struct Traffic {
     /// holding their berths and their persons, but not in the system:
     /// not ticked, not drawn, and not among [`Traffic::npcs`].
     left_behind: BTreeMap<SystemId, Vec<LeftShip>>,
+    /// The berths left for fighters after the tick's think
+    /// ([`Traffic::think_holding`]), for a fighter launched in the AI loop
+    /// to claim from ([`Traffic::think_launched`]); none before the first.
+    launch_room: Option<LaunchRoom>,
 }
 
 /// What becomes of the ships [`Traffic::retarget`] does not take along.
@@ -725,6 +730,7 @@ impl Traffic {
             berth_picks: BerthPicks::default(),
             berth_exits: BerthExits::default(),
             left_behind: BTreeMap::new(),
+            launch_room: None,
         }
     }
 
@@ -950,11 +956,37 @@ impl Traffic {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.forget_provocations();
+        let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
+        let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
+        self.launch_room = Some(left);
+        let freed = pod_flight::count_down(&mut self.npcs);
+        self.freed.extend(freed);
+    }
+
+    /// The per-NPC part of the think half, for each NPC `thinks` picks,
+    /// in `world`, deciding as `behaviour` says, rolling on `chance`: the
+    /// decisions, the board waits, the comm calls and the quote gate, the
+    /// plunders, the goals, pursuit, the fire commands and targets settled
+    /// against `room`, the gate waits and the cloak thinks. Every NPC it
+    /// does not pick is left exactly as it was: it decides nothing, its
+    /// trigger is not settled again, it holds no gate wait and its cloak
+    /// does not think. What room is left after.
+    fn think_npcs(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: &World,
+        mut room: LaunchRoom,
+        thinks: impl Fn(&Npc) -> bool,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> LaunchRoom {
+        let picked: Vec<bool> = self.npcs.iter().map(&thinks).collect();
         let due: Vec<bool> = self
             .npcs
             .iter()
-            .map(|npc| {
-                matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
+            .zip(&picked)
+            .map(|(npc, &picked)| {
+                picked
+                    && matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
                     && npc.condition == Condition::Intact
                     && !pod_flight::is_pod(npc)
                     && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
@@ -991,8 +1023,8 @@ impl Traffic {
         let plunders = plunder::plunders(&decisions);
         self.take_goals(decisions, world.player.map(|player| player.state.position));
         board_wait::lapse(&mut self.npcs, &due);
-        self.plunder(plunders, &world, chance);
-        self.pursue(&world, &due, &keeps, chance);
+        self.plunder(plunders, world, chance);
+        self.pursue(world, &due, &keeps, chance);
         plunder::drift(&mut self.npcs, &due);
         // Whether a fighter launched now finds a slot, the test
         // `_LaunchFighter` makes (@0x3d648-0x3d662), read slot by slot as
@@ -1001,11 +1033,13 @@ impl Traffic {
         // runs (see `launch_room`). A kept trigger, of an NPC not deciding,
         // takes its berth too, its launches cleared with none left until
         // it next decides.
-        let mut room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let mut around = world.around(&self.npcs);
         let mut commands: Vec<(Trigger, Option<Option<ShipRef>>)> =
             self.npcs.iter().map(|npc| (npc.trigger, None)).collect();
         for index in launch_room::berth_order(&self.npcs) {
+            if !picked[index] {
+                continue;
+            }
             let npc = &self.npcs[index];
             around.fighter_room = room.any();
             let (trigger, target) = if due[index] {
@@ -1030,12 +1064,29 @@ impl Traffic {
                 npc.target = target;
             }
         }
+        self.take_gate_waits(behaviour, world, &picked);
+        let player = world.player.map(|player| player.state);
+        self.think_cloaks(player, &picked);
+        room
+    }
+
+    /// Each NPC `picked` says (one flag an NPC) that waits at its gate
+    /// holds its gate wait in `world`, as `behaviour` says: its trigger,
+    /// its pick, and its target dropped or kept.
+    fn take_gate_waits(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: &World,
+        picked: &[bool],
+    ) {
         let around = world.around(&self.npcs);
         let waits: Vec<Option<GateWait>> = self
             .npcs
             .iter()
-            .map(|npc| {
-                launch_room::waits_at_gate(npc.mode).then(|| behaviour.gate_wait(npc, &around))
+            .zip(picked)
+            .map(|(npc, &picked)| {
+                (picked && launch_room::waits_at_gate(npc.mode))
+                    .then(|| behaviour.gate_wait(npc, &around))
             })
             .collect();
         for (npc, wait) in self.npcs.iter_mut().zip(waits) {
@@ -1052,10 +1103,6 @@ impl Traffic {
                 }
             }
         }
-        let player = world.player.map(|player| player.state);
-        self.think_cloaks(player);
-        let freed = pod_flight::count_down(&mut self.npcs);
-        self.freed.extend(freed);
     }
 
     /// The fly half of a tick in `world` (steps 6 to 8 of the module
@@ -1429,13 +1476,19 @@ impl Traffic {
             .collect()
     }
 
-    /// Each flying NPC's cloak think (`_AIHandleCloaking`, see [`cloak`]),
+    /// Each flying NPC `picked` says (one flag an NPC) thinks its cloak
+    /// (`_AIHandleCloaking`, see [`cloak`]),
     /// knowing whether it is disabled, retreats (fleeing), and where the
     /// ship it attacks is, among the NPCs and the `player`.
-    fn think_cloaks(&mut self, player: Option<ShipState>) {
+    fn think_cloaks(&mut self, player: Option<ShipState>, picked: &[bool]) {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
-        for npc in self.npcs.iter_mut().filter(|npc| npc.mode == Mode::Flying) {
+        for (npc, _) in self
+            .npcs
+            .iter_mut()
+            .zip(picked)
+            .filter(|(npc, picked)| **picked && npc.mode == Mode::Flying)
+        {
             let attacking = npc.goal.attacking().and_then(|ship| match ship {
                 ShipRef::Player => player,
                 ShipRef::Npc(id) => states

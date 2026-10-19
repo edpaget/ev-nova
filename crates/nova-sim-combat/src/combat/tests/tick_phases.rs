@@ -201,7 +201,7 @@ fn a_lock_lands_in_the_shot_step() {
         combat.defend_player(&mut fighters, arena, &mut NeverFires);
         combat.fire_player(&mut fighters, arena, &mut NeverFires);
         combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
-        combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+        combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
         combat.fly_shots(&mut fighters, arena, &mut NeverFires);
         let shot_step = combat.take_strikes();
         locked.extend(

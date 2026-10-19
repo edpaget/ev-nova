@@ -23,9 +23,12 @@
 //!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the scans,
 //!    then every NPC's point defence and fighter launches, slot by slot
 //!    (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
-//!    @0x8732f; [`Combat::defend_npcs`]), and the fighters launched put in
-//!    the system (`_LaunchFighter`, see the `fighters` module), before
-//!    `_HandleShot`, so they move on their launch frame.
+//!    @0x8732f; [`Combat::defend_npcs`]), each fighter launched put in the
+//!    system as its slot's turn ends (`_LaunchFighter`, see the `fighters`
+//!    module), a fighter above its carrier thinking then, and the loop
+//!    resumed after that slot ([`Session::dispatch_npcs`]); then the
+//!    fleets announced and the comm calls answered. All before
+//!    `_HandleShot`, so the fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
 //!    locks, their hits settled and answered.
 //! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
@@ -53,8 +56,12 @@
 //!   the same pass and before the frame is drawn, where
 //!   `_HandleShipDisplay` runs it at the ship's display
 //!   (@0x2daa2-0x2dcfc).
-//! - Every NPC's point defence and launches run after every NPC's
-//!   decision, where `_AIDispatch` interleaves them slot by slot.
+//! - Every existing NPC's point defence and launches run after every
+//!   existing NPC's decision, where `_AIDispatch` interleaves them slot by
+//!   slot; a fighter launched in the loop decides at its launch.
+//! - The fleets announced and the comm calls answered come after the
+//!   whole AI loop, where `_AIDispatch` says each in its own slot (see
+//!   [`Session::dispatch_npcs`]).
 //! - What the close strikes (the beams, the shockwaves) is answered by the
 //!   caller after the pass ([`Session::answer_strikes`]), before the frame
 //!   is drawn.
@@ -66,11 +73,11 @@
 //!   through [`Session::game_work`] (rdm task
 //!   `retire-the-sessions-separate-pass-parts`).
 //!
-//! **Filed.** A fighter an NPC launches is put in the system after the
-//! whole slot loop, so it neither thinks nor is a later slot's
-//! point-defence candidate until the next tick, where the original's loop
-//! reaches its slot in its launch frame: that crosses a drawn frame
-//! (rdm:phase/weapons-fidelity/phase-44-fighter-launched-into-a-later-slot-thinks-on-its-launch-frame).
+//! **Filed.** An existing NPC in a slot above a carrier thinks before
+//! the loop, blind to the fighter launched that frame, and a launched
+//! fighter's own launch settles against the room left after every
+//! existing claim, where the original's loop reaches them in slot order
+//! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
 //! session ([`Session::with_fighters`]): the player, then every NPC, each
@@ -176,7 +183,9 @@ impl Session {
     /// past it (@0x4402a to @0x44350). Where the original branches on its
     /// argument, this branches on `ai`: with it, the traffic thinks, the
     /// scans settle and every NPC's point defence fires and its fighters
-    /// launch, put in the system at once, before the shots,
+    /// launch, each put in the system as its slot's turn ends
+    /// ([`Session::dispatch_npcs`]), then the fleets and comm calls are
+    /// said, all before the shots,
     /// and the traffic's motion is its fly half, its reinforcement clock
     /// included ([`Session::traffic_tail`]), then the assistance; without
     /// it, the traffic only moves, and the reinforcement clock
@@ -201,14 +210,13 @@ impl Session {
             // The arrivals of a Derelict government come in disabled.
             self.hold_derelicts();
             self.take_scans(rules.law, chance);
-            self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, chance);
-            });
             // `_LaunchFighter` marks each fighter's slot active in
-            // `_AIDispatch` (@0x3c90b, @0x3d680), so `_HandleShot` and its
-            // own `_HandleShip` see it that frame.
-            let sorties = self.combat.take_sorties();
-            self.launch_fighters(&sorties, chance);
+            // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
+            // `_HandleShot` and its own `_HandleShip` see it that frame.
+            self.dispatch_npcs(pass, behaviour, rules, chance);
+            if marks.is_some() {
+                self.after_traffic_ai(chance);
+            }
             Some(marks)
         } else {
             None
@@ -295,10 +303,11 @@ impl Session {
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
     /// says and drawing on `chance`: on the first pass in a system not
     /// yet set up, its population ([`Session::populate`]), which moves
-    /// from the next; otherwise the session's work before the AI, the
-    /// traffic's think half ([`Traffic::think_holding`]), and the fleets
-    /// and comm calls it brings. What its motion is read against, when it
-    /// thought.
+    /// from the next; otherwise the session's work before the AI and the
+    /// traffic's think half ([`Traffic::think_holding`]). The fleets it
+    /// brings and the comm calls it queues are said after the AI loop
+    /// ([`Session::dispatch_npcs`], `Session::after_traffic_ai`). What its
+    /// motion is read against, when it thought.
     ///
     /// [`Traffic::think_holding`]: crate::traffic::Traffic::think_holding
     fn traffic_think(
@@ -315,7 +324,6 @@ impl Session {
         self.step_traffic(|traffic, world| {
             traffic.think_holding(behaviour, world, &strikes, chance);
         });
-        self.after_traffic_ai(chance);
         Some(marks)
     }
 

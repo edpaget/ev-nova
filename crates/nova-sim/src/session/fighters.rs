@@ -6,11 +6,14 @@
 //! armour full, its class's stock weapons and rounds aboard, its AI type
 //! its `InherentAI`, pushed out at the bay's speed ([`launch_velocity`])
 //! along the launch heading: the player's after its trigger, an NPC's
-//! right after the NPCs' point-defence phase that launched it, before
-//! `_HandleShot` ([`Session::game_work`]), so each moves on its launch
-//! tick. With no ship slot free below the reserve `_LaunchFighter` leaves
-//! (8 @0x3d648, so it stops at 55 NPCs, as [`RuleKey::SpawnReserve`]
-//! reads; see [`SPAWN_RESERVE`]), or no record of its ship type, it goes
+//! right after its carrier's turn in the NPCs' point-defence loop
+//! ([`Session::dispatch_npcs`]), before `_HandleShot`
+//! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
+//! fighter in a slot above its carrier's thinks then and takes its turn
+//! in the rest of the loop, and every later slot's point defence can
+//! choose it, as [`RuleKey::LaunchFrameAi`] reads. With no ship slot
+//! free below the reserve `_LaunchFighter` leaves (8 @0x3d648, so it
+//! stops at 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]), or no record of its ship type, it goes
 //! back into its bay, a round again. An NPC's launch has its slot
 //! already: the traffic counts the free slots as its NPCs fire, and a
 //! carrier finding none launches nothing (see `nova_sim::traffic`'s room
@@ -68,7 +71,8 @@ use crate::traffic::table::{self, ShipKind};
 impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
-    /// back into its bay. Each rolls its afterburner on `chance`.
+    /// back into its bay. Each rolls its afterburner on `chance`. The
+    /// NPCs put in the system, in order.
     ///
     /// Once one of the player's, from a glow bay (`Flags2` 0x0200), is put
     /// in the system, the player's weapon glow lights, once
@@ -77,12 +81,20 @@ impl Session {
     /// `_LaunchFighter` returns a fighter (@0x62c61-0x62c6e,
     /// @0x62c78-0x62c98). An NPC's launch never lights it, as
     /// `_AILaunchFighter` never writes it.
-    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
+    pub(super) fn launch_fighters(
+        &mut self,
+        sorties: &[Sortie],
+        chance: &mut dyn Chance,
+    ) -> Vec<NpcId> {
         let mut glows = false;
+        let mut placed = Vec::new();
         for sortie in sorties {
-            if self.launch_fighter(sortie, chance).is_none() {
+            let Some(id) = self.launch_fighter(sortie, chance) else {
                 self.put_back(sortie);
-            } else if sortie.carrier == ShipRef::Player {
+                continue;
+            };
+            placed.push(id);
+            if sortie.carrier == ShipRef::Player {
                 glows |= self
                     .arsenal
                     .weapon(sortie.bay)
@@ -92,6 +104,7 @@ impl Session {
         if glows {
             self.combat.light_glow(ShipRef::Player);
         }
+        placed
     }
 
     /// Puts the fighter of `sortie` in the system, its afterburner rolled
@@ -545,7 +558,7 @@ fn fighter(
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::combat::armament::LauncherRounds;
     use std::rc::Rc;
 
@@ -573,16 +586,16 @@ mod tests {
 
     /// The Viper Bay: carrying ship 144, reloading every 60 ticks,
     /// pushing its fighter out at 4 pixels a tick, 4 fighters a bay.
-    const BAY: WeaponId = WeaponId(149);
+    pub(in crate::session) const BAY: WeaponId = WeaponId(149);
     /// The fighter, a Viper.
-    const VIPER: ShipId = ShipId(144);
+    pub(in crate::session) const VIPER: ShipId = ShipId(144);
     /// The fighter outfit, the bay's rounds.
     const VIPERS: OutfitId = OutfitId(158);
     /// The outfit holding the Viper Bay.
     const VIPER_BAY: OutfitId = OutfitId(157);
     /// The fighter's gun: 10 pixels a tick for 30 ticks, every 5, 5
     /// energy and 2 mass damage.
-    const GUN: WeaponId = WeaponId(141);
+    pub(in crate::session) const GUN: WeaponId = WeaponId(141);
     /// A warship escort's ship type.
     const WARSHIP: ShipId = ShipId(150);
 
@@ -594,7 +607,7 @@ mod tests {
         ..FAST
     };
 
-    fn bay() -> WeaponRecord {
+    pub(in crate::session) fn bay() -> WeaponRecord {
         WeaponRecord {
             guidance: 99,
             ammo_type: 144,
@@ -611,7 +624,7 @@ mod tests {
     /// across, carries a Viper Bay (held by outfit 157); the Viper (a
     /// fighter, an interceptor by `InherentAI`, 20 across) carries a gun;
     /// and a warship escort type, 150.
-    fn carrying() -> FakePilotCatalog {
+    pub(in crate::session) fn carrying() -> FakePilotCatalog {
         FakePilotCatalog {
             ship_records: vec![
                 ship(128, FAST),
@@ -674,7 +687,11 @@ mod tests {
     }
 
     /// A pilot owning `vipers` Vipers aboard, with `escorts`.
-    fn pilot(catalog: &FakePilotCatalog, vipers: u16, escorts: Vec<Escort>) -> Pilot {
+    pub(in crate::session) fn pilot(
+        catalog: &FakePilotCatalog,
+        vipers: u16,
+        escorts: Vec<Escort>,
+    ) -> Pilot {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.outfits.insert(VIPERS, vipers);
         pilot.escorts = escorts;
@@ -690,7 +707,11 @@ mod tests {
 
     /// `pilot`'s session by `rules`, the bay selected, its first traffic
     /// tick done.
-    fn flying_by(catalog: &FakePilotCatalog, pilot: Pilot, rules: Rulebook) -> Session {
+    pub(in crate::session) fn flying_by(
+        catalog: &FakePilotCatalog,
+        pilot: Pilot,
+        rules: Rulebook,
+    ) -> Session {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_rules(rules);
@@ -1577,7 +1598,7 @@ mod tests {
         sitting_ai().with(AiType::Warship, Rc::new(Raiding))
     }
 
-    const PIRATES: crate::catalog::GovtId = crate::catalog::GovtId(142);
+    pub(in crate::session) const PIRATES: crate::catalog::GovtId = crate::catalog::GovtId(142);
 
     /// Adds a pirate carrier, a warship 60 across, 200 above the player
     /// and attacking it, escorting `lead`, carrying a Viper Bay with
@@ -1587,7 +1608,7 @@ mod tests {
     }
 
     /// The pirate carrier [`carrier`] adds.
-    fn carrier_npc(lead: NpcId, vipers: u32) -> Npc {
+    pub(in crate::session) fn carrier_npc(lead: NpcId, vipers: u32) -> Npc {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.ship = ShipId(160);
         npc.govt = Some(PIRATES);
@@ -1908,7 +1929,11 @@ mod tests {
 
     /// One advance pass of `session`'s game work, the player at rest, its
     /// NPCs deciding as `behaviour` says.
-    fn game_pass(session: &mut Session, catalog: &FakePilotCatalog, behaviour: &impl Behaviour) {
+    pub(in crate::session) fn game_pass(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &impl Behaviour,
+    ) {
         let rescued = session.game_work(
             Controls::default(),
             catalog,
@@ -2078,10 +2103,10 @@ mod tests {
     /// A homing missile fired every tick, 5 pixels a tick for 100.
     const MISSILE: WeaponId = WeaponId(134);
     /// The Quad Light Blaster Turret's point defence.
-    const QUAD: WeaponId = WeaponId(133);
+    pub(in crate::session) const QUAD: WeaponId = WeaponId(133);
 
     /// An NPC at (`x`, `y`) at rest, armed with `weapon`.
-    fn armed_npc(x: f32, y: f32, weapon: WeaponRecord) -> Npc {
+    pub(in crate::session) fn armed_npc(x: f32, y: f32, weapon: WeaponRecord) -> Npc {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.state.position = Vec2::new(x, y);
         npc.armament = crate::combat::armament::Armament::new([(
