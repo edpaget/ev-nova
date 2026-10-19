@@ -704,15 +704,20 @@ fn refuel(fuel: &mut crate::reserves::Gauge) -> bool {
 }
 
 /// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7): it
-/// jumps out (state 2), whatever its fuel, as the original tests none;
-/// its target, fire command and provocation are gone. A warship that
-/// cannot jump lands or stops on its next think
-/// (`nova_sim::ai::warship`); the other types keep leaving.
+/// jumps out (state 2), whatever its fuel, as the original tests none,
+/// and its target is gone (+0x70 -1). Those are the routine's writes
+/// but two: the +0x50 floor and the +0xa4 stamp, the warp stage's
+/// (rdm:phase/ship-handling-fidelity/phase-8-warp-out). It keeps its
+/// provocation (+0x96), which `_WimpyTraderAI` reads beside a target a
+/// later hit sets (@0x8b1ac). Its fire command is cleared too: the
+/// engine holds one between thinks, where the original fires each frame
+/// at its target, which the leave makes none. A warship that cannot jump
+/// lands or stops on its next think (`nova_sim::ai::warship`); the other
+/// types keep leaving.
 pub(super) fn make_leave(npc: &mut Npc) {
     npc.goal = Goal::JumpOut;
     npc.target = None;
     npc.trigger = Trigger::default();
-    npc.provoked = 0.0;
 }
 
 /// `npc` stops assisting, and decides again, its travel stellar
@@ -1662,6 +1667,24 @@ mod tests {
         assert!(spared.spared);
         assert_eq!(spared.goal, Goal::JumpOut);
         assert_eq!(spared.target, None);
+    }
+
+    #[test]
+    fn a_bribed_ship_keeps_its_provocation_and_drops_its_target() {
+        // `_AIMakeShipLeave` (@0x7e2b0-0x7e2e7) writes goal 2, +0x50,
+        // target -1 and +0xa4, and no +0x96.
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        npc(&mut session).provoked = 5.0;
+        hail(&mut session, &catalog);
+        session
+            .answer(1, &catalog, &HailOptions::default(), &mut Draws::of(&[99]))
+            .expect("open");
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let spared = &session.npcs()[0];
+        assert_eq!(spared.goal, Goal::JumpOut);
+        assert_eq!(spared.target, None);
+        assert_eq!(spared.provoked, 5.0);
     }
 
     #[test]
