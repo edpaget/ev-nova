@@ -98,6 +98,7 @@ mod game;
 mod launch;
 mod map_find;
 mod menu;
+mod menu_commands;
 mod missions;
 mod overlays;
 mod port;

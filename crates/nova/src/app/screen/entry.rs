@@ -162,6 +162,14 @@ impl AppScreen {
         Some(ScreenAction::None)
     }
 
+    /// Whether play is being entered and the entry holds a Command chord
+    /// typed now, for the handover ([`Entry::holds_commands`]).
+    pub(super) fn entry_holds_commands(&self) -> bool {
+        self.entry
+            .as_ref()
+            .is_some_and(|entering| entering.core.holds_commands())
+    }
+
     /// The window's close while play is entered: `Some(false)`, staying
     /// open, once the entry has held or dropped it; `None` with no entry.
     pub(super) fn entry_close(&mut self) -> Option<bool> {
