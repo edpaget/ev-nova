@@ -1,0 +1,23 @@
+[package]
+name = "nova-bundle"
+description = "Builds Nova.app, the universal ad-hoc-signed macOS bundle, into a .dmg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Info.plist, written as XML.
+plist.workspace = true
+# `cargo metadata`'s output, read into the bundle's spec.
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Real folders for the std adapters' tests.
+tempfile.workspace = true
+
+[lints]
+workspace = true

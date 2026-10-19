@@ -28,6 +28,9 @@ nova-audio = { path = "crates/nova-audio" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
+# nova-bundle writes Nova.app's Info.plist with it, and its tests read the
+# plist back. Its default `serde` feature is not needed.
+plist = { version = "1.10.1", default-features = false }
 tempfile = "3"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }

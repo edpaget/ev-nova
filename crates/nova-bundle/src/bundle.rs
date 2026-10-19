@@ -1,0 +1,721 @@
+//! The bundler's sequence: read the spec, build both targets, stage
+//! `Nova.app`, merge the binaries, check their slices, sign, verify, and
+//! make the `.dmg`.
+//!
+//! [`steps`] is the whole sequence as data, a function of the spec and the
+//! layout, so a new signing mode or notarization step is another entry,
+//! and [`bundle`] runs it through the ports, stopping at the first
+//! failure.
+
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use crate::icon::ICON;
+use crate::info_plist::{EXECUTABLE, info_plist};
+use crate::layout::{DUMP, Layout, StagingInOutput, VOLUME};
+use crate::ports::{Files, Invocation, Process, RunError};
+use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
+
+/// The two targets merged into each universal binary.
+pub const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+/// The slices `lipo -archs` must list for each merged binary.
+pub const ARCHS: [&str; 2] = ["arm64", "x86_64"];
+
+/// What the edge supplies: the tools and the settings the build runs with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Host {
+    /// The `cargo` to build with (`$CARGO` under `cargo run`).
+    pub cargo: OsString,
+    /// `MACOSX_DEPLOYMENT_TARGET`, the binaries' minimum macOS.
+    pub min_system: String,
+    /// The output directory asked for, if any.
+    pub out: Option<PathBuf>,
+}
+
+/// One step of the sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// Removes a directory, if present.
+    RemoveDir(PathBuf),
+    /// Creates a directory and its parents.
+    CreateDir(PathBuf),
+    /// Writes a file.
+    Write {
+        /// The file.
+        path: PathBuf,
+        /// Its contents.
+        bytes: Vec<u8>,
+    },
+    /// Copies a file.
+    Copy {
+        /// The source.
+        from: PathBuf,
+        /// The destination.
+        to: PathBuf,
+    },
+    /// Makes a symbolic link.
+    Symlink {
+        /// What the link points to.
+        target: PathBuf,
+        /// The link.
+        link: PathBuf,
+    },
+    /// Runs a program.
+    Run(Invocation),
+    /// Runs `lipo -archs` on a merged binary and fails unless it lists
+    /// every one of [`ARCHS`].
+    CheckArchs(PathBuf),
+}
+
+/// Why bundling stopped.
+#[derive(Debug, thiserror::Error)]
+pub enum BundleError {
+    /// A program failed.
+    #[error("`{command}` failed: {source}")]
+    Run {
+        /// The command line.
+        command: String,
+        /// How it failed.
+        source: RunError,
+    },
+    /// `cargo metadata` gave no spec.
+    #[error(transparent)]
+    Spec(#[from] SpecError),
+    /// The output directory can't be used.
+    #[error(transparent)]
+    Layout(#[from] StagingInOutput),
+    /// A file step failed.
+    #[error("could not {action} {}: {source}", path.display())]
+    File {
+        /// What the step did.
+        action: &'static str,
+        /// The path it did it to.
+        path: PathBuf,
+        /// Why it failed.
+        source: io::Error,
+    },
+    /// A merged binary lacks a slice.
+    #[error("`{command}` lists `{found}`, without the {arch} slice")]
+    MissingArch {
+        /// The `lipo -archs` command line.
+        command: String,
+        /// The slice missing.
+        arch: &'static str,
+        /// What it listed.
+        found: String,
+    },
+}
+
+/// `cargo metadata`, whose output is the spec.
+#[must_use]
+pub fn metadata(cargo: &OsString) -> Invocation {
+    Invocation::new(cargo)
+        .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+        .captured()
+}
+
+/// Every step after `cargo metadata`, in order.
+#[must_use]
+pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
+    let release = |target: &str, bin: &str| spec.target_dir.join(target).join("release").join(bin);
+    let lipo = |bin: &str, output: PathBuf| {
+        Step::Run(
+            Invocation::new("lipo")
+                .arg("-create")
+                .args(TARGETS.map(|target| release(target, bin)))
+                .arg("-output")
+                .arg(output),
+        )
+    };
+    let sign = |path: PathBuf| {
+        Step::Run(
+            Invocation::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(path),
+        )
+    };
+    let verify = |path: PathBuf| {
+        Step::Run(
+            Invocation::new("codesign")
+                .args(["--verify", "--deep", "--strict", "--verbose=2"])
+                .arg(path),
+        )
+    };
+    vec![
+        // Both targets in one build, default features only, so egui stays
+        // out of the published build.
+        Step::Run(
+            Invocation::new(&host.cargo)
+                .args([
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    GAME_PACKAGE,
+                    "-p",
+                    DUMP,
+                ])
+                .args(TARGETS.iter().flat_map(|target| ["--target", target])),
+        ),
+        Step::RemoveDir(layout.staging.clone()),
+        Step::CreateDir(layout.macos()),
+        Step::CreateDir(layout.resources()),
+        Step::Write {
+            path: layout.info_plist(),
+            bytes: info_plist(spec, &host.min_system),
+        },
+        Step::Write {
+            path: layout.icon(),
+            bytes: ICON.to_vec(),
+        },
+        lipo(EXECUTABLE, layout.executable()),
+        lipo(DUMP, layout.dump()),
+        Step::CheckArchs(layout.executable()),
+        Step::CheckArchs(layout.dump()),
+        Step::Copy {
+            from: spec.workspace_root.join("packaging").join("README.txt"),
+            to: layout.staging.join("README.txt"),
+        },
+        Step::Copy {
+            from: spec.workspace_root.join("LICENSE"),
+            to: layout.staging.join("LICENSE"),
+        },
+        // Drag-install: the volume shows Applications beside the app.
+        Step::Symlink {
+            target: PathBuf::from("/Applications"),
+            link: layout.staging.join("Applications"),
+        },
+        // Ad-hoc signatures, so Apple silicon runs the binaries. Not
+        // `--deep`: the bundle holds one executable and no nested code,
+        // and Apple discourages `--deep` for signing. Verifying is
+        // `--deep`.
+        sign(layout.dump()),
+        sign(layout.app()),
+        verify(layout.app()),
+        verify(layout.dump()),
+        Step::CreateDir(layout.out.clone()),
+        Step::Run(
+            Invocation::new("hdiutil")
+                .args(["create", "-volname", VOLUME, "-srcfolder"])
+                .arg(&layout.staging)
+                .args(["-fs", "HFS+", "-format", "UDZO", "-ov"])
+                .arg(layout.dmg()),
+        ),
+    ]
+}
+
+/// Builds the `.dmg`, returning its path.
+pub fn bundle(
+    process: &mut impl Process,
+    files: &mut impl Files,
+    host: &Host,
+) -> Result<PathBuf, BundleError> {
+    let spec = BundleSpec::from_metadata(&run(process, &metadata(&host.cargo))?)?;
+    let layout = Layout::new(&spec.target_dir, host.out.clone())?;
+    for step in steps(&spec, &layout, host) {
+        execute(&step, process, files)?;
+    }
+    Ok(layout.dmg())
+}
+
+fn run(process: &mut impl Process, invocation: &Invocation) -> Result<Vec<u8>, BundleError> {
+    process.run(invocation).map_err(|source| BundleError::Run {
+        command: invocation.to_string(),
+        source,
+    })
+}
+
+fn file(action: &'static str, path: &Path, result: io::Result<()>) -> Result<(), BundleError> {
+    result.map_err(|source| BundleError::File {
+        action,
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn execute(
+    step: &Step,
+    process: &mut impl Process,
+    files: &mut impl Files,
+) -> Result<(), BundleError> {
+    match step {
+        Step::RemoveDir(path) => file("remove", path, files.remove_dir_all(path)),
+        Step::CreateDir(path) => file("create", path, files.create_dir_all(path)),
+        Step::Write { path, bytes } => file("write", path, files.write(path, bytes)),
+        Step::Copy { from, to } => file("copy to", to, files.copy(from, to)),
+        Step::Symlink { target, link } => file("link", link, files.symlink(target, link)),
+        Step::Run(invocation) => run(process, invocation).map(drop),
+        Step::CheckArchs(binary) => {
+            let invocation = Invocation::new("lipo").arg("-archs").arg(binary).captured();
+            let stdout = run(process, &invocation)?;
+            let found = String::from_utf8_lossy(&stdout);
+            let listed: Vec<&str> = found.split_whitespace().collect();
+            match ARCHS.into_iter().find(|arch| !listed.contains(arch)) {
+                None => Ok(()),
+                Some(arch) => Err(BundleError::MissingArch {
+                    command: invocation.to_string(),
+                    arch,
+                    found: found.trim().to_owned(),
+                }),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::spec::tests::sample_metadata;
+
+    /// Everything the ports were asked to do, in order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Event {
+        Run(Invocation),
+        RemoveDir(PathBuf),
+        CreateDir(PathBuf),
+        Write(PathBuf, Vec<u8>),
+        Copy(PathBuf, PathBuf),
+        Symlink(PathBuf, PathBuf),
+    }
+
+    type Log = Rc<RefCell<Vec<Event>>>;
+
+    /// Records each run; answers `cargo metadata` and `lipo -archs` with
+    /// canned output, and fails the runs `fails` picks.
+    struct Recorder {
+        log: Log,
+        archs: Vec<u8>,
+        fails: Box<dyn Fn(&Invocation) -> bool>,
+    }
+
+    impl Process for Recorder {
+        fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
+            self.log.borrow_mut().push(Event::Run(invocation.clone()));
+            if (self.fails)(invocation) {
+                return Err(RunError::Failed(Some(1)));
+            }
+            let first = invocation.args.first().and_then(|a| a.to_str());
+            Ok(match first {
+                Some("metadata") => sample_metadata(),
+                Some("-archs") => self.archs.clone(),
+                _ => Vec::new(),
+            })
+        }
+    }
+
+    /// Records each file operation; fails the ones `fails` picks.
+    struct FakeFiles {
+        log: Log,
+        fails: Box<dyn Fn(&Event) -> bool>,
+    }
+
+    impl FakeFiles {
+        fn record(&self, event: Event) -> io::Result<()> {
+            let failed = (self.fails)(&event);
+            self.log.borrow_mut().push(event);
+            if failed {
+                Err(io::Error::other("disk full"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl Files for FakeFiles {
+        fn remove_dir_all(&mut self, path: &Path) -> io::Result<()> {
+            self.record(Event::RemoveDir(path.to_owned()))
+        }
+        fn create_dir_all(&mut self, path: &Path) -> io::Result<()> {
+            self.record(Event::CreateDir(path.to_owned()))
+        }
+        fn write(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            self.record(Event::Write(path.to_owned(), bytes.to_vec()))
+        }
+        fn copy(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+            self.record(Event::Copy(from.to_owned(), to.to_owned()))
+        }
+        fn symlink(&mut self, target: &Path, link: &Path) -> io::Result<()> {
+            self.record(Event::Symlink(target.to_owned(), link.to_owned()))
+        }
+    }
+
+    struct Run {
+        result: Result<PathBuf, BundleError>,
+        events: Vec<Event>,
+    }
+
+    impl Run {
+        fn runs(&self) -> Vec<Invocation> {
+            self.events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Run(invocation) => Some(invocation.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn ran(&self, program: &str) -> bool {
+            self.runs().iter().any(|i| i.program == program)
+        }
+    }
+
+    fn host(out: Option<PathBuf>) -> Host {
+        Host {
+            cargo: OsString::from("/rust/bin/cargo"),
+            min_system: "13.0".into(),
+            out,
+        }
+    }
+
+    fn run_with(
+        host: &Host,
+        archs: &[u8],
+        process_fails: impl Fn(&Invocation) -> bool + 'static,
+        file_fails: impl Fn(&Event) -> bool + 'static,
+    ) -> Run {
+        let log = Log::default();
+        let mut process = Recorder {
+            log: Rc::clone(&log),
+            archs: archs.to_vec(),
+            fails: Box::new(process_fails),
+        };
+        let mut files = FakeFiles {
+            log: Rc::clone(&log),
+            fails: Box::new(file_fails),
+        };
+        let result = bundle(&mut process, &mut files, host);
+        let events = log.borrow().clone();
+        Run { result, events }
+    }
+
+    fn run_ok(host: &Host) -> Run {
+        run_with(host, b"x86_64 arm64\n", |_| false, |_| false)
+    }
+
+    fn is(program: &'static str, first: &'static str) -> impl Fn(&Invocation) -> bool {
+        move |i| i.program == program && i.args.first().is_some_and(|a| a == first)
+    }
+
+    fn spec() -> BundleSpec {
+        BundleSpec::from_metadata(&sample_metadata()).expect("spec")
+    }
+
+    /// `program` with the whitespace-separated `words`, then `paths`.
+    fn cmd(program: &str, words: &str, paths: &[&Path]) -> Invocation {
+        Invocation::new(program)
+            .args(words.split_whitespace())
+            .args(paths)
+    }
+
+    #[test]
+    fn runs_the_whole_sequence_in_order() {
+        let root = Path::new("/work").join("ev-nova");
+        let target = root.join("target");
+        let staging = target.join("bundle").join("staging");
+        let out = target.join("bundle").join("out");
+        let app = staging.join("Nova.app");
+        let contents = app.join("Contents");
+        let exe = contents.join("MacOS").join("nova");
+        let dump = staging.join("nova-dump");
+        let dmg = out.join("ev-nova-universal-apple-darwin.dmg");
+        let arm = |b: &str| target.join("aarch64-apple-darwin").join("release").join(b);
+        let x86 = |b: &str| target.join("x86_64-apple-darwin").join("release").join(b);
+        let cargo = "/rust/bin/cargo";
+        let sign = "--force --sign -";
+        let verify = "--verify --deep --strict --verbose=2";
+
+        let run = run_ok(&host(None));
+
+        assert_eq!(run.result.as_ref().expect("bundled"), &dmg);
+        let expected = vec![
+            Event::Run(
+                cmd(cargo, "metadata --format-version 1 --no-deps --locked", &[]).captured(),
+            ),
+            Event::Run(cmd(
+                cargo,
+                "build --release --locked -p nova -p nova-dump \
+                 --target aarch64-apple-darwin --target x86_64-apple-darwin",
+                &[],
+            )),
+            Event::RemoveDir(staging.clone()),
+            Event::CreateDir(contents.join("MacOS")),
+            Event::CreateDir(contents.join("Resources")),
+            Event::Write(contents.join("Info.plist"), info_plist(&spec(), "13.0")),
+            Event::Write(contents.join("Resources").join("Nova.icns"), ICON.to_vec()),
+            Event::Run(
+                cmd("lipo", "-create", &[&arm("nova"), &x86("nova")])
+                    .arg("-output")
+                    .arg(&exe),
+            ),
+            Event::Run(
+                cmd("lipo", "-create", &[&arm("nova-dump"), &x86("nova-dump")])
+                    .arg("-output")
+                    .arg(&dump),
+            ),
+            Event::Run(cmd("lipo", "-archs", &[&exe]).captured()),
+            Event::Run(cmd("lipo", "-archs", &[&dump]).captured()),
+            Event::Copy(
+                root.join("packaging").join("README.txt"),
+                staging.join("README.txt"),
+            ),
+            Event::Copy(root.join("LICENSE"), staging.join("LICENSE")),
+            Event::Symlink(PathBuf::from("/Applications"), staging.join("Applications")),
+            Event::Run(cmd("codesign", sign, &[&dump])),
+            Event::Run(cmd("codesign", sign, &[&app])),
+            Event::Run(cmd("codesign", verify, &[&app])),
+            Event::Run(cmd("codesign", verify, &[&dump])),
+            Event::CreateDir(out.clone()),
+            Event::Run(
+                Invocation::new("hdiutil")
+                    .args(["create", "-volname", "EV Nova", "-srcfolder"])
+                    .arg(&staging)
+                    .args(["-fs", "HFS+", "-format", "UDZO", "-ov"])
+                    .arg(&dmg),
+            ),
+        ];
+        assert_eq!(run.events, expected);
+    }
+
+    #[test]
+    fn the_icon_is_where_the_plist_names_it() {
+        let layout = Layout::new(&spec().target_dir, None).expect("layout");
+        let all = steps(&spec(), &layout, &host(None));
+        let plist = all
+            .iter()
+            .find_map(|s| match s {
+                Step::Write { path, bytes } if *path == layout.info_plist() => Some(bytes.clone()),
+                _ => None,
+            })
+            .expect("the plist is written");
+        let icon_file = plist::Value::from_reader_xml(plist.as_slice())
+            .expect("plist")
+            .into_dictionary()
+            .expect("dict")
+            .get("CFBundleIconFile")
+            .and_then(plist::Value::as_string)
+            .expect("icon file")
+            .to_owned();
+        assert!(all.contains(&Step::Write {
+            path: layout.resources().join(icon_file),
+            bytes: ICON.to_vec(),
+        }));
+    }
+
+    #[test]
+    fn writes_the_dmg_to_the_output_dir_given() {
+        let dist = Path::new("/work").join("ev-nova").join("dist");
+        let run = run_ok(&host(Some(dist.clone())));
+        let dmg = dist.join("ev-nova-universal-apple-darwin.dmg");
+        assert_eq!(run.result.as_ref().expect("bundled"), &dmg);
+        let hdiutil = run.runs().pop().expect("a run");
+        assert_eq!(hdiutil.program, "hdiutil");
+        assert_eq!(hdiutil.args.last(), Some(&dmg.into_os_string()));
+        assert!(run.events.contains(&Event::CreateDir(dist)));
+    }
+
+    #[test]
+    fn the_minimum_system_reaches_the_plist() {
+        let mut host = host(None);
+        host.min_system = "14.1".into();
+        let run = run_ok(&host);
+        let plist = run
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Write(path, bytes) if path.ends_with("Info.plist") => Some(bytes.clone()),
+                _ => None,
+            })
+            .expect("a plist");
+        assert_eq!(plist, info_plist(&spec(), "14.1"));
+    }
+
+    #[test]
+    fn an_output_dir_holding_staging_stops_before_building() {
+        let target = Path::new("/work").join("ev-nova").join("target");
+        let run = run_ok(&host(Some(target)));
+        assert!(matches!(run.result, Err(BundleError::Layout(_))));
+        assert_eq!(run.runs().len(), 1, "only cargo metadata ran");
+    }
+
+    #[test]
+    fn a_failing_metadata_stops_everything() {
+        let run = run_with(
+            &host(None),
+            b"arm64 x86_64",
+            is("/rust/bin/cargo", "metadata"),
+            |_| false,
+        );
+        let Err(BundleError::Run { command, .. }) = &run.result else {
+            panic!("{:?}", run.result);
+        };
+        assert_eq!(command, &metadata(&host(None).cargo).to_string());
+        assert_eq!(run.events.len(), 1);
+    }
+
+    #[test]
+    fn a_failing_build_stops_before_any_lipo() {
+        let run = run_with(
+            &host(None),
+            b"arm64 x86_64",
+            is("/rust/bin/cargo", "build"),
+            |_| false,
+        );
+        let error = run.result.as_ref().expect_err("fails").to_string();
+        assert!(
+            error.contains("/rust/bin/cargo build --release --locked"),
+            "{error}"
+        );
+        assert!(error.contains("exited with code 1"), "{error}");
+        assert!(!run.ran("lipo"));
+        assert_eq!(run.events.len(), 2, "nothing staged");
+    }
+
+    #[test]
+    fn a_binary_missing_a_slice_stops_before_signing() {
+        for (archs, missing) in [
+            (&b"arm64\n"[..], "x86_64"),
+            (b"x86_64\n", "arm64"),
+            (b"", "arm64"),
+        ] {
+            let run = run_with(&host(None), archs, |_| false, |_| false);
+            let Err(BundleError::MissingArch { arch, command, .. }) = &run.result else {
+                panic!("{:?}", run.result);
+            };
+            assert_eq!(*arch, missing);
+            let layout = Layout::new(&spec().target_dir, None).expect("layout");
+            assert_eq!(
+                command,
+                &Invocation::new("lipo")
+                    .arg("-archs")
+                    .arg(layout.executable())
+                    .to_string()
+            );
+            assert!(!run.ran("codesign"));
+            assert!(!run.ran("hdiutil"));
+        }
+    }
+
+    #[test]
+    fn the_missing_slice_error_names_what_lipo_listed() {
+        let run = run_with(&host(None), b"  arm64 \n", |_| false, |_| false);
+        let error = run.result.expect_err("fails").to_string();
+        assert!(
+            error.contains("lists `arm64`, without the x86_64 slice"),
+            "{error}"
+        );
+    }
+
+    /// Answers `lipo -archs` with both slices, but only arm64 for
+    /// `nova-dump`.
+    struct DumpThin(Log);
+    impl Process for DumpThin {
+        fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
+            self.0.borrow_mut().push(Event::Run(invocation.clone()));
+            let args: Vec<_> = invocation
+                .args
+                .iter()
+                .map(|a| a.to_string_lossy())
+                .collect();
+            Ok(match args.first().map(AsRef::as_ref) {
+                Some("metadata") => sample_metadata(),
+                Some("-archs") if args[1].ends_with("nova-dump") => b"arm64".to_vec(),
+                Some("-archs") => b"arm64 x86_64".to_vec(),
+                _ => Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn a_dump_missing_a_slice_stops_too() {
+        let log = Log::default();
+        let mut files = FakeFiles {
+            log: Rc::clone(&log),
+            fails: Box::new(|_| false),
+        };
+        let result = bundle(&mut DumpThin(Rc::clone(&log)), &mut files, &host(None));
+        assert!(matches!(
+            result,
+            Err(BundleError::MissingArch { arch: "x86_64", .. })
+        ));
+        assert!(
+            !log.borrow()
+                .iter()
+                .any(|e| matches!(e, Event::Run(i) if i.program == "codesign"))
+        );
+    }
+
+    #[test]
+    fn a_failing_signature_check_never_makes_the_dmg() {
+        let run = run_with(
+            &host(None),
+            b"arm64 x86_64",
+            is("codesign", "--verify"),
+            |_| false,
+        );
+        let error = run.result.as_ref().expect_err("fails").to_string();
+        assert!(
+            error.contains("codesign --verify --deep --strict"),
+            "{error}"
+        );
+        assert!(!run.ran("hdiutil"));
+    }
+
+    #[test]
+    fn a_failing_signature_stops_before_verifying() {
+        let run = run_with(
+            &host(None),
+            b"arm64 x86_64",
+            is("codesign", "--force"),
+            |_| false,
+        );
+        assert!(run.result.is_err());
+        assert_eq!(
+            run.runs()
+                .iter()
+                .filter(|i| i.program == "codesign")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_failing_file_step_names_the_path_and_stops() {
+        let run = run_with(
+            &host(None),
+            b"arm64 x86_64",
+            |_| false,
+            |e| matches!(e, Event::Write(..)),
+        );
+        let layout = Layout::new(&spec().target_dir, None).expect("layout");
+        let Err(BundleError::File { path, action, .. }) = &run.result else {
+            panic!("{:?}", run.result);
+        };
+        assert_eq!(path, &layout.info_plist());
+        assert_eq!(*action, "write");
+        assert!(!run.ran("lipo"));
+    }
+
+    #[test]
+    fn each_file_step_s_failure_is_reported() {
+        type Fails = fn(&Event) -> bool;
+        let cases: [(Fails, &str); 5] = [
+            (|e| matches!(e, Event::RemoveDir(_)), "remove"),
+            (|e| matches!(e, Event::CreateDir(_)), "create"),
+            (|e| matches!(e, Event::Write(..)), "write"),
+            (|e| matches!(e, Event::Copy(..)), "copy to"),
+            (|e| matches!(e, Event::Symlink(..)), "link"),
+        ];
+        for (fails, expected) in cases {
+            let run = run_with(&host(None), b"arm64 x86_64", |_| false, fails);
+            let Err(BundleError::File { action, .. }) = &run.result else {
+                panic!("{expected}: {:?}", run.result);
+            };
+            assert_eq!(*action, expected);
+        }
+    }
+}
