@@ -390,6 +390,7 @@ mod hover;
 mod iff_scramblers;
 mod inertialess;
 mod jump_collapse;
+mod kept_berths;
 mod map;
 mod map_borders;
 mod map_click;

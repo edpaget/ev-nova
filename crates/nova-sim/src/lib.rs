@@ -551,6 +551,7 @@ pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCa
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Leave, Traffic, World};
 pub use tutorial::{Tutorial, TutorialHint};

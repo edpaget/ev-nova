@@ -94,6 +94,13 @@ impl Traffic {
     pub fn reused_slot_search(&self) -> RuleSource {
         self.berth_search.reading()
     }
+
+    /// Writes `timer` as the search timer of the ship last in `berth`, for
+    /// tests that set a berth's timer up.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn write_berth_search(&mut self, berth: u32, timer: SearchTimer) {
+        self.berth_search.write(berth, timer);
+    }
 }
 
 #[cfg(test)]
