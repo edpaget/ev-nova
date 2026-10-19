@@ -24,6 +24,7 @@ mod stock_escape_pod;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
 mod stock_inertialess;
+mod stock_ionization;
 mod stock_map_panel;
 mod stock_map_search;
 mod stock_miners;

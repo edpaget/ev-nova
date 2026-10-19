@@ -411,7 +411,8 @@ pub struct Npc {
     /// left as the player's hulk, as `_RandomShipSpawn`,
     /// `_GenericRandomShipSpawn`, `_LaunchFighter` and the eject set it
     /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
-    /// ship-handling-fidelity phase 11 lowers it. Never saved.
+    /// [`ionization`](crate::traffic::ionization) sheds it and slows the
+    /// ship by it. Never saved.
     pub ion: Ion,
     /// The crew pods it has left to eject as it dies (the original's
     /// +0xc908): its class's `PodCount` as it spawns, launches or is left
