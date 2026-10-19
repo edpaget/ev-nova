@@ -139,6 +139,7 @@ mod comm_call_tests;
 pub mod destination;
 #[cfg(test)]
 mod display_tests;
+pub mod docked;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
