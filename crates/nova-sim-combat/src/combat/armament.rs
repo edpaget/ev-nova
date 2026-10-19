@@ -124,6 +124,7 @@
 //! weapon, so a load of -1 is kept. A person's own weapon slots add to
 //! these (`nova_sim::person::fit`).
 
+mod ai_launch;
 mod burst_reload;
 
 use std::collections::BTreeMap;
@@ -1132,8 +1133,9 @@ impl Armament {
 
     /// The bay an NPC attacking would launch from now, as
     /// `_AILaunchFighter` picks it (@0x813cc-0x8140b): the one of lowest
-    /// weapon ID holding rounds of its own, once it has reloaded; none
-    /// while that one reloads, a later bay waiting until it is empty.
+    /// weapon ID holding rounds of its own, a bay AI ships won't use
+    /// passed over, once it has reloaded; none while that one reloads, a
+    /// later bay waiting until it is empty.
     #[must_use]
     pub fn bay_to_launch(&self, rounds: &dyn Rounds) -> Option<WeaponId> {
         let bay = self.first_bay(rounds)?;
@@ -1216,11 +1218,17 @@ impl Armament {
         self.first_bay(rounds)
     }
 
-    /// The bay of lowest weapon ID holding rounds of its own, ready or not.
+    /// The bay of lowest weapon ID holding rounds of its own that AI ships
+    /// may use, ready or not: `_AILaunchFighter` passes over a bay of
+    /// `Flags2` [`AI_WONT_USE`] (@0x813f3-0x813f7).
     fn first_bay(&self, rounds: &dyn Rounds) -> Option<WeaponId> {
         self.mounts
             .iter()
-            .filter(|mount| mount.spec.is_bay() && rounds.held(mount.spec.id) > 0)
+            .filter(|mount| {
+                mount.spec.is_bay()
+                    && rounds.held(mount.spec.id) > 0
+                    && mount.spec.flags2 & AI_WONT_USE == 0
+            })
             .map(|mount| mount.spec.id)
             .min()
     }
@@ -4160,13 +4168,13 @@ mod tests {
     #[test]
     fn a_bay_launching_with_bays_reads_its_rounds_alone() {
         // `_AILaunchFighter` never asks `_WeaponHasAmmo`: a cloaked NPC
-        // launches from a bay AI ships won't use.
+        // launches. It passes over a bay AI ships won't use itself
+        // (@0x813f3-0x813f7; `ai_launch_skips_a_bay_ai_ships_wont_use`).
         let (mut armament, mut supplies) = two_bays([2, 2]);
         supplies.shooter = Shooter {
             cloaked: true,
             ..NPC
         };
-        armament.mounts[1].spec.flags2 = AI_WONT_USE;
         assert_eq!(launched(&supplies.tick(&mut armament, BAYS)), [149]);
         let mut armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
