@@ -1053,6 +1053,23 @@ mod tests {
     }
 
     #[test]
+    fn an_ionized_repairer_reaches_further_by_its_slowed_turn() {
+        let govts = govts(0, 0);
+        // 4° a tick reaches 230; slowed to 2 at a factor of 0.5, 290.
+        let ignores = |charge: f32| {
+            let mut helper = at(1, Some(TRADERS), 260.0, 0.0);
+            helper.goal = Goal::Assist(Help::Repair);
+            helper.stats.handling.turn_rate = 4.0;
+            helper.stats.ion.class_capacity = 400.0;
+            helper.ion.charge = charge;
+            let npcs = [helper, of(2, Some(PIRATES))];
+            !Scene::new(&npcs, &govts).answers(&strike(n(1), n(2)))
+        };
+        assert!(!ignores(0.0), "out of its reach, it answers");
+        assert!(ignores(200.0), "within its slowed reach");
+    }
+
+    #[test]
     fn a_pirate_docking_to_plunder_ignores_an_npcs_hit_but_not_the_players() {
         use crate::traffic::plunder_dock::{DockSub, Docking};
         let govts = govts(0, 0);

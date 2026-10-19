@@ -1119,6 +1119,70 @@ mod tests {
         }
     }
 
+    /// `ship` ionized to a factor of 0.5 when `charged`.
+    fn ionized(mut ship: Npc, charged: bool) -> Npc {
+        ship.stats.ion.class_capacity = 400.0;
+        ship.ion.charge = if charged { 200.0 } else { 0.0 };
+        ship
+    }
+
+    #[test]
+    fn an_ionized_jumper_turns_at_its_full_rate_once_its_stage_runs_and_slower_before() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        // Facing up, its jump's aim east: it turns, taking no thrust.
+        let turned = |stage: f32, charged: bool| {
+            let mut ship = ionized(warping(stage, 0), charged);
+            ship.state.heading = 0.0;
+            ship.state.velocity = Vec2::ZERO;
+            assert_eq!(
+                fly_jump(&mut ship, &views, &world, false),
+                Some(Outcome::Flying)
+            );
+            ship.state.heading
+        };
+        assert_eq!(turned(3.0, true), turned(3.0, false), "spared under way");
+        assert_eq!(turned(3.0, false), 3.0);
+        assert_eq!(turned(0.0, false), 3.0);
+        assert_eq!(turned(0.0, true), 1.5, "slowed before its stage runs");
+    }
+
+    #[test]
+    fn an_ionized_inertialess_jumper_drifts_by_its_slowed_thrust() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let drifted = |charged: bool| {
+            let mut ship = ionized(warping(3.0, 0), charged);
+            ship.stats.inertialess_hull = true;
+            ship.speed = 5.0;
+            ship.state.velocity = Vec2::ZERO;
+            fly_jump(&mut ship, &views, &world, false);
+            ship.state.velocity.length()
+        };
+        let (plain, charged) = (drifted(false), drifted(true));
+        assert!(plain > 0.0);
+        assert!((charged - plain * 0.5).abs() < 1e-6, "{charged} of {plain}");
+    }
+
+    #[test]
+    fn an_ionized_follower_gives_up_its_stage_by_its_slowed_turn() {
+        let turning = LeaderWarp {
+            aim: 101,
+            ..leader()
+        };
+        // 11 off: within its 12° a tick, but not its 6° slowed. Its stage
+        // was given up, so its turn is not spared.
+        let followed = |charged: bool| {
+            let mut ship = ionized(ship(), charged);
+            ship.stats.handling.turn_rate = 12.0;
+            ship.warp.stage = -1.0;
+            assert_eq!(follow_jump(&mut ship, turning, true), FollowStep::Waiting);
+            (ship.ai_wait, ship.warp.aim)
+        };
+        assert_eq!(followed(false), (FOLLOW_WAIT, 90), "it waits");
+        assert_eq!(followed(true), (0, 101), "it gives up");
+    }
+
     #[test]
     fn a_ship_not_flying_or_not_intact_or_not_jumping_flies_no_jump() {
         let views = BTreeMap::new();

@@ -1052,6 +1052,31 @@ mod tests {
     }
 
     #[test]
+    fn a_missile_suits_a_fleeing_npc_its_ionization_slows() {
+        let (mut chaser, _) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        // A fleeing NPC 100 above, turning 6° a tick: too agile for the
+        // missile, unless slowed to 3 at a factor of 0.5.
+        let hopeless = |charge: f32| {
+            let mut quarry = ship(2, 142, 0.0);
+            quarry.hull.class_speed = 6.0;
+            quarry.state.position = Vec2::new(0.0, -100.0);
+            quarry.state.velocity = Vec2::new(0.0, -1.0);
+            quarry.goal = Goal::Flee(n(1));
+            quarry.stats.handling.turn_rate = 6.0;
+            quarry.stats.ion.class_capacity = 400.0;
+            quarry.ion.charge = charge;
+            let npcs = [chaser.clone(), quarry];
+            let around = Surroundings::new(&[], &npcs);
+            hopeless_chase(&chaser, n(2), &around)
+        };
+        assert!(hopeless(0.0), "too agile: out of reach");
+        assert!(!hopeless(200.0), "slowed: in reach");
+    }
+
+    #[test]
     fn only_the_player_or_a_fleeing_npc_is_chased_hopelessly() {
         let (chaser, _) = chase(1.0);
         let mut quarry = ship(2, 142, 0.0);

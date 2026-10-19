@@ -238,6 +238,113 @@ mod tests {
         assert_eq!((ship.display.ion_tint, ship.ion.colour), (None, 0));
     }
 
+    /// `charged(charge)` heading `heading` at `at`, at rest.
+    fn placed(charge: f32, at: Vec2, heading: f32) -> Npc {
+        let mut ship = charged(charge);
+        ship.state.position = at;
+        ship.state.heading = heading;
+        ship
+    }
+
+    /// The speed gained and the degrees turned by `ship` after one tick
+    /// `fly` flies it.
+    fn flown(mut ship: Npc, fly: impl Fn(&mut Npc)) -> (f32, f32) {
+        let before = ship.state.heading;
+        fly(&mut ship);
+        let turned = crate::flight::shortest_turn(before, ship.state.heading).abs();
+        (ship.state.velocity.length(), turned)
+    }
+
+    /// Asserts that the charged one of two ships `fly` flies, one facing
+    /// along its way (`ahead`) and one across it (`across`), gains half
+    /// the plain one's speed and turns half its degrees.
+    fn assert_slowed(at: Vec2, ahead: f32, across: f32, fly: impl Fn(&mut Npc)) {
+        let (plain_speed, _) = flown(placed(0.0, at, ahead), &fly);
+        let (charged_speed, _) = flown(placed(200.0, at, ahead), &fly);
+        assert!(plain_speed > 0.0);
+        assert!(
+            (charged_speed - plain_speed * 0.5).abs() < 1e-6,
+            "{charged_speed} of {plain_speed}"
+        );
+        let (_, plain_turn) = flown(placed(0.0, at, across), &fly);
+        let (_, charged_turn) = flown(placed(200.0, at, across), &fly);
+        assert!(plain_turn > 0.0);
+        assert!(
+            (charged_turn - plain_turn * 0.5).abs() < 1e-4,
+            "{charged_turn} of {plain_turn}"
+        );
+    }
+
+    #[test]
+    fn an_ionized_npc_flown_by_the_autopilot_thrusts_and_turns_slower() {
+        use crate::traffic::autopilot::{TopSpeeds, fly};
+        let run_out = |ship: &mut Npc| {
+            ship.goal = crate::ai::Goal::JumpOut;
+            let speeds = TopSpeeds::own_of(ship);
+            fly(
+                ship,
+                &[],
+                &std::collections::BTreeMap::new(),
+                None,
+                false,
+                speeds,
+                FlightRules::default(),
+                crate::rulebook::RuleSource::Engine,
+                &mut nova_sim_base::NeverFires,
+            );
+        };
+        // Running out up the screen, away from the centre.
+        assert_slowed(Vec2::new(0.0, -100.0), 0.0, 90.0, run_out);
+    }
+
+    #[test]
+    fn an_ionized_pirate_docking_thrusts_and_turns_slower() {
+        use crate::traffic::autopilot::TopSpeeds;
+        use crate::traffic::plunder::fly_docking;
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let victim = crate::flight::ShipState::default();
+        let dock = |ship: &mut Npc| {
+            ship.docking = Some(Docking {
+                ship: crate::combat::ShipRef::Player,
+                sub: DockSub::Approach,
+            });
+            let speeds = TopSpeeds::own_of(ship);
+            let flown = fly_docking(
+                ship,
+                Some(&victim),
+                speeds,
+                FlightRules::default(),
+                &mut nova_sim_base::fixture::Draws::of(&[]),
+            );
+            assert!(flown.is_some());
+        };
+        // Approaching the victim straight up the screen.
+        assert_slowed(Vec2::new(0.0, 1000.0), 0.0, 90.0, dock);
+    }
+
+    #[test]
+    fn an_ionized_npcs_rush_is_measured_against_its_slowed_thrust() {
+        use crate::flight::Controls;
+        use crate::traffic::inertialess::Inertia;
+        use crate::traffic::ship_display::{Thrust, record};
+        let flight = FlightRules::default();
+        let mut ship = charged(200.0);
+        let own = ship.flying_handling(6.0, flight);
+        // A rush, 2.75 times its slowed thrust: under twice its unslowed.
+        let rush = Handling {
+            accel: own.accel * 2.75,
+            ..own
+        };
+        let thrust = Controls {
+            thrust: true,
+            ..Controls::default()
+        };
+        record(&mut ship, &rush, thrust, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.thrust, Thrust::Rush);
+        record(&mut ship, &own, thrust, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.thrust, Thrust::Plain);
+    }
+
     #[test]
     fn an_ion_dissipator_among_its_default_items_changes_nothing() {
         let dissipators = [

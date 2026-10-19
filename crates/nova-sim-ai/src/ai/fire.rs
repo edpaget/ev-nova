@@ -2911,6 +2911,21 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_missile_is_fired_at_an_agile_npc_its_ionization_slows() {
+        let emp = shooter(&[short(128), turning_missile(131, 20, 0)], ATTACK);
+        // 6° a tick, slowed to 3 at a factor of 0.5.
+        let agile = |charge: f32| {
+            move |other: &mut Npc| {
+                other.stats.handling.turn_rate = 6.0;
+                other.stats.ion.class_capacity = 400.0;
+                other.ion.charge = charge;
+            }
+        };
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile(0.0)), None);
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile(200.0)), id(131));
+    }
+
+    #[test]
     fn a_planet_type_missile_flies_only_at_a_planet_type_ship_and_another_only_at_another() {
         use crate::combat::weapon::PLANET_TYPE;
         let planet = |player: &mut PlayerSide| player.hull.planet_type = true;

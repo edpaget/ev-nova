@@ -2387,6 +2387,21 @@ mod tests {
     }
 
     #[test]
+    fn an_ionized_repairer_reaches_further_by_its_slowed_turn() {
+        let catalog = hailable();
+        // Its 2° a tick reaches 290; slowed to 1 at a factor of 0.5, 320.
+        for (charge, assisting) in [(0.0, 0), (200.0, 1)] {
+            let mut session = repairing(&catalog);
+            let helper = npc(&mut session);
+            helper.state.position = Vec2::new(300.0, 0.0);
+            helper.stats.ion.class_capacity = 400.0;
+            helper.ion.charge = charge;
+            session.tick_assistance(&NovaDisable);
+            assert_eq!(session.npcs()[0].assisting, assisting, "{charge}");
+        }
+    }
+
+    #[test]
     fn a_repair_for_a_player_no_longer_disabled_ends_at_once_unsaid() {
         let catalog = hailable();
         let mut session = repairing(&catalog);
