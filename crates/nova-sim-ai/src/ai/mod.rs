@@ -550,10 +550,12 @@ pub struct Surroundings<'a> {
     pub iff_marked: &'a BTreeSet<GovtId>,
     /// Whether a fighter launched now would find a ship slot: a free berth
     /// below the spawn reserve, as `_LaunchFighter`'s
-    /// `_GenericRandomShipSpawn(govt, 8)` asks (@0x3d648-0x3d662). With
-    /// none, a goal-4 sniper's launch fails and its bay stays ready, so the
-    /// snipe's own `_AILaunchFighter` makes the bay its pick after its
-    /// passes (see [`fire`]).
+    /// `_GenericRandomShipSpawn(govt, 8)` asks (@0x3d648-0x3d662), read
+    /// slot by slot: the traffic sets it before each NPC's trigger, the
+    /// launches of lower berths that tick having taken theirs (see
+    /// `traffic::launch_room`). With none, a goal-4 sniper's launch fails
+    /// and its bay stays ready, so the snipe's own `_AILaunchFighter` makes
+    /// the bay its pick after its passes (see [`fire`]).
     pub fighter_room: bool,
 }
 

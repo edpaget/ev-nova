@@ -1635,13 +1635,17 @@ mod tests {
     }
 
     #[test]
-    fn a_sniping_carrier_whose_launch_finds_no_slot_keeps_its_round_and_takes_its_bay_as_its_pick()
+    fn a_sniping_carrier_whose_launch_finds_no_slot_launches_nothing_and_takes_its_bay_as_its_pick()
     {
         // A goal-4 carrier sniping at rest 100 above the player, facing it,
         // with a gun its pass finds. With 55 ships in the system its launch
         // finds no slot (@0x3d648-0x3d662) and leaves the bay ready, so the
         // snipe's own `_AILaunchFighter` makes the bay its pick after its
-        // passes (@0x8732f, @0x81411).
+        // passes (@0x8732f, @0x81411). Both launches fail before the sound,
+        // the round and the reload (@0x81421-0x81423); the pick, the bay,
+        // ready, is then fired by `_FireAIShipWeapon` with the gun pass's
+        // flag, which spawns nothing and by the engine spends a fighter
+        // (@0x88cd8-0x88dac, `RuleKey::AiSpendWithoutShot`).
         let catalog = carrying();
         let sniped = |ships: u32| {
             let (mut session, raider, _) = raided(&catalog);
@@ -1666,10 +1670,23 @@ mod tests {
             fight(&mut session, &catalog, &raiding_ai());
             (session, raider)
         };
-        let (full, raider) = sniped(55);
+        let (mut full, raider) = sniped(55);
         assert_eq!(vipers(&full), [], "no fighter");
-        assert_eq!(aboard(&full, raider), 2, "the round put back");
-        assert_eq!(full.npc(raider).expect("there").pick, Some(BAY));
+        assert_eq!(aboard(&full, raider), 1, "drained by its pick alone");
+        let carrier = full.npc(raider).expect("there");
+        assert_eq!(carrier.pick, Some(BAY));
+        let bay = carrier
+            .armament
+            .mounts()
+            .iter()
+            .find(|mount| mount.spec.id == BAY)
+            .expect("carried");
+        assert_eq!(bay.reload, 0.0, "no launch reloads it");
+        let heard = full
+            .take_combat_events()
+            .into_iter()
+            .any(|event| matches!(event, CombatEvent::Fired { weapon, .. } if weapon == BAY));
+        assert!(!heard, "no bay heard");
         let (room, raider) = sniped(54);
         assert_eq!(vipers(&room).len(), 1);
         assert_eq!(aboard(&room, raider), 1);

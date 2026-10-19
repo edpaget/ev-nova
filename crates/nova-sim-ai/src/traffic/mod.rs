@@ -156,6 +156,7 @@ pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod inertialess;
+mod launch_room;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
@@ -196,6 +197,7 @@ use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
+use launch_room::LaunchRoom;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
@@ -986,37 +988,39 @@ impl Traffic {
         self.plunder(plunders, &world, chance);
         self.pursue(&world, &due, &keeps, chance);
         plunder::drift(&mut self.npcs, &due);
-        let mut around = world.around(&self.npcs);
         // Whether a fighter launched now finds a slot, the test
-        // `_LaunchFighter` makes (@0x3d648-0x3d662), a snapshot taken as the
-        // traffic thinks. In the original a lower slot's launch within
-        // `_AIDispatch`'s loop (@0x4429d) takes the last slot before a
-        // higher slot's AI runs; here every carrier of the tick reads the
-        // same room. That per-slot order is
-        // rdm:phase/weapons-fidelity/phase-36-npc-fighter-launch-inside-ai-dispatch.
-        around.fighter_room = self.free_berth(world.spawn_reserve).is_some();
-        let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
-            .npcs
-            .iter()
-            .zip(&due)
-            .map(|(npc, &due)| {
-                due.then(|| {
-                    (
-                        behaviour.trigger(npc, &around),
-                        behaviour.target(npc, &around),
-                    )
-                })
-            })
-            .collect();
-        for (npc, command) in self.npcs.iter_mut().zip(commands) {
-            if let Some((trigger, target)) = command {
-                // No pass clears the pick (+0x72): passes that keep none,
-                // or none run, leave it as it was.
-                if trigger.keep.is_some() {
-                    npc.pick = trigger.keep;
-                    self.berth_picks.write(npc.berth, npc.pick);
-                }
-                npc.trigger = trigger;
+        // `_LaunchFighter` makes (@0x3d648-0x3d662), read slot by slot as
+        // `_AIDispatch`'s loop runs them (@0x44270-0x442ae): a lower
+        // slot's launch takes the last slot before a higher slot's AI
+        // runs (see `launch_room`). A kept trigger, of an NPC not deciding,
+        // takes its berth too, its launches cleared with none left until
+        // it next decides.
+        let mut room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
+        let mut around = world.around(&self.npcs);
+        let mut commands: Vec<(Trigger, Option<Option<ShipRef>>)> =
+            self.npcs.iter().map(|npc| (npc.trigger, None)).collect();
+        for index in launch_room::berth_order(&self.npcs) {
+            let npc = &self.npcs[index];
+            around.fighter_room = room.any();
+            let (trigger, target) = if due[index] {
+                (
+                    behaviour.trigger(npc, &around),
+                    Some(behaviour.target(npc, &around)),
+                )
+            } else {
+                (npc.trigger, None)
+            };
+            commands[index] = (room.settle(npc, trigger), target);
+        }
+        for ((npc, (trigger, target)), &due) in self.npcs.iter_mut().zip(commands).zip(&due) {
+            // No pass clears the pick (+0x72): passes that keep none,
+            // or none run, leave it as it was.
+            if due && trigger.keep.is_some() {
+                npc.pick = trigger.keep;
+                self.berth_picks.write(npc.berth, npc.pick);
+            }
+            npc.trigger = trigger;
+            if let Some(target) = target {
                 npc.target = target;
             }
         }
@@ -1025,8 +1029,7 @@ impl Traffic {
             .npcs
             .iter()
             .map(|npc| {
-                matches!(npc.mode, Mode::Emerging { .. } | Mode::HeldAtGate { .. })
-                    .then(|| behaviour.gate_wait(npc, &around))
+                launch_room::waits_at_gate(npc.mode).then(|| behaviour.gate_wait(npc, &around))
             })
             .collect();
         for (npc, wait) in self.npcs.iter_mut().zip(waits) {
@@ -3600,7 +3603,8 @@ mod tests {
     }
 
     /// Keeps each goal and records, as it fires, whether its
-    /// surroundings had room for a fighter.
+    /// surroundings had room for a fighter. It launches nothing, so takes
+    /// no berth: every NPC sees the same room.
     #[derive(Debug, Default)]
     struct RoomSeen(RefCell<Vec<bool>>);
 
