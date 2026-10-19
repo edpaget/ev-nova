@@ -34,6 +34,7 @@ mod stock_missions;
 mod stock_murk;
 mod stock_news;
 mod stock_npc_escape;
+mod stock_npc_skill;
 mod stock_pirates;
 mod stock_plunder;
 mod stock_pursuit;
