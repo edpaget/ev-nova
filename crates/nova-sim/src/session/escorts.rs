@@ -1346,6 +1346,24 @@ mod tests {
     }
 
     #[test]
+    fn escorts_arrive_at_the_players_top_speed_velocity() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let player = *session.player();
+        assert!(
+            (player.velocity.length() - session.top_speed()).abs() < 1e-4,
+            "the jump arrives at top speed: {player:?}"
+        );
+        let escorts = escort_npcs(&session);
+        assert_eq!(escorts.len(), 2);
+        for npc in &escorts {
+            assert_eq!(npc.state.velocity, player.velocity);
+            assert_eq!(npc.state.heading, player.heading);
+        }
+    }
+
+    #[test]
     fn an_escort_rolls_its_skill_when_first_placed_and_keeps_it_through_each_entry() {
         // The warship of `SkillVar` 37: 75 sides, the last 1.37.
         let mut catalog = fleeted();

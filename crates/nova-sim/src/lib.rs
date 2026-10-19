@@ -162,6 +162,8 @@
 //!   touch them.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
+//! - [`jump_arrival`]: the original's jump arrival, 1350 out on the
+//!   side the player came from at its top speed.
 //! - [`inertialess`]: inertialess flight: who flies it
 //!   ([`is_inertialess`](inertialess::is_inertialess)), the speed along
 //!   the heading thrust and brakes move, and the velocity pulled toward
@@ -383,6 +385,7 @@ pub mod map_search;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
+pub use nova_sim_ai::jump_arrival;
 pub use nova_sim_ai::navigation;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;

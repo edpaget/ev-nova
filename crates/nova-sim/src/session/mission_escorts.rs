@@ -339,6 +339,8 @@ mod tests {
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+        // Held still, as the jump arrives at the escorts' own top speed.
+        session.player.velocity = crate::geometry::Vec2::ZERO;
         let off_slot = |session: &Session| {
             let player = session.player;
             mission_escorts(session)
@@ -1184,6 +1186,7 @@ mod tests {
         assert!(session.take_pay_notes().is_empty());
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "none defected");
         session.player.position = session.sites[0].position;
+        session.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(&mut session).expect("lands");
         take_off(&mut session, &catalog);
         assert!(session.take_pay_notes().is_empty());

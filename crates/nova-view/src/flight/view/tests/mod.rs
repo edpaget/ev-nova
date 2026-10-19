@@ -1016,15 +1016,18 @@ fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
 }
 
-/// `state` after `ticks` of the player's steps under `controls`.
+/// `state` after `ticks` of the player's steps under `controls`, capped
+/// at the top speed of a pilot without Strict Play (the speed a jump
+/// arrives at).
 fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
+    let top = handling().max_speed * nova_sim::top_speed::NON_STRICT_SPEED;
     for _ in 0..ticks {
         player_step(
             &mut state,
             &handling(),
             controls,
             None,
-            nova_sim::flight::Caps::top(handling().max_speed),
+            nova_sim::flight::Caps::top(top),
             FlightRules::default(),
         );
     }

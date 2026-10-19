@@ -358,6 +358,19 @@ impl Harness {
         )
     }
 
+    /// [`Harness::planning`], its jumps arriving at rest just outside the
+    /// no-jump zone, [`RuleKey::JumpArrival`]'s other reading, so the ship
+    /// can jump on from where it arrives.
+    fn planning_at_rest() -> Self {
+        Self::flying_by(
+            data(),
+            SharedChance::default(),
+            Rulebook::default()
+                .with_override(RuleKey::MapPlotting, RuleSource::Bible)
+                .with_override(RuleKey::JumpArrival, RuleSource::Bible),
+        )
+    }
+
     /// [`Harness::flying_over`], its rules read as `rules` says.
     fn flying_by(data: Rc<GameData>, chance: SharedChance, rules: Rulebook) -> Self {
         let screen = start_screen(Rc::clone(&data))
@@ -657,7 +670,8 @@ impl Harness {
     /// jump distance from it, then lets go: first Down, to face away from
     /// the centre while drifting in, then Up.
     fn fly_out(&mut self) {
-        for _ in 0..600 {
+        // Long enough to turn round a jump's arrival at top speed inward.
+        for _ in 0..1800 {
             if self.ship().position.length() >= MIN_JUMP_DISTANCE {
                 self.hold(&[]);
                 return;
@@ -690,8 +704,10 @@ impl Harness {
         let ship = self.ship();
         let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
         // A crawl, as a ship at rest off the centre can drift, isn't
-        // drifting wrong: Down would hold it there.
-        let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
+        // drifting wrong: Down would hold it there, as reverse aims only
+        // a ship moving fast enough on an axis.
+        let drifting_wrong = (if out { outward < -1e-3 } else { outward > 1e-3 })
+            && nova_sim::player_turn::reverse_aim(ship.velocity).is_some();
         // Down stops within a turn of its whole-degree aim, without
         // snapping onto it: a turn and the table's degree of slack.
         let turn = self.session().handling().turn_rate.trunc() + 1.0;
@@ -836,8 +852,9 @@ fn date(harness: &Harness) -> (u8, u8, i32) {
 #[test]
 fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     // The planner: Gamma is unknown past unexplored Beta, so the engine's
-    // Shift-click can't add it after Beta.
-    let mut harness = Harness::planning();
+    // Shift-click can't add it after Beta. The jump arrives at rest, so the
+    // ship can jump on from where it arrives.
+    let mut harness = Harness::planning_at_rest();
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
@@ -950,7 +967,8 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
 
 #[test]
 fn j_straight_after_arriving_jumps_on_to_the_next_system() {
-    let mut harness = Harness::planning();
+    // At rest just outside the zone, by the other reading of the arrival.
+    let mut harness = Harness::planning_at_rest();
     harness.out_towards(130);
     harness.arrive_in(129);
     // Once the jump effect is over, and a second later, J still goes on.
@@ -1197,7 +1215,10 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // A unit every 30 ticks: a unit a second.
     const REGEN_TICKS: i16 = 30;
     let data = data_with(&ship_with_regen(REGEN_TICKS));
-    let mut harness = Harness::flying_over(data, SharedChance::default());
+    // Arriving at rest, by the other reading, so the second jump starts
+    // from where the first arrives.
+    let at_rest = Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible);
+    let mut harness = Harness::flying_by(data, SharedChance::default(), at_rest);
     // A first jump drains the tank below full, so the second jump's
     // `before` sits where regen is free to show, not clamped at the top.
     harness.jump_to_beta();

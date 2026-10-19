@@ -32,16 +32,13 @@
 //! as both reach @0x6d343.
 //!
 //! **The speed's resets.** It starts at none (`_ResetPlayer` @0x1d43c), and
-//! landing sets it to none (`_PlayerLandOnStellar` @0x63409). An arrival
-//! takes its velocity's length ([`Session::arrive_at_speed`]): a gate's
-//! exit sets it to half the top speed along the exit heading
-//! (`_PlayerEnterHypergate` @0x63b17, `_PlayerEnterWormhole` @0x643cd),
-//! the speed the exit's velocity is; a jump's arrival is at rest in the
-//! engine, so none. The original's arrival sets +0x48 to the top speed
-//! (@0x6bce7-0x6bcf5), placing the ship 1350 out as it does every ship
-//! (@0x6bc8c-0x6bccd): that whole block is
-//! rdm:phase/ship-handling-fidelity/phase-18-arrival-at-top-speed's,
-//! since it reverses the engine's at-rest arrival. Nothing else writes the
+//! landing sets it to none (`_PlayerLandOnStellar` @0x63409). A gate's
+//! exit takes its velocity's length ([`Session::arrive_at_speed`]), half
+//! the top speed along the exit heading (`_PlayerEnterHypergate`
+//! @0x63b17, `_PlayerEnterWormhole` @0x643cd). A jump's arrival, by the
+//! engine's reading of `jump_arrival`, sets it to the top speed, the
+//! velocity zero (@0x6bce7-0x6bcf5; see the `jump_arrival` module); by
+//! the other reading it is at rest, so none. Nothing else writes the
 //! player's +0x48: not taking off (the ship is landed, at none), changing
 //! ship or capturing one.
 //!
@@ -383,19 +380,20 @@ mod tests {
     }
 
     #[test]
-    fn a_new_pilot_starts_at_none_and_landing_and_a_jumps_arrival_set_none() {
+    fn a_new_pilot_starts_at_none_and_landing_and_an_at_rest_jumps_arrival_set_none() {
         let catalog = hull();
         let mut session = flying(&catalog, 0.0);
         assert_eq!(session.player_speed(), 0.0, "a new pilot");
         session.player_speed = 3.0;
         session.dock(crate::catalog::StellarId(128));
         assert_eq!(session.player_speed(), 0.0, "landed");
-        let mut session = flying(&catalog, 0.0);
+        let mut session = flying(&catalog, 0.0)
+            .with_rules(Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible));
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(
             session.player.velocity,
             Vec2::ZERO,
-            "the engine's at-rest arrival"
+            "the other reading's at-rest arrival"
         );
         assert_eq!(session.player_speed(), 0.0);
     }

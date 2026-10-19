@@ -162,6 +162,16 @@ pub(super) struct Placement {
 pub(super) enum ShipPlacement {
     /// Exactly here, moving and heading as this says.
     Arrive(ShipState),
+    /// Exactly here, moving and heading as `ship` says, at `speed` along
+    /// its heading: the original's jump arrival, where an inertialess
+    /// ship comes in still at its top speed (see the `jump_arrival`
+    /// module).
+    ArriveAtSpeed {
+        /// Where it is, how it moves and which way it faces.
+        ship: ShipState,
+        /// Its speed along its heading.
+        speed: f32,
+    },
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
     /// Where it is, as it is.
@@ -866,6 +876,10 @@ impl Session {
                 self.player = state;
                 self.arrive_at_speed();
             }
+            ShipPlacement::ArriveAtSpeed { ship, speed } => {
+                self.player = ship;
+                self.player_speed = speed;
+            }
             ShipPlacement::AtRest(position) => {
                 self.player.position = position;
                 self.player.velocity = Vec2::ZERO;
@@ -1471,6 +1485,32 @@ mod tests {
             },
             "at rest, its heading kept"
         );
+    }
+
+    #[test]
+    fn placing_an_arrival_with_a_speed_sets_the_speed_not_the_velocity_length() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let still = ShipState {
+            position: Vec2::new(-1350.0, 0.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        placed(
+            &mut session,
+            ShipPlacement::ArriveAtSpeed {
+                ship: still,
+                speed: 6.0,
+            },
+            false,
+        );
+        assert_eq!(*session.player(), still);
+        assert_eq!(session.player_speed(), 6.0);
+        let moving = ShipState {
+            velocity: Vec2::new(3.0, -4.0),
+            ..still
+        };
+        placed(&mut session, ShipPlacement::Arrive(moving), false);
+        assert_eq!(session.player_speed(), 5.0, "the velocity's length");
     }
 
     #[test]

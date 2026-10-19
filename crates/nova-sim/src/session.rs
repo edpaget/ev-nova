@@ -393,6 +393,7 @@ mod hover;
 mod iff_scramblers;
 mod inertialess;
 mod ionization;
+mod jump_arrival;
 mod jump_collapse;
 mod map;
 mod map_borders;
@@ -3866,7 +3867,8 @@ impl Session {
         // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
         self.red_alert.clear_icon();
         self.take_jump_cost(chance);
-        let (mut from, mut at) = (self.pilot.system, first);
+        let departure = self.pilot.system;
+        let (mut from, mut at) = (departure, first);
         let mut hops = 0;
         // The systems passed on the way, each hop the visible system that
         // stands for it, as the original resolves them (@0x6bd67-0x6bdc1).
@@ -3901,12 +3903,11 @@ impl Session {
         for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
             self.raise_at(mark + n, StoryEvent::Explored { system });
         }
-        let map = |id| self.galaxy.position(id).unwrap_or_default();
         let entered = Arrival {
             system: at,
             sites: self.read_sites(catalog, at),
             placement: Placement {
-                ship: ShipPlacement::Arrive(arrival(map(from), map(at), self.stats.jump_distance)),
+                ship: self.jump_arrival(departure, first, from, at),
                 stellar: None,
                 hold: false,
             },
@@ -7848,7 +7849,9 @@ pub(super) mod tests {
     #[test]
     fn arriving_puts_the_ship_at_the_edge_facing_the_system_it_came_from() {
         let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
@@ -7941,7 +7944,9 @@ pub(super) mod tests {
     #[test]
     fn a_second_jump_continues_the_route_to_the_destination() {
         let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, &catalog, 132);
         assert_eq!(session.system(), SystemId(131));
@@ -9987,7 +9992,7 @@ pub(super) mod tests {
                     SystemId(131),
                     vec![LandingSite {
                         flags: TRADES,
-                        ..planet(140, -1000.0, 0.0)
+                        ..planet(140, -1350.0, 0.0)
                     }],
                 ),
             ],
@@ -10844,7 +10849,7 @@ pub(super) mod tests {
                 SystemId(131),
                 vec![LandingSite {
                     flags: TRADES,
-                    ..planet(140, -1000.0, 0.0)
+                    ..planet(140, -1350.0, 0.0)
                 }],
             )],
             commodities: food_and_metal(),
@@ -11070,7 +11075,9 @@ pub(super) mod tests {
     fn a_hyperspace_distance_outfit_lets_the_ship_jump_nearer_the_centre() {
         // The stock Horizontal Booster: -500, halving the no-jump zone.
         let booster = owning(catalog(), HYPERSPACE_DISTANCE, -500, 1);
-        let mut session = Session::start(&booster).expect("starts");
+        let mut session = Session::start(&booster)
+            .expect("starts")
+            .with_rules(at_rest_arrival());
         session.plot_course(SystemId(131)).expect("a route");
         session.player.position = Vec2::new(0.0, 600.0);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
@@ -11098,7 +11105,9 @@ pub(super) mod tests {
     #[test]
     fn after_arriving_and_a_second_of_flight_the_ship_can_jump_on() {
         let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(jump(&mut session, &catalog, 132), Some(SystemId(131)));
         for _ in 0..TICKS_PER_SECOND {
@@ -11110,7 +11119,9 @@ pub(super) mod tests {
     #[test]
     fn with_a_raised_jump_distance_the_ship_arrives_outside_it_and_can_jump_on() {
         let raised = owning(catalog(), HYPERSPACE_DISTANCE, 250, 1);
-        let mut session = Session::start(&raised).expect("starts");
+        let mut session = Session::start(&raised)
+            .expect("starts")
+            .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
         session.player.position = Vec2::new(0.0, 1300.0);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
@@ -11192,6 +11203,13 @@ pub(super) mod tests {
         }
     }
 
+    /// The rules with the jump's arrival at rest just outside the no-jump
+    /// zone, the other reading of `jump_arrival` (see the `jump_arrival`
+    /// module).
+    pub(super) fn at_rest_arrival() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible)
+    }
+
     /// Plots a course to 134, flies out and begins the jump.
     pub(super) fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
         let mut session = Session::start(catalog)
@@ -11214,7 +11232,8 @@ pub(super) mod tests {
     #[test]
     fn a_multi_jump_passes_modval_systems_along_the_course_for_one_jumps_fuel_and_days() {
         let catalog = chained(catalog(), 2);
-        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        let mut session =
+            bound_for_134(&catalog, MultiJumpRule::default()).with_rules(at_rest_arrival());
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)), "the first hop");
         session.take_sounds();
@@ -11299,10 +11318,10 @@ pub(super) mod tests {
         assert_eq!(session.course(), []);
         assert_eq!(session.reserves().fuel.now, 200.0);
         assert_eq!(dmy(&session), (24, 6, 1177));
-        assert_eq!(
-            session.player().position,
-            Vec2::new(-1001.0, 0.0),
-            "facing 132, west of 134"
+        let position = session.player().position;
+        assert!(
+            (position - Vec2::new(-1350.0, 0.0)).length() < 1e-3,
+            "on 130's side, the first hop east of it: {position:?}"
         );
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }

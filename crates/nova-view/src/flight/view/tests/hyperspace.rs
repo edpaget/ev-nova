@@ -691,11 +691,22 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(view.course_map().current(), Some(SystemId(131)));
     assert_eq!(view.course_map().route(), []);
+    // 1350 out on Sol's side, at top speed (`nova_sim::jump_arrival`).
     let arrived = player(&view);
-    assert_eq!(arrived.position, Vec2::new(-1001.0, 0.0));
-    assert_eq!(arrived.velocity, Vec2::ZERO, "at rest");
+    let top = view.session().expect("flying").top_speed();
+    assert!(
+        (arrived.position - Vec2::new(-1350.0, 0.0)).length() < 1e-3,
+        "{arrived:?}"
+    );
+    assert!(
+        (arrived.velocity.length() - top).abs() < 1e-4,
+        "{arrived:?}"
+    );
     assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
-    assert_eq!(view.shown_position(), at(-1001.0, 0.0));
+    assert_eq!(
+        view.shown_position(),
+        at(arrived.position.x, arrived.position.y)
+    );
     let list = drawn(&view);
     let (at_fade, color) = fade(&list).expect("a fade");
     assert_eq!(color.a, 255, "the arrival frame, white");
@@ -712,11 +723,11 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     let mut stars = DrawList::new();
     starfield::draw(&mut stars, &view.camera());
     assert!(list.iter().take(stars.len()).eq(stars.iter()));
-    let at_rest = player(&view);
+    let flying = player(&view);
     view.input(&key(Key::Up, true));
     ticks(&mut view, 3);
-    assert_eq!(player(&view), stepped(at_rest, THRUST, 3));
-    assert_ne!(player(&view), at_rest, "it flies again");
+    assert_eq!(player(&view), stepped(flying, THRUST, 3));
+    assert_ne!(player(&view), flying, "it flies again");
 }
 
 #[test]
@@ -884,7 +895,8 @@ fn with_effects_off_a_jump_moves_off_then_arrives_without_fading() {
         assert!(view.session().expect("flying").hyper_gamma() < 0.0);
         view.tick(TICK);
     }
-    assert_ne!(leaving.position, Vec2::new(-1001.0, 0.0));
+    let arriving = Vec2::new(-1350.0, 0.0);
+    assert!((leaving.position - arriving).length() > 1.0);
 
     // On the warp's end the ship arrives and the screen is white once.
     let session = view.session().expect("flying");
@@ -897,7 +909,11 @@ fn with_effects_off_a_jump_moves_off_then_arrives_without_fading() {
         "opaque white over everything"
     );
     assert!(view.jump_effect().is_some(), "flashing");
-    assert_eq!(player(&view).position, Vec2::new(-1001.0, 0.0));
+    assert!(
+        (player(&view).position - arriving).length() < 1e-3,
+        "{:?}",
+        player(&view)
+    );
 
     // Then plain flight, with no fade in.
     view.tick(ms(33));
@@ -1364,6 +1380,11 @@ fn a_flight_key_held_through_arrival_acts_at_once() {
     let arrived = player(&view);
     view.tick(TICK);
     assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    assert_ne!(
+        player(&view),
+        stepped(arrived, Controls::default(), 1),
+        "not coasting"
+    );
 }
 
 #[test]
@@ -1377,6 +1398,11 @@ fn a_key_held_when_j_is_pressed_stays_held() {
     let arrived = player(&view);
     view.tick(TICK);
     assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    assert_ne!(
+        player(&view),
+        stepped(arrived, Controls::default(), 1),
+        "not coasting"
+    );
 }
 
 #[test]
