@@ -7,7 +7,7 @@ use std::rc::Rc;
 use nova_appkit::{Command, MenuBar};
 use objc2::MainThreadMarker;
 use objc2::sel;
-use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
+use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem, NSWindow};
 
 /// The item of `menu` titled `title`, and where it is.
 fn item(menu: &NSMenu, title: &str) -> (isize, objc2::rc::Retained<NSMenuItem>) {
@@ -21,6 +21,8 @@ fn item(menu: &NSMenu, title: &str) -> (isize, objc2::rc::Retained<NSMenuItem>) 
 
 pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
     let mtm = MainThreadMarker::new().expect("the test binary's main thread");
+    // On, so the install is what turns it off.
+    NSWindow::setAllowsAutomaticWindowTabbing(true, mtm);
     let picked = Rc::new(RefCell::new(Vec::new()));
     let bar = {
         let picked = Rc::clone(&picked);
@@ -50,6 +52,12 @@ pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
         NSEventModifierFlags::Command
     );
     assert!(quit.target().is_some(), "the crate's target");
+    let (_, hide_others) = item(app_menu, "Hide Others");
+    assert_eq!(hide_others.keyEquivalent().to_string(), "h");
+    assert_eq!(
+        hide_others.keyEquivalentModifierMask(),
+        NSEventModifierFlags::Command | NSEventModifierFlags::Option
+    );
     let (prefs_at, prefs) = item(app_menu, "Preferences…");
     assert_eq!(prefs.keyEquivalent().to_string(), ",");
     let (about_at, _) = item(app_menu, "About EV Nova");
@@ -90,6 +98,17 @@ pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
     // Window is AppKit's Window menu.
     let (_, minimize) = item(window, "Minimize");
     assert_eq!(minimize.action(), Some(sel!(performMiniaturize:)));
+    assert!(!minimize.isAlternate());
+    let (_, minimize_all) = item(window, "Minimize All");
+    assert_eq!(minimize_all.action(), Some(sel!(miniaturizeAll:)));
+    assert!(minimize_all.isAlternate(), "Minimize, with Option held");
+    assert_eq!(minimize_all.keyEquivalent().to_string(), "m");
+    assert_eq!(
+        minimize_all.keyEquivalentModifierMask(),
+        NSEventModifierFlags::Command | NSEventModifierFlags::Option
+    );
+    // The game's one window offers no tabs.
+    assert!(!NSWindow::allowsAutomaticWindowTabbing(mtm));
     let windows_menu = app.windowsMenu().expect("a Windows menu");
     assert_eq!(windows_menu.title().to_string(), "Window");
     let services = app.servicesMenu().expect("a Services menu");
