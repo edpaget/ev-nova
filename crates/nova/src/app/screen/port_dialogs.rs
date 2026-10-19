@@ -245,10 +245,9 @@ pub(super) fn desc_dialog(
 /// governments and no draws, as there is no flight; then
 /// `_MungeBriefing(0, -1)` (about @0x16035, X @0x1acb1) fills its tags
 /// from the zeroed globals ([`text_tags::expand_before_any_pilot`]).
-/// After a flight the original reads the last pilot's globals instead
-/// (no `_ResetPlayer` after `_PlayGame`); the engine holds no pilot
-/// outside flight, which rdm:phase/main-screen/phase-3-game-in-progress
-/// builds.
+/// This is the main screen's reading with no game in progress; with one,
+/// the router reads the pilot it holds instead, as the original reads the
+/// loaded pilot's globals (no `_ResetPlayer` after `_PlayGame`).
 pub(super) fn start_up_words(
     raw: &str,
     data: &(impl nova_sim::PilotCatalog + ?Sized),

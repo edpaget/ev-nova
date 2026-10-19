@@ -30,6 +30,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
 use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
@@ -459,6 +460,7 @@ impl Harness {
             self.send(WindowEvent::Text(c));
         }
         self.press(Key::Enter);
+        self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
     }
 
@@ -1186,6 +1188,7 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
     harness.choose(MenuChoice::OpenPilot);
     assert_eq!(harness.showing(), Showing::OpenPilot);
     harness.press(Key::Enter);
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().pilot().name(), "Ada");
     harness.jump_to_beta();
@@ -1240,10 +1243,13 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     assert!(before < 300.0, "below full, so regen could show: {before}");
 
     let arrived = harness.arrive_in(130);
-    assert_eq!(
-        harness.session().reserves().fuel.now,
-        before - JUMP_FUEL,
-        "none regained during the jump or as a lump on arrival"
+    // `_HandlePlayer` regenerates through the warp stage too
+    // (@0x6d96d-0x6d9c3): at its normal rate, a unit a second, over a warp
+    // shorter than 6 seconds, and no lump on arrival.
+    let landed_with = harness.session().reserves().fuel.now;
+    assert!(
+        before - JUMP_FUEL < landed_with && landed_with < before - JUMP_FUEL + 6.0,
+        "regained through the warp at its rate alone: {landed_with}"
     );
     assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
 
@@ -1253,10 +1259,10 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // boundaries the fixed step may fall either side of.
     let ticks = f32::from(seconds) * TICKS_PER_SECOND as f32;
     let regen_over_the_run = ticks / f32::from(REGEN_TICKS);
-    let at_most = before - JUMP_FUEL + regen_over_the_run + 1.0;
+    let at_most = landed_with + regen_over_the_run + 1.0;
     let fuel = harness.session().reserves().fuel.now;
     assert!(
-        before - JUMP_FUEL < fuel && fuel <= at_most,
+        landed_with < fuel && fuel <= at_most,
         "creeping back at its normal rate, at most {at_most}: {fuel}"
     );
 }
@@ -1274,6 +1280,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
     harness.choose(MenuChoice::OpenPilot);
     harness.press(Key::Enter);
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));
@@ -1580,3 +1587,5 @@ fn escape_on_the_hypergate_map_enters_the_gate_too() {
     assert_eq!(harness.session().system(), SystemId(130));
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
 }
+
+crate::common::entry_harness!(Harness, click, frame);

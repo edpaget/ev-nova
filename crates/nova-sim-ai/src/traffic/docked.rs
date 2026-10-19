@@ -11,24 +11,13 @@
 //! - it is no further than [`DOCKED_WITH`] on each axis, inclusive, a NaN
 //!   off counting as too far (@0x89634-0x89689).
 //!
-//! On the engine, sub 0xf is:
-//!
-//! - a pirate's [`Npc::docking`] in [`DockSub::Dock`], whose
-//!   [`ship`](crate::traffic::plunder_dock::Docking::ship) is its nav (see
-//!   [`plunder_dock`](crate::traffic::plunder_dock));
-//! - a repairer's stand-in: [`Goal::Assist`] with [`Help::Repair`] within
-//!   its [`assist::reach`] of the player. `_AIMakeShipRepairPlayer`
-//!   (@0x82e08) targets the player, so its target test always passes.
-//!
-//! *Reconcile:* rdm:phase/combat-ai-fidelity/phase-19-left-out-of-phase-10
-//! gives the repairer an [`Npc::docking`] in [`DockSub::Dock`] with the
-//! player; drop the repairer's stand-in here when it lands, as that phase
-//! drops it from the answer flag's `docking`.
+//! On the engine, sub 0xf is an [`Npc::docking`] in [`DockSub::Dock`],
+//! whose [`ship`](crate::traffic::plunder_dock::Docking::ship) is its nav:
+//! a pirate's (see [`plunder_dock`](crate::traffic::plunder_dock)) or a
+//! repairer's (see [`repair_dock`](crate::traffic::repair_dock)).
 
-use crate::ai::{Goal, Help};
 use crate::combat::ShipRef;
 use crate::flight::ShipState;
-use crate::hail::assist;
 use crate::traffic::npc::Npc;
 use crate::traffic::plunder_dock::DockSub;
 
@@ -44,24 +33,15 @@ pub fn docked_with_player(npc: &Npc, player: &ShipState) -> bool {
         .docking
         .filter(|docking| docking.sub == DockSub::Dock)
         .map(|docking| docking.ship);
-    let repairing = npc.goal == Goal::Assist(Help::Repair)
-        && assist::within(
-            &npc.state,
-            player,
-            assist::reach(Help::Repair, npc.turn_rate()),
-        );
-    let on_player =
-        repairing || nav == Some(ShipRef::Player) || npc.target == Some(ShipRef::Player);
+    let on_player = nav == Some(ShipRef::Player) || npc.target == Some(ShipRef::Player);
     let off = npc.state.position - player.position;
-    (nav.is_some() || repairing)
-        && on_player
-        && off.x.abs() <= DOCKED_WITH
-        && off.y.abs() <= DOCKED_WITH
+    nav.is_some() && on_player && off.x.abs() <= DOCKED_WITH && off.y.abs() <= DOCKED_WITH
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::{Goal, Help};
     use crate::combat::NpcId;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
@@ -97,10 +77,15 @@ mod tests {
         pirate
     }
 
-    /// A ship repairing the player, `off` it.
-    fn repairer(off: Vec2) -> Npc {
+    /// A ship repairing the player, `off` it, docking with it by `sub`.
+    fn repairer(off: Vec2, sub: DockSub) -> Npc {
         let mut ship = near(off);
         ship.goal = Goal::Assist(Help::Repair);
+        ship.target = Some(ShipRef::Player);
+        ship.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub,
+        });
         ship
     }
 
@@ -156,17 +141,20 @@ mod tests {
     }
 
     #[test]
-    fn a_repairer_within_its_reach_and_16_counts() {
-        let ship = repairer(Vec2::new(16.0, -16.0));
+    fn a_repairer_docked_with_the_player_within_16_counts() {
+        let ship = repairer(Vec2::new(16.0, -16.0), DockSub::Dock);
         assert!(docked_with_player(&ship, &player()));
     }
 
     #[test]
-    fn a_repairer_within_its_reach_but_17_off_does_not() {
-        let ship = repairer(Vec2::new(17.0, 0.0));
-        let reach = assist::reach(Help::Repair, ship.turn_rate());
-        assert!(reach > 17.0, "within its reach");
-        assert!(!docked_with_player(&ship, &player()));
+    fn a_repairer_17_off_or_closing_does_not() {
+        let far = repairer(Vec2::new(17.0, 0.0), DockSub::Dock);
+        assert!(!docked_with_player(&far, &player()));
+        let closing = repairer(Vec2::ZERO, DockSub::Close);
+        assert!(!docked_with_player(&closing, &player()));
+        let mut undocked = repairer(Vec2::ZERO, DockSub::Dock);
+        undocked.docking = None;
+        assert!(!docked_with_player(&undocked, &player()), "no sub 0xf");
     }
 
     #[test]

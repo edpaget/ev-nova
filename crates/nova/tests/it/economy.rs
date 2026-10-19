@@ -21,6 +21,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -875,6 +876,7 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.pilot().ship(), OLD);
@@ -1062,6 +1064,7 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     let restored = game.pilot();
     assert_eq!(restored, flown);
@@ -1082,3 +1085,5 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     assert_eq!(Some(restored.date()), days.nth(8));
     assert_eq!(game.session().stats(), stats);
 }
+
+crate::common::entry_harness!(Harness, click, frame);

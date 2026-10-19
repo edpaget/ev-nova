@@ -472,9 +472,9 @@ fn scanner_name<'a>(person: Option<&'a str>, scanner: ShipId, session: &'a Sessi
 pub const NO_RESPONSE: &str = "No response.";
 /// `STR#` 2002 #54.
 pub const HAIL_IN_HYPERSPACE: &str = "Unable to send hail - target ship is entering hyperspace.";
-/// `STR#` 2002 #3, without the ship's name the original adds.
+/// `STR#` 2002 #3, which the line follows with the player's ship's name.
 pub const ENERGY_TRANSFER: &str = "Energy transfer complete";
-/// `STR#` 2002 #384.
+/// `STR#` 2002 #384, which the line follows with the player's ship's name.
 pub const REPAIRS_COMPLETE: &str = "Repairs complete";
 
 /// What the player is told when `refusal` stops a hail: the original's
@@ -537,16 +537,16 @@ pub(super) fn mission_board_message(line: MissionBoardLine, session: &Session) -
 }
 
 /// What the player is told when a ship it asked for help is done:
-/// "<ship>:  Energy transfer complete." or "<ship>:  Repairs complete."
-/// (the original names the player's ship after the energy transfer; it
-/// has no name here).
+/// "`ship`:  Energy transfer complete, `player ship`." or "`ship`:  Repairs
+/// complete, `player ship`." (`_HighLevelAIHandler` @0x8f5b5-0x8f668,
+/// `_LowLevelAIHandler` @0x86e0f-0x86ebb).
 #[must_use]
 pub fn comm_message(note: &CommNote) -> String {
     let done = match note.done {
         Help::Refuel => ENERGY_TRANSFER,
         Help::Repair => REPAIRS_COMPLETE,
     };
-    format!("{}:  {done}.", note.comm_name)
+    format!("{}:  {done}, {}.", note.comm_name, note.ship_name)
 }
 
 /// `STR#` 2002 #29.
@@ -1848,15 +1848,16 @@ mod tests {
         let note = |done| nova_sim::CommNote {
             from: NpcId(2),
             comm_name: "Cruiser".to_owned(),
+            ship_name: "Kestrel".to_owned(),
             done,
         };
         assert_eq!(
             comm_message(&note(Help::Refuel)),
-            "Cruiser:  Energy transfer complete."
+            "Cruiser:  Energy transfer complete, Kestrel."
         );
         assert_eq!(
             comm_message(&note(Help::Repair)),
-            "Cruiser:  Repairs complete."
+            "Cruiser:  Repairs complete, Kestrel."
         );
     }
 

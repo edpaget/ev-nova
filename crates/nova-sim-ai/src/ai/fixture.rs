@@ -4,7 +4,7 @@ use crate::ai::fire::AmmoLeft;
 use crate::ai::{Blessed, Blessing, PlayerSide, Surroundings};
 use crate::catalog::{EscortClass, GovtId, GovtRecord, LandingSite, WeaponId, WeaponRecord};
 use crate::combat::ShipRef;
-use crate::combat::armament::{Armament, LauncherRounds};
+use crate::combat::armament::{Armament, Arsenal, LauncherRounds};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
@@ -146,6 +146,15 @@ pub(crate) fn around<'a>(
         record,
         ..Surroundings::new(sites, npcs)
     }
+}
+
+/// The global weapon records of the weapons `npcs` carry, as their mounts
+/// hold them: what a lead reads ([`Surroundings::weapons`]).
+pub(crate) fn records_of<'a>(npcs: impl IntoIterator<Item = &'a Npc>) -> Arsenal {
+    Arsenal::of_specs(
+        npcs.into_iter()
+            .flat_map(|npc| npc.armament.mounts().iter().map(|mount| mount.spec)),
+    )
 }
 
 /// NPC `id` as a ship.

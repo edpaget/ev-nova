@@ -631,7 +631,10 @@ fn a_helpers_note_shows_for_the_common_time() {
     assert_eq!(view.message(), None);
     view.tick(TICK);
     let note = view.message().expect("refuelled").to_owned();
-    assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+    assert!(
+        note.ends_with(":  Energy transfer complete, Ship 129."),
+        "{note}"
+    );
     assert_lasts(&mut view, &note, nova_sim::hail::NOTE_TICKS);
 }
 

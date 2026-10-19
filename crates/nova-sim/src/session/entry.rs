@@ -982,9 +982,13 @@ impl Session {
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
+                // The berths' odds, search timers and persons outlast the
+                // traffic, as the original's ship table does (see the
+                // `kept_berths` module).
+                let kept = self.traffic.kept_berths();
                 self.traffic = Traffic::new();
                 // A new traffic reads reused slots' picks, exit cursors and
-                // blink timers by the rulebook.
+                // blink timers and search timers by the rulebook.
                 self.traffic
                     .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
                 self.traffic
@@ -995,6 +999,9 @@ impl Session {
                 self.traffic.set_spawn_anim_rolls_first_class(
                     self.rules.source_for(RuleKey::SpawnAnimRollsFirstClass),
                 );
+                self.traffic
+                    .set_reused_slot_search(self.rules.source_for(RuleKey::ReusedSlotSearch));
+                self.traffic.keep_berths(kept);
                 self.set_first_class();
                 self.traffic_due = true;
                 self.fleet.clear();

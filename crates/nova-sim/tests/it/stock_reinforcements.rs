@@ -199,6 +199,9 @@ fn a_federation_ship_outnumbered_in_kania_calls_its_fleet_which_comes_after_its_
     let mut arrived = None;
     for tick in 0..2000_u32 {
         session.tick_traffic(data.as_ref(), &Outnumbered, &mut chance);
+        // The combat tick settles the frame's calls (see the session's
+        // `comm_calls` module).
+        session.tick_combat(nova_sim::Rules::default(), &mut chance);
         let messages = session.take_messages();
         let sounds = session.take_sounds();
         if messages.contains(&line) {

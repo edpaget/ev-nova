@@ -124,14 +124,14 @@ impl Session {
                     let npcs = self
                         .npcs()
                         .iter()
-                        .filter(|npc| self.shown(npc.hull))
+                        .filter(|npc| self.shown(&npc.hull))
                         .map(|npc| {
                             let layer =
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
                     let player = self
-                        .shown(self.hull)
+                        .shown(&self.hull)
                         .then(|| (ShipRef::Player, self.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
                     (in_draw_order(layers.iter().copied()), layers)
@@ -158,7 +158,7 @@ impl Session {
             ShipRef::Player => Some(self.hull),
             ShipRef::Npc(id) => self.npc(id).map(|npc| npc.hull),
         };
-        hull.is_some_and(|hull| !self.shown(hull))
+        hull.is_some_and(|hull| !self.shown(&hull))
     }
 
     /// The ship type whose frames `ship`'s slot sprite holds, the sheet
@@ -180,7 +180,7 @@ impl Session {
                 (slot_of(npc), npc.ship, npc.hull)
             }
         };
-        let stale = !self.shown(hull)
+        let stale = !self.shown(&hull)
             && self.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
         Some(if stale {
             self.slot_sprites.frames.of(slot)
@@ -206,7 +206,7 @@ impl Session {
 
     /// Whether a ship of `hull` is drawn and laid out (see
     /// [`Session::is_hidden`]).
-    fn shown(&self, hull: HullSpec) -> bool {
+    fn shown(&self, hull: &HullSpec) -> bool {
         !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
     }
 
@@ -277,7 +277,7 @@ impl Session {
         let mut npcs: Vec<&Npc> = self
             .npcs()
             .iter()
-            .filter(|npc| self.shown(npc.hull))
+            .filter(|npc| self.shown(&npc.hull))
             .collect();
         npcs.sort_by_key(|npc| npc.berth);
         let npcs = npcs.into_iter().map(|npc| {
@@ -285,7 +285,7 @@ impl Session {
             (ShipRef::Npc(npc.id), slot_of(npc), layer)
         });
         let player = self
-            .shown(self.hull)
+            .shown(&self.hull)
             .then(|| (ShipRef::Player, Slot::Player, self.player_layer()));
         player.into_iter().chain(npcs).collect()
     }

@@ -10,9 +10,10 @@
 //!
 //! | Original | Engine |
 //! |---|---|
-//! | `_BraveTraderAI` @0x8b6dc, `_HighLevelAIHandler` @0x8e0d7 and @0x8e70d, in each think | the think's [`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements), answered with the frame's other calls ([`Session::answer_comm_calls`]), unforced |
-//! | `_DoCommDialog` @0x9636d, battle help | the hail's Defend, forced (`Session::act`) |
-//! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in [`Session::tick_traffic`] after the frame's calls, on every tick in flight, a jump's included; and after double time's second pass ([`Session::tick_again`]) |
+//! | `_BraveTraderAI` @0x8b6dc, `_HighLevelAIHandler` @0x8e0d7 and @0x8e70d, in each think | the think's [`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements), answered in slot order with the frame's other calls ([`Session::settle_line_queue`]), unforced, at the odds its think read |
+//! | `_DoCommDialog` @0x9636d, battle help | the hail's Defend, forced (`Session::act`), at the ship's cached odds |
+//! | `_AICallForReinforcements`' reads of +0xc914 (@0x7f60d, @0x7f69b) | the caller's cached odds ([`Npc::odds`](crate::traffic::npc::Npc::odds)) by the engine's reading of [`RuleKey::OddsCache`], worked out fresh by the other |
+//! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in [`Session::tick_traffic`] after the frame's calls, on every tick in flight, a jump's included, or held behind calls held behind a scan into [`Session::tick_combat`] (see the `comm_calls` module); and after double time's second pass ([`Session::tick_again`]) |
 //! | `_IncrementGameTime` @0xb724-0xb759 | the daily step's reinforcements ([`Session::reinforcements_day`]) |
 //! | `_ResetPlayerPrecalcedValues` @0xc628-0xc68f | [`Session::reset_precalced`], after the sabotage clock and before the trim |
 //! | `_WarshipAI` @0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e | the coming fleet in the traffic's [`World`](crate::traffic::World) ([`Session::reinforcements_coming`]) |
@@ -59,7 +60,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::Session;
-use crate::ai::odds::odds_against;
+use crate::ai::odds::cached_odds_at;
 use crate::ai::reinforcements::{
     self, Called, Clock, Coming, Event, Inhibitors, ReinforcementFacts,
 };
@@ -153,10 +154,21 @@ impl Session {
 
     /// NPC `id` calls for its system's reinforcement fleet, `force`d past
     /// the strength test or not (`_AICallForReinforcements(ship, force)`,
-    /// see the module docs): its facts gathered now, the odds against it
-    /// worked out fresh as its retreat reads them. A ship not in the
+    /// see the module docs): its facts gathered now. The odds against it
+    /// are its slot's cached ones (+0xc914 @0x7f60d, @0x7f69b) by the
+    /// engine's reading of [`RuleKey::OddsCache`]: `think_odds`, as its
+    /// think read them, for a call a think made (the odds pass ran after
+    /// the think, before this answer), else its cached odds now, as
+    /// battle help's call between frames reads them. By the other reading
+    /// they are worked out fresh now ([`cached_odds_at`],
+    /// which the session only hands the think's odds). A ship not in the
     /// system calls nothing.
-    pub(super) fn call_for_reinforcements(&mut self, id: NpcId, force: bool) {
+    pub(super) fn call_for_reinforcements(
+        &mut self,
+        id: NpcId,
+        force: bool,
+        think_odds: Option<f32>,
+    ) {
         let fleet = self.traffic.reinforcement_fleet();
         let facts = {
             let world = self.world();
@@ -169,7 +181,7 @@ impl Session {
                 has_govt: npc.govt.is_some(),
                 fleet,
                 clock: self.clock_here(),
-                odds: odds_against(npc, &around),
+                odds: cached_odds_at(npc, &around, think_odds),
                 allied: self.govts.allies(npc.govt, fleet_govt),
                 fleet_max_odds: self.govts.max_odds(fleet_govt),
                 force,

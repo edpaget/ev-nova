@@ -204,6 +204,8 @@ fn main() -> ExitCode {
         }
         Err(error) => eprintln!("nova: running without dialogs: {error}"),
     }
+    // Last, once the rules and the chance its load reads are given.
+    let screen = screen.open_last_pilot();
     let audio = open_audio(&data, &dir, &rulebook);
     let runner =
         Runner::new(Rc::clone(&data), screen, fonts).with_diagnostics(Box::new(std::io::stderr()));

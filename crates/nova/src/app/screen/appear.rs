@@ -31,8 +31,15 @@ impl AppScreen {
     /// appears (`_LoadMainScreenAnim` before the `StillDown` spin,
     /// @0x1a593), and the appear waits for the primary button if it is
     /// down. The death's return and Escape's put-away both come here.
+    /// Play entered from the menu leaves its pilot held there
+    /// ([`AppScreen::leave_play`]); the developer's flight, entered from
+    /// a side, is dropped ([`AppScreen::end_flight`]).
     pub(super) fn return_to_main_screen(&mut self) {
-        self.end_flight(Side::MainMenu);
+        if self.return_to == Side::MainMenu {
+            self.leave_play();
+        } else {
+            self.end_flight(Side::MainMenu);
+        }
         if let Some(menu) = &mut self.menu {
             menu.screen.appear();
         }

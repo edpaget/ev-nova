@@ -929,6 +929,12 @@ impl<C> FlightView<C> {
         &self.escort_menu
     }
 
+    /// Shuts the escort menu, as play is entered from the main screen
+    /// (`escortMenuOnscreen` = 0, `_EnterGameFromMainScreen` @0x1a39e).
+    pub fn shut_escort_menu(&mut self) {
+        self.escort_menu.close();
+    }
+
     /// Picks the target as `pick` says.
     pub(super) fn select_target(&mut self, pick: TargetPick) {
         if let Ok(session) = &mut self.session {

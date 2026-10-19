@@ -38,9 +38,17 @@
 //!
 //! **The load sweep.** [`Session::fly`] raises `Explored` for every
 //! catalog system that is visible after the load's refresh and explored,
-//! by ascending ID, as `_OpenLastPilotFile` (@0x765a2-0x765ce) and
-//! `_MainScreenChoice` (@0x1a8d4-0x1a906) sweep. Nothing it decides reads
-//! a rule, so it does not wait on task load-reads-rules-before-fly.
+//! by ascending ID, as Open Pilot's `_MainScreenChoice` sweeps
+//! (@0x1a8d4-0x1a906) once the pilot is loaded; `_OpenLastPilotFile`
+//! sweeps the same way at launch (@0x765a2-0x765ce), which the launch's
+//! load of the last pilot builds with the same sweep. A return from play
+//! to the main screen keeps the session as play left it, so it sweeps
+//! nothing and runs no `OnExplore`: `_DoMainScreen`'s setup, which
+//! explores the player's system, runs once a launch, as
+//! [`Session::open_at_launch`] does ([`Session::explore_here`]); Open
+//! Pilot doesn't run it. Nothing the sweep
+//! decides reads a rule, so it does not wait on task
+//! load-reads-rules-before-fly.
 //!
 //! **Gate exits** explore no nebula (`_PlayerEnterHypergate` 0x637bf,
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the
@@ -48,8 +56,8 @@
 //!
 //! Left to others: the activity read at the exploration
 //! (crons-news-ranks-fidelity phase 24), a jump's `OnExplore` before its
-//! days and crons (phase 25), the menu round trip re-running `OnExplore`
-//! (phase 26), and the escape pod's exploration (roadmap player-death).
+//! days and crons (phase 25), and the escape pod's exploration (roadmap
+//! player-death).
 
 use super::{Session, SessionEvent};
 use crate::catalog::{NebulaId, SystemId};
@@ -114,6 +122,17 @@ impl Session {
         for system in swept {
             self.raise(StoryEvent::Explored { system });
         }
+    }
+
+    /// `_DoMainScreen`'s once-a-launch exploration of the player's system
+    /// (`_ExploreNebulaeFromSystem(current)` @0x1affe), part of
+    /// [`Session::open_at_launch`]: `Explored` for the current system,
+    /// visible or not, explored or not. A nebula the load's sweep explored
+    /// already is not admitted again as it settles.
+    pub(super) fn explore_here(&mut self) {
+        self.raise(StoryEvent::Explored {
+            system: self.pilot.system,
+        });
     }
 
     /// Withdraws the `Explored` events raised and not yet settled, keeping
@@ -517,6 +536,56 @@ mod tests {
                 .any(|note| matches!(note, ScriptNote::EventsDropped { .. }))
         );
         assert!(bit(&session, 7));
+    }
+
+    // The launch.
+
+    /// [`around_131`]'s pilot loaded at 131, its load's sweep settled
+    /// (which explores nebula 128, as the load explores 131), with bit 7
+    /// cleared again.
+    fn loaded_at_131() -> (FakePilotCatalog, Session) {
+        let catalog = nebulous(vec![around_131("")]);
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.system = SystemId(131);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        settle(&mut session, &catalog);
+        assert!(explored(&session, 128), "the sweep's");
+        run(&mut session, "!b7");
+        let _ = session.take_save_due();
+        (catalog, session)
+    }
+
+    #[test]
+    fn the_launch_explores_the_players_system() {
+        let (_, mut session) = loaded_at_131();
+        session.open_at_launch(&mut NeverFires);
+        assert_eq!(
+            session.story_raised(),
+            [StoryEvent::Explored {
+                system: SystemId(131)
+            }]
+        );
+    }
+
+    #[test]
+    fn the_launch_runs_the_on_explore_of_a_nebula_over_the_players_system_left_unexplored() {
+        let (catalog, mut session) = loaded_at_131();
+        session.pilot.galaxy.set_nebula_explored(N128, false);
+        session.galaxy.set_overlay(session.pilot.galaxy.clone());
+        session.open_at_launch(&mut NeverFires);
+        assert!(!session.take_save_due(), "the launch makes no save due");
+        settle(&mut session, &catalog);
+        assert!(explored(&session, 128));
+        assert!(bit(&session, 7), "its OnExplore ran");
+    }
+
+    #[test]
+    fn a_nebula_the_sweep_explored_runs_no_more_at_the_launch() {
+        let (catalog, mut session) = loaded_at_131();
+        session.open_at_launch(&mut NeverFires);
+        settle(&mut session, &catalog);
+        assert!(!bit(&session, 7), "once in all: the sweep's");
+        assert!(!session.take_save_due(), "no save is due");
     }
 
     // A new pilot and the gates.

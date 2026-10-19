@@ -372,9 +372,11 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
-                crate::rulebook::RuleSource::Engine,
+                crate::traffic::autopilot::Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut nova_sim_base::NeverFires,
             );
             let turned = crate::flight::shortest_turn(heading, ship.state.heading).abs();

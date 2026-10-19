@@ -130,6 +130,9 @@ pub struct MemoryPilots {
     fail_writes: Rc<Cell<bool>>,
     deleted: Rc<RefCell<Vec<String>>>,
     fail_deletes: Rc<Cell<bool>>,
+    last: Rc<RefCell<Option<String>>>,
+    fail_last_reads: Rc<Cell<bool>>,
+    fail_last_writes: Rc<Cell<bool>>,
 }
 
 impl MemoryPilots {
@@ -195,6 +198,30 @@ impl MemoryPilots {
         self.fail_deletes.set(fail);
     }
 
+    /// The key the last-pilot record names, if any.
+    #[must_use]
+    pub fn last(&self) -> Option<String> {
+        self.last.borrow().clone()
+    }
+
+    /// Sets the last-pilot record to name `key`, as if it had been written.
+    pub fn put_last(&self, key: &str) {
+        *self.last.borrow_mut() = Some(key.to_owned());
+    }
+
+    /// Makes every read of the last-pilot record fail (`true`), or succeed
+    /// again. Reads of pilots are untouched.
+    pub fn fail_last_reads(&self, fail: bool) {
+        self.fail_last_reads.set(fail);
+    }
+
+    /// Makes every write of the last-pilot record fail (`true`), keeping
+    /// the record as it was, or succeed again. Writes of pilots are
+    /// untouched.
+    pub fn fail_last_writes(&self, fail: bool) {
+        self.fail_last_writes.set(fail);
+    }
+
     fn check_reads(&self) -> io::Result<()> {
         if self.fail_reads.get() {
             return Err(io::Error::other("the disk is unreadable"));
@@ -231,6 +258,21 @@ impl PilotStore for MemoryPilots {
         }
         self.saves.borrow_mut().remove(key);
         self.deleted.borrow_mut().push(key.to_owned());
+        Ok(())
+    }
+
+    fn last_pilot(&self) -> io::Result<Option<String>> {
+        if self.fail_last_reads.get() {
+            return Err(io::Error::other("the record is unreadable"));
+        }
+        Ok(self.last())
+    }
+
+    fn set_last_pilot(&self, key: &str) -> io::Result<()> {
+        if self.fail_last_writes.get() {
+            return Err(io::Error::other("the record is locked"));
+        }
+        self.put_last(key);
         Ok(())
     }
 
@@ -356,5 +398,47 @@ mod tests {
         store.write("a", "new").expect("writes");
         assert_eq!(store.text("a").as_deref(), Some("new"));
         assert_eq!(store.location(), "memory");
+    }
+
+    #[test]
+    fn clones_share_the_last_pilot_record_apart_from_the_pilots() {
+        let store = MemoryPilots::new();
+        let other = store.clone();
+        assert_eq!(store.last_pilot().expect("reads"), None);
+        store.set_last_pilot("Ada").expect("writes");
+        assert_eq!(other.last_pilot().expect("reads").as_deref(), Some("Ada"));
+        assert_eq!(other.last().as_deref(), Some("Ada"));
+        assert_eq!(
+            (store.keys(), store.writes()),
+            (Vec::<String>::new(), 0),
+            "the record is no pilot and no write"
+        );
+        other.put_last("Bea");
+        assert_eq!(store.last().as_deref(), Some("Bea"));
+    }
+
+    #[test]
+    fn the_last_pilot_record_fails_when_told_to_apart_from_the_pilots() {
+        let store = MemoryPilots::new();
+        store.put_last("Ada");
+        store.fail_last_writes(true);
+        assert!(store.set_last_pilot("Bea").is_err());
+        assert_eq!(store.last().as_deref(), Some("Ada"));
+        store.write("Cy", "saved").expect("pilot writes still work");
+        store.fail_last_writes(false);
+        store.set_last_pilot("Bea").expect("writes");
+        assert_eq!(store.last().as_deref(), Some("Bea"));
+        store.fail_last_reads(true);
+        assert!(store.last_pilot().is_err());
+        assert!(store.read("Cy").is_ok(), "pilot reads still work");
+        store.fail_last_reads(false);
+        assert_eq!(store.last_pilot().expect("reads").as_deref(), Some("Bea"));
+        store.fail_reads(true);
+        store.fail_writes(true);
+        assert!(
+            store.last_pilot().is_ok(),
+            "pilot failures leave the record"
+        );
+        assert!(store.set_last_pilot("Dee").is_ok());
     }
 }

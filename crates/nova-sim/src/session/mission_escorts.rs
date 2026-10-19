@@ -1386,7 +1386,7 @@ mod tests {
         assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
         tick(&mut session, &catalog);
         for npc in mission_escorts(&session) {
-            assert_eq!(npc.goal, Goal::Idle);
+            assert_eq!(npc.goal, Goal::Wait, "the hold's goal 6");
         }
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Hold),

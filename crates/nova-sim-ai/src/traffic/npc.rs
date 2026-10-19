@@ -2,6 +2,7 @@
 //! doing, and what it fights with.
 
 use crate::ai::Goal;
+use crate::ai::lost_sight::SearchTimer;
 use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::Carrier;
@@ -200,6 +201,11 @@ pub struct NpcPerson {
     pub quoted: bool,
     /// The quote tick it last said its hail quote, if it has.
     pub quoted_at: Option<u64>,
+    /// Whether it starts with zero fuel (`përs` `Flags2`
+    /// [`ZERO_FUEL`](crate::traffic::persons::ZERO_FUEL), person +0x16 & 1):
+    /// the one ship that needs a jump's fuel now to jump out
+    /// ([`can_jump`](crate::ai::leave::can_jump)).
+    pub zero_fuel: bool,
 }
 
 impl NpcPerson {
@@ -219,6 +225,7 @@ impl NpcPerson {
             grudge,
             quoted: false,
             quoted_at: None,
+            zero_fuel: record.flags2 & crate::traffic::persons::ZERO_FUEL != 0,
         }
     }
 }
@@ -333,8 +340,6 @@ pub struct Npc {
     /// Whether the player has paid it to spare it: it never targets the
     /// player again.
     pub spared: bool,
-    /// The ticks it has spent within reach of the player, repairing it.
-    pub assisting: u32,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
     /// ship.
@@ -369,6 +374,29 @@ pub struct Npc {
     /// gate (@0x89d47). The gate's sprite opens while it waits
     /// ([`Npc::holds_gate_open`]).
     pub emerges_from: Option<StellarId>,
+    /// The stellar of this system it has visited, the original's +0x92,
+    /// which the idle block reads to send a ship that has visited away
+    /// rather than to another stellar
+    /// ([`idle_block::visited_here`](crate::ai::idle_block::visited_here)).
+    /// `None` stands for both the original's -1 and -2: every spawn starts
+    /// it at -2 (e.g. @0x1c3d6, @0x41ed4, @0x7f3fa), and the interceptor's
+    /// patrol writes -2 (@0x8d01e). Its writers here: the gate emerge
+    /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574) and a miner's shuttle
+    /// as it sets off (@0x8b3ae, [`Decision::visits`](crate::ai::Decision::visits),
+    /// see [`miner`](crate::ai::miner)), which also reads it to leave that
+    /// stellar out of its pick (@0x8b373). The landing's end
+    /// (`_HighLevelAIHandler` @0x8db00) is
+    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's.
+    pub visited: Option<StellarId>,
+    /// Whether its travel stellar, the original's +0x6c, is set: what a
+    /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read
+    /// through [`travel::is_set`](crate::ai::travel::is_set), which adds the
+    /// stellar goals and the emerge's gate). Its writers are the decisions'
+    /// ([`Decision::travel`](crate::ai::Decision::travel), taken by
+    /// [`travel::take`](crate::ai::travel::take)) and the drops that write
+    /// -1 (see [`travel`](crate::ai::travel)). Every spawn clears it
+    /// (@0x1c3c1, @0x3c444, @0x3c9e2).
+    pub travel_set: bool,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
@@ -412,6 +440,10 @@ pub struct Npc {
     /// [`ShipKind::holds`](crate::traffic::table::ShipKind)): a scooping
     /// miner leaves once its own hold ([`NpcHold::total`]) reaches it.
     pub holds: u16,
+    /// Its class's `shïp` `Fuel`, raw ([`ShipKind::class_fuel`](crate::traffic::table::ShipKind::class_fuel)):
+    /// above 99, it can jump out whatever fuel it holds, but for a person
+    /// that starts with zero fuel ([`can_jump`](crate::ai::leave::can_jump)).
+    pub class_fuel: i16,
     /// What it was, while it is a former escort of the player's: disabled
     /// or breaking up as one, it left the fleet with this record (the
     /// original's +0xc8de). It forgets once intact, boarded or taken into
@@ -441,6 +473,25 @@ pub struct Npc {
     /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
     /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
     pub pods_left: u16,
+    /// The odds against it as its slot caches them (the original's
+    /// +0xc914): -1 ([`odds_cache::STALE`](crate::traffic::odds_cache::STALE))
+    /// from its spawn until the frame's odds pass reaches its berth, then
+    /// the odds then, until the next round (see
+    /// [`odds_cache`](crate::traffic::odds_cache)). What its odds retreat
+    /// and its calls for reinforcements read by the engine
+    /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
+    pub odds: f32,
+    /// Whether it has no AI: the original's AI type 0 or below (+0x88),
+    /// which only the player's eject hulk has, -1 (`_HandlePlayer`
+    /// @0x6f31f). Its [`ai_type`](Npc::ai_type) stays its class's
+    /// `InherentAI`, as the engine's [`AiType`] has no "none". A ship
+    /// with no AI never thinks (`_AIDispatch`'s gate, `_DoPlayGameWork`
+    /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
+    /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
+    /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
+    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad).
+    /// Never saved.
+    pub no_ai: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
@@ -450,14 +501,16 @@ pub struct Npc {
     /// spawns. Never saved.
     pub pursuit: Pursuit,
     /// Its AI wait (the original's +0x4c) for the waits it takes while it
-    /// flies, outside its [`Mode`] and a pirate's count wait: a pirate's
-    /// dock with its victim (`Rand(80)` + 100), its hold after a plunder
-    /// (100) and a ship a pirate took into its fleet (150) (see
-    /// [`plunder`](crate::traffic::plunder)). While it runs it counts in
-    /// [`Npc::wait_running`], the traffic counts it down as the ship
-    /// flies, its high level is skipped but for a drift or a hold, and the
-    /// ship moves on at its velocity with no turn or thrust. A hit's answer
-    /// cuts it to 20. None as it spawns. Never saved.
+    /// flies, outside its [`Mode`]: a pirate's dock with its victim
+    /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
+    /// took into its fleet (150) (see [`plunder`](crate::traffic::plunder))
+    /// and a pirate's count wait (120, see
+    /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
+    /// in [`Npc::wait_running`], the traffic counts it down as the ship
+    /// flies, its high level is skipped but for a drift, a hold or a count
+    /// wait, and the ship moves on at its velocity with no turn or thrust
+    /// but in its count wait, where it brakes. A hit's answer cuts it to
+    /// 20. None as it spawns. Never saved.
     pub ai_wait: u32,
     /// The docking it flies with a disabled ship it plunders, its sub-goal
     /// and nav kept from tick to tick (see
@@ -465,6 +518,23 @@ pub struct Npc {
     /// once its plunder runs, and with any goal but an attack or a plunder.
     /// Never saved.
     pub docking: Option<Docking>,
+    /// Its search timer for a target it lost sight of (the original's
+    /// +0xc90c): written only by `_HighLevelAIHandler`'s lost-sight block
+    /// (see [`lost_sight`](crate::ai::lost_sight)). No spawn or launch
+    /// writes it, so a ship brought into a berth takes the timer the
+    /// berth's last ship left, a never-used berth's 0, as
+    /// [`RuleKey::ReusedSlotSearch`](crate::RuleKey::ReusedSlotSearch)
+    /// reads it (see [`berth_search`](crate::traffic::berth_search)).
+    /// Never saved.
+    pub lost_sight: SearchTimer,
+    /// The berth ([`Npc::berth`]) of its swarm leader, the original's
+    /// +0xc906, `None` for -1: the lowest berth of a swarming class fighting
+    /// its target, kept while it stays so (see
+    /// [`swarm`](crate::ai::swarm)). A berth, not an [`NpcId`], as the
+    /// original holds a slot index: a name for a berth re-used before the
+    /// next pass reads its new ship. None at every spawn and launch
+    /// (`_AISetup` @0x7f415). Never saved.
+    pub swarm_leader: Option<u32>,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
@@ -702,8 +772,26 @@ impl Npc {
         )
     }
 
+    /// The ship the threat tests read as the one it fights: its goal's
+    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) the
+    /// target it holds. The original's tests read +0x70 and spare none of
+    /// state 6 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
+    /// `_ExtendedIsThreatToShip` @0x81a27), and a trader's stop keeps it
+    /// (@0x8d803-0x8d80f; see
+    /// [`trader_target`](crate::ai::lost_sight::trader_target)). In the
+    /// other goals that leave the quarry none, +0x70 is -1 or the state is
+    /// one the tests spare.
+    #[must_use]
+    pub fn fought(&self) -> Option<ShipRef> {
+        match self.goal {
+            Goal::Wait => self.target,
+            goal => goal.quarry(),
+        }
+    }
+
     /// Whether it fights `ship` directly: it is intact, flying, and
-    /// attacking, sniping at or fleeing from it.
+    /// attacking, sniping at or fleeing from it, or stopped holding it as
+    /// its target ([`Npc::fought`]).
     ///
     /// This is only the direct-target part of the original's threat
     /// tests: `_ExtendedIsThreatToShip` @0x81a27 also counts a ship
@@ -714,7 +802,7 @@ impl Npc {
     pub fn threatens(&self, ship: ShipRef) -> bool {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
-            && self.goal.quarry() == Some(ship)
+            && self.fought() == Some(ship)
     }
 
     /// Whether it threatens the NPC `ship`, as `_ExtendedIsThreatToShip`
@@ -729,8 +817,9 @@ impl Npc {
     /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
     /// active ship in slots 1-63, other than itself, whose leader is
     /// `ship` (@0x81ab2-0x81b59). Here [`Condition::Intact`] stands for
-    /// the active and disabled tests and [`Goal::quarry`]'s attack, snipe
-    /// and flee for the AI states. Unlike `_IsThreatToPlayer`, there is
+    /// the active and disabled tests and [`Npc::fought`] (the quarry of an
+    /// attack, snipe or flight, or a stop's kept target) for the AI states
+    /// and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
     /// [`Npc::threatens`] keeps it, since its one modelled reader
     /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target))
@@ -746,7 +835,7 @@ impl Npc {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.leader != Some(ship)
-            && match self.goal.quarry() {
+            && match self.fought() {
                 Some(ShipRef::Npc(id)) => {
                     id == ship || npcs.iter().any(|n| n.id == id && n.leader == Some(ship))
                 }
@@ -803,7 +892,8 @@ impl Npc {
     /// coming out of a gate or jumping in has one, and so does a flying
     /// pirate docked or holding after a plunder, or a ship it took into
     /// its fleet), and
-    /// [`Goal::quarry`]'s attack, snipe and flee for the AI states.
+    /// [`Npc::fought`] (the quarry of an attack, snipe or flight, or a
+    /// stop's kept target) for the AI states and the target.
     ///
     /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
     /// that fails this test but targets an active ship the player leads
@@ -817,7 +907,7 @@ impl Npc {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.ai_wait == 0
-            && match self.goal.quarry() {
+            && match self.fought() {
                 Some(ShipRef::Player) => true,
                 Some(ShipRef::Npc(id)) => led(id),
                 None => false,
@@ -859,7 +949,7 @@ impl Npc {
     ///   the engine has no defence ships; rdm:task/planet-domination owns
     ///   them.
     /// - **The target clause**: it [threatens the player or a ship the
-    ///   player leads](Npc::threatens_player_or_led) by its goal's quarry,
+    ///   player leads](Npc::threatens_player_or_led) by [`Npc::fought`],
     ///   or its target ([`Npc::target`], the hit's, which
     ///   `_DamageShip` sets before `_AIMakeShipAttackPlayer`, @0x3bcf6) is
     ///   the player (@0x81be1) or a ship the player leads (@0x81c2e-0x81c4a)
@@ -928,11 +1018,12 @@ impl Npc {
     /// doesn't fly yet (a landed ship's stay, a launched fighter's) will
     /// count here once built (rdm weapons-fidelity phase 17's findings).
     ///
-    /// A pirate's count wait ([`Goal::CountWait`]) runs it while ticks are
-    /// left: it is the original's +0x4c too, read so by
-    /// `_ExtendedIsThreatToPlayer` (@0x81bed). `_HandleShip` exempts it from
-    /// its gate ([`Npc::count_wait`]), and so does
-    /// [`fire::gated`](crate::ai::fire::gated).
+    /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
+    /// the original keeps it in +0x4c, read so by
+    /// `_ExtendedIsThreatToPlayer` (@0x81bed). `_HandleShip` exempts goal
+    /// 0x16 from its gate ([`Npc::count_wait`]), and so does
+    /// [`fire::gated`](crate::ai::fire::gated); a pirate turned out of it
+    /// onto another goal keeps the wait, gate and all.
     #[must_use]
     pub fn wait_running(&self) -> bool {
         matches!(
@@ -941,8 +1032,7 @@ impl Npc {
                 | Mode::HeldAtGate { .. }
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
-        ) || matches!(self.goal, Goal::CountWait { ticks_left } if ticks_left > 0)
-            || self.ai_wait > 0
+        ) || self.ai_wait > 0
     }
 
     /// Whether it is in its count wait, goal 0x16 ([`Goal::CountWait`]):
@@ -951,7 +1041,7 @@ impl Npc {
     /// @0x34a54-0x34a72).
     #[must_use]
     pub fn count_wait(&self) -> bool {
-        matches!(self.goal, Goal::CountWait { .. })
+        self.goal == Goal::CountWait
     }
 
     /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
@@ -981,7 +1071,8 @@ impl Npc {
     /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
     /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
     /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
-    /// (+0x70 = -1, @0x89544), and its trigger released.
+    /// (+0x70 = -1, @0x89544), and its trigger released. A ship with a
+    /// fuel tank has visited the gate ([`Npc::visited`], [`Npc::gate_visit`]).
     ///
     /// The original holds no trigger from one frame to the next: each
     /// frame `_LowLevelAIHandler` clears the fire flag +0xba (@0x851f6)
@@ -996,8 +1087,19 @@ impl Npc {
     pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: u32) {
         self.mode = Mode::Emerging { ticks_left };
         self.emerges_from = Some(gate);
+        self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+    }
+
+    /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
+    /// comes out of `gate`: the gate when `_ShipFuelCapacity` is above 0,
+    /// else none (-2, @0x8955e-0x89574). The original makes the write under
+    /// its gate-index test of at most 0x7ff (@0x8952d, @0x8955c), which
+    /// every stellar passes.
+    #[must_use]
+    pub fn gate_visit(gate: StellarId, fuel_capacity: f32) -> Option<StellarId> {
+        (fuel_capacity > 0.0).then_some(gate)
     }
 
     /// Whether it is in hyperspace: its jump state +0x50 outside
@@ -1500,6 +1602,48 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_ship_threatens_by_the_target_it_kept() {
+        // `_IsThreatToPlayer` (@0x7f536-0x7f56b) and `_ExtendedIsThreatToShip`
+        // spare none of state 6, and read +0x70, which a trader's stop
+        // keeps (@0x8d803-0x8d80f).
+        let asker = NpcId(1);
+        let escort = NpcId(9);
+        let led = |id: NpcId| id == escort;
+        let stopped = |target| Npc {
+            goal: Goal::Wait,
+            target,
+            ..crate::traffic::fixture::npc(4, ShipStats::default())
+        };
+        let on_player = stopped(Some(ShipRef::Player));
+        assert!(on_player.threatens_player_or_led(led));
+        assert!(on_player.threatens_player());
+        assert!(on_player.threatens_player_extended(&[], true));
+        assert!(stopped(Some(ShipRef::Npc(escort))).threatens_player_or_led(led));
+        assert!(!stopped(None).threatens_player_or_led(led), "no target");
+        assert!(!stopped(None).threatens_player());
+        let npcs = [crate::traffic::fixture::npc(1, ShipStats::default())];
+        assert!(stopped(Some(ShipRef::Npc(asker))).threatens_npc_among(asker, &npcs));
+        assert!(!stopped(None).threatens_npc_among(asker, &npcs));
+        let idle = Npc {
+            goal: Goal::Idle,
+            ..on_player.clone()
+        };
+        assert!(
+            !idle.threatens_player_or_led(led),
+            "an idle ship by its quarry alone"
+        );
+        let inspecting = Npc {
+            goal: Goal::Inspect(ShipRef::Npc(asker)),
+            target: Some(ShipRef::Npc(asker)),
+            ..on_player
+        };
+        assert!(
+            !inspecting.threatens_npc_among(asker, &npcs),
+            "state 7 spared"
+        );
+    }
+
+    #[test]
     fn threatens_npc_among_counts_a_ship_attacking_the_asker_or_one_it_leads() {
         let asker = NpcId(1);
         let ship = |id| crate::traffic::fixture::npc(id, ShipStats::default());
@@ -1727,6 +1871,27 @@ mod tests {
         assert_eq!(npc.trigger, Trigger::default());
         assert_eq!(npc.state, state, "the caller places it");
         assert!(npc.led_out, "the caller decides it");
+    }
+
+    #[test]
+    fn a_ship_with_a_fuel_tank_that_comes_out_of_a_gate_has_visited_it() {
+        // `_AIMakeShipEmergeFromHyperGate` writes +0x92 the gate when
+        // `_ShipFuelCapacity` > 0, else -2 (@0x8955e-0x89574).
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+        npc.reserves.fuel.max = 300.0;
+        npc.reserves.fuel.now = 0.0;
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(
+            npc.visited,
+            Some(StellarId(310)),
+            "by its tank, not its fuel"
+        );
+        npc.reserves.fuel.max = 0.0;
+        npc.visited = Some(StellarId(128));
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.visited, None, "no tank: -2, never visited");
+        assert_eq!(Npc::gate_visit(StellarId(311), 1.0), Some(StellarId(311)));
+        assert_eq!(Npc::gate_visit(StellarId(311), 0.0), None);
     }
 
     #[test]
@@ -1978,13 +2143,14 @@ mod tests {
         // A hit sets its target to the player (`_DamageShip` @0x3be5d), but
         // its wait (+0x4c) runs, and the next frame clears the target.
         let waiting = Npc {
-            goal: Goal::CountWait { ticks_left: 20 },
+            goal: Goal::CountWait,
+            ai_wait: 20,
             target: Some(ShipRef::Player),
             ..plain(1)
         };
         assert!(!waiting.threatens_player_extended(&[], true));
         let done = Npc {
-            goal: Goal::CountWait { ticks_left: 0 },
+            ai_wait: 0,
             ..waiting
         };
         assert!(done.threatens_player_extended(&[], true), "its wait is out");
@@ -1994,7 +2160,8 @@ mod tests {
     fn a_count_wait_runs_its_wait_while_ticks_are_left_and_is_always_a_count_wait() {
         for (ticks_left, running) in [(0, false), (1, true), (120, true)] {
             let waiting = Npc {
-                goal: Goal::CountWait { ticks_left },
+                goal: Goal::CountWait,
+                ai_wait: ticks_left,
                 ..plain(1)
             };
             assert_eq!(waiting.wait_running(), running, "{ticks_left}");
@@ -2200,6 +2367,18 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_person_starts_with_zero_fuel_by_its_flags2_0x0001_alone() {
+        let record = |flags2| PersonRecord {
+            flags2,
+            ..nova_sim_catalog::fixture::person(151, 128)
+        };
+        assert!(NpcPerson::of(&record(0x0001), false).zero_fuel);
+        assert!(NpcPerson::of(&record(0xFFFF), false).zero_fuel);
+        assert!(!NpcPerson::of(&record(0xFFFE), false).zero_fuel);
+        assert!(!NpcPerson::of(&record(0), false).zero_fuel);
+    }
+
+    #[test]
     fn an_npc_person_carries_its_records_fields_and_is_invincible_below_zero() {
         let record = PersonRecord {
             flags: 0x0030,
@@ -2225,6 +2404,7 @@ mod tests {
                 grudge: true,
                 quoted: false,
                 quoted_at: None,
+                zero_fuel: false,
             }
         );
         for shield_mod in [0, 100] {

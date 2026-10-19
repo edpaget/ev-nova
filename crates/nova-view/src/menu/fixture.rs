@@ -155,13 +155,18 @@ impl ForkReader for OneFile {
 }
 
 /// A `cölr` placing the buttons, the logo, the rollover and the slides, its button
-/// style the stock one ([`ButtonStyle::STOCK`](crate::ui::ButtonStyle::STOCK)),
+/// style and its menu font and colours the stock ones ([`ButtonStyle::STOCK`](crate::ui::ButtonStyle::STOCK)),
 /// so adding it to other test data leaves their buttons as they were.
 fn colors() -> Vec<u8> {
     let mut bytes = vec![0; Colors::SIZE.expect("fixed")];
     bytes[0x00..0x04].copy_from_slice(&0x00FF_FFFF_u32.to_be_bytes());
     bytes[0x04..0x08].copy_from_slice(&0x0080_8080_u32.to_be_bytes());
     bytes[0x08..0x0C].copy_from_slice(&0x0026_2626_u32.to_be_bytes());
+    // The pilot panel's font and colours, the stock ones.
+    bytes[0x0C..0x0C + 6].copy_from_slice(b"Geneva");
+    bytes[0x4C..0x4E].copy_from_slice(&9_i16.to_be_bytes());
+    bytes[0x4E..0x52].copy_from_slice(&0x00FF_0000_u32.to_be_bytes());
+    bytes[0x52..0x56].copy_from_slice(&0x0080_0000_u32.to_be_bytes());
     bytes[0x9E..0x9E + 8].copy_from_slice(b"Charcoal");
     bytes[0xDE..0xE0].copy_from_slice(&12_i16.to_be_bytes());
     let mut put = |offset: usize, (x, y): (i16, i16)| {

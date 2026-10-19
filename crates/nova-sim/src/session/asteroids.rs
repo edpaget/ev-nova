@@ -583,7 +583,7 @@ mod tests {
             }
             session.npc(id).expect("here").goal
         };
-        assert_eq!(think(&mut session), Goal::Idle, "state 6");
+        assert_eq!(think(&mut session), Goal::Wait, "state 6");
         grown(&mut session, 1);
         assert!(session.asteroids.get(0).is_some(), "slot 0");
         assert_eq!(think(&mut session), Goal::Mine, "state 16");

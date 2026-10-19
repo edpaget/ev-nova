@@ -74,6 +74,13 @@ pub enum Showing {
     /// A `dësc`'s movie, over flight, which it pauses: a mission text's,
     /// or an offer's.
     Movie,
+    /// The intro screen's pictures, as a pilot enters play for the first
+    /// time (see `menu::intro`). The main menu's
+    /// music plays on.
+    Intro,
+    /// The intro screen's text in "Desc Dialog" over black, and the fade
+    /// to black after it. The music is spent.
+    IntroText,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

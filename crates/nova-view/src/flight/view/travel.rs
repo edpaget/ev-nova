@@ -128,6 +128,14 @@ impl<
         self.session.as_ref().is_ok_and(Session::may_save)
     }
 
+    /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
+    /// breaking up or destroyed, which [`FlightView::may_save`] answers.
+    /// Enter Ship refuses such a pilot. Never without a session.
+    #[must_use]
+    pub fn is_dying(&self) -> bool {
+        self.session.is_ok() && !self.may_save()
+    }
+
     /// Whether ending play now deletes the pilot, as
     /// [`Session::deletes_pilot_on_ending_play`] says: a strict-play pilot
     /// dying outside the escape pod. Never without a session.
@@ -523,8 +531,9 @@ impl<
 
     /// Runs up to `steps` of the session's steps, each only while
     /// `go_on` holds of the session before it: the ship's tick under the
-    /// keys held, the traffic's, the quotes', the assistance's and the
-    /// fight's, then the effects; in double time, the second pass
+    /// keys held, the traffic's (the assistance's within it) and the
+    /// fight's, which settles the frame's lines, then the quotes and the
+    /// effects; in double time, the second pass
     /// ([`Session::tick_again`]) with the answers to its hits and their
     /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
@@ -592,9 +601,8 @@ impl<
                     }
                     if !again {
                         session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_assistance(&*self.disable_rule);
-                        notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
+                        notes.extend(session.take_comm());
                     }
                     // The pass's hits are answered before the frame is
                     // drawn, as `_HandleShot` answers them (@0x44385)

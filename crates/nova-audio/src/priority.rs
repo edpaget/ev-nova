@@ -135,6 +135,12 @@ pub const PLUNDER_BEEP: Priority = Priority::new(1);
 /// Either assignment button, `_beepSnd[1]`:
 /// `_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b.
 pub const CAPTURE_ASSIGNED: Priority = Priority::new(1);
+/// A repairer's "Repairs complete" line, `_beepSnd[1]`:
+/// `_LowLevelAIHandler` @0x86e0a.
+pub const REPAIRS_COMPLETE: Priority = Priority::new(1);
+/// A refueller's "Energy transfer complete" line, `_beepSnd[1]`:
+/// `_HighLevelAIHandler` @0x8f5b0.
+pub const ENERGY_TRANSFER_COMPLETE: Priority = Priority::new(1);
 /// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
 /// @0x2db5a, `_DamageShip` @0x3af11.
 pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
@@ -192,6 +198,9 @@ pub const MAP_NOT_FOUND: Priority = Priority::new(1);
 /// landscape's press (@0x5fe59). `_PlanetSoundCallback`'s replay of a
 /// looped one as that voice ends plays at 10 (@0x55f9c).
 pub const PORT_AMBIENT: Priority = Priority::new(32_000);
+/// An intro picture's sound, snd 30003: `_ShowIntroScreen`'s
+/// `_PlaySound(.., 0xa, ..)` @0x16ebb.
+pub const INTRO_PICTURE: Priority = Priority::new(10);
 
 #[cfg(test)]
 mod tests {
@@ -240,6 +249,8 @@ mod tests {
             (SHIP_STOLEN, 1, "ship stolen"),
             (PLUNDER_BEEP, 1, "plunder beep"),
             (CAPTURE_ASSIGNED, 1, "capture assigned"),
+            (REPAIRS_COMPLETE, 1, "repairs complete"),
+            (ENERGY_TRANSFER_COMPLETE, 1, "energy transfer complete"),
             (MISSION_SHIP_LOST, 1, "mission ship lost"),
             (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
             (TRAFFIC_CONTROL, 1, "traffic control"),
@@ -259,6 +270,7 @@ mod tests {
             (MAP_FOUND, 1, "map found"),
             (MAP_NOT_FOUND, 1, "map not found"),
             (PORT_AMBIENT, 32_000, "port ambient"),
+            (INTRO_PICTURE, 10, "intro picture"),
         ];
         for (priority, number, what) in pinned {
             assert_eq!(priority.get(), number, "{what}");

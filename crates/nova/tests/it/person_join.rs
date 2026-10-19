@@ -42,6 +42,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -649,6 +650,7 @@ impl Game {
         game.click(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
+        game.enter_ship();
         assert_eq!(game.showing(), showing);
         game.frame();
         game.frame();
@@ -1353,3 +1355,5 @@ fn a_cinematic_offer_movie_over_flight_hides_the_pointer() {
     assert_eq!(game.showing(), Showing::Movie);
     assert!(game.app.screen().hides_pointer(), "_HideTheCursor @0x55a73");
 }
+
+crate::common::entry_harness!(Game, click, frame);

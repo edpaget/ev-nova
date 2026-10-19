@@ -15,8 +15,9 @@ use nova_sim::{
     StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, MissionInfo, MissionInfoPress, OfferPrompt, PersonRules,
-    PlayerInfo, ship_layer::SlotSprites, story::sprite_pool::StellarSpritePool,
+    ControlBits, Hailed, HireTerms, KeptBerths, MissionInfo, MissionInfoPress, OfferPrompt,
+    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
+    story::sprite_pool::StellarSpritePool,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -98,6 +99,29 @@ impl<
     pub fn resume(&mut self) {
         if let Ok(session) = &mut self.session {
             session.resume(&mut self.chance);
+        }
+    }
+
+    /// Opens a pilot just loaded on the main screen, as Open Pilot's
+    /// `_MainScreenChoice(1)` does once it is loaded: every active
+    /// mission's auxiliary ships restart
+    /// ([`Session::restart_aux_from_main_screen`], @0x1a918-0x1a982) on
+    /// the flight's chance. A session that failed opens nothing.
+    pub fn open_on_main_screen(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.restart_aux_from_main_screen(&mut self.chance);
+        }
+    }
+
+    /// Opens the last pilot at launch, once it is loaded, as
+    /// `_OpenLastPilotFile` and `_DoMainScreen`'s once-a-launch setup do
+    /// ([`Session::open_at_launch`]) on the flight's chance: every active
+    /// mission's auxiliary ships restart in the unguarded form
+    /// (@0x765d4-0x76637), and the player's system is explored (@0x1affe).
+    /// A session that failed opens nothing.
+    pub fn open_at_launch(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.open_at_launch(&mut self.chance);
         }
     }
 
@@ -310,6 +334,24 @@ impl<
         self.session.as_ref().ok().map(Session::stellar_sprite_pool)
     }
 
+    /// The flight with its traffic's berths starting from `kept`, what an
+    /// earlier flight of the same run left ([`Session::with_kept_berths`]).
+    #[must_use]
+    pub fn with_kept_berths(self, kept: KeptBerths) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_kept_berths(kept)),
+            ..self
+        }
+    }
+
+    /// What the flight's traffic's berths keep for the next flight
+    /// ([`Session::kept_berths`]), or `None` when its session never
+    /// started.
+    #[must_use]
+    pub fn kept_berths(&self) -> Option<KeptBerths> {
+        self.session.as_ref().ok().map(Session::kept_berths)
+    }
+
     /// The flight with `terms` giving the fee and wage of a hire
     /// ([`Session::with_hire_terms`]).
     #[must_use]
@@ -519,6 +561,15 @@ impl<
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
         Some(session.player_info(&self.catalog))
+    }
+
+    /// What the main screen's pilot panel says about the pilot, as
+    /// [`Session::pilot_panel`] gives it from the screen's catalog,
+    /// changing nothing; `None` for a session that failed.
+    #[must_use]
+    pub fn pilot_panel(&self) -> Option<PilotPanel> {
+        let session = self.session.as_ref().ok()?;
+        Some(session.pilot_panel(&self.catalog))
     }
 
     /// The player info dialog opens, as [`Session::open_player_info`] has

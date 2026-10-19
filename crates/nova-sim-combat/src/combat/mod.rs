@@ -9167,7 +9167,8 @@ mod tests {
     }
 
     impl Ship {
-        /// The ship with `hull`.
+        /// The ship with `hull`, taken whole as the field it fills.
+        #[allow(clippy::large_types_passed_by_value)]
         fn of(self, hull: HullSpec) -> Self {
             Self { hull, ..self }
         }
@@ -10989,6 +10990,7 @@ mod tests {
 
     /// The layer of the first shot of `record` that a ship of `hull`
     /// fires at ship 2, 300 to its right.
+    #[allow(clippy::large_types_passed_by_value)] // a test's fixture, built in place
     fn fired_layer(record: WeaponRecord, hull: HullSpec) -> ShotLayer {
         let mut combat = Combat::default();
         let mut ships = [

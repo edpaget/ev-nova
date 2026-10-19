@@ -475,6 +475,22 @@ fn breaking_up_by_the_other_reading(store: &MemoryPilots) -> AppScreen {
 }
 
 #[test]
+fn a_dead_pilots_return_shows_the_killed_message() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_and_took_off(&store);
+    until_exploded(&mut screen);
+    tick_until(&mut screen, 400, |screen| {
+        screen.showing() == Showing::MainMenu
+    });
+    returned(&mut screen);
+    assert_eq!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        &nova_view::menu::PanelPilot::Dying("Ada".to_owned())
+    );
+    assert_eq!(super::game::panel_message(&screen).as_deref(), Some("Ada "));
+}
+
+#[test]
 fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_only() {
     let store = MemoryPilots::new();
     let mut screen = landed_and_took_off(&store);
@@ -491,9 +507,12 @@ fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_on
     assert_eq!(store.deleted(), Vec::<String>::new(), "not strict: kept");
     assert_eq!(store.keys(), ["Ada"]);
     let mut screen = deadly_menu(&store);
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
-    assert_eq!(pilot(&screen), &last, "reopened as at the take-off");
+    open_held(&mut screen);
+    assert_eq!(
+        screen.game_in_progress().and_then(FlightView::pilot),
+        Some(&last),
+        "reopened as at the take-off"
+    );
 }
 
 /// Ticks a dead pilot from its explosion through the hold, checking
@@ -535,7 +554,11 @@ fn a_dead_pilot_holds_fades_and_returns_to_a_black_second_then_the_main_menu() {
         choose(&mut screen, MenuChoice::NewPilot),
         ScreenAction::None
     );
-    assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
+    assert_eq!(
+        screen.showing(),
+        Showing::Question,
+        "the menu takes input: New Pilot asks #8 over the dead pilot held"
+    );
 }
 
 #[test]
@@ -552,7 +575,11 @@ fn by_the_other_reading_a_dead_pilot_returns_to_the_main_menu_fading_in() {
         choose(&mut screen, MenuChoice::NewPilot),
         ScreenAction::None
     );
-    assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
+    assert_eq!(
+        screen.showing(),
+        Showing::Question,
+        "the menu takes input: New Pilot asks #8 over the dead pilot held"
+    );
 }
 
 #[test]
@@ -568,7 +595,11 @@ fn by_the_other_reading_the_main_menu_takes_input_under_its_fade_in() {
         choose(&mut screen, MenuChoice::NewPilot),
         ScreenAction::None
     );
-    assert_eq!(screen.showing(), Showing::NewPilot);
+    assert_eq!(
+        screen.showing(),
+        Showing::Question,
+        "#8 over the dead pilot"
+    );
 }
 
 #[test]
@@ -592,17 +623,54 @@ fn a_key_typed_during_the_death_fade_is_flights_and_never_reaches_the_main_menu(
 }
 
 #[test]
-fn after_the_return_no_flight_is_left_to_re_enter() {
+fn after_the_ships_destruction_the_menu_holds_the_dead_pilot() {
     let store = MemoryPilots::new();
     let mut screen = landed_took_off_and_breaking_up(&store);
     until_exploded(&mut screen);
     tick_until(&mut screen, 400, |screen| {
         screen.showing() == Showing::MainMenu
     });
-    assert!(screen.flight_view().is_none());
+    assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
+    let held = screen.game_in_progress().expect("the dead pilot held");
+    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
+    assert!(held.is_dying());
+    returned(&mut screen);
+    screen.take_sounds();
+    choose(&mut screen, MenuChoice::EnterShip);
+    assert_eq!(screen.showing(), Showing::MainMenu, "Enter Ship refuses it");
+    assert!(
+        screen
+            .take_sounds()
+            .contains(&Sound::Ui(UiSound::EnterRefused)),
+        "153"
+    );
+    for _ in 0..10 {
+        screen.tick(TICK);
+    }
+    assert_eq!(
+        screen.showing(),
+        Showing::MainMenu,
+        "play doesn't end again"
+    );
+    choose(&mut screen, MenuChoice::NewPilot);
+    assert_eq!(screen.showing(), Showing::Question, "New Pilot asks #8");
     screen.quit();
-    assert_eq!(store.writes(), 3, "nothing left to save");
+    assert_eq!(store.writes(), 3, "nothing put away again");
+}
+
+#[test]
+fn a_developers_dead_flight_is_dropped_not_held() {
+    let store = MemoryPilots::new();
+    let mut screen = deadly_menu(&store);
+    screen.input(&key(Key::Tab, true));
+    fly(&mut screen);
+    until_exploded(&mut screen);
+    tick_until(&mut screen, 400, |screen| {
+        screen.showing() == Showing::MainMenu
+    });
+    assert!(screen.flight_view().is_none(), "dropped");
+    assert!(screen.game_in_progress().is_none(), "not held");
 }
 
 #[test]
@@ -622,15 +690,16 @@ fn without_a_main_menu_a_dead_pilot_returns_to_the_side_flight_was_entered_from(
 }
 
 #[test]
-fn escape_during_the_breakup_writes_no_save_and_drops_flight() {
+fn escape_during_the_breakup_writes_no_save_and_holds_the_dying_pilot() {
     let store = MemoryPilots::new();
     let mut screen = landed_took_off_and_breaking_up(&store);
     let writes = store.writes();
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert_eq!(store.writes(), writes, "no save");
-    assert!(screen.flight_view().is_none(), "flight dropped");
+    assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
+    assert!(screen.game_in_progress().is_some_and(FlightView::is_dying));
 }
 
 #[test]
@@ -692,13 +761,41 @@ fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
     assert_eq!(store.deleted(), ["Ada"]);
     assert_eq!(store.keys(), Vec::<String>::new());
     assert_eq!(store.writes(), writes, "nothing written after the take-off");
+    assert!(
+        screen
+            .game_in_progress()
+            .and_then(FlightView::pilot)
+            .is_some_and(|pilot| pilot.name() == "Ada"),
+        "deleted and still held"
+    );
     returned(&mut screen);
+    screen.quit();
+    assert_eq!(store.writes(), writes, "nothing put away again");
+    assert_eq!(store.deleted(), ["Ada"], "nor deleted again");
     choose(&mut screen, MenuChoice::OpenPilot);
     assert_eq!(
         screen.pilot_list().expect("open").keys(),
         Vec::<String>::new()
     );
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
+}
+
+#[test]
+fn a_strict_pilot_deleted_leaves_the_last_pilot_record_and_the_next_launch_holds_nothing() {
+    // `_DeletePilotFile` (@0x72e6b-0x72ef6) never touches "Last Pilot";
+    // the next launch's load fails resolving it (@0x750f4, -43) and
+    // `_OpenLastPilotFile` returns silently (@0x7658a).
+    let store = MemoryPilots::new();
+    let mut screen = strict_landed_and_took_off(&store);
+    until_exploded(&mut screen);
+    until_the_main_menu(&mut screen);
+    assert_eq!(store.deleted(), ["Ada"]);
+    assert_eq!(store.last().as_deref(), Some("Ada"), "the record is left");
+    let mut relaunched = super::launch::launched(&store);
+    assert_eq!(relaunched.showing(), Showing::MainMenu);
+    assert!(relaunched.game_in_progress().is_none(), "no pilot held");
+    assert!(relaunched.load_note().is_none(), "no note");
+    assert_eq!(relaunched.take_warnings(), Vec::<String>::new());
 }
 
 #[test]

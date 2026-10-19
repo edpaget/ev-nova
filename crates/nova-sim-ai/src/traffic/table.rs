@@ -281,6 +281,11 @@ pub struct ShipKind {
     /// fleet's random cargo gives it (see
     /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
     pub holds: u16,
+    /// Its `shïp` `Fuel`, raw (class +0x2, `_LoadObjectData`
+    /// @0x7a117-0x7a11b): before its default items, which
+    /// `_AIShipHasFuelForJump` reads (see
+    /// [`can_jump`](crate::ai::leave::can_jump)).
+    pub class_fuel: i16,
     /// The `shïp`'s own `Armor` (+0x60), before its default items: what a
     /// derelict's armour is cut from ([`derelict_armor`](crate::traffic::persons::derelict_armor)).
     /// A person's fitted ship keeps its ship type's, unscaled by its
@@ -619,6 +624,7 @@ pub fn kind(
         miner: record.flags3 & crate::ai::miner::MINER_BITS,
         can_scoop: scoop::has_asteroid_scoop(&defaults, outfits),
         holds: crate::market::hold_tons(record.fields.holds),
+        class_fuel: record.fields.fuel,
         base_armor: f32::from(record.fields.armor.max(0)),
         immobile: record.fields.speed == 0 && record.fields.accel == 0,
         skill_var: record.skill_var,
@@ -1627,6 +1633,27 @@ mod tests {
         assert_eq!(holding(20), 20);
         assert_eq!(holding(-35), 35, "a negative Holds is its size");
         assert_eq!(holding(0), 0);
+    }
+
+    #[test]
+    fn a_ship_type_carries_its_classs_raw_fuel_without_its_default_items() {
+        let tank = outfit(150, &[(crate::stats::MORE_FUEL, 200)]);
+        // By the other reading of `NpcDefaultItems`, its default items
+        // count toward its tank.
+        let fuelled = |fuel| {
+            let mut record = ship(204, ShipFields { fuel, ..FAST });
+            record.defaults = vec![(OutfitId(150), 1)];
+            kind(
+                &record,
+                std::slice::from_ref(&tank),
+                &arsenal(),
+                RuleSource::Bible,
+            )
+        };
+        assert_eq!(fuelled(99).class_fuel, 99);
+        assert_eq!(fuelled(99).stats.fuel, 299.0, "the item fills the tank");
+        assert_eq!(fuelled(0).class_fuel, 0);
+        assert_eq!(fuelled(-5).class_fuel, -5);
     }
 
     #[test]

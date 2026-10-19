@@ -37,6 +37,9 @@ use crate::story::Entrance;
 const EMERGE_DRAW: u32 = 50;
 /// The least a follower waits in the gate (@0x67469).
 const EMERGE_LEAST: u32 = 100;
+/// A follower's provocation as it comes out: +0x96 = -1 (@0x673ed), so
+/// the first point of damage that hits it leaves it unprovoked.
+const EMERGE_PROVOCATION: f32 = -1.0;
 
 impl Session {
     /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
@@ -127,8 +130,8 @@ impl Session {
     /// @0x67346-0x67487) comes out after the player, in order: at rest at
     /// `exit`, or where the player arrived under
     /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
-    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, with no
-    /// target and its trigger released
+    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, its
+    /// provocation -1 (@0x673ed), with no target and its trigger released
     /// ([`Npc::emerge_from_gate`](crate::traffic::npc::Npc::emerge_from_gate),
     /// @0x89544), then
     /// bursting out of it as any ship coming out of a gate does (see the
@@ -177,6 +180,7 @@ impl Session {
                 velocity: Vec2::ZERO,
                 heading,
             };
+            npc.provoked = EMERGE_PROVOCATION;
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
             npc.emerge_from_gate(gate, wait);
         }
@@ -566,6 +570,29 @@ pub(super) mod tests {
             assert!(ship.emerging());
             assert_eq!(ship.trigger, Trigger::default());
             assert_eq!(ship.target, None);
+        }
+    }
+
+    #[test]
+    fn a_follower_comes_out_of_the_gate_with_provocation_minus_1() {
+        // Loop B writes +0x96 = -1 (@0x673ed), so its first point of
+        // damage leaves it unprovoked.
+        let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        for npc in session.traffic.npcs_mut() {
+            npc.provoked = 7.0;
+        }
+        session.emerge_followers(
+            exit_gate_of(GateKind::Hypergate),
+            exit_of(GateKind::Hypergate),
+            &mut NeverFires,
+        );
+        let ships = specials(&session);
+        assert_eq!(ships.len(), 2);
+        for ship in ships {
+            assert_eq!(ship.provoked, -1.0);
         }
     }
 

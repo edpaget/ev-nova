@@ -50,14 +50,20 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
 /// The call of a brave trader's think ending in `goal` among `around`: a
 /// distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or attacking an NPC
 /// of AI type above 2, a warship or an interceptor (state 4, a target
-/// neither -1 nor the player, @0x8b6e3-0x8b71c).
+/// neither -1 nor the player, @0x8b6e3-0x8b71c); a ship with no AI
+/// ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), -1) is neither. A
+/// ship gone from its slot is read in its record as it left
+/// ([`Surroundings::gone_npc`]), which the freed slot still holds.
 #[must_use]
 pub fn brave_call(goal: Goal, around: &Surroundings) -> Option<CommCall> {
     match goal {
         Goal::Flee(_) => Some(CommCall::Distress),
         Goal::Attack(ShipRef::Npc(id)) => around
             .npc(id)
-            .filter(|target| matches!(target.ai_type, AiType::Warship | AiType::Interceptor))
+            .or_else(|| around.gone_npc(id))
+            .filter(|target| {
+                !target.no_ai && matches!(target.ai_type, AiType::Warship | AiType::Interceptor)
+            })
             .map(|_| CommCall::Distress),
         _ => None,
     }
@@ -187,6 +193,21 @@ mod tests {
         assert_eq!(call(Goal::Attack(ShipRef::Npc(NpcId(9)))), None, "gone");
         assert_eq!(call(Goal::Snipe(n(2))), None, "sniping");
         assert_eq!(call(Goal::Idle), None);
+    }
+
+    #[test]
+    fn a_brave_trader_attacking_a_ship_with_no_ai_calls_for_none_whatever_its_class() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut hulk = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);
+        hulk.no_ai = true;
+        let npcs = [ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0), hulk];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            brave_call(Goal::Attack(n(2)), &around),
+            None,
+            "AI type -1 is not above 2 (@0x8b707)"
+        );
     }
 
     #[test]

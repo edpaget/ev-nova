@@ -189,29 +189,6 @@ impl Session {
         }
     }
 
-    /// Scans the player for each NPC that has looked the player over
-    /// since the last
-    /// ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)),
-    /// convicting by `law` and drawing on `chance`, unless the player is
-    /// landed. `Session::tick_combat` takes them first, jumping or not,
-    /// each held past the warp's lead-in by
-    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
-    /// [`Session::scanned_by`]).
-    ///
-    /// The scans wait from the traffic tick that queued them to the combat
-    /// tick of the same step, so they settle before the frame is drawn,
-    /// and before an arrival, which the view makes after the step. A scan
-    /// the arrival would cut off is dropped with the system's traffic, as
-    /// the original's would be held.
-    pub(super) fn take_scans(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
-        if self.landed.is_some() {
-            return;
-        }
-        for npc in self.traffic.take_scans() {
-            self.scanned_by(npc, law, chance);
-        }
-    }
-
     /// The scan of the player by NPC `id` (`_ScanPlayer` @0x7e46e),
     /// convicting by `law` and drawing on `chance`: nothing for a ship
     /// gone or of no government, or that does not go on (see
@@ -239,7 +216,7 @@ impl Session {
     /// ([`SimMessage::IllegalJunk`], [`SimMessage::IllegalOutfit`]) with
     /// [`SimSound::Smuggling`], and clears its latch. The player is always
     /// visible to the scanner (no cloak).
-    fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
+    pub(super) fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
         let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };

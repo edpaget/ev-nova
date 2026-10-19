@@ -3070,6 +3070,7 @@ fn every_stock_player_homing_missile_locks_its_target_at_31_ticks() {
 /// 100 pixels away at `bearing`, and which way: a shot's heading, or, for
 /// a beam (over within the tick when it lasts a tick), the bearing when
 /// it hit that ship.
+#[allow(clippy::large_types_passed_by_value)] // a test's fixture, built in place
 fn fires_at(spec: &WeaponSpec, hull: HullSpec, bearing: f32) -> Option<f32> {
     let at = facing(bearing) * 100.0;
     let mut combat = Combat::default();

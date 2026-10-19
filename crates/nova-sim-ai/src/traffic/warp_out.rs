@@ -33,9 +33,10 @@
 //!   `mission_ships` module does for [`Outcome::JumpedOut`]. It plays no
 //!   sound.
 //!
-//! A ship enters it where it reaches its jump distance under
-//! [`Goal::JumpOut`], or runs out from its attacker beyond its reach
-//! (see [`autopilot`](crate::traffic::autopilot)): [`Npc::begin_own_jump`].
+//! A ship enters it where its leave reaches sub 4 under [`Goal::JumpOut`],
+//! or as it flees beyond its attacker's reach: past 1000 from the centre,
+//! braked first unless it expedites (see
+//! [`leave_flight`](crate::traffic::leave_flight)): [`Npc::begin_own_jump`].
 //!
 //! **Goal 0xb, its leader's jump** (`_HighLevelAIHandler`
 //! @0x8de63-0x8df75; [`follow_check`]), each advance pass before the low

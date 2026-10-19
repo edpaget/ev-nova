@@ -406,6 +406,22 @@ impl<C> FlightView<C> {
         self.session.as_ref().ok().map(Session::pilot)
     }
 
+    /// Whether the pilot flying has seen the intro screen
+    /// ([`Session::seen_intro`]); false when the flight never started.
+    #[must_use]
+    pub fn seen_intro(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::seen_intro)
+    }
+
+    /// Marks the pilot flying as having seen the intro screen
+    /// ([`Session::mark_intro_seen`]); nothing when the flight never
+    /// started.
+    pub fn mark_intro_seen(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.mark_intro_seen();
+        }
+    }
+
     /// Changes the pilot with `change` while landed, as
     /// [`Session::transact`] does, and says whether it did.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {

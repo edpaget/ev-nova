@@ -362,6 +362,7 @@ mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         }
     }
 

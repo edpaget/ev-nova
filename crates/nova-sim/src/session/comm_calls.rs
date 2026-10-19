@@ -37,10 +37,9 @@
 //!   before a call that crosses no boundary the player sees.
 //!
 //! **The calls.** Each think's call ([`Decision::comm_call`](crate::ai::Decision::comm_call),
-//! gathered by [`Traffic::take_comm_calls`](crate::traffic::Traffic::take_comm_calls))
-//! is answered in [`Session::answer_comm_calls`], in NPC order, right
-//! after the frame's decisions and fleet arrivals, so one call's line
-//! keeps the next one in the same frame off the line:
+//! queued on the line, [`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line))
+//! is answered in slot order, so one call's line keeps the next one in the
+//! same frame off the line (see "Slot order" below):
 //!
 //! - **A distress call** is made when [`calls_for_help`] says so of the
 //!   ship's facts as the session finds them ([`DistressFacts`]): its
@@ -59,13 +58,45 @@
 //!   the think's own call) is `_AICallForReinforcements(ship, 0)`, which
 //!   says nothing on the line itself (see the `reinforcements` module).
 //!
-//! The original makes each call inside its ship's think, against the
-//! ships as the earlier slots' thinks left them; the engine answers the
-//! frame's calls together, against the ships as the frame's traffic left
-//! them, before the frame is drawn. A ship that left the system in the
-//! frame calls nothing. A scan line from an earlier slot that would keep
-//! a call off the line in the original is answered later here, in
-//! [`Session::tick_combat`]: rdm:phase/combat-ai-fidelity/phase-15-comm-calls-in-slot-order.
+//! **Slot order.** The original raises every line of the frame's ships
+//! inside their thinks, one slot after another in ascending order
+//! (`_DoPlayGameWork` @0x44270-0x442ae), after `_HandlePlayer`
+//! (@0x43e19), and each through `_DisplayComm`, which sets `_commCount`
+//! at once (@0x9024b): a ship's calls (`_AICallForHelp` @0x83248,
+//! `_InterceptorAI` @0x8cff5), then its scan of the player
+//! (`_ScanPlayer` from @0x8f11e-0x8f38a), its refuel note (@0x8f6a1),
+//! and its repair note, plunder lines and dock (`_LowLevelAIHandler`
+//! @0x86ef4, `_AIPlunderShipContents` @0x84791 and @0x84941, the dock
+//! @0x86fc7). So each line keeps a later slot's call off the line, and a
+//! later slot's line replaces an earlier one's. The traffic queues all of
+//! it at each ship's berth (see `nova_sim::traffic::on_line`), the
+//! refuel note among it (see `nova_sim::traffic::refuel_dock`), and
+//! [`Session::settle_line_queue`] settles it in [`Session::tick_combat`],
+//! right after `_HandlePlayer`'s part of the frame (`before_fight`: the
+//! propulsion repair, the sabotage and the eject), so their lines come
+//! before every call, as the original's do, and the scans' law is at
+//! hand:
+//!
+//! - an earlier slot's scan line, stolen line, refuel or repair note
+//!   keeps a later slot's distress call and pre-scan hail off, and their
+//!   `snd ` 154, while a call from an earlier slot still shows and a
+//!   later slot's line replaces it;
+//! - the ships are kept in the order they came, not by slot, so the
+//!   queue sorts its work by berth: a ship that came later into a lower
+//!   berth is answered first.
+//! - The reinforcement clock ticks after the frame's calls, as
+//!   `_HandleReinforcements` (@0x44504) runs after the `_AIDispatch` loop
+//!   (@0x4429d), so on a frame whose line work is queued its tick is held
+//!   too, and runs right after it settles: a `ReinfTime` 1 call's fleet
+//!   still arrives in its frame, and the frame's announcement still
+//!   follows its calls and refuel note.
+//!
+//! The lines the view raises from `_HandlePlayer`'s keys (a jump's
+//! refusal, an escort command, Return) set the line before the frame's
+//! steps, so before every call too. The attack quotes a think raises
+//! (`_ShowPersonHailQuote` via `_AIMakeShipAttackPlayer` @0x89ce1) are
+//! still said after the fight: rdm:phase/combat-ai-fidelity/phase-28-left-out-of-phase-22.
+//! A ship that left the system in the frame calls nothing.
 
 use super::Session;
 use crate::ai::CommCall;
@@ -73,11 +104,13 @@ use crate::ai::call_for_help::{DistressFacts, calls_for_help, threatens_player};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::comm_line::CommLine;
-use crate::hail::{QUIET, likes_player};
+use crate::hail::{Help, QUIET, likes_player};
+use crate::legal::LegalCode;
 use crate::message::SimMessage;
 use crate::mission::hail_finds;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
+use crate::traffic::on_line::OnLine;
 
 /// The `STR#` of the twenty distress lines, `_shipHelpRequests`
 /// (`_LoadStrings` @0x71bf3-0x71c27).
@@ -144,16 +177,69 @@ impl Session {
         self.comm_line.reset();
     }
 
-    /// Answers the calls the traffic's decisions made since they were
-    /// last taken, in order, each drawing on `chance` (see the module
-    /// docs).
-    pub(super) fn answer_comm_calls(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        for (id, call) in self.traffic.take_comm_calls() {
-            match call {
-                CommCall::Distress => self.call_for_help(id, chance),
-                CommCall::PreScan => self.hail_before_scan(id, chance),
-                CommCall::Reinforcements => self.call_for_reinforcements(id, false),
+    /// Answers NPC `id`'s `call`, made by a think that read the `odds`
+    /// against it, drawing on `chance`.
+    fn answer_call(
+        &mut self,
+        id: NpcId,
+        call: CommCall,
+        odds: f32,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        match call {
+            CommCall::Distress => self.call_for_help(id, chance),
+            CommCall::PreScan => self.hail_before_scan(id, chance),
+            CommCall::Reinforcements => self.call_for_reinforcements(id, false, Some(odds)),
+        }
+    }
+
+    /// Settles the frame's work on the message line
+    /// ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)),
+    /// in slot order: each scan of the player ([`Session::scanned_by`]),
+    /// convicting by `law`; each call; each pirate's or repairer's deed
+    /// ([`Session::answer_pirate`]); and each refuel's note, drawing on
+    /// `chance`, so an earlier slot's line keeps a later slot's call off
+    /// as the original's does (see the module docs). Then the
+    /// reinforcement clock's tick held behind them runs, if one was (see
+    /// [`Session::tick_traffic`]). Nothing settles while the player is
+    /// landed.
+    ///
+    /// *Ordering against the original.* The plunder's cargo, credits and
+    /// mission failures and the repair's armour settle here, after
+    /// `before_fight`, where the original carries them out inside the
+    /// loop; the loop follows `_HandlePlayer` there too. All of it is
+    /// later in the step than the loop, but before the fight, the frame's
+    /// drawing and any dialog, landing, jump or save, so no boundary is
+    /// crossed.
+    ///
+    /// `Session::tick_combat` settles it first, jumping or not, after
+    /// `before_fight`; each scan is held past the warp's lead-in by
+    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
+    /// [`Session::scanned_by`]). The work waits from the traffic tick that
+    /// queued it to the combat tick of the same step, so it settles before
+    /// the frame is drawn. In the warp the view steps the session only
+    /// while its lead-in lasts, and the arrival comes after its last step,
+    /// so work queued in the lead-in settles before the arrival too. Work
+    /// the arrival would cut off is dropped with the system's traffic, as
+    /// the original's would be held.
+    pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
+        if self.landed.is_some() {
+            return;
+        }
+        for work in self.traffic.take_on_line() {
+            match work {
+                OnLine::Scan(id) => self.scanned_by(id, law, chance),
+                OnLine::Call(id, call, odds) => self.answer_call(id, call, odds, chance),
+                OnLine::Pirate(event) => self.answer_pirate(event, chance),
+                OnLine::RefuelDone(id, ship) => {
+                    // `_beepSnd[1]` (@0x8f585-0x8f5b0), with the line.
+                    let sound = SimSound::EnergyTransferComplete;
+                    self.say_help_done(id, ship, Help::Refuel, sound);
+                }
             }
+        }
+        if std::mem::take(&mut self.reinforcements_held) {
+            self.tick_reinforcements(chance);
         }
     }
 
@@ -231,13 +317,14 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::rc::Rc;
 
     use super::*;
     use crate::ai::{Behaviour, Decision, Goal, Surroundings};
     use crate::catalog::{
-        CommCatalog, GovtId, GovtRecord, MissionRecord, MissionShip, ShipId, ShipRecord,
+        CommCatalog, GovtId, GovtRecord, MissionRecord, MissionShip, Penalties, ShipId, ShipRecord,
+        SystemId,
     };
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -248,11 +335,15 @@ mod tests {
     };
     use crate::traffic::ShipBehav;
     use crate::traffic::npc::{AiType, MissionMark, Npc};
+    use crate::traffic::plunder::PirateEvent;
 
     /// Traders, scanning for bit 0x0004.
     const TRADERS: GovtId = GovtId(128);
     /// A quiet government (`Flags2` 0x0008).
     const QUIETS: GovtId = GovtId(129);
+    /// The police, scanning for bit 0x0004 and punishing smuggling, its
+    /// fine 500.
+    const POLICE: GovtId = GovtId(130);
     /// The class of the ships that call.
     const CALLER: ShipId = ShipId(129);
     /// A class whose inherent government is quiet.
@@ -280,10 +371,11 @@ mod tests {
         }
     }
 
-    /// Each NPC listed decides its goal and makes its call; the others
-    /// idle, calling nothing.
+    /// Each NPC listed decides its goal and makes its call, if any; the
+    /// others idle, calling nothing. Each NPC of the second plunders the
+    /// player in its think, drifting after.
     #[derive(Debug, Default)]
-    struct Calling(BTreeMap<NpcId, (Goal, CommCall)>);
+    struct Calling(BTreeMap<NpcId, (Goal, Option<CommCall>)>, BTreeSet<NpcId>);
 
     impl Behaviour for Calling {
         fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -296,10 +388,14 @@ mod tests {
             _around: &Surroundings,
             _chance: &mut dyn Chance,
         ) -> Decision {
-            let (goal, call) = self
-                .0
-                .get(&npc.id)
-                .map_or((Goal::Idle, None), |&(goal, call)| (goal, Some(call)));
+            if self.1.contains(&npc.id) {
+                return Decision {
+                    goal: Goal::Drift,
+                    plunders: Some(ShipRef::Player),
+                    ..Decision::default()
+                };
+            }
+            let (goal, call) = self.0.get(&npc.id).copied().unwrap_or((Goal::Idle, None));
             Decision {
                 goal,
                 comm_call: call,
@@ -309,7 +405,7 @@ mod tests {
     }
 
     /// The catalog: ships 128-130 (130's inherent government quiet), the
-    /// traders and the quiet government, and mission 140 escorting the
+    /// traders, the quiet government and the police, and mission 140 escorting the
     /// player's way (`ShipGoal` 3), its cargo masked 0x0006.
     fn calling_catalog() -> FakePilotCatalog {
         FakePilotCatalog {
@@ -329,6 +425,15 @@ mod tests {
                 GovtRecord {
                     flags2: QUIET,
                     ..govt(129)
+                },
+                GovtRecord {
+                    scan_mask: 0x0004,
+                    scan_fine: 500,
+                    penalties: Penalties {
+                        smuggle: 5,
+                        ..Penalties::default()
+                    },
+                    ..govt(130)
                 },
             ],
             missions: vec![MissionRecord {
@@ -372,21 +477,25 @@ mod tests {
     fn fleeing(session: &mut Session, govt: Option<GovtId>, class: ShipId) -> (NpcId, Calling) {
         let pirate = add(session, None, ShipId(128));
         let trader = add(session, govt, class);
-        let flees = (Goal::Flee(ShipRef::Npc(pirate)), CommCall::Distress);
-        (trader, Calling(BTreeMap::from([(trader, flees)])))
+        let flees = (Goal::Flee(ShipRef::Npc(pirate)), Some(CommCall::Distress));
+        (trader, calling([(trader, flees)]))
     }
 
-    /// A traffic tick of `catalog` as `behaviour` decides, drawing
-    /// `draws`: the messages and sounds it raised, and the bounds asked.
+    /// `calls`, no NPC plundering.
+    fn calling<const N: usize>(calls: [(NpcId, (Goal, Option<CommCall>)); N]) -> Calling {
+        Calling(BTreeMap::from(calls), BTreeSet::new())
+    }
+
+    /// A traffic tick of `catalog` as `behaviour` decides, then the combat
+    /// tick of the same step, which settles the calls, drawing `draws`:
+    /// the messages and sounds they raised, and the bounds asked.
     fn ticked(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         behaviour: &Calling,
         draws: &[u32],
     ) -> (Vec<SimMessage>, Vec<SimSound>, Vec<u32>) {
-        let mut chance = Draws::of(draws);
-        session.tick_traffic(catalog, behaviour, &mut chance);
-        (session.take_messages(), session.take_sounds(), chance.asked)
+        stepped(session, catalog, behaviour, draws)
     }
 
     fn help(text: &str) -> Vec<SimMessage> {
@@ -458,7 +567,9 @@ mod tests {
             let (trader, calls) = fleeing(&mut session, govt, class);
             setup(&mut session, trader);
             let (messages, sounds, asked) = ticked(&mut session, &catalog, &calls, &[0]);
-            assert_eq!((messages, sounds, asked), (vec![], vec![], vec![]), "{why}");
+            assert_eq!((messages, asked), (vec![], vec![]), "{why}");
+            // A breakup's klaxon is the combat tick's.
+            assert!(!sounds.contains(&SimSound::CallForHelp), "{why}");
         };
         let nothing = |_: &mut Session, _| {};
         silent(&nothing, Some(QUIETS), CALLER, "a quiet government");
@@ -483,6 +594,7 @@ mod tests {
                         grudge: false,
                         quoted: false,
                         quoted_at: None,
+                        zero_fuel: false,
                     });
             },
             Some(TRADERS),
@@ -584,13 +696,8 @@ mod tests {
         if counted {
             session.count_down_comm_line();
         }
-        let picks = (Goal::Inspect(ShipRef::Player), CommCall::PreScan);
-        ticked(
-            &mut session,
-            &catalog,
-            &Calling(BTreeMap::from([(police, picks)])),
-            draws,
-        )
+        let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
+        ticked(&mut session, &catalog, &calling([(police, picks)]), draws)
     }
 
     #[test]
@@ -685,5 +792,483 @@ mod tests {
         assert!(!session.comm_line().free_for_calls(), "399 counted");
         session.tick_quotes(&catalog, &mut NeverFires);
         assert!(session.comm_line().free_for_calls(), "400 counted");
+    }
+
+    // The calls and scans in slot order (see the module docs).
+
+    /// Adds an interceptor of the police at the player's side, inspecting
+    /// the player; it gives the inspection up on its next think.
+    fn scanner(session: &mut Session) -> NpcId {
+        let police = add(session, Some(POLICE), CALLER);
+        let npc = session.npc_mut(police).expect("there");
+        npc.ai_type = AiType::Interceptor;
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        police
+    }
+
+    /// A traffic tick, then the combat tick of the same step, as
+    /// `behaviour` decides, drawing `draws`: the messages and sounds they
+    /// raised, and the bounds asked.
+    fn stepped(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &Calling,
+        draws: &[u32],
+    ) -> (Vec<SimMessage>, Vec<SimSound>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        session.tick_traffic(catalog, behaviour, &mut chance);
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        (session.take_messages(), session.take_sounds(), chance.asked)
+    }
+
+    /// The police's find of mission 140's cargo: the fine, told.
+    fn smuggling() -> SimMessage {
+        SimMessage::Smuggling {
+            scanner: CALLER,
+            ship_name: None,
+            fine: 500,
+        }
+    }
+
+    #[test]
+    fn an_earlier_slots_scan_line_keeps_a_later_slots_distress_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [smuggling()], "no call for help");
+        assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
+        assert_eq!(asked, [100], "the scan's roll, no distress line drawn");
+    }
+
+    #[test]
+    fn a_call_by_an_earlier_slot_shows_and_a_later_slots_scan_replaces_it() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        scanner(&mut session);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(
+            messages,
+            [help("Ship 129:  Help 1"), vec![smuggling()]].concat()
+        );
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::Smuggling]);
+        assert_eq!(asked, [DISTRESS_LINE_COUNT, 100]);
+        let mut line = CommLine::default();
+        line.show(smuggling().ticks());
+        assert_eq!(session.comm_line(), line, "the scan's count");
+    }
+
+    #[test]
+    fn an_earlier_slots_scan_line_keeps_a_later_interceptors_pre_scan_hail_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        scanner(&mut session);
+        let hailer = add(&mut session, Some(TRADERS), CALLER);
+        session.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.count_down_comm_line();
+        assert!(session.comm_line().idle());
+        let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
+        let calls = calling([(hailer, picks)]);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [smuggling()], "no hail");
+        assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
+        assert_eq!(asked, [100]);
+    }
+
+    #[test]
+    fn a_call_held_behind_a_scan_that_finds_nothing_is_still_made_in_the_combat_tick() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let mut chance = Draws::of(&[0, 2]);
+        session.tick_traffic(&catalog, &calls, &mut chance);
+        assert_eq!(session.take_messages(), [], "held");
+        assert_eq!(session.take_sounds(), []);
+        assert!(chance.asked.is_empty(), "nothing drawn yet");
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        assert_eq!(session.take_messages(), help("Ship 129:  Help 3"));
+        assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
+        assert_eq!(chance.asked, [100, DISTRESS_LINE_COUNT], "scan, then call");
+    }
+
+    #[test]
+    fn a_held_call_settles_on_a_jumping_step_too() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player = crate::flight::ShipState {
+            position: crate::geometry::Vec2::new(0.0, -5000.0),
+            velocity: crate::geometry::Vec2::ZERO,
+            heading: 90.0,
+        };
+        session.begin_jump().expect("jumps");
+        assert!(session.in_warp_lead_in());
+        let _ = (session.take_messages(), session.take_sounds());
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let mut chance = Draws::of(&[0, 0]);
+        session.tick_traffic(&catalog, &calls, &mut chance);
+        assert_eq!(session.take_messages(), [], "held");
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        assert!(session.jumping().is_some(), "still jumping");
+        assert_eq!(session.take_messages(), help("Ship 129:  Help 1"));
+        assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
+    }
+
+    // The frame's other lines in slot order with the calls (see the
+    // module docs).
+
+    /// A traffic tick, `between` run, then the combat tick of the same
+    /// step, as `behaviour` decides, drawing `draws`: the messages, comm
+    /// notes and sounds they raised.
+    fn stepped_with(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &Calling,
+        draws: &[u32],
+        between: impl FnOnce(&mut Session),
+    ) -> (Vec<SimMessage>, Vec<crate::hail::CommNote>, Vec<SimSound>) {
+        let mut chance = Draws::of(draws);
+        session.tick_traffic(catalog, behaviour, &mut chance);
+        between(session);
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        (
+            session.take_messages(),
+            session.take_comm(),
+            session.take_sounds(),
+        )
+    }
+
+    /// Adds a pirate that plunders the player as `calls` has it, the
+    /// player holding no cargo and 10,000 credits, so a plunder at the
+    /// odds' floor of 10 takes 300 credits.
+    fn plunderer(session: &mut Session, calls: &mut Calling) -> NpcId {
+        let pirate = add(session, None, ShipId(128));
+        calls.1.insert(pirate);
+        session.pilot.cargo.clear();
+        session.pilot.cash = 10_000;
+        pirate
+    }
+
+    /// The pirate's line: no tons and 300 credits stolen.
+    fn stolen() -> SimMessage {
+        SimMessage::CargoStolen {
+            tons: 0,
+            credits: 300,
+        }
+    }
+
+    /// The line's count as `message` set it.
+    fn showing(message: &SimMessage) -> CommLine {
+        let mut line = CommLine::default();
+        line.show(message.ticks());
+        line
+    }
+
+    #[test]
+    fn an_earlier_slots_stolen_line_keeps_a_later_slots_distress_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        plunderer(&mut session, &mut calls);
+        let (trader, fled) = fleeing(&mut session, Some(TRADERS), CALLER);
+        calls.0.insert(trader, fled.0[&trader]);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [stolen()], "no call for help");
+        assert_eq!(sounds, [SimSound::CargoStolen]);
+        assert_eq!(asked, [21], "the odds' jitter, no distress line drawn");
+    }
+
+    #[test]
+    fn an_earlier_slots_stolen_line_keeps_a_later_interceptors_pre_scan_hail_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        let mut calls = Calling::default();
+        plunderer(&mut session, &mut calls);
+        let hailer = add(&mut session, Some(TRADERS), CALLER);
+        session.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.count_down_comm_line();
+        assert!(session.comm_line().idle());
+        calls.0.insert(
+            hailer,
+            (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan)),
+        );
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [stolen()], "no hail");
+        assert_eq!(sounds, [SimSound::CargoStolen], "no snd 154");
+        assert_eq!(asked, [21]);
+    }
+
+    #[test]
+    fn a_later_slots_stolen_line_replaces_an_earlier_slots_call() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let (_, mut calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        plunderer(&mut session, &mut calls);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(
+            messages,
+            [help("Ship 129:  Help 1"), vec![stolen()]].concat()
+        );
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::CargoStolen]);
+        assert_eq!(asked, [DISTRESS_LINE_COUNT, 21]);
+        assert_eq!(session.comm_line(), showing(&stolen()), "the stolen line's");
+    }
+
+    /// A former escort `pirate` stole, said in the frame's slot order.
+    fn escort_stolen(pirate: NpcId) -> PirateEvent {
+        PirateEvent::Plundered {
+            pirate,
+            victim: NpcId(9999),
+            tons: 0,
+            line: None,
+            taken: Some(crate::ai::plunder_contents::Taken::Escort),
+        }
+    }
+
+    #[test]
+    fn an_escort_stolen_line_from_an_earlier_slot_keeps_a_later_slots_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let pirate = add(&mut session, None, ShipId(128));
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
+            session.traffic.queue_pirate_event(escort_stolen(pirate));
+        });
+        assert_eq!(messages, [SimMessage::ShipStolen { fighter: false }]);
+        assert_eq!(sounds, [SimSound::ShipStolen]);
+    }
+
+    #[test]
+    fn an_escort_stolen_line_from_a_later_slot_replaces_an_earlier_slots_call() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let pirate = add(&mut session, None, ShipId(128));
+        let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
+            session.traffic.queue_pirate_event(escort_stolen(pirate));
+        });
+        assert_eq!(
+            messages,
+            [
+                help("Ship 129:  Help 1"),
+                vec![SimMessage::ShipStolen { fighter: false }]
+            ]
+            .concat()
+        );
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::ShipStolen]);
+    }
+
+    /// Adds a ship docked at the player refuelling it, the player's tank
+    /// above a jump's fuel, so the refuel is done on its first tick.
+    fn refueller(session: &mut Session) -> NpcId {
+        let helper = add(session, Some(TRADERS), ShipId(128));
+        let npc = session.npc_mut(helper).expect("there");
+        npc.goal = Goal::Assist(crate::hail::Help::Refuel);
+        npc.target = Some(ShipRef::Player);
+        session.pilot.reserves.fuel.now = 150.0;
+        helper
+    }
+
+    #[test]
+    fn an_earlier_refuellers_note_keeps_a_later_slots_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let helper = refueller(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |_| {});
+        assert_eq!(messages, [], "no call for help");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].from, helper);
+        assert_eq!(sounds, [SimSound::EnergyTransferComplete]);
+    }
+
+    #[test]
+    fn an_earlier_slots_call_shows_and_a_later_refuellers_note_replaces_it() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        refueller(&mut session);
+        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |_| {});
+        assert_eq!(messages, help("Ship 129:  Help 1"));
+        assert_eq!(notes.len(), 1);
+        assert_eq!(
+            sounds,
+            [SimSound::CallForHelp, SimSound::EnergyTransferComplete]
+        );
+    }
+
+    #[test]
+    fn an_earlier_repairers_note_keeps_a_later_slots_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let helper = add(&mut session, Some(TRADERS), ShipId(128));
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let repaired = PirateEvent::PlayerRepaired {
+            helper,
+            ship: ShipId(128),
+        };
+        let (messages, notes, sounds) =
+            stepped_with(&mut session, &catalog, &calls, &[0], |session| {
+                session.traffic.queue_pirate_event(repaired);
+            });
+        assert_eq!(messages, [], "no call for help");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(sounds, [SimSound::RepairsComplete]);
+    }
+
+    #[test]
+    fn an_earlier_slots_call_shows_and_a_later_repairers_note_replaces_it() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let helper = add(&mut session, Some(TRADERS), ShipId(128));
+        let repaired = PirateEvent::PlayerRepaired {
+            helper,
+            ship: ShipId(128),
+        };
+        let (messages, notes, sounds) =
+            stepped_with(&mut session, &catalog, &calls, &[0], |session| {
+                session.traffic.queue_pirate_event(repaired);
+            });
+        assert_eq!(messages, help("Ship 129:  Help 1"));
+        assert_eq!(notes.len(), 1);
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::RepairsComplete]);
+    }
+
+    /// `calling_catalog` with a bomb outfit.
+    fn bombing_catalog() -> FakePilotCatalog {
+        let mut catalog = calling_catalog();
+        catalog.outfits.push(crate::testkit::bomb_outfit());
+        catalog
+    }
+
+    /// Has `session`'s player own the bomb, its clock seeded and at the
+    /// fuse, so it goes off on the next combat tick.
+    fn light_the_bomb(session: &mut Session) {
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
+        session.reset_precalced();
+        let _ = session.sabotage.tick(false, &mut Draws::of(&[0]));
+        session.sabotage.set_counter(crate::sabotage::FUSE);
+    }
+
+    /// The bomb's line.
+    fn bombed() -> SimMessage {
+        SimMessage::BombExploded {
+            outfit: crate::catalog::OutfitId(crate::testkit::BOMB),
+            one: true,
+        }
+    }
+
+    #[test]
+    fn a_bomb_line_keeps_the_frames_calls_off() {
+        let catalog = bombing_catalog();
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        light_the_bomb(&mut session);
+        let (messages, sounds, _) = stepped(&mut session, &catalog, &calls, &[0, 0, 0]);
+        assert_eq!(messages, [bombed()], "no call for help");
+        assert!(!sounds.contains(&SimSound::CallForHelp), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_call_shows_on_the_frame_before_a_sabotage_line_and_the_line_replaces_it() {
+        let catalog = bombing_catalog();
+        let mut session = flying(&catalog);
+        let (trader, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let (messages, _, _) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, help("Ship 129:  Help 1"), "frame N");
+        light_the_bomb(&mut session);
+        let quiet = calling([(trader, (Goal::Idle, None))]);
+        let (messages, _, _) = stepped(&mut session, &catalog, &quiet, &[0, 0]);
+        assert_eq!(messages, [bombed()], "frame N + 1");
+        assert_eq!(session.comm_line(), showing(&bombed()), "the bomb's count");
+    }
+
+    #[test]
+    fn an_eject_line_keeps_the_frames_calls_off() {
+        let catalog = crate::testkit::with_escape_ship(calling_catalog());
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(crate::testkit::ESCAPE_FIGHTERS), 2);
+        session.condition = Condition::Disabled;
+        session.hold_eject(true);
+        let (messages, sounds, _) = stepped(&mut session, &catalog, &calls, &[0; 8]);
+        assert_eq!(
+            messages,
+            [SimMessage::EscapingIn {
+                ship: ShipId(crate::testkit::ESCAPE_SHIP)
+            }],
+            "no call for help"
+        );
+        assert!(!sounds.contains(&SimSound::CallForHelp), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_propulsion_repair_line_sets_the_line_and_keeps_the_frames_calls_off() {
+        let mut catalog = calling_catalog();
+        catalog.outfits.push(crate::testkit::outfit(
+            437,
+            &[(crate::self_repair::MOD_REPAIR, 0)],
+        ));
+        let mut session = flying(&catalog);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(437), 1);
+        session.pilot.reserves.armor.now = 3.0;
+        session.condition = Condition::Disabled;
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(
+            messages,
+            [SimMessage::PropulsionRepaired],
+            "no call for help"
+        );
+        assert_eq!(sounds, [SimSound::PropulsionRepaired]);
+        assert_eq!(
+            asked,
+            [crate::self_repair::REPAIR_ODDS],
+            "no distress line drawn"
+        );
+        assert_eq!(
+            session.comm_line(),
+            showing(&SimMessage::PropulsionRepaired),
+            "@0x68c3f"
+        );
+    }
+
+    #[test]
+    fn a_call_from_a_reused_lower_berth_is_answered_first() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let pirate = add(&mut session, None, ShipId(128));
+        let flee = |at: u32, class: ShipId, session: &mut Session| {
+            let mut ship = npc(0, session.stats());
+            ship.govt = Some(TRADERS);
+            ship.ship = class;
+            ship.state.position = session.player.position;
+            session.traffic.add_npc_at(ship, at)
+        };
+        let high = flee(5, CALLER, &mut session);
+        let low = flee(2, ShipId(128), &mut session);
+        let flees = (Goal::Flee(ShipRef::Npc(pirate)), Some(CommCall::Distress));
+        let calls = calling([(high, flees), (low, flees)]);
+        let (messages, _, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, help("Ship 128:  Help 1"), "berth 2's");
+        assert_eq!(asked, [DISTRESS_LINE_COUNT], "berth 5's kept off");
     }
 }

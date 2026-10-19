@@ -5,7 +5,9 @@
 //! the `EV Nova` executable; see [`pursuit`](crate::ai::pursuit)).
 //!
 //! - **The afterburner** ([`has_afterburner`]), rolled as a ship spawns:
-//!   none for a planet-type class (`shïp` `Flags` 0x0400, @0x6554); one
+//!   first none, unrolled, at a berth another ship still names as its
+//!   swarm leader (@0x64ff-0x6539, [`swarm::named`](crate::ai::swarm::named),
+//!   which each roll's caller asks); none for a planet-type class (`shïp` `Flags` 0x0400, @0x6554); one
 //!   for a class of [`AFTERBURNER_ALWAYS`] (0x0040, @0x6559); for one of
 //!   [`AFTERBURNER_BY_RATING`] (0x0020), one while the rating over the
 //!   yardstick is at least `Rand(`[`RATING_ROLL`]`)` +
@@ -28,16 +30,16 @@
 //!   an auxiliary ship and a fleet's escorts have none, as
 //!   `_GenericRandomShipSpawn` writes 0 (@0x3cb83) and their spawns roll
 //!   nothing ([`asks`]).
+//! - The player's escorts (the session's, see `nova_sim`'s
+//!   `afterburner_roll` module): `_SpawnEscort` rolls it for a ship hired
+//!   (@0x3ff51) and for each escort of a pilot loaded, against the loaded
+//!   pilot's rating, as the pilot file never keeps it (`_LoadPilotData`
+//!   @0x75a25, @0x75b2b); `_DoShipCapture` for the old ship kept on "Use
+//!   As My Ship" (@0x4123e). Each keeps it through every jump, landing and
+//!   take-off (`_RespawnEscort` never writes it, @0x3d4b8-0x3d62c). A ship
+//!   kept on "Use As Escort" (`_AIMakeEscortFlyInForm` @0x89b8e) keeps the
+//!   flag its own spawn rolled.
 //! - Neither routine plays a sound.
-//!
-//! # Not modelled
-//!
-//! - `_AIHasAfterburner`'s swarm-leader test (@0x64ff-0x6539): a ship
-//!   another names as its swarm leader +0xc906 has none. The engine has
-//!   no swarms (rdm phase combat-ai-fidelity/phase-14-swarming).
-//! - The player's escorts' flag, which `_SpawnEscort` (@0x3ff51) and
-//!   `_DoShipCapture` (@0x4123e) roll and a jump keeps: here they have
-//!   none (rdm phase combat-ai-fidelity/phase-17-left-out-of-phase-7).
 
 use crate::chance::Chance;
 use crate::combat::hull::{AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING, HullSpec};

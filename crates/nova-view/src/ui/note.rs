@@ -46,6 +46,12 @@ pub const LOAD_FALLBACK_NOTE: &str = "This pilot file appears to reference infor
 from a plug-in or replacement data set that is not currently loaded. You can continue to use \
 this pilot, but it may cause odd behavior.";
 
+/// `STR#` 140 #34, the note `_OpenPilotFile` shows through `_EVNoteAlert`
+/// when `_LoadPilotData` reports a pilot file of another version (-42,
+/// @0x766c8-0x766ef), kept here as [`LOAD_FALLBACK_NOTE`] is.
+pub const VERSION_NOTE: &str =
+    "This pilot file was created with a different version of Nova, and can\u{2019}t be used.";
+
 /// The note alert: `text` in item 3 and item 1 an OK button that Return,
 /// Escape or a click activates, which closes it.
 #[derive(Clone, Debug)]

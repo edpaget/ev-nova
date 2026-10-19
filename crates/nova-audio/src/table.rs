@@ -109,6 +109,12 @@ pub struct SoundTable {
     /// Plays as either button of the captured-ship assignment dialog is
     /// pressed.
     pub capture_assigned: Option<SoundId>,
+    /// Plays with the comm line said as a ship repairing the player
+    /// finishes.
+    pub repairs_complete: Option<SoundId>,
+    /// Plays with the comm line said as a ship refuelling the player
+    /// finishes.
+    pub energy_transfer_complete: Option<SoundId>,
     /// Plays as a mission's special ship lost fails a mission that isn't
     /// hidden.
     pub mission_ship_lost: Option<SoundId>,
@@ -288,6 +294,11 @@ impl SoundTable {
     /// - `capture_assigned`: 151, `_beepSnd[1]`, which
     ///   `_DoCapturedShipAssignmentDialog` plays for either button
     ///   (@0x5b56b, @0x5b66b).
+    /// - `repairs_complete`: 151, `_beepSnd[1]`, which `_LowLevelAIHandler`
+    ///   plays with a repairer's "Repairs complete" line (@0x86e0a).
+    /// - `energy_transfer_complete`: 151, `_beepSnd[1]`, which
+    ///   `_HighLevelAIHandler` plays with a refueller's "Energy transfer
+    ///   complete" line (@0x8f5b0).
     /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
     ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
     ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
@@ -406,6 +417,8 @@ impl SoundTable {
         ship_stolen: Some(SoundId(151)),
         plunder_beep: Some(SoundId(152)),
         capture_assigned: Some(SoundId(151)),
+        repairs_complete: Some(SoundId(151)),
+        energy_transfer_complete: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
         mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
@@ -432,6 +445,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one assertion for each of the table's fields
     fn the_original_table_is_pinned_field_by_field() {
         let table = SoundTable::ORIGINAL;
         assert_eq!(table.engine, None, "the original thrusts in silence");
@@ -492,6 +506,12 @@ mod tests {
         assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.plunder_beep, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.capture_assigned, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.repairs_complete, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(
+            table.energy_transfer_complete,
+            Some(SoundId(151)),
+            "_beepSnd[1]"
+        );
         assert_eq!(
             table.downed_mission_failed,
             Some(SoundId(151)),

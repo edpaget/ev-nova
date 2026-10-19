@@ -11,9 +11,11 @@ use std::rc::Rc;
 use nova_data::records::string_list::StrList;
 use nova_data::{GameData, InterfaceData, Record};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource};
 use nova_view::menu::{MainMenu, MainScreenArt, MainScreenSource, MenuChoice};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::yes_no::{QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
+use nova_view::ui::note::VERSION_NOTE;
+use nova_view::ui::yes_no::{NEW_PILOT_QUESTION, QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
 use nova_view::ui::{DescriptionSource, DialogResources, YesNoDialog};
 use nova_view::{
     DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, Sound, UiSound,
@@ -47,6 +49,27 @@ const BUTTONS: [Recorded; 6] = [
     (8054, (581.0, 464.0), (99, 61)),
     (8055, (580.0, 528.0), (98, 60)),
 ];
+
+#[test]
+fn the_stock_intro_is_pictures_8200_to_8202_at_45_seconds_with_no_sound_or_text() {
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    let shown = |picture| IntroPicture { picture, delay: 45 };
+    let intro = data.first_character_intro().expect("chär 128");
+    assert_eq!(
+        intro,
+        CharacterIntro {
+            pictures: [shown(8200), shown(8201), shown(8202), intro.pictures[3]],
+            text: None,
+        }
+    );
+    assert!(intro.pictures[3].picture <= 0, "{:?}", intro.pictures[3]);
+    for picture in 8200..=8202 {
+        assert!(data.intro_picture_size(picture).is_some(), "PICT {picture}");
+    }
+    assert!(!data.has_sound(INTRO_SOUND), "no snd 30003");
+}
 
 #[test]
 fn the_stock_art_resolves_where_it_was_recorded() {
@@ -224,17 +247,40 @@ fn the_stock_main_menu_draws_pict_8000_and_the_six_buttons_frame_0() {
 
 #[test]
 fn str_140_10_is_the_quit_question() {
-    let Some(ui) = interface() else {
+    let Some(list) = str_140() else {
         return;
     };
+    assert_eq!(list.strings[9].as_str(), QUIT_QUESTION);
+}
+
+/// `STR#` 140 from the interface file, if the stock data is there.
+fn str_140() -> Option<StrList> {
+    let ui = interface()?;
     let res = ui
         .resources()
         .get(StrList::TYPE, 140)
         .expect("STR# 140 is in the interface file");
-    let list = nova_data::decode_bytes::<StrList>(res.data())
-        .expect("decodes")
-        .record;
-    assert_eq!(list.strings[9].as_str(), QUIT_QUESTION);
+    Some(
+        nova_data::decode_bytes::<StrList>(res.data())
+            .expect("decodes")
+            .record,
+    )
+}
+
+#[test]
+fn str_140_8_is_the_new_pilot_question() {
+    let Some(list) = str_140() else {
+        return;
+    };
+    assert_eq!(list.strings[7].as_str(), NEW_PILOT_QUESTION);
+}
+
+#[test]
+fn str_140_34_is_the_version_note() {
+    let Some(list) = str_140() else {
+        return;
+    };
+    assert_eq!(list.strings[33].as_str(), VERSION_NOTE);
 }
 
 #[test]
@@ -262,4 +308,77 @@ fn the_yes_no_dialog_asks_in_stock_dlog_3002s_item_3_and_return_answers_yes() {
         repeat: false,
     });
     assert_eq!(dialog.take_answer(), Some(true));
+}
+
+// The pilot panel.
+
+/// The stock pilot panel's looks: Geneva 9, values 0xFF0000 and labels
+/// 0x800000, and `STR#` 2002's labels.
+#[test]
+fn the_stock_pilot_panels_looks_are_geneva_9_in_its_reds_with_its_labels() {
+    use nova_view::menu::PilotPanelSource;
+    use nova_view::menu::pilot_panel::{PanelLabels, PanelLooks};
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    assert_eq!(
+        data.pilot_panel_looks(),
+        PanelLooks::stock(PanelLabels {
+            pilot_name: "Pilot Name:".to_owned(),
+            date: "Current Date:".to_owned(),
+            combat_rating: "Combat Rating:".to_owned(),
+            ship_name: "Ship Name:".to_owned(),
+            ship_class: "Ship Class:".to_owned(),
+            no_pilot: "No Pilot File Loaded".to_owned(),
+            killed: "has been killed".to_owned(),
+            legal_status: "Legal status in".to_owned(),
+            current_system: "current system:".to_owned(),
+        })
+    );
+}
+
+/// Every stock `shïp` has a target picture, its own or its base ship's,
+/// and `PICT` 8000 is black under each where the panel puts it at the
+/// classic centre (512, 384), so the original's wrapping addOver and the
+/// engine's saturating add draw it alike.
+#[test]
+fn every_stock_ship_has_a_picture_over_black() {
+    use nova_data::graphics::{PICT, decode_pict};
+    use nova_data::records::ship::Ship;
+    use nova_view::menu::PilotPanelSource;
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    let found = data.resource(PICT, 8000).expect("PICT 8000");
+    let background = decode_pict(found.resource.data()).expect("decodes");
+    let mut missing = Vec::new();
+    let mut lit = Vec::new();
+    assert_eq!(data.ids(Ship::TYPE).len(), 288, "every stock shïp");
+    for &id in data.ids(Ship::TYPE) {
+        let Some(picture) = data.panel_ship(nova_sim::ShipId(id)).picture else {
+            missing.push(id);
+            continue;
+        };
+        let left = 512 - i64::from(picture.width / 2);
+        let top = 384 + 280;
+        for y in top..top + i64::from(picture.height) {
+            for x in left..left + i64::from(picture.width) {
+                let (Ok(px), Ok(py)) = (u32::try_from(x), u32::try_from(y)) else {
+                    continue;
+                };
+                if let Some([r, g, b, _]) = background.pixel(px, py)
+                    && (r, g, b) != (0, 0, 0)
+                {
+                    lit.push((id, x, y, [r, g, b]));
+                }
+            }
+        }
+    }
+    assert_eq!(missing, Vec::<i16>::new(), "ships with no picture");
+    assert_eq!(
+        lit.len(),
+        0,
+        "lit pixels under a picture: {:?}",
+        &lit[..lit.len().min(20)]
+    );
 }

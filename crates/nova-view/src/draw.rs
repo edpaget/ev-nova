@@ -15,8 +15,11 @@ pub enum Blend {
     #[default]
     Normal,
     /// Adds its colour, scaled by its alpha, to what is beneath: a true
-    /// saturating add. No screen uses it since the glow and lights moved to
-    /// [`Blend::Or`].
+    /// saturating add. The main screen's pilot panel draws the ship's
+    /// target picture with it, for QuickDraw's addOver (`CopyBits` mode
+    /// 0x22), which wraps instead; the two agree over black, as every
+    /// stock picture lies (see
+    /// [`pilot_panel`](crate::menu::pilot_panel)).
     Additive,
     /// ORs its colour, scaled by a level from the tint, into what is
     /// beneath, bit for bit: the original's ship glow and lights blits,

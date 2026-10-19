@@ -105,6 +105,7 @@ use std::collections::BTreeSet;
 
 use super::Session;
 use crate::ai::pursuit::Pursuit;
+use crate::ai::swarm::{self, FormationParent};
 use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
@@ -146,6 +147,11 @@ pub(super) struct KeptEscort {
     /// writes +0x40, @0x3d4b8-0x3d62c); none when its NPC was not in the
     /// system, and it rolls one as `_SpawnEscort` does.
     pub(super) skill: Option<f32>,
+    /// Its afterburner ([`Npc::afterburner`]), which `_RespawnEscort`
+    /// never writes (@0x3d4b8-0x3d62c); `None` with no NPC, and the
+    /// escort rolls it as it is placed (see the `afterburner_roll`
+    /// module).
+    pub(super) afterburner: Option<bool>,
 }
 
 impl Session {
@@ -185,7 +191,8 @@ impl Session {
     ///
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
     /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark, and every
-    /// escort its skill. Its
+    /// escort its skill and its afterburner (+0xbd), which `_RespawnEscort`
+    /// never writes. Its
     /// ionization is not kept: `_RespawnEscort` clears the charge
     /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
     /// the first frame (@0x3a783) clears the colour of a ship with no
@@ -207,6 +214,7 @@ impl Session {
                         npc.display.rolls.anim,
                     )),
                     skill: Some(npc.skill),
+                    afterburner: Some(npc.afterburner),
                 })
             })
             .collect()
@@ -216,10 +224,12 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, its skill, and its display and fold, with no ionization, or a
-    /// loaded pilot's fold set with none kept
-    /// ([`Session::loaded_escort_set`]); one that kept no skill rolls one
-    /// on `chance`.
+    /// mark, its skill, its afterburner, and its display and fold, with no
+    /// ionization, or a loaded pilot's fold set with none kept
+    /// ([`Session::loaded_escort_set`]). One that kept no skill rolls one
+    /// on `chance`, and one that kept no afterburner, having no NPC (a
+    /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
+    /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
     pub(super) fn enter_escorts(
         &mut self,
         berths: &[u32],
@@ -263,6 +273,14 @@ impl Session {
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
                     }
                 }
+                match kept.afterburner {
+                    Some(afterburner) => {
+                        if let Some(npc) = self.npc_mut(id) {
+                            npc.afterburner = afterburner;
+                        }
+                    }
+                    None => self.roll_escort_afterburner(id, chance),
+                }
                 Some(id)
             })
             .collect();
@@ -281,10 +299,13 @@ impl Session {
     }
 
     /// Escort `index` as an NPC in the system, at `berth` or else the
-    /// first free one, beside the player until it is snapped to its slot;
-    /// none when its ship type has no record. It flies at `skill`, or one
-    /// rolled on `chance` as `_SpawnEscort` rolls it (through
-    /// `_GenericRandomShipSpawn` @0x3cad1), of no government.
+    /// first free one, beside the player until it is snapped to its slot,
+    /// with no afterburner, which each caller rolls or restores (see the
+    /// `afterburner_roll` module); none when its ship type has no record.
+    /// It flies at `skill`, or one rolled on `chance` as `_SpawnEscort`
+    /// rolls it (through `_GenericRandomShipSpawn` @0x3cad1), of no
+    /// government.
+    #[allow(clippy::too_many_lines)] // one line for each of the NPC's fields
     pub(super) fn place_escort_at(
         &mut self,
         index: usize,
@@ -347,7 +368,6 @@ impl Session {
             info_types: 0,
             cargo: NpcHold::default(),
             spared: false,
-            assisting: 0,
             carrier,
             person,
             mission: None,
@@ -356,6 +376,8 @@ impl Session {
             cloak_gear: kind.cloak,
             led_out: false,
             emerges_from: None,
+            visited: None,
+            travel_set: false,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
             skill,
@@ -364,6 +386,7 @@ impl Session {
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
+            class_fuel: kind.class_fuel,
             former: None,
             tractor: None,
             ion: Ion::default(),
@@ -371,6 +394,8 @@ impl Session {
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,
+            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
+            swarm_leader: None,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
@@ -391,6 +416,9 @@ impl Session {
                 },
                 ..NpcDisplay::default()
             },
+            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+            odds: crate::traffic::odds_cache::STALE,
+            no_ai: false,
         };
         npc.independent();
         Some(match berth {
@@ -445,34 +473,20 @@ impl Session {
         self.save_due = true;
     }
 
-    /// Gives each ship the player leads ([`Session::player_led`]) its slot
-    /// in one formation of them all and the player, spaced by the widest
-    /// sprite among them ([`escort::spacing`]): 2, 3, … in ship-table
-    /// order, by berth, hired and mission escorts alike, as
-    /// `_AICalcFormationPositions` numbers every ship whose formation
-    /// parent is the player in table-slot order (@0x85137-0x851cc). That
-    /// parent is the player for each ship it leads (`_DoPlayGameWork`
-    /// @0x44160-0x441c0). The original recomputes the formation every
-    /// frame (the parent's +0xc2 flag); the engine re-forms on each change
-    /// to the led set, which gives the same slots at every frame.
+    /// Gives each ship the player leads ([`Session::player_led`]) whose
+    /// formation parent is the player its slot in one formation of them
+    /// and the player ([`Session::formation_slots`]). The parent is the
+    /// player for each ship it leads but one attacking with a swarm leader,
+    /// which forms on that ([`swarm::formation_parent`], `_DoPlayGameWork`
+    /// @0x44160-0x441c0) and keeps the slot it held. The original
+    /// recomputes the formation every frame (the parent's +0xc2 flag); the
+    /// engine re-forms on each change to the led set, and on each change
+    /// of parent before the traffic's tick (the `swarm_formation` module),
+    /// which gives the same slots at every frame.
     pub(super) fn reform(&mut self) {
-        let placed: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
-        let widths: Vec<Option<f32>> = placed
-            .iter()
-            .filter_map(|&id| self.npc(id))
-            .map(|npc| npc.hull.sprite_size)
-            .collect();
-        let spacing = escort::spacing(self.hull.sprite_size, &widths);
-        for (place, id) in placed.into_iter().enumerate() {
-            let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
+        for (id, formation) in self.formation_slots() {
             let Some(npc) = self.npc_mut(id) else {
                 continue;
-            };
-            let formation = FormationSlot {
-                slot,
-                ships,
-                spacing,
             };
             if let Some(duty) = &mut npc.escort {
                 duty.formation = formation;
@@ -482,6 +496,36 @@ impl Session {
                 mark.formation = Some(formation);
             }
         }
+    }
+
+    /// The slot each ship in the player's formation takes: those the
+    /// player leads whose formation parent is the player, 2, 3, … in
+    /// ship-table order, by berth, hired and mission escorts alike, as
+    /// `_AICalcFormationPositions` numbers every ship whose formation
+    /// parent is the player in table-slot order (@0x85137-0x851cc), out of
+    /// them and the player, spaced by the widest sprite among them
+    /// ([`escort::spacing`]).
+    pub(super) fn formation_slots(&self) -> Vec<(NpcId, FormationSlot)> {
+        let placed: Vec<&Npc> = self
+            .player_led()
+            .filter(|npc| swarm::formation_parent(npc) == Some(FormationParent::Player))
+            .collect();
+        let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
+        let widths: Vec<Option<f32>> = placed.iter().map(|npc| npc.hull.sprite_size).collect();
+        let spacing = escort::spacing(self.hull.sprite_size, &widths);
+        placed
+            .iter()
+            .enumerate()
+            .map(|(place, npc)| {
+                let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
+                let formation = FormationSlot {
+                    slot,
+                    ships,
+                    spacing,
+                };
+                (npc.id, formation)
+            })
+            .collect()
     }
 
     /// Puts escort NPC `id`, hired or a mission escort, on its slot beside
@@ -646,7 +690,12 @@ impl Session {
     }
 
     /// Escort NPC `id` leaves the fleet, as [`Session::dismiss`] says but
-    /// making no save due; whether it was in the fleet.
+    /// making no save due; whether it was in the fleet. A holding escort
+    /// ([`Goal::Wait`]) takes goal 0, as `_EscortAI` writes goal and sub 0
+    /// for a ship of AI type above 4 whose leader is gone
+    /// (@0x83917-0x8397b): `_DamageShip`'s leader clear (@0x3afdd) keeps
+    /// its type. Without it, a disabled holding escort the fleet lost and
+    /// later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
         let Some(index) = self.fleet.iter().position(|&placed| placed == Some(id)) else {
             return false;
@@ -657,6 +706,9 @@ impl Session {
         }
         if let Some(npc) = self.npc_mut(id) {
             npc.escort = None;
+            if npc.goal == Goal::Wait {
+                npc.goal = Goal::Idle;
+            }
         }
         self.reform();
         true
@@ -668,8 +720,7 @@ impl Session {
     /// ([`Session::destroy_cargo_share`], `_DoCommDialog` @0x96864), any
     /// ship type by the engine reading of [`RuleKey::ReleaseCargoShare`]
     /// and only a trader by the other; then it leaves the fleet and the
-    /// system (`_AIMakeShipLeave`), jumping out with a jump's fuel, or
-    /// else deciding as its idle block does.
+    /// system (`_AIMakeShipLeave`), jumping out whatever its fuel.
     pub(super) fn release(&mut self, id: NpcId) {
         if !self.is_escort(id) {
             return;
@@ -2196,7 +2247,7 @@ mod tests {
             fly(&mut session, &catalog, weaving(tick));
         }
         let warship = escort_npcs(&session)[0];
-        assert_eq!(warship.goal, Goal::Idle);
+        assert_eq!(warship.goal, Goal::Wait, "the hold's goal 6");
         assert!(
             (warship.state.position - held).length() < 1.0,
             "it stayed put"
@@ -2225,7 +2276,7 @@ mod tests {
         assert!(
             escort_npcs(&session)
                 .iter()
-                .all(|npc| npc.goal == Goal::Idle)
+                .all(|npc| npc.goal == Goal::Wait)
         );
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
         assert_eq!(orders(&session), [None, None]);
@@ -2750,6 +2801,24 @@ mod tests {
             Some(PersonId(700)),
             "its link kept"
         );
+    }
+
+    #[test]
+    fn a_holding_escort_that_leaves_the_fleet_takes_goal_0() {
+        // Its leader gone, `_EscortAI` writes goal 0 and sub 0 for a ship
+        // of AI type above 4 (@0x83917-0x8397b), which `_DamageShip`'s
+        // leader clear (@0x3afdd) leaves it.
+        let catalog = with_ace();
+        for (goal, left) in [
+            (Goal::Wait, Goal::Idle),
+            (Goal::Attack(ShipRef::Player), Goal::Attack(ShipRef::Player)),
+        ] {
+            let mut session = flying_ace(&catalog);
+            let ace = session.fleet[0].expect("placed");
+            session.npc_mut(ace).expect("here").goal = goal;
+            assert!(session.unfleet(ace));
+            assert_eq!(session.npc(ace).expect("here").goal, left, "{goal:?}");
+        }
     }
 
     #[test]

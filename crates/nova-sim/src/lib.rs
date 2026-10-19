@@ -409,6 +409,7 @@ pub use nova_sim_story::nebula;
 pub use nova_sim_story::news;
 pub use nova_sim_story::person;
 pub use nova_sim_story::pilot;
+pub mod pilot_panel;
 pub mod pre_jump;
 pub use nova_sim_story::rank;
 pub mod rating;
@@ -543,7 +544,7 @@ pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
-pub use saves::{PilotKeeper, PilotStore, pilot_key};
+pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
 pub use self_destruct::SelfDestruct;
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
@@ -563,6 +564,7 @@ pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCa
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Leave, Traffic, World};
 pub use tutorial::{Tutorial, TutorialHint};

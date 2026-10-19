@@ -276,7 +276,7 @@ impl Session {
     /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
     /// [`Session::legal_status_in`]): the player's system's stellars read
     /// from `catalog`; "N/A" in an uninhabited system.
-    fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
+    pub(super) fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
         let system = self.pilot.system;
         let sites = overlaid_sites(&self.galaxy, catalog, system);
         let inhabited = player_info::system_is_inhabited(
