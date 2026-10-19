@@ -412,7 +412,7 @@ pub struct PersonWorld<'a> {
     /// The player as the last galaxy refresh read them: what a ship
     /// type's or fleet's `AppearOn`, and a drawn person's `ActiveOn`, are
     /// tested against, as `_PropagateMissionBitEffects` caches them (see
-    /// [`RuleKey::SpawnAvailability`](crate::RuleKey::SpawnAvailability)).
+    /// [`RuleKey::SpawnAvailability`]).
     pub refreshed: &'a dyn PilotFacts,
     /// The player's fleet: the persons among it never spawn, and their
     /// names count as in the system.
