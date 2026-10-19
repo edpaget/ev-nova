@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
-use nova_sim::{Pilot, PilotKeeper, PilotStore, RuleKey, pilot_key};
+use nova_sim::{PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::FlightView;
 use nova_view::spaceport::SpaceportView;
@@ -114,49 +114,30 @@ impl AppScreen {
         self.switch_to(Side::Spaceport);
     }
 
-    /// Flies `pilot`, from the main menu, in place of any flight; Escape
-    /// goes back to the menu. A pilot last landed on a stellar resumes in
-    /// flight over it ([`FlightView::with_pilot`]).
-    pub(super) fn start_flight(&mut self, pilot: Pilot) {
-        self.build_flight(pilot, false);
-        self.enter_built_flight();
-    }
-
-    /// Builds `pilot`'s flight in place of any flight, without showing
-    /// it: one `loaded` from a save reads its load's fallbacks from the
-    /// router's rules ([`FlightView::loaded`]), a new one is flown as it
-    /// is.
-    pub(super) fn build_flight(&mut self, pilot: Pilot, loaded: bool) {
-        self.drop_spaceport();
-        self.put_away_flight();
-        let rules = self.rules;
-        let flight = self.flight(|data| {
-            if loaded {
-                FlightView::loaded(data, pilot, rules)
-            } else {
-                FlightView::with_pilot(data, pilot)
-            }
-        });
-        self.flight = Some(flight);
-    }
-
-    /// Shows the flight just built, from the main menu, which Escape goes
-    /// back to: in space, as `_EnterGameFromMainScreen` and `_PlayGame`
-    /// land nothing.
-    pub(super) fn enter_built_flight(&mut self) {
-        self.return_to = Side::MainMenu;
-        self.switch_to(Side::Flight);
-    }
-
     /// Puts the pilot away and shows `side`: saves it (unless it may not
     /// be saved), or deletes a strict pilot dying
     /// ([`AppScreen::put_away_pilot`]), before anything can show the menu
     /// or list the pilots, and drops flight, the spaceport and any dialog
-    /// open over flight, so nothing is left to re-enter.
+    /// open over flight, so nothing is left to re-enter
+    /// ([`AppScreen::drop_flight`]).
     pub(super) fn end_flight(&mut self, side: Side) {
         self.put_away_pilot();
         self.switch_to(side);
-        self.put_away_flight();
+        self.drop_flight();
+    }
+
+    /// Drops the flight shown, if any, keeping its settings for the next
+    /// flight ([`AppScreen::remember_flight`]), then the spaceport and
+    /// every dialog open over flight ([`AppScreen::drop_over_flight`]).
+    pub(super) fn drop_flight(&mut self) {
+        if let Some(flight) = self.flight.take() {
+            self.remember_flight(&flight);
+        }
+        self.drop_over_flight();
+    }
+
+    /// Drops the spaceport and every dialog open over flight.
+    pub(super) fn drop_over_flight(&mut self) {
         self.drop_spaceport();
         self.plunder = None;
         self.assignment = None;
@@ -285,14 +266,10 @@ impl AppScreen {
         }
     }
 
-    /// Drops the flight, if any, keeping its ship slots' draw-layer and
-    /// cloned-frame history, what its berths keep, its course map's zoom
-    /// and whether the map shows the borders, for the next flight in this
-    /// run.
-    fn put_away_flight(&mut self) {
-        let Some(flight) = self.flight.take() else {
-            return;
-        };
+    /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
+    /// what its berths keep, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
+    pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
         }
@@ -340,21 +317,25 @@ impl AppScreen {
     /// warning. Pilots without a name, which the developer's F flies, are
     /// never saved.
     pub(super) fn save_pilot(&mut self) {
-        let (Some(flight), Some(keeper)) = (&self.flight, self.keeper()) else {
-            return;
-        };
-        if !flight.may_save() {
-            return;
-        }
-        let Some(pilot) = flight.pilot() else {
-            return;
-        };
-        if pilot_key(pilot.name()).is_none() {
-            return;
-        }
-        if let Err(warning) = keeper.save(pilot) {
+        if let Some(warning) = self
+            .flight
+            .as_ref()
+            .and_then(|flight| self.save_warning(flight))
+        {
             self.warnings.push(warning);
         }
+    }
+
+    /// Saves `flight`'s pilot as [`AppScreen::save_pilot`] says, and the
+    /// warning a failure gives.
+    pub(super) fn save_warning(&self, flight: &FlightView<Rc<GameData>>) -> Option<String> {
+        let keeper = self.keeper()?;
+        if !flight.may_save() {
+            return None;
+        }
+        let pilot = flight.pilot()?;
+        pilot_key(pilot.name())?;
+        keeper.save(pilot).err()
     }
 
     /// Settles what the set expressions run in flight or in the spaceport
@@ -364,8 +345,11 @@ impl AppScreen {
     /// visit's offers as it settles, so the spaceport's offer is asked for
     /// here, after the texts the landing queued, as `_DoPortDialog` offers
     /// after `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input
-    /// can open a service. Last, a `Q` run while landed leaves, once
-    /// nothing shown holds it ([`AppScreen::leave_if_due`]).
+    /// can open a service. Then a `Q` run while landed leaves, once
+    /// nothing shown holds it ([`AppScreen::leave_if_due`]). Last, the
+    /// main menu's pilot panel is brought in step with the game held
+    /// ([`AppScreen::show_game_on_menu`]): this runs after every input and
+    /// tick, so every frame drawn on the menu shows the game as it stands.
     pub(super) fn settle_script(&mut self) {
         if let Some(flight) = self.flight.as_mut() {
             flight.settle_script();
@@ -373,6 +357,7 @@ impl AppScreen {
         self.show_mission_texts();
         self.serve_offers();
         self.leave_if_due();
+        self.show_game_on_menu();
     }
 
     /// Leaves the spaceport for a `Q` run while landed

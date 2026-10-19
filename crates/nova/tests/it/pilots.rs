@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
@@ -117,13 +118,26 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 const CASH: i32 = 25_000;
 
 /// The `chär`: 25,000 credits, ship 128 in system 128 on 23 June 1177,
-/// and no legal records.
+/// and no legal records; no intro picture, and the intro text `dësc` 0,
+/// which there is no "Desc Dialog" to show.
 fn character() -> Vec<u8> {
     let mut bytes = vec![0; Character::SIZE.expect("fixed")];
     bytes[0x00..0x04].copy_from_slice(&CASH.to_be_bytes());
     put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
     put_i16s(&mut bytes, 0x0E, &[-1; 4]);
     put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+    bytes
+}
+
+/// The intro picture of [`intro_game_data`]'s `chär`.
+pub(crate) const INTRO_PICT: i16 = 8200;
+
+/// [`character`] whose intro is [`INTRO_PICT`] for 2 s, and no text.
+fn intro_character() -> Vec<u8> {
+    let mut bytes = character();
+    put_i16s(&mut bytes, 0x20, &[INTRO_PICT, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x28, &[2, 0, 0, 0]);
+    put_i16s(&mut bytes, 0x30, &[-1]);
     bytes
 }
 
@@ -181,8 +195,22 @@ fn spin() -> Vec<u8> {
 }
 
 fn game_data() -> Rc<GameData> {
+    game_data_of(character(), Vec::new())
+}
+
+/// [`game_data`], its `chär` showing an intro picture ([`INTRO_PICT`])
+/// to a pilot entering play for the first time.
+pub(crate) fn intro_game_data() -> Rc<GameData> {
+    game_data_of(
+        intro_character(),
+        vec![(PICT, INTRO_PICT, pict(8, 4, [0, 0, 90]))],
+    )
+}
+
+/// The game data, its `chär` `character`, with `extra` too.
+fn game_data_of(character: Vec<u8>, extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<GameData> {
     let mut resources = vec![
-        (Character::TYPE, 128, character()),
+        (Character::TYPE, 128, character),
         (Ship::TYPE, 128, ship()),
         (ShipAnim::TYPE, 128, ship_anim()),
         (RLED, 2000, sheet(36, 1)),
@@ -202,6 +230,7 @@ fn game_data() -> Rc<GameData> {
     }
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
+    resources.extend(extra);
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -298,8 +327,8 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-struct Harness {
-    app: App<Rc<GameData>>,
+pub(crate) struct Harness {
+    pub(crate) app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     frames: u64,
     /// What the app's audio was asked to play.
@@ -311,18 +340,42 @@ struct Harness {
 impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
-    fn opening(store: &MemoryPilots) -> Self {
+    pub(crate) fn opening(store: &MemoryPilots) -> Self {
         Self::opening_with(store, AudioSettings::default())
     }
 
     /// [`Harness::opening`], its audio on `settings`.
     fn opening_with(store: &MemoryPilots, settings: AudioSettings) -> Self {
-        let data = game_data();
+        Self::built(store, settings, false)
+    }
+
+    /// The app on the main menu as `main` builds it, keeping pilots in
+    /// `store` and opening the last pilot at launch, before any frame.
+    fn launching(store: &MemoryPilots) -> Self {
+        Self::built(store, AudioSettings::default(), true)
+    }
+
+    /// The app on the main menu, keeping pilots in `store`, its audio on
+    /// `settings`, opening the last pilot at launch when `launch`.
+    fn built(store: &MemoryPilots, settings: AudioSettings, launch: bool) -> Self {
+        Self::built_on(game_data(), store, settings, launch)
+    }
+
+    /// [`Harness::built`] over `data`.
+    pub(crate) fn built_on(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
-        let screen = start_screen(Rc::clone(&data))
+        let mut screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
+        if launch {
+            screen = screen.open_last_pilot();
+        }
         let audio = RecordingAudio::new();
         let log = audio.log();
         let handle = audio.clone();
@@ -336,7 +389,7 @@ impl Harness {
         }
     }
 
-    fn handle(&mut self, event: WindowEvent) -> Control {
+    pub(crate) fn handle(&mut self, event: WindowEvent) -> Control {
         self.app.handle(event, &mut FakeWindow, &mut self.gpu)
     }
 
@@ -357,7 +410,7 @@ impl Harness {
     }
 
     /// Types `name`, each letter on its own key.
-    fn type_name(&mut self, name: &str) {
+    pub(crate) fn type_name(&mut self, name: &str) {
         for c in name.chars() {
             let code = match c.to_ascii_lowercase() {
                 'a' => KeyCode::KeyA,
@@ -372,19 +425,19 @@ impl Harness {
         }
     }
 
-    fn press(&mut self, code: KeyCode) {
+    pub(crate) fn press(&mut self, code: KeyCode) {
         self.type_key(code, None);
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
     /// a few frames let the dock approach clear it, and the second lands.
-    fn land(&mut self) {
+    pub(crate) fn land(&mut self) {
         self.press(KeyCode::KeyL);
         self.approach();
         self.press(KeyCode::KeyL);
     }
 
-    fn click(&mut self, at: Point) {
+    pub(crate) fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
         });
@@ -397,7 +450,7 @@ impl Harness {
     }
 
     /// Where the main menu's `choice` button is.
-    fn menu_button(&self, choice: MenuChoice) -> Point {
+    pub(crate) fn menu_button(&self, choice: MenuChoice) -> Point {
         self.app
             .screen()
             .main_menu()
@@ -406,7 +459,7 @@ impl Harness {
     }
 
     /// The music commands since the last call; the effects let go.
-    fn music(&self) -> Vec<AudioCommand> {
+    pub(crate) fn music(&self) -> Vec<AudioCommand> {
         std::mem::take(&mut *self.log.borrow_mut())
             .into_iter()
             .filter(|command| {
@@ -449,7 +502,7 @@ impl Harness {
         panic!("the app never exits");
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
@@ -474,7 +527,7 @@ impl Harness {
             .clone()
     }
 
-    fn frame(&mut self) -> Frame {
+    pub(crate) fn frame(&mut self) -> Frame {
         self.frames += 1;
         self.send(WindowEvent::Redraw {
             elapsed: Duration::from_millis(16 * self.frames),
@@ -534,7 +587,7 @@ fn assert_menu_drawn(game: &mut Harness) {
     }
 }
 
-fn saved(store: &MemoryPilots, key: &str) -> Pilot {
+pub(crate) fn saved(store: &MemoryPilots, key: &str) -> Pilot {
     nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
 }
 
@@ -560,6 +613,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     );
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     let pilot = game.pilot();
     assert_eq!(pilot.name(), "Ada P");
@@ -603,6 +657,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(game.showing(), Showing::OpenPilot);
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert!(game.app.screen().spaceport_view().is_none());
     assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
@@ -660,6 +715,28 @@ fn frames_to(delay: Duration) -> u64 {
 
 const DOWN: SoundId = SoundId(600);
 const UP: SoundId = SoundId(601);
+
+#[test]
+fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
+    assert_eq!(store.keys(), ["Ada"]);
+
+    let mut game = Harness::launching(&store);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    let held = game.app.screen().game_in_progress().expect("a game held");
+    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
+    assert_menu_drawn(&mut game);
+    game.enter_ship();
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().name(), "Ada");
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
+}
 
 #[test]
 fn a_keyed_new_pilot_opens_only_once_its_click_has_played() {
@@ -724,6 +801,7 @@ fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
     assert_eq!(
@@ -737,6 +815,7 @@ fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.pilot().stellar(), Some(StellarId(128)));
     assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over it");
@@ -763,6 +842,7 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
 
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(
         game.music(),
@@ -777,3 +857,5 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     game.frame();
     assert_eq!(game.music(), [], "spent for the rest of the run");
 }
+
+crate::common::entry_harness!(Harness, click, frame);

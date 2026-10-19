@@ -1629,6 +1629,7 @@ impl Boarder {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
+        self.enter_ship();
         assert_eq!(self.showing(), showing);
     }
 
@@ -2315,6 +2316,7 @@ fn a_hail_option_registered_at_the_edge_shows_its_button_and_its_reply() {
 
 // Escorts.
 
+use crate::common::EntryHarness;
 use nova_sim::{AiType, EscortOrder, NovaAi, RuleKey, RuleSource};
 
 /// A `sÿst` at map (`x`, 0) with these hyperlinks, `stellar` if any, and
@@ -3318,3 +3320,5 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.tap(Key::Char('w'));
     assert!(text_at(&game.frame(), "Bay - 2").is_some());
 }
+
+crate::common::entry_harness!(Boarder, click, frame);

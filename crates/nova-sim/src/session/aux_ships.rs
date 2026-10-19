@@ -169,12 +169,59 @@ impl Session {
     }
 
     /// The take-off's restart of every active mission's auxiliary ships,
-    /// in slot order ([`Session::restart_aux`]), drawing on `chance`.
+    /// in slot order ([`Session::restart_aux`]), drawing on `chance`; the
+    /// launch's too ([`Session::open_at_launch`]).
     pub(super) fn restart_every_aux(&mut self, chance: &mut dyn Chance) {
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
         for slot in slots {
             self.restart_aux(slot, chance);
         }
+    }
+
+    /// Open Pilot's restart of every active mission's auxiliary ships, in
+    /// slot order ([`AuxShips::restart_from_main_screen`]), drawing on
+    /// `chance`: `_MainScreenChoice(1)`'s loop over the 16 slots
+    /// (@0x1a918-0x1a982), run once the pilot is loaded. No save is due.
+    /// Which slot draws first decides nothing the player sees (the
+    /// engine's generator isn't the original's).
+    ///
+    /// [`AuxShips::restart_from_main_screen`]: crate::mission::aux_ships::AuxShips::restart_from_main_screen
+    pub fn restart_aux_from_main_screen(&mut self, chance: &mut dyn Chance) {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            let Some(active) = self.pilot.missions.get(slot) else {
+                continue;
+            };
+            let record = self.lifecycle_record(active.mission);
+            if let Some(active) = self.pilot.missions.get_mut(slot) {
+                active
+                    .aux
+                    .restart_from_main_screen(&record.aux, record.flags, chance);
+            }
+        }
+    }
+
+    /// The setup of a pilot opened at launch, once the load has run (its
+    /// sweep with it), drawing on `chance`, as `_OpenLastPilotFile` and
+    /// `_DoMainScreen`'s once-a-launch setup do:
+    ///
+    /// - every active mission's auxiliary ships restarted, in slot order,
+    ///   in the unguarded form the take-off uses ([`AuxShips::restart`],
+    ///   @0x765d4-0x76637): unlike [`Session::restart_aux_from_main_screen`]
+    ///   it redraws the countdown and zeroes those arrived even with none
+    ///   left to come;
+    /// - the player's system explored (`_ExploreNebulaeFromSystem(current)`
+    ///   @0x1affe), raising `Explored` for it to settle.
+    ///
+    /// No save is due. Open Pilot runs neither, nor does a return from
+    /// play. The original sweeps after the load and this runs after the
+    /// session's own sweep; both settle before the main menu's first
+    /// frame.
+    ///
+    /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+    pub fn open_at_launch(&mut self, chance: &mut dyn Chance) {
+        self.restart_every_aux(chance);
+        self.explore_here();
     }
 
     /// The player's exit from a hypergate or wormhole, after the
@@ -1221,6 +1268,94 @@ mod tests {
         let mut draws = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut draws);
         assert!(!draws.asked.contains(&70), "the hook restarts none");
+    }
+
+    #[test]
+    fn open_pilots_restart_draws_each_slot_with_ships_left_in_slot_order() {
+        let (_, mut session) = two_slots();
+        let spent = |left| AuxShips {
+            countdown: 5,
+            arrived: 2,
+            left,
+        };
+        for (slot, left) in [(0, 1), (1, 0)] {
+            if let Some(active) = session.pilot.missions.get_mut(slot) {
+                active.aux = spent(left);
+            }
+        }
+        let _ = session.take_save_due();
+        let mut draws = Draws::of(&[9]);
+        session.restart_aux_from_main_screen(&mut draws);
+        let aux = |slot| session.pilot().missions().get(slot).expect("held").aux;
+        assert_eq!(
+            aux(0),
+            AuxShips {
+                countdown: 79,
+                arrived: 0,
+                left: 1
+            }
+        );
+        assert_eq!(aux(1), spent(0), "none left: as saved");
+        assert_eq!(draws.asked, [70], "one draw, slot 0's");
+        assert!(!session.take_save_due(), "no save is due");
+    }
+
+    #[test]
+    fn the_launchs_restart_redraws_every_slot_even_with_none_left() {
+        // `_OpenLastPilotFile`'s loop has no +0x6e guard (@0x765d4-0x76637).
+        let (_, mut session) = two_slots();
+        let spent = |left| AuxShips {
+            countdown: 5,
+            arrived: 2,
+            left,
+        };
+        for (slot, left) in [(0, 1), (1, 0)] {
+            if let Some(active) = session.pilot.missions.get_mut(slot) {
+                active.aux = spent(left);
+            }
+        }
+        let _ = session.take_save_due();
+        let mut draws = Draws::of(&[9, 69]);
+        session.open_at_launch(&mut draws);
+        let aux = |slot| session.pilot().missions().get(slot).expect("held").aux;
+        for (slot, left) in [(0, 1), (1, 0)] {
+            let restarted = aux(slot);
+            assert!(
+                (70..140).contains(&restarted.countdown),
+                "slot {slot}: Rand(70)+70, got {}",
+                restarted.countdown
+            );
+            assert_eq!(
+                (restarted.arrived, restarted.left),
+                (0, left),
+                "slot {slot}"
+            );
+        }
+        assert_eq!(draws.asked, [70, 70], "a draw for each slot");
+        assert!(!session.take_save_due(), "no save is due");
+    }
+
+    #[test]
+    fn the_launchs_restart_refills_every_visits_ships() {
+        let catalog = crate::testkit::far_129_reachable(aux_only(3, -1, AUX_EVERY_VISIT));
+        let mut session = accepted(&catalog);
+        set_aux(
+            &mut session,
+            AuxShips {
+                countdown: 0,
+                arrived: 3,
+                left: 0,
+            },
+        );
+        session.open_at_launch(&mut Draws::of(&[3]));
+        assert_eq!(
+            aux_of(&session),
+            AuxShips {
+                countdown: 73,
+                arrived: 0,
+                left: 3
+            }
+        );
     }
 
     // The gate exit.

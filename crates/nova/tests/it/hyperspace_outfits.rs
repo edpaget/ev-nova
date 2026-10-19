@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -512,6 +513,7 @@ impl Harness {
             game.type_key(code, Some(letter));
         }
         game.press(KeyCode::Enter);
+        game.enter_ship();
         assert_eq!(game.showing(), Showing::Flight);
         game.frame();
         game
@@ -712,3 +714,5 @@ fn without_the_booster_the_same_flight_is_too_close_to_jump() {
     assert_eq!(game.session().system(), SystemId(128));
     assert_eq!(game.pilot().owned(BOOSTER), 0);
 }
+
+crate::common::entry_harness!(Harness, click, frame);

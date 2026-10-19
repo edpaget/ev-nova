@@ -24,6 +24,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -660,6 +661,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     let base_speed = game.top_speed();
@@ -746,6 +748,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.land();
@@ -782,6 +785,7 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     game.frame();
     game.land();
     game.open_outfitter();
@@ -808,3 +812,5 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     assert_eq!(game.pilot().owned(MAP), 0);
     assert_eq!(game.pilot().cash(), 23_000);
 }
+
+crate::common::entry_harness!(Harness, click, frame);
