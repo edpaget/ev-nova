@@ -14,7 +14,7 @@
 //! for the later ones.
 //!
 //! **The kill** (@0x39da4-0x39e1f): the ship goes inactive with its armour
-//! at -1000 and its death timer at none, and `_CreateExplosion` makes its
+//! at [`KILLED_ARMOR`] and its death timer at none, and `_CreateExplosion` makes its
 //! `Explode2` at size 0 with its sound ([`Combat::explode`]; no explosion
 //! when the `Explode2` is out of range, as `_CreateExplosion` refuses it,
 //! @0x3f6b1-0x3f6cc). The view plays the bööm's sound, so no `SimSound` is
@@ -52,7 +52,9 @@ use std::collections::BTreeSet;
 
 use super::Session;
 use crate::combat::hull::Condition;
-use crate::deadly_stellar::{DeadlyStellarKill, drawn_radius, is_deadly, resists_deadly, touches};
+use crate::deadly_stellar::{
+    DeadlyStellarKill, KILLED_ARMOR, drawn_radius, is_deadly, resists_deadly, touches,
+};
 use crate::flight::Flyer;
 use crate::geometry::Vec2;
 use crate::player_fate::{Ending, HOLD_TICKS};
@@ -126,6 +128,7 @@ impl Session {
             self.combat.explode(self.player.position, explosion);
         }
         self.condition = Condition::Destroyed;
+        self.pilot.reserves.armor.now = KILLED_ARMOR;
         self.pod = None;
         self.player_exploded_this_tick = true;
         self.player_end = Some(Ending::Holding {
@@ -154,6 +157,7 @@ impl Session {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::catalog::{LandingSite, OutfitId, ShipId};
@@ -414,6 +418,10 @@ mod tests {
         session.take_sounds();
         fight(&mut session);
         assert_eq!(session.condition, Condition::Destroyed);
+        assert_eq!(
+            session.pilot.reserves.armor.now,
+            crate::deadly_stellar::KILLED_ARMOR
+        );
         assert_eq!(
             session.player_end,
             Some(Ending::Holding {

@@ -44,6 +44,10 @@ pub const DEADLY_STELLAR: u16 = 0x0100;
 /// killing it (`cmpw $0x2a`, `_ShipResistsDeadlyStellars`).
 pub const DEADLY_RESISTANCE: i16 = 42;
 
+/// The armour a ship a deadly stellar kills is left with (the immediate
+/// float -1000.0 written to +0x58 @0x39db6).
+pub const KILLED_ARMOR: f32 = -1000.0;
+
 /// Whether a stellar of `spöb` `Flags2` `flags2` is deadly.
 #[must_use]
 pub fn is_deadly(flags2: u16) -> bool {
