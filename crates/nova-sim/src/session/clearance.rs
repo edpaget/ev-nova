@@ -763,4 +763,79 @@ mod tests {
         assert_eq!(carried_over(&guarded_129(0), REQUESTED_NEAR), denied);
         assert_eq!(carried_over(&guarded_129(0x4), CLEARED), denied);
     }
+
+    // The owner recheck.
+
+    /// [`catalog`] with system 127, at (-300, 0), listing planet 128 too,
+    /// hidden while bit 1 is clear: so at the start 130 owns 128 and shows
+    /// it.
+    fn shared_128() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog
+            .star_map
+            .push(crate::testkit::star(127, (-300.0, 0.0), &[]));
+        catalog.systems.push(SystemId(127));
+        catalog
+            .sites
+            .push((SystemId(127), vec![planet(128, 30.0, -40.0)]));
+        catalog.visibility.push(crate::catalog::SystemVisibility {
+            id: SystemId(127),
+            visibility: crate::control::Test::parse("b1"),
+        });
+        catalog
+    }
+
+    /// [`shared_128`]'s session with 128 held and requested, then 127
+    /// shown by a galaxy change, with no rebuild point: 127, the lower
+    /// visible lister, owns 128 now, though 130 still shows it.
+    fn owned_elsewhere(catalog: &FakePilotCatalog) -> Session {
+        let mut session = quiet(Session::start(catalog).expect("starts"));
+        assert!(session.stellars_shown().any(|id| id == StellarId(128)));
+        assert_eq!(session.land(), requested(128));
+        assert!(session.change_galaxy(catalog, |overlay| {
+            overlay.set_visible(SystemId(127), None);
+        }));
+        assert_eq!(
+            session.galaxy().owner(&[SystemId(127), SystemId(130)]),
+            Some(SystemId(127))
+        );
+        assert!(session.stellars_shown().any(|id| id == StellarId(128)));
+        quiet(session)
+    }
+
+    #[test]
+    fn l_refuses_a_held_stellar_another_system_owns_now_as_not_landable() {
+        let catalog = shared_128();
+        let mut session = owned_elsewhere(&catalog);
+        let request = session.dock_request();
+        assert!(request.is_some());
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            }),
+            "the owner recheck (@0x6699a-0x669a4)"
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x67e8f");
+        assert_eq!(session.dock_request(), request, "kept");
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn a_disabled_ship_is_refused_a_stellar_another_system_owns_now_the_same_way() {
+        let catalog = shared_128();
+        let mut session = owned_elsewhere(&catalog);
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            }),
+            "before `_IsDisabled` (@0x66af7)"
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+        assert_eq!(session.landed(), None);
+    }
 }

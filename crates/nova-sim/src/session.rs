@@ -3294,6 +3294,14 @@ impl Session {
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
     ///
+    /// The stellar held is rechecked as the dock request rechecks it
+    /// (@0x6699a-0x669aa): one the player's system no longer holds
+    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+    /// or no longer among the stellars shown, is refused as
+    /// [`LandingRefusal::NotLandable`], a disabled ship's too. A galaxy
+    /// change between rebuild points can give a stellar shown to another
+    /// system.
+    ///
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
     /// @0x676fe), once a press, a disabled ship's not-landable target
@@ -3325,12 +3333,29 @@ impl Session {
         };
         let blessing = self.blessing();
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        // The stellar held, wherever its system lists it, and the dock
+        // request's recheck of it (@0x6699a-0x669aa): its owner word the
+        // player's system, and active, which the stellars shown hold as the
+        // last rebuild point left them.
+        let target = self
+            .nav_target()
+            .and_then(|id| self.chart.listed.iter().find(|site| site.id == id));
+        let player = self.pilot.system;
+        let held = |site: &LandingSite| {
+            self.chart.sites.iter().any(|shown| shown.id == site.id)
+                && self
+                    .chart
+                    .galaxy
+                    .holder(site.id, self.statics.listers(site.id), player)
+                    == Some(player)
+        };
         let press = land_or_select(
-            self.nav_target(),
+            target,
             self.port.dock,
             &self.ship.player,
             &self.chart.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
+            held,
             |site| self.space.landing_reach(&self.setup, site),
         );
         if disabled {
