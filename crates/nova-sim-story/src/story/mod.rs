@@ -838,9 +838,17 @@
 //! `nova_sim::course` module).
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
-//! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
-//! its system by the same rule before it enters. For a jump and a gate
-//! this is the original's; for `M` and `N` it is the engine's own: the
+//! gate's exit, `M` and `N`, the escape pod's rescue and the developer
+//! tools' relocation) enters the system as
+//! [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem) says (see
+//! the `nova_sim::session` `arrival_system` module): by the engine, the
+//! system it is given as it is, a visible system shadowed at its place
+//! too, and a hidden one moved out of as the refresh moves the player
+//! ([`OverlaidGalaxy::entered`]); a jump decides its system before its
+//! refresh, the raw Con target it was selected from off the multi-jump
+//! branch. By the other reading, story-runtime phase 4's, every arrival is
+//! resolved by place after the refresh ([`OverlaidGalaxy::arrival`]). For
+//! `M` and `N` into a hidden system the move is the engine's own: the
 //! original writes the system given (@0x158f2) and leaves the player in a
 //! hidden system until the next refresh moves it. A government override
 //! is the engine's own too, with no Rulebook key: the original changes a
@@ -1882,12 +1890,17 @@
 //! - **A stellar's system.** `_FindSystemFromStellar` (@0x7ec1-0x7f48)
 //!   gives the lowest-ID visible system whose `NavDefs` list the stellar,
 //!   else the lowest-ID system that lists it.
-//! - **Arrivals.** A jump resolves its hops by place
-//!   (`_FindActiveCoLocatedSystem` @0x6bd67, @0x6bd7b, @0x6bdc1). A
+//! - **Arrivals.** A jump resolves its hops by place on its multi-jump
+//!   branch only (`_FindActiveCoLocatedSystem` @0x6bd67, @0x6bd7b,
+//!   @0x6bdc1); otherwise it writes the raw Con link it was selected from
+//!   (+0x6c, @0x6bd3a, @0x6be0b), unresolved, before its refresh, which
+//!   moves the player only out of a hidden system (@0x99918). A
 //!   hypergate's exit takes the stellar's system (`_FindSystemFromStellar`
-//!   @0x638e4) and resolves it by place (@0x638ed), and so does a
-//!   wormhole's (@0x64085, @0x64155, @0x64204). `M` and `N` write the
-//!   system they are given (@0x158f2) and resolve nothing.
+//!   @0x638e4) and resolves it by place (@0x638ed). A wormhole's
+//!   `_FindActiveCoLocatedSystem` calls (@0x64085, @0x64155, @0x64204)
+//!   only filter its candidates: it comes out in the exit's owner as it
+//!   is (@0x642a7). `M` and `N` write the system they are given (@0x158f2)
+//!   and resolve nothing.
 //! - **Traffic over time** reads the current system afresh at each spawn.
 //!   Every frame `_DoPlayGameWork` calls `_EnterMoreShips` with the
 //!   player's system (@0x44228-0x44237), which reads that system's record
