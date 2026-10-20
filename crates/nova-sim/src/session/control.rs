@@ -182,12 +182,15 @@ impl Session {
             SetOp::MoveTo(system) => {
                 self.chart
                     .select_for_landed_move(&self.statics, self.landed, *system, true);
-                self.queued.moves.push(ScriptMove::To(*system));
+                self.run.queued.moves.push(ScriptMove::To(*system));
             }
             SetOp::MoveKeepPosition(system) => {
                 self.chart
                     .select_for_landed_move(&self.statics, self.landed, *system, false);
-                self.queued.moves.push(ScriptMove::KeepPosition(*system));
+                self.run
+                    .queued
+                    .moves
+                    .push(ScriptMove::KeepPosition(*system));
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
             SetOp::PlaySound(sound) => self.play_script_sound(*sound),
@@ -229,7 +232,7 @@ impl Session {
             SetOpKind::MoveKeepPosition
                 if self.setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
             {
-                self.queued.moves.push(ScriptMove::Stay);
+                self.run.queued.moves.push(ScriptMove::Stay);
             }
             SetOpKind::PlaySound => self.drop_script_sound(),
             SetOpKind::LeaveStellar => self.leave_on_no_list(),

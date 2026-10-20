@@ -406,7 +406,7 @@ mod tests {
         let mut unavailable = person::boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = person::alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         assert!(matches!(
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))

@@ -303,7 +303,7 @@ impl Session {
         self.pilot.cargo.clear();
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
-        self.recent_rank = None;
+        self.run.recent_rank = None;
         // The system died in: its timer cancelled and its countdown
         // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
         self.space.reset_reinforcements_here(&mut self.pilot);
@@ -1032,8 +1032,8 @@ mod tests {
         session.red_alert.check(true, false, true);
         session.red_alert.step(0);
         assert!(session.red_alert_icon().is_some(), "the alert is up");
-        session.recent_rank = Some(RankId(140));
-        session.queued.sound = Some(SoundId(200));
+        session.run.recent_rank = Some(RankId(140));
+        session.run.queued.sound = Some(SoundId(200));
         session.chart.target = Some(NpcId(5));
         session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
@@ -1051,8 +1051,8 @@ mod tests {
         assert_eq!(session.ship.secondary, None);
         assert_eq!(session.pilot.jumped_from, None);
         assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
-        assert_eq!(session.recent_rank, None);
-        assert_eq!(session.queued.sound, None);
+        assert_eq!(session.run.recent_rank, None);
+        assert_eq!(session.run.queued.sound, None);
         assert_eq!(session.chart.target, None);
         assert_eq!(
             session.chart.nav,

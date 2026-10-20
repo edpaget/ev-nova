@@ -123,7 +123,7 @@ impl Session {
     /// target, by the engine the navigation target, and by the other
     /// reading none.
     pub(super) fn ship_offer_reaches(&self) -> Option<StellarId> {
-        self.offering?;
+        self.run.offering?;
         match self.setup.rules.source_for(RuleKey::PersonMissionStellar) {
             RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => None,
@@ -159,14 +159,14 @@ impl Session {
                 .in_world(&self.pilot, &self.statics, &self.setup, |world| {
                     mission::resolve(&record, Venue::Ship, origin, world, today, chance)
                 });
-            self.ship_offers.insert(id, offer);
+            self.run.ship_offers.insert(id, offer);
         }
     }
 
     /// The offer from a ship of `mission`, as the last person linked to it
     /// resolved it.
     pub(super) fn ship_offer(&self, mission: MissionId) -> Option<&Offer> {
-        self.ship_offers.get(&mission)
+        self.run.ship_offers.get(&mission)
     }
 
     /// Hails as the original's comm key does, Option not held: see
@@ -264,7 +264,7 @@ impl Session {
     /// person does before it offers (@0x621de-0x6220d, @0x65882-0x658b1).
     pub(super) fn reach_linked(&mut self, linked: Option<(OfferingShip, MissionId)>) {
         if let Some((ship, mission)) = linked {
-            self.offering_ship = Some(ship);
+            self.run.offering_ship = Some(ship);
             self.check_avail_bits(mission);
         }
     }
@@ -275,7 +275,9 @@ impl Session {
     /// ([`Traffic::berth_person`](crate::Traffic::berth_person)), none
     /// when it had none or a capture cleared it. None with no slot named.
     pub(super) fn offering_ship_name(&self) -> Option<&str> {
-        self.space.traffic.berth_person(self.offering_ship?.berth)
+        self.space
+            .traffic
+            .berth_person(self.run.offering_ship?.berth)
     }
 
     /// Whether `options` list a way for `npc` to join the fleet, its hail
@@ -300,13 +302,13 @@ impl Session {
             OfferedBy::Hail => SimSound::HailOffer,
             OfferedBy::Boarding => SimSound::PersonOfferBoarded,
         });
-        self.offering = Some(offering);
+        self.run.offering = Some(offering);
         self.offer_dialog(offering.mission, chance)
     }
 
     /// The person whose offer the offer dialog shows, while it does.
     pub(super) fn offering_person(&self) -> Option<&str> {
-        let offering = self.offering?;
+        let offering = self.run.offering?;
         let person = self.space.traffic.person(offering.person)?;
         Some(&person.record.name)
     }
@@ -323,7 +325,7 @@ impl Session {
     /// the settling to come ([`Session::settle_script`]; see the
     /// `mission_ships` module).
     pub(super) fn end_ship_offer(&mut self, accepted: bool) {
-        let Some(offering) = self.offering.take() else {
+        let Some(offering) = self.run.offering.take() else {
             return;
         };
         let flags = self
@@ -347,14 +349,14 @@ impl Session {
                     && let Some(active) = self.pilot.missions.get(slot)
                     && swaps_for_mission_ship(flags, active.ships.left)
                 {
-                    self.swap_due = Some((offering.npc, slot));
+                    self.run.swap_due = Some((offering.npc, slot));
                 }
             }
             OfferedBy::Hail => {}
             OfferedBy::Boarding => {
                 // `_HandlePlayerBoardAttempt` names the boarded ship only
                 // around its offer (@0x65882 to @0x65a11).
-                self.offering_ship = None;
+                self.run.offering_ship = None;
                 if accepted {
                     self.mark_boarded(offering.npc);
                 }
@@ -687,11 +689,11 @@ pub(super) mod tests {
         catalog.persons[0].link_mission = Some(131);
         let session = populated(&catalog, Rulebook::default(), None);
         assert_eq!(session.npcs().len(), 1, "Ace is there");
-        assert!(session.ship_offers.is_empty());
+        assert!(session.run.ship_offers.is_empty());
         let mut catalog = linked(0);
         catalog.persons[0].link_mission = None;
         let session = populated(&catalog, Rulebook::default(), None);
-        assert!(session.ship_offers.is_empty(), "no LinkMission");
+        assert!(session.run.ship_offers.is_empty(), "no LinkMission");
     }
 
     #[test]
@@ -782,7 +784,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let (hailed, asked) = hail(&mut session, &unavailable);
         assert!(opened_comm(&hailed), "{hailed:?}");
         assert!(!asked.is_empty(), "the conversation rolled");
@@ -819,7 +821,7 @@ pub(super) mod tests {
         let mut session = targeting_ace(&unresolved);
         assert!(opened_comm(&hail(&mut session, &unresolved).0), "no record");
         let mut session = targeting_ace(&catalog);
-        session.ship_offers.clear();
+        session.run.ship_offers.clear();
         assert!(session.ship_mission_available(MissionId(130)));
         assert!(
             opened_comm(&hail(&mut session, &catalog).0),
@@ -1288,7 +1290,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         assert!(opened_comm(&hail(&mut session, &unavailable).0));
         assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x621de");
         assert_eq!(osn(&session, RuleSource::Bible), "[Error]");
@@ -1398,8 +1400,8 @@ pub(super) mod tests {
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
         session.space.traffic.set_berth_person(99, "Earlier");
-        session.offering_ship = Some(OfferingShip { berth: 99 });
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offering_ship = Some(OfferingShip { berth: 99 });
+        session.run.offers.set_roll(MissionId(130), 51);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
         assert_eq!(osn(&session, RuleSource::Engine), "[Error]");
@@ -1409,10 +1411,10 @@ pub(super) mod tests {
     fn boarding_a_linked_person_writes_its_missions_avail_bits_verdict() {
         let catalog = boardable(0);
         let mut session = alongside_ace(&catalog);
-        session.avail_cache.insert(MissionId(130), false);
+        session.run.avail_cache.insert(MissionId(130), false);
         let _ = board(&mut session);
         assert_eq!(
-            session.avail_cache.get(&MissionId(130)),
+            session.run.avail_cache.get(&MissionId(130)),
             Some(&true),
             "_IsMissionAvailable(m, 1) @0x658b1"
         );
@@ -1423,7 +1425,7 @@ pub(super) mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
         assert!(session.npcs()[0].boarded);
@@ -1512,7 +1514,7 @@ pub(super) mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let _ = session.take_sounds();
         assert!(matches!(board(&mut session).0, Ok(Boarding::Opened(_))));
         assert_eq!(plunder_airlocks(&mut session), 1, "@0x659b3");
@@ -1529,7 +1531,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let _ = session.take_sounds();
         assert!(opened_comm(&hail(&mut session, &unavailable).0));
         assert_eq!(offer_sounds(&mut session), [], "the comm dialog");

@@ -350,17 +350,17 @@ impl Session {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
         self.out.interface_loads.clear();
         let mut settled = Settled::default();
-        if let Some(stellar) = self.offer_roll_due.take()
+        if let Some(stellar) = self.run.offer_roll_due.take()
             && self.landed == Some(stellar)
         {
             self.roll_landing_offers(stellar, catalog, &mut &mut *chance);
         }
         loop {
-            if let Some((npc, slot)) = self.swap_due.take() {
+            if let Some((npc, slot)) = self.run.swap_due.take() {
                 self.swap_in_mission_ship(catalog, npc, slot, chance);
             }
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
-            let due = std::mem::take(&mut self.goal_checks_due);
+            let due = std::mem::take(&mut self.run.goal_checks_due);
             if due.is_empty() {
                 if std::mem::take(&mut self.chart.galaxy_stale)
                     && self.setup.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
@@ -384,7 +384,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
         settled: &mut Settled,
     ) {
-        for step in std::mem::take(&mut self.queued.moves) {
+        for step in std::mem::take(&mut self.run.queued.moves) {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
                 ScriptMove::KeepPosition(system) => (system, true),
@@ -410,7 +410,7 @@ impl Session {
         if self.landed.is_some() {
             return false;
         }
-        let Some(text) = self.queued.leave.take() else {
+        let Some(text) = self.run.queued.leave.take() else {
             return false;
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
@@ -427,7 +427,7 @@ impl Session {
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.landed.is_some() && self.queued.leave.is_some()
+        self.landed.is_some() && self.run.queued.leave.is_some()
     }
 
     /// Carries out a held `Q`'s leave ([`Session::leave_due`]) as the
@@ -469,14 +469,14 @@ impl Session {
     /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
     /// keeps none.
     pub(super) fn depart(&mut self) {
-        self.queued.left_with = self.queued.leave.take().filter(|text| !text.is_empty());
+        self.run.queued.left_with = self.run.queued.leave.take().filter(|text| !text.is_empty());
     }
 
     /// The message the last take-off left on, a held `Q`'s, once: the
     /// take-off line, shown in place of the take-off's greeting, with no
     /// beep (`_DisplayComm` @0x635cf).
     pub fn take_leave_message(&mut self) -> Option<String> {
-        self.queued.left_with.take()
+        self.run.queued.left_with.take()
     }
 
     /// Whether the last take-off left on a held `Q`'s message, not yet
@@ -484,21 +484,21 @@ impl Session {
     /// in its place and leaves the tutorial as it was
     /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
     pub(super) fn left_with_message(&self) -> bool {
-        self.queued.left_with.is_some()
+        self.run.queued.left_with.is_some()
     }
 
     /// The landing's part: a leave still pending is dropped
     /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
     /// opens, @0x6332a-0x63335).
     pub(super) fn drop_leave(&mut self) {
-        self.queued.leave = None;
+        self.run.queued.leave = None;
     }
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as
     /// [`ScriptEffectRules::sound`] says (see the module docs).
     pub(super) fn play_script_sound(&mut self, sound: SoundId) {
         match self.setup.script_effect_rules().sound {
-            RuleSource::Engine => self.queued.sound = Some(sound),
+            RuleSource::Engine => self.run.queued.sound = Some(sound),
             RuleSource::Bible => self.out.sounds.push(SimSound::Script {
                 sound,
                 exclusive: false,
@@ -509,7 +509,7 @@ impl Session {
     /// Sounds the mission sound a `P` holds, if any, as the flight's
     /// tick does.
     pub(super) fn sound_script(&mut self) {
-        if let Some(sound) = self.queued.sound.take() {
+        if let Some(sound) = self.run.queued.sound.take() {
             self.out.sounds.push(SimSound::Script {
                 sound,
                 exclusive: true,
@@ -525,18 +525,18 @@ impl Session {
         let picked = self
             .setup
             .pick_string(list, chance)
-            .map(|text| match self.script_slot {
+            .map(|text| match self.run.script_slot {
                 Some(slot) => self.mission_text(slot, &text),
                 None => text,
             });
-        self.queued.leave = picked.or_else(|| self.setup.blank_leave());
+        self.run.queued.leave = picked.or_else(|| self.setup.blank_leave());
     }
 
     /// A `Q` whose list is past 32767, the engine's widest ID, so names
     /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
     /// `_absquatulateStr` empty for a missing list (@0x72f0f).
     pub(super) fn leave_on_no_list(&mut self) {
-        self.queued.leave = self.setup.blank_leave();
+        self.run.queued.leave = self.setup.blank_leave();
     }
 
     /// A `P` whose sound is past 32767, the engine's widest ID, so names
@@ -547,7 +547,7 @@ impl Session {
     /// is nothing to sound.
     pub(super) fn drop_script_sound(&mut self) {
         if self.setup.script_effect_rules().sound == RuleSource::Engine {
-            self.queued.sound = None;
+            self.run.queued.sound = None;
         }
     }
 

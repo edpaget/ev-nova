@@ -2840,7 +2840,10 @@ mod tests {
         let mut catalog = merchants();
         catalog.missions[0].avail_random = 50;
         let mut session = targeting_merchant(&catalog);
-        session.offers.set_roll(crate::catalog::MissionId(130), 51);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(130), 51);
         assert_eq!(
             opened(&mut session, &catalog, &joining_options(RuleSource::Bible)),
             ["Greetings", "Request Assistance"]

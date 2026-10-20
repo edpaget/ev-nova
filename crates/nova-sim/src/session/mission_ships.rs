@@ -964,7 +964,7 @@ impl Session {
         // player moved since is kept, and `<OSN>` names the swapped-in
         // ship all the same.
         if let Some(npc) = swapped_in.and_then(|id| self.space.npc(id)) {
-            self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
+            self.run.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
         if self.setup.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
             && let Some(active) = self.slot_holding(slot, record.id)
@@ -3875,7 +3875,7 @@ pub(super) mod tests {
                 behav: ShipBehav::Own,
                 formation: None,
             });
-            session.story.watched.clear();
+            session.run.story.watched.clear();
             session.watch_ship(first);
         }));
     }
@@ -3885,7 +3885,7 @@ pub(super) mod tests {
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
         session.drop_raised();
-        session.story.watched.clear();
+        session.run.story.watched.clear();
         let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
         session.mission_ships_came(Some(first));
         assert_eq!(
@@ -3895,14 +3895,14 @@ pub(super) mod tests {
                 fate: Fate::Arrived
             }]
         );
-        assert_eq!(session.story.watched, [second].into());
+        assert_eq!(session.run.story.watched, [second].into());
     }
 
     #[test]
     fn ships_of_an_observe_goal_met_already_or_of_another_goal_are_not_watched() {
         let catalog = returning(0, 0);
         let session = in_flight(&catalog);
-        assert!(session.story.watched.is_empty(), "a destroy goal");
+        assert!(session.run.story.watched.is_empty(), "a destroy goal");
         let mut catalog = returning(4, 0);
         catalog.missions[0].ships.syst = 131;
         let mut session = accepted(&catalog);
@@ -3912,7 +3912,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);
         assert_eq!(marked(&session), [0, 0]);
-        assert!(session.story.watched.is_empty(), "met already");
+        assert!(session.run.story.watched.is_empty(), "met already");
     }
 
     #[test]
@@ -5605,7 +5605,7 @@ pub(super) mod tests {
         let berth = swapped_in_berth(&session);
         assert_eq!(berth, 1, "the lowest free berth, not the hailed ship's");
         assert_eq!(
-            session.offering_ship,
+            session.run.offering_ship,
             Some(super::super::person_offers::OfferingShip { berth }),
             "the target swapped in (@0x6252f, @0x625a4)"
         );
@@ -5636,7 +5636,7 @@ pub(super) mod tests {
         assert_eq!(session.chart.target, None, "the player's target is kept");
         let berth = swapped_in_berth(&session);
         assert_eq!(
-            session.offering_ship,
+            session.run.offering_ship,
             Some(super::super::person_offers::OfferingShip { berth }),
         );
         assert_eq!(session.plain_text("<OSN>"), "[Error]");
@@ -6322,7 +6322,7 @@ pub(super) mod tests {
         observed.missions[0].ships.goal = 4;
         let session = swapped(&observed);
         let ship = session.npcs()[0].id;
-        assert_eq!(session.story.watched, [ship].into(), "arrived: watched");
+        assert_eq!(session.run.story.watched, [ship].into(), "arrived: watched");
     }
 
     #[test]

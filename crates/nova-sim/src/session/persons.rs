@@ -267,7 +267,7 @@ impl Session {
         if mission_checked {
             // The 0x0400 filter names the ship around its check and puts
             // -1 back (@0x33dfb, @0x33e25).
-            self.offering_ship = None;
+            self.run.offering_ship = None;
         }
         let ticks = self.space.escorts.quote_clock.ticks;
         for (id, eligible) in decided {
@@ -368,14 +368,14 @@ impl Session {
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             ranks: self.rank_names(),
-            rank_govts: self.rank_govts,
+            rank_govts: self.run.rank_govts,
             leet: self.setup.leet,
             rules: TagRules::from_rulebook(&self.setup.rules),
         };
         let text = expand_tags(&line, &tags);
         self.out.quotes.push(PersonQuote { npc: id, text });
         self.out.sounds.push(SimSound::HailQuote);
-        self.offering_ship = None;
+        self.run.offering_ship = None;
     }
 
     /// The hail quotes said since they were last taken, in order; taking
@@ -1855,7 +1855,7 @@ mod tests {
     /// A hailed ship named for `<OSN>` that is not among the NPCs: "Earlier".
     fn named_earlier(session: &mut Session) {
         session.space.traffic.set_berth_person(99, "Earlier");
-        session.offering_ship = Some(super::super::person_offers::OfferingShip { berth: 99 });
+        session.run.offering_ship = Some(super::super::person_offers::OfferingShip { berth: 99 });
         assert_eq!(session.plain_text("<OSN>"), "Earlier");
     }
 
@@ -2161,13 +2161,19 @@ mod tests {
         let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
-        session.offers.set_roll(crate::catalog::MissionId(130), 51);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(130), 51);
         assert_eq!(
             quote_tick(&catalog, &mut session, &[1]),
             (vec![], vec![140]),
             "unavailable: Bee alone draws"
         );
-        session.offers.set_roll(crate::catalog::MissionId(130), 50);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(130), 50);
         let (said, asked) = quote_tick(&catalog, &mut session, &[0, 1]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
         assert_eq!(asked, [140, 140]);
@@ -2248,10 +2254,10 @@ mod tests {
         let (mut catalog, mut session) = quoting_while_b7(Rulebook::default());
         catalog.star_map[0].links.push(SystemId(131));
         set_b7(&mut session);
-        assert_eq!(session.avail_cache.get(&MissionId(130)), Some(&false));
+        assert_eq!(session.run.avail_cache.get(&MissionId(130)), Some(&false));
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(
-            session.avail_cache.get(&MissionId(130)),
+            session.run.avail_cache.get(&MissionId(130)),
             Some(&true),
             "@0x6bf3f"
         );

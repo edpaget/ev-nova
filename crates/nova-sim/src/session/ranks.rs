@@ -168,7 +168,7 @@ impl Session {
     fn held_ranks(&mut self) -> Held<'_> {
         Held {
             active: &mut self.pilot.ranks,
-            recent: &mut self.recent_rank,
+            recent: &mut self.run.recent_rank,
         }
     }
 
@@ -203,7 +203,7 @@ impl Session {
             &self.statics.ranks,
             Held {
                 active: &mut self.pilot.ranks,
-                recent: &mut self.recent_rank,
+                recent: &mut self.run.recent_rank,
             },
             crime,
             victim,
@@ -221,7 +221,7 @@ impl Session {
         RankNames {
             records: &self.statics.ranks,
             active: &self.pilot.ranks,
-            recent: self.recent_rank,
+            recent: self.run.recent_rank,
             fallback: self
                 .setup
                 .nth_string(MISC_STRINGS, NO_RANK_STRING)
@@ -351,7 +351,7 @@ pub(super) mod tests {
         session.run_ops(
             &set("K200 L200 K201"),
             &mut Scripted::default(),
-            &mut |session, _| seen.push((active(session), session.recent_rank)),
+            &mut |session, _| seen.push((active(session), session.run.recent_rank)),
         );
         assert_eq!(
             seen,

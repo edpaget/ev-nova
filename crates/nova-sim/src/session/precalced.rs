@@ -614,13 +614,13 @@ pub(super) mod tests {
         session.suppress_offer(MissionId(200));
         session.enter_offer_venue(OUTFITTER);
         assert!(
-            session.suppressed.contains(&MissionId(200)),
+            session.run.suppressed.contains(&MissionId(200)),
             "the same venue"
         );
         session.close_outfitter();
-        assert_eq!(session.offer_venue, None);
+        assert_eq!(session.run.offer_venue, None);
         session.enter_offer_venue(OUTFITTER);
-        assert!(session.suppressed.is_empty());
+        assert!(session.run.suppressed.is_empty());
     }
 
     #[test]

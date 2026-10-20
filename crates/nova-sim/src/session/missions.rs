@@ -375,12 +375,14 @@ impl Session {
     pub(super) fn offer_of(&self, mission: MissionId) -> Option<Offer> {
         if self.landed.is_none() {
             let offering = self
+                .run
                 .offering
                 .filter(|offering| offering.mission == mission)?;
             return self.ship_offer(offering.mission).cloned();
         }
         Venue::ORDER.into_iter().find_map(|venue| {
-            self.offers
+            self.run
+                .offers
                 .at(venue)
                 .iter()
                 .find(|offer| offer.mission == mission)
@@ -528,7 +530,7 @@ impl Session {
         if offer.venue == Venue::Outside {
             self.drop_offered(mission, at);
         } else {
-            self.offers.drop_offer(mission);
+            self.run.offers.drop_offer(mission);
         }
         self.end_ship_offer(false);
         self.show_offer_after_movie(mission, offer.venue);
@@ -540,7 +542,7 @@ impl Session {
     /// @0xa36f5), taken before the answer changes the list.
     fn outside_position(&self, offer: &Offer) -> Option<usize> {
         (offer.venue == Venue::Outside)
-            .then(|| self.offers.position(Venue::Outside, offer.mission))
+            .then(|| self.run.offers.position(Venue::Outside, offer.mission))
             .flatten()
     }
 
@@ -557,9 +559,9 @@ impl Session {
     /// player sees comes between the two.
     fn drop_offered(&mut self, mission: MissionId, at: Option<usize>) {
         if self.setup.rules.source_for(RuleKey::OfferShift) == RuleSource::Bible {
-            self.offers.drop_offer(mission);
+            self.run.offers.drop_offer(mission);
         } else if let Some(at) = at {
-            self.offers.drop_at(Venue::Outside, at);
+            self.run.offers.drop_at(Venue::Outside, at);
         }
     }
 
@@ -568,9 +570,9 @@ impl Session {
     /// @0xa3628 and from @0xa39a4 to @0xa40cd, then puts it back as it
     /// was, so a dialog's accept inside another's script leaves it open.
     fn in_offer_dialog<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let was = std::mem::replace(&mut self.offer_dialog_open, true);
+        let was = std::mem::replace(&mut self.run.offer_dialog_open, true);
         let done = f(self);
-        self.offer_dialog_open = was;
+        self.run.offer_dialog_open = was;
         done
     }
 
@@ -647,7 +649,7 @@ impl Session {
         if self.landed.is_none() {
             // In flight the original's per-frame poll checks the goals
             // next (see the `mission_ships` module).
-            self.goal_checks_due.push(slot);
+            self.run.goal_checks_due.push(slot);
         }
         self.out.save_due = true;
         self.run_mission_script(slot, &record.on_accept, chance);
@@ -666,7 +668,7 @@ impl Session {
             chance,
         );
         self.load_at_accept(slot, record, chance);
-        let in_dialog = self.offer_dialog_open
+        let in_dialog = self.run.offer_dialog_open
             || self.setup.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
         let docked = self.landed;
         let here = docked
@@ -678,7 +680,7 @@ impl Session {
                 .is_none_or(|stop| Some(stop.stellar) == here);
         }
         if docked.is_some() && in_dialog {
-            self.offers.drop_offer(record.id);
+            self.run.offers.drop_offer(record.id);
             self.refilter_offers();
         }
         let aborts = self
@@ -690,7 +692,7 @@ impl Session {
         if aborts {
             self.auto_abort(slot, record, chance);
         }
-        self.offers.set_roll(record.id, 0);
+        self.run.offers.set_roll(record.id, 0);
         Some(slot)
     }
 
@@ -706,9 +708,9 @@ impl Session {
         script: &Script,
         chance: &mut dyn Chance,
     ) {
-        self.script_slot = Some(slot);
+        self.run.script_slot = Some(slot);
         self.run_script(script, chance);
-        self.script_slot = None;
+        self.run.script_slot = None;
     }
 
     /// The mission in `slot`, to change, if it is `mission`.
@@ -729,16 +731,16 @@ impl Session {
         // Each offer checked writes its cached `AvailBits` (@0xa207a).
         let checked: Vec<MissionId> = [Venue::Computer, Venue::Outside]
             .into_iter()
-            .flat_map(|venue| self.offers.at(venue).iter().map(|offer| offer.mission))
+            .flat_map(|venue| self.run.offers.at(venue).iter().map(|offer| offer.mission))
             .collect();
         for mission in checked {
             self.check_avail_bits(mission);
         }
-        let mut offers = std::mem::take(&mut self.offers);
+        let mut offers = std::mem::take(&mut self.run.offers);
         self.at_visit(stellar, |visit| {
             offers.refilter(&self.statics.missions, visit);
         });
-        self.offers = offers;
+        self.run.offers = offers;
     }
 
     /// Ends the mission `record` in `slot` as `_AbortMission` (@0x99a92)
@@ -756,14 +758,14 @@ impl Session {
         on_abort: bool,
         chance: &mut dyn Chance,
     ) {
-        if !self.pilot.missions.holds(slot, record.id) || !self.ending.insert(slot) {
+        if !self.pilot.missions.holds(slot, record.id) || !self.run.ending.insert(slot) {
             return;
         }
         self.release_mission_ships(slot);
         if on_abort {
             self.run_mission_script(slot, &record.on_abort, chance);
         }
-        self.ending.remove(&slot);
+        self.run.ending.remove(&slot);
         self.close_slot(slot, record.id);
     }
 
@@ -831,7 +833,7 @@ impl Session {
         pay: i64,
         chance: &mut dyn Chance,
     ) -> bool {
-        if !self.ending.insert(slot) {
+        if !self.run.ending.insert(slot) {
             return false;
         }
         self.run_mission_script(slot, &record.on_abort, chance);
@@ -846,7 +848,7 @@ impl Session {
         if self.landed.is_some() {
             self.release_mission_ships(slot);
         }
-        self.ending.remove(&slot);
+        self.run.ending.remove(&slot);
         true
     }
 
@@ -1006,7 +1008,7 @@ impl Session {
         self.chart
             .apply_pay(&mut self.pilot, &self.statics, &mut self.out, done.pay);
         self.forget_offers();
-        self.reoffer_due = true;
+        self.run.reoffer_due = true;
     }
 
     /// The deadline check of the mission in `slot` (`_MissionObjectivesCheck`
@@ -1058,17 +1060,17 @@ impl Session {
     /// once after a landing's last slot when a mission succeeded
     /// (`_RandomizeMissionData` @0xa1b04), drawing on `chance`.
     pub(super) fn reoffer_missions(&mut self, chance: &mut dyn Chance) {
-        if !std::mem::take(&mut self.reoffer_due) {
+        if !std::mem::take(&mut self.run.reoffer_due) {
             return;
         }
         let Some(stellar) = self.landed else {
             return;
         };
-        let mut offers = std::mem::take(&mut self.offers);
+        let mut offers = std::mem::take(&mut self.run.offers);
         self.at_visit(stellar, |visit| {
             offers.reoffer(&self.statics.missions, visit, chance);
         });
-        self.offers = offers;
+        self.run.offers = offers;
     }
 
     /// `A`: ends every slot holding `mission`, running its `OnAbort`,
@@ -1140,11 +1142,11 @@ impl Session {
     /// `chance`, unless they were rolled there last (see the
     /// [`mission`](crate::mission) module).
     pub(super) fn roll_offers(&mut self, stellar: StellarId, chance: &mut dyn Chance) {
-        let mut offers = std::mem::take(&mut self.offers);
+        let mut offers = std::mem::take(&mut self.run.offers);
         self.at_visit(stellar, |visit| {
             offers.roll(&self.statics.missions, visit, chance);
         });
-        self.offers = offers;
+        self.run.offers = offers;
     }
 
     /// Forgets the stellar the offers were rolled at, so the next landing
@@ -1152,7 +1154,7 @@ impl Session {
     /// phase 2's abort, failure and success (@0x99bcf, @0x99db5,
     /// @0xa03ef, @0xa0691).
     pub(crate) fn forget_offers(&mut self) {
-        self.offers.forget();
+        self.run.offers.forget();
     }
 
     /// Draws the offers' roll table afresh on `chance`, as `_ResetPlayer`
@@ -1163,19 +1165,19 @@ impl Session {
     /// 0, until its first landing or arrival. The offers stay; the
     /// stellar they were rolled at is already none on both paths.
     pub(super) fn draw_offer_rolls(&mut self, chance: &mut dyn Chance) {
-        self.offers.redraw(chance);
+        self.run.offers.redraw(chance);
     }
 
     /// Empties the offers, keeping the stellar they were rolled at.
     pub(super) fn empty_offers(&mut self) {
-        self.offers.empty();
+        self.run.offers.empty();
     }
 
     /// The offers at `venue` of the visit under way, in the order rolled:
     /// none before the first landing settles.
     #[must_use]
     pub fn mission_offers(&self, venue: Venue) -> &[Offer] {
-        self.offers.at(venue)
+        self.run.offers.at(venue)
     }
 
     /// Why `mission` is not offered at the stellar the ship is docked at,
@@ -1200,7 +1202,7 @@ impl Session {
                 visit,
                 mission: record,
                 venue: Venue::of(record.avail_loc),
-                rolls: self.offers.table(),
+                rolls: self.run.offers.table(),
                 cached_avail_bits: None,
             };
             mission::availability()
@@ -1281,7 +1283,7 @@ impl Session {
             .iter()
             .map(|record| (record.id, gate.allows(&record.avail_bits)))
             .collect();
-        self.avail_cache = verdicts;
+        self.run.avail_cache = verdicts;
     }
 
     /// Caches `mission`'s `AvailBits` verdict now, as a check of it that
@@ -1290,7 +1292,7 @@ impl Session {
     pub(super) fn check_avail_bits(&mut self, mission: MissionId) {
         if let Some(record) = self.statics.mission_record(mission) {
             let holds = self.gate().allows(&record.avail_bits);
-            self.avail_cache.insert(mission, holds);
+            self.run.avail_cache.insert(mission, holds);
         }
     }
 
@@ -1311,7 +1313,7 @@ impl Session {
     /// reading tested now; the rest as [`Session::ship_mission_available`].
     pub(crate) fn quoted_mission_available(&self, mission: MissionId) -> bool {
         let cached = match self.setup.rules.source_for(RuleKey::CachedAvailBits) {
-            RuleSource::Engine => self.avail_cache.get(&mission).copied(),
+            RuleSource::Engine => self.run.avail_cache.get(&mission).copied(),
             RuleSource::Bible => None,
         };
         self.ship_mission_available_reading(mission, cached)
@@ -1332,7 +1334,7 @@ impl Session {
                 visit,
                 mission: record,
                 venue: Venue::Ship,
-                rolls: self.offers.table(),
+                rolls: self.run.offers.table(),
                 cached_avail_bits: cached,
             };
             mission::availability()
@@ -1344,7 +1346,7 @@ impl Session {
     /// The visit's roll table.
     #[cfg(test)]
     pub(crate) fn offer_rolls(&self) -> &mission::RollTable {
-        self.offers.table()
+        self.run.offers.table()
     }
 
     /// What `text`'s tags read for `mission`, in `slot` (none for an
@@ -1399,8 +1401,8 @@ impl Session {
         raw: &str,
         chance: &mut dyn Chance,
     ) -> String {
-        let (parsed, govts) = source.parse(self, self.rank_govts, raw);
-        self.rank_govts = govts;
+        let (parsed, govts) = source.parse(self, self.run.rank_govts, raw);
+        self.run.rank_govts = govts;
         if self.setup.leet && source == TextSource::Desc {
             text_tags::load_leet(&parsed, chance)
         } else {
@@ -1424,7 +1426,7 @@ impl Session {
         movie: Option<&DescMovie>,
         chance: &mut dyn Chance,
     ) -> String {
-        self.loaded_movie = raw.and(movie).cloned();
+        self.run.loaded_movie = raw.and(movie).cloned();
         raw.map(|raw| self.take_in(TextSource::Desc, raw, chance))
             .unwrap_or_default()
     }
@@ -1439,7 +1441,7 @@ impl Session {
     #[must_use]
     pub fn loaded_after_movie(&self) -> Option<DescMovie> {
         match self.setup.rules.source_for(RuleKey::DescMovieGlobals) {
-            RuleSource::Engine => self.loaded_movie.clone().filter(|movie| movie.after),
+            RuleSource::Engine => self.run.loaded_movie.clone().filter(|movie| movie.after),
             RuleSource::Bible => None,
         }
     }
@@ -1449,8 +1451,8 @@ impl Session {
     /// leave, as [`Session::load_description`] leaves them, changing
     /// nothing: a missing one empty, keeping the remembered governments.
     pub(super) fn peek_desc(&self, raw: Option<&str>) -> (String, RankTagGovts) {
-        raw.map_or((String::new(), self.rank_govts), |raw| {
-            TextSource::Desc.parse(self, self.rank_govts, raw)
+        raw.map_or((String::new(), self.run.rank_govts), |raw| {
+            TextSource::Desc.parse(self, self.run.rank_govts, raw)
         })
     }
 
@@ -1491,7 +1493,7 @@ impl Session {
     /// governments: none when it is not offered, or in flight.
     #[must_use]
     pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
-        self.offer_text_reading(mission, text, self.rank_govts)
+        self.offer_text_reading(mission, text, self.run.rank_govts)
     }
 
     /// `text` with its tags filled for the mission in `slot`
@@ -1500,7 +1502,7 @@ impl Session {
     /// tags read [`UNSET`](text_tags::UNSET).
     #[must_use]
     pub fn mission_text(&self, slot: u8, text: &str) -> String {
-        self.mission_text_reading(slot, text, self.rank_govts)
+        self.mission_text_reading(slot, text, self.run.rank_govts)
     }
 
     /// `text` with its tags filled with no mission, as the original's
@@ -1510,7 +1512,7 @@ impl Session {
     /// [`RuleKey::MissionlessTags`] says.
     #[must_use]
     pub fn plain_text(&self, text: &str) -> String {
-        let context = self.tag_context(None, None, self.rank_govts);
+        let context = self.tag_context(None, None, self.run.rank_govts);
         text_tags::expand(text, &context, self)
     }
 }
@@ -2022,7 +2024,7 @@ mod tests {
         assert_eq!(chance.sides_asked, vec![100; ROLLED], "the table alone");
         assert_eq!(session.offer_rolls().roll(MissionId(128)), Some(42));
         assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(1));
-        assert_eq!(session.offers.rolled_at(), None);
+        assert_eq!(session.run.offers.rolled_at(), None);
         assert_eq!(
             ids(session.mission_offers(Venue::Computer)),
             [130, 131, 132],
@@ -2034,7 +2036,7 @@ mod tests {
     fn a_relocation_draws_no_table() {
         let catalog = offering();
         let mut session = landed(&catalog, &mut NeverFires);
-        session.offers.set_roll(MissionId(130), 77);
+        session.run.offers.set_roll(MissionId(130), 77);
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
@@ -2062,7 +2064,7 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert!(session.mission_offers(Venue::Computer).is_empty());
-        assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+        assert_eq!(session.run.offers.rolled_at(), Some(StellarId(128)));
     }
 
     #[test]
@@ -2082,7 +2084,7 @@ mod tests {
                 "{reading:?}"
             );
             assert_eq!(
-                session.offers.rolled_at(),
+                session.run.offers.rolled_at(),
                 Some(StellarId(128)),
                 "{reading:?}"
             );
@@ -2108,7 +2110,7 @@ mod tests {
                     "{reading:?} {text}"
                 );
                 assert_eq!(
-                    session.offers.rolled_at(),
+                    session.run.offers.rolled_at(),
                     Some(StellarId(128)),
                     "{reading:?} {text}"
                 );
@@ -2124,7 +2126,7 @@ mod tests {
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
         assert!(session.mission_offers(Venue::Computer).is_empty());
-        assert_eq!(session.offers.rolled_at(), None);
+        assert_eq!(session.run.offers.rolled_at(), None);
     }
 
     #[test]
@@ -2875,7 +2877,7 @@ mod tests {
         );
         assert!(session.take_save_due());
         assert_eq!(
-            session.offers.rolled_at(),
+            session.run.offers.rolled_at(),
             Some(StellarId(128)),
             "nothing forgotten"
         );
@@ -3138,7 +3140,7 @@ mod tests {
         assert_eq!(accept(&mut session, 719), 0);
         assert_eq!(held(&session), []);
         assert_eq!(marks.taken(), [200], "the A's OnAbort, and no auto-abort");
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
     }
 
     #[test]
@@ -3159,7 +3161,7 @@ mod tests {
         );
         assert!(session.control_bit(bit(22)));
         assert_eq!(ids(session.mission_offers(Venue::Computer)), [141]);
-        assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+        assert_eq!(session.run.offers.rolled_at(), Some(StellarId(128)));
         assert_eq!(held(&session), []);
     }
 
@@ -3176,7 +3178,7 @@ mod tests {
         assert!(session.control_bit(bit(23)));
         assert_eq!(held(&session), []);
         assert!(session.take_save_due());
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
         assert_eq!(
             session.abort_mission(0, &mut NeverFires),
             Err(AbortError::NotActive)
@@ -3230,7 +3232,7 @@ mod tests {
         assert!(!session.control_bit(bit(23)));
         assert_eq!(held(&session), [(0, 140)]);
         assert_eq!(session.pilot().legal_record(FED), 0, "no penalty");
-        assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+        assert_eq!(session.run.offers.rolled_at(), Some(StellarId(128)));
     }
 
     #[test]
@@ -3298,7 +3300,7 @@ mod tests {
             .count();
         assert_eq!(days, 2);
         assert_eq!(held(&session), []);
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
         assert_eq!(session.offer_rolls().roll(MissionId(140)), Some(0));
     }
 
@@ -3767,7 +3769,7 @@ mod tests {
             [150],
             "re-offered with OnSuccess's bit"
         );
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
     }
 
     #[test]
@@ -3814,7 +3816,7 @@ mod tests {
         land_on(&mut session, &catalog, 128);
         assert_eq!(held(&session), []);
         assert_eq!(session.pilot().legal_record(FED), 8);
-        assert_eq!(session.offers.rolled_at(), None);
+        assert_eq!(session.run.offers.rolled_at(), None);
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
@@ -3906,7 +3908,7 @@ mod tests {
         settle(&mut session, &catalog);
         assert!(session.control_bit(bit(40)));
         assert_eq!(held(&session), []);
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
     }
 
     #[test]
@@ -4046,7 +4048,7 @@ mod tests {
         settle(&mut session, &catalog);
         assert!(session.control_bit(bit(40)));
         assert_eq!(held(&session), []);
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
     }
 
     /// Mission 140, unabortable, timed one day, completed at 128 for the
@@ -4117,7 +4119,7 @@ mod tests {
         settle(&mut session, &catalog);
         let active = session.pilot().missions().get(0).expect("stays");
         assert_eq!(active.failed, Some(FailedBy::Quick));
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
         back_over_128(&mut session);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let mut chance = Draws::of(&[]);
@@ -4462,7 +4464,7 @@ mod tests {
         run(&mut session, "A140");
         assert_eq!(marks.taken(), [203, 203]);
         assert_eq!(held(&session), [(1, 141)]);
-        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "forgotten");
     }
 
     #[test]
@@ -5143,9 +5145,9 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(session.ship_mission_available(MissionId(130)), "undrawn: 0");
-        session.offers.set_roll(MissionId(130), 41);
+        session.run.offers.set_roll(MissionId(130), 41);
         assert!(!session.ship_mission_available(MissionId(130)));
-        session.offers.set_roll(MissionId(130), 40);
+        session.run.offers.set_roll(MissionId(130), 40);
         assert!(session.ship_mission_available(MissionId(130)));
         assert!(
             !session.ship_mission_available(MissionId(131)),

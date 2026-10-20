@@ -113,7 +113,7 @@ impl Session {
             return Ok(());
         }
         self.enter_at(catalog, system, stellar)?;
-        self.offer_roll_due = Some(stellar);
+        self.run.offer_roll_due = Some(stellar);
         Ok(())
     }
 
@@ -885,7 +885,10 @@ mod tests {
         session
             .abort_mission(slot, &mut NeverFires)
             .expect("aborted");
-        session.offers.set_roll(crate::catalog::MissionId(201), 77);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(201), 77);
         assert_eq!(
             session.relocate(&catalog, SystemId(130), StellarId(128)),
             Ok(())
@@ -942,7 +945,10 @@ mod tests {
         let slot = session
             .accept_mission(crate::catalog::MissionId(200), &mut NeverFires)
             .expect("accepted");
-        session.offers.set_roll(crate::catalog::MissionId(201), 77);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(201), 77);
         session.drop_raised();
         assert_eq!(
             session.land_at(&catalog, SystemId(130), StellarId(128)),

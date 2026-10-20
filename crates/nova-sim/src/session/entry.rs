@@ -750,7 +750,7 @@ impl Session {
         let notes = self.out.fighter_notes.len();
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
-            self.offers.redraw(&mut &mut *chance);
+            self.run.offers.redraw(&mut &mut *chance);
         }
         self.bring_in_traffic(
             resets.traffic,
@@ -900,7 +900,7 @@ impl Session {
     /// fighters out.
     fn leave_behind(&mut self, resets: &Resets) {
         if resets.has(Reset::HeldSound) {
-            self.queued.sound = None;
+            self.run.queued.sound = None;
         }
         if resets.has(Reset::Jump) {
             self.jump = None;
@@ -1015,7 +1015,7 @@ impl Session {
                 self.space.set_first_class(&self.statics);
                 self.space.traffic_due = true;
                 self.space.escorts.fleet.clear();
-                self.story.watched.clear();
+                self.run.story.watched.clear();
             }
         }
     }

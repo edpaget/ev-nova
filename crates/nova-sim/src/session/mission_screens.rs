@@ -358,7 +358,7 @@ impl Session {
             return;
         }
         let movie = match self.setup.rules.source_for(RuleKey::DescMovieGlobals) {
-            RuleSource::Engine => self.loaded_movie.clone(),
+            RuleSource::Engine => self.run.loaded_movie.clone(),
             RuleSource::Bible => self.statics.offer_movie(mission),
         };
         if let Some(movie) = movie.filter(|movie| movie.after) {
@@ -659,7 +659,7 @@ impl Session {
                 self.statics
                     .mission_record(offer.mission)
                     .is_some_and(|record| record.avail_loc == loc)
-                    && !self.suppressed.contains(&offer.mission)
+                    && !self.run.suppressed.contains(&offer.mission)
             })
             .cloned()
             .collect();
@@ -755,18 +755,18 @@ impl Session {
     /// @0xa36a7-0xa36d7): entering one other than the last forgets the
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
     pub fn enter_offer_venue(&mut self, loc: i16) {
-        if self.offer_venue != Some(loc) {
+        if self.run.offer_venue != Some(loc) {
             if loc != SPACEPORT {
-                self.suppressed.clear();
+                self.run.suppressed.clear();
             }
-            self.offer_venue = Some(loc);
+            self.run.offer_venue = Some(loc);
         }
     }
 
     /// Suppresses the offer of `mission`, whose accept was refused, until
     /// another venue is entered (`_OfferMissionFromPort` @0xa3765).
     pub(super) fn suppress_offer(&mut self, mission: MissionId) {
-        self.suppressed.insert(mission);
+        self.run.suppressed.insert(mission);
     }
 
     /// Whether `offer`, on the visit under way, is still available at its
@@ -784,7 +784,7 @@ impl Session {
                 visit,
                 mission: record,
                 venue: offer.venue,
-                rolls: self.offers.table(),
+                rolls: self.run.offers.table(),
                 cached_avail_bits: None,
             };
             availability()
@@ -1364,14 +1364,14 @@ mod tests {
     fn cached(session: &Session, missions: &[i16]) -> Vec<Option<bool>> {
         missions
             .iter()
-            .map(|&id| session.avail_cache.get(&MissionId(id)).copied())
+            .map(|&id| session.run.avail_cache.get(&MissionId(id)).copied())
             .collect()
     }
 
     /// Every verdict cached `false`, as if `AvailBits` had failed at the
     /// last refresh.
     fn all_cached_false(session: &mut Session) {
-        for verdict in session.avail_cache.values_mut() {
+        for verdict in session.run.avail_cache.values_mut() {
             *verdict = false;
         }
     }
@@ -1426,7 +1426,7 @@ mod tests {
         );
         let mut session = docked(&catalog);
         session.enter_offer_venue(BAR);
-        session.suppressed.insert(MissionId(141));
+        session.run.suppressed.insert(MissionId(141));
         all_cached_false(&mut session);
         assert_eq!(
             prompted(session.next_offer(BAR, &mut NeverFires)),
@@ -2878,7 +2878,7 @@ mod tests {
         assert_eq!(first(&mut full), MissionId(143), "the same visit");
         full.enter_offer_venue(SPACEPORT);
         assert!(
-            full.suppressed.contains(&MissionId(142)),
+            full.run.suppressed.contains(&MissionId(142)),
             "the spaceport keeps it"
         );
         full.enter_offer_venue(BAR);
@@ -3439,16 +3439,19 @@ mod tests {
     fn a_loaded_desc_leaves_its_movie_and_a_missing_one_empties_it() {
         let mut session = ranked(Vec::new(), Vec::new(), Rulebook::default());
         let movie = film("Loaded.mov", 0x0001);
-        assert_eq!(session.loaded_movie, None, "a new session has loaded none");
+        assert_eq!(
+            session.run.loaded_movie, None,
+            "a new session has loaded none"
+        );
         let _ = session.load_description(
             Some("Earlier: <PRK128> <SRK129>."),
             movie.as_ref(),
             &mut NeverFires,
         );
-        assert_eq!(session.loaded_movie, movie);
+        assert_eq!(session.run.loaded_movie, movie);
         let _ = session.load_description(None, film("Other.mov", 0).as_ref(), &mut NeverFires);
         assert_eq!(
-            session.loaded_movie, None,
+            session.run.loaded_movie, None,
             "a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
         );
         assert_eq!(
@@ -3457,10 +3460,10 @@ mod tests {
             "and keeps the governments (@0x71a5e skips @0x71926)"
         );
         let _ = session.load_description(Some("Plain."), None, &mut NeverFires);
-        assert_eq!(session.loaded_movie, None, "a dësc that names none");
+        assert_eq!(session.run.loaded_movie, None, "a dësc that names none");
         let _ = session.load_description(Some("Again."), movie.as_ref(), &mut NeverFires);
         let _ = session.peek_desc(Some("Peeked."));
-        assert_eq!(session.loaded_movie, movie, "peeking loads nothing");
+        assert_eq!(session.run.loaded_movie, movie, "peeking loads nothing");
     }
 
     #[test]
@@ -3759,7 +3762,7 @@ mod tests {
             .accept_mission(MissionId(142), &mut NeverFires)
             .expect("accepted");
         let _ = session.show_info_row(0, &mut NeverFires);
-        assert_eq!(session.loaded_movie, film("Q.mov", 0x0001));
+        assert_eq!(session.run.loaded_movie, film("Q.mov", 0x0001));
     }
 
     #[test]
@@ -3788,13 +3791,13 @@ mod tests {
         prompted(session.next_offer(BAR, &mut NeverFires));
         let _ = session.show_info_row(0, &mut NeverFires);
         assert_eq!(
-            session.loaded_movie,
+            session.run.loaded_movie,
             film("Q.mov", 0x0001),
             "the QuickBrief's"
         );
         session.reload_offer_desc(MissionId(142), &mut NeverFires);
         assert_eq!(
-            session.loaded_movie,
+            session.run.loaded_movie,
             film("A.mov", 0x0001),
             "the info screen's close reloads the offer (@0xa335c)"
         );

@@ -1173,7 +1173,7 @@ mod tests {
         assert_eq!(kept.failed, None);
         assert_eq!(session.pilot().total_cargo(), 6);
         assert_eq!(session.take_messages(), [SimMessage::MissionFailed]);
-        assert_eq!(session.offers.rolled_at(), None, "the offers forgotten");
+        assert_eq!(session.run.offers.rolled_at(), None, "the offers forgotten");
         assert!(session.take_save_due());
     }
 

@@ -465,6 +465,7 @@ mod map_search;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_map;
+mod mission_run;
 mod mission_screens;
 mod mission_ships;
 mod missions;
@@ -553,6 +554,7 @@ use std::rc::Rc;
 use self::chart::Chart;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::mission_run::MissionRun;
 use self::outbox::Outbox;
 use self::outfits::{carries, launches};
 use self::player_ship::PlayerShip;
@@ -569,9 +571,9 @@ use crate::board::{
     TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DescMovie, EscortClass, GateSite, GovtId, JunkId,
-    LandingSite, ListedStellar, MissionId, OutfitId, OutfitRecord, PersonId, PilotCatalog, RankId,
-    RankRecord, ShipId, ShipRecord, StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, EscortClass, GateSite, GovtId, JunkId, LandingSite,
+    ListedStellar, OutfitId, OutfitRecord, PersonId, PilotCatalog, RankRecord, ShipId, ShipRecord,
+    StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -614,7 +616,7 @@ use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
 };
 use crate::message::SimMessage;
-use crate::mission::{Offers, StellarMarks};
+use crate::mission::StellarMarks;
 use crate::navigation::NavMode;
 use crate::nebula;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
@@ -640,7 +642,6 @@ use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
-use crate::text_tags::RankTagGovts;
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
@@ -850,6 +851,9 @@ pub struct Session {
     /// The landing, the take-off and the spaceport visit under way (see the
     /// `port` module).
     port: Port,
+    /// The missions' runtime state and the story runtime (see the
+    /// `mission_run` module).
+    run: MissionRun,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
     /// The jump under way, from J being accepted until the ship arrives.
@@ -876,83 +880,6 @@ pub struct Session {
     /// start, a new pilot from [`Session::begin`]; not saved, as the
     /// original's `_newbieFlag` is not.
     tutorial: crate::tutorial::Tutorial,
-    /// What the set expressions left for later: for
-    /// [`Session::settle_script`], and the next flight tick; never saved.
-    queued: script_effects::Queued,
-    /// The story runtime: the events raised and the ships watched (see the
-    /// [`story`](crate::story) module); never saved.
-    story: story::StoryRuntime,
-    /// The rank last activated, which `<RRK>` reads, until `L` or a sweep
-    /// clears it. Never saved: `None` on every [`Session::fly`], as the
-    /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
-    /// (@0x1dbf1) reset it (see the `ranks` module).
-    recent_rank: Option<RankId>,
-    /// The offers of the visit under way and the stellar they were rolled
-    /// at (see the `missions` module); never saved, as the original saves
-    /// none of it.
-    offers: Offers,
-    /// Whether a mission succeeded on the landing under way, so the
-    /// offers are re-offered after its last slot (see the `missions`
-    /// module); never saved.
-    reoffer_due: bool,
-    /// The slots of the missions accepted in flight, whose ship goals are
-    /// checked once the settling that accepted them is done (see the
-    /// `mission_ships` module); never saved.
-    goal_checks_due: Vec<u8>,
-    /// The person's NPC an accept on its hail swaps for the ship of the
-    /// mission in the slot, once the settling that accepted it begins
-    /// (see the `mission_ships` module); never saved.
-    swap_due: Option<(NpcId, u8)>,
-    /// The stellar a move ([`Session::relocate`]) docked at, whose
-    /// offers the next settling rolls if the ship is still landed there
-    /// (see the `edit` module); never saved.
-    offer_roll_due: Option<StellarId>,
-    /// The slot whose mission's script is running, if any: what a `Q`
-    /// fills its mission tags from (see the `missions` module); never
-    /// saved.
-    script_slot: Option<u8>,
-    /// The mission slots whose `OnAbort` is running, so that none ends
-    /// again inside itself (see the `missions` module); never saved.
-    ending: BTreeSet<u8>,
-    /// The governments the last `<PRKnnn>` and `<SRKnnn>` taken in named
-    /// (`_descRankGovt`; see the `missions` module's text sources), as
-    /// the crossed rank tags read them; never saved, as the original
-    /// saves none of it.
-    rank_govts: RankTagGovts,
-    /// The movie the last `dësc` loaded names: the original's `MovieFile`
-    /// and `Flags` globals (*0x3b52f4, *0x3b5644), which each
-    /// `_LoadDescription` overwrites (@0x71895-0x718de) and a missing
-    /// `dësc` empties (@0x71a5e-0x71a77), and which every movie check
-    /// reads as they stand ([`RuleKey::DescMovieGlobals`]). Written with
-    /// the governments above by [`Session::load_description`], so the two
-    /// can't drift; none at a new session, and never saved.
-    loaded_movie: Option<DescMovie>,
-    /// The ship `<OSN>` names by the engine (`_offeringShipIndex`; see
-    /// the `person_offers` module); never saved, and none at a new pilot
-    /// or a load (`_InitMissions` @0x97bbf).
-    offering_ship: Option<person_offers::OfferingShip>,
-    /// Each mission's `AvailBits` verdict as the original last cached it
-    /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
-    /// as a load refreshes it.
-    avail_cache: BTreeMap<MissionId, bool>,
-    /// The outside offers whose accept was refused, passed over until
-    /// another venue is entered (see the `mission_screens` module); never
-    /// saved, as the original saves none of it.
-    suppressed: BTreeSet<MissionId>,
-    /// The venue offers were last entered at, an `AvailLoc`; never saved.
-    offer_venue: Option<i16>,
-    /// The offers from a ship, by mission, each resolved as a person
-    /// linked to it spawned (see the `person_offers` module); never saved,
-    /// as the original saves none of it.
-    ship_offers: person_offers::ShipOffers,
-    /// The offer from a ship the offer dialog shows, until the player
-    /// answers it (see the `person_offers` module); never saved.
-    offering: Option<person_offers::Offering>,
-    /// Whether an offer dialog is open, as the original's `_missionDialog`
-    /// is set: while the player's accept or refusal runs, so an `S` in
-    /// that `OnAccept` or `OnRefuse` sees it (see the `missions` module);
-    /// never saved.
-    offer_dialog_open: bool,
     /// Whether the load had to fall back for data the save references
     /// and the catalog lacks ([`Session::load_repaired`]); never saved.
     load_repaired: bool,
@@ -1196,25 +1123,6 @@ impl Session {
             red_alert: RedAlert::default(),
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
-            queued: script_effects::Queued::default(),
-            story: story::StoryRuntime::default(),
-            recent_rank: None,
-            offers: Offers::default(),
-            reoffer_due: false,
-            goal_checks_due: Vec::new(),
-            swap_due: None,
-            offer_roll_due: None,
-            ending: BTreeSet::new(),
-            rank_govts: RankTagGovts::NONE,
-            loaded_movie: None,
-            offering_ship: None,
-            avail_cache: BTreeMap::new(),
-            suppressed: BTreeSet::new(),
-            offer_venue: None,
-            ship_offers: person_offers::ShipOffers::new(),
-            offering: None,
-            offer_dialog_open: false,
-            script_slot: None,
             load_repaired,
             pilot,
             statics: Rc::new(statics),
@@ -1224,6 +1132,7 @@ impl Session {
             space: Space::new(),
             chart: Chart::new(galaxy, system),
             port: Port::new(player.position),
+            run: MissionRun::new(),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -1888,7 +1797,7 @@ impl Session {
             .enter_with(table, world, missions, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
         self.space.traffic_due = false;
-        self.story.watched.clear();
+        self.run.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
         self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
@@ -4001,7 +3910,7 @@ impl Session {
     /// module).
     pub fn close_outfitter(&mut self) {
         self.reset_precalced();
-        self.offer_venue = None;
+        self.run.offer_venue = None;
     }
 
     /// The bar's hire screen closes, after a hire or none, or the bar says
@@ -4875,7 +4784,7 @@ impl Session {
         if named {
             // Named and put back to none around the plunder
             // (@0x65882, @0x65a11).
-            self.offering_ship = None;
+            self.run.offering_ship = None;
         }
         self.mark_boarded(npc.id);
         self.out.sounds.push(SimSound::Boarded);
@@ -7066,7 +6975,9 @@ pub(super) mod tests {
         }
     }
     use super::*;
-    use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
+    use crate::catalog::{
+        CharacterStart, GateSite, LandingSite, MissionId, RankId, SoundId, StellarId,
+    };
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::catalog::{DateAffixes, MissionRecord, MissionTexts};
     use crate::chance::NeverFires;
@@ -18890,7 +18801,7 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         }
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
-        assert!(session.story.watched.is_empty(), "forgotten once seen");
+        assert!(session.run.story.watched.is_empty(), "forgotten once seen");
     }
 
     /// A full cloak: fading out from 32, it reads cloaked for 32 more
@@ -18936,7 +18847,11 @@ pub(super) mod tests {
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(fates(&session), [], "cloaked, and no scanner");
-        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        assert_eq!(
+            session.run.story.watched,
+            BTreeSet::from([NpcId(0)]),
+            "kept"
+        );
         // The sighting (`_MissionHandler` @0x44214) reads the fade the last
         // pass's display left (@0x444ad, @0x2d088): seen on the first pass
         // that finds it uncloaked.
@@ -18953,7 +18868,7 @@ pub(super) mod tests {
             "fading out from 32 at 0.75 a tick, cloaked above 8, seen the pass after"
         );
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
-        assert!(session.story.watched.is_empty(), "forgotten once seen");
+        assert!(session.run.story.watched.is_empty(), "forgotten once seen");
     }
 
     #[test]
@@ -18993,7 +18908,11 @@ pub(super) mod tests {
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert!(!session.npcs()[0].cloak.is_cloaked());
         assert_eq!(fates(&session), [], "seen, but off screen");
-        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        assert_eq!(
+            session.run.story.watched,
+            BTreeSet::from([NpcId(0)]),
+            "kept"
+        );
         session.space.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, -200.0);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
@@ -19905,12 +19824,16 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
             assert!(session.npcs()[0].emerging(), "{left} to go");
             assert_eq!(fates(&session), [], "not seen while it waits");
-            assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+            assert_eq!(
+                session.run.story.watched,
+                BTreeSet::from([NpcId(0)]),
+                "kept"
+            );
         }
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert!(!session.npcs()[0].emerging(), "bursting out");
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
-        assert!(session.story.watched.is_empty(), "forgotten once seen");
+        assert!(session.run.story.watched.is_empty(), "forgotten once seen");
     }
 
     #[test]
@@ -19929,7 +19852,7 @@ pub(super) mod tests {
         assert!(!session.in_warp_lead_in());
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fates(&session), [fate(0, Fate::Observed)], "jumping");
-        assert!(session.story.watched.is_empty());
+        assert!(session.run.story.watched.is_empty());
     }
 
     #[test]
@@ -19938,18 +19861,21 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.watch_ship(NpcId(0));
         session.populate(&catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, 180]));
-        assert!(session.story.watched.is_empty(), "the populate forgot it");
+        assert!(
+            session.run.story.watched.is_empty(),
+            "the populate forgot it"
+        );
 
         session.watch_ship(NpcId(99));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fates(&session), [], "not in the system");
-        assert!(session.story.watched.is_empty(), "forgotten");
+        assert!(session.run.story.watched.is_empty(), "forgotten");
 
         session.watch_ship(NpcId(0));
         session.space.traffic_due = true;
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fates(&session), [], "the populating tick");
-        assert!(session.story.watched.is_empty(), "forgotten");
+        assert!(session.run.story.watched.is_empty(), "forgotten");
 
         let watched = session.npcs()[0].id;
         session.watch_ship(watched);
@@ -19957,7 +19883,7 @@ pub(super) mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert!(session.story.watched.is_empty(), "the traffic reset");
+        assert!(session.run.story.watched.is_empty(), "the traffic reset");
     }
 
     #[test]
