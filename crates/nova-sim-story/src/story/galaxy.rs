@@ -580,11 +580,17 @@ impl OverlaidGalaxy {
         self.map.places().stand_in(system)
     }
 
-    /// Where a player arriving in `system` goes: the visible system that
-    /// stands for it ([`OverlaidGalaxy::same_place`]), else the chain head, the lowest-ID
-    /// system at that place (itself when it is not in the catalog), made
-    /// visible, as the original moves a player whose system is hidden
-    /// (@0x998f1-0x99a36).
+    /// Where a player in `system` goes when it is resolved by place: the
+    /// visible system that stands for it ([`OverlaidGalaxy::same_place`]),
+    /// else the chain head, the lowest-ID system at that place (itself
+    /// when it is not in the catalog), made visible, as the original moves
+    /// a player whose system is hidden (@0x998f1-0x99a36).
+    ///
+    /// The move out of a hidden system takes it
+    /// ([`OverlaidGalaxy::hidden_move`]), and so does every arrival by
+    /// [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem)'s other
+    /// reading. By the engine's, an arrival takes
+    /// [`OverlaidGalaxy::entered`], which keeps a visible system as it is.
     #[must_use]
     pub fn arrival(&self, system: SystemId) -> HiddenMove {
         match self.same_place(system) {
@@ -730,6 +736,22 @@ impl OverlaidGalaxy {
     #[must_use]
     pub fn hidden_move(&self, system: SystemId) -> Option<HiddenMove> {
         (!self.visible(system)).then(|| self.arrival(system))
+    }
+
+    /// Where a player entering `system` as the original writes it goes:
+    /// `system` itself while it is visible, a visible system shadowed at
+    /// its place by a lower one too; else the move out of a hidden system
+    /// ([`OverlaidGalaxy::hidden_move`]), as the refresh after the write
+    /// makes it only for a hidden system (the +0x1eb test @0x99918). A
+    /// system not in the catalog goes where [`OverlaidGalaxy::arrival`]
+    /// takes it. The arrivals' reading by the engine of
+    /// [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem).
+    #[must_use]
+    pub fn entered(&self, system: SystemId) -> HiddenMove {
+        self.hidden_move(system).unwrap_or(HiddenMove {
+            to: system,
+            make_visible: false,
+        })
     }
 }
 
@@ -1218,6 +1240,48 @@ mod tests {
             let galaxy = resolving(&[], colocated);
             assert_eq!(galaxy.hidden_move(SystemId(5)), None, "{colocated:?}");
             assert_eq!(galaxy.hidden_move(SystemId(3)), None, "{colocated:?}");
+        }
+    }
+
+    #[test]
+    fn an_entry_keeps_a_visible_system_and_moves_only_out_of_a_hidden_one() {
+        let stay = |to| HiddenMove {
+            to: SystemId(to),
+            make_visible: false,
+        };
+        let shown = |to| HiddenMove {
+            to: SystemId(to),
+            make_visible: true,
+        };
+        for colocated in [CoLocated::Lowest, CoLocated::Itself] {
+            let at = |hidden: &[i16]| resolving(hidden, colocated);
+            assert_eq!(
+                at(&[]).entered(SystemId(3)),
+                stay(3),
+                "{colocated:?}: shadowed by 2, entered as it is"
+            );
+            assert_eq!(at(&[]).entered(SystemId(5)), stay(5), "{colocated:?}");
+            assert_eq!(at(&[]).entered(SystemId(2)), stay(2), "{colocated:?}");
+            assert_eq!(
+                at(&[3]).entered(SystemId(3)),
+                stay(2),
+                "{colocated:?}: hidden, to the lowest visible one there"
+            );
+            assert_eq!(at(&[2, 3]).entered(SystemId(3)), stay(5), "{colocated:?}");
+            assert_eq!(
+                at(&[2, 3, 5]).entered(SystemId(3)),
+                shown(2),
+                "{colocated:?}: none visible, the head made visible"
+            );
+            assert_eq!(at(&[4]).entered(SystemId(4)), shown(4), "{colocated:?}");
+            for hidden in [&[][..], &[99]] {
+                assert_eq!(
+                    at(hidden).entered(SystemId(99)),
+                    at(hidden).arrival(SystemId(99)),
+                    "{colocated:?} {hidden:?}: not in the catalog, as an arrival takes it"
+                );
+            }
+            assert_eq!(at(&[99]).entered(SystemId(99)), shown(99), "{colocated:?}");
         }
     }
 
