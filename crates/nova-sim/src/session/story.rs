@@ -453,17 +453,25 @@ impl Session {
     /// ([`Session::change_galaxy`]): the player moved out of a system now
     /// hidden, the traffic retargeted, [`SessionEvent::GalaxyChanged`]
     /// told and a save due. Stellar ownership follows from the overlay
-    /// ([`OverlaidGalaxy::owner`]), derived before the move. Whether it
-    /// changed anything.
+    /// ([`OverlaidGalaxy::owner`]), derived before the move. Every rescue
+    /// kept is forgotten first, whatever the refresh changes
+    /// (@0x9968a-0x9969f), and after the move the player's system rescues
+    /// afresh, standing in for the rebuild the original runs after each
+    /// such refresh (see the `kept_rescues` module). Whether it changed
+    /// anything.
     pub(super) fn refresh_galaxy<C>(&mut self, catalog: &C) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         self.propagate_cached_tests();
         let refresh = self.refresh_now();
-        self.change_galaxy(catalog, |overlay| {
+        self.chart.forget_rescues();
+        let changed = self.change_galaxy(catalog, |overlay| {
             refresh.write(overlay);
-        })
+        });
+        self.chart
+            .keep_rescues(&self.pilot, &self.statics, &self.setup);
+        changed
     }
 
     /// A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f): every
@@ -475,10 +483,15 @@ impl Session {
     /// ([`leave_hidden`]), docked or not. When the refresh changed
     /// anything, the stellars are rebuilt quietly after it, as the load's
     /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
-    /// stellars shown are those the refreshed galaxy gives.
+    /// stellars shown are those the refreshed galaxy gives. Every rescue
+    /// kept is forgotten first, and the player's system rescues afresh
+    /// after the move, changed or not (see the `kept_rescues` module).
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
         self.propagate_cached_tests();
+        self.chart.forget_rescues();
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
+            self.chart
+                .keep_rescues(&self.pilot, &self.statics, &self.setup);
             return;
         }
         self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());

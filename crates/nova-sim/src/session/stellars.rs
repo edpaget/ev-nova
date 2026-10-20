@@ -95,6 +95,13 @@
 //! swap in is shown explored from the next rebuild point. That share
 //! raises no event and tells nothing.
 //!
+//! It then rescues, docked or not: by the engine reading of
+//! [`RuleKey::RescueUntilRefresh`], each stellar the player's system
+//! lists that no system owns and no system has rescued is kept as the
+//! player's system's until the next refresh (@0x32c58-0x32ca1; see the
+//! `kept_rescues` module), so it stays that system's across a gate's
+//! exit or an `M`.
+//!
 //! In flight, each rebuild point then derives which stellars are shown
 //! afresh, as `_HandleStellarSystemVisibility` sets them active and owned
 //! (see the `entry` module), and tells `StellarsRebuilt` when that
@@ -156,8 +163,10 @@ impl Session {
     /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
     /// the exploration shared by place (`Chart::share_explored`, as
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
-    /// and the known set worked out afresh (`Chart::rework_known`,
-    /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
+    /// the known set worked out afresh (`Chart::rework_known`,
+    /// @0x32b7b, @0x32b91-0x32c10) and the rescue kept
+    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), before its stellars;
+    /// then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it, then the sprite pool handed out (see the
     /// `stale_sprites` module). Whether it changed the stellars.
@@ -165,6 +174,8 @@ impl Session {
         self.chart.rewrite_course(&mut self.pilot, &self.setup);
         self.chart.share_explored(&mut self.pilot, &self.setup);
         self.chart.rework_known(&self.pilot);
+        self.chart
+            .keep_rescues(&self.pilot, &self.statics, &self.setup);
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(

@@ -470,6 +470,7 @@ mod ionization;
 mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
+mod kept_rescues;
 mod launch_frame;
 mod lost_target;
 mod map;
@@ -3142,7 +3143,11 @@ impl Session {
         // @0x6be0b). The entry then moves the player only out of a system
         // the refresh left hidden, by the engine's `arrival_system`, as the
         // refresh's move does (@0x99918); by its other reading it resolves
-        // the arrival by place.
+        // the arrival by place. The refresh forgets every rescue kept, and
+        // the entry's rebuild rescues for the arrival system; the original
+        // forgets them before the days (@0x6bf3f, the days @0x6c144), the
+        // engine after them (see the `kept_rescues` module).
+        self.chart.forget_rescues();
         if self
             .chart
             .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
