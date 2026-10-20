@@ -110,6 +110,10 @@
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`exchange_events`]: what the commodity exchange says of the price
+//!   events at the stellar docked at, the disputed
+//!   [`exchange_events::exchange_events`], which [`Session::market`]
+//!   puts in [`Market::events`](market::Market::events).
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
@@ -367,6 +371,7 @@ pub use nova_sim_port::escape;
 pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
+pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;

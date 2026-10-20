@@ -9,6 +9,10 @@
 //! each module at its old path (`nova_sim::mission`, `nova_sim::Pilot`,
 //! …), so the rest of the workspace reaches them through it.
 //!
+//! - [`exchange_events`]: what the commodity exchange says of the `öops`
+//!   price events at the stellar docked at, the disputed
+//!   [`exchange_events::exchange_events`]: the first local event's line
+//!   ([`exchange_events::event_line`]), or every local event's name.
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
 //! - [`mission`]: mission offers: which missions a docked stellar offers
@@ -80,6 +84,7 @@ use nova_sim_combat::{cloak, combat, fleet};
 #[allow(unused_imports)]
 use nova_sim_state::{cron, date, govt, landing, legal, market, outfit_effects, stats};
 
+pub mod exchange_events;
 pub mod exploration;
 pub mod mission;
 pub mod nebula;
