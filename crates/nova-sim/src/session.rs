@@ -3403,7 +3403,7 @@ impl Session {
             let system_of = |id| {
                 self.chart
                     .galaxy
-                    .system_of(self.statics.listers(id), self.pilot.system)
+                    .system_of(id, self.statics.listers(id), self.pilot.system)
             };
             Ok(gate::hypergate_offers(
                 &links,
@@ -3464,7 +3464,7 @@ impl Session {
         let system_of = |id| {
             self.chart
                 .galaxy
-                .system_of(self.statics.listers(id), self.pilot.system)
+                .system_of(id, self.statics.listers(id), self.pilot.system)
         };
         let exit = if has_links(&links) {
             to.and_then(|to| {
@@ -3540,7 +3540,11 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
-        let owner_of = |id| self.chart.galaxy.holder(self.statics.listers(id), player);
+        let owner_of = |id| {
+            self.chart
+                .galaxy
+                .holder(id, self.statics.listers(id), player)
+        };
         let Some(exit) =
             wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
@@ -6474,7 +6478,8 @@ impl Chart {
     /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
     /// the stellar's +0x14 as the aux and mission ship readers find it.
     fn holder_of(&self, pilot: &Pilot, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
-        self.galaxy.holder(statics.listers(stellar), pilot.system)
+        self.galaxy
+            .holder(stellar, statics.listers(stellar), pilot.system)
     }
 
     /// The markup at `site`, one of the system's: by whether it has a
@@ -6905,7 +6910,8 @@ fn shown_sites(
     listed
         .iter()
         .filter(|site| {
-            docked == Some(site.id) || galaxy.shows(listers_of(listed_stellars, site.id), system)
+            docked == Some(site.id)
+                || galaxy.shows(site.id, listers_of(listed_stellars, site.id), system)
         })
         .copied()
         .collect()
@@ -29151,7 +29157,9 @@ pub(super) mod tests {
         let listers = [SystemId(131)];
         assert_eq!(session.galaxy().owner(&listers), None, "made visible");
         assert_eq!(
-            session.galaxy().holder(&listers, SystemId(131)),
+            session
+                .galaxy()
+                .holder(StellarId(400), &listers, SystemId(131)),
             Some(SystemId(131)),
             "rescued"
         );

@@ -1776,7 +1776,7 @@ impl TagNames for Session {
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
         self.chart
             .galaxy
-            .whereabouts(self.statics.listers(stellar), self.pilot.system)
+            .whereabouts(stellar, self.statics.listers(stellar), self.pilot.system)
             .named(self.chart.galaxy.map().places())
     }
 

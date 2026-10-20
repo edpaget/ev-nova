@@ -390,6 +390,12 @@ pub struct OverlaidGalaxy {
     colocated: CoLocated,
     /// The overlaid map.
     map: StarMap,
+    /// The rescues kept until the next refresh: each stellar no system
+    /// owned that the player's system listed at a rebuild point, with that
+    /// system ([`OverlaidGalaxy::keep_rescues`]). Never saved, as the
+    /// original never saves +0x14 (`_WritePilotData` @0x72580, @0x72ae2):
+    /// a load refreshes first.
+    rescued: BTreeMap<StellarId, SystemId>,
 }
 
 impl OverlaidGalaxy {
@@ -410,6 +416,7 @@ impl OverlaidGalaxy {
             overlay,
             colocated,
             map,
+            rescued: BTreeMap::new(),
         }
     }
 
@@ -454,7 +461,8 @@ impl OverlaidGalaxy {
     }
 
     /// Applies `overlay` instead, rebuilding the map when it differs, and
-    /// says whether it did.
+    /// says whether it did. The kept rescues stay: only a refresh forgets
+    /// them ([`OverlaidGalaxy::forget_rescues`]).
     pub fn set_overlay(&mut self, overlay: GalaxyOverlay) -> bool {
         if overlay == self.overlay {
             return false;
@@ -653,69 +661,129 @@ impl OverlaidGalaxy {
             .or_else(|| listers.first().copied())
     }
 
-    /// The system that holds a stellar `listers` list, with the player in
-    /// `player`: its [`owner`](Self::owner), else `player` when it lists
-    /// the stellar, else none.
-    ///
-    /// This is `_HandleStellarSystemVisibility`'s rescue
-    /// (@0x32c58-0x32cb3): a stellar with no owner (+0x14 above 0x7ff) is
-    /// given to the player's system (player +0x74) when that system's
-    /// `NavDefs` list it. The rescue writes the owner, so it lasts until
-    /// the next galaxy refresh clears every owner
-    /// (`_PropagateMissionBitEffects` @0x9968c); this gives it as the
-    /// original holds it after a rebuild point.
+    /// The system kept as `stellar`'s rescuer until the next refresh, if
+    /// any ([`OverlaidGalaxy::keep_rescues`]).
     #[must_use]
-    pub fn holder(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
+    pub fn rescued(&self, stellar: StellarId) -> Option<SystemId> {
+        self.rescued.get(&stellar).copied()
+    }
+
+    /// `_HandleStellarSystemVisibility`'s rescue (@0x32c58-0x32cba), at a
+    /// rebuild point with the player in `player`: each stellar of `listed`
+    /// that `player` lists, with no [`owner`](Self::owner) and no rescue
+    /// kept, is kept as `player`'s. The original writes the player's
+    /// system (+0x74) into the owner word (+0x14, @0x32ca1) only while it
+    /// is unset (above 0x7ff, @0x32c58-0x32c60), so a rescue is never
+    /// overwritten and lasts until the next refresh
+    /// ([`forget_rescues`](Self::forget_rescues)). By
+    /// [`RuleKey::RescueUntilRefresh`](crate::RuleKey::RescueUntilRefresh)'s
+    /// other reading the session never calls it, and the rescue is
+    /// derived for the player's system alone ([`holder`](Self::holder)).
+    pub fn keep_rescues(&mut self, listed: &[ListedStellar], player: SystemId) {
+        for stellar in listed {
+            if stellar.systems.contains(&player)
+                && self.owner(&stellar.systems).is_none()
+                && !self.rescued.contains_key(&stellar.id)
+            {
+                self.rescued.insert(stellar.id, player);
+            }
+        }
+    }
+
+    /// Forgets every kept rescue, as `_PropagateMissionBitEffects` writes
+    /// 0xffff to every stellar's owner word as its first act
+    /// (@0x9968a-0x9969f), at every refresh, whatever it changes.
+    pub fn forget_rescues(&mut self) {
+        self.rescued.clear();
+    }
+
+    /// The system that holds `stellar`, which `listers` list, with the
+    /// player in `player`: its [`owner`](Self::owner), else the system
+    /// kept as its rescuer ([`rescued`](Self::rescued)), else `player`
+    /// when it lists the stellar, else none.
+    ///
+    /// This is the owner word (+0x14) with `_HandleStellarSystemVisibility`'s
+    /// rescue (@0x32c58-0x32cb3): a stellar with no owner (+0x14 above
+    /// 0x7ff) is given to the player's system (player +0x74) when that
+    /// system's `NavDefs` list it. The rescue writes the owner, so it
+    /// lasts until the next galaxy refresh clears every owner
+    /// (`_PropagateMissionBitEffects` @0x9968c); the kept rescue is that.
+    /// The last case is the rescue the next rebuild point would write, so
+    /// in every gap between a write of the player's system and its rebuild
+    /// this gives what the original holds once that rebuild has run.
+    #[must_use]
+    pub fn holder(
+        &self,
+        stellar: StellarId,
+        listers: &[SystemId],
+        player: SystemId,
+    ) -> Option<SystemId> {
         self.owner(listers)
+            .or_else(|| self.rescued(stellar))
             .or_else(|| listers.contains(&player).then_some(player))
     }
 
-    /// The [`holder`](Self::holder) of a stellar `listers` list, with the
-    /// player in `player`, while that holder is visible: the system the
-    /// stellar is active in, else none.
+    /// The [`holder`](Self::holder) of `stellar`, which `listers` list,
+    /// with the player in `player`, while that holder is visible: the
+    /// system the stellar is active in, else none.
     ///
     /// `_HandleStellarSystemVisibility` sets a stellar active (+0x44) when
     /// its owner's visible byte is set (@0x32cbe-0x32cdf), after its
     /// rescue (@0x32c58-0x32cb3).
     #[must_use]
-    pub fn active_holder(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
-        self.holder(listers, player)
+    pub fn active_holder(
+        &self,
+        stellar: StellarId,
+        listers: &[SystemId],
+        player: SystemId,
+    ) -> Option<SystemId> {
+        self.holder(stellar, listers, player)
             .filter(|&holder| self.visible(holder))
     }
 
-    /// Where a stellar `listers` list is, with the player in `player`:
-    /// its [`holder`](Self::holder) and what
+    /// Where `stellar`, which `listers` list, is, with the player in
+    /// `player`: its [`holder`](Self::holder) and what
     /// [`find_system_from_stellar`](Self::find_system_from_stellar) gives
     /// it, for the owner-first readers to take as they each do
     /// ([`Whereabouts`]).
     #[must_use]
-    pub fn whereabouts(&self, listers: &[SystemId], player: SystemId) -> Whereabouts {
+    pub fn whereabouts(
+        &self,
+        stellar: StellarId,
+        listers: &[SystemId],
+        player: SystemId,
+    ) -> Whereabouts {
         Whereabouts {
-            holder: self.holder(listers, player),
+            holder: self.holder(stellar, listers, player),
             found: self.find_system_from_stellar(listers),
         }
     }
 
-    /// The system a stellar `listers` list is in, with the player in
-    /// `player`, as the original's owner-first readers resolve it: its
+    /// The system `stellar`, which `listers` list, is in, with the player
+    /// in `player`, as the original's owner-first readers resolve it: its
     /// [`Whereabouts::system`]. The hypergate's readers resolve a link so
     /// (`_DrawMap` @0xf1f8-0xf21a, `_DoSystemMap` @0x12ff2-0x13011,
     /// `_PlayerEnterHypergate` @0x638cd-0x638ff), each then by place.
     #[must_use]
-    pub fn system_of(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
-        self.whereabouts(listers, player).system()
+    pub fn system_of(
+        &self,
+        stellar: StellarId,
+        listers: &[SystemId],
+        player: SystemId,
+    ) -> Option<SystemId> {
+        self.whereabouts(stellar, listers, player).system()
     }
 
-    /// Whether `system`, the player's, shows a stellar `listers` list: it
-    /// is the stellar's [`active_holder`](Self::active_holder).
+    /// Whether `system`, the player's, shows `stellar`, which `listers`
+    /// list: it is the stellar's [`active_holder`](Self::active_holder).
     ///
     /// `_HandleStellarSystemVisibility`'s sprite pass shows each active
     /// stellar whose owner is the player's system (@0x32cef-0x32d4c,
-    /// @0x32ec1-0x33229). So a stellar another visible system owns is
-    /// never shown, though `system` lists it.
+    /// @0x32ec1-0x33229). So a stellar another visible system owns, or
+    /// keeps rescued, is never shown, though `system` lists it.
     #[must_use]
-    pub fn shows(&self, listers: &[SystemId], system: SystemId) -> bool {
-        self.active_holder(listers, system) == Some(system)
+    pub fn shows(&self, stellar: StellarId, listers: &[SystemId], system: SystemId) -> bool {
+        self.active_holder(stellar, listers, system) == Some(system)
     }
 
     /// The stellars of `listed` that `system`, the player's, shows
@@ -726,7 +794,7 @@ impl OverlaidGalaxy {
     pub fn shown(&self, listed: &[ListedStellar], system: SystemId) -> BTreeSet<StellarId> {
         listed
             .iter()
-            .filter(|stellar| self.shows(&stellar.systems, system))
+            .filter(|stellar| self.shows(stellar.id, &stellar.systems, system))
             .map(|stellar| stellar.id)
             .collect()
     }
@@ -1483,11 +1551,14 @@ mod tests {
         assert_eq!(found(&galaxy, &[2, 4]), Some(4));
     }
 
+    /// A stellar no test keeps a rescue for.
+    const ANY: StellarId = StellarId(999);
+
     /// The system `galaxy` holds a stellar listed by `listers` for, with
     /// the player in `player`.
     fn holder(galaxy: &OverlaidGalaxy, listers: &[i16], player: i16) -> Option<i16> {
         galaxy
-            .holder(&ids(listers), SystemId(player))
+            .holder(ANY, &ids(listers), SystemId(player))
             .map(|id| id.0)
     }
 
@@ -1505,7 +1576,7 @@ mod tests {
         let galaxy = hiding(&[]);
         let active = |listers: &[i16], player| {
             galaxy
-                .active_holder(&ids(listers), SystemId(player))
+                .active_holder(ANY, &ids(listers), SystemId(player))
                 .map(|id| id.0)
         };
         assert_eq!(active(&[2, 3], 3), Some(2), "the visible owner 2");
@@ -1515,12 +1586,12 @@ mod tests {
 
         let galaxy = hiding(&[1]);
         assert_eq!(
-            galaxy.holder(&ids(&[1]), SystemId(1)),
+            galaxy.holder(ANY, &ids(&[1]), SystemId(1)),
             Some(SystemId(1)),
             "rescued into the player's hidden 1"
         );
         assert_eq!(
-            galaxy.active_holder(&ids(&[1]), SystemId(1)),
+            galaxy.active_holder(ANY, &ids(&[1]), SystemId(1)),
             None,
             "a hidden holder is not active (@0x32cbe-0x32cdf)"
         );
@@ -1531,7 +1602,7 @@ mod tests {
         let galaxy = hiding(&[2]);
         let system_of = |listers: &[i16], player| {
             galaxy
-                .system_of(&ids(listers), SystemId(player))
+                .system_of(ANY, &ids(listers), SystemId(player))
                 .map(|id| id.0)
         };
         assert_eq!(system_of(&[1, 4], 4), Some(1), "the owner");
@@ -1543,7 +1614,7 @@ mod tests {
         let galaxy = hiding(&[]);
         let system_of = |listers: &[i16], player| {
             galaxy
-                .system_of(&ids(listers), SystemId(player))
+                .system_of(ANY, &ids(listers), SystemId(player))
                 .map(|id| id.0)
         };
         assert_eq!(
@@ -1561,7 +1632,7 @@ mod tests {
     /// Where `galaxy` puts a stellar listed by `listers`, with the player
     /// in `player`.
     fn whereabouts(galaxy: &OverlaidGalaxy, listers: &[i16], player: i16) -> Whereabouts {
-        galaxy.whereabouts(&ids(listers), SystemId(player))
+        galaxy.whereabouts(ANY, &ids(listers), SystemId(player))
     }
 
     /// `holder` and `found` as a [`Whereabouts`].
@@ -1688,7 +1759,7 @@ mod tests {
     #[test]
     fn shows_owned_and_rescued_stellars_and_nothing_owned_elsewhere() {
         let galaxy = hiding(&[]);
-        let shows = |listers: &[i16], system| galaxy.shows(&ids(listers), SystemId(system));
+        let shows = |listers: &[i16], system| galaxy.shows(ANY, &ids(listers), SystemId(system));
         assert!(shows(&[1], 1));
         assert!(!shows(&[2, 3], 3), "2 owns it");
         assert!(shows(&[2, 3], 2));
@@ -1699,7 +1770,7 @@ mod tests {
         assert!(!shows(&[3], 2), "2 does not list it");
         assert!(!shows(&[], 1));
         let galaxy = hiding(&[1]);
-        assert!(!galaxy.shows(&ids(&[1]), SystemId(1)), "1 is hidden");
+        assert!(!galaxy.shows(ANY, &ids(&[1]), SystemId(1)), "1 is hidden");
     }
 
     #[test]
@@ -1731,6 +1802,96 @@ mod tests {
         assert_eq!(shown(4), [131]);
         assert_eq!(shown(1), [128]);
         assert_eq!(shown(5), [] as [i16; 0]);
+    }
+
+    /// A stellar `id` that `systems` list.
+    fn listing(id: i16, systems: &[i16]) -> ListedStellar {
+        ListedStellar {
+            id: StellarId(id),
+            systems: ids(systems),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+            min_status: 0,
+        }
+    }
+
+    /// The system `galaxy` keeps stellar `id` rescued in, if any.
+    fn rescued(galaxy: &OverlaidGalaxy, id: i16) -> Option<i16> {
+        galaxy.rescued(StellarId(id)).map(|system| system.0)
+    }
+
+    #[test]
+    fn the_rescue_pass_keeps_the_players_system_for_each_unowned_stellar_it_lists() {
+        // 2 shadows 3 and 5 at their place, so neither claims.
+        let mut galaxy = hiding(&[]);
+        let listed = [
+            listing(128, &[3, 5]),
+            listing(129, &[1, 5]),
+            listing(130, &[3]),
+            listing(131, &[4]),
+        ];
+        galaxy.keep_rescues(&listed, SystemId(5));
+        assert_eq!(rescued(&galaxy, 128), Some(5), "unowned, 5 lists it");
+        assert_eq!(rescued(&galaxy, 129), None, "1 owns it");
+        assert_eq!(rescued(&galaxy, 130), None, "5 does not list it");
+        assert_eq!(rescued(&galaxy, 131), None, "4 owns it, 5 does not list it");
+
+        galaxy.keep_rescues(&listed, SystemId(3));
+        assert_eq!(
+            rescued(&galaxy, 128),
+            Some(5),
+            "a kept rescue is never overwritten (@0x32c58-0x32c60)"
+        );
+        assert_eq!(rescued(&galaxy, 130), Some(3), "unowned, 3 lists it");
+    }
+
+    #[test]
+    fn the_holder_is_the_owner_else_the_kept_rescue_else_the_players_system_listing_it() {
+        let mut galaxy = hiding(&[]);
+        let listed = [listing(128, &[3, 5]), listing(129, &[2, 5])];
+        galaxy.keep_rescues(&listed, SystemId(5));
+        let holder = |galaxy: &OverlaidGalaxy, id, listers: &[i16], player| {
+            galaxy
+                .holder(StellarId(id), &ids(listers), SystemId(player))
+                .map(|id| id.0)
+        };
+        assert_eq!(holder(&galaxy, 128, &[3, 5], 3), Some(5), "kept by 5");
+        assert_eq!(holder(&galaxy, 129, &[2, 5], 3), Some(2), "the owner");
+        assert_eq!(
+            holder(&galaxy, 130, &[3], 3),
+            Some(3),
+            "no owner, none kept: the player's system listing it"
+        );
+        assert_eq!(holder(&galaxy, 130, &[3], 1), None);
+        assert!(!galaxy.shows(StellarId(128), &ids(&[3, 5]), SystemId(3)));
+        assert!(galaxy.shows(StellarId(128), &ids(&[3, 5]), SystemId(5)));
+        assert_eq!(
+            galaxy.shown(&listed, SystemId(3)),
+            BTreeSet::new(),
+            "3 shows nothing 5 keeps"
+        );
+
+        galaxy.forget_rescues();
+        assert_eq!(rescued(&galaxy, 128), None);
+        assert_eq!(holder(&galaxy, 128, &[3, 5], 3), Some(3), "forgotten");
+    }
+
+    #[test]
+    fn a_kept_rescue_is_active_only_while_its_system_is_visible_and_outlives_a_new_overlay() {
+        let mut galaxy = hiding(&[]);
+        galaxy.keep_rescues(&[listing(128, &[3, 5])], SystemId(5));
+        let active = |galaxy: &OverlaidGalaxy| {
+            galaxy
+                .active_holder(StellarId(128), &ids(&[3, 5]), SystemId(3))
+                .map(|id| id.0)
+        };
+        assert_eq!(active(&galaxy), Some(5));
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(5), Some(false));
+        assert!(galaxy.set_overlay(overlay));
+        assert_eq!(rescued(&galaxy, 128), Some(5), "only a refresh forgets");
+        assert_eq!(active(&galaxy), None, "5 is hidden");
     }
 
     #[test]

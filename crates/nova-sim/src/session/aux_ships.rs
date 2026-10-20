@@ -628,9 +628,11 @@ mod tests {
         take_off(&mut session, &catalog);
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(
-            session
-                .galaxy()
-                .holder(session.statics.listers(StellarId(128)), SystemId(130)),
+            session.galaxy().holder(
+                StellarId(128),
+                session.statics.listers(StellarId(128)),
+                SystemId(130)
+            ),
             Some(SystemId(130)),
             "rescued"
         );

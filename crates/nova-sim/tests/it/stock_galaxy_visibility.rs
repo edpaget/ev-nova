@@ -226,7 +226,7 @@ fn the_spica_wormhole_has_exits() {
         StellarId(466),
         spica,
         &sites,
-        |id| galaxy.holder(listers_of(&listed, id), spica),
+        |id| galaxy.holder(id, listers_of(&listed, id), spica),
         WormholeRule::UnlinkedOnly,
         &mut NeverFires,
     )

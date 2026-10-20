@@ -132,7 +132,7 @@ impl Chart {
                 gravity: site.gravity,
                 active: self
                     .galaxy
-                    .active_holder(statics.listers(site.id), pilot.system)
+                    .active_holder(site.id, statics.listers(site.id), pilot.system)
                     .is_some(),
                 destroyed: site.destroyed,
             })

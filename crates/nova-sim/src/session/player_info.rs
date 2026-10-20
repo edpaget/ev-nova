@@ -296,7 +296,9 @@ impl Chart {
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
-                let holder = self.galaxy.holder(&listed.systems, pilot.system)?;
+                let holder = self
+                    .galaxy
+                    .holder(listed.id, &listed.systems, pilot.system)?;
                 let sites = catalog.landing_sites(holder);
                 let site = sites.iter().find(|site| site.id == listed.id)?;
                 Some(player_info::tribute_of(site))
@@ -348,7 +350,7 @@ impl Chart {
         let govt = self.galaxy.govt(system);
         let counting = sites.iter().take(3).filter(|site| {
             self.galaxy
-                .active_holder(statics.listers(site.id), pilot.system)
+                .active_holder(site.id, statics.listers(site.id), pilot.system)
                 .is_some()
                 && !uninhabited(site)
                 && is_landable(site)

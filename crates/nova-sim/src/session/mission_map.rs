@@ -147,7 +147,8 @@ impl Chart {
             return None;
         }
         let stellar = destination.or(return_to)?;
-        self.galaxy.holder(statics.listers(stellar), pilot.system)
+        self.galaxy
+            .holder(stellar, statics.listers(stellar), pilot.system)
     }
 }
 

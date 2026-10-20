@@ -207,7 +207,7 @@ impl Chart {
                 MapStellar {
                     active: self
                         .galaxy
-                        .active_holder(&stellar.systems, pilot.system)
+                        .active_holder(stellar.id, &stellar.systems, pilot.system)
                         .is_some(),
                     flags: stellar.flags,
                     flags2: stellar.flags2,
@@ -242,7 +242,7 @@ impl Chart {
     fn map_mission_systems(&self, pilot: &Pilot, statics: &Statics) -> Vec<SystemId> {
         let active = |stellar| {
             self.galaxy
-                .active_holder(statics.listers(stellar), pilot.system)
+                .active_holder(stellar, statics.listers(stellar), pilot.system)
         };
         let mut systems = Vec::new();
         for (_, mission) in pilot.missions().iter() {

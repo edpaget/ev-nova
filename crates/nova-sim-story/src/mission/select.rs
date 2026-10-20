@@ -142,7 +142,7 @@ pub fn stellars_of(
         .iter()
         .filter_map(|stellar| {
             let id = stellar.id;
-            let system = galaxy.active_holder(&stellar.systems, player)?;
+            let system = galaxy.active_holder(id, &stellar.systems, player)?;
             Some(Stellar {
                 id,
                 system,
@@ -183,7 +183,7 @@ pub fn placements(
         .iter()
         .map(|stellar| Placed {
             id: stellar.id,
-            at: galaxy.whereabouts(&stellar.systems, player),
+            at: galaxy.whereabouts(stellar.id, &stellar.systems, player),
         })
         .collect()
 }
