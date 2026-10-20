@@ -165,7 +165,7 @@ impl Session {
         self.ship.player.velocity = Vec2::ZERO;
         self.ship.player.heading = 0.0;
         self.ship.player_speed = 0.0;
-        self.touchdown = self.ship.player.position;
+        self.port.touchdown = self.ship.player.position;
         // A new pilot starts the first-flight tutorial (`_DoNewPilot`
         // @0x19254; see the `tutorial` module).
         self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;

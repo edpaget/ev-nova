@@ -2026,7 +2026,7 @@ mod tests {
             assert_eq!(session.pilot().explored, explored, "{text}");
             assert_eq!(session.course(), course, "{text}");
             assert_eq!(session.take_events(), [], "{text}");
-            assert!(!session.hold_position, "{text}");
+            assert!(!session.port.hold_position, "{text}");
         }
     }
 
@@ -2060,7 +2060,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.player().position, position);
         assert_eq!(session.player().velocity, velocity);
-        assert!(!session.hold_position, "no take-off hold");
+        assert!(!session.port.hold_position, "no take-off hold");
         assert_eq!(session.pilot().stellar, Some(StellarId(129)), "kept");
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
@@ -2103,7 +2103,7 @@ mod tests {
             assert_eq!(session.system(), SystemId(130), "{text}");
             assert_eq!(session.player().position, Vec2::new(10.0, 10.0), "{text}");
             assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0), "{text}");
-            assert!(!session.hold_position, "{text}: no take-off hold");
+            assert!(!session.port.hold_position, "{text}: no take-off hold");
             assert_eq!(session.pilot().stellar, Some(StellarId(129)), "{text}");
             assert_eq!(session.shots(), [], "{text}");
             session.assert_scene_left(text);
@@ -2129,7 +2129,7 @@ mod tests {
             assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
             assert_eq!(session.pilot().stellar, Some(StellarId(128)), "{text}");
             assert_eq!(session.take_events(), [], "{text}");
-            assert!(!session.hold_position, "{text}");
+            assert!(!session.port.hold_position, "{text}");
         }
     }
 

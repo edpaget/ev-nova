@@ -2303,7 +2303,7 @@ mod tests {
             ..ShipState::default()
         };
         session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
-        session.dock = Some(crate::clearance::DockRequest {
+        session.port.dock = Some(crate::clearance::DockRequest {
             stellar: StellarId(128),
             permission: crate::clearance::CLEARED,
         });

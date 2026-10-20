@@ -72,7 +72,7 @@ impl Session {
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
-        let dock = self.dock;
+        let dock = self.port.dock;
         for site in self.chart.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self
                 .space
@@ -199,7 +199,7 @@ mod tests {
         let catalog = gated();
         for permission in [REQUESTED_NEAR, CLEARED] {
             let mut session = flying(&catalog);
-            session.dock = Some(DockRequest {
+            session.port.dock = Some(DockRequest {
                 stellar: StellarId(300),
                 permission,
             });
@@ -210,7 +210,7 @@ mod tests {
             }
             assert_eq!(frames.first(), Some(&1), "{permission:#x}: {frames:?}");
             assert!(session.gate_open(StellarId(300)), "{permission:#x}");
-            session.dock = None;
+            session.port.dock = None;
             for _ in 0..30 {
                 tick(&mut session, &catalog);
             }
@@ -224,7 +224,7 @@ mod tests {
         let catalog = gated();
         for (stellar, permission) in [(300, 0), (128, CLEARED)] {
             let mut session = flying(&catalog);
-            session.dock = Some(DockRequest {
+            session.port.dock = Some(DockRequest {
                 stellar: StellarId(stellar),
                 permission,
             });

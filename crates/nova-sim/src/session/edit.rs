@@ -586,27 +586,30 @@ mod tests {
         use crate::wares::DayRolls;
         let catalog = atlas();
         let mut session = landed(&catalog);
-        session.hire_rolls.hold(ShipId(129));
-        session.outfit_rolls.hold(OutfitId(128));
-        session.ship_rolls.hold(ShipId(128));
-        session.ship_rolls.hold(ShipId(129));
-        session.ship_redraws.insert(ShipId(129));
-        session.outfit_visit.bought = crate::outfitter::Bought::after_buying(
+        session.port.hire_rolls.hold(ShipId(129));
+        session.port.outfit_rolls.hold(OutfitId(128));
+        session.port.ship_rolls.hold(ShipId(128));
+        session.port.ship_rolls.hold(ShipId(129));
+        session.port.ship_redraws.insert(ShipId(129));
+        session.port.outfit_visit.bought = crate::outfitter::Bought::after_buying(
             &crate::testkit::outfit(128, &[(crate::outfit_effects::MAP, 1)]),
         );
-        let (hire, outfits) = (session.hire_rolls.clone(), session.outfit_rolls.clone());
+        let (hire, outfits) = (
+            session.port.hire_rolls.clone(),
+            session.port.outfit_rolls.clone(),
+        );
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
         session.chart.assert_docked_among_shown(session.landed);
-        assert_eq!(session.hire_rolls, hire, "kept");
-        assert_eq!(session.outfit_rolls, outfits, "kept");
+        assert_eq!(session.port.hire_rolls, hire, "kept");
+        assert_eq!(session.port.outfit_rolls, outfits, "kept");
         let mut kept = DayRolls::default();
         kept.hold(ShipId(128));
-        assert_eq!(session.ship_rolls, kept, "the redraw due applied");
-        assert!(session.ship_redraws.is_empty());
+        assert_eq!(session.port.ship_rolls, kept, "the redraw due applied");
+        assert!(session.port.ship_redraws.is_empty());
         assert_eq!(
-            session.outfit_visit.bought,
+            session.port.outfit_visit.bought,
             crate::outfitter::Bought::default()
         );
     }
@@ -617,23 +620,26 @@ mod tests {
         let catalog = atlas();
         let rules = Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible);
         let mut session = landed(&catalog).with_rules(rules);
-        session.hire_rolls.hold(ShipId(129));
-        session.outfit_rolls.hold(crate::catalog::OutfitId(128));
-        session.ship_rolls.hold(ShipId(129));
-        session.ship_redraws.insert(ShipId(129));
-        session.outfit_visit.bought = crate::outfitter::Bought::after_buying(
+        session.port.hire_rolls.hold(ShipId(129));
+        session
+            .port
+            .outfit_rolls
+            .hold(crate::catalog::OutfitId(128));
+        session.port.ship_rolls.hold(ShipId(129));
+        session.port.ship_redraws.insert(ShipId(129));
+        session.port.outfit_visit.bought = crate::outfitter::Bought::after_buying(
             &crate::testkit::outfit(128, &[(crate::outfit_effects::MAP, 1)]),
         );
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
         session.chart.assert_docked_among_shown(session.landed);
-        assert_eq!(session.hire_rolls, crate::wares::DayRolls::default());
-        assert_eq!(session.outfit_rolls, crate::wares::DayRolls::default());
-        assert_eq!(session.ship_rolls, crate::wares::DayRolls::default());
-        assert!(session.ship_redraws.is_empty());
+        assert_eq!(session.port.hire_rolls, crate::wares::DayRolls::default());
+        assert_eq!(session.port.outfit_rolls, crate::wares::DayRolls::default());
+        assert_eq!(session.port.ship_rolls, crate::wares::DayRolls::default());
+        assert!(session.port.ship_redraws.is_empty());
         assert_eq!(
-            session.outfit_visit.bought,
+            session.port.outfit_visit.bought,
             crate::outfitter::Bought::default()
         );
     }
@@ -643,7 +649,7 @@ mod tests {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.plot_course(SystemId(132)).expect("a route");
-        session.hire_rolls.hold(ShipId(129));
+        session.port.hire_rolls.hold(ShipId(129));
         let before = session.clone();
         assert_eq!(
             session.relocate(&catalog, SystemId(130), StellarId(128)),

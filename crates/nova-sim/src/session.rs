@@ -486,6 +486,7 @@ mod player_led;
 mod player_repair;
 mod player_ship;
 mod plunder_loop;
+mod port;
 mod precalced;
 mod radar;
 mod ranks;
@@ -555,6 +556,7 @@ use self::hooks::ShipHook;
 use self::outbox::Outbox;
 use self::outfits::{carries, launches};
 use self::player_ship::PlayerShip;
+use self::port::Port;
 use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
@@ -615,7 +617,6 @@ use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
 use crate::navigation::NavMode;
 use crate::nebula;
-use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
@@ -646,7 +647,6 @@ use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
 use crate::trig::intercept_angle;
-use crate::wares::DayRolls;
 use crate::warp;
 
 pub use crate::combat::hull::ESCAPE_POD_SHIP;
@@ -847,6 +847,9 @@ pub struct Session {
     /// The system shown, the galaxy overlay and the nav selection (see the
     /// `chart` module).
     chart: Chart,
+    /// The landing, the take-off and the spaceport visit under way (see the
+    /// `port` module).
+    port: Port,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
     /// The jump under way, from J being accepted until the ship arrives.
@@ -865,60 +868,6 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
-    /// Each ship class's roll for hire today: drawn by the daily step, or
-    /// else the first time the bar's list asks it (see
-    /// [`RuleKey::DayRolls`]). Not saved.
-    hire_rolls: DayRolls<ShipId>,
-    /// The news of the bar visit under way, drawn as the bar opened (see
-    /// the `news` module); forgotten as the docking changes, and never
-    /// saved.
-    bar_news: Option<News>,
-    /// Each outfit's roll for sale today: drawn by the daily step, or else
-    /// the first time the outfitter's list asks it (see
-    /// [`RuleKey::DayRolls`]). Not saved.
-    outfit_rolls: DayRolls<OutfitId>,
-    /// The outfitter visit under way ([`OutfitVisit`]): the
-    /// once-an-opening flags, which limit what is sold as
-    /// [`RuleKey::OutfitLimit`] reads, and the counts owned when it
-    /// opened, which a sale refunds against as [`RuleKey::OutfitRefund`]
-    /// reads. None of it is saved.
-    outfit_visit: OutfitVisit,
-    /// The outfit a relisting selected, `oütf` 128, while it may still be
-    /// selected: the engine's `*0xded58` after an order that changes the
-    /// listing, which Buy and Sell answer for, listed or not (see
-    /// [`RuleKey::RelistedSelection`]). The outfitter carries its row even
-    /// when it is not listed ([`Outfitter::unlisted`]). An order of
-    /// another outfit, and each opening, lets it go. It is not saved.
-    outfit_reselected: Option<OutfitId>,
-    /// What this spaceport stay has done that passes days as it is left
-    /// (see [`Session::take_off`]). A landing starts it afresh. It is not
-    /// saved: the original keeps it in flags `_DoPortDialog` clears on
-    /// opening (@0x5f93d-0x5f95a), and loading a save passes no time.
-    stay: Stay,
-    /// Each ship class's roll for sale today: drawn by the daily step, or
-    /// else the first time the shipyard's list asks it (see
-    /// [`RuleKey::DayRolls`]). Not saved.
-    ship_rolls: DayRolls<ShipId>,
-    /// The ship classes whose roll is drawn again the next time the
-    /// shipyard's list is built: each one bought or declined since it was
-    /// last built. The original builds the list once each time the
-    /// shipyard opens (`_SetupPortAvailableShipTypes`, called only
-    /// @0x5e68f), so a roll drawn again shows only then. A landing with
-    /// no day passing forgets their rolls, and a day's draw, which draws
-    /// them afresh, empties it.
-    ship_redraws: BTreeSet<ShipId>,
-    /// The dock request the land key made, if any: the original's
-    /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
-    /// not saved, as a flight start sets both to −1.
-    dock: Option<crate::clearance::DockRequest>,
-    /// Whether the land key is held, as the view last said: the
-    /// original's `_dockTryFlag`, which holds the dock approach back (see
-    /// the `clearance` module).
-    land_key: bool,
-    /// The take-off grace's ticks still to run (see the `takeoff_grace`
-    /// module); not saved, as the original's pilot file does not keep its
-    /// frame counter.
-    takeoff_grace: u32,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
@@ -930,12 +879,6 @@ pub struct Session {
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
-    /// Whether the next take-off keeps the ship where it touched down
-    /// (the original's `_dontMovePlayerAfterLanding`); never saved.
-    hold_position: bool,
-    /// Where the ship was as it last landed, before it was docked at the
-    /// stellar's centre.
-    touchdown: Vec2,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -944,10 +887,6 @@ pub struct Session {
     /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
     /// (@0x1dbf1) reset it (see the `ranks` module).
     recent_rank: Option<RankId>,
-    /// What the ranks' price multipliers are taken from as the spaceport
-    /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
-    /// saved, as `_priceFluxMult` lives in memory only.
-    port_ranks: ranks::PortRanks,
     /// The offers of the visit under way and the stellar they were rolled
     /// at (see the `missions` module); never saved, as the original saves
     /// none of it.
@@ -1254,26 +1193,12 @@ impl Session {
             jump: None,
             player_end: None,
             pod: None,
-            hire_rolls: DayRolls::default(),
-            bar_news: None,
-            outfit_rolls: DayRolls::default(),
-            outfit_visit: OutfitVisit::default(),
-            outfit_reselected: None,
-            stay: Stay::default(),
-            ship_rolls: DayRolls::default(),
-            ship_redraws: BTreeSet::new(),
-            dock: None,
-            land_key: false,
-            takeoff_grace: 0,
             red_alert: RedAlert::default(),
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
             queued: script_effects::Queued::default(),
-            hold_position: false,
-            touchdown: player.position,
             story: story::StoryRuntime::default(),
             recent_rank: None,
-            port_ranks: ranks::PortRanks::default(),
             offers: Offers::default(),
             reoffer_due: false,
             goal_checks_due: Vec::new(),
@@ -1298,6 +1223,7 @@ impl Session {
             ship: PlayerShip::new(player, fields, defaults, stock),
             space: Space::new(),
             chart: Chart::new(galaxy, system),
+            port: Port::new(player.position),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -3421,7 +3347,7 @@ impl Session {
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
         let press = land_or_select(
             self.nav_target(),
-            self.dock,
+            self.port.dock,
             &self.ship.player,
             &self.chart.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
@@ -3714,7 +3640,7 @@ impl Session {
     /// price multipliers as the spaceport opens (see the `ranks` module),
     /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
-        self.touchdown = self.ship.player.position;
+        self.port.touchdown = self.ship.player.position;
         let site = self.chart.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
             self.ship.player.position = site.position;
@@ -3732,7 +3658,7 @@ impl Session {
         self.pilot.stellar = Some(stellar);
         // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
         self.drop_leave();
-        self.bar_news = None;
+        self.port.bar_news = None;
         self.chart.bar_nav = None;
         self.space.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
@@ -3744,7 +3670,7 @@ impl Session {
         self.leave_with_fighters(true);
         self.land_day_rolls();
         self.open_outfit_visit();
-        self.stay = Stay::default();
+        self.port.stay = Stay::default();
         self.out.save_due = true;
         self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
@@ -3771,14 +3697,14 @@ impl Session {
     /// reading, it forgets every roll.
     fn land_day_rolls(&mut self) {
         if self.setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
-            for ship in std::mem::take(&mut self.ship_redraws) {
-                self.ship_rolls.redraw(&ship);
+            for ship in std::mem::take(&mut self.port.ship_redraws) {
+                self.port.ship_rolls.redraw(&ship);
             }
         } else {
-            self.hire_rolls.clear();
-            self.outfit_rolls.clear();
-            self.ship_rolls.clear();
-            self.ship_redraws.clear();
+            self.port.hire_rolls.clear();
+            self.port.outfit_rolls.clear();
+            self.port.ship_rolls.clear();
+            self.port.ship_redraws.clear();
         }
     }
 
@@ -3866,8 +3792,8 @@ impl Session {
         // A held `Q`'s leave is consumed (@0x63588-0x635e3; see the
         // `script_effects` module).
         self.depart();
-        let stay = std::mem::take(&mut self.stay);
-        self.bar_news = None;
+        let stay = std::mem::take(&mut self.port.stay);
+        self.port.bar_news = None;
         self.chart.bar_nav = None;
         let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
@@ -3887,8 +3813,8 @@ impl Session {
         {
             self.out.emit(SessionEvent::SystemChanged);
         }
-        if std::mem::take(&mut self.hold_position) {
-            self.ship.player.position = self.touchdown;
+        if std::mem::take(&mut self.port.hold_position) {
+            self.ship.player.position = self.port.touchdown;
         }
         // At level 2, with its place's head, by the engine
         // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
@@ -3932,7 +3858,7 @@ impl Session {
         // The original's bar is redrawn before this with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
         // flight view's `took_off`.
-        self.dock = None;
+        self.port.dock = None;
         self.chart.deselect();
         self.cue_course();
         Some(stellar)
@@ -3996,6 +3922,7 @@ impl Session {
             mission_stellar,
             blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
             granted: self
+                .port
                 .dock
                 .is_some_and(|request| request.permission >= crate::clearance::CLEARED),
         }
@@ -4032,7 +3959,7 @@ impl Session {
     /// even when it is not listed ([`Outfitter::unlisted`]; see
     /// [`RuleKey::RelistedSelection`]).
     pub fn outfitter(&mut self, chance: &mut dyn Chance) -> Option<Outfitter> {
-        self.outfitter_with(chance, self.outfit_reselected)
+        self.outfitter_with(chance, self.port.outfit_reselected)
     }
 
     /// The outfitter as [`outfitter`](Self::outfitter) builds it, with
@@ -4046,7 +3973,7 @@ impl Session {
         let stellar = self.landed?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
-        let mut rolls = std::mem::take(&mut self.outfit_rolls);
+        let mut rolls = std::mem::take(&mut self.port.outfit_rolls);
         let outfitter = Shop {
             records: &self.statics.outfits,
             crons: &self.statics.crons,
@@ -4059,13 +3986,13 @@ impl Session {
             hardpoints: self.hardpoints(),
             free_cargo: self.ship.free_cargo(&self.pilot),
             launchers: &self.launchers(),
-            visit: &self.outfit_visit,
+            visit: &self.port.outfit_visit,
             price_mult: self.outfit_price_mult(),
             rules: self.setup.rules,
             gate: self.gate(),
         }
         .outfitter_with(&self.pilot, &mut rolls, chance, also);
-        self.outfit_rolls = rolls;
+        self.port.outfit_rolls = rolls;
         outfitter
     }
 
@@ -4113,8 +4040,8 @@ impl Session {
     /// (a headless one) refunds against the counts owned since then, and
     /// an outfit owned before never refunds in full.
     fn open_outfit_visit(&mut self) {
-        self.outfit_visit = OutfitVisit::open(&self.pilot.outfits);
-        self.outfit_reselected = None;
+        self.port.outfit_visit = OutfitVisit::open(&self.pilot.outfits);
+        self.port.outfit_reselected = None;
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -4218,10 +4145,10 @@ impl Session {
         let follows = self.setup.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
-        if self.outfit_reselected != Some(order.outfit) {
-            self.outfit_reselected = None;
+        if self.port.outfit_reselected != Some(order.outfit) {
+            self.port.outfit_reselected = None;
         }
-        let asked = self.outfit_reselected;
+        let asked = self.port.outfit_reselected;
         // The button's own check comes before the loop (@0x5c087-0x5c0a2
         // for Buy, @0x5c5d5-0x5c5dd for Sell). A buy's first pass checks
         // the same, so a buy that runs a pass reads it off the run
@@ -4275,7 +4202,7 @@ impl Session {
             Reselection::Kept
         };
         if after != Reselection::Kept {
-            self.outfit_reselected = Some(FIRST_OUTFIT);
+            self.port.outfit_reselected = Some(FIRST_OUTFIT);
         }
         if order.direction == Direction::Sell {
             button_passed = Self::button_passed(checked, &run);
@@ -4307,6 +4234,7 @@ impl Session {
     /// follows its loop only when this passed.
     pub fn outfit_button_passes(&mut self, order: OutfitOrder, chance: &mut dyn Chance) -> bool {
         let asked = self
+            .port
             .outfit_reselected
             .filter(|&reselected| reselected == order.outfit);
         self.outfitter_with(chance, asked)
@@ -4429,7 +4357,7 @@ impl Session {
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
         match order.direction {
             Direction::Buy => {
-                self.outfit_visit.bought(&record);
+                self.port.outfit_visit.bought(&record);
                 let added = self.grant_outfit(record.id);
                 self.run_script(&record.on_purchase, chance);
                 if added && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0 {
@@ -4455,7 +4383,7 @@ impl Session {
                 self.run_script(&record.on_sell, chance);
             }
         }
-        self.stay.outfit_traded = true;
+        self.port.stay.outfit_traded = true;
         self.ship.refit(
             &mut self.pilot,
             &self.statics,
@@ -4519,7 +4447,7 @@ impl Session {
     ) -> OutfitRun {
         let run = self.outfit_order(order, count, chance);
         if count == 0 && run.button_passed {
-            self.stay.outfit_traded = true;
+            self.port.stay.outfit_traded = true;
         }
         run
     }
@@ -4530,8 +4458,8 @@ impl Session {
     /// afresh: the roll of each class bought or declined since it was last
     /// built is drawn again first.
     pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
-        for ship in std::mem::take(&mut self.ship_redraws) {
-            self.ship_rolls.redraw(&ship);
+        for ship in std::mem::take(&mut self.port.ship_redraws) {
+            self.port.ship_rolls.redraw(&ship);
         }
         self.listed_shipyard(chance)
     }
@@ -4543,7 +4471,7 @@ impl Session {
         let stellar = self.landed?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
-        let mut rolls = std::mem::take(&mut self.ship_rolls);
+        let mut rolls = std::mem::take(&mut self.port.ship_rolls);
         let shipyard = Yard {
             ships: &self.statics.ships,
             outfits: &self.statics.outfits,
@@ -4557,7 +4485,7 @@ impl Session {
             gate: self.gate(),
         }
         .shipyard(&self.pilot, &mut rolls, chance);
-        self.ship_rolls = rolls;
+        self.port.ship_rolls = rolls;
         shipyard
     }
 
@@ -4605,7 +4533,7 @@ impl Session {
     /// ([`shipyard`](Self::shipyard)); until then it can be named and
     /// bought again. Nothing about the pilot changes, so no save is due.
     pub fn decline_ship(&mut self, ship: ShipId) {
-        self.ship_redraws.insert(ship);
+        self.port.ship_redraws.insert(ship);
     }
 
     /// Buys a ship of class `ship`, named `name` ([`shipyard::cull_name`]
@@ -4673,7 +4601,7 @@ impl Session {
         // (`_DoShipyardDialog` @0x5ee99, @0x5ef9f; see the `precalced`
         // module): their trims are the purchase rule's, already made.
         self.reset_precalced_for(precalced::ResetCause::Purchase);
-        self.ship_redraws.insert(ship);
+        self.port.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         // No secondary is selected on the new ship (`_DoShipyardDialog`
         // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
@@ -4688,7 +4616,7 @@ impl Session {
         // class and outfits it leaves (`_DoShipyardDialog`
         // @0x5f051-0x5f07b); the save is due already.
         self.pilot.reserves = shipyard::filled(&self.ship.fit.stats, &self.setup.rules);
-        self.stay.ship_bought = true;
+        self.port.stay.ship_bought = true;
         Ok(report)
     }
 
@@ -12956,14 +12884,14 @@ pub(super) mod tests {
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
         assert_ne!(
-            session.outfit_visit,
+            session.port.outfit_visit,
             OutfitVisit::open(&session.pilot.outfits)
         );
     }
 
     /// Whether `session`'s visit is a new one, opened over its outfits.
     fn opened_anew(session: &Session) -> bool {
-        session.outfit_visit == OutfitVisit::open(&session.pilot.outfits)
+        session.port.outfit_visit == OutfitVisit::open(&session.pilot.outfits)
     }
 
     #[test]
@@ -12999,9 +12927,9 @@ pub(super) mod tests {
     fn a_sale_leaves_the_visit_as_it_is() {
         let mut session = outfitted(&limiting());
         dirty_the_visit(&mut session);
-        let visit = session.outfit_visit.clone();
+        let visit = session.port.outfit_visit.clone();
         session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
-        assert_eq!(session.outfit_visit, visit);
+        assert_eq!(session.port.outfit_visit, visit);
     }
 
     #[test]
@@ -13009,7 +12937,7 @@ pub(super) mod tests {
         let mut session = outfitted(&limiting());
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
         let outfitter = session.outfitter(&mut NeverFires).expect("open");
-        assert_eq!(outfitter.visit, session.outfit_visit);
+        assert_eq!(outfitter.visit, session.port.outfit_visit);
     }
 
     // Refunds.
@@ -13510,12 +13438,12 @@ pub(super) mod tests {
             &[(BLASTER, 2), (CONTRABAND, 1)],
         );
         session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
-        session.stay.outfit_traded = false;
+        session.port.stay.outfit_traded = false;
         assert_eq!(
             session.outfit_counted(sell(BLASTER), 0, &mut NeverFires),
             Ok(0)
         );
-        assert!(session.stay.outfit_traded);
+        assert!(session.port.stay.outfit_traded);
     }
 
     #[test]
@@ -27790,9 +27718,9 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         // Two escorts changed (a day before the wage), an outfit traded
         // and a ship bought (five days after it), and the take-off's day.
-        session.stay.escorts_changed = 2;
-        session.stay.outfit_traded = true;
-        session.stay.ship_bought = true;
+        session.port.stay.escorts_changed = 2;
+        session.port.stay.outfit_traded = true;
+        session.port.stay.ship_bought = true;
         let mut chance = Logged::default();
         session.take_off(&catalog, &mut chance).expect("takes off");
         let expected = [

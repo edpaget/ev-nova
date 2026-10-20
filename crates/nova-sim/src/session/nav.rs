@@ -381,7 +381,7 @@ impl Session {
             return false;
         }
         self.out.sounds.push(SimSound::NavSelected);
-        self.dock = None;
+        self.port.dock = None;
         if nav_off {
             self.chart.set_nav(NavMode::Off);
         }
@@ -445,7 +445,7 @@ impl Session {
         if !selected {
             self.chart.nav_fly_in.start();
             self.chart.set_nav(NavMode::Stellar(Some(picked)));
-            self.dock = None;
+            self.port.dock = None;
         }
         Some(picked)
     }
@@ -1153,7 +1153,7 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.nav_mode(), hyperspace(131));
-        session.dock = Some(crate::clearance::DockRequest {
+        session.port.dock = Some(crate::clearance::DockRequest {
             stellar: StellarId(128),
             permission: 0,
         });

@@ -295,7 +295,7 @@ impl Session {
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
         // modules).
         self.chart.set_nav(crate::navigation::NavMode::Off);
-        self.dock = None;
+        self.port.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.ship.secondary = None;
         self.pilot.jumped_from = None;

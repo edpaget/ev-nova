@@ -94,7 +94,7 @@ impl Session {
                 .or_else(|| self.setup.nth_string(MISC_STRINGS, NO_NEWS))
                 .unwrap_or_default();
         }
-        self.bar_news = Some(News { commercial, story });
+        self.port.bar_news = Some(News { commercial, story });
         true
     }
 
@@ -109,7 +109,7 @@ impl Session {
     /// before the bar opens, and after the ship's docking changes.
     #[must_use]
     pub fn news(&self) -> Option<&News> {
-        self.bar_news.as_ref()
+        self.port.bar_news.as_ref()
     }
 
     /// The `öops` story at `docked`, the story the cron news replaces

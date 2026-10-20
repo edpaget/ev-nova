@@ -728,11 +728,11 @@ impl Session {
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
-            self.touchdown = self.ship.player.position;
+            self.port.touchdown = self.ship.player.position;
         }
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
-            self.bar_news = None;
+            self.port.bar_news = None;
             self.chart.bar_nav = None;
             self.ship.warp.warp_ups.clear();
             // The warp-out needs no clearing here: a relocation from
@@ -891,7 +891,7 @@ impl Session {
             }
             ShipPlacement::Keep => {}
         }
-        self.hold_position |= placement.hold;
+        self.port.hold_position |= placement.hold;
     }
 
     /// Lets go of what `resets` says of the system left: the held sound,
@@ -935,7 +935,7 @@ impl Session {
             self.chart.target = None;
         }
         if resets.has(Reset::DockRequest) {
-            self.dock = None;
+            self.port.dock = None;
         }
         if resets.has(Reset::Boarding) {
             self.space.escorts.aboard = None;
@@ -1575,10 +1575,10 @@ mod tests {
     fn a_placements_hold_is_added_to_the_take_offs_never_taken_away() {
         let mut session = Session::start(&catalog()).expect("starts");
         placed(&mut session, ShipPlacement::Keep, false);
-        assert!(!session.hold_position);
+        assert!(!session.port.hold_position);
         placed(&mut session, ShipPlacement::Keep, true);
-        assert!(session.hold_position);
+        assert!(session.port.hold_position);
         placed(&mut session, ShipPlacement::Keep, false);
-        assert!(session.hold_position, "kept");
+        assert!(session.port.hold_position, "kept");
     }
 }

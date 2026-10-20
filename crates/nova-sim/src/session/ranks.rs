@@ -115,7 +115,7 @@ impl Session {
     /// (`_DoPortDialog` @0x5f970-0x5fa04): the active ranks and the docked
     /// stellar's government.
     pub(super) fn open_port_prices(&mut self) {
-        self.port_ranks = PortRanks {
+        self.port.port_ranks = PortRanks {
             active: self.pilot.ranks.clone(),
             govt: self.chart.docked_govt(self.landed),
         };
@@ -131,7 +131,7 @@ impl Session {
     pub fn price_mults(&self) -> PriceMults {
         let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
         let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
-            RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
+            RuleSource::Engine => (&self.port.port_ranks.active, self.port.port_ranks.govt),
             RuleSource::Bible => (&self.pilot.ranks, self.chart.docked_govt(self.landed)),
         };
         rank::price_mults(
@@ -798,7 +798,7 @@ pub(super) mod tests {
         let pilot = save::decode(&save::encode(&pilot)).expect("loads");
         let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
         assert_eq!(
-            session.port_ranks,
+            session.port.port_ranks,
             super::PortRanks::default(),
             "no spaceport opens on resuming"
         );
@@ -1344,7 +1344,7 @@ pub(super) mod tests {
             let rules = reading(RuleKey::BlessingLanding, source);
             for (ranks, greets) in [(&[][..], false), (&[200][..], true)] {
                 let mut session = holding(&catalog, rules, ranks);
-                session.dock = Some(crate::clearance::DockRequest {
+                session.port.dock = Some(crate::clearance::DockRequest {
                     stellar: crate::catalog::StellarId(128),
                     permission: crate::clearance::REQUESTED_NEAR,
                 });

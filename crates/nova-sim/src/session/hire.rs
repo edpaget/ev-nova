@@ -192,7 +192,7 @@ impl Session {
             arsenal: &self.statics.arsenal,
             outfits: &self.statics.outfits,
         };
-        let rolls = &mut self.hire_rolls;
+        let rolls = &mut self.port.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))
     }
 
@@ -236,7 +236,7 @@ impl Session {
                 });
             }
         });
-        self.hire_rolls.redraw(&ship);
+        self.port.hire_rolls.redraw(&ship);
         if let Some(berth) = berth {
             let index = self.pilot.escorts.len() - 1;
             self.space.escorts.fleet.resize(index, None);
@@ -1516,7 +1516,7 @@ mod tests {
         for (rule, cash) in [(RuleSource::Engine, 600), (RuleSource::Bible, 1000)] {
             let mut session = docked(1000, rule);
             let landed = session.date();
-            session.stay.ship_bought = true;
+            session.port.stay.ship_bought = true;
             session
                 .take_off(&NoTraffic, &mut NeverFires)
                 .expect("takes off");

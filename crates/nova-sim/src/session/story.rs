@@ -641,9 +641,9 @@ impl Session {
         }
         let buy_random = self.setup.rules.source_for(RuleKey::BuyRandom);
         wares::draw_day(
-            &mut self.hire_rolls,
-            &mut self.ship_rolls,
-            &mut self.outfit_rolls,
+            &mut self.port.hire_rolls,
+            &mut self.port.ship_rolls,
+            &mut self.port.outfit_rolls,
             self.statics.ships.iter().map(|ship| {
                 (
                     ship.id,
@@ -659,7 +659,7 @@ impl Session {
             }),
             chance,
         );
-        self.ship_redraws.clear();
+        self.port.ship_redraws.clear();
     }
 }
 
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn escorts_sold_or_upgraded_pass_half_their_count() {
         let mut session = shopping();
-        session.stay.escorts_changed = 4;
+        session.port.stay.escorts_changed = 4;
         assert_eq!(days_at_take_off(&mut session), 3);
     }
 
@@ -904,7 +904,7 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("buys");
-        session.stay.escorts_changed = 4;
+        session.port.stay.escorts_changed = 4;
         assert_eq!(days_at_take_off(&mut session), 0);
 
         let catalog = surplus();

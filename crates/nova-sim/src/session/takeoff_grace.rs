@@ -63,17 +63,17 @@ impl Session {
     /// the ship takes off or comes out of a gate.
     pub(super) fn start_takeoff_grace(&mut self) {
         self.space.frame = market::AFTER_TAKE_OFF_FRAME;
-        self.takeoff_grace = TAKEOFF_GRACE_TICKS;
+        self.port.takeoff_grace = TAKEOFF_GRACE_TICKS;
     }
 
     /// Counts the take-off grace down a flight tick.
     pub(super) fn takeoff_grace_tick(&mut self) {
-        self.takeoff_grace = self.takeoff_grace.saturating_sub(1);
+        self.port.takeoff_grace = self.port.takeoff_grace.saturating_sub(1);
     }
 
     /// Whether the take-off grace is still running.
     pub(super) fn in_takeoff_grace(&self) -> bool {
-        self.takeoff_grace > 0
+        self.port.takeoff_grace > 0
     }
 
     /// Whether the take-off grace refuses `command`: the map and the

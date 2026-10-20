@@ -1233,7 +1233,10 @@ mod tests {
         take_off(&mut session, &catalog);
         land_now(&mut session).expect("lands");
         assert!(session.pilot().escorts().is_empty());
-        assert_eq!(session.stay.escorts_changed, 0, "none sold or upgraded");
+        assert_eq!(
+            session.port.stay.escorts_changed, 0,
+            "none sold or upgraded"
+        );
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
