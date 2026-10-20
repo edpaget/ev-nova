@@ -688,7 +688,7 @@ mod tests {
     /// A far stellar of `Gravity` 1 listed in `session`'s system: a gravity
     /// source whose pull is a millionth of a pixel a tick.
     fn gravity_listed(session: &mut Session) {
-        session.listed.push(crate::catalog::LandingSite {
+        session.chart.listed.push(crate::catalog::LandingSite {
             gravity: 1,
             ..crate::testkit::planet(199, 100_000.0, 0.0)
         });

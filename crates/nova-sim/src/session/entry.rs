@@ -673,8 +673,8 @@ impl Session {
             sites,
             placement,
         } = arrival;
-        let resolved = self.galaxy.arrival(asked);
-        if story::show(&mut self.pilot, &mut self.galaxy, resolved) {
+        let resolved = self.chart.galaxy.arrival(asked);
+        if story::show(&mut self.pilot, &mut self.chart.galaxy, resolved) {
             self.out.save_due = true;
             self.out.emit(SessionEvent::GalaxyChanged);
         }
@@ -724,7 +724,7 @@ impl Session {
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
             self.bar_news = None;
-            self.bar_nav = None;
+            self.chart.bar_nav = None;
             self.ship.warp.warp_ups.clear();
             // The warp-out needs no clearing here: a relocation from
             // flight docks after (`Session::land_at`), and one already
@@ -801,37 +801,37 @@ impl Session {
         listed: Vec<LandingSite>,
         dock: Dock,
     ) -> bool {
-        let before = self.shown;
+        let before = self.chart.shown;
         self.pilot.system = system;
         let (docked_in, docked_listed) = match dock {
-            Dock::AsItWas => (self.shown, None),
+            Dock::AsItWas => (self.chart.shown, None),
             Dock::At(at, at_listed) => (at, Some(at_listed)),
         };
         if self.landed.is_none() || docked_in == system {
             self.show(system, listed);
-            self.next_sites = None;
+            self.chart.next_sites = None;
         } else {
             if let Some(docked_listed) = docked_listed {
                 self.show(docked_in, docked_listed);
             }
-            self.shown = docked_in;
-            self.next_sites = Some(listed);
+            self.chart.shown = docked_in;
+            self.chart.next_sites = Some(listed);
         }
-        self.shown != before
+        self.chart.shown != before
     }
 
     /// Shows the stellars of `listed`, every one `system` lists, that it
     /// shows ([`shown_sites`](super::shown_sites)).
     fn show(&mut self, system: SystemId, listed: Vec<LandingSite>) {
-        self.sites = super::shown_sites(
-            &self.galaxy,
+        self.chart.sites = super::shown_sites(
+            &self.chart.galaxy,
             &self.statics.listed_stellars,
             system,
             &listed,
             self.landed,
         );
-        self.listed = listed;
-        self.shown = system;
+        self.chart.listed = listed;
+        self.chart.shown = system;
         self.keep_gate_sprites();
     }
 
@@ -851,16 +851,16 @@ impl Session {
         if self.landed.is_some() {
             return false;
         }
-        let listed = std::mem::take(&mut self.listed);
+        let listed = std::mem::take(&mut self.chart.listed);
         let before: Vec<StellarId> = self.stellars_shown().collect();
-        self.show(self.shown, listed);
+        self.show(self.chart.shown, listed);
         !self.stellars_shown().eq(before)
     }
 
     /// The stellars shown, in navigation order (their system's `NavDefs`
     /// order): what the flight view draws.
     pub fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
-        self.sites.iter().map(|site| site.id)
+        self.chart.sites.iter().map(|site| site.id)
     }
 
     /// Checks the invariant [`Session::set_player_system`] keeps: docked,
@@ -868,11 +868,11 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn assert_docked_among_shown(&self) {
         if let Some(stellar) = self.landed {
-            let shown: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
+            let shown: Vec<StellarId> = self.chart.sites.iter().map(|site| site.id).collect();
             assert!(
                 shown.contains(&stellar),
                 "docked at {stellar:?}, showing {shown:?} of {:?}",
-                self.shown
+                self.chart.shown
             );
         }
     }
@@ -937,7 +937,7 @@ impl Session {
             self.space.strikes.clear();
         }
         if resets.has(Reset::Target) {
-            self.target = None;
+            self.chart.target = None;
         }
         if resets.has(Reset::DockRequest) {
             self.dock = None;
@@ -1482,7 +1482,7 @@ mod tests {
     fn placed(session: &mut Session, ship: ShipPlacement, hold: bool) {
         let arrival = Arrival {
             system: session.pilot.system,
-            sites: session.sites.clone(),
+            sites: session.chart.sites.clone(),
             placement: Placement {
                 ship,
                 stellar: None,

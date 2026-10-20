@@ -53,7 +53,7 @@ impl Session {
     ///   snapshot makes at the same refresh.
     #[must_use]
     pub fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
-        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         let standing = Standing {
             dominated: Self::iff_dominated(site),
             blessed: self.blessing().blesses(site.govt, Blessed::Landing),
@@ -83,7 +83,7 @@ impl Session {
     /// 0..=100.
     #[must_use]
     pub fn interference(&self) -> u8 {
-        let system = self.galaxy.map().interference(self.pilot.system);
+        let system = self.chart.galaxy.map().interference(self.pilot.system);
         iff::interference(system, self.radar_gear().anti_interference)
     }
 }
@@ -345,13 +345,13 @@ mod tests {
     fn a_destroyed_stellar_is_unlandable() {
         let mut session = session(&radar_catalog());
         session.pilot.set_system_record(SystemId(130), 50);
-        session.sites[0].destroyed = true;
+        session.chart.sites[0].destroyed = true;
         assert_eq!(
             session.stellar_iff(StellarId(128)),
             Some(StellarIff::Unlandable)
         );
-        session.sites[0].destroyed = false;
-        session.sites[0].flags |= StellarFlags::UNINHABITED;
+        session.chart.sites[0].destroyed = false;
+        session.chart.sites[0].flags |= StellarFlags::UNINHABITED;
         assert_eq!(
             session.stellar_iff(StellarId(128)),
             Some(StellarIff::Unlandable)

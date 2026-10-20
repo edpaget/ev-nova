@@ -35,7 +35,7 @@ impl Session {
     pub(super) fn rewrite_course(&mut self) {
         self.pilot.course = course::rewritten(
             &self.pilot.course,
-            self.galaxy.map().places(),
+            self.chart.galaxy.map().places(),
             self.setup.route_rewrite(),
         );
     }
@@ -47,7 +47,7 @@ impl Session {
             &self.pilot.course,
             hops,
             arrived,
-            self.galaxy.map().places(),
+            self.chart.galaxy.map().places(),
             self.setup.route_rewrite(),
         );
     }

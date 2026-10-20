@@ -911,7 +911,7 @@ mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotBlinkTimer, reading);
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
             assert_eq!(session.space.traffic.reused_slot_blink_timer(), reading);
-            let stellar = session.sites[0].id;
+            let stellar = session.chart.sites[0].id;
             session
                 .land_at(&catalog, session.pilot.system, stellar)
                 .expect("relocates");
@@ -933,7 +933,7 @@ mod tests {
             let first = session.space.traffic.first_class();
             assert_eq!(first.spec, session.ship.fit.hull.frames, "the player's 128");
             assert_eq!(first.reading, reading);
-            let stellar = session.sites[0].id;
+            let stellar = session.chart.sites[0].id;
             session
                 .land_at(&catalog, session.pilot.system, stellar)
                 .expect("relocates");

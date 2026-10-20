@@ -757,12 +757,12 @@ mod tests {
             let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.state.position = at;
             let id = npc.id;
-            session.sites = vec![crate::catalog::LandingSite {
+            session.chart.sites = vec![crate::catalog::LandingSite {
                 flags2: crate::deadly_stellar::DEADLY_STELLAR,
                 frame_size: Some((2, 2)),
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
-            session.listed = session.sites.clone();
+            session.chart.listed = session.chart.sites.clone();
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
@@ -1078,7 +1078,7 @@ mod tests {
     fn hailed(catalog: &FakePilotCatalog) -> (Session, crate::hail::HailView) {
         let mut session = accepted(catalog);
         take_off(&mut session, catalog);
-        session.target = Some(session.npcs()[0].id);
+        session.chart.target = Some(session.npcs()[0].id);
         let view = session
             .hail(catalog, &HailOptions::default(), &mut NeverFires)
             .expect("answered");
@@ -1177,14 +1177,14 @@ mod tests {
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
         let mission_escort = mission_escorts(&session)[0].id;
-        session.target = Some(mission_escort);
+        session.chart.target = Some(mission_escort);
         assert_eq!(
             session
                 .hail(&catalog, &HailOptions::default(), &mut NeverFires)
                 .map(|view| view.reply),
             Err(HailRefusal::NoResponse)
         );
-        session.target = session.space.escorts.fleet[0];
+        session.chart.target = session.space.escorts.fleet[0];
         let view = session
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("the hired escort answers");
@@ -1217,7 +1217,7 @@ mod tests {
         jump_to(&mut session, &catalog, 131);
         assert!(session.take_pay_notes().is_empty());
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "none defected");
-        session.ship.player.position = session.sites[0].position;
+        session.ship.player.position = session.chart.sites[0].position;
         session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(&mut session).expect("lands");
         take_off(&mut session, &catalog);
@@ -1334,7 +1334,7 @@ mod tests {
         let unled = session.space.npc_mut(escort).expect("there");
         unled.goal = Goal::Idle;
         unled.mission = None;
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::NearestThreat), None);
     }
 
@@ -1469,7 +1469,7 @@ mod tests {
     fn attack_never_copies_a_targeted_mission_escort_as_a_target() {
         let catalog = ships_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
-        session.target = Some(ids[0]);
+        session.chart.target = Some(ids[0]);
         let done = session
             .command_escorts(EscortGroup::All, EscortCommand::Attack)
             .expect("the orders changed");
@@ -1488,7 +1488,7 @@ mod tests {
             .place_escort(0, &mut crate::chance::NeverFires)
             .expect("a ship");
         session.space.npc_mut(stranger).expect("here").escort = None;
-        session.target = Some(stranger);
+        session.chart.target = Some(stranger);
         let done = session
             .command_escorts(EscortGroup::All, EscortCommand::Attack)
             .expect("changed");

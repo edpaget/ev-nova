@@ -362,7 +362,7 @@ impl Session {
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
             let due = std::mem::take(&mut self.goal_checks_due);
             if due.is_empty() {
-                if std::mem::take(&mut self.galaxy_stale)
+                if std::mem::take(&mut self.chart.galaxy_stale)
                     && self.setup.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
                 {
                     self.refresh_galaxy(catalog);
@@ -907,7 +907,7 @@ mod tests {
         moved(&mut session, &catalog, "M131 N133");
         assert_eq!(session.system(), SystemId(133));
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
-        assert_eq!(ids(&session.sites), [150, 151]);
+        assert_eq!(ids(&session.chart.sites), [150, 151]);
     }
 
     /// The rules with `MissingSystemMove` read as `reading`.
@@ -945,7 +945,7 @@ mod tests {
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert_eq!(session.player().velocity, Vec2::ZERO);
         assert_eq!(session.player().heading, 1.5, "heading kept");
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.landed(), None);
         assert_eq!(session.pilot().stellar(), None);
         assert!(session.take_save_due());
@@ -1012,7 +1012,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
     }
 
     #[test]
@@ -1025,7 +1025,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0));
-        assert_eq!(session.sites, []);
+        assert_eq!(session.chart.sites, []);
     }
 
     #[test]
@@ -1052,13 +1052,13 @@ mod tests {
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.shots().len(), 1, "{text}");
             session.select_stellar(crate::session::StellarPick::Slot(0));
-            session.target = Some(NpcId(0));
+            session.chart.target = Some(NpcId(0));
             session.ship.warp.gate = Some(StellarId(128));
             session.space.strikes = session.space.combat.take_strikes();
             moved(&mut session, &catalog, text);
             assert_eq!(session.shots(), [], "{text}");
             assert_eq!(session.nav_target(), None, "{text}");
-            assert_eq!(session.target, None, "{text}");
+            assert_eq!(session.chart.target, None, "{text}");
             assert_eq!(session.ship.warp.gate, None, "{text}");
             assert_eq!(session.space.strikes, [], "{text}");
         }
@@ -1358,12 +1358,12 @@ mod tests {
             assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}");
             assert_eq!(session.take_fighter_notes(), [], "{reading:?}");
             assert_eq!(
-                ids(&session.sites),
+                ids(&session.chart.sites),
                 [128, 129],
                 "the port's until the take-off: {reading:?}"
             );
             session.take_off(&catalog, &mut NeverFires);
-            assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
+            assert_eq!(ids(&session.chart.sites), [140, 141], "{reading:?}");
         }
     }
 
@@ -1379,7 +1379,7 @@ mod tests {
         assert_eq!(session.pilot().system(), SystemId(131));
         assert_eq!(session.pilot().stellar(), Some(StellarId(140)));
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
-        assert_eq!(ids(&session.sites), [128, 129], "the port's stellars");
+        assert_eq!(ids(&session.chart.sites), [128, 129], "the port's stellars");
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert!(!session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), [SystemId(131)], "kept");
@@ -1421,7 +1421,7 @@ mod tests {
             Some(StellarId(128))
         );
         assert_eq!(session.system(), SystemId(131));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert!(session.pilot().has_explored(SystemId(131)), "explored");
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
@@ -1430,7 +1430,7 @@ mod tests {
         moved(&mut session, &catalog, "M132");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.player().position, Vec2::ZERO, "the centre");
-        assert_eq!(session.sites, []);
+        assert_eq!(session.chart.sites, []);
     }
 
     #[test]
@@ -1446,7 +1446,7 @@ mod tests {
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         session.ship.player.position = Vec2::new(-45.0, 0.0);
         land_now(&mut session).expect("lands on 141");
         session.take_off(&catalog, &mut NeverFires);
@@ -1499,7 +1499,7 @@ mod tests {
             .expect("moves");
         session.assert_docked_among_shown();
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
     }
 
@@ -1982,7 +1982,7 @@ mod tests {
         assert!(session.leave_due());
         assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
         assert_eq!(session.system(), SystemId(131));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert_eq!(session.npcs().len(), 3, "131's ships");
     }
@@ -2041,7 +2041,7 @@ mod tests {
         session.ship.player.position = Vec2::new(10.0, 10.0);
         session.ship.player.velocity = Vec2::new(5.0, -1.0);
         session.select_stellar(crate::session::StellarPick::Slot(0));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.ship.warp.gate = Some(StellarId(128));
         session.space.strikes = session.space.combat.take_strikes();
         session.stage_scene(NpcId(0));
@@ -2064,7 +2064,7 @@ mod tests {
         assert_eq!(session.pilot().stellar, Some(StellarId(129)), "kept");
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.ship.warp.gate, None);
         assert_eq!(session.space.strikes, []);
         session.assert_scene_left("N9999");

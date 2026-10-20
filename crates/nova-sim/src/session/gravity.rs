@@ -50,13 +50,14 @@ impl Session {
     /// `Gravity` not none (@0x39c20-0x39c27). None in the stock data.
     #[must_use]
     pub fn gravity_sources_present(&self) -> bool {
-        self.listed.iter().any(|site| site.gravity != 0)
+        self.chart.listed.iter().any(|site| site.gravity != 0)
     }
 
     /// `_HandleGravity`'s sources (see the module docs): each listed
     /// stellar of `Gravity` not none, in slot order.
     fn gravity_sources(&self) -> Vec<GravitySource> {
-        self.listed
+        self.chart
+            .listed
             .iter()
             .filter(|site| site.gravity != 0)
             .map(|site| GravitySource {
@@ -184,8 +185,8 @@ mod tests {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
-        session.listed = listed.to_vec();
-        session.sites = listed[..shown].to_vec();
+        session.chart.listed = listed.to_vec();
+        session.chart.sites = listed[..shown].to_vec();
         session
     }
 

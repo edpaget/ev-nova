@@ -64,7 +64,7 @@ impl Session {
         let Some(site) = self.bar_site() else {
             return false;
         };
-        self.bar_nav = Some(self.nav);
+        self.chart.bar_nav = Some(self.chart.nav);
         let commercial = self
             .setup
             .pick_string(COMMERCIALS, chance)
@@ -759,18 +759,18 @@ mod tests {
         let mut session = landed(&catalog, lists());
         assert!(session.open_bar(&mut NeverFires));
         session.take_off(&NoTraffic, &mut NeverFires);
-        assert_eq!(session.bar_nav, None, "took off");
+        assert_eq!(session.chart.bar_nav, None, "took off");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert!(session.open_bar(&mut NeverFires));
         session
             .land_at(&catalog, SystemId(130), StellarId(128))
             .expect("lands");
-        assert_eq!(session.bar_nav, None, "landed again");
+        assert_eq!(session.chart.bar_nav, None, "landed again");
         assert!(session.open_bar(&mut NeverFires));
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert_eq!(session.bar_nav, None, "moved");
+        assert_eq!(session.chart.bar_nav, None, "moved");
     }
 
     #[test]

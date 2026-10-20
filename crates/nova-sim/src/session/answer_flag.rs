@@ -77,11 +77,11 @@ mod tests {
     /// Fires one shot at NPC 0, the player's target, then lets the target
     /// go and ticks the fight until the shot lands; then the NPCs answer.
     fn shot_after_letting_go(session: &mut Session) {
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.hold_trigger(Trigger::default());
-        session.target = None;
+        session.chart.target = None;
         for _ in 0..60 {
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 break;
@@ -132,7 +132,7 @@ mod tests {
         lead.state.position.x += 3000.0;
         let lead = session.space.traffic.add_npc(lead);
         session.space.traffic.npcs_mut()[0].leader = Some(lead);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -224,7 +224,7 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let seen = session.player_side();
         assert_eq!((seen.target, seen.class), (None, EscortClass::Freighter));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         assert_eq!(session.player_side().target, Some(ShipRef::Npc(NpcId(0))));
         let class = |session: &mut Session, escort_type: i16, inherent_ai: i16, mass: i16| {
             let mut record = ship(session.pilot.ship.0, ShipFields { mass, ..FAST });

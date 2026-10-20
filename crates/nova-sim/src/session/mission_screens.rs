@@ -1598,6 +1598,7 @@ mod tests {
             .expect("takes off");
         settle(session, catalog);
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
@@ -1942,7 +1943,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(session.texts_queued(), 1);
-        session.nav = NavMode::Off;
+        session.chart.nav = NavMode::Off;
         session
             .accept_mission(MissionId(131), &mut NeverFires)
             .expect("accepted");

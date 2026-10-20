@@ -255,7 +255,7 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        session.target = Some(hired);
+        session.chart.target = Some(hired);
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         let armor = repaired_armor(45.0, false);
         let reserves = Reserves {
@@ -294,7 +294,11 @@ mod tests {
             "in the formation of all four and the player"
         );
         assert_eq!(npc.carrier, None);
-        assert_eq!(session.target, Some(hired), "the player's target is kept");
+        assert_eq!(
+            session.chart.target,
+            Some(hired),
+            "the player's target is kept"
+        );
         assert_eq!(session.take_messages(), [SimMessage::EscortRepaired]);
         assert_eq!(session.take_sounds(), [SimSound::EscortRepaired]);
         assert!(session.take_save_due());

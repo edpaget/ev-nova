@@ -38,7 +38,7 @@ impl Session {
     /// governments.
     #[must_use]
     pub fn map_border_sources(&self) -> BorderSources {
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         let places = galaxy.map().places();
         let mut coarse = Vec::new();
         let mut walk = Vec::new();
@@ -64,8 +64,8 @@ impl Session {
     /// `system`'s source, a visible system standing for a place, when it
     /// passes `_AddSystemInfluenceToMap`'s flag tests (@0x115b2-0x1160e).
     fn border_source(&self, system: SystemId) -> Option<BorderSource> {
-        let galaxy = &self.galaxy;
-        if !self.known.contains(&system) || !self.pilot.has_explored(system) {
+        let galaxy = &self.chart.galaxy;
+        if !self.chart.known.contains(&system) || !self.pilot.has_explored(system) {
             return None;
         }
         let govt = galaxy.govt(system)?;
@@ -167,7 +167,7 @@ mod tests {
         for id in 130..=138 {
             session.pilot.explore(SystemId(id));
         }
-        session.known = (130..=138).map(SystemId).collect();
+        session.chart.known = (130..=138).map(SystemId).collect();
         session
     }
 
@@ -237,7 +237,7 @@ mod tests {
     fn an_unknown_system_adds_none() {
         let catalog = bordered();
         let mut session = everything_seen(&catalog, Rulebook::default());
-        session.known.remove(&SystemId(131));
+        session.chart.known.remove(&SystemId(131));
         let sources = session.map_border_sources();
         assert_eq!(coarse(&sources), [130, 135, 138]);
         assert!(walked(&sources).iter().all(|&(_, by)| by != 131));
@@ -257,10 +257,10 @@ mod tests {
         // same. 138 unknown adds neither.
         let catalog = bordered();
         let mut session = everything_seen(&catalog, Rulebook::default());
-        session.known.remove(&SystemId(137));
+        session.chart.known.remove(&SystemId(137));
         session.pilot.explored.remove(&SystemId(137));
         assert_eq!(coarse(&session.map_border_sources()), [130, 131, 135, 138]);
-        session.known.remove(&SystemId(138));
+        session.chart.known.remove(&SystemId(138));
         let sources = session.map_border_sources();
         assert_eq!(coarse(&sources), [130, 131, 135]);
         assert_eq!(walked(&sources), [(130, 130), (131, 131), (135, 135)]);

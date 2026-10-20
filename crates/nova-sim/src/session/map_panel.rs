@@ -84,8 +84,8 @@ impl Session {
 
     /// What the panel reads of `system` (see the module docs).
     fn panel_facts(&self, catalog: &impl PilotCatalog, system: SystemId) -> PanelFacts {
-        let map = self.galaxy.map();
-        let stellars = overlaid_sites(&self.galaxy, catalog, system)
+        let map = self.chart.galaxy.map();
+        let stellars = overlaid_sites(&self.chart.galaxy, catalog, system)
             .into_iter()
             .map(|site| PanelStellar {
                 name: self
@@ -99,6 +99,7 @@ impl Session {
                 flags2: site.flags2,
                 gravity: site.gravity,
                 active: self
+                    .chart
                     .galaxy
                     .active_holder(self.statics.listers(site.id), self.pilot.system)
                     .is_some(),
@@ -114,7 +115,7 @@ impl Session {
                 .get(&system)
                 .cloned()
                 .unwrap_or_default(),
-            government: self.galaxy.govt(system).map(|govt| {
+            government: self.chart.galaxy.govt(system).map(|govt| {
                 self.statics
                     .govts
                     .get(govt)

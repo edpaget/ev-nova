@@ -102,7 +102,7 @@ mod tests {
         let mut session = marked(&catalog);
         let before = session.kept_berths();
         let held = odds(&session);
-        let stellar = session.sites[0].id;
+        let stellar = session.chart.sites[0].id;
         session
             .land_at(&catalog, session.pilot.system, stellar)
             .expect("relocates");

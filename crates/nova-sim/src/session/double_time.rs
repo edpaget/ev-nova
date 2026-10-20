@@ -636,7 +636,7 @@ mod tests {
     /// The aim a jump from `session`'s system to 131 sets, as the turn's
     /// `_CalcInterceptAngle` of the map positions gives it (@0x6b0cf).
     fn bearing_aim(session: &Session) -> i16 {
-        let map = |id| session.galaxy.map().position(id).expect("on the map");
+        let map = |id| session.chart.galaxy.map().position(id).expect("on the map");
         crate::trig::intercept_angle(map(session.system()), map(crate::catalog::SystemId(131)))
     }
 
@@ -861,7 +861,7 @@ mod tests {
             primary: true,
             ..Trigger::default()
         });
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         again(&mut session, Controls::default());
         let events = session.take_combat_events();
         assert!(
@@ -963,7 +963,7 @@ mod tests {
         };
         let catalog = crate::session::tests::arming(missile, quad, 0);
         let mut session = crate::session::tests::with_an_npc_at(&catalog, 750, 550, 180);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()
@@ -1065,7 +1065,7 @@ mod tests {
             primary: true,
             ..Trigger::default()
         });
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         // Brakes and turns on the advance pass until the next pass is
         // ready to jump.
         for steps in 0.. {

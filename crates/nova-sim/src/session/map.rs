@@ -71,9 +71,9 @@ impl Session {
 
     /// [`Session::system_color_code`] with `coding` read already.
     fn color_code(&self, coding: &Coding<'_>, system: SystemId) -> SystemColorCode {
-        let places = self.galaxy.map().places();
+        let places = self.chart.galaxy.map().places();
         let head = places.head(system);
-        let stood = if self.galaxy.exists(system) {
+        let stood = if self.chart.galaxy.exists(system) {
             places.stand_in(system)
         } else {
             None
@@ -85,6 +85,7 @@ impl Session {
         let record = match self.setup.rules.source_for(RuleKey::LegalRecords) {
             RuleSource::Engine => head.map_or(0, |head| self.pilot.system_record(head)),
             RuleSource::Bible => self
+                .chart
                 .galaxy
                 .govt(system)
                 .map_or(0, |govt| self.pilot.legal_record(govt)),
@@ -93,7 +94,7 @@ impl Session {
             return iff::system_color_code(false, explored, false, record, &[]);
         };
         let inhabited = exploration::inhabited(
-            self.galaxy.map().stellars(active),
+            self.chart.galaxy.map().stellars(active),
             self.setup.rules.source_for(RuleKey::MapExplore),
         );
         let stellars: Vec<MapStellar> = coding
@@ -103,6 +104,7 @@ impl Session {
             .flatten()
             .map(|stellar| {
                 let govt = self
+                    .chart
                     .galaxy
                     .overlay()
                     .stellar(stellar.id)
@@ -110,12 +112,13 @@ impl Session {
                     .unwrap_or(stellar.govt);
                 MapStellar {
                     active: self
+                        .chart
                         .galaxy
                         .active_holder(&stellar.systems, self.pilot.system)
                         .is_some(),
                     flags: stellar.flags,
                     flags2: stellar.flags2,
-                    destroyed: self.galaxy.destroyed(stellar.id),
+                    destroyed: self.chart.galaxy.destroyed(stellar.id),
                     min_status: stellar.min_status,
                     standing: Standing {
                         dominated: Self::dominated_by(stellar.flags2),
@@ -145,7 +148,8 @@ impl Session {
     #[must_use]
     pub fn map_mission_systems(&self) -> Vec<SystemId> {
         let active = |stellar| {
-            self.galaxy
+            self.chart
+                .galaxy
                 .active_holder(self.statics.listers(stellar), self.pilot.system)
         };
         let mut systems = Vec::new();
@@ -173,7 +177,7 @@ impl Session {
                 && !hidden
                 && mission.ships.left > 0
                 && let ShipSystem::At(at) = mission.ships.system
-                && let Some(standing) = self.galaxy.map().places().stand_in(at)
+                && let Some(standing) = self.chart.galaxy.map().places().stand_in(at)
             {
                 systems.push(standing);
             }
@@ -192,15 +196,15 @@ impl Session {
     #[must_use]
     pub fn floating_preselection(&self) -> Option<SystemId> {
         let slot = self.hyper_slot()?;
-        let system = *self.galaxy.con_slots(self.pilot.system).get(slot)?;
-        (self.galaxy.exists(system) && self.galaxy.visible(system)).then_some(system)
+        let system = *self.chart.galaxy.con_slots(self.pilot.system).get(slot)?;
+        (self.chart.galaxy.exists(system) && self.chart.galaxy.visible(system)).then_some(system)
     }
 
     /// The current system's Con slot selected in mode 3 (+0x6c), if any:
     /// the one the raw selection stands in (`Session::selected_slot`),
     /// always one of the first 16.
     fn hyper_slot(&self) -> Option<usize> {
-        let NavMode::Hyperspace(Some(selected)) = self.nav else {
+        let NavMode::Hyperspace(Some(selected)) = self.chart.nav else {
             return None;
         };
         self.selected_slot(selected)
@@ -226,9 +230,9 @@ impl Session {
     ) -> MapDrawing {
         let coding = self.ship.coding(&self.pilot, &self.statics, &self.setup);
         let state = MapState {
-            galaxy: &self.galaxy,
+            galaxy: &self.chart.galaxy,
             explored: &self.pilot.explored,
-            known: &self.known,
+            known: &self.chart.known,
             current: self.pilot.system,
             course: &self.pilot.course,
             hyper_slot: self.hyper_slot(),

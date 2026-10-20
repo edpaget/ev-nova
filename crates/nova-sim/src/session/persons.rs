@@ -864,7 +864,7 @@ mod tests {
         session.populate(catalog, &mut Draws::of(&ACE_ABOVE));
         assert_eq!(persons(&session), [Some(600)]);
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
-        session.target = Some(session.npcs()[0].id);
+        session.chart.target = Some(session.npcs()[0].id);
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()
@@ -1494,7 +1494,7 @@ mod tests {
         if hostile {
             session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         }
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let options = HailOptions::default();
         let opened = session
             .hail(catalog, &options, &mut NeverFires)
@@ -1563,7 +1563,7 @@ mod tests {
         let catalog = talkative(24);
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let view = session
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("answers");
@@ -1571,7 +1571,7 @@ mod tests {
         let catalog = mixed("");
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let view = session
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("answers");
@@ -2228,7 +2228,7 @@ mod tests {
     fn by_the_engine_hailing_the_person_refreshes_its_missions_verdict() {
         let (catalog, mut session) = quoting_while_b7(Rulebook::default());
         set_b7(&mut session);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let _ = session.open_hail(
             &catalog,
             &crate::hail::HailOptions::default(),

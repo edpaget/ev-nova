@@ -199,7 +199,8 @@ impl Session {
     /// The stellar the ship is docked at, if it has a bar.
     pub(super) fn bar_site(&self) -> Option<LandingSite> {
         let stellar = self.landed?;
-        self.sites
+        self.chart
+            .sites
             .iter()
             .find(|site| site.id == stellar)
             .filter(|site| site.flags & StellarFlags::BAR != 0)
@@ -1268,12 +1269,12 @@ mod tests {
     fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
         let id = session.space.escorts.fleet[index].expect("placed");
         let at = session.space.npc(id).expect("there").state.position;
-        session.sites = vec![LandingSite {
+        session.chart.sites = vec![LandingSite {
             flags2: crate::deadly_stellar::DEADLY_STELLAR,
             frame_size: Some((2, 2)),
             ..crate::testkit::planet(160, at.x, at.y)
         }];
-        session.listed = session.sites.clone();
+        session.chart.listed = session.chart.sites.clone();
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert!(session.space.npc(id).is_none(), "killed");
         id
@@ -1584,7 +1585,7 @@ mod tests {
         catalog: &FakePilotCatalog,
         id: crate::NpcId,
     ) -> Option<EscortStatus> {
-        session.target = Some(id);
+        session.chart.target = Some(id);
         session
             .hail(catalog, &HailOptions::default(), &mut NeverFires)
             .expect("answered")

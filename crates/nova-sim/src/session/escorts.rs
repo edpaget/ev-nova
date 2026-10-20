@@ -690,7 +690,7 @@ impl Session {
         // Reported, "attacking target.", for a target the player does not
         // lead (@0x6653f-0x66559); copied only when it is not allied with
         // the player either (@0x6625f).
-        let reported = self.target.filter(|&target| {
+        let reported = self.chart.target.filter(|&target| {
             command == EscortCommand::Attack && !self.player_led().any(|npc| npc.id == target)
         });
         let target = reported
@@ -2231,12 +2231,12 @@ mod tests {
             let mut session = session.with_rules(rules);
             let id = session.space.escorts.fleet[1].expect("placed");
             let at = session.space.npc(id).expect("there").state.position;
-            session.sites = vec![crate::catalog::LandingSite {
+            session.chart.sites = vec![crate::catalog::LandingSite {
                 flags2: crate::deadly_stellar::DEADLY_STELLAR,
                 frame_size: Some((2, 2)),
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
-            session.listed = session.sites.clone();
+            session.chart.listed = session.chart.sites.clone();
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert!(session.space.npc(id).is_none(), "{reading:?}");
             assert_eq!(
@@ -2406,7 +2406,7 @@ mod tests {
         );
         let mut session = flying(&catalog, RuleSource::Engine);
         let freighter = session.space.escorts.fleet[1].expect("placed");
-        session.target = Some(freighter);
+        session.chart.target = Some(freighter);
         let commanded = session.command_escorts(EscortGroup::All, EscortCommand::Attack);
         assert_eq!(commanded.map(|commanded| commanded.targeted), Some(false));
         assert!(escort_npcs(&session).iter().all(|npc| npc.target.is_none()));
@@ -2418,14 +2418,14 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let first = pirate(&mut session, 0.0, -400.0, Goal::Idle);
         let second = pirate(&mut session, 0.0, 400.0, Goal::Idle);
-        session.target = Some(first);
+        session.chart.target = Some(first);
         session.command_escorts(EscortGroup::All, EscortCommand::Attack);
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Attack),
             None,
             "nothing changed"
         );
-        session.target = Some(second);
+        session.chart.target = Some(second);
         assert!(
             session
                 .command_escorts(EscortGroup::All, EscortCommand::Attack)
@@ -2621,7 +2621,7 @@ mod tests {
     fn attacking_into_hyperspace(catalog: &FakePilotCatalog) -> (Session, NpcId) {
         let mut session = flying(catalog, RuleSource::Bible);
         let quarry = pirate(&mut session, 0.0, -400.0, Goal::Idle);
-        session.target = Some(quarry);
+        session.chart.target = Some(quarry);
         assert_eq!(
             session
                 .command_escorts(EscortGroup::All, EscortCommand::Attack)
@@ -2635,7 +2635,7 @@ mod tests {
         );
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session);
-        session.target = Some(quarry);
+        session.chart.target = Some(quarry);
         begin_jump_now(&mut session).expect("jumps");
         (session, quarry)
     }
@@ -2699,7 +2699,7 @@ mod tests {
         let freighter = session.space.escorts.fleet[1].expect("placed");
         let launched = pirate(&mut session, 0.0, -400.0, Goal::Idle);
         session.space.npc_mut(launched).expect("here").leader = Some(freighter);
-        session.target = Some(launched);
+        session.chart.target = Some(launched);
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Attack),
             Some(Commanded {
@@ -2880,7 +2880,7 @@ mod tests {
         );
         session.space.npc_mut(attacker).expect("there").goal =
             Goal::Attack(ShipRef::Npc(bystander));
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::NearestThreat), None);
     }
 

@@ -29,7 +29,7 @@ impl Session {
     where
         S: PilotCatalog + ?Sized,
     {
-        let Some(index) = self.galaxy.map().buoy(system) else {
+        let Some(index) = self.chart.galaxy.map().buoy(system) else {
             return SimMessage::Arrived(system);
         };
         let patch = patch_id(index).map_or(StringPatch::Absent, |id| catalog.string_patch(id));

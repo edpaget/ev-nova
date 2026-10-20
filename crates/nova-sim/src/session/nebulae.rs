@@ -96,9 +96,9 @@ impl Session {
         };
         nebula::explores(
             record,
-            self.galaxy.nebula_active(nebula),
-            self.galaxy.nebula_explored(nebula),
-            self.galaxy.position(system),
+            self.chart.galaxy.nebula_active(nebula),
+            self.chart.galaxy.nebula_explored(nebula),
+            self.chart.galaxy.position(system),
         )
     }
 
@@ -108,7 +108,7 @@ impl Session {
     /// once-fired record too, making a save due.
     pub(super) fn explore_nebula(&mut self, nebula: NebulaId) {
         self.pilot.galaxy.set_nebula_explored(nebula, true);
-        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
         self.out.emit(SessionEvent::GalaxyChanged);
         if self.setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
             self.pilot.story_fired.insert(nebula_hook(nebula));
@@ -120,9 +120,10 @@ impl Session {
     /// catalog system visible and explored, by ascending ID.
     pub(super) fn sweep_explored(&mut self) {
         let swept: Vec<SystemId> = self
+            .chart
             .galaxy
             .catalog_systems()
-            .filter(|&system| self.galaxy.visible(system) && self.pilot.has_explored(system))
+            .filter(|&system| self.chart.galaxy.visible(system) && self.pilot.has_explored(system))
             .collect();
         for system in swept {
             self.raise(StoryEvent::Explored { system });
@@ -576,7 +577,10 @@ mod tests {
     fn the_launch_runs_the_on_explore_of_a_nebula_over_the_players_system_left_unexplored() {
         let (catalog, mut session) = loaded_at_131();
         session.pilot.galaxy.set_nebula_explored(N128, false);
-        session.galaxy.set_overlay(session.pilot.galaxy.clone());
+        session
+            .chart
+            .galaxy
+            .set_overlay(session.pilot.galaxy.clone());
         session.open_at_launch(&mut NeverFires);
         assert!(!session.take_save_due(), "the launch makes no save due");
         settle(&mut session, &catalog);

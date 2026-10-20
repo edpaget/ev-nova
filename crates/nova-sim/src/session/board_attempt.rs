@@ -75,7 +75,7 @@ impl Session {
     pub(crate) fn put_player_over(&mut self, id: NpcId) {
         if let Some(state) = self.space.npc(id).map(|npc| npc.state) {
             self.ship.player = state;
-            self.target = Some(id);
+            self.chart.target = Some(id);
         }
     }
 }
@@ -351,7 +351,7 @@ mod tests {
         let silent: [Refusal; 3] = [
             (
                 "no target",
-                |session| session.target = None,
+                |session| session.chart.target = None,
                 BoardRefusal::NoTarget,
             ),
             (
@@ -585,7 +585,7 @@ mod tests {
     fn put_over_a_ship_the_player_targets_it_at_its_place_speed_and_heading() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.target = None;
+        session.chart.target = None;
         session.ship.player.position = Vec2::new(300.0, -40.0);
         session.ship.player.heading = 90.0;
         let police = session.npcs()[1].clone();
@@ -602,7 +602,7 @@ mod tests {
         let mut session = in_flight_with(&catalog, 1);
         fail(&mut session);
         let _ = board_first(&mut session);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             session.board(
                 &NovaLaw::default(),

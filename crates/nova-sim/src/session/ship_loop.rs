@@ -450,7 +450,7 @@ mod tests {
         // its display, and a later slot's shockwave reaches it no more.
         let catalog = armed();
         let mut session = empty(&catalog);
-        let site = session.sites[0];
+        let site = session.chart.sites[0];
         let lander = place(&mut session, 1, site.position, Vec2::ZERO);
         session.space.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
         wreck(&mut session, 2, site.position + Vec2::new(20.0, 0.0));

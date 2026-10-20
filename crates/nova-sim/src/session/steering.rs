@@ -102,7 +102,7 @@ impl Session {
     /// other reading none; none with no selection (see the module docs
     /// for where the position is read).
     fn face_stellar(&self) -> Option<Vec2> {
-        let id = match self.nav {
+        let id = match self.chart.nav {
             NavMode::Off | NavMode::Stellar(None) | NavMode::Hyperspace(None) => return None,
             NavMode::Stellar(Some(id)) => id,
             NavMode::Hyperspace(Some(selected)) => {
@@ -113,7 +113,7 @@ impl Session {
                 StellarId(FIRST_STELLAR + slot)
             }
         };
-        let here = self.sites.iter().find(|site| site.id == id);
+        let here = self.chart.sites.iter().find(|site| site.id == id);
         Some(here.map_or_else(
             || {
                 let (x, y) = self.statics.stellar_marks.place(id).unwrap_or_default();
@@ -202,7 +202,7 @@ mod tests {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.state.position = at;
         let id = session.space.traffic.add_npc(npc);
-        session.target = Some(id);
+        session.chart.target = Some(id);
     }
 
     #[test]

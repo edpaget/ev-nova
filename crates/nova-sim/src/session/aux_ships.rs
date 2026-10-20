@@ -98,7 +98,7 @@ impl Session {
         let coming = active.aux.coming(&record.aux);
         let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
         let holders = (holder(active.destination), holder(active.return_to));
-        let map = self.galaxy.map();
+        let map = self.chart.galaxy.map();
         if coming <= 0
             || !aux_system_allows(
                 record.aux.syst,

@@ -71,7 +71,7 @@ impl Session {
         }
         let position = self.ship.player.position;
         let distance_squared = position.x * position.x + position.y * position.y;
-        let sites = &self.sites;
+        let sites = &self.chart.sites;
         let hints = self.tutorial.check(
             frame,
             self.ship.condition == Condition::Intact,

@@ -477,9 +477,9 @@ fn a_second_call_before_the_interval_brings_none_and_one_after_it_does() {
 fn a_day_counts_down_only_the_visible_systems() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
-    let mut overlay = session.galaxy.overlay().clone();
+    let mut overlay = session.chart.galaxy.overlay().clone();
     assert!(overlay.set_visible(SystemId(131), Some(false)));
-    session.galaxy.set_overlay(overlay);
+    session.chart.galaxy.set_overlay(overlay);
     session.pilot.reinforcement_days =
         BTreeMap::from([(SystemId(130), 3), (SystemId(131), 2), (SystemId(132), 1)]);
     session.reinforcements_day();

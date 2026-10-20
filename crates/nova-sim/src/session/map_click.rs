@@ -128,7 +128,7 @@ impl Session {
             .hits
             .iter()
             .find_map(|&hit| self.accepted(press, hit))?;
-        let pick = self.galaxy.same_place(hit)?;
+        let pick = self.chart.galaxy.same_place(hit)?;
         if press.hypergate.is_some() {
             return Some(MapClicked {
                 selected: Some(pick),
@@ -154,6 +154,7 @@ impl Session {
         }
         if !docked {
             if self
+                .chart
                 .galaxy
                 .map()
                 .jumps(self.pilot.system, self.setup.hyperlinks)
@@ -199,7 +200,7 @@ impl Session {
         {
             return Some((hit, flagged));
         }
-        let places = self.galaxy.map().places();
+        let places = self.chart.galaxy.map().places();
         let source = match self.pilot.course.last() {
             Some(&last) if press.shift => {
                 if places.together(last, hit) {
@@ -213,7 +214,7 @@ impl Session {
             .links(source)
             .find(|&to| to == hit || places.together(to, hit));
         let back = || {
-            let stood = self.galaxy.same_place(hit)?;
+            let stood = self.chart.galaxy.same_place(hit)?;
             self.links_back(source, stood).then_some(stood)
         };
         linked.or_else(back).map(|to| (to, false))
@@ -223,12 +224,13 @@ impl Session {
     /// in order: each set, in the catalog and with a visible system at its
     /// place (`_FindActiveCoLocatedSystem`).
     fn links(&self, source: SystemId) -> impl Iterator<Item = SystemId> + '_ {
-        self.galaxy
+        self.chart
+            .galaxy
             .con_slots(source)
             .iter()
             .take(CON_SLOTS)
-            .filter(|&&slot| self.galaxy.exists(slot))
-            .filter_map(|&slot| self.galaxy.same_place(slot))
+            .filter(|&&slot| self.chart.galaxy.exists(slot))
+            .filter_map(|&slot| self.chart.galaxy.same_place(slot))
     }
 
     /// Whether, by [`HyperlinkRule::BothWays`], `to` links to `source`, so
@@ -236,6 +238,7 @@ impl Session {
     fn links_back(&self, source: SystemId, to: SystemId) -> bool {
         self.setup.hyperlinks == HyperlinkRule::BothWays
             && self
+                .chart
                 .galaxy
                 .map()
                 .jumps(source, HyperlinkRule::BothWays)
@@ -249,7 +252,7 @@ impl Session {
             &self.pilot.course,
             self.pilot.system,
             pick,
-            self.galaxy.map().places(),
+            self.chart.galaxy.map().places(),
             |source| {
                 let gate = self.pilot.explored_level(source) != ExploredLevel::Unexplored
                     || self.is_known(pick);
@@ -391,7 +394,7 @@ mod tests {
             };
             assert_eq!(session.map_click(&press), None, "{green:?}");
         }
-        session.nav = hyperspace(134);
+        session.chart.nav = hyperspace(134);
         let press = MapPress {
             green: Some(SystemId(133)),
             ..press(&hits, false)
@@ -407,7 +410,7 @@ mod tests {
     #[test]
     fn the_green_system_selects_in_mode_3_in_flight_when_the_ship_can_jump_there() {
         let mut session = hub_session();
-        session.known.clear();
+        session.chart.known.clear();
         session.pilot.course = ids(&[131]);
         let hits = ids(&[134]);
         let press = MapPress {
@@ -422,7 +425,7 @@ mod tests {
     #[test]
     fn an_unknown_system_one_link_from_the_current_one_is_accepted() {
         let mut session = hub_session();
-        session.known.clear();
+        session.chart.known.clear();
         assert_eq!(click(&mut session, &[131]), selects(131));
     }
 
@@ -463,7 +466,7 @@ mod tests {
     fn a_shadowed_system_at_a_links_place_is_accepted_as_the_link() {
         // 134 shares 131's place, and 131, the lower, stands for it.
         let mut session = Session::start(&alternates()).expect("starts");
-        session.known.clear();
+        session.chart.known.clear();
         assert_eq!(click(&mut session, &[134]), selects(131));
         assert_eq!(session.nav_mode(), hyperspace(131));
     }
@@ -473,7 +476,7 @@ mod tests {
         let catalog = alternates();
         let mut session = Session::start(&catalog).expect("starts");
         assert!(hide(&mut session, &catalog, &[131, 134]));
-        session.known.clear();
+        session.chart.known.clear();
         assert_eq!(click(&mut session, &[132]), None);
     }
 
@@ -509,7 +512,7 @@ mod tests {
         assert!(hide(&mut session, &catalog, &[131]));
         assert_eq!(click(&mut session, &[134]), selects(134));
         assert!(session.cycle_map_selection());
-        assert_eq!(session.nav, hyperspace(134), "slot 1, after slot 0");
+        assert_eq!(session.chart.nav, hyperspace(134), "slot 1, after slot 0");
     }
 
     #[test]
@@ -521,7 +524,7 @@ mod tests {
         ] {
             let mut session = hub_session();
             session.mark_known([SystemId(133)]);
-            session.nav = before;
+            session.chart.nav = before;
             session.pilot.course = ids(&[131]);
             assert_eq!(click(&mut session, &[133]), selects(133), "{before:?}");
             assert_eq!(session.nav_mode(), after, "{before:?}");
@@ -614,7 +617,7 @@ mod tests {
     #[test]
     fn the_hypergate_maps_current_system_still_needs_the_acceptance() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.known.clear();
+        session.chart.known.clear();
         assert_eq!(gate_click(&mut session, &[130], &[131], false), None);
     }
 
@@ -703,7 +706,7 @@ mod tests {
     fn a_shift_click_at_the_current_systems_place_clears_the_course() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.pilot.course = ids(&[131, 132]);
-        session.nav = hyperspace(131);
+        session.chart.nav = hyperspace(131);
         assert_eq!(shift_click(&mut session, &[130]), shifted(None));
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), hyperspace(131), "no nav written");
@@ -767,7 +770,7 @@ mod tests {
     fn clear_route_empties_the_course_and_lets_go_of_the_selection_keeping_the_mode() {
         let mut session = hub_session();
         session.pilot.course = ids(&[131, 132]);
-        session.nav = hyperspace(131);
+        session.chart.nav = hyperspace(131);
         session.clear_route();
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));

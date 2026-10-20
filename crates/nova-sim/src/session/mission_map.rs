@@ -116,7 +116,8 @@ impl Session {
             return None;
         }
         let stellar = destination.or(return_to)?;
-        self.galaxy
+        self.chart
+            .galaxy
             .holder(self.statics.listers(stellar), self.pilot.system)
     }
 }

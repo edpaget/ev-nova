@@ -191,7 +191,7 @@ impl Session {
             {
                 crate::legal::spread_statuses(
                     &mut self.pilot,
-                    self.galaxy.governed(),
+                    self.chart.galaxy.governed(),
                     &start.legal,
                     &self.statics.govts,
                 );
@@ -207,8 +207,8 @@ impl Session {
         // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
         // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
         // pilot is what it saves.
-        self.pilot.stellar = nearest_stellar(self.ship.player.position, &self.sites)
-            .or_else(|| self.listed.first().map(|site| site.id));
+        self.pilot.stellar = nearest_stellar(self.ship.player.position, &self.chart.sites)
+            .or_else(|| self.chart.listed.first().map(|site| site.id));
         // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
         self.reset_precalced();
@@ -1350,7 +1350,7 @@ mod tests {
             .push(crate::testkit::star(129, (-600.0, 600.0), &[]));
         let mut session = new_pilot(&catalog);
         session.begin(&catalog, &mut Scripted::default());
-        let shown: Vec<StellarId> = session.sites.iter().map(|site| site.id).collect();
+        let shown: Vec<StellarId> = session.chart.sites.iter().map(|site| site.id).collect();
         assert_eq!(shown, [StellarId(128), StellarId(129)], "127 not shown");
         assert_eq!(session.pilot().stellar(), Some(StellarId(127)));
     }

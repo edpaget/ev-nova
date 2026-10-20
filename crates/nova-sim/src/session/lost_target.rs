@@ -45,7 +45,7 @@ impl Session {
             .target()
             .is_none_or(|npc| !targeting::targetable(npc, cloaked_ok))
         {
-            self.target = None;
+            self.chart.target = None;
         }
     }
 
@@ -62,7 +62,7 @@ impl Session {
     /// is drawn.
     pub(super) fn let_go_of_gone_target(&mut self) {
         if self.target().is_none() {
-            self.target = None;
+            self.chart.target = None;
         }
     }
 }
@@ -107,7 +107,7 @@ mod tests {
     /// NPC 0, until a pass breaks NPC 0 up.
     fn break_up_the_target(session: &mut Session, catalog: &FakePilotCatalog) {
         session.select_target(TargetPick::Next);
-        assert_eq!(session.target, Some(NpcId(0)));
+        assert_eq!(session.chart.target, Some(NpcId(0)));
         session.hold_trigger(FIRE);
         for _ in 0..200 {
             pass(session, catalog);
@@ -118,7 +118,7 @@ mod tests {
             if broke {
                 return;
             }
-            assert_eq!(session.target, Some(NpcId(0)), "intact");
+            assert_eq!(session.chart.target, Some(NpcId(0)), "intact");
         }
         panic!("never broke up: {:?}", session.npcs());
     }
@@ -131,12 +131,16 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         break_up_the_target(&mut session, &catalog);
-        assert_eq!(session.target, Some(NpcId(0)), "held through the pass");
+        assert_eq!(
+            session.chart.target,
+            Some(NpcId(0)),
+            "held through the pass"
+        );
         let brackets = session.target_brackets().expect("bracketed");
         assert_eq!(brackets.standing, Standing::Disabled);
         // The head of the next pass, before its trigger and its move.
         session.tick(Controls::default());
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 
     #[test]
@@ -152,9 +156,13 @@ mod tests {
         };
         pass(&mut session, &catalog);
         assert!(session.npcs()[0].cloak.is_cloaked(), "cloaked");
-        assert_eq!(session.target, Some(NpcId(0)), "held through the pass");
+        assert_eq!(
+            session.chart.target,
+            Some(NpcId(0)),
+            "held through the pass"
+        );
         session.tick(Controls::default());
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 
     #[test]
@@ -163,14 +171,14 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         break_up_the_target(&mut session, &catalog);
-        assert_eq!(session.target, Some(NpcId(0)));
+        assert_eq!(session.chart.target, Some(NpcId(0)));
         session.tick_again(
             Controls::default(),
             &Idling,
             Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 
     #[test]
@@ -187,7 +195,11 @@ mod tests {
         let catalog = arming(homing, blaster(), 0);
         let mut session = facing_an_npc(&catalog, 180);
         break_up_the_target(&mut session, &catalog);
-        assert_eq!(session.target, Some(NpcId(0)), "held through the pass");
+        assert_eq!(
+            session.chart.target,
+            Some(NpcId(0)),
+            "held through the pass"
+        );
         let before: Vec<_> = session.shots().iter().map(|shot| shot.id).collect();
         pass(&mut session, &catalog);
         let fired: Vec<_> = session
@@ -200,7 +212,7 @@ mod tests {
             assert_eq!(shot.target, None, "no lock: {shot:?}");
             assert_eq!(shot.aimed_at, None, "aimed at none: {shot:?}");
         }
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.target_brackets(), None);
     }
 
@@ -217,11 +229,14 @@ mod tests {
         };
         pass(&mut session, &catalog);
         assert!(session.npcs()[0].cloak.is_cloaked(), "cloaked");
-        assert!(session.target_fly_in.expand() > 0.0, "still flying in");
+        assert!(
+            session.chart.target_fly_in.expand() > 0.0,
+            "still flying in"
+        );
         pass(&mut session, &catalog);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.target_brackets(), None);
-        assert_eq!(session.target_fly_in, FlyIn::default(), "settled");
+        assert_eq!(session.chart.target_fly_in, FlyIn::default(), "settled");
     }
 
     #[test]
@@ -235,6 +250,6 @@ mod tests {
         session.space.traffic.npcs_mut()[0].reserves.armor.now = 0.0;
         pass(&mut session, &catalog);
         assert!(session.npcs().is_empty(), "destroyed and taken out");
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 }

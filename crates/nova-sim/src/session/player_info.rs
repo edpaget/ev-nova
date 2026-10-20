@@ -203,7 +203,10 @@ impl Session {
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
-                let holder = self.galaxy.holder(&listed.systems, self.pilot.system)?;
+                let holder = self
+                    .chart
+                    .galaxy
+                    .holder(&listed.systems, self.pilot.system)?;
                 let sites = catalog.landing_sites(holder);
                 let site = sites.iter().find(|site| site.id == listed.id)?;
                 Some(player_info::tribute_of(site))
@@ -216,7 +219,7 @@ impl Session {
     /// from `catalog`; "N/A" in an uninhabited system.
     pub(super) fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
         let system = self.pilot.system;
-        let sites = overlaid_sites(&self.galaxy, catalog, system);
+        let sites = overlaid_sites(&self.chart.galaxy, catalog, system);
         let inhabited = player_info::system_is_inhabited(
             sites.iter().map(|site| (uninhabited(site), gate(site))),
         );
@@ -241,10 +244,11 @@ impl Session {
         system: SystemId,
         words: &Words,
     ) -> String {
-        let sites = overlaid_sites(&self.galaxy, catalog, system);
-        let govt = self.galaxy.govt(system);
+        let sites = overlaid_sites(&self.chart.galaxy, catalog, system);
+        let govt = self.chart.galaxy.govt(system);
         let counting = sites.iter().take(3).filter(|site| {
-            self.galaxy
+            self.chart
+                .galaxy
                 .active_holder(self.statics.listers(site.id), self.pilot.system)
                 .is_some()
                 && !uninhabited(site)

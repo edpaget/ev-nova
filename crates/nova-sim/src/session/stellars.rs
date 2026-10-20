@@ -165,9 +165,9 @@ impl Session {
         self.share_explored();
         self.rework_known();
         let reshown = self.reshow();
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(
-            &self.sites,
+            &self.chart.sites,
             |id| galaxy.destroyed(id),
             self.statics.fallback_frame.is_some(),
         );
@@ -179,10 +179,10 @@ impl Session {
     /// it finds whole is no longer dead since the last rebuild point, and
     /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         self.space
             .rebuilt
-            .frame(&self.sites, |id| galaxy.destroyed(id));
+            .frame(&self.chart.sites, |id| galaxy.destroyed(id));
         self.place_stellar_sprites();
     }
 
@@ -190,7 +190,8 @@ impl Session {
     /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
     /// (see [`gate_entry`](crate::traffic::gate_entry)).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
             .map(|site| (site.id, self.space.rebuilt.type_width(site)))
@@ -206,8 +207,13 @@ impl Session {
         let Some(life) = self.statics.lives.get(&stellar).cloned() else {
             return;
         };
-        let destroyed_before = self.galaxy.destroyed(stellar);
-        let site = self.sites.iter().find(|site| site.id == stellar).copied();
+        let destroyed_before = self.chart.galaxy.destroyed(stellar);
+        let site = self
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .copied();
         let shown = site.is_some() && self.landed.is_none();
         if let Some(site) = site
             && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
@@ -262,7 +268,8 @@ impl Session {
     /// `Strength` above 0 with a sprite, as big as its disc
     /// ([`landing_radius`]), with its current strength.
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .filter(|site| !site.destroyed && site.frame_size.is_some())
             .filter_map(|site| {
@@ -328,7 +335,11 @@ impl Session {
     ) {
         let (Some(life), Some(site)) = (
             self.statics.lives.get(&stellar).cloned(),
-            self.sites.iter().find(|site| site.id == stellar).copied(),
+            self.chart
+                .sites
+                .iter()
+                .find(|site| site.id == stellar)
+                .copied(),
         ) else {
             return;
         };
@@ -511,6 +522,7 @@ mod tests {
     /// Whether the stellar shown `stellar` is destroyed.
     fn shown_destroyed(session: &Session, stellar: i16) -> bool {
         session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
@@ -1040,7 +1052,7 @@ mod tests {
     fn a_landed_m_docks_at_the_first_stellar_destroyed_or_not() {
         let catalog = wrecking();
         let mut session = moved_landed(&catalog, "Y140 M131");
-        assert!(session.next_sites.as_deref().expect("waiting")[0].destroyed);
+        assert!(session.chart.next_sites.as_deref().expect("waiting")[0].destroyed);
         assert_eq!(
             session.take_off(&catalog, &mut Scripted::default()),
             Some(StellarId(128))
@@ -2261,7 +2273,7 @@ mod tests {
             position: offset,
             ..ShipState::default()
         };
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.dock = Some(crate::clearance::DockRequest {
             stellar: StellarId(128),
             permission: crate::clearance::CLEARED,
@@ -2436,7 +2448,7 @@ mod tests {
     fn a_session_flown_has_rebuilt_its_masters_at_once() {
         let catalog = ruin(100, false);
         let session = quiet(&catalog);
-        let site = session.sites[0];
+        let site = session.chart.sites[0];
         assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
             session.space.landing_reach(&session.setup, &site),
@@ -2462,7 +2474,7 @@ mod tests {
     /// The stellar a click at (`x`, `y`) picks, with none selected
     /// before it (a click passes over the one selected).
     fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
-        session.nav = crate::NavMode::Off;
+        session.chart.nav = crate::NavMode::Off;
         crate::testkit::click_stellar(session, Vec2::new(x, y))
     }
 
@@ -2658,7 +2670,7 @@ mod tests {
             overlay.set_stellar_govt(StellarId(140), Some(Some(GovtId(150))));
         });
         assert_eq!(shown(&session), [140], "read again, not shown afresh");
-        assert_eq!(session.sites[0].govt, Some(GovtId(150)));
+        assert_eq!(session.chart.sites[0].govt, Some(GovtId(150)));
     }
 
     #[test]
@@ -2677,6 +2689,7 @@ mod tests {
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         let site = session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(200))

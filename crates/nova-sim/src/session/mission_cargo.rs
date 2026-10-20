@@ -632,6 +632,7 @@ mod tests {
             let _ = session.settle_script(catalog, &mut NeverFires);
         }
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
@@ -861,6 +862,7 @@ mod tests {
         grant_blessing_rank(&mut session);
         assert!(!blessed(&session));
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(129))

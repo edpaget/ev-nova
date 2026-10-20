@@ -427,7 +427,7 @@ impl Session {
             } else {
                 super::player_trigger(self.ship.trigger, self.jump.is_some())
             },
-            target: self.target.map(ShipRef::Npc),
+            target: self.chart.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.ship.condition,
             held_disabled: false,
@@ -762,7 +762,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         // Aimed at it: a stray hit the answer flag forgives.
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let behaviour = Recording::default();
         let (seen, _) = until_hit(&mut session, &catalog, &behaviour);
         let npc = seen
@@ -824,7 +824,7 @@ mod tests {
         // passes: the shot that hit, life -1 (@0x36f4f), counts for none.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let behaviour = Recording::default();
         session.hold_trigger(FIRE);
         let mut flying = Vec::new();

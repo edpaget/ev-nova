@@ -423,7 +423,7 @@ impl Session {
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
-        let govt = self.galaxy.govt(self.pilot.system);
+        let govt = self.chart.galaxy.govt(self.pilot.system);
         let Some(before) = self.write_galaxy(change) else {
             return false;
         };
@@ -439,7 +439,7 @@ impl Session {
         let gate = self.gate();
         Refresh {
             hidden: hidden_by(
-                self.galaxy.catalog_systems(),
+                self.chart.galaxy.catalog_systems(),
                 &self.statics.visibility,
                 &gate,
             ),
@@ -500,8 +500,8 @@ impl Session {
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
             return;
         }
-        self.galaxy.set_overlay(self.pilot.galaxy.clone());
-        if leave_hidden(&mut self.pilot, &mut self.galaxy) {
+        self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
+        if leave_hidden(&mut self.pilot, &mut self.chart.galaxy) {
             let system = self.pilot.system;
             let sites = self.read_sites(catalog, system);
             self.set_player_system(system, sites, Dock::AsItWas);
@@ -517,7 +517,7 @@ impl Session {
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         self.refresh_sites(catalog, before);
-        let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
+        let moved = leave_hidden(&mut self.pilot, &mut self.chart.galaxy);
         // The original rewrites only the system numbers (@0x998f1-0x99a36):
         // docked, the spaceport open stays the stellar's.
         if moved {
@@ -527,7 +527,7 @@ impl Session {
                 self.out.emit(SessionEvent::SystemChanged);
             }
         }
-        if moved || self.galaxy.govt(self.pilot.system) != govt {
+        if moved || self.chart.galaxy.govt(self.pilot.system) != govt {
             let table = self.spawn_table(catalog);
             let every: BTreeSet<NpcId> =
                 self.space.traffic.npcs().iter().map(|npc| npc.id).collect();
@@ -550,7 +550,7 @@ impl Session {
         if self.pilot.galaxy == before {
             return None;
         }
-        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
         self.out.save_due = true;
         Some(before)
     }
@@ -588,12 +588,13 @@ impl Session {
     /// nothing is read again. Which stellars are shown is
     /// [`Session::set_player_system`]'s alone; this only stamps them.
     fn stamp_sites(&mut self) {
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         for site in self
+            .chart
             .sites
             .iter_mut()
-            .chain(&mut self.listed)
-            .chain(self.next_sites.iter_mut().flatten())
+            .chain(&mut self.chart.listed)
+            .chain(self.chart.next_sites.iter_mut().flatten())
         {
             *site = galaxy.site(*site);
         }
@@ -613,12 +614,13 @@ impl Session {
                 was.govt != is.govt || was.destroyed.is_some() != is.destroyed.is_some()
             })
         };
-        let shown_stale = changed(&self.listed);
-        let waiting_stale = self.next_sites.as_deref().is_some_and(changed);
+        let shown_stale = changed(&self.chart.listed);
+        let waiting_stale = self.chart.next_sites.as_deref().is_some_and(changed);
         if shown_stale {
-            self.listed = self.read_sites(catalog, self.shown);
+            self.chart.listed = self.read_sites(catalog, self.chart.shown);
             let held: Vec<StellarId> = self.stellars_shown().collect();
-            self.sites = self
+            self.chart.sites = self
+                .chart
                 .listed
                 .iter()
                 .filter(|site| held.contains(&site.id))
@@ -628,7 +630,7 @@ impl Session {
         }
         if waiting_stale {
             let sites = self.read_sites(catalog, self.pilot.system);
-            if let Some(waiting) = &mut self.next_sites {
+            if let Some(waiting) = &mut self.chart.next_sites {
                 *waiting = sites;
             }
         }
@@ -647,7 +649,7 @@ impl Session {
         self.pilot
             .course
             .iter()
-            .map_while(|&hop| self.galaxy.same_place(hop))
+            .map_while(|&hop| self.chart.galaxy.same_place(hop))
             .collect()
     }
 
@@ -1596,7 +1598,10 @@ mod tests {
         land_now(&mut session).expect("lands");
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
         let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert!(session.next_sites.is_some(), "131's wait for the take-off");
+        assert!(
+            session.chart.next_sites.is_some(),
+            "131's wait for the take-off"
+        );
         let reads = session_reads(&catalog);
         session.set_stellar_state(StellarId(140), Some(left(1)));
         session.set_stellar_state(StellarId(129), Some(left(1)));
@@ -1607,18 +1612,21 @@ mod tests {
                 .map(|site| (site.id.0, site.destroyed))
                 .collect()
         };
-        assert_eq!(destroyed(&session.sites), [(128, false), (129, true)]);
+        assert_eq!(destroyed(&session.chart.sites), [(128, false), (129, true)]);
         assert_eq!(
-            destroyed(session.next_sites.as_deref().expect("waiting")),
+            destroyed(session.chart.next_sites.as_deref().expect("waiting")),
             [(140, true)]
         );
         assert_eq!(session_reads(&catalog), reads, "nothing read again");
         session.set_stellar_state(StellarId(129), None);
-        assert_eq!(destroyed(&session.sites), [(128, false), (129, false)]);
+        assert_eq!(
+            destroyed(&session.chart.sites),
+            [(128, false), (129, false)]
+        );
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        assert_eq!(destroyed(&session.sites), [(140, true)]);
+        assert_eq!(destroyed(&session.chart.sites), [(140, true)]);
     }
 
     /// How many times `catalog`'s stellars were read.
@@ -1637,7 +1645,7 @@ mod tests {
             overlay.set_destroyed(StellarId(300), Some(left(2)));
         }));
         assert_eq!(session_reads(&catalog), reads, "a countdown, and another's");
-        assert!(session.sites[0].destroyed);
+        assert!(session.chart.sites[0].destroyed);
     }
 
     #[test]
@@ -1648,12 +1656,12 @@ mod tests {
         assert!(session.change_galaxy(&catalog, |overlay| {
             overlay.set_destroyed(StellarId(128), Some(left(3)));
         }));
-        assert!(session.sites[0].destroyed);
+        assert!(session.chart.sites[0].destroyed);
         assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
         assert!(session.change_galaxy(&catalog, |overlay| {
             overlay.set_destroyed(StellarId(128), None);
         }));
-        assert!(!session.sites[0].destroyed);
+        assert!(!session.chart.sites[0].destroyed);
     }
 
     #[test]
@@ -1944,7 +1952,7 @@ mod tests {
         pilot.system = SystemId(131);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(session.system(), SystemId(134));
-        assert_eq!(session.sites[0].id, StellarId(141), "134's stellars");
+        assert_eq!(session.chart.sites[0].id, StellarId(141), "134's stellars");
         assert!(!session.take_save_due());
     }
 

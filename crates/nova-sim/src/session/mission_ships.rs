@@ -331,7 +331,7 @@ impl Session {
             &record.ships,
             record.flags,
             &facts,
-            (self.galaxy.map(), &self.statics.govts),
+            (self.chart.galaxy.map(), &self.statics.govts),
             self.strings(),
             &mut draw_type,
             chance,
@@ -355,7 +355,7 @@ impl Session {
     /// Whether ships in `system` are in the player's system
     /// ([`ShipSystem::with_player`]), over the overlaid map's places.
     fn ships_here(&self, system: ShipSystem) -> bool {
-        system.with_player(self.pilot.system, self.galaxy.map().places())
+        system.with_player(self.pilot.system, self.chart.galaxy.map().places())
     }
 
     /// Whether the enter-system hook, on an entry `how`, restarts the
@@ -529,8 +529,9 @@ impl Session {
     /// The system's `NavDefs` slots: each its stellar's position, none
     /// for an empty slot (or one whose stellar cannot be read).
     fn nav_slots(&self) -> Vec<Option<Vec2>> {
-        let mut sites = self.sites.iter();
-        self.galaxy
+        let mut sites = self.chart.sites.iter();
+        self.chart
+            .galaxy
             .map()
             .stellars(self.pilot.system)
             .iter()
@@ -649,8 +650,8 @@ impl Session {
     /// The way from the player's system to the one it last jumped from,
     /// on the map: none before a jump, or when either is not on it.
     fn way_back(&self) -> Option<Vec2> {
-        let from = self.galaxy.position(self.pilot.jumped_from?)?;
-        let here = self.galaxy.position(self.pilot.system)?;
+        let from = self.chart.galaxy.position(self.pilot.jumped_from?)?;
+        let here = self.chart.galaxy.position(self.pilot.system)?;
         Some(from - here)
     }
 
@@ -997,14 +998,14 @@ impl Session {
         if came == 0 {
             return;
         }
-        let targeted = self.target == Some(npc);
+        let targeted = self.chart.target == Some(npc);
         self.space.drop_quarry(npc);
         self.space.traffic.remove(npc);
         // The ship brought in above is numbered last.
         let swapped_in = self.space.last_npc();
         if targeted {
-            self.target = swapped_in;
-            self.target_fly_in.settle();
+            self.chart.target = swapped_in;
+            self.chart.target_fly_in.settle();
         }
         // The hail's dialog closes on the player's target, now the ship
         // swapped in (@0x6252f), which `_offeringShipIndex` takes
@@ -2305,7 +2306,7 @@ pub(super) mod tests {
     fn land_and_take_off_in_131(session: &mut Session, catalog: &FakePilotCatalog) {
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
-        session.nav = crate::navigation::NavMode::Off;
+        session.chart.nav = crate::navigation::NavMode::Off;
         assert_eq!(land_now(session), Ok(StellarId(140)));
         settle(session, catalog);
         take_off(session, catalog);
@@ -2531,12 +2532,12 @@ pub(super) mod tests {
             npc.state.position = at;
             let id = npc.id;
             assert!(npc.mission.is_some(), "a mission ship");
-            session.sites = vec![crate::catalog::LandingSite {
+            session.chart.sites = vec![crate::catalog::LandingSite {
                 flags2: crate::deadly_stellar::DEADLY_STELLAR,
                 frame_size: Some((2, 2)),
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
-            session.listed = session.sites.clone();
+            session.chart.listed = session.chart.sites.clone();
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");
@@ -3127,7 +3128,7 @@ pub(super) mod tests {
     /// Lands the NPC at `index` on the system's first stellar, from rest
     /// over it, on one traffic tick.
     fn land_ship(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
-        let site = session.sites[0];
+        let site = session.chart.sites[0];
         let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.goal = Goal::Land(site.id);
         npc.state.position = site.position;
@@ -4582,7 +4583,7 @@ pub(super) mod tests {
             ..crate::flight::ShipState::default()
         };
         npc.condition = Condition::Disabled;
-        session.target = Some(session.npcs()[index].id);
+        session.chart.target = Some(session.npcs()[index].id);
         let law = Witness::default();
         let boarding = session.board(
             &law,
@@ -5162,7 +5163,7 @@ pub(super) mod tests {
         assert_eq!(conditions(&session), [Condition::Disabled]);
         session.ship.player = crate::flight::ShipState::default();
         session.space.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
-        session.target = Some(session.npcs()[0].id);
+        session.chart.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -5279,7 +5280,7 @@ pub(super) mod tests {
             "glided in to about 1000 out"
         );
         session.ship.player = session.npcs()[0].state;
-        session.target = Some(session.npcs()[0].id);
+        session.chart.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -5466,7 +5467,7 @@ pub(super) mod tests {
             .with_strings(Rc::new(Names));
         session.populate(catalog, &mut NeverFires);
         session.space.traffic.npcs_mut()[0].state = ACE_AT;
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
         session
@@ -5497,7 +5498,7 @@ pub(super) mod tests {
         assert_eq!(ship.state, ACE_AT, "in Ace's place");
         assert_eq!(ship.ship, ShipId(129), "flying Ace's type");
         assert_eq!(ship.govt, Some(GovtId(131)), "the düde's");
-        assert_eq!(session.target, Some(ship.id), "now the target");
+        assert_eq!(session.chart.target, Some(ship.id), "now the target");
         // A new target, not Ace's id reused: the original marks the target
         // panel for redraw (`_statusRedraw[6]`, @0x62543), and ours redraws
         // it at once on the target's `NpcId` changing
@@ -5538,7 +5539,7 @@ pub(super) mod tests {
         ace.berth = 2;
         session.space.traffic.set_berth_person(2, "Ace");
         session.space.traffic.forget_berth_person(1);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
         assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed at berth 2");
@@ -5593,10 +5594,10 @@ pub(super) mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        session.target = None;
+        session.chart.target = None;
         settle(&mut session, &catalog);
         assert!(!person_here(&session), "swapped all the same");
-        assert_eq!(session.target, None, "the player's target is kept");
+        assert_eq!(session.chart.target, None, "the player's target is kept");
         let berth = swapped_in_berth(&session);
         assert_eq!(
             session.offering_ship,
@@ -6046,7 +6047,7 @@ pub(super) mod tests {
         let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = state;
         ace.condition = Condition::Disabled;
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let boarded = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
@@ -6124,14 +6125,14 @@ pub(super) mod tests {
         // @0x62538: the expand is set to 0 as the target moves.
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
         settle(&mut session, &catalog);
         let brackets = session.target_brackets().expect("bracketed");
-        assert_eq!(Some(brackets.npc), session.target);
+        assert_eq!(Some(brackets.npc), session.chart.target);
         assert_eq!(brackets.expand, 0.0);
     }
 
@@ -6142,7 +6143,7 @@ pub(super) mod tests {
         // 256 for a target on screen (@0x6a5c9).
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
@@ -6163,7 +6164,7 @@ pub(super) mod tests {
     fn a_hail_that_swaps_nothing_leaves_the_fly_in_running() {
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session
                 .refuse_mission(MissionId(140), &mut NeverFires)
@@ -6171,7 +6172,7 @@ pub(super) mod tests {
             Ok(())
         );
         settle(&mut session, &catalog);
-        assert_eq!(session.target, Some(NpcId(0)));
+        assert_eq!(session.chart.target, Some(NpcId(0)));
         assert_eq!(session.target_brackets().expect("bracketed").expand, 196.0);
     }
 
@@ -6179,14 +6180,14 @@ pub(super) mod tests {
     fn the_swap_moves_no_target_but_the_persons() {
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
         settle(&mut session, &catalog);
         assert_eq!(marked(&session), [0]);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 
     #[test]
@@ -6255,7 +6256,7 @@ pub(super) mod tests {
         assert!(person_here(&session), "Ace stays (@0x62481 → @0x62593)");
         assert_eq!(session.npcs().len(), npcs);
         assert!(marked(&session).is_empty(), "no ship came");
-        assert_eq!(session.target, Some(NpcId(0)), "Ace still targeted");
+        assert_eq!(session.chart.target, Some(NpcId(0)), "Ace still targeted");
         assert_eq!(ships_of(&session), before, "no count changes");
         assert_eq!(before.left, 1);
         let active = session.pilot().missions().get(0).expect("held");
@@ -6402,7 +6403,7 @@ pub(super) mod tests {
         let pilot = crate::pilot::Pilot::new(&catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(&catalog, &bible, &mut NeverFires);
         let Ok(Hailed::Comm(view)) = hailed else {
             panic!("the comm dialog: {hailed:?}");
@@ -6471,7 +6472,7 @@ pub(super) mod tests {
         if hostile {
             npc.goal = Goal::Attack(ShipRef::Player);
         }
-        session.target = Some(npc.id);
+        session.chart.target = Some(npc.id);
         session
     }
 

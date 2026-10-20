@@ -149,7 +149,7 @@ impl Session {
             let reached = map_reveals(
                 reach,
                 self.pilot.system,
-                self.galaxy.map(),
+                self.chart.galaxy.map(),
                 self.setup.hyperlinks,
                 &self.statics.govts,
                 self.setup.outfit_rules().map_explore,
@@ -170,9 +170,10 @@ impl Session {
         clean_records(&mut self.pilot.legal, &effect.clean);
         // The original cleans the visible systems' records (@0x44f4e).
         let visible = self
+            .chart
             .galaxy
             .governed()
-            .filter(|&(system, _)| self.galaxy.visible(system));
+            .filter(|&(system, _)| self.chart.galaxy.visible(system));
         let cleaned = cleaned_records(
             visible,
             |system| self.pilot.system_record(system),
@@ -208,7 +209,7 @@ impl Session {
     /// or not: the original writes the explored level itself (@0x15c71),
     /// whatever the system's visibility.
     pub(super) fn explore_system(&mut self, system: SystemId) {
-        if self.galaxy.exists(system) {
+        if self.chart.galaxy.exists(system) {
             self.pilot.explore(system);
         }
     }

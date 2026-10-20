@@ -263,11 +263,11 @@ impl Session {
     /// (see the module docs).
     #[must_use]
     pub fn nav_mode(&self) -> NavMode {
-        match self.nav {
+        match self.chart.nav {
             NavMode::Hyperspace(selected) => NavMode::Hyperspace(
                 selected
-                    .filter(|&system| self.galaxy.exists(system))
-                    .and_then(|system| self.galaxy.same_place(system)),
+                    .filter(|&system| self.chart.galaxy.exists(system))
+                    .and_then(|system| self.chart.galaxy.same_place(system)),
             ),
             mode => mode,
         }
@@ -294,7 +294,7 @@ impl Session {
     /// (@0x1408c-0x140d8).
     #[must_use]
     pub fn map_preselection(&self) -> Option<SystemId> {
-        match self.nav {
+        match self.chart.nav {
             NavMode::Hyperspace(Some(_)) => self.nav_mode().hyperspace(),
             _ => Some(self.pilot.system),
         }
@@ -304,7 +304,7 @@ impl Session {
     /// stellar selection reads.
     #[must_use]
     pub fn nav_target(&self) -> Option<StellarId> {
-        self.nav.stellar()
+        self.chart.nav.stellar()
     }
 
     /// The system J jumps to: the one selected in mode 3, resolved by
@@ -314,6 +314,7 @@ impl Session {
             return None;
         };
         let jumps = self
+            .chart
             .galaxy
             .map()
             .jumps(self.pilot.system, self.setup.hyperlinks);
@@ -335,13 +336,13 @@ impl Session {
     /// dialogs' and the bar's restores write mode 3 only after
     /// [`Session::land_at`], which has no original.
     pub(super) fn set_nav(&mut self, nav: NavMode) {
-        self.nav = nav;
-        self.nav_slot = None;
+        self.chart.nav = nav;
+        self.chart.nav_slot = None;
     }
 
     /// Lets go of the selection and keeps the mode.
     pub(super) fn deselect(&mut self) {
-        self.set_nav(self.nav.deselected());
+        self.set_nav(self.chart.nav.deselected());
     }
 
     /// A landed `M` (`first`) or `N` into `system` writes the selection
@@ -359,10 +360,10 @@ impl Session {
     /// exist are the original's, as far as it can be modelled, is in the
     /// module docs.
     pub(super) fn select_for_landed_move(&mut self, system: SystemId, first: bool) {
-        if self.landed.is_none() || !self.galaxy.exists(system) {
+        if self.landed.is_none() || !self.chart.galaxy.exists(system) {
             return;
         }
-        self.set_nav(match self.nav {
+        self.set_nav(match self.chart.nav {
             NavMode::Stellar(_) if first => {
                 NavMode::Stellar(self.statics.first_stellars.get(&system).copied())
             }
@@ -374,7 +375,7 @@ impl Session {
     /// original saves +0x6a and +0x6c (see the module's **Setters**). The
     /// raw selection is saved, not the one resolved by place.
     pub fn save_port_nav(&mut self) {
-        self.port_nav = Some(self.nav);
+        self.chart.port_nav = Some(self.chart.nav);
     }
 
     /// Restores the nav saved as the port dialog opened
@@ -382,7 +383,7 @@ impl Session {
     /// as the dialog closes. With nothing saved it changes nothing, and a
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
-        if let Some(saved) = self.port_nav.take() {
+        if let Some(saved) = self.chart.port_nav.take() {
             self.set_nav(saved);
         }
     }
@@ -394,8 +395,8 @@ impl Session {
     #[must_use]
     pub fn map_nav(&self) -> SavedNav {
         SavedNav {
-            nav: self.nav,
-            slot: self.nav_slot,
+            nav: self.chart.nav,
+            slot: self.chart.nav_slot,
         }
     }
 
@@ -406,8 +407,8 @@ impl Session {
     /// module's **Setters**). The course is never saved, so a Shift-click's
     /// course stays.
     pub fn restore_map_nav(&mut self, saved: SavedNav) {
-        self.nav = saved.nav;
-        self.nav_slot = saved.slot;
+        self.chart.nav = saved.nav;
+        self.chart.nav_slot = saved.slot;
     }
 
     /// Puts back the selection saved as a map opened ([`Session::map_nav`]),
@@ -419,7 +420,7 @@ impl Session {
     /// there the selection saved belongs to another mode and nothing
     /// changes.
     pub fn restore_map_selection(&mut self, saved: SavedNav) {
-        if std::mem::discriminant(&self.nav) == std::mem::discriminant(&saved.nav) {
+        if std::mem::discriminant(&self.chart.nav) == std::mem::discriminant(&saved.nav) {
             self.restore_map_nav(saved);
         }
     }
@@ -430,7 +431,7 @@ impl Session {
     /// bar's locals outlive each map, so every map is put back to the
     /// same nav. With nothing saved it changes nothing.
     pub fn restore_bar_nav(&mut self) {
-        if let Some(saved) = self.bar_nav {
+        if let Some(saved) = self.chart.bar_nav {
             self.set_nav(saved);
         }
     }
@@ -450,6 +451,7 @@ impl Session {
             return;
         };
         if self
+            .chart
             .galaxy
             .map()
             .jumps(self.pilot.system, self.setup.hyperlinks)
@@ -476,15 +478,15 @@ impl Session {
         if self.setup.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
             return;
         }
-        let slots = self.galaxy.con_slots(self.pilot.system);
+        let slots = self.chart.galaxy.con_slots(self.pilot.system);
         let dead = slots.iter().take(CON_SLOTS).position(|&slot| {
             SYSTEM_IDS.contains(&slot.0)
-                && (!self.galaxy.exists(slot) || self.galaxy.same_place(slot).is_none())
+                && (!self.chart.galaxy.exists(slot) || self.chart.galaxy.same_place(slot).is_none())
         });
         if let Some(slot) = dead {
             let selected = slots[slot];
             self.set_nav(NavMode::Hyperspace(Some(selected)));
-            self.nav_slot = Some(NavSlot {
+            self.chart.nav_slot = Some(NavSlot {
                 system: self.pilot.system,
                 slot,
                 selected,
@@ -498,8 +500,8 @@ impl Session {
     /// map's click (`_DoSystemMap` @0x13739-0x137bb) write +0x6c.
     pub(super) fn select_at_place(&mut self, system: SystemId) {
         self.set_nav(NavMode::Hyperspace(Some(system)));
-        self.nav_slot = self.galaxy.same_place(system).and_then(|place| {
-            let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
+        self.chart.nav_slot = self.chart.galaxy.same_place(system).and_then(|place| {
+            let slot = self.slot_at(|slot| self.chart.galaxy.same_place(slot) == Some(place))?;
             Some(NavSlot {
                 system: self.pilot.system,
                 slot,
@@ -529,7 +531,7 @@ impl Session {
         if nav_off {
             self.set_nav(NavMode::Off);
         }
-        if hyperspace && !matches!(self.nav, NavMode::Hyperspace(_)) {
+        if hyperspace && !matches!(self.chart.nav, NavMode::Hyperspace(_)) {
             self.set_nav(NavMode::Hyperspace(None));
             self.cue_course();
         }
@@ -558,7 +560,7 @@ impl Session {
     /// none it is silent. The nav mode is untouched, and the original
     /// takes it during a jump too.
     pub fn clear_target(&mut self) -> bool {
-        let had = self.target.take().is_some();
+        let had = self.chart.target.take().is_some();
         if had {
             self.out.sounds.push(SimSound::TargetCleared);
         }
@@ -585,13 +587,13 @@ impl Session {
             return None;
         }
         let picked = match pick {
-            StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_stellar(self.ship.player.position, &self.sites),
+            StellarPick::Slot(slot) => self.chart.sites.get(slot).map(|site| site.id),
+            StellarPick::Nearest => nearest_stellar(self.ship.player.position, &self.chart.sites),
         }?;
-        let selected = self.nav == NavMode::Stellar(Some(picked));
+        let selected = self.chart.nav == NavMode::Stellar(Some(picked));
         self.out.sounds.push(SimSound::NavSelected);
         if !selected {
-            self.nav_fly_in.start();
+            self.chart.nav_fly_in.start();
             self.set_nav(NavMode::Stellar(Some(picked)));
             self.dock = None;
         }
@@ -622,7 +624,7 @@ impl Session {
         }
         let selected = self.nav_mode().hyperspace();
         let Some(next) = next_hyper_destination(
-            self.galaxy.map(),
+            self.chart.galaxy.map(),
             self.pilot.system,
             &self.course_shown(),
             selected,
@@ -649,7 +651,8 @@ impl Session {
     /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
     #[must_use]
     pub fn floating_map_links(&self) -> Vec<SystemId> {
-        self.galaxy
+        self.chart
+            .galaxy
             .con_slots(self.pilot.system)
             .iter()
             .copied()
@@ -662,32 +665,33 @@ impl Session {
     /// place (`_FindActiveCoLocatedSystem` ≠ −1, `_MapFilter`
     /// @0x13f4f-0x13f65, `_HandlePlayer` @0x6a21f).
     fn flags(&self, slot: SystemId) -> bool {
-        self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some()
+        self.chart.galaxy.exists(slot) && self.chart.galaxy.same_place(slot).is_some()
     }
 
     /// The first of the current system's [`CON_SLOTS`] Con slots whose
     /// system `test` passes, empty slots (−1) passed over.
     fn slot_at(&self, test: impl Fn(SystemId) -> bool) -> Option<usize> {
-        self.galaxy
+        self.chart
+            .galaxy
             .con_slots(self.pilot.system)
             .iter()
             .take(CON_SLOTS)
-            .position(|&slot| self.galaxy.exists(slot) && test(slot))
+            .position(|&slot| self.chart.galaxy.exists(slot) && test(slot))
     }
 
     /// The Con slot the raw mode-3 selection `selected` stands in: the one
     /// noted as it was written, while it stands ([`NavSlot`]); else the
     /// first naming it; else the first whose system stands at its place.
     pub(super) fn selected_slot(&self, selected: SystemId) -> Option<usize> {
-        if let Some(noted) = self.nav_slot
+        if let Some(noted) = self.chart.nav_slot
             && noted.system == self.pilot.system
             && noted.selected == selected
         {
             return Some(noted.slot);
         }
         self.slot_at(|slot| slot == selected).or_else(|| {
-            let place = self.galaxy.same_place(selected)?;
-            self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))
+            let place = self.chart.galaxy.same_place(selected)?;
+            self.slot_at(|slot| self.chart.galaxy.same_place(slot) == Some(place))
         })
     }
 
@@ -700,7 +704,7 @@ impl Session {
     /// arrival @0x6be25-0x6be2b, the hypergate @0x637e4-0x637f2), and so
     /// does every deselect.
     fn cycle_from(&self) -> i32 {
-        match self.nav {
+        match self.chart.nav {
             NavMode::Hyperspace(Some(selected)) => self
                 .selected_slot(selected)
                 .and_then(|slot| i32::try_from(slot).ok())
@@ -748,7 +752,7 @@ impl Session {
         // below the first to the last (@0x13f77-0x13f9b): a start past the
         // slots begins the walk at the first.
         let start = usize::try_from(self.cycle_from() + 1).unwrap_or(CON_SLOTS - 1);
-        let slots = self.galaxy.con_slots(self.pilot.system);
+        let slots = self.chart.galaxy.con_slots(self.pilot.system);
         let slots = &slots[..slots.len().min(CON_SLOTS)];
         let next = (start..slots.len()).chain(0..start).find_map(|at| {
             slots
@@ -758,7 +762,7 @@ impl Session {
                 .map(|slot| (at, slot))
         });
         self.set_nav(NavMode::Hyperspace(next.map(|(_, selected)| selected)));
-        self.nav_slot = next.map(|(slot, selected)| NavSlot {
+        self.chart.nav_slot = next.map(|(slot, selected)| NavSlot {
             system: self.pilot.system,
             slot,
             selected,
@@ -932,7 +936,7 @@ mod tests {
     fn hyperspace_mode_in_mode_3_changes_nothing_but_beeps() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        session.nav = NavMode::Hyperspace(None);
+        session.chart.nav = NavMode::Hyperspace(None);
         let mut session = quiet(session);
         assert!(session.hyperspace_mode());
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "not cued");
@@ -957,7 +961,7 @@ mod tests {
     #[test]
     fn the_block_with_both_keys_beeps_once_turns_off_then_cues_and_drops_the_request() {
         let mut session = cued_with_a_request();
-        session.nav = NavMode::Hyperspace(None);
+        session.chart.nav = NavMode::Hyperspace(None);
         assert!(session.nav_mode_keys(true, true));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
         assert_eq!(session.nav_mode(), hyperspace(131), "off, then cued");
@@ -967,7 +971,7 @@ mod tests {
     #[test]
     fn the_block_with_h_alone_in_mode_3_keeps_the_selection_beeps_and_drops_the_request() {
         let mut session = cued_with_a_request();
-        session.nav = NavMode::Hyperspace(Some(SystemId(130)));
+        session.chart.nav = NavMode::Hyperspace(Some(SystemId(130)));
         assert!(session.nav_mode_keys(false, true));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
         assert_eq!(session.nav_mode(), hyperspace(130), "kept");
@@ -1012,7 +1016,7 @@ mod tests {
     fn hyper_select_cycles_from_the_system_selected_not_the_course() {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        session.nav = hyperspace(135);
+        session.chart.nav = hyperspace(135);
         assert_eq!(session.select_next_system(), Some(SystemId(134)), "wraps");
     }
 
@@ -1038,7 +1042,7 @@ mod tests {
     fn hyper_select_with_no_links_in_mode_3_selects_no_destination_in_silence() {
         let mut session = linkless();
         assert!(session.hyperspace_mode());
-        session.nav = hyperspace(130);
+        session.chart.nav = hyperspace(130);
         session.take_sounds();
         assert_eq!(session.select_next_system(), None);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
@@ -1049,7 +1053,7 @@ mod tests {
     #[test]
     fn hyper_select_with_no_links_lets_go_of_a_stellar_and_keeps_mode_2() {
         let mut session = linkless();
-        session.nav = stellar(128);
+        session.chart.nav = stellar(128);
         assert_eq!(session.select_next_system(), None);
         assert_eq!(session.nav_mode(), NavMode::Stellar(None));
         assert_eq!(session.take_sounds(), []);
@@ -1128,7 +1132,7 @@ mod tests {
             hyperspace(131),
         ] {
             let mut session = quiet(Session::start(&three_stellars()).expect("starts"));
-            session.nav = before;
+            session.chart.nav = before;
             assert!(matches!(
                 session.land(),
                 Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
@@ -1147,7 +1151,7 @@ mod tests {
     fn the_jump_goes_to_the_system_selected_rather_than_the_courses_first_hop() {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        session.nav = hyperspace(134);
+        session.chart.nav = hyperspace(134);
         fly_out(&mut session);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
@@ -1158,7 +1162,7 @@ mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         for mode in [hyperspace(132), hyperspace(136), stellar(128), NavMode::Off] {
-            session.nav = mode;
+            session.chart.nav = mode;
             fly_out(&mut session);
             assert_eq!(
                 session.begin_jump(),
@@ -1259,7 +1263,7 @@ mod tests {
             (hyperspace(131), NavMode::Hyperspace(None)),
         ] {
             let mut session = at_wormhole(&catalog);
-            session.nav = before;
+            session.chart.nav = before;
             assert_eq!(session.nav_mode(), before, "a selection to let go of");
             assert_eq!(
                 session.enter_wormhole(&catalog, &mut NeverFires),
@@ -1285,7 +1289,7 @@ mod tests {
             let catalog = catalog();
             let mut session = Session::start(&catalog).expect("starts");
             session.plot_course(SystemId(132)).expect("a route");
-            session.nav = before;
+            session.chart.nav = before;
             move_to_131(&mut session, &catalog);
             assert_eq!(session.system(), SystemId(131));
             assert_eq!(session.nav_mode(), after, "{before:?}");
@@ -1297,7 +1301,7 @@ mod tests {
         let catalog = catalog();
         for expr in ["M131", "N131"] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.nav = stellar(128);
+            session.chart.nav = stellar(128);
             run(&mut session, expr);
             assert_eq!(session.nav_mode(), stellar(128), "{expr}");
             let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -1373,7 +1377,7 @@ mod tests {
             (hyperspace(131), NavMode::Hyperspace(None)),
         ] {
             let (catalog, mut session) = landed();
-            session.nav = before;
+            session.chart.nav = before;
             run(&mut session, "M131");
             assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
             let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -1390,7 +1394,7 @@ mod tests {
             (NavMode::Off, NavMode::Off),
         ] {
             let (catalog, mut session) = landed();
-            session.nav = before;
+            session.chart.nav = before;
             run(&mut session, "N131");
             assert_eq!(session.nav_mode(), after, "{before:?} at the operator");
             let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -1404,7 +1408,7 @@ mod tests {
         for expr in ["M999", "N999"] {
             for before in [stellar(128), hyperspace(131)] {
                 let (catalog, mut session) = landed();
-                session.nav = before;
+                session.chart.nav = before;
                 run(&mut session, expr);
                 assert_eq!(session.nav_mode(), before, "{expr} {before:?}");
                 let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -1421,7 +1425,7 @@ mod tests {
         for expr in ["M131", "N131"] {
             for before in [stellar(128), hyperspace(131), NavMode::Off] {
                 let (catalog, mut session) = landed();
-                session.nav = before;
+                session.chart.nav = before;
                 session.save_port_nav();
                 run(&mut session, expr);
                 let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -1465,15 +1469,15 @@ mod tests {
             slot: 2,
             selected: SystemId(131),
         };
-        session.nav = hyperspace(131);
-        session.nav_slot = Some(noted);
+        session.chart.nav = hyperspace(131);
+        session.chart.nav_slot = Some(noted);
         let saved = session.map_nav();
-        assert_eq!(session.nav, hyperspace(131), "saving changes nothing");
+        assert_eq!(session.chart.nav, hyperspace(131), "saving changes nothing");
         session.select_at_place(SystemId(134));
         session.pilot.course = ids(&[135]);
         session.restore_map_nav(saved);
-        assert_eq!(session.nav, hyperspace(131));
-        assert_eq!(session.nav_slot, Some(noted), "the slot with it");
+        assert_eq!(session.chart.nav, hyperspace(131));
+        assert_eq!(session.chart.nav_slot, Some(noted), "the slot with it");
         assert_eq!(session.course(), ids(&[135]), "the course kept");
     }
 
@@ -1481,12 +1485,12 @@ mod tests {
     fn a_dialogs_map_nav_puts_back_any_mode_raw() {
         for before in [NavMode::Off, stellar(128), NavMode::Hyperspace(None)] {
             let mut session = Session::start(&hub()).expect("starts");
-            session.nav = before;
+            session.chart.nav = before;
             let saved = session.map_nav();
             session.select_at_place(SystemId(134));
             session.restore_map_nav(saved);
-            assert_eq!(session.nav, before, "{before:?}");
-            assert_eq!(session.nav_slot, None, "{before:?}: none noted");
+            assert_eq!(session.chart.nav, before, "{before:?}");
+            assert_eq!(session.chart.nav_slot, None, "{before:?}: none noted");
         }
     }
 
@@ -1514,7 +1518,7 @@ mod tests {
     fn plotting_a_course_cues_its_first_hop_from_any_mode() {
         for before in [NavMode::Off, stellar(128), NavMode::Hyperspace(None)] {
             let mut session = Session::start(&three_stellars()).expect("starts");
-            session.nav = before;
+            session.chart.nav = before;
             session.plot_course(SystemId(132)).expect("a route");
             assert_eq!(session.nav_mode(), hyperspace(131), "{before:?}");
         }
@@ -1528,7 +1532,7 @@ mod tests {
             (NavMode::Off, NavMode::Off),
         ] {
             let mut session = Session::start(&hub()).expect("starts");
-            session.nav = before;
+            session.chart.nav = before;
             assert_eq!(
                 session.plot_course(SystemId(136)),
                 Err(RouteError::Unreachable)
@@ -1545,7 +1549,7 @@ mod tests {
         assert_eq!(session.nav_mode(), hyperspace(131));
 
         for before in [NavMode::Off, stellar(128), NavMode::Hyperspace(None)] {
-            session.nav = before;
+            session.chart.nav = before;
             session.pilot.course = ids(&[132]);
             session.cue_course();
             assert_eq!(session.nav_mode(), before, "132 is not linked from 130");
@@ -1575,7 +1579,7 @@ mod tests {
         // place (@0xe334).
         let mut session = unplaced(hub(), RuleSource::Engine);
         session.cue_course();
-        assert_eq!(session.nav, hyperspace(999), "the raw slot");
+        assert_eq!(session.chart.nav, hyperspace(999), "the raw slot");
         assert_eq!(
             session.nav_mode(),
             NavMode::Hyperspace(None),
@@ -1592,7 +1596,7 @@ mod tests {
         fly_out(&mut session);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert!(session.cycle_map_selection());
-        assert_eq!(session.nav, hyperspace(135), "after the slot noted");
+        assert_eq!(session.chart.nav, hyperspace(135), "after the slot noted");
     }
 
     #[test]
@@ -1601,7 +1605,7 @@ mod tests {
         catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 132]);
         let mut session = unplaced(catalog, RuleSource::Engine);
         session.cue_course();
-        assert_eq!(session.nav, hyperspace(132));
+        assert_eq!(session.chart.nav, hyperspace(132));
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
     }
 
@@ -1612,21 +1616,25 @@ mod tests {
         catalog.star_map[0] = star(130, (0.0, 0.0), &[131, -1, 50, 999]);
         let mut session = unplaced(catalog, RuleSource::Engine);
         session.cue_course();
-        assert_eq!(session.nav, hyperspace(999));
+        assert_eq!(session.chart.nav, hyperspace(999));
     }
 
     #[test]
     fn the_cue_of_an_unplaced_hop_changes_nothing_by_the_other_reading_or_with_no_dead_slot() {
         let mut session = unplaced(hub(), RuleSource::Bible);
-        session.nav = stellar(128);
+        session.chart.nav = stellar(128);
         session.cue_course();
-        assert_eq!(session.nav, stellar(128), "by the other reading");
+        assert_eq!(session.chart.nav, stellar(128), "by the other reading");
 
         for source in RuleSource::ALL {
             let mut session = unplaced(catalog(), source);
-            session.nav = stellar(128);
+            session.chart.nav = stellar(128);
             session.cue_course();
-            assert_eq!(session.nav, stellar(128), "130 lists 131 alone, {source:?}");
+            assert_eq!(
+                session.chart.nav,
+                stellar(128),
+                "130 lists 131 alone, {source:?}"
+            );
         }
     }
 
@@ -1645,7 +1653,7 @@ mod tests {
     #[test]
     fn a_selection_not_in_the_catalog_reads_as_none() {
         let mut session = Session::start(&hub()).expect("starts");
-        session.nav = hyperspace(999);
+        session.chart.nav = hyperspace(999);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
         assert_eq!(session.map_preselection(), None);
     }
@@ -1662,7 +1670,7 @@ mod tests {
             hyperspace(134),
             "134 stands at its place"
         );
-        session.nav = NavMode::Off;
+        session.chart.nav = NavMode::Off;
         session.cue_course();
         assert_eq!(session.nav_mode(), hyperspace(134));
         hide(&mut session, &catalog, &[134]);
@@ -1780,17 +1788,17 @@ mod tests {
     /// Cycles the map's selection once, and gives the raw selection.
     fn cycle(session: &mut Session) -> NavMode {
         assert!(session.cycle_map_selection());
-        session.nav
+        session.chart.nav
     }
 
     #[test]
     fn the_map_cycle_sets_mode_3_with_the_next_listed_link_from_the_selection_and_wraps() {
         // `hub`'s 130 lists 134, 131, 131, 130, 999, 135.
         let mut session = Session::start(&hub()).expect("starts");
-        session.nav = hyperspace(134);
+        session.chart.nav = hyperspace(134);
         assert_eq!(cycle(&mut session), hyperspace(131));
         assert_eq!(session.nav_mode(), hyperspace(131));
-        session.nav = hyperspace(135);
+        session.chart.nav = hyperspace(135);
         assert_eq!(cycle(&mut session), hyperspace(134), "wraps");
     }
 
@@ -1823,7 +1831,7 @@ mod tests {
         for _ in 0..3 {
             cycle(&mut session);
         }
-        assert_eq!(session.nav, hyperspace(131), "slot 2");
+        assert_eq!(session.chart.nav, hyperspace(131), "slot 2");
         for expected in [135, 134, 131] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
         }
@@ -1864,7 +1872,7 @@ mod tests {
             NavMode::Stellar(None),
         ] {
             let mut session = Session::start(&hub()).expect("starts");
-            session.nav = before;
+            session.chart.nav = before;
             assert_eq!(cycle(&mut session), hyperspace(134), "{before:?}");
         }
     }
@@ -1873,7 +1881,7 @@ mod tests {
     fn the_map_cycle_in_a_system_with_no_links_selects_none_in_mode_3() {
         for before in [NavMode::Off, stellar(128), hyperspace(130)] {
             let mut session = linkless();
-            session.nav = before;
+            session.chart.nav = before;
             assert_eq!(cycle(&mut session), NavMode::Hyperspace(None), "{before:?}");
         }
     }
@@ -1908,7 +1916,7 @@ mod tests {
         assert!(hide(&mut session, &catalog, &[131]));
         session.pilot.course = ids(&[134]);
         session.cue_course();
-        assert_eq!(session.nav, hyperspace(134));
+        assert_eq!(session.chart.nav, hyperspace(134));
         assert_eq!(cycle(&mut session), hyperspace(134), "slot 1, after slot 0");
         assert_eq!(cycle(&mut session), hyperspace(132));
     }
@@ -1926,7 +1934,7 @@ mod tests {
             for (rules, expected) in [(Rulebook::default(), engine), (other, by_other)] {
                 let source = rules.source_for(RuleKey::MapCycleStart);
                 let mut session = Session::start(&hub()).expect("starts").with_rules(rules);
-                session.nav = stellar(stellar_id);
+                session.chart.nav = stellar(stellar_id);
                 assert_eq!(
                     cycle(&mut session),
                     hyperspace(expected),
@@ -1939,7 +1947,7 @@ mod tests {
     #[test]
     fn a_map_cycle_from_a_system_no_slot_stands_for_starts_at_the_first_link() {
         let mut session = Session::start(&hub()).expect("starts");
-        session.nav = hyperspace(132);
+        session.chart.nav = hyperspace(132);
         assert_eq!(cycle(&mut session), hyperspace(134));
     }
 
@@ -1950,7 +1958,7 @@ mod tests {
         catalog.star_map[0] = star(130, (0.0, 0.0), &[132, 131]);
         with_alternate(&mut catalog);
         let mut session = Session::start(&catalog).expect("starts");
-        session.nav = hyperspace(134);
+        session.chart.nav = hyperspace(134);
         assert_eq!(cycle(&mut session), hyperspace(132), "after 131's slot");
     }
 
@@ -1962,7 +1970,7 @@ mod tests {
         catalog.star_map[0] = star(130, (0.0, 0.0), &links);
         for (stellar_id, expected) in [(100, 135), (142, 135), (143, 134)] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.nav = stellar(stellar_id);
+            session.chart.nav = stellar(stellar_id);
             assert_eq!(
                 cycle(&mut session),
                 hyperspace(expected),
@@ -1977,7 +1985,7 @@ mod tests {
         let mut catalog = hub();
         catalog.star_map[0] = star(130, (0.0, 0.0), &[-1, 131, -1, 132]);
         let mut session = Session::start(&catalog).expect("starts");
-        session.nav = stellar(129);
+        session.chart.nav = stellar(129);
         assert_eq!(cycle(&mut session), hyperspace(132), "after slot 1, 131's");
     }
 

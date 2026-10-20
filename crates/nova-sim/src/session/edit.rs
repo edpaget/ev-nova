@@ -1110,7 +1110,7 @@ mod tests {
         assert_eq!(combat.shots().len(), 1);
         land_now(&mut session).expect("lands");
         session.space.combat = combat;
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.ship.warp.gate = Some(StellarId(129));
         session.stage_scene(session.npcs()[0].id);
         assert_eq!(session.space.escorts.fleet.len(), 2);

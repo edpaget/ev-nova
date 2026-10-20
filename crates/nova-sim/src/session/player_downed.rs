@@ -406,7 +406,7 @@ mod tests {
     fn firing_at_the_npc(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         session.hold_trigger(FIRE);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let _ = session.take_sounds();
         let _ = session.take_messages();
         session
@@ -484,7 +484,7 @@ mod tests {
             let mut session = facing_an_npc(&catalog, 180);
             session.space.traffic.npcs_mut()[0].reserves.armor.now = armor;
             session.hold_trigger(FIRE);
-            session.target = Some(NpcId(0));
+            session.chart.target = Some(NpcId(0));
             let _ = session.take_sounds();
             let _ = session.take_messages();
             let below = Below(10.0);

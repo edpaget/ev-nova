@@ -1148,7 +1148,7 @@ pub(super) mod tests {
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
         let quarry = pirate(&mut session, 0.0, -300.0);
         session.select_target(TargetPick::Nearest);
-        assert_eq!(session.target, Some(quarry));
+        assert_eq!(session.chart.target, Some(quarry));
         launch(&mut session);
         let fighter = fleet_npcs(&session)[0].clone();
         assert_eq!(
@@ -1306,7 +1306,7 @@ pub(super) mod tests {
         assert_eq!(session.pilot().escorts()[0].order, None, "no target");
         assert_eq!(fleet_npcs(&session)[0].target, None);
         let first = session.space.escorts.fleet[0];
-        session.target = first;
+        session.chart.target = first;
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }

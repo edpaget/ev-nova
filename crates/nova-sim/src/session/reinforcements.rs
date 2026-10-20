@@ -222,7 +222,7 @@ impl Session {
     /// The daily step's reinforcements: each visible system's countdown
     /// goes down by one (@0xb724-0xb759).
     pub(super) fn reinforcements_day(&mut self) {
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         for (system, days) in &mut self.pilot.reinforcement_days {
             if galaxy.visible(*system) {
                 *days = reinforcements::day(*days);

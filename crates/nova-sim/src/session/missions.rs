@@ -284,7 +284,7 @@ impl Session {
             crate::story::listers_of(&self.statics.listed_stellars, stellar)
                 .iter()
                 .copied()
-                .filter(|&system| self.galaxy.exists(system) && !refresh.hides(system))
+                .filter(|&system| self.chart.galaxy.exists(system) && !refresh.hides(system))
         };
         if crate::story::listers_of(&self.statics.listed_stellars, stop.stellar).is_empty() {
             return Err(StopRefusal::NoSystem);
@@ -602,7 +602,7 @@ impl Session {
         let penalty = abort_penalty(&record, self.statics.govt_targets(&record), |govt| {
             self.pilot.legal_record(govt)
         });
-        let in_systems = abort_penalty(&record, self.galaxy.governed(), |system| {
+        let in_systems = abort_penalty(&record, self.chart.galaxy.governed(), |system| {
             self.pilot.system_record(system)
         });
         self.set_records(&penalty, &in_systems);
@@ -868,7 +868,7 @@ impl Session {
                     &self.statics.govts,
                 );
                 let systems = cleaned(
-                    self.galaxy.governed(),
+                    self.chart.galaxy.governed(),
                     |system| self.pilot.system_record(system),
                     of,
                     among,
@@ -954,7 +954,7 @@ impl Session {
         let changes = failure_records(&record, self.statics.govt_targets(&record), |govt| {
             self.pilot.legal_record(govt)
         });
-        let in_systems = failure_records(&record, self.galaxy.governed(), |system| {
+        let in_systems = failure_records(&record, self.chart.galaxy.governed(), |system| {
             self.pilot.system_record(system)
         });
         self.set_records(&changes, &in_systems);
@@ -1035,7 +1035,7 @@ impl Session {
         let in_systems = success_records(
             &record,
             &self.statics.govts,
-            self.galaxy.governed(),
+            self.chart.galaxy.governed(),
             |system| self.pilot.system_record(system),
         );
         self.set_records(&changes, &in_systems);
@@ -1245,12 +1245,12 @@ impl Session {
     /// `f` of the galaxy a mission's stellars are chosen from.
     pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
         let player = self.pilot.system;
-        let stellars = stellars_of(&self.galaxy, &self.statics.listed_stellars, player);
-        let placed = placements(&self.galaxy, &self.statics.listed_stellars, player);
+        let stellars = stellars_of(&self.chart.galaxy, &self.statics.listed_stellars, player);
+        let placed = placements(&self.chart.galaxy, &self.statics.listed_stellars, player);
         f(&World {
             stellars: &stellars,
             placed: &placed,
-            map: self.galaxy.map(),
+            map: self.chart.galaxy.map(),
             govts: &self.statics.govts,
             draw: self.setup.rules.source_for(RuleKey::MissionStellarDraw),
             distance: self.setup.rules.source_for(RuleKey::MissionStellarDistance),
@@ -1261,8 +1261,8 @@ impl Session {
     /// `f` of the visit to `stellar`, one of the stellars shown: `None`
     /// when it is not shown.
     pub(super) fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
-        let docked = *self.sites.iter().find(|site| site.id == stellar)?;
-        Some(self.visit_with(Some(docked), self.shown, f))
+        let docked = *self.chart.sites.iter().find(|site| site.id == stellar)?;
+        Some(self.visit_with(Some(docked), self.chart.shown, f))
     }
 
     /// `f` of the flight in the player's system, with no stellar docked:
@@ -1698,9 +1698,10 @@ impl TagNames for Session {
     }
 
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
-        self.galaxy
+        self.chart
+            .galaxy
             .whereabouts(self.statics.listers(stellar), self.pilot.system)
-            .named(self.galaxy.map().places())
+            .named(self.chart.galaxy.map().places())
     }
 
     fn cargo_name(&self, cargo: u8) -> Option<String> {
@@ -1941,6 +1942,7 @@ mod tests {
     /// Takes `session` off and puts it at rest over 128 in 130.
     fn back_over_128(session: &mut Session) {
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(128))
@@ -2493,9 +2495,9 @@ mod tests {
         session.pilot.set_legal_record(GovtId(128), 5);
         // Hidden under the player directly: a refresh would move the
         // player out (`leave_hidden`), but every reader must still agree.
-        let mut overlay = session.galaxy.overlay().clone();
+        let mut overlay = session.chart.galaxy.overlay().clone();
         assert!(overlay.set_visible(SystemId(130), Some(false)));
-        session.galaxy.set_overlay(overlay);
+        session.chart.galaxy.set_overlay(overlay);
         assert!(!session.galaxy().visible(SystemId(130)), "hidden");
         assert_eq!(session.system_record(), 5, "govt 128's, though hidden");
         assert_eq!(
@@ -2651,6 +2653,7 @@ mod tests {
             settle(session, catalog);
         }
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
@@ -4204,7 +4207,7 @@ mod tests {
     #[test]
     fn s_in_flight_in_a_system_with_no_stellars_resolves_from_128() {
         let session = started_in_flight_in(133);
-        assert!(session.sites.is_empty(), "133 lists none");
+        assert!(session.chart.sites.is_empty(), "133 lists none");
         assert_eq!(destination(&session), Some(StellarId(128)));
     }
 
@@ -5002,6 +5005,7 @@ mod tests {
             .expect("takes off");
         settle(&mut session, &catalog);
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(129))

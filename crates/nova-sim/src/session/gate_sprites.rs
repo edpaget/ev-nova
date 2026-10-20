@@ -50,7 +50,8 @@ impl Session {
 
     /// Hypergate `gate`, when it is shown.
     fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .find(|site| site.id == gate && is_hypergate(site))
     }
@@ -58,6 +59,7 @@ impl Session {
     /// Keeps a sprite for each hypergate shown, and only for those.
     pub(super) fn keep_gate_sprites(&mut self) {
         let gates: Vec<StellarId> = self
+            .chart
             .sites
             .iter()
             .filter(|site| is_hypergate(site))
@@ -79,7 +81,7 @@ impl Session {
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
         let dock = self.dock;
-        for site in self.sites.iter().filter(|site| is_hypergate(site)) {
+        for site in self.chart.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self
                 .space
                 .slot_sprite_width(&self.statics, &self.setup, site);
@@ -309,7 +311,7 @@ mod tests {
             let mut session = flying(&catalog);
             if empty_slot {
                 // A rebuild point that could read no frame for the gate.
-                let mut unreadable = session.sites.clone();
+                let mut unreadable = session.chart.sites.clone();
                 for site in &mut unreadable {
                     site.frame_size = None;
                 }
@@ -445,11 +447,11 @@ mod tests {
         tick(&mut session, &catalog);
         session.keep_gate_sprites();
         assert_eq!(session.gate_frame(StellarId(300)), Some(1), "kept");
-        let shown = session.sites.clone();
-        session.sites.retain(|site| site.id != StellarId(300));
+        let shown = session.chart.sites.clone();
+        session.chart.sites.retain(|site| site.id != StellarId(300));
         session.keep_gate_sprites();
         assert!(session.space.gate_sprites.is_empty(), "let go");
-        session.sites = shown;
+        session.chart.sites = shown;
         session.keep_gate_sprites();
         assert_eq!(
             session.space.gate_sprites.get(&StellarId(300)),

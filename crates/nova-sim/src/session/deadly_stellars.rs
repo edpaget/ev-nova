@@ -243,8 +243,8 @@ pub(super) mod tests {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
-        session.listed = listed.to_vec();
-        session.sites = listed[..shown].to_vec();
+        session.chart.listed = listed.to_vec();
+        session.chart.sites = listed[..shown].to_vec();
         session
     }
 
@@ -475,9 +475,9 @@ pub(super) mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut session = among(&catalog, &[on_the_npc()], 1, rules);
-            session.target = Some(NpcId(0));
+            session.chart.target = Some(NpcId(0));
             fight(&mut session);
-            assert_eq!(session.target, None);
+            assert_eq!(session.chart.target, None);
         }
     }
 
@@ -669,8 +669,8 @@ pub(super) mod tests {
             fight(&mut session);
             assert_eq!(session.npcs().len(), 1);
             let at = session.npcs()[0].state.position;
-            session.sites = vec![deadly_at(140, at.x, at.y)];
-            session.listed = session.sites.clone();
+            session.chart.sites = vec![deadly_at(140, at.x, at.y)];
+            session.chart.listed = session.chart.sites.clone();
             session.tick_again(
                 Controls::default(),
                 &crate::ai::NovaAi::default(),
@@ -748,8 +748,8 @@ pub(super) mod tests {
             if struck(&trial) {
                 session.take_messages();
                 session.take_sounds();
-                session.sites = vec![deadly_at(140, 0.0, 40.0)];
-                session.listed = session.sites.clone();
+                session.chart.sites = vec![deadly_at(140, 0.0, 40.0)];
+                session.chart.listed = session.chart.sites.clone();
                 fire_at_the_player(&mut session, catalog);
                 assert!(struck(&session), "hit that tick");
                 return session;
@@ -915,11 +915,11 @@ pub(super) mod tests {
                     "by a strike"
                 );
                 let at = session.space.npc(target).expect("there").state.position;
-                session.sites = vec![LandingSite {
+                session.chart.sites = vec![LandingSite {
                     frame_size: Some((2, 2)),
                     ..deadly_at(160, at.x, at.y)
                 }];
-                session.listed = session.sites.clone();
+                session.chart.listed = session.chart.sites.clone();
                 fight(session);
                 return;
             }

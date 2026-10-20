@@ -115,7 +115,7 @@ impl Session {
     /// independent stellar.
     fn docked_govt(&self) -> Option<GovtId> {
         let landed = self.landed?;
-        self.sites.iter().find(|site| site.id == landed)?.govt
+        self.chart.sites.iter().find(|site| site.id == landed)?.govt
     }
 
     /// Takes what the price multipliers read as the spaceport opens
@@ -707,7 +707,7 @@ pub(super) mod tests {
             .take_off(catalog, &mut NeverFires)
             .expect("takes off");
         let _ = session.settle_script(catalog, &mut NeverFires);
-        let site = session.sites[0];
+        let site = session.chart.sites[0];
         session.ship.player.position = site.position;
         session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session).expect("lands again");
@@ -943,8 +943,8 @@ pub(super) mod tests {
             let mut session = landed_holding(&catalog, rules, &[200]);
             assert_eq!(prices(&mut session), ONE_RANK, "{timing:?}");
             // Government 130 is no ally of the rank's government 128.
-            session.sites[0].govt = Some(crate::catalog::GovtId(130));
-            session.listed[0].govt = Some(crate::catalog::GovtId(130));
+            session.chart.sites[0].govt = Some(crate::catalog::GovtId(130));
+            session.chart.listed[0].govt = Some(crate::catalog::GovtId(130));
             assert_eq!(prices(&mut session), while_landed, "{timing:?}");
             land_again(&mut session, &catalog);
             assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");
@@ -1430,10 +1430,10 @@ pub(super) mod tests {
         }];
         let mut session = holding(&catalog, Rulebook::default(), &[]);
         let at = |session: &mut Session, stellar: usize| {
-            let site = session.sites[stellar];
+            let site = session.chart.sites[stellar];
             session.ship.player.position = site.position;
             session.ship.player.velocity = crate::geometry::Vec2::ZERO;
-            session.nav = crate::navigation::NavMode::Off;
+            session.chart.nav = crate::navigation::NavMode::Off;
         };
         at(&mut session, 1);
         land_now(&mut session).expect("lands at 129");

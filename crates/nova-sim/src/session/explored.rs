@@ -86,7 +86,7 @@ impl Session {
     /// when lower (see the module docs). Raises no event.
     pub(super) fn explore_place(&mut self, system: SystemId, level: ExploredLevel) {
         let source = self.setup.explored_by_place();
-        for explored in explored_with(system, self.galaxy.map().places(), source) {
+        for explored in explored_with(system, self.chart.galaxy.map().places(), source) {
             self.pilot.raise_explored(explored, level);
         }
     }
@@ -96,7 +96,7 @@ impl Session {
     /// level. Raises no event.
     pub(super) fn share_explored(&mut self) {
         let source = self.setup.explored_by_place();
-        let places = self.galaxy.map().places();
+        let places = self.chart.galaxy.map().places();
         let explored = shared_by_place(&self.pilot.explored, places, source);
         let charted = shared_by_place(&self.pilot.charted, places, source);
         for system in explored {
@@ -110,13 +110,13 @@ impl Session {
     /// Whether `system` is known (+0x1ec; see the module docs' "Known").
     #[must_use]
     pub fn is_known(&self, system: SystemId) -> bool {
-        self.known.contains(&system)
+        self.chart.known.contains(&system)
     }
 
     /// The systems known, by ascending ID.
     #[must_use]
     pub fn known(&self) -> &BTreeSet<SystemId> {
-        &self.known
+        &self.chart.known
     }
 
     /// A rebuild point's known pass (see the module docs' "Known"): every
@@ -124,14 +124,14 @@ impl Session {
     /// visible, explored system and its links by place marked
     /// (@0x32b91-0x32c10).
     pub(super) fn rework_known(&mut self) {
-        self.known = known_from(&self.galaxy, &self.pilot.explored);
+        self.chart.known = known_from(&self.chart.galaxy, &self.pilot.explored);
     }
 
     /// A map grant's known pass, after its walk, with no clear
     /// (`_AutoSetExploration` @0xdb06-0xdbd4).
     pub(super) fn add_known(&mut self) {
-        let known = known_from(&self.galaxy, &self.pilot.explored);
-        self.known.extend(known);
+        let known = known_from(&self.chart.galaxy, &self.pilot.explored);
+        self.chart.known.extend(known);
     }
 
     /// Marks `systems` known, as the hypergate map marks each system it
@@ -139,7 +139,7 @@ impl Session {
     /// gate's offers as its map opens (see the
     /// [`galaxy_map`](crate::galaxy_map) module).
     pub fn mark_known(&mut self, systems: impl IntoIterator<Item = SystemId>) {
-        self.known.extend(systems);
+        self.chart.known.extend(systems);
     }
 
     /// A new pilot's neighbours (see the module docs): each of the start
@@ -147,7 +147,7 @@ impl Session {
     /// engine, that system's head, and by the other reading the system.
     pub(super) fn explore_start_neighbours(&mut self) {
         let source = self.setup.explored_by_place();
-        let galaxy = &self.galaxy;
+        let galaxy = &self.chart.galaxy;
         let neighbours = start_neighbours(
             galaxy.con_slots(self.pilot.system),
             |system| galaxy.exists(system) && galaxy.visible(system),

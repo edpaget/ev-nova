@@ -265,7 +265,7 @@ impl Session {
         if let Some(slot) = self.space.npc(hulk).map(slot_of) {
             self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
-        self.target = None;
+        self.chart.target = None;
         self.deselect();
         self.ship.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
@@ -1207,8 +1207,9 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, KEPT, DROPPED]);
         let target = session.npcs()[0].id;
-        session.target = Some(target);
-        session.nav = crate::navigation::NavMode::Stellar(Some(crate::catalog::StellarId(128)));
+        session.chart.target = Some(target);
+        session.chart.nav =
+            crate::navigation::NavMode::Stellar(Some(crate::catalog::StellarId(128)));
         session.ship.secondary = Some(WeaponId(128));
         let state = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
@@ -1243,7 +1244,7 @@ mod tests {
             "x takes y, then a push east: {:?}",
             session.ship.player.velocity
         );
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.ship.secondary, None);
         assert_eq!(session.ship.condition, Condition::Intact);

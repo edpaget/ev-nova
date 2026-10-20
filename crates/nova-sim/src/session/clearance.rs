@@ -117,14 +117,15 @@ impl Session {
     pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
         if let Some(stellar) = selected {
             self.set_nav(NavMode::Stellar(Some(stellar)));
-            self.nav_fly_in.start();
+            self.chart.nav_fly_in.start();
         }
     }
 
     /// How the request's line and the greeting word `stellar`, one of the
     /// system's.
     fn dock_kind(&self, stellar: crate::catalog::StellarId) -> DockKind {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .find(|site| site.id == stellar)
             .map_or(DockKind::Planet, DockKind::of_site)
@@ -136,7 +137,12 @@ impl Session {
         if !self.land_key
             && let Some(mut request) = self.dock
         {
-            match self.sites.iter().find(|site| site.id == request.stellar) {
+            match self
+                .chart
+                .sites
+                .iter()
+                .find(|site| site.id == request.stellar)
+            {
                 None => self.dock = None,
                 Some(site) => {
                     let blessing = self.blessing();
@@ -159,7 +165,7 @@ impl Session {
                 }
             }
         }
-        if matches!(self.nav, NavMode::Hyperspace(_)) {
+        if matches!(self.chart.nav, NavMode::Hyperspace(_)) {
             self.dock = None;
         }
     }
@@ -412,7 +418,7 @@ mod tests {
         let mut session = session();
         session.land().expect("requests");
         tick(&mut session);
-        session.sites[0].min_status = 32767;
+        session.chart.sites[0].min_status = 32767;
         assert_eq!(session.land(), landed(128), "after the greeting");
 
         // A far request, then the ship moved over the stellar with no

@@ -280,7 +280,7 @@ impl Session {
             self.out.save_due = true;
             // What a `Visibility` test reads is the pilot's: one left as
             // it was cannot change the galaxy.
-            self.galaxy_stale = true;
+            self.chart.galaxy_stale = true;
         }
     }
 

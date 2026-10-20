@@ -109,7 +109,7 @@ impl Session {
         let reserves = &mut self.pilot.reserves;
         reserves.shield.now = 0.0;
         reserves.armor.now = -1.0;
-        self.target = None;
+        self.chart.target = None;
         let player = self.ship.player;
         for npc in self.space.traffic.npcs_mut() {
             if docked_with_player(npc, &player) {
@@ -227,7 +227,7 @@ mod tests {
     fn tick_149_beeps_151_says_have_a_nice_day_and_destroys_the_player() {
         let catalog = armed();
         let mut session = flying(&catalog);
-        session.target = Some(NpcId(1));
+        session.chart.target = Some(NpcId(1));
         hold(&mut session, 148);
         assert_eq!(session.player_condition(), Condition::Intact);
         let (sounds, messages) = tick(&mut session, true);
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(messages, [line(SelfDestructLine::NiceDay)]);
         assert_eq!(session.pilot.reserves.shield.now, 0.0);
         assert!(session.pilot.reserves.armor.now <= -1.0);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert!(matches!(
             session.player_condition(),
             Condition::Dying { .. } | Condition::Destroyed

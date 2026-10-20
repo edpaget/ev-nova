@@ -183,7 +183,7 @@ fn the_reused_slot_reading_outlives_a_new_traffic() {
         let rules = Rulebook::default().with_override(RuleKey::ReusedSlotPick, reading);
         let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
         assert_eq!(session.space.traffic.reused_slot_pick(), reading);
-        let stellar = session.sites[0].id;
+        let stellar = session.chart.sites[0].id;
         session
             .land_at(&catalog, session.pilot.system, stellar)
             .expect("relocates");

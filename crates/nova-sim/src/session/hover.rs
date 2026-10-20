@@ -23,14 +23,14 @@ impl Session {
         ship_under(
             self.npcs(),
             self.scanner(),
-            self.target.is_some()
+            self.chart.target.is_some()
                 && matches!(self.ship.condition, Condition::Intact | Condition::Disabled),
             at,
             drawn,
         )
         .or_else(|| {
             self.jump.is_none().then(|| {
-                stellar_under(&self.sites, at, |site| {
+                stellar_under(&self.chart.sites, at, |site| {
                     self.space
                         .drawn_frame_size(&self.statics, &self.setup, site)
                 })
@@ -82,10 +82,10 @@ impl Session {
         if self.landed.is_some() {
             return None;
         }
-        let before = self.target;
+        let before = self.chart.target;
         let mut took = None;
         if drawn.player().is_some_and(|ship| in_box(at, ship)) {
-            self.target = None;
+            self.chart.target = None;
             took = Some(Hover::Player);
         }
         let scanner = self.scanner();
@@ -96,11 +96,11 @@ impl Session {
             .find(|npc| drawn.npc(npc.id).is_some_and(|ship| in_box(at, ship)))
             .map(|npc| npc.id)
         {
-            self.target = Some(id);
+            self.chart.target = Some(id);
             took = Some(Hover::Ship(id));
         }
-        if self.target != before {
-            self.out.sounds.push(if self.target.is_some() {
+        if self.chart.target != before {
+            self.out.sounds.push(if self.chart.target.is_some() {
                 SimSound::TargetSelected
             } else {
                 SimSound::TargetCleared
@@ -111,13 +111,13 @@ impl Session {
         if self.jump.is_some() {
             return None;
         }
-        let selected = self.nav.stellar();
-        let picked = stellar_under_past(&self.sites, at, selected, |site| {
+        let selected = self.chart.nav.stellar();
+        let picked = stellar_under_past(&self.chart.sites, at, selected, |site| {
             self.space
                 .drawn_frame_size(&self.statics, &self.setup, site)
         })?;
         self.out.sounds.push(SimSound::NavSelected);
-        self.nav_fly_in.start();
+        self.chart.nav_fly_in.start();
         self.set_nav(NavMode::Stellar(Some(picked)));
         self.dock = None;
         Some(Hover::Stellar(picked))
@@ -201,7 +201,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let far = Vec2::new(-5000.0, 0.0);
         assert_eq!(session.hover(far, &AllAt(far)), None);
-        session.target = Some(NpcId(99));
+        session.chart.target = Some(NpcId(99));
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
     }
 
@@ -210,7 +210,7 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         let far = Vec2::new(-5000.0, 0.0);
-        session.target = Some(NpcId(99));
+        session.chart.target = Some(NpcId(99));
         session.ship.condition = Condition::Disabled;
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
         session.ship.condition = Condition::Dying {
@@ -293,21 +293,21 @@ mod tests {
             session.click_in_space(SPACE, &drawn),
             Some(Hover::Ship(ids[0]))
         );
-        assert_eq!(session.target, Some(ids[0]));
+        assert_eq!(session.chart.target, Some(ids[0]));
         assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
-        assert_eq!(session.target_fly_in, started_fly_in());
+        assert_eq!(session.chart.target_fly_in, started_fly_in());
     }
 
     #[test]
     fn a_click_on_the_players_ship_lets_go_of_the_target_with_the_clear_beep() {
         let (mut session, ids) = flying(1);
-        session.target = Some(ids[0]);
+        session.chart.target = Some(ids[0]);
         let drawn = Drawn::default().player_at(PLAYER_AT);
         assert_eq!(
             session.click_in_space(PLAYER_AT, &drawn),
             Some(Hover::Player)
         );
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.take_sounds(), [SimSound::TargetCleared]);
     }
 
@@ -323,14 +323,14 @@ mod tests {
             None,
             "own ship, no target"
         );
-        assert_eq!(session.target, None);
-        session.target = Some(ids[0]);
+        assert_eq!(session.chart.target, None);
+        session.chart.target = Some(ids[0]);
         assert_eq!(
             session.click_in_space(Vec2::new(5000.0, 5000.0), &drawn),
             None,
             "the target again"
         );
-        assert_eq!(session.target, Some(ids[0]));
+        assert_eq!(session.chart.target, Some(ids[0]));
         assert_eq!(session.take_sounds(), []);
         assert_eq!(session.nav_mode(), crate::NavMode::Off);
     }
@@ -338,16 +338,20 @@ mod tests {
     #[test]
     fn a_click_on_the_target_drawn_over_a_stellar_selects_the_stellar() {
         let (mut session, ids) = flying(1);
-        session.target = Some(ids[0]);
+        session.chart.target = Some(ids[0]);
         let drawn = Drawn::default().with(ids[0], OVER_128);
         assert_eq!(
             session.click_in_space(OVER_128, &drawn),
             Some(Hover::Stellar(StellarId(128)))
         );
-        assert_eq!(session.target, Some(ids[0]), "kept");
+        assert_eq!(session.chart.target, Some(ids[0]), "kept");
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
-        assert_eq!(session.nav_fly_in, started_fly_in(), "the brackets fly in");
+        assert_eq!(
+            session.chart.nav_fly_in,
+            started_fly_in(),
+            "the brackets fly in"
+        );
     }
 
     #[test]
@@ -376,7 +380,7 @@ mod tests {
             Some(Hover::Ship(ids[1])),
             "passed over"
         );
-        session.target = None;
+        session.chart.target = None;
         session.statics_mut().outfits =
             vec![crate::testkit::outfit(250, &[(MOD_SCANNER, SCAN_TARGET)])];
         session
@@ -398,17 +402,17 @@ mod tests {
             session.click_in_space(SPACE, &drawn),
             Some(Hover::Ship(ids[0]))
         );
-        assert_eq!(session.target, Some(ids[0]));
+        assert_eq!(session.chart.target, Some(ids[0]));
         assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
     }
 
     #[test]
     fn a_click_on_the_players_ship_over_the_target_keeps_it_and_tries_the_stellars() {
         let (mut session, ids) = flying(1);
-        session.target = Some(ids[0]);
+        session.chart.target = Some(ids[0]);
         let drawn = Drawn::default().player_at(SPACE).with(ids[0], SPACE);
         assert_eq!(session.click_in_space(SPACE, &drawn), None, "no stellar");
-        assert_eq!(session.target, Some(ids[0]), "kept");
+        assert_eq!(session.chart.target, Some(ids[0]), "kept");
         assert_eq!(session.nav_mode(), crate::NavMode::Off);
         assert_eq!(session.take_sounds(), []);
 
@@ -417,7 +421,7 @@ mod tests {
             session.click_in_space(OVER_128, &over),
             Some(Hover::Stellar(StellarId(128)))
         );
-        assert_eq!(session.target, Some(ids[0]), "kept");
+        assert_eq!(session.chart.target, Some(ids[0]), "kept");
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
     }
@@ -473,7 +477,7 @@ mod tests {
         ];
         let mut session = Session::start(&catalog).expect("starts");
         let none = Drawn::default();
-        session.nav = crate::NavMode::Stellar(Some(StellarId(131)));
+        session.chart.nav = crate::NavMode::Stellar(Some(StellarId(131)));
         session.take_sounds();
         assert_eq!(
             session.click_in_space(Vec2::new(10.0, 0.0), &none),
@@ -497,7 +501,7 @@ mod tests {
         let drawn = Drawn::default().with(ids[0], SPACE);
         assert_eq!(session.click_in_space(SPACE, &drawn), None);
         assert_eq!(session.click_in_space(OVER_128, &drawn), None);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.nav_mode(), crate::NavMode::Off);
         assert_eq!(session.take_sounds(), []);
     }

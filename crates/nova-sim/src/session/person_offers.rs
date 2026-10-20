@@ -132,7 +132,10 @@ impl Session {
     /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
     /// -1, else index 0 @0xa1514).
     pub(super) fn first_listed_stellar(&self) -> StellarId {
-        self.sites.first().map_or(StellarId(128), |site| site.id)
+        self.chart
+            .sites
+            .first()
+            .map_or(StellarId(128), |site| site.id)
     }
 
     /// The stellar whose being a mission's destination counts it reached
@@ -473,7 +476,7 @@ pub(super) mod tests {
 
     fn populated(catalog: &FakePilotCatalog, rules: Rulebook, nav: Option<i16>) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        session.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
+        session.chart.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
         session.populate(catalog, &mut NeverFires);
         session
     }
@@ -518,7 +521,7 @@ pub(super) mod tests {
             Rulebook::default().with_override(RuleKey::PersonMissionStellar, RuleSource::Bible);
         let session = populated(&catalog, rules, None);
         assert_eq!(session.system(), SystemId(133));
-        assert!(session.sites.is_empty());
+        assert!(session.chart.sites.is_empty());
         assert_eq!(offered_to(&session), Some(StellarId(128)));
     }
 
@@ -527,7 +530,7 @@ pub(super) mod tests {
         let catalog = in_an_empty_system(linked(0));
         let session = populated(&catalog, Rulebook::default(), None);
         assert_eq!(session.system(), SystemId(133));
-        assert!(session.sites.is_empty());
+        assert!(session.chart.sites.is_empty());
         assert_eq!(offered_to(&session), None);
     }
 
@@ -580,7 +583,7 @@ pub(super) mod tests {
     fn a_person_jumping_in_mid_stay_resolves_and_overwrites_the_last_offer() {
         let (catalog, mut session) = awaiting_arrivals();
         assert_eq!(offered_to(&session), None, "Ace's");
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.tick_traffic(&catalog, &NovaAi::default(), &mut Draws::of(&[0, 0, 473]));
         let names: Vec<Option<i16>> = session
             .npcs()
@@ -589,7 +592,7 @@ pub(super) mod tests {
             .collect();
         assert_eq!(names, [Some(600), Some(601)], "Bee jumps in");
         assert_eq!(offered_to(&session), Some(StellarId(129)), "Bee's");
-        session.nav = crate::navigation::NavMode::Off;
+        session.chart.nav = crate::navigation::NavMode::Off;
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             offered_to(&session),
@@ -727,7 +730,7 @@ pub(super) mod tests {
         let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.populate(catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session
     }
 
@@ -833,7 +836,7 @@ pub(super) mod tests {
             (Err(HailRefusal::NoResponse), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::NoTarget), vec![])
@@ -985,10 +988,10 @@ pub(super) mod tests {
         let catalog = talking();
         let rules = Rulebook::default().with_override(RuleKey::PersonMissionStellar, reading);
         let mut session = populated(&catalog, rules, Some(resolved));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
         assert_eq!(accept(&mut session), Ok(0));
         session.pilot().missions().get(0).expect("held").reached
     }
@@ -1004,7 +1007,7 @@ pub(super) mod tests {
         let mut catalog = linked(0);
         catalog.missions[0].flags = 0x0004;
         let mut session = populated(&catalog, Rulebook::default(), Some(129));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(
             matches!(

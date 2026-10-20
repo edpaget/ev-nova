@@ -27,8 +27,8 @@ impl Session {
             .systems
             .iter()
             .filter(|&(&id, _)| {
-                self.galaxy.exists(id)
-                    && self.galaxy.visible(id)
+                self.chart.galaxy.exists(id)
+                    && self.chart.galaxy.visible(id)
                     && self.pilot.explored_level(id) > ExploredLevel::Unexplored
                     && self.is_known(id)
             })

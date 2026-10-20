@@ -156,7 +156,7 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
     }
 
     fn open(&self, system: SystemId) -> bool {
-        let galaxy = &self.session.galaxy;
+        let galaxy = &self.session.chart.galaxy;
         galaxy.exists(system)
             && galaxy.visible(system)
             && self.session.is_known(system)
@@ -169,7 +169,7 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
             .landing_sites(system)
             .into_iter()
             .map(|site| {
-                let site = self.session.galaxy.site(site);
+                let site = self.session.chart.galaxy.site(site);
                 let active = self.session.stellar_owner(site.id).is_some();
                 (site.id, qualifies(&site, active, record))
             })
@@ -282,7 +282,7 @@ impl Session {
         self.ship.condition = Condition::Intact;
         self.pod = None;
         self.ship.fate.pod_zeroed = false;
-        self.target = None;
+        self.chart.target = None;
         self.ship.fate.self_destruct.reset();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
@@ -323,7 +323,7 @@ impl Session {
             self.pilot.set_legal_record(govt, record);
         }
         self.pilot.system_legal = Some(crate::legal::systems_from_govts(
-            self.galaxy.governed(),
+            self.chart.galaxy.governed(),
             &BTreeMap::new(),
             &self.statics.govts,
         ));
@@ -354,7 +354,7 @@ impl Session {
             .listed_stellars
             .iter()
             .find(|listed| listed.id == stellar)?;
-        self.galaxy.owner(&listed.systems)
+        self.chart.galaxy.owner(&listed.systems)
     }
 
     /// Where the rescue takes the pod from `from`, the system the player
@@ -446,7 +446,7 @@ mod tests {
         let catalog = galaxy();
         let mut session = explored(&catalog, &[133]);
         assert!(session.search_map(&catalog).open(SystemId(133)));
-        session.known.remove(&SystemId(133));
+        session.chart.known.remove(&SystemId(133));
         assert!(!session.search_map(&catalog).open(SystemId(133)), "unknown");
         assert_eq!(
             session.escape_destination(SystemId(130), &catalog),
@@ -1021,8 +1021,8 @@ mod tests {
         assert!(session.red_alert_icon().is_some(), "the alert is up");
         session.recent_rank = Some(RankId(140));
         session.queued.sound = Some(SoundId(200));
-        session.target = Some(NpcId(5));
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.chart.target = Some(NpcId(5));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
         session.ship.latches.blessing_ranks.clear();
         session.ship.latches.scan_latches = Latches {
@@ -1040,8 +1040,12 @@ mod tests {
         assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
         assert_eq!(session.recent_rank, None);
         assert_eq!(session.queued.sound, None);
-        assert_eq!(session.target, None);
-        assert_eq!(session.nav, crate::navigation::NavMode::Off, "_ResetPlayer");
+        assert_eq!(session.chart.target, None);
+        assert_eq!(
+            session.chart.nav,
+            crate::navigation::NavMode::Off,
+            "_ResetPlayer"
+        );
         assert_eq!(
             session.ship.latches.blessing_ranks, session.pilot.ranks,
             "taken again"

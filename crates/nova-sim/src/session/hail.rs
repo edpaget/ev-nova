@@ -227,7 +227,8 @@ impl Session {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
         let stellar = self.nav_target().ok_or(HailRefusal::NoTarget)?;
-        self.sites
+        self.chart
+            .sites
             .iter()
             .find(|site| site.id == stellar)
             .filter(|site| landing::answers_hail(site))
@@ -881,7 +882,7 @@ mod tests {
         session.populate(catalog, &mut placed(0, -300));
         // Setup starts it at its top speed: brought to rest.
         npc(&mut session).state.velocity = Vec2::ZERO;
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.pilot.cash = 100_000;
         session
     }
@@ -928,7 +929,7 @@ mod tests {
         let catalog = hailable();
         // Boxed: six sessions are too large for the stack together.
         let mut untargeted = Box::new(targeting(&catalog));
-        untargeted.target = None;
+        untargeted.chart.target = None;
         let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
@@ -996,7 +997,7 @@ mod tests {
         assert!(asked.is_empty());
         session.let_go_of_lost_target();
         assert_eq!(
-            session.target, None,
+            session.chart.target, None,
             "as the original lets it go (@0x686a4)"
         );
     }
@@ -1120,9 +1121,10 @@ mod tests {
     /// `Flags2` `flags2`.
     fn at_stellar(catalog: &FakePilotCatalog, flags: u32, flags2: u16) -> Session {
         let mut session = targeting(catalog);
-        session.target = None;
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.chart.target = None;
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         let site = session
+            .chart
             .sites
             .iter_mut()
             .find(|site| site.id == StellarId(128))
@@ -1157,7 +1159,7 @@ mod tests {
         let catalog = hailable();
         let land = StellarFlags::CAN_LAND;
         let mut hidden = Box::new(at_stellar(&catalog, land, 0));
-        hidden.sites.retain(|site| site.id != StellarId(128));
+        hidden.chart.sites.retain(|site| site.id != StellarId(128));
         for (mut session, why) in [
             (
                 Box::new(at_stellar(&catalog, land | StellarFlags::UNINHABITED, 0)),
@@ -1182,7 +1184,7 @@ mod tests {
     fn with_no_ship_target_and_no_nav_stellar_there_is_nothing_to_hail() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.nav = crate::navigation::NavMode::Off;
+        session.chart.nav = crate::navigation::NavMode::Off;
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
         assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
         assert!(asked.is_empty(), "{asked:?}");
@@ -1193,7 +1195,7 @@ mod tests {
     fn option_held_hails_the_nav_stellar_over_the_ship_target() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Ok(super::super::Hailed::Stellar(StellarId(128))));
         assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
@@ -1206,7 +1208,7 @@ mod tests {
         let catalog = hailable();
         let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         let mut session = at_stellar(&catalog, flags, 0);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x6261c");
         assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
@@ -1240,7 +1242,7 @@ mod tests {
             starting: false,
         };
         for mut session in [landed, jumping, dying] {
-            session.target = Some(NpcId(0));
+            session.chart.target = Some(NpcId(0));
             for option in [false, true] {
                 let (hailed, asked, sounds) = key_with(&mut session, &catalog, option);
                 assert_eq!(hailed, Err(HailRefusal::NoTarget), "option {option}");
@@ -1254,7 +1256,7 @@ mod tests {
     fn every_refusal_beeps_once() {
         let catalog = hailable();
         let mut untargeted = Box::new(targeting(&catalog));
-        untargeted.target = None;
+        untargeted.chart.target = None;
         let mut disabled = Box::new(targeting(&catalog));
         npc(&mut disabled).condition = Condition::Disabled;
         let mut arriving = Box::new(targeting(&catalog));
@@ -1280,7 +1282,7 @@ mod tests {
     fn a_refusal_through_hail_beeps_too() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        session.target = None;
+        session.chart.target = None;
         session.take_sounds();
         assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_err());
         assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
@@ -2383,7 +2385,7 @@ mod tests {
     fn escorting(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting(catalog);
         session.join_fleet(NpcId(0));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.take_save_due();
         session
     }
@@ -2897,7 +2899,7 @@ mod tests {
         assert_eq!(merchant.condition, Condition::Intact);
         assert!(merchant.escort.is_some());
         assert!(session.is_escort(NpcId(0)));
-        assert_eq!(session.target, None, "the player's target cleared");
+        assert_eq!(session.chart.target, None, "the player's target cleared");
         let other = session.space.npc(other).expect("there");
         assert_eq!((other.target, other.goal), (None, Goal::Idle), "let go");
         assert!(session.take_save_due());
