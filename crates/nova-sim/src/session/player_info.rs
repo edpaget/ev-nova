@@ -81,7 +81,7 @@ impl Session {
     /// key handler runs, so an exploded player's key is silent too: its
     /// fate's row refuses the press before it gets here.
     pub fn press_player_info(&mut self) -> bool {
-        if self.jump.is_some()
+        if self.mode.jump().is_some()
             || self.port.in_takeoff_grace()
             || matches!(self.ship.condition, Condition::Dying { .. })
         {
@@ -102,7 +102,7 @@ impl Session {
     /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
     /// the session does not hold.
     pub fn open_player_info(&mut self, catalog: &impl PilotCatalog) -> Option<PlayerInfo> {
-        if self.jump.is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
+        if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }
         self.reset_precalced();
@@ -1051,14 +1051,14 @@ mod tests {
         use crate::session::precalced::tests::{convicted, overloaded};
         let catalog = catalog();
         let jumping = |session: &mut Session| {
-            session.jump = Some(super::super::Jump::PreJump {
+            session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                 to: SystemId(131),
                 bearing: None,
                 warp: None,
             });
         };
         let hyperspace = |session: &mut Session| {
-            session.jump = Some(super::super::Jump::Hyperspace {
+            session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                 to: SystemId(131),
                 warp: 0,
             });
@@ -1104,14 +1104,14 @@ mod tests {
         let catalog = catalog();
         let refusals: [Refusal; 3] = [
             ("the pre-jump, +0x50 > 0 (@0x702f7)", |session| {
-                session.jump = Some(super::super::Jump::PreJump {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                     to: SystemId(131),
                     bearing: None,
                     warp: None,
                 });
             }),
             ("hyperspace, +0x50 > 0 (@0x702f7)", |session| {
-                session.jump = Some(super::super::Jump::Hyperspace {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                     to: SystemId(131),
                     warp: 0,
                 });

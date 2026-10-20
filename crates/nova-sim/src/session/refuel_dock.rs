@@ -208,7 +208,7 @@ mod tests {
     fn nothing_is_given_while_landed_or_by_a_ship_not_intact_or_coasting() {
         let catalog = catalog();
         let (mut landed, _) = refuelled(&catalog, 40.0, 300.0);
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let (mut disabled, helper) = refuelled(&catalog, 40.0, 300.0);
         disabled.space.npc_mut(helper).expect("here").condition = Condition::Disabled;
         let (mut coasting, helper) = refuelled(&catalog, 40.0, 300.0);
@@ -227,7 +227,7 @@ mod tests {
     fn a_refuel_goes_on_through_the_warp_lead_in() {
         let catalog = catalog();
         let (mut session, _) = refuelled(&catalog, 40.0, 300.0);
-        session.jump = Some(Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });

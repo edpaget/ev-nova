@@ -680,7 +680,7 @@ impl Session {
         group: EscortGroup,
         command: EscortCommand,
     ) -> Option<Commanded> {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return None;
         }
         // The original lets go of the escorts' targets earlier in every
@@ -753,7 +753,7 @@ impl Session {
                 command
             },
             targeted: reported.is_some(),
-            underway: self.jump.is_some(),
+            underway: self.mode.jump().is_some(),
         })
     }
 

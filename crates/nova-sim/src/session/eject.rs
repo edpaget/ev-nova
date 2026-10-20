@@ -340,7 +340,7 @@ impl Session {
         };
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         // Whole degrees (`cvttss2si` @0x68d84).
         let heading = self.ship.player.heading.trunc();
         let state = &mut self.ship.player;
@@ -1367,7 +1367,7 @@ mod tests {
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.statics_mut().warp_sounds[0] = 9;
-        session.jump = Some(BRAKING);
+        session.mode = crate::session::Mode::Jumping(BRAKING);
         session.take_messages();
         let (breakup, check) = to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
@@ -1389,7 +1389,7 @@ mod tests {
                 SimMessage::JumpCollapsed
             ]
         );
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.jump(), None);
         // C is the old class's (2.08, `Flags` 0x0004), not the pod's.
         let speed = crate::warp::lead_in_speed(2, crate::warp::warp_factor(0x0004), 9);
         assert_ne!(
@@ -1411,7 +1411,7 @@ mod tests {
         let catalog = escaping();
         let (mut session, sounds) = escaped(&catalog, &[], |session| {
             session.statics_mut().warp_sounds[0] = 9;
-            session.jump = Some(BRAKING);
+            session.mode = crate::session::Mode::Jumping(BRAKING);
         });
         assert_eq!(
             session.take_messages(),
@@ -1452,7 +1452,7 @@ mod tests {
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.set_double_time_key(true);
         session.statics_mut().warp_sounds = [9, 9];
-        session.jump = Some(BRAKING);
+        session.mode = crate::session::Mode::Jumping(BRAKING);
         session.pilot.reserves.armor.now = 0.0;
         session.ship.condition = Condition::Dying {
             ticks_left: 0,
@@ -1465,7 +1465,7 @@ mod tests {
             &mut NeverFires,
         );
         assert!(in_the_pod(&session));
-        assert_eq!(session.jump, None, "collapsed");
+        assert_eq!(session.mode.jump(), None, "collapsed");
         assert_eq!(hulk(&session).state.velocity, Vec2::ZERO, "no speed");
     }
 
@@ -1869,9 +1869,10 @@ mod tests {
     fn the_pod_thrusts_along_its_heading_and_ignores_controls_and_fire() {
         let catalog = ejecting(100);
         let mut session = in_a_pod(&catalog, 90.0);
-        let handling = session
-            .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         assert!(handling.accel > 0.0 && handling.max_speed > handling.accel);
         let controls = crate::flight::Controls {
             thrust: false,

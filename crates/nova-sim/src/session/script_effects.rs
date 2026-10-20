@@ -351,7 +351,7 @@ impl Session {
         self.out.interface_loads.clear();
         let mut settled = Settled::default();
         if let Some(stellar) = self.run.offer_roll_due.take()
-            && self.landed == Some(stellar)
+            && self.mode.landed() == Some(stellar)
         {
             self.roll_landing_offers(stellar, catalog, &mut &mut *chance);
         }
@@ -409,7 +409,7 @@ impl Session {
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.run.leave_due(self.landed)
+        self.run.leave_due(self.mode.landed())
     }
 
     /// Carries out a held `Q`'s leave ([`Session::leave_due`]) as the
@@ -480,7 +480,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             self.run.empty_offers();
             return;
         }
@@ -514,7 +514,7 @@ impl Session {
             (site.position, dock)
         });
         let rules = self.setup.script_effect_rules();
-        let landed = self.landed.is_some();
+        let landed = self.mode.landed().is_some();
         let ship = match first {
             _ if keep => ShipPlacement::Keep,
             Some((position, _)) => ShipPlacement::AtRest(position),
@@ -826,7 +826,9 @@ mod tests {
     fn moved(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
         run(session, text);
         let _ = settle(session, catalog);
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
     }
 
     fn ids(sites: &[LandingSite]) -> Vec<i16> {
@@ -1491,7 +1493,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
@@ -1521,7 +1525,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
@@ -2028,7 +2034,9 @@ mod tests {
         session.run.drop_raised();
         run(session, text);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.story_raised()
     }
 
@@ -2114,7 +2122,9 @@ mod tests {
             run(&mut session, text);
             let mut settled = Settled::default();
             session.settle_moves(&catalog, &mut NeverFires, &mut settled);
-            session.chart.assert_docked_among_shown(session.landed);
+            session
+                .chart
+                .assert_docked_among_shown(session.mode.landed());
             assert_eq!(
                 session.story_raised(),
                 [crate::story::StoryEvent::EnteredSystem {

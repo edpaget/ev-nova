@@ -46,7 +46,9 @@ impl Session {
 
     /// The player's frame's hold on `pass` (see the module docs).
     pub(super) fn hold_player(&mut self, pass: GamePass) {
-        let step = self.ship.tractor_step(&self.pilot, &self.setup, self.jump);
+        let step = self
+            .ship
+            .tractor_step(&self.pilot, &self.setup, self.mode.jump());
         let npcs = self.space.traffic.npcs();
         player_pass(
             &mut self.ship.tractor,
@@ -138,12 +140,12 @@ mod tests {
         let mut session = held(Vec2::new(-2.0, 2.0));
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         assert_eq!(
             step,
             session
                 .ship
-                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                 .accel
                 * 0.25
         );
@@ -171,12 +173,12 @@ mod tests {
         session.ship.ion.charge = 200.0;
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         assert_eq!(
             step,
             session
                 .ship
-                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                 .accel
                 * 0.25
         );
@@ -191,7 +193,7 @@ mod tests {
         npc.condition = Condition::Disabled;
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             session.npcs()[0].state.velocity,
@@ -204,7 +206,7 @@ mod tests {
         let mut session = held(Vec2::new(-2.0, 2.0));
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
@@ -225,7 +227,7 @@ mod tests {
         session.ship.player.velocity = Vec2::new(1.0, -1.0);
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(1.0 - step, step - 1.0));
         assert!(!session.held_by_other());
@@ -237,7 +239,7 @@ mod tests {
         session.pod = Some(100);
         let step = session
             .ship
-            .tractor_step(&session.pilot, &session.setup, session.jump);
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         session.tick(Controls::default());
         assert_eq!(session.pod, Some(99), "the pod flew");
         assert_eq!(session.player().velocity.x, -step);
@@ -246,16 +248,17 @@ mod tests {
     #[test]
     fn a_held_player_is_not_slowed() {
         let mut session = held(Vec2::ZERO);
-        let handling = session
-            .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         let top = session.top_speed();
         assert!(session.held_by_other());
         session.ship.tractor = None;
         assert_eq!(
             session
                 .ship
-                .flying_handling(&session.pilot, &session.setup, session.jump),
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump()),
             handling
         );
         assert_eq!(session.top_speed(), top);

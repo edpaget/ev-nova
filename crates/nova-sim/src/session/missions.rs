@@ -252,7 +252,8 @@ impl Session {
     /// storyline walker (`fixture`), its one caller.
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn docked_at_mission_stop(&self, stop: Stop) -> bool {
-        self.landed
+        self.mode
+            .landed()
             .is_some_and(|docked| self.setup.docked_at_stop(&self.statics, Some(stop), docked))
     }
 
@@ -360,7 +361,7 @@ impl Session {
         self.out.interface_loads.clear();
         let venue = self
             .run
-            .offer_of(self.landed, mission)
+            .offer_of(self.mode.landed(), mission)
             .map(|offer| offer.venue);
         let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
         if let Some(venue) = venue {
@@ -390,7 +391,7 @@ impl Session {
     ) -> Result<u8, AcceptError> {
         let offer = self
             .run
-            .offer_of(self.landed, mission)
+            .offer_of(self.mode.landed(), mission)
             .ok_or(AcceptError::NotOffered)?;
         let record = self
             .statics
@@ -440,7 +441,10 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<RefuseShown, NotOffered> {
         self.out.interface_loads.clear();
-        let offer = self.run.offer_of(self.landed, mission).ok_or(NotOffered)?;
+        let offer = self
+            .run
+            .offer_of(self.mode.landed(), mission)
+            .ok_or(NotOffered)?;
         let at = self.run.outside_position(&offer);
         let record = self.statics.lifecycle_record(mission);
         let offer_hidden = self
@@ -568,7 +572,7 @@ impl Session {
         active.ships = self.ships_at_accept(record, &active, chance);
         let slot = self.pilot.missions.fill(active)?;
         self.run.register_slot(&self.pilot, slot);
-        if self.landed.is_none() {
+        if self.mode.landed().is_none() {
             // In flight the original's per-frame poll checks the goals
             // next (see the `mission_ships` module).
             self.run.goal_checks_due.push(slot);
@@ -592,7 +596,7 @@ impl Session {
         self.load_at_accept(slot, record, chance);
         let in_dialog = self.run.offer_dialog_open
             || self.setup.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
-        let docked = self.landed;
+        let docked = self.mode.landed();
         let here = docked
             .or_else(|| self.ship_offer_reaches())
             .filter(|_| in_dialog);
@@ -647,7 +651,7 @@ impl Session {
     /// Keeps only the offers still available at the stellar docked at
     /// ([`Offers::refilter`](mission::Offers::refilter)).
     fn refilter_offers(&mut self) {
-        let Some(stellar) = self.landed else {
+        let Some(stellar) = self.mode.landed() else {
             return;
         };
         // Each offer checked writes its cached `AvailBits` (@0xa207a).
@@ -760,7 +764,7 @@ impl Session {
             self.chart
                 .apply_pay(&mut self.pilot, &self.statics, &mut self.out, pay);
         }
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             self.release_mission_ships(slot);
         }
         self.run.ending.remove(&slot);
@@ -934,7 +938,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        if active.failed.is_some() || active.days_left != Some(0) || self.landed.is_some() {
+        if active.failed.is_some() || active.days_left != Some(0) || self.mode.landed().is_some() {
             return;
         }
         let record = self.statics.lifecycle_record(active.mission);
@@ -978,7 +982,7 @@ impl Session {
         if !std::mem::take(&mut self.run.reoffer_due) {
             return;
         }
-        let Some(stellar) = self.landed else {
+        let Some(stellar) = self.mode.landed() else {
             return;
         };
         let mut offers = std::mem::take(&mut self.run.offers);
@@ -1032,7 +1036,8 @@ impl Session {
             return;
         }
         let origin = self
-            .landed
+            .mode
+            .landed()
             .unwrap_or_else(|| self.chart.first_listed_stellar());
         let today = self.pilot.date;
         let offer = self
@@ -1087,7 +1092,7 @@ impl Session {
             .missions
             .iter()
             .find(|record| record.id == mission)?;
-        let stellar = self.landed?;
+        let stellar = self.mode.landed()?;
         self.at_visit(stellar, |visit| {
             let facts = AvailFacts {
                 visit,
@@ -1216,7 +1221,7 @@ impl Session {
         let Some(record) = self
             .statics
             .mission_record(mission)
-            .filter(|_| self.landed.is_none())
+            .filter(|_| self.mode.landed().is_none())
         else {
             return false;
         };
@@ -1346,7 +1351,7 @@ impl Session {
         text: &str,
         rank_govts: RankTagGovts,
     ) -> Option<String> {
-        let offer = self.run.offer_of(self.landed, mission)?;
+        let offer = self.run.offer_of(self.mode.landed(), mission)?;
         let context = self.tag_context(Some(MissionValues::offered(&offer)), None, rank_govts);
         Some(text_tags::expand(text, &context, self))
     }

@@ -361,7 +361,9 @@ mod tests {
             ),
             (
                 "landed",
-                |session| session.landed = Some(crate::catalog::StellarId(128)),
+                |session| {
+                    session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
+                },
                 BoardRefusal::NoTarget,
             ),
         ];

@@ -72,7 +72,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Chart, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
+use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -683,7 +683,7 @@ impl Session {
         let left = self.pilot.system;
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
-            jump_pending: self.jump.is_some(),
+            jump_pending: self.mode.jump().is_some(),
         };
         let resets = resets(how, &self.setup.rules, facts);
         if resets.has(Reset::Strikes) {
@@ -731,7 +731,12 @@ impl Session {
             self.port.touchdown = self.ship.player.position;
         }
         if resets.has(Reset::Dock) {
-            self.landed = placement.stellar;
+            match placement.stellar {
+                Some(stellar) => self.mode = Mode::Landed(stellar),
+                None => {
+                    self.mode.take_landed();
+                }
+            }
             self.port.bar_news = None;
             self.chart.bar_nav = None;
             self.ship.warp.warp_ups.clear();
@@ -816,7 +821,7 @@ impl Session {
             Dock::AsItWas => (self.chart.shown, None),
             Dock::At(at, at_listed) => (at, Some(at_listed)),
         };
-        if self.landed.is_none() || docked_in == system {
+        if self.mode.landed().is_none() || docked_in == system {
             self.show(system, listed);
             self.chart.next_sites = None;
         } else {
@@ -837,7 +842,7 @@ impl Session {
             &self.statics.listed_stellars,
             system,
             &listed,
-            self.landed,
+            self.mode.landed(),
         );
         self.chart.listed = listed;
         self.chart.shown = system;
@@ -857,7 +862,7 @@ impl Session {
     /// rebuild point lets go of the navigation target first, so it never
     /// names a stellar no longer shown.
     pub(super) fn reshow(&mut self) -> bool {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return false;
         }
         let listed = std::mem::take(&mut self.chart.listed);
@@ -903,7 +908,7 @@ impl Session {
             self.run.queued.sound = None;
         }
         if resets.has(Reset::Jump) {
-            self.jump = None;
+            self.mode.end_jump();
         }
         if resets.has(Reset::Thrust) {
             self.ship.stop_thrust(&mut self.out);

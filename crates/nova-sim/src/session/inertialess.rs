@@ -64,7 +64,7 @@ impl Session {
     pub(super) fn fly_inertialess(&mut self, controls: Controls, aim: Option<i16>) {
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         let caps = self.player_caps();
         let disabled = self.player_fate().row().drag;
         if disabled {
@@ -288,7 +288,7 @@ mod tests {
         session.ship.aim = 45;
         let accel = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel;
         session.tick(held(false, Turn::None, true));
         assert!((session.player_speed() - (1.0 - accel)).abs() < 1e-6);
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let accel = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel;
         session.tick(Controls::default());
         assert!((session.player_speed() - (6.0 - accel)).abs() < 1e-5);
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let max_speed = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .max_speed;
         for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
             session.ship.engine_glow = base;

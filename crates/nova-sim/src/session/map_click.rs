@@ -125,7 +125,7 @@ impl Session {
     /// accepted hit did.
     pub fn map_click(&mut self, press: &MapPress<'_>) -> Option<MapClicked> {
         self.chart
-            .map_click(&mut self.pilot, &self.setup, self.landed, press)
+            .map_click(&mut self.pilot, &self.setup, self.mode.landed(), press)
     }
 
     /// Clear Route, from its button or C (@0x12c69-0x12dbf): the course

@@ -146,7 +146,7 @@ impl Session {
         let reserves = &mut self.pilot.reserves;
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;
-        self.jump = None;
+        self.mode.end_jump();
         let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
         self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
@@ -423,11 +423,11 @@ mod tests {
         fly_out(&mut session);
         session.begin_jump().expect("jumps");
         assert!(matches!(
-            session.jump,
+            session.mode.jump(),
             Some(super::super::Jump::PreJump { .. })
         ));
         fight(&mut session, &[]);
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.jump(), None);
     }
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert!(session.jumping().is_some(), "its warp is under way");
         fight(&mut session, &[]);
-        assert_eq!(session.jump, None, "+0x50 = -1.0 (@0x693a6)");
+        assert_eq!(session.mode.jump(), None, "+0x50 = -1.0 (@0x693a6)");
     }
 
     #[test]

@@ -215,7 +215,7 @@ impl Session {
             .iter()
             .find(|site| site.id == stellar)
             .copied();
-        let shown = site.is_some() && self.landed.is_none();
+        let shown = site.is_some() && self.mode.landed().is_none();
         if let Some(site) = site
             && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
         {
@@ -719,7 +719,9 @@ mod tests {
             session.relocate(&catalog, SystemId(131), StellarId(140)),
             Ok(())
         );
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(140)));
     }
 
@@ -827,7 +829,9 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         run(&mut session, "Y128");
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.pilot().stellar, Some(StellarId(128)));
         assert_eq!(
             session.take_off(&catalog, &mut Scripted::default()),
@@ -1065,7 +1069,9 @@ mod tests {
         land_now(&mut session).expect("lands");
         run(&mut session, script);
         let _ = session.settle_script(catalog, &mut Scripted::default());
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.pilot().stellar, Some(StellarId(140)), "{script}");
         assert_eq!(
@@ -2607,7 +2613,9 @@ mod tests {
         assert_eq!(shown(&session), [128, 129, 200], "130 owns 200");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(shown(&session), [140], "200 is 130's, though 131 lists it");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
     }
 
     #[test]
@@ -2746,11 +2754,15 @@ mod tests {
             "a load resumes in its stellar's owner, whatever system was saved"
         );
         assert_eq!(shown(&session), [128, 129, 200], "130's, docked at 200");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(200), Some(None));
         });
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");

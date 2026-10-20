@@ -61,7 +61,7 @@ impl Session {
     /// `_DoBarDialog` does (@0x48efe-0x48f11), for the bar's map to put
     /// back ([`Session::restore_bar_nav`]).
     pub fn open_bar(&mut self, chance: &mut dyn Chance) -> bool {
-        let Some(site) = self.chart.bar_site(self.landed) else {
+        let Some(site) = self.chart.bar_site(self.mode.landed()) else {
             return false;
         };
         self.chart.bar_nav = Some(self.chart.nav);
@@ -102,7 +102,7 @@ impl Session {
     /// unless the ship is docked at a stellar with a bar.
     #[must_use]
     pub fn news_picture(&self) -> Option<i16> {
-        self.chart.news_picture(&self.statics, self.landed)
+        self.chart.news_picture(&self.statics, self.mode.landed())
     }
 
     /// The news of the bar visit under way, as it was drawn: `None`
@@ -734,7 +734,7 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.news_picture(), None, "not landed");
         let mut session = landed(&catalog, lists());
-        session.landed = Some(StellarId(140));
+        session.mode = crate::session::Mode::Landed(StellarId(140));
         assert_eq!(session.news_picture(), None, "no bar");
     }
 

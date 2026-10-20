@@ -407,8 +407,11 @@
 //!   other state too (`run_mission_script`, the offer rolls,
 //!   `accept_mission`, and the text parsing that hands `Session` to
 //!   `TextSource::parse`) stay on `Session`.
-//! - The mode fields `landed`, `jump`, `pod` and `player_end`: phase 8
-//!   decides whether they become one enum.
+//! - `mode: mode::Mode` (`mode` module; phase 8, done): flying, landed at
+//!   a stellar or jumping, one at a time. The escape pod's countdown
+//!   `pod` and the game's end `player_end` stay `Option`s beside it: a
+//!   jump can outlive the player's death, and only [`Session::takes`],
+//!   which the view asks, keeps the pod from docking or jumping.
 //! - The stragglers `red_alert`, `tutorial` and `load_repaired`, which
 //!   stay on `Session`.
 
@@ -565,6 +568,7 @@ use self::chart::Chart;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::mission_run::MissionRun;
+use self::mode::Mode;
 use self::outbox::Outbox;
 use self::outfits::{carries, launches};
 use self::player_ship::PlayerShip;
@@ -864,23 +868,26 @@ pub struct Session {
     /// The missions' runtime state and the story runtime (see the
     /// `mission_run` module).
     run: MissionRun,
-    /// The stellar the ship is docked at, if it has landed.
-    landed: Option<StellarId>,
-    /// The jump under way, from J being accepted until the ship arrives.
-    jump: Option<Jump>,
+    /// Whether the ship flies, is docked at a stellar or is jumping, one at
+    /// a time (see the `mode` module).
+    mode: Mode,
     /// How far the game's end has got since the player's ship exploded:
     /// set to the hold's start on the explosion tick, counted down by
     /// [`Session::tick`]'s dead branch, then moved on by
     /// [`Session::begin_fade`] and [`Session::end_play`]. Read only while
     /// the ship is destroyed, and never saved: the session is dropped
-    /// when play ends.
+    /// when play ends. Beside `mode`, not in it: it can coexist with a
+    /// jump, as a deadly stellar kills a jumping player and leaves the
+    /// jump set.
     player_end: Option<Ending>,
     /// The escape pod's countdown, the ticks still to run before the
     /// rescue, while the player is in the pod: the original's +0xc908
     /// while it is above 0, set to [`POD_TICKS`](crate::POD_TICKS) by the
     /// eject (@0x6f669) and counted down by the pod's flight
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
-    /// it runs ([`crate::FateRow::saves`]).
+    /// it runs ([`crate::FateRow::saves`]). Beside `mode`, not in it: it
+    /// can coexist with a landing or a jump, as only [`Session::takes`],
+    /// which the view asks, keeps the pod from docking or jumping.
     pod: Option<u32>,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
@@ -1126,8 +1133,7 @@ impl Session {
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
         };
         let mut session = Self {
-            landed: None,
-            jump: None,
+            mode: Mode::Flying,
             player_end: None,
             pod: None,
             red_alert: RedAlert::default(),
@@ -1432,7 +1438,7 @@ impl Session {
     /// `_HandlePlayer` does.
     pub fn tick(&mut self, controls: Controls) {
         self.ship.warp.gate = None;
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         let frame = self.pass_head();
@@ -1489,7 +1495,7 @@ impl Session {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
         self.hold_player(pass);
-        self.ship.gamma_tick(self.jump);
+        self.ship.gamma_tick(self.mode.jump());
         self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
             let capacity = self.capacity();
@@ -1552,7 +1558,7 @@ impl Session {
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
         self.ship
-            .engage_afterburner(&self.pilot, self.jump, controls);
+            .engage_afterburner(&self.pilot, self.mode.jump(), controls);
         let controls = match self.ship.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1569,21 +1575,21 @@ impl Session {
                 return;
             }
         };
-        match self.jump {
+        match self.mode.jump() {
             None => {
                 let aim = self.steer(controls);
                 self.ship.bank_player(
                     self.ship
-                        .turn_way(&self.pilot, &self.setup, self.jump, controls, aim),
+                        .turn_way(&self.pilot, &self.setup, self.mode.jump(), controls, aim),
                     aim.is_some(),
                 );
                 if self.ship.player_inertialess(&self.setup) {
                     self.fly_inertialess(controls, aim);
                 } else {
                     self.ship.thrust(&mut self.out, controls.thrust);
-                    let handling = self
-                        .ship
-                        .flying_handling(&self.pilot, &self.setup, self.jump);
+                    let handling =
+                        self.ship
+                            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
                     if self.player_fate().row().drag {
                         crate::flight::drag(&mut self.ship.player);
                     }
@@ -1606,7 +1612,7 @@ impl Session {
             }
             Some(Jump::Hyperspace { to, warp }) => {
                 self.aim_at_jump(to);
-                self.jump = Some(Jump::Hyperspace {
+                self.mode = Mode::Jumping(Jump::Hyperspace {
                     to,
                     warp: if again { warp } else { warp.saturating_add(1) },
                 });
@@ -1861,7 +1867,7 @@ impl Session {
         if std::mem::take(&mut self.space.reinforcements_held) {
             self.tick_reinforcements(chance);
         }
-        if self.landed.is_none() {
+        if self.mode.landed().is_none() {
             if self.space.traffic_due {
                 if self.jumping().is_none() {
                     self.populate(catalog, chance);
@@ -1927,7 +1933,7 @@ impl Session {
         } else {
             self.tick_reinforcements(chance);
         }
-        if self.landed.is_none() {
+        if self.mode.landed().is_none() {
             self.step_gate_sprites(chance);
         }
         self.let_go_of_gone_target();
@@ -1949,7 +1955,7 @@ impl Session {
     /// the system is set up, nothing is answered; the world runs through a
     /// jump, so a hit in it is answered.
     pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
-        if self.landed.is_some() || self.space.traffic_due {
+        if self.mode.landed().is_some() || self.space.traffic_due {
             return;
         }
         let strikes = std::mem::take(&mut self.space.strikes);
@@ -2012,8 +2018,12 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self.ship.warp_world(&self.pilot, &self.statics, self.jump),
-            tractor_step: self.ship.tractor_step(&self.pilot, &self.setup, self.jump),
+            warp: self
+                .ship
+                .warp_world(&self.pilot, &self.statics, self.mode.jump()),
+            tractor_step: self
+                .ship
+                .tractor_step(&self.pilot, &self.setup, self.mode.jump()),
             weapons: &self.statics.arsenal,
         };
         let stepped = f(&mut self.space.traffic, world);
@@ -2078,8 +2088,12 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self.ship.warp_world(&self.pilot, &self.statics, self.jump),
-            tractor_step: self.ship.tractor_step(&self.pilot, &self.setup, self.jump),
+            warp: self
+                .ship
+                .warp_world(&self.pilot, &self.statics, self.mode.jump()),
+            tractor_step: self
+                .ship
+                .tractor_step(&self.pilot, &self.setup, self.mode.jump()),
             weapons: &self.statics.arsenal,
         }
     }
@@ -2101,7 +2115,9 @@ impl Session {
             },
             // Its `_ShipTurnRate` and `_ShipAccelRate`, slowed by its ion
             // charge (see the `ionization` module).
-            handling: self.ship.ionized(self.jump, self.ship.fit.stats.handling),
+            handling: self
+                .ship
+                .ionized(self.mode.jump(), self.ship.fit.stats.handling),
             rating: self.pilot.combat_rating,
             yardstick: self.statics.arsenal.strength(ShipId(128)),
             untargetable: record
@@ -2225,7 +2241,7 @@ impl Session {
     /// original draws it again.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.ship.fate.player_exploded_this_tick = false;
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             // The fight stands still, but the work queued on the line
             // settles (see `settle_line_queue`), and the pass's asteroid
             // work runs (see the `asteroids` module).
@@ -2563,7 +2579,7 @@ impl Session {
     /// While landed the keys are silent.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         let before = self.chart.target;
-        if self.landed.is_none() {
+        if self.mode.landed().is_none() {
             let scanner = self.scanner();
             let npcs = self.space.traffic.npcs();
             let from = self.ship.player.position;
@@ -2788,17 +2804,17 @@ impl Session {
     /// (`_HandlePlayer` @0x6b89f, @0x6b9cc, @0x6ba72); the engine's own
     /// refusals, landed or disabled, do not.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return Err(JumpRefusal::Landed);
         }
         if self.ship.condition != Condition::Intact {
             return Err(JumpRefusal::Disabled);
         }
-        if let Some(Jump::PreJump { to, .. }) = self.jump {
+        if let Some(Jump::PreJump { to, .. }) = self.mode.jump() {
             return Ok(to);
         }
         // A jump under way carries on whatever holds the ship (@0x6b21d).
-        let held = self.jump.is_none() && self.held_by_other();
+        let held = self.mode.jump().is_none() && self.held_by_other();
         let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
             if self.jump_refusal_told(refusal) {
                 self.out.sounds.push(SimSound::Refused);
@@ -2817,7 +2833,7 @@ impl Session {
     /// [`Session::jump_readiness`] both ask this, so the rule lives in one
     /// place.
     fn check_next_jump(&self) -> Result<SystemId, JumpRefusal> {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return Err(JumpRefusal::Landed);
         }
         check_jump(
@@ -2838,7 +2854,7 @@ impl Session {
     /// refused. The nav area draws the destination by this.
     #[must_use]
     pub fn jump_readiness(&self) -> JumpReadiness {
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             JumpReadiness::Underway
         } else if self.check_next_jump().is_ok() {
             JumpReadiness::Clear
@@ -2864,7 +2880,7 @@ impl Session {
     fn stage_jump(&mut self, to: SystemId, bearing: Option<i16>, warp: Option<u32>) {
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         let stage = pre_jump::stage(
             &self.ship.player,
             &handling,
@@ -2880,10 +2896,10 @@ impl Session {
         };
         match (stage, warp) {
             (PreJump::Ready, Some(warp)) => {
-                self.jump = Some(Jump::Hyperspace { to, warp });
+                self.mode = Mode::Jumping(Jump::Hyperspace { to, warp });
                 self.ship.sound_thrust(&mut self.out, false);
             }
-            _ => self.jump = Some(Jump::PreJump { to, bearing, warp }),
+            _ => self.mode = Mode::Jumping(Jump::PreJump { to, bearing, warp }),
         }
         if started {
             self.start_warp();
@@ -2893,7 +2909,7 @@ impl Session {
     /// The warp's clock: the engine's ticks since the warp stage began,
     /// if it has (see [`Jump`]).
     fn warp_clock(&self) -> Option<u32> {
-        warp_clock(self.jump)
+        warp_clock(self.mode.jump())
     }
 
     /// Whether the jump has begun ([`Session::jumping`]) and its warp is
@@ -2904,14 +2920,14 @@ impl Session {
     #[must_use]
     pub fn in_warp_lead_in(&self) -> bool {
         self.ship
-            .in_warp_lead_in(&self.pilot, &self.statics, self.jump)
+            .in_warp_lead_in(&self.pilot, &self.statics, self.mode.jump())
     }
 
     /// The system being jumped to, once the jump itself has begun and
     /// until the ship arrives; `None` during the pre-jump stage.
     #[must_use]
     pub fn jumping(&self) -> Option<SystemId> {
-        jumping(self.jump)
+        jumping(self.mode.jump())
     }
 
     /// The system a jump is bound for while the ship brakes and turns
@@ -2919,7 +2935,7 @@ impl Session {
     /// the jump has begun.
     #[must_use]
     pub fn preparing_jump(&self) -> Option<SystemId> {
-        match self.jump {
+        match self.mode.jump() {
             Some(Jump::PreJump { to, .. }) => Some(to),
             _ => None,
         }
@@ -3003,10 +3019,10 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
-        let Some(Jump::Hyperspace { to: first, .. }) = self.jump else {
+        let Some(Jump::Hyperspace { to: first, .. }) = self.mode.jump() else {
             return None;
         };
-        self.jump = None;
+        self.mode.end_jump();
         self.ship.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
         // module).
@@ -3253,7 +3269,7 @@ impl Session {
     }
 
     fn land_press(&mut self) -> Result<LandPress, LandingRefusal> {
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             return Err(LandingRefusal::Jumping);
         }
         let disabled = match self.ship.condition {
@@ -3568,7 +3584,7 @@ impl Session {
         self.ship.player.velocity = Vec2::ZERO;
         // `_PlayerLandOnStellar` @0x63409.
         self.ship.player_speed = 0.0;
-        self.landed = Some(stellar);
+        self.mode = Mode::Landed(stellar);
         self.ship.clear_tractor();
         self.space.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
@@ -3684,7 +3700,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
-        let stellar = self.landed.take()?;
+        let stellar = self.mode.take_landed()?;
         // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
         // @0x633a0), before the stay's days (@0x63440) and the deselect
         // (@0x674d2); see the flight view's `took_off`.
@@ -3774,7 +3790,7 @@ impl Session {
     /// purchase does not go through it: [`Session::buy_ship`] applies its
     /// purchase through `Session::become_class`.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
-        if self.landed.is_none() {
+        if self.mode.landed().is_none() {
             return false;
         }
         change(&mut self.pilot);
@@ -3786,7 +3802,7 @@ impl Session {
     /// at a trade center, priced by the stellar's [`Markup`].
     #[must_use]
     pub fn market(&self) -> Option<Market> {
-        let stellar = self.landed?;
+        let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         market::market(&market::Exchange {
             goods: &self.statics.goods,
@@ -3870,7 +3886,7 @@ impl Session {
         chance: &mut dyn Chance,
         also: Option<OutfitId>,
     ) -> Option<Outfitter> {
-        let stellar = self.landed?;
+        let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.port.outfit_rolls);
@@ -4357,7 +4373,7 @@ impl Session {
     /// declined since keeping its roll, the rolls not drawn yet drawn on
     /// `chance`.
     fn listed_shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
-        let stellar = self.landed?;
+        let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.port.ship_rolls);
@@ -4515,7 +4531,7 @@ impl Session {
     /// fuel is sold, or the refill is refused, nothing changes and the
     /// refusal says why.
     pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
-        let stellar = self.landed.ok_or(RechargeRefusal::NoFuel)?;
+        let stellar = self.mode.landed().ok_or(RechargeRefusal::NoFuel)?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar);
         if !site.is_some_and(|site| recharge::sells_fuel(site.flags)) {
             return Err(RechargeRefusal::NoFuel);
@@ -4556,7 +4572,7 @@ impl Session {
     /// The stellar the ship is docked at, if it has landed.
     #[must_use]
     pub fn landed(&self) -> Option<StellarId> {
-        self.landed
+        self.mode.landed()
     }
 
     /// Whether the ship flew its last tick under thrust. Landing and
@@ -4765,7 +4781,7 @@ impl Session {
         rule: &dyn BoardingRule,
         chance: &mut dyn Chance,
     ) -> Result<Boarding, BoardRefusal> {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return Err(BoardRefusal::NoTarget);
         }
         let target = self.target().map(|npc| self.statics.board_target(npc));
@@ -8781,9 +8797,9 @@ pub(super) mod tests {
         session.take_off(&catalog, &mut NeverFires);
         begin_jump_now(&mut session).expect("jumps from the edge");
         assert!(
-            matches!(session.jump, Some(Jump::Hyperspace { .. })),
+            matches!(session.mode.jump(), Some(Jump::Hyperspace { .. })),
             "{:?}",
-            session.jump
+            session.mode.jump()
         );
         let leaving = session.reserves().fuel.now;
         for _ in 0..10 {
@@ -8793,7 +8809,7 @@ pub(super) mod tests {
         let max = session.reserves().fuel.max;
         session.pilot.reserves.fuel.now = max + 5.0;
         session.tick(Controls::default());
-        assert!(matches!(session.jump, Some(Jump::Hyperspace { .. })));
+        assert!(matches!(session.mode.jump(), Some(Jump::Hyperspace { .. })));
         assert_eq!(session.reserves().fuel.now, max, "clamped");
     }
 
@@ -16942,7 +16958,7 @@ pub(super) mod tests {
         let catalog = quoting_armed();
         let mut session = hit_in_its_gate(&catalog);
         session.answer_strikes(&crate::ai::NovaAi::default());
-        session.landed = Some(crate::catalog::StellarId(128));
+        session.mode = Mode::Landed(crate::catalog::StellarId(128));
         session.tick_quotes_again(&catalog, &mut crate::chance::NeverFires);
         assert!(session.take_quotes().is_empty());
         assert!(!session.take_sounds().contains(&SimSound::HailQuote));
@@ -16952,10 +16968,10 @@ pub(super) mod tests {
     fn strikes_are_left_unanswered_while_landed_jumping_or_before_the_system_is_set_up() {
         let catalog = quoting_armed();
         let mut session = hit_in_its_gate(&catalog);
-        session.landed = Some(crate::catalog::StellarId(128));
+        session.mode = Mode::Landed(crate::catalog::StellarId(128));
         session.answer_strikes(&crate::ai::NovaAi::default());
         assert!(session.npcs()[0].emerging(), "landed");
-        session.landed = None;
+        session.mode = Mode::Flying;
         session.space.traffic_due = true;
         session.answer_strikes(&crate::ai::NovaAi::default());
         assert!(session.npcs()[0].emerging(), "not set up");
@@ -17305,9 +17321,9 @@ pub(super) mod tests {
         session.hold_trigger(FIRE);
         session.ship.player.heading = 0.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
-        session.landed = Some(StellarId(128));
+        session.mode = Mode::Landed(StellarId(128));
         session.tick_combat(Rules::default(), &mut NeverFires);
-        session.landed = None;
+        session.mode = Mode::Flying;
         session.ship.player.heading = 90.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         let start = newest_start(&session, ShipRef::Player, session.ship.player.position);
@@ -19183,7 +19199,7 @@ pub(super) mod tests {
     fn the_target_keys_are_silent_while_landed() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.landed = Some(crate::catalog::StellarId(128));
+        session.mode = Mode::Landed(crate::catalog::StellarId(128));
         session.take_sounds();
         for pick in [
             TargetPick::Next,
@@ -19488,7 +19504,7 @@ pub(super) mod tests {
         let catalog = shockwave_catalog();
         let mut session = beside_a_heavy_npc(&catalog);
         session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
-        session.jump = Some(Jump::PreJump {
+        session.mode = Mode::Jumping(Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
@@ -19602,7 +19618,7 @@ pub(super) mod tests {
     fn a_player_braking_for_its_jump_is_hit_by_an_impact_shot_but_not_pushed() {
         let catalog = armed();
         let mut session = knocking(&catalog, (None, 100.0), (Some(knocker()), 100.0));
-        session.jump = Some(Jump::PreJump {
+        session.mode = Mode::Jumping(Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
@@ -19857,12 +19873,12 @@ pub(super) mod tests {
     fn a_watched_ship_is_not_observed_while_landed_but_is_through_a_jump() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.landed = Some(StellarId(128));
+        session.mode = Mode::Landed(StellarId(128));
         session.watch_ship(NpcId(0));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fates(&session), [], "landed");
-        session.landed = None;
-        session.jump = Some(Jump::Hyperspace {
+        session.mode = Mode::Flying;
+        session.mode = Mode::Jumping(Jump::Hyperspace {
             to: SystemId(131),
             warp: 1000,
         });
@@ -19896,7 +19912,7 @@ pub(super) mod tests {
 
         let watched = session.npcs()[0].id;
         session.watch_ship(watched);
-        session.landed = Some(StellarId(128));
+        session.mode = Mode::Landed(StellarId(128));
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
@@ -22736,7 +22752,7 @@ pub(super) mod tests {
                 )
             })
         };
-        session.jump = Some(Jump::PreJump {
+        session.mode = Mode::Jumping(Jump::PreJump {
             to: SystemId(129),
             bearing: None,
             warp: None,
@@ -22750,7 +22766,7 @@ pub(super) mod tests {
                 .any(|shot| shot.weapon.id == WeaponId(134)),
             "a missile at it"
         );
-        session.jump = None;
+        session.mode.end_jump();
         assert!(defended(&mut session), "firing once the jump is off");
     }
 
@@ -22808,7 +22824,7 @@ pub(super) mod tests {
                 .latches
                 .sabotage
                 .set_counter(crate::sabotage::FUSE);
-            session.jump = Some(Jump::PreJump {
+            session.mode = Mode::Jumping(Jump::PreJump {
                 to: SystemId(129),
                 bearing: None,
                 warp: None,
@@ -22822,7 +22838,10 @@ pub(super) mod tests {
                 &mut NeverFires,
             );
             let events = session.take_combat_events();
-            (quad_fired(&events, ShipRef::Player), session.jump.is_some())
+            (
+                quad_fired(&events, ShipRef::Player),
+                session.mode.jump().is_some(),
+            )
         };
         assert_eq!(
             defended(false),
@@ -23184,7 +23203,7 @@ pub(super) mod tests {
         };
         let catalog = arming(quad, slow, 0);
         let mut session = with_an_npc_at(&catalog, 750, 550, 180);
-        session.jump = Some(Jump::PreJump {
+        session.mode = Mode::Jumping(Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
@@ -24100,7 +24119,7 @@ pub(super) mod tests {
     fn nothing_is_boarded_while_landed() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.landed = Some(StellarId(128));
+        session.mode = Mode::Landed(StellarId(128));
         assert_eq!(
             board_by(&mut session, &NovaLaw::default()),
             Err(BoardRefusal::NoTarget)
@@ -24111,7 +24130,7 @@ pub(super) mod tests {
     fn a_board_during_a_jump_runs_its_checks() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.jump = Some(crate::session::Jump::Hyperspace {
+        session.mode = Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -24120,7 +24139,7 @@ pub(super) mod tests {
             Ok(Boarding::Opened(ON_BOARD))
         );
         let mut session = alongside(&catalog);
-        session.jump = Some(crate::session::Jump::Hyperspace {
+        session.mode = Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -28411,7 +28430,9 @@ pub(super) mod tests {
         let _ = session.settle_script(catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert!(session.chart.next_sites.is_some(), "deferred");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session
     }
 
@@ -28422,7 +28443,9 @@ pub(super) mod tests {
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
         });
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(
             session.chart.sites[0].id,
             StellarId(128),
@@ -28523,7 +28546,9 @@ pub(super) mod tests {
         session.run.drop_raised();
         session.take_messages();
         assert!(hide(&mut session, &catalog, &[131]));
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(*session.player(), player);
         assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
@@ -28569,7 +28594,9 @@ pub(super) mod tests {
     /// Takes off from `session`, and checks it flies in 134 among its
     /// stellars, the scene told changed.
     fn takes_off_into_134(session: &mut Session) {
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_events();
         assert_eq!(
             session.take_off(&NoTraffic, &mut NeverFires),
@@ -28587,7 +28614,9 @@ pub(super) mod tests {
         let mut session = docked_at_140(&catalog);
         assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
         hide(&mut session, &catalog, &[131]);
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert_eq!(
             session.recharge(),
@@ -29132,7 +29161,9 @@ pub(super) mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)), "docked as asked");
         assert_eq!(session.pilot().stellar, Some(StellarId(140)));

@@ -173,7 +173,7 @@ impl Session {
     /// arriving fleet on `chance`: in flight, a jump's frames included,
     /// once the system is set up.
     pub(super) fn tick_reinforcements(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if self.landed.is_some() || self.space.traffic_due {
+        if self.mode.landed().is_some() || self.space.traffic_due {
             return;
         }
         let fleet = self.space.traffic.reinforcement_fleet();

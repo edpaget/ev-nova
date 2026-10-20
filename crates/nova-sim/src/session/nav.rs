@@ -377,7 +377,7 @@ impl Session {
     /// flight view keeps the block's latch (0xdee04), which says when a
     /// held key presses again.
     pub fn nav_mode_keys(&mut self, nav_off: bool, hyperspace: bool) -> bool {
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             return false;
         }
         self.out.sounds.push(SimSound::NavSelected);
@@ -433,7 +433,7 @@ impl Session {
     /// stellar selected in mode 2 and goes on to any under it
     /// (@0x6a69d → @0x6a703).
     pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             return None;
         }
         let picked = match pick {
@@ -469,8 +469,12 @@ impl Session {
     /// the press plots a one-jump course to the system selected, the
     /// course that reading's cycle starts from.
     pub fn select_next_system(&mut self) -> Option<SystemId> {
-        self.chart
-            .select_next_system(&mut self.pilot, &self.setup, &mut self.out, self.jump)
+        self.chart.select_next_system(
+            &mut self.pilot,
+            &self.setup,
+            &mut self.out,
+            self.mode.jump(),
+        )
     }
 
     /// The links the floating map's clicks test, as `_HandlePlayer` walks
@@ -513,7 +517,7 @@ impl Session {
     /// (@0x1408c-0x140d8).
     pub fn cycle_map_selection(&mut self) -> bool {
         self.chart
-            .cycle_map_selection(&self.pilot, &self.setup, self.landed)
+            .cycle_map_selection(&self.pilot, &self.setup, self.mode.landed())
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
@@ -525,7 +529,7 @@ impl Session {
     /// on the jump state (@0x6a145).
     pub fn select_on_floating_map(&mut self, link: Option<SystemId>) -> bool {
         self.chart
-            .select_on_floating_map(&mut self.out, self.jump, link)
+            .select_on_floating_map(&mut self.out, self.mode.jump(), link)
     }
 }
 

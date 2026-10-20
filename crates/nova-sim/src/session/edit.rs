@@ -105,7 +105,7 @@ impl Session {
         system: SystemId,
         stellar: StellarId,
     ) -> Result<(), RelocateRefusal> {
-        let Some(landed) = self.landed else {
+        let Some(landed) = self.mode.landed() else {
             return Err(RelocateRefusal::InFlight);
         };
         if (system, stellar) == (self.pilot.system, landed) {
@@ -130,11 +130,12 @@ impl Session {
         system: SystemId,
         stellar: StellarId,
     ) -> Result<(), RelocateRefusal> {
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             return Err(RelocateRefusal::InFlight);
         }
         let here = self
-            .landed
+            .mode
+            .landed()
             .is_some_and(|landed| (system, stellar) == (self.pilot.system, landed));
         if !here {
             self.enter_at(catalog, system, stellar)?;
@@ -601,7 +602,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.port.hire_rolls, hire, "kept");
         assert_eq!(session.port.outfit_rolls, outfits, "kept");
         let mut kept = DayRolls::default();
@@ -633,7 +636,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.port.hire_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.port.outfit_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.port.ship_rolls, crate::wares::DayRolls::default());
@@ -667,7 +672,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(130), StellarId(129))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(session.player().position, Vec2::new(2000.0, 0.0));
     }
@@ -706,7 +713,9 @@ mod tests {
             session
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");
-            session.chart.assert_docked_among_shown(session.landed);
+            session
+                .chart
+                .assert_docked_among_shown(session.mode.landed());
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
             session.take_off(&catalog, &mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
@@ -720,7 +729,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
@@ -767,7 +778,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(flown.system(), SystemId(131));
@@ -840,7 +853,9 @@ mod tests {
             session.land_at(&catalog, SystemId(130), StellarId(129)),
             Ok(())
         );
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(
             landings(&session),
@@ -995,7 +1010,9 @@ mod tests {
                 Ok(()),
                 "{stellar}"
             );
-            session.chart.assert_docked_among_shown(session.landed);
+            session
+                .chart
+                .assert_docked_among_shown(session.mode.landed());
             assert_eq!(session.system(), SystemId(system));
             assert_eq!(session.landed(), Some(StellarId(stellar)));
             assert_eq!(session.pilot().stellar(), Some(StellarId(stellar)));
@@ -1141,7 +1158,9 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.ship.warp.gate, None);

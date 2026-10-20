@@ -63,7 +63,7 @@
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled
 //! player's jump collapses first (see the `jump_collapse` module).
 
-use super::{Jump, PlayerShip, Session, Setup, Statics};
+use super::{Jump, Mode, PlayerShip, Session, Setup, Statics};
 use crate::catalog::SystemId;
 use crate::flight::{Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
 use crate::glow::{Follow, JumpRaises, ramp_jump_glow};
@@ -144,7 +144,7 @@ impl Session {
     /// fallback (see the module docs).
     #[must_use]
     pub fn warp_end_due(&self) -> bool {
-        self.ship.warp_end_due(self.jump)
+        self.ship.warp_end_due(self.mode.jump())
     }
 
     /// The warp factor of the player's ship class (class +0x44,
@@ -183,7 +183,7 @@ impl Session {
         self.ship.jump_unfold();
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         let flight = self.setup.flight_rules();
         let way;
         (self.ship.player.heading, way) = turn(
@@ -193,12 +193,12 @@ impl Session {
             Turn::None,
             flight.player_turn,
         );
-        self.ship.bank_through_jump(self.jump, way);
+        self.ship.bank_through_jump(self.mode.jump(), way);
         let moved = staged
             && self.ship.move_off(
                 &self.pilot,
                 &self.statics,
-                self.jump,
+                self.mode.jump(),
                 bearing,
                 handling.turn_rate,
             );
@@ -227,7 +227,7 @@ impl Session {
         self.ship.ramp_jump(
             &self.pilot,
             &self.setup,
-            self.jump,
+            self.mode.jump(),
             JumpRaises {
                 brake: false,
                 bank: self.ship.banking_glow(),
@@ -251,7 +251,7 @@ impl Session {
     ) {
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         let slow_down = !self.ship.fit.stats.fast_jump;
         let flight = self.setup.flight_rules();
         let inertialess = self.ship.player_inertialess(&self.setup);
@@ -281,14 +281,14 @@ impl Session {
                 speed,
             );
             self.ship.bank_through_jump(
-                self.jump,
+                self.mode.jump(),
                 super::ship_display::way_turned(before, self.ship.player.heading),
             );
             self.ship.sound_thrust(&mut self.out, thrust);
             self.ship.ramp_jump(
                 &self.pilot,
                 &self.setup,
-                self.jump,
+                self.mode.jump(),
                 JumpRaises {
                     brake: thrust,
                     bank: self.ship.banking_glow(),
@@ -310,7 +310,7 @@ impl Session {
                 Some(ticks) if again => ticks,
                 Some(ticks) => ticks.saturating_add(1),
             };
-            self.jump = Some(Jump::PreJump {
+            self.mode = Mode::Jumping(Jump::PreJump {
                 to,
                 bearing,
                 warp: Some(warp),
@@ -365,9 +365,9 @@ impl Session {
                     to,
                     warp: Some(warp),
                     ..
-                }) = self.jump
+                }) = self.mode.jump()
                 {
-                    self.jump = Some(Jump::Hyperspace { to, warp });
+                    self.mode = Mode::Jumping(Jump::Hyperspace { to, warp });
                 }
             }
             WarpEnd::Fallback => {
@@ -578,9 +578,13 @@ mod tests {
     #[test]
     fn the_stage_starts_at_2_and_grows_by_1_a_pass_on_either_pass() {
         let mut session = jumping(&catalog());
-        assert_eq!(session.ship.warp_stage(session.jump), 2.0, "@0x6b5e9");
+        assert_eq!(
+            session.ship.warp_stage(session.mode.jump()),
+            2.0,
+            "@0x6b5e9"
+        );
         tick(&mut session);
-        assert_eq!(session.ship.warp_stage(session.jump), 3.0);
+        assert_eq!(session.ship.warp_stage(session.mode.jump()), 3.0);
         assert_eq!(session.warp_clock(), Some(1));
         session.tick_again(
             Controls::default(),
@@ -589,7 +593,7 @@ mod tests {
             &mut NeverFires,
         );
         assert_eq!(
-            session.ship.warp_stage(session.jump),
+            session.ship.warp_stage(session.mode.jump()),
             4.0,
             "double time's second pass too"
         );
@@ -603,7 +607,11 @@ mod tests {
         session.ship.warp.warp.stage = 1.0;
         session.ship.player.velocity = Vec2::new(0.5, 0.0);
         tick(&mut session);
-        assert_eq!(session.ship.warp_stage(session.jump), 1.0, "no growth");
+        assert_eq!(
+            session.ship.warp_stage(session.mode.jump()),
+            1.0,
+            "no growth"
+        );
         assert_eq!(session.ship.player.velocity, Vec2::new(0.5, 0.0), "no drag");
     }
 
@@ -613,7 +621,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         tick(&mut session);
         assert_eq!(session.warp_clock(), None, "braking");
-        assert_eq!(session.ship.warp_stage(session.jump), 1.0);
+        assert_eq!(session.ship.warp_stage(session.mode.jump()), 1.0);
     }
 
     // The drag.
@@ -662,9 +670,10 @@ mod tests {
         session.ship.player_speed = speed;
         session.ship.player.velocity = Vec2::new(0.0, -2.0);
         session.ship.engine_glow = 10;
-        let handling = session
-            .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         let caps = session.player_caps();
         let flight = session.setup.flight_rules();
         let mut dragged = session.ship.player;
@@ -747,7 +756,7 @@ mod tests {
         assert!(
             50.0 > session
                 .ship
-                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                 .max_speed
         );
     }
@@ -793,7 +802,7 @@ mod tests {
         let mut session = jumping(&catalog);
         let rate = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .turn_rate;
         assert!(rate > 30.0, "{rate}");
         assert_eq!(MOVE_OFF_ARC, 30.0);
@@ -833,10 +842,10 @@ mod tests {
     fn the_hyper_gamma_is_lowered_to_100_at_the_top_of_a_pass() {
         let mut session = jumping(&catalog());
         session.ship.warp.warp.gamma = 250.0;
-        session.ship.gamma_tick(session.jump);
+        session.ship.gamma_tick(session.mode.jump());
         assert_eq!(session.hyper_gamma(), 100.0);
         session.ship.warp.warp.gamma = -3.0;
-        session.ship.gamma_tick(session.jump);
+        session.ship.gamma_tick(session.mode.jump());
         assert_eq!(session.hyper_gamma(), 0.0);
     }
 
@@ -901,7 +910,7 @@ mod tests {
         for _ in 0..10 {
             tick(&mut session);
         }
-        session.jump = None;
+        session.mode.end_jump();
         for _ in 10..236 {
             tick(&mut session);
         }
@@ -962,7 +971,7 @@ mod tests {
         assert!(session.ship.warp.warp_out.playing(), "130 plays");
         tick(&mut session);
         assert!(session.warp_end_due(), "the pass after");
-        assert!(session.ship.warp_stage(session.jump) > 30.0);
+        assert!(session.ship.warp_stage(session.mode.jump()) > 30.0);
         assert!(session.take_sounds().is_empty(), "the pass after");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let arrival = session.take_sounds();
@@ -1112,7 +1121,7 @@ mod tests {
             assert!(
                 !session.warp_end_due(),
                 "{}",
-                session.ship.warp_stage(session.jump)
+                session.ship.warp_stage(session.mode.jump())
             );
         }
     }
@@ -1129,10 +1138,10 @@ mod tests {
             assert!(
                 !session.warp_end_due(),
                 "{}",
-                session.ship.warp_stage(session.jump)
+                session.ship.warp_stage(session.mode.jump())
             );
         }
-        assert_eq!(session.ship.warp_stage(session.jump), 30.0);
+        assert_eq!(session.ship.warp_stage(session.mode.jump()), 30.0);
         tick(&mut session);
         assert!(session.warp_end_due());
     }

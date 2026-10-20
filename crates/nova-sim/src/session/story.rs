@@ -215,9 +215,11 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn settle_leave(&mut self) -> bool {
-        self.session
-            .run
-            .settle_leave(&mut self.session.out, self.session.landed, self.settled)
+        self.session.run.settle_leave(
+            &mut self.session.out,
+            self.session.mode.landed(),
+            self.settled,
+        )
     }
 
     fn take_raised(&mut self) -> VecDeque<StoryEvent> {
@@ -1728,7 +1730,9 @@ mod tests {
             StellarId(129),
             Some(left(1)),
         );
-        session.chart.assert_docked_among_shown(session.landed);
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         let destroyed = |sites: &[LandingSite]| -> Vec<(i16, bool)> {
             sites
                 .iter()

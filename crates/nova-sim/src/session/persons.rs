@@ -194,7 +194,7 @@ impl Session {
     /// double time's second pass reads it unmoved
     /// ([`Session::tick_quotes_again`]).
     pub fn tick_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         self.space.count_down_comm_line();
@@ -219,7 +219,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         self.roll_quotes(catalog, chance);
@@ -1086,7 +1086,7 @@ mod tests {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         hit_ace(&mut session);
-        session.jump = Some(crate::session::Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -1963,7 +1963,7 @@ mod tests {
     #[test]
     fn by_the_engine_the_0x0400_mission_check_is_skipped_while_the_player_jumps() {
         let (catalog, mut session) = linked_quoting();
-        session.jump = Some(super::super::Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -1972,7 +1972,7 @@ mod tests {
             "Earlier",
             "the player jumping: no check"
         );
-        session.jump = None;
+        session.mode.end_jump();
         assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
     }
 
@@ -2277,7 +2277,7 @@ mod tests {
     #[test]
     fn nothing_is_said_while_the_player_is_landed() {
         let (catalog, mut session) = quoting([0, 0]);
-        session.landed = Some(crate::catalog::StellarId(128));
+        session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
         assert_eq!(
             quote_tick(&catalog, &mut session, &[0, 0]),
             (vec![], vec![])

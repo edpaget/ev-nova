@@ -189,7 +189,7 @@ impl Session {
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             self.tick(controls);
             if self.rescue_if_due(catalog, chance) {
                 return true;
@@ -425,7 +425,7 @@ impl Session {
             trigger: if self.pod.is_some() {
                 Trigger::default()
             } else {
-                super::player_trigger(self.ship.trigger, self.jump.is_some())
+                super::player_trigger(self.ship.trigger, self.mode.jump().is_some())
             },
             target: self.chart.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
@@ -441,7 +441,7 @@ impl Session {
             jamming: player_terms.jamming,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
-            jumping: self.jump.is_some(),
+            jumping: self.mode.jump().is_some(),
             afterburner: knockback.shots,
             afterburner_beam: knockback.beams,
             tractor: &mut self.ship.tractor,

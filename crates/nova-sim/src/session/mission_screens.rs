@@ -305,7 +305,7 @@ impl Session {
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
     pub fn press_mission_info(&mut self) -> MissionInfoPress {
-        if self.jump.is_some() || !self.takes(PlayerCommand::MissionInfo) {
+        if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
         let info = self.mission_info();
@@ -367,10 +367,10 @@ impl Session {
     /// where a ship's offer is answered over flight.
     #[must_use]
     pub fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
-        self.landed.is_some()
+        self.mode.landed().is_some()
             && self
                 .run
-                .offer_of(self.landed, mission)
+                .offer_of(self.mode.landed(), mission)
                 .is_some_and(|offer| offer.venue != Venue::Computer)
             && self
                 .statics
@@ -584,7 +584,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Option<ComputerRow> {
-        self.run.offer_of(self.landed, mission)?;
+        self.run.offer_of(self.mode.landed(), mission)?;
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts.and_then(|texts| texts.offer.clone());
@@ -742,9 +742,10 @@ impl Session {
     /// `_IsMissionAvailable(i, 1)` checks it: never in flight, nor for a
     /// mission the session has no record of.
     fn still_available(&self, offer: &Offer) -> bool {
-        let (Some(stellar), Some(record)) =
-            (self.landed, self.statics.mission_record(offer.mission))
-        else {
+        let (Some(stellar), Some(record)) = (
+            self.mode.landed(),
+            self.statics.mission_record(offer.mission),
+        ) else {
             return false;
         };
         self.at_visit(stellar, |visit| {
@@ -3340,14 +3341,14 @@ mod tests {
         type Refusal = (&'static str, fn(&mut Session));
         let refusals: [Refusal; 7] = [
             ("the pre-jump, +0x50 > 0 (@0x70424)", |session| {
-                session.jump = Some(super::super::Jump::PreJump {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                     to: SystemId(131),
                     bearing: None,
                     warp: None,
                 });
             }),
             ("hyperspace, +0x50 > 0 (@0x70424)", |session| {
-                session.jump = Some(super::super::Jump::Hyperspace {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                     to: SystemId(131),
                     warp: 0,
                 });

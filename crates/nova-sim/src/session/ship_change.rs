@@ -467,7 +467,7 @@ impl Session {
         self.become_class(&record, change, |_| {});
         self.ship.bump_armor(&mut self.pilot, &self.setup);
         // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             self.out.interface_loads.push(InterfaceLoad {
                 government: self.interface_government(),
                 nav: self.nav_mode(),

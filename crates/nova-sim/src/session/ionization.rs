@@ -65,7 +65,7 @@ impl Session {
     /// charge, its factor, and its jump under way from J on.
     #[must_use]
     pub fn ionization(&self) -> Ionization {
-        self.ship.ionization(self.jump)
+        self.ship.ionization(self.mode.jump())
     }
 
     /// Sets the player's ionization directly, for
@@ -300,7 +300,7 @@ mod tests {
         session.ship.ion.charge = 100.0;
         for tick in 1..=20 {
             session.tick(Controls::default());
-            assert!(session.jump.is_some(), "{tick}");
+            assert!(session.mode.jump().is_some(), "{tick}");
             assert_eq!(session.ion().charge, 100.0 - 0.5 * tick as f32, "{tick}");
         }
     }
@@ -342,9 +342,10 @@ mod tests {
     fn an_ionized_player_turns_slower_and_at_most_by_0_7() {
         let session = flying(&ionizing(), 200.0);
         let own = session.setup.flight_rules().handling(session.handling());
-        let flying = session
-            .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+        let flying =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         assert_eq!(flying.turn_rate, own.turn_rate * 0.5);
         assert_eq!(flying.accel, (f64::from(own.accel) * 0.5) as f32);
         assert_eq!(flying.max_speed, session.top_speed(), "the pull holds it");
@@ -352,7 +353,7 @@ mod tests {
         let swamped = swamped_session.ship.flying_handling(
             &swamped_session.pilot,
             &swamped_session.setup,
-            swamped_session.jump,
+            swamped_session.mode.jump(),
         );
         assert_eq!(
             swamped.turn_rate,
@@ -394,11 +395,12 @@ mod tests {
         session.ship.ion.charge = 200.0;
         let out = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        let jumping = session
-            .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump);
+        let jumping =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         assert_eq!(jumping.turn_rate, out.turn_rate * 2.0);
         assert_eq!(jumping.accel, out.accel);
     }

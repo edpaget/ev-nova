@@ -170,7 +170,7 @@ impl Session {
     /// the day not drawn yet; `None` when it has not landed at a stellar
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
-        let site = self.chart.bar_site(self.landed)?;
+        let site = self.chart.bar_site(self.mode.landed())?;
         let facts = Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
@@ -213,7 +213,10 @@ impl Session {
             .ship_record(ship)
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
-        let site = self.chart.bar_site(self.landed).ok_or(HireRefusal::NoBar)?;
+        let site = self
+            .chart
+            .bar_site(self.mode.landed())
+            .ok_or(HireRefusal::NoBar)?;
         let fee = self.setup.hire_terms.0.charge(
             &record,
             &site,

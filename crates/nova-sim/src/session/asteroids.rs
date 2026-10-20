@@ -87,7 +87,7 @@ impl Session {
     /// and culled in the play area (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
     pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             // The landing's kill is spent: the field stays empty until the
             // take-off, and a later frame's counter can't match it.
             self.space.asteroid_kill = None;
@@ -123,7 +123,7 @@ impl Session {
     /// it places none (see the module docs). The view runs it before it
     /// draws a frame; [`Session::tick_asteroids`] runs it too.
     pub fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if !std::mem::take(&mut self.space.asteroid_field_due) || self.landed.is_some() {
+        if !std::mem::take(&mut self.space.asteroid_field_due) || self.mode.landed().is_some() {
             return;
         }
         if self.setup.places_asteroids() {

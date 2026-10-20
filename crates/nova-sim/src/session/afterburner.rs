@@ -98,7 +98,7 @@ impl Session {
     pub(super) fn burn_afterburner(&mut self) {
         let handling = self
             .ship
-            .flying_handling(&self.pilot, &self.setup, self.jump);
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         let (top, accel) = (handling.max_speed, handling.accel);
         if !self.ship.afterburner_on {
             self.ship.player_max_vel.bleed(top, accel);
@@ -345,7 +345,7 @@ mod tests {
                 session.ship.player.velocity.x,
                 top + session
                     .ship
-                    .flying_handling(&session.pilot, &session.setup, session.jump)
+                    .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                     .accel
                     * 2.75
             ),
@@ -380,7 +380,7 @@ mod tests {
         let thrust = facing(45.0).x
             * session
                 .ship
-                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                 .accel;
         for _ in 0..4 {
             let step = moved(&mut session, held(true, true));
@@ -397,7 +397,7 @@ mod tests {
         let mut session = flying(&burner(), 90.0);
         let push = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel
             * 2.75;
         session.tick(held(false, true));
@@ -429,7 +429,7 @@ mod tests {
         let top = session.top_speed();
         let bleed = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel
             * 0.4;
         let mut box_ = session.ship.player_max_vel.get();
@@ -469,7 +469,7 @@ mod tests {
             afterburner_top(top)
                 - session
                     .ship
-                    .flying_handling(&session.pilot, &session.setup, session.jump)
+                    .flying_handling(&session.pilot, &session.setup, session.mode.jump())
                     .accel
                     * 0.4
         ));
@@ -498,18 +498,21 @@ mod tests {
     fn in_hyperspace_the_box_bleeds_by_accel_x_0_4_a_tick() {
         let mut session = flying(&burner(), 90.0);
         let box_ = widened(&mut session);
-        session.jump = Some(super::super::Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
             to: SystemId(131),
             warp: 1,
         });
         session.tick(Controls::default());
         assert!(
-            matches!(session.jump, Some(super::super::Jump::Hyperspace { .. })),
+            matches!(
+                session.mode.jump(),
+                Some(super::super::Jump::Hyperspace { .. })
+            ),
             "still in the warp's run"
         );
         let bleed = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel
             * 0.4;
         assert!(
@@ -795,7 +798,7 @@ mod tests {
         let mut session = flying(&inertialess(), 90.0);
         let push = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel
             * 2.75;
         session.tick(held(false, true));
@@ -825,7 +828,7 @@ mod tests {
         let top = session.top_speed();
         let push = session
             .ship
-            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel
             * 2.75;
         assert!(

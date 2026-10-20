@@ -4,8 +4,8 @@
 //! `become_class` and `refit`; the latches each reset arms ([`Latches`]);
 //! its death, the pod and self-destruct ([`Fate`]); and its warp and
 //! double time ([`Warp`]). The pod's countdown, the jump under way and
-//! the game's end (`pod`, `jump` and `player_end`) stay on `Session` as
-//! mode fields.
+//! the game's end (`pod`, the `mode` and `player_end`) stay on `Session`
+//! as mode fields.
 
 use std::collections::{BTreeMap, BTreeSet};
 

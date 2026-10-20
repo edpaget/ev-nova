@@ -45,15 +45,18 @@ impl Session {
     /// offered gives [`MapMarks::NONE`].
     #[must_use]
     pub fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
-        let green = self.run.offer_of(self.landed, mission).and_then(|offer| {
-            self.chart.green_system(
-                &self.pilot,
-                &self.statics,
-                mission,
-                offer.destination.map(|stop| stop.stellar),
-                offer.return_to.map(|stop| stop.stellar),
-            )
-        });
+        let green = self
+            .run
+            .offer_of(self.mode.landed(), mission)
+            .and_then(|offer| {
+                self.chart.green_system(
+                    &self.pilot,
+                    &self.statics,
+                    mission,
+                    offer.destination.map(|stop| stop.stellar),
+                    offer.return_to.map(|stop| stop.stellar),
+                )
+            });
         MapMarks {
             green,
             multi_arrows: true,

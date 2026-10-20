@@ -638,14 +638,14 @@ pub(super) mod tests {
             let catalog = armed();
             let on_the_player = deadly_at(140, 0.0, 40.0);
             let mut session = among(&catalog, &[on_the_player], 1, Rulebook::default());
-            session.jump = Some(jump);
+            session.mode = crate::session::Mode::Jumping(jump);
             fight(&mut session);
             assert_eq!(session.ship.condition, Condition::Destroyed, "{jump:?}");
             assert!(
                 matches!(session.player_end, Some(Ending::Holding { .. })),
                 "{jump:?}"
             );
-            assert_eq!(session.jump, Some(jump), "the jump stays");
+            assert_eq!(session.mode.jump(), Some(jump), "the jump stays");
             for tick in 0..5 {
                 session.tick(Controls::default());
                 fight(&mut session);
@@ -653,7 +653,7 @@ pub(super) mod tests {
                     matches!(session.player_end, Some(Ending::Holding { .. })),
                     "{jump:?} tick {tick}"
                 );
-                assert_eq!(session.jump, Some(jump), "{jump:?} tick {tick}");
+                assert_eq!(session.mode.jump(), Some(jump), "{jump:?} tick {tick}");
             }
         }
     }

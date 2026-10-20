@@ -369,7 +369,7 @@ impl Session {
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                if self.landed.is_none() {
+                if self.mode.landed().is_none() {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
@@ -1355,7 +1355,7 @@ impl Session {
     fn unmark_mission_ships(&mut self, ids: &[NpcId]) {
         let mut reform = false;
         for &id in ids {
-            if self.landed.is_some() {
+            if self.mode.landed().is_some() {
                 self.space.traffic.remove(id);
             } else {
                 reform |= self.space.unmark_mission_ship(&self.statics, id);

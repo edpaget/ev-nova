@@ -195,7 +195,7 @@ impl Session {
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         let mut source = &mut *chance;
@@ -1040,11 +1040,14 @@ mod tests {
             .expect("a route");
         fly_out(&mut jumping);
         begin_jump_now(&mut jumping).expect("jumps");
-        let (stage, clock) = (jumping.ship.warp_stage(jumping.jump), jumping.warp_clock());
+        let (stage, clock) = (
+            jumping.ship.warp_stage(jumping.mode.jump()),
+            jumping.warp_clock(),
+        );
         assert!(stage > 1.0, "in the warp stage: {stage}");
         again(&mut jumping, THRUST);
         assert_eq!(
-            jumping.ship.warp_stage(jumping.jump).to_bits(),
+            jumping.ship.warp_stage(jumping.mode.jump()).to_bits(),
             (stage + 1.0).to_bits(),
             "+0x50 grows on it too"
         );

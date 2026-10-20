@@ -116,7 +116,7 @@ impl Session {
     /// the module docs), on double time's second pass when `again`:
     /// nothing without one.
     pub(super) fn collapse_jump(&mut self, again: bool) {
-        let warp = match self.jump {
+        let warp = match self.mode.jump() {
             Some(Jump::PreJump { warp, .. }) => warp,
             Some(Jump::Hyperspace { warp, .. }) => Some(warp),
             None => return,
@@ -136,7 +136,7 @@ impl Session {
             speed,
             self.top_speed(),
         );
-        self.jump = None;
+        self.mode.end_jump();
         self.space.say(&mut self.out, SimMessage::JumpCollapsed);
         self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         self.out.sounds.push(SimSound::JumpCollapsed);

@@ -177,7 +177,7 @@ impl Session {
         // `_JettisonCargo`'s reset (@0x3e3b5; see the `precalced` module):
         // every good is gone, so its trim never cuts.
         self.reset_precalced();
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         self.drop_cargo_boxes(decided.total, goods, chance);
@@ -244,7 +244,7 @@ impl Session {
         if !scan::goes_on(ai_type, &govt, off, chance)
             || self
                 .ship
-                .warp_holds_scans(&self.pilot, &self.statics, self.jump)
+                .warp_holds_scans(&self.pilot, &self.statics, self.mode.jump())
         {
             return;
         }
@@ -2123,16 +2123,16 @@ mod tests {
         assert!(
             session
                 .ship
-                .warp_holds_scans(&session.pilot, &session.statics, session.jump),
+                .warp_holds_scans(&session.pilot, &session.statics, session.mode.jump()),
             "past the lead-in"
         );
         session.ship.condition = crate::combat::hull::Condition::Disabled;
         assert!(session.in_warp_lead_in(), "never past it");
-        assert!(
-            !session
-                .ship
-                .warp_holds_scans(&session.pilot, &session.statics, session.jump)
-        );
+        assert!(!session.ship.warp_holds_scans(
+            &session.pilot,
+            &session.statics,
+            session.mode.jump()
+        ));
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.jumping(), None, "the warp collapsed");
         assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);

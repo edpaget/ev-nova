@@ -222,7 +222,8 @@ impl Session {
     /// [`HailRefusal::NoTarget`] with none (@0x6206c); else the ship
     /// target as [`Session::answering`] says.
     pub(super) fn hail_target(&self, option: bool) -> Result<HailTarget, HailRefusal> {
-        self.ship.player_hails(self.landed, self.jump)?;
+        self.ship
+            .player_hails(self.mode.landed(), self.mode.jump())?;
         if self.target().is_some() && !option {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
@@ -245,7 +246,8 @@ impl Session {
     /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
     /// class 0x2ff, mute whoever leads it, @0x62145).
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
-        self.ship.player_hails(self.landed, self.jump)?;
+        self.ship
+            .player_hails(self.mode.landed(), self.mode.jump())?;
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
         // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
@@ -931,14 +933,14 @@ mod tests {
         let mut untargeted = Box::new(targeting(&catalog));
         untargeted.chart.target = None;
         let mut landed = Box::new(targeting(&catalog));
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
         let mut braking = Box::new(targeting(&catalog));
-        braking.jump = Some(crate::session::Jump::PreJump {
+        braking.mode = crate::session::Mode::Jumping(crate::session::Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
@@ -1230,9 +1232,9 @@ mod tests {
     fn option_held_while_landed_jumping_or_dying_hails_nothing() {
         let catalog = hailable();
         let mut landed = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let mut jumping = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -1262,7 +1264,7 @@ mod tests {
         let mut arriving = Box::new(targeting(&catalog));
         npc(&mut arriving).mode = Mode::JumpingIn { tick: 0 };
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });

@@ -181,12 +181,16 @@ impl Session {
             SetOp::RenameShip(list) => self.rename_ship(list.0, chance),
             SetOp::MoveTo(system) => {
                 self.chart
-                    .select_for_landed_move(&self.statics, self.landed, *system, true);
+                    .select_for_landed_move(&self.statics, self.mode.landed(), *system, true);
                 self.run.queued.moves.push(ScriptMove::To(*system));
             }
             SetOp::MoveKeepPosition(system) => {
-                self.chart
-                    .select_for_landed_move(&self.statics, self.landed, *system, false);
+                self.chart.select_for_landed_move(
+                    &self.statics,
+                    self.mode.landed(),
+                    *system,
+                    false,
+                );
                 self.run
                     .queued
                     .moves

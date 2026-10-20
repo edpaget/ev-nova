@@ -117,7 +117,7 @@ impl Session {
     pub(super) fn open_port_prices(&mut self) {
         self.port.port_ranks = PortRanks {
             active: self.pilot.ranks.clone(),
-            govt: self.chart.docked_govt(self.landed),
+            govt: self.chart.docked_govt(self.mode.landed()),
         };
     }
 
@@ -132,7 +132,10 @@ impl Session {
         let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
         let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
             RuleSource::Engine => (&self.port.port_ranks.active, self.port.port_ranks.govt),
-            RuleSource::Bible => (&self.pilot.ranks, self.chart.docked_govt(self.landed)),
+            RuleSource::Bible => (
+                &self.pilot.ranks,
+                self.chart.docked_govt(self.mode.landed()),
+            ),
         };
         rank::price_mults(
             &self.statics.ranks,

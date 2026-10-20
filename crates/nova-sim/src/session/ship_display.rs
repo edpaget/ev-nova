@@ -610,10 +610,10 @@ mod tests {
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 180.0);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         for _ in 0..400 {
-            let stage = session.ship.warp_stage(session.jump);
+            let stage = session.ship.warp_stage(session.mode.jump());
             session.ship.ship_display.frames.bank = 14.0;
             session.tick(Controls::default());
-            if session.ship.warp_stage(session.jump) > JUMP_LEVEL_STAGE {
+            if session.ship.warp_stage(session.mode.jump()) > JUMP_LEVEL_STAGE {
                 assert_eq!(session.ship.ship_display.frames.bank, 0.0, "past 30");
                 return;
             }
@@ -698,7 +698,7 @@ mod tests {
             assert_eq!(session.begin_jump(), Ok(SystemId(131)));
             for _ in 0..200 {
                 session.tick(Controls::default());
-                if session.ship.warp_stage(session.jump) > 1.0 {
+                if session.ship.warp_stage(session.mode.jump()) > 1.0 {
                     break;
                 }
             }

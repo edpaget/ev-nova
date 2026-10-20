@@ -401,7 +401,7 @@ mod tests {
     fn a_landed_tick_moves_no_brackets() {
         let mut session = session(&three_stellars());
         session.select_stellar(StellarPick::Slot(0));
-        session.landed = Some(StellarId(131));
+        session.mode = crate::session::Mode::Landed(StellarId(131));
         session.tick(Controls::default());
         assert_eq!(nav_expand(&session), 196.0);
     }

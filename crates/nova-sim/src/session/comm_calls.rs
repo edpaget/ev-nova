@@ -217,7 +217,7 @@ impl Session {
     /// the arrival would cut off is dropped with the system's traffic, as
     /// the original's would be held.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
         for work in self.space.traffic.take_on_line() {

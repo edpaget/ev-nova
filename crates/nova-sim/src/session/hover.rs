@@ -29,7 +29,7 @@ impl Session {
             drawn,
         )
         .or_else(|| {
-            self.jump.is_none().then(|| {
+            self.mode.jump().is_none().then(|| {
                 stellar_under(&self.chart.sites, at, |site| {
                     self.space
                         .drawn_frame_size(&self.statics, &self.setup, site)
@@ -79,7 +79,7 @@ impl Session {
     /// task nav-selection-follow-up) and the box's shape (stellar-fidelity
     /// phase 9).
     pub fn click_in_space(&mut self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return None;
         }
         let before = self.chart.target;
@@ -108,7 +108,7 @@ impl Session {
             self.retargeted(before);
             return took;
         }
-        if self.jump.is_some() {
+        if self.mode.jump().is_some() {
             return None;
         }
         let selected = self.chart.nav.stellar();
@@ -171,13 +171,13 @@ mod tests {
             Some(Hover::Stellar(StellarId(128)))
         );
         assert_eq!(session.hover(Vec2::new(500.0, 500.0), &elsewhere), None);
-        session.jump = Some(Jump::PreJump {
+        session.mode = crate::session::Mode::Jumping(Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
         });
         assert_eq!(session.hover(OVER_128, &elsewhere), None, "pre-jump");
-        session.jump = Some(Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -450,7 +450,7 @@ mod tests {
             },
         ] {
             let (mut session, ids) = flying(1);
-            session.jump = Some(jump);
+            session.mode = crate::session::Mode::Jumping(jump);
             let drawn = Drawn::default().with(ids[0], SPACE);
             assert_eq!(session.click_in_space(OVER_128, &drawn), None, "{jump:?}");
             assert_eq!(session.nav_mode(), crate::NavMode::Off, "{jump:?}");
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn a_click_while_landed_does_nothing() {
         let (mut session, ids) = flying(1);
-        session.landed = Some(StellarId(128));
+        session.mode = crate::session::Mode::Landed(StellarId(128));
         let drawn = Drawn::default().with(ids[0], SPACE);
         assert_eq!(session.click_in_space(SPACE, &drawn), None);
         assert_eq!(session.click_in_space(OVER_128, &drawn), None);

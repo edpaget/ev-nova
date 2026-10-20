@@ -21,6 +21,57 @@
 //! asks, keeps the pod from docking or jumping. The tests here pin each
 //! of those transitions.
 
+use crate::catalog::StellarId;
+
+use super::Jump;
+
+/// Whether the ship flies, is docked at a stellar or is jumping: one at a
+/// time (see the module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum Mode {
+    /// In flight, with no jump under way.
+    #[default]
+    Flying,
+    /// Docked at the stellar.
+    Landed(StellarId),
+    /// The jump under way, from J being accepted until the ship arrives.
+    Jumping(Jump),
+}
+
+impl Mode {
+    /// The stellar the ship is docked at, if it has landed.
+    pub(super) fn landed(self) -> Option<StellarId> {
+        match self {
+            Self::Landed(stellar) => Some(stellar),
+            Self::Flying | Self::Jumping(_) => None,
+        }
+    }
+
+    /// The jump under way, if any.
+    pub(super) fn jump(self) -> Option<Jump> {
+        match self {
+            Self::Jumping(jump) => Some(jump),
+            Self::Flying | Self::Landed(_) => None,
+        }
+    }
+
+    /// Lifts off: a landed mode flies, and gives the stellar it was docked
+    /// at; any other is left as it is, and gives none.
+    pub(super) fn take_landed(&mut self) -> Option<StellarId> {
+        let stellar = self.landed()?;
+        *self = Self::Flying;
+        Some(stellar)
+    }
+
+    /// Ends the jump under way, if any: a jumping mode flies; any other is
+    /// left as it is.
+    pub(super) fn end_jump(&mut self) {
+        if let Self::Jumping(_) = self {
+            *self = Self::Flying;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ai::NovaAi;
@@ -36,15 +87,67 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, begin_jump_now, catalog, land_now};
     use crate::{POD_TICKS, PlayerCommand};
 
+    use super::Mode;
+
+    const DOCK: StellarId = StellarId(128);
+
+    const WARP: Jump = Jump::Hyperspace {
+        to: SystemId(131),
+        warp: 7,
+    };
+
+    #[test]
+    fn the_queries_read_each_variant() {
+        assert_eq!(Mode::default(), Mode::Flying);
+        assert_eq!(Mode::Flying.landed(), None);
+        assert_eq!(Mode::Flying.jump(), None);
+        assert_eq!(Mode::Landed(DOCK).landed(), Some(DOCK));
+        assert_eq!(Mode::Landed(DOCK).jump(), None);
+        assert_eq!(Mode::Jumping(WARP).landed(), None);
+        assert_eq!(Mode::Jumping(WARP).jump(), Some(WARP));
+    }
+
+    #[test]
+    fn taking_landed_from_landed_flies() {
+        let mut mode = Mode::Landed(DOCK);
+        assert_eq!(mode.take_landed(), Some(DOCK));
+        assert_eq!(mode, Mode::Flying);
+        assert_eq!(mode.take_landed(), None);
+        assert_eq!(mode, Mode::Flying);
+    }
+
+    #[test]
+    fn taking_landed_from_a_jump_leaves_it_jumping() {
+        let mut mode = Mode::Jumping(WARP);
+        assert_eq!(mode.take_landed(), None);
+        assert_eq!(mode, Mode::Jumping(WARP));
+    }
+
+    #[test]
+    fn ending_a_jump_flies() {
+        let mut mode = Mode::Jumping(WARP);
+        mode.end_jump();
+        assert_eq!(mode, Mode::Flying);
+        mode.end_jump();
+        assert_eq!(mode, Mode::Flying);
+    }
+
+    #[test]
+    fn ending_a_jump_leaves_a_landed_mode_landed() {
+        let mut mode = Mode::Landed(DOCK);
+        mode.end_jump();
+        assert_eq!(mode, Mode::Landed(DOCK));
+    }
+
     /// A session in the pre-jump stage, bound for 131: at rest facing up,
     /// it turns before it jumps.
     fn preparing(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 0.0);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         assert!(
-            matches!(session.jump, Some(Jump::PreJump { .. })),
+            matches!(session.mode.jump(), Some(Jump::PreJump { .. })),
             "{:?}",
-            session.jump
+            session.mode.jump()
         );
         session
     }
@@ -54,9 +157,9 @@ mod tests {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 0.0);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert!(
-            matches!(session.jump, Some(Jump::Hyperspace { .. })),
+            matches!(session.mode.jump(), Some(Jump::Hyperspace { .. })),
             "{:?}",
-            session.jump
+            session.mode.jump()
         );
         session
     }
@@ -76,10 +179,10 @@ mod tests {
         let catalog = catalog();
         for start in JUMPING {
             let mut session = start(&catalog);
-            let jump = session.jump;
+            let jump = session.mode.jump();
             assert_eq!(session.land(), Err(LandingRefusal::Jumping));
-            assert_eq!(session.landed, None);
-            assert_eq!(session.jump, jump);
+            assert_eq!(session.mode.landed(), None);
+            assert_eq!(session.mode.jump(), jump);
         }
     }
 
@@ -88,13 +191,13 @@ mod tests {
         let catalog = catalog();
         for start in JUMPING {
             let mut session = start(&catalog);
-            let jump = session.jump;
+            let jump = session.mode.jump();
             assert_eq!(
                 session.land_at(&catalog, SystemId(130), StellarId(128)),
                 Err(RelocateRefusal::InFlight)
             );
-            assert_eq!(session.landed, None);
-            assert_eq!(session.jump, jump);
+            assert_eq!(session.mode.landed(), None);
+            assert_eq!(session.mode.jump(), jump);
         }
     }
 
@@ -104,8 +207,8 @@ mod tests {
         let mut session = docked(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
-        assert_eq!(session.landed, Some(StellarId(128)));
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.landed(), Some(StellarId(128)));
+        assert_eq!(session.mode.jump(), None);
     }
 
     #[test]
@@ -132,8 +235,8 @@ mod tests {
                 Rules::default(),
                 &mut NeverFires,
             );
-            assert_eq!(session.landed, Some(StellarId(128)), "pass {pass}");
-            assert_eq!(session.jump, None, "pass {pass}");
+            assert_eq!(session.mode.landed(), Some(StellarId(128)), "pass {pass}");
+            assert_eq!(session.mode.jump(), None, "pass {pass}");
         }
     }
 
@@ -142,8 +245,8 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-        assert_eq!(session.landed, Some(StellarId(128)));
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.landed(), Some(StellarId(128)));
+        assert_eq!(session.mode.jump(), None);
     }
 
     #[test]
@@ -153,14 +256,14 @@ mod tests {
         moved
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert_eq!(moved.landed, Some(StellarId(140)));
-        assert_eq!(moved.jump, None);
+        assert_eq!(moved.mode.landed(), Some(StellarId(140)));
+        assert_eq!(moved.mode.jump(), None);
         let mut landed = Session::start(&catalog).expect("starts");
         landed
             .land_at(&catalog, SystemId(131), StellarId(140))
             .expect("lands");
-        assert_eq!(landed.landed, Some(StellarId(140)));
-        assert_eq!(landed.jump, None);
+        assert_eq!(landed.mode.landed(), Some(StellarId(140)));
+        assert_eq!(landed.mode.jump(), None);
     }
 
     #[test]
@@ -171,8 +274,8 @@ mod tests {
             session.take_off(&catalog, &mut NeverFires),
             Some(StellarId(128))
         );
-        assert_eq!(session.landed, None);
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.landed(), None);
+        assert_eq!(session.mode.jump(), None);
     }
 
     #[test]
@@ -183,8 +286,8 @@ mod tests {
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
         );
-        assert_eq!(session.jump, None);
-        assert_eq!(session.landed, None);
+        assert_eq!(session.mode.jump(), None);
+        assert_eq!(session.mode.landed(), None);
     }
 
     /// Only the view's gate, [`Session::takes`] refusing
@@ -201,7 +304,7 @@ mod tests {
             session.land_at(&catalog, SystemId(130), StellarId(128)),
             Ok(())
         );
-        assert_eq!(session.landed, Some(StellarId(128)));
+        assert_eq!(session.mode.landed(), Some(StellarId(128)));
         assert_eq!(session.pod, Some(POD_TICKS));
     }
 
@@ -214,7 +317,7 @@ mod tests {
         session.pod = Some(POD_TICKS);
         assert!(!session.takes(PlayerCommand::Jump), "the view's gate");
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        assert!(session.jump.is_some());
+        assert!(session.mode.jump().is_some());
         assert_eq!(session.pod, Some(POD_TICKS));
     }
 }
