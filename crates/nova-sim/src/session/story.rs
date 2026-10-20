@@ -457,8 +457,9 @@ impl Session {
     /// kept is forgotten first, whatever the refresh changes
     /// (@0x9968a-0x9969f), and after the move the player's system rescues
     /// afresh, standing in for the rebuild the original runs after each
-    /// such refresh (see the `kept_rescues` module). Whether it changed
-    /// anything.
+    /// such refresh (see the `kept_rescues` module). What it leaves
+    /// hidden is kept for a later new pilot, changed or not (see the
+    /// `last_refresh` module). Whether it changed anything.
     pub(super) fn refresh_galaxy<C>(&mut self, catalog: &C) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
@@ -471,6 +472,7 @@ impl Session {
         });
         self.chart
             .keep_rescues(&self.pilot, &self.statics, &self.setup);
+        self.chart.snapshot_refresh();
         changed
     }
 
@@ -486,12 +488,15 @@ impl Session {
     /// stellars shown are those the refreshed galaxy gives. Every rescue
     /// kept is forgotten first, and the player's system rescues afresh
     /// after the move, changed or not (see the `kept_rescues` module).
+    /// What it leaves hidden is kept for a later new pilot, changed or
+    /// not (see the `last_refresh` module).
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
         self.propagate_cached_tests();
         self.chart.forget_rescues();
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
             self.chart
                 .keep_rescues(&self.pilot, &self.statics, &self.setup);
+            self.chart.snapshot_refresh();
             return;
         }
         self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
@@ -500,6 +505,7 @@ impl Session {
             let sites = self.chart.read_sites(catalog, system);
             self.set_player_system(system, sites, Dock::AsItWas);
         }
+        self.chart.snapshot_refresh();
         self.rebuild_quietly();
     }
 

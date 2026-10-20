@@ -126,8 +126,10 @@ impl Session {
     /// withdraws the `Explored` events [`Session::fly`] raised, so the
     /// start system's nebulae wait for the first exploration (see the
     /// `nebulae` module); explores the start system's visible
-    /// neighbours, or by the engine their heads (see the `explored`
-    /// module), destroys the stellars that start the
+    /// neighbours, or by the engine their heads, visible by the engine's
+    /// reading of [`RuleKey::NewPilotVisibility`] as the run's last
+    /// refresh left them ([`Session::with_last_refresh`]; see the
+    /// `explored` and `last_refresh` modules), destroys the stellars that start the
     /// game destroyed (see the `stellars` module), then, by the engine's
     /// reading of
     /// [`RuleKey::CharacterStatusSpread`](crate::RuleKey::CharacterStatusSpread),
@@ -136,7 +138,9 @@ impl Session {
     /// then runs its `OnStart` once, drawing on `chance` (see the module docs),
     /// and nothing when the `chär` cannot be read, then refreshes the
     /// galaxy, so the systems its bits show are visible (`_PlayGame`
-    /// @0x457e9; see the `story` module), rebuilds the stellars shown
+    /// @0x457e9; see the `story` module), keeping for the run the
+    /// refresh from before the `OnStart` until play is entered
+    /// ([`Session::enter_game`]), rebuilds the stellars shown
     /// (see the `stellars` module), and last draws the offers' roll table
     /// on `chance`, as `_DoNewPilot`'s `_ResetPlayer` does (@0x18dd4).
     /// The original draws it before the `OnStart`; nothing here reads it,
@@ -160,6 +164,9 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut dyn Chance,
     ) {
+        // `_DoNewPilot`'s refresh (@0x1925e), which `Session::fly` stood
+        // for: what the run keeps until play is entered.
+        let before_on_start = self.chart.last_refresh.clone();
         // `_ResetPlayer(1)` (@0x18dd4, @0x1d427-0x1d441).
         self.ship.player.position = Vec2::new(50.0, 50.0);
         self.ship.player.velocity = Vec2::ZERO;
@@ -176,7 +183,7 @@ impl Session {
         // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
         // its `OnStart` (see the `explored` module).
         self.chart
-            .explore_start_neighbours(&mut self.pilot, &self.setup);
+            .explore_start_neighbours(&mut self.pilot, &self.statics, &self.setup);
         self.chart.destroy_from_the_start(
             &mut self.pilot,
             &self.statics,
@@ -208,8 +215,11 @@ impl Session {
             self.run_script(&start.on_start, chance);
         }
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
-        // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
+        // `_DoNewPilot`'s, before the `OnStart`, was the flight's. It runs
+        // early, so the run keeps `_DoNewPilot`'s until play is entered
+        // (`Session::enter_game`; see the `last_refresh` module).
         self.refresh_galaxy(catalog);
+        self.chart.last_refresh = before_on_start;
         // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
         // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
         // pilot is what it saves.

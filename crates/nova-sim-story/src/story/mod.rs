@@ -361,7 +361,10 @@
 //! `OnStart` and, quietly, at a load, which covers Open Pilot's call
 //! (`_MainScreenChoice` @0x1a8ca); a return from play to the main screen
 //! keeps the session as play left it, as `_DoMainScreen`'s own setup runs
-//! once a launch. By the other
+//! once a launch. What the last refresh left hidden is carried to the
+//! next new pilot of the run, whose neighbour loop reads the visible flags
+//! before its own refresh (@0x18fc5; `nova_sim::LastRefresh`,
+//! [`RuleKey::NewPilotVisibility`](crate::RuleKey::NewPilotVisibility)). By the other
 //! reading of [`RuleKey::VisibilityRefresh`](crate::RuleKey::VisibilityRefresh)
 //! it also refreshes after every settled script that changed the pilot.
 //! The availability tests stay live reads at each spawn, where the

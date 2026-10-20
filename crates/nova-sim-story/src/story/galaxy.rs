@@ -319,8 +319,10 @@ impl GalaxyOverlay {
         }
     }
 
-    /// The systems it hides.
-    pub(crate) fn hidden(&self) -> BTreeSet<SystemId> {
+    /// The systems it hides: those of `Some(false)`, not the move's
+    /// `Some(true)`.
+    #[must_use]
+    pub fn hidden(&self) -> BTreeSet<SystemId> {
         self.systems()
             .filter(|(_, change)| change.visible == Some(false))
             .map(|(id, _)| id)

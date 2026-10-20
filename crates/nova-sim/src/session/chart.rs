@@ -14,6 +14,7 @@ use crate::navigation::NavMode;
 use crate::story::OverlaidGalaxy;
 use crate::traffic::npc::NpcId;
 
+use super::LastRefresh;
 use super::nav::NavSlot;
 
 /// What the player sees of the galaxy and has selected in it, in
@@ -69,6 +70,13 @@ pub(super) struct Chart {
     /// settling: by the other reading of [`RuleKey::VisibilityRefresh`](crate::rulebook::RuleKey::VisibilityRefresh)
     /// the settling refreshes the galaxy then.
     pub(super) galaxy_stale: bool,
+    /// What the last galaxy refresh left hidden, for a new pilot made
+    /// later in the run (see the `last_refresh` module): nothing hidden
+    /// before the first refresh, which `Session::fly` runs.
+    pub(super) last_refresh: LastRefresh,
+    /// What a session earlier in the run left, which a new pilot's
+    /// neighbour pass reads by the engine; `None` at launch.
+    pub(super) carried_refresh: Option<LastRefresh>,
 }
 
 impl Chart {
@@ -91,6 +99,8 @@ impl Chart {
             next_sites: None,
             known: BTreeSet::new(),
             galaxy_stale: false,
+            last_refresh: LastRefresh::default(),
+            carried_refresh: None,
         }
     }
 }

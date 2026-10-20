@@ -471,6 +471,7 @@ mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
 mod kept_rescues;
+mod last_refresh;
 mod launch_frame;
 mod lost_target;
 mod map;
@@ -546,6 +547,7 @@ mod warp_stage;
 
 use capture::CaptureFuel;
 pub use hooks::HookRules;
+pub use last_refresh::LastRefresh;
 pub use map_click::{MapClicked, MapPress};
 pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
