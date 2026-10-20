@@ -165,6 +165,7 @@ mod tests {
     use crate::gate::{GateKind, WORMHOLE};
     use crate::hyperspace::MultiJumpRule;
     use crate::rulebook::Rulebook;
+    use crate::session::jump_exploration::tests::watching_explored;
     use crate::session::tests::{
         alternates, at_gate, chained, gate_landing, gate_site, gated, hide, with_alternate,
         wormholes,
@@ -445,18 +446,15 @@ mod tests {
         // as they stood.
         let catalog = alternates();
         for source in RuleSource::ALL {
-            let mut session = shadowing(&catalog, source);
-            session.run.drop_raised();
+            let (mut session, seen) = watching_explored(shadowing(&catalog, source), &[131, 134]);
             jump_as_131_shows(&mut session, &catalog);
-            let explored: Vec<SystemId> = session
-                .story_raised()
-                .into_iter()
-                .filter_map(|event| match event {
-                    crate::story::StoryEvent::Explored { system } => Some(system),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(explored, by(source, ids(&[131]), ids(&[134])), "{source:?}");
+            // Then the system entered, explored again after the refresh
+            // (@0x6c1db).
+            assert_eq!(
+                seen.systems(),
+                by(source, ids(&[131, 131]), ids(&[134, 131])),
+                "{source:?}"
+            );
         }
     }
 

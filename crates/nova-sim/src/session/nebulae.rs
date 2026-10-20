@@ -5,8 +5,8 @@
 //!
 //! **Activity.** Every refresh point writes each nebula's activity from
 //! its `ActiveOn` beside every system's visibility (the session's
-//! `story` module's `Refresh`): a landing, a jump's arrival before its
-//! days, a new pilot, a load, and, by the other reading of
+//! `story` module's `Refresh`): a landing, a jump's arrival after its
+//! explorations and before its days, a new pilot, a load, and, by the other reading of
 //! [`RuleKey::VisibilityRefresh`](crate::RuleKey::VisibilityRefresh),
 //! every settling after a script.
 //!
@@ -22,8 +22,9 @@
 //! (@0x515a) before `OnExplore` (@0x519e), so a nested exploration finds
 //! it explored; and tells [`SessionEvent::GalaxyChanged`], so the map
 //! draws it. Activity and the explored flag are read as the event
-//! settles, not as the exploration happens (crons-news-ranks-fidelity
-//! phase 24).
+//! is dispatched; a jump's and a new pilot's `OnStart` explorations are
+//! dispatched at once, as the original explores them, so each reads the
+//! activity of the last refresh (see the `jump_exploration` module).
 //!
 //! **Readings.** By the engine's reading of [`RuleKey::NebulaExploreOnce`]
 //! the explored flag is never saved and exploring makes no save due; a
@@ -54,10 +55,11 @@
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the
 //! `entry` module).
 //!
-//! Left to others: the activity read at the exploration
-//! (crons-news-ranks-fidelity phase 24), a jump's `OnExplore` before its
-//! days and crons (phase 25), and the escape pod's exploration (roadmap
-//! player-death).
+//! Left to others: the escape pod's exploration (roadmap player-death),
+//! and a jump's scripts run in the arrival, its `EnteredSystem` hooks
+//! before the arrival is explored again and populated, and the
+//! explorations of scripts run outside the dispatcher
+//! (crons-news-ranks-fidelity phase 40).
 
 use super::{Chart, MissionRun, Outbox, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{NebulaId, SystemId};
@@ -163,7 +165,7 @@ impl MissionRun {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{NebulaRecord, SystemVisibility};
     use crate::chance::NeverFires;
@@ -177,7 +179,7 @@ mod tests {
     const N128: NebulaId = NebulaId(128);
 
     /// [`catalog`] with `nebulae`.
-    fn nebulous(nebulae: Vec<NebulaRecord>) -> FakePilotCatalog {
+    pub(in crate::session) fn nebulous(nebulae: Vec<NebulaRecord>) -> FakePilotCatalog {
         let mut catalog = FakePilotCatalog {
             nebulae,
             ..catalog()
@@ -188,7 +190,7 @@ mod tests {
 
     /// Nebula 128 around 131 (600, 0) alone, active by `active_on`,
     /// setting bit 7 as it is explored.
-    fn around_131(active_on: &str) -> NebulaRecord {
+    pub(in crate::session) fn around_131(active_on: &str) -> NebulaRecord {
         nebula(128, (500, -100, 200, 200), active_on, "b7")
     }
 
@@ -312,8 +314,10 @@ mod tests {
         settle(&mut session, &catalog);
         assert!(!explored(&session, 128), "130 is outside it");
         assert!(!bit(&session, 7));
-        jump(&mut session, &catalog, 131).expect("arrives");
         session.take_events();
+        session.run.raise(StoryEvent::Explored {
+            system: SystemId(131),
+        });
         settle(&mut session, &catalog);
         assert!(bit(&session, 7), "its OnExplore ran");
         assert!(session.galaxy().nebula_shown(N128));
@@ -406,8 +410,10 @@ mod tests {
         for (source, due) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
             let mut session = flown(&catalog, rules(RuleKey::NebulaExploreOnce, source));
             settle(&mut session, &catalog);
-            jump(&mut session, &catalog, 131).expect("arrives");
             session.take_save_due();
+            session.run.raise(StoryEvent::Explored {
+                system: SystemId(131),
+            });
             settle(&mut session, &catalog);
             assert!(explored(&session, 128), "{source:?}");
             assert_eq!(session.take_save_due(), due, "{source:?}");

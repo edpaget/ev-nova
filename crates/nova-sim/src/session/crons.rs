@@ -159,7 +159,7 @@ impl PlayerShip {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::catalog::{
         CronId, CronRecord, MissionId, MissionRecord, OutfitId, OutfitRecord, ShipId, ShipRecord,
         StellarId, SystemId,
@@ -323,7 +323,12 @@ mod tests {
 
     /// Crön `id` running `duration` days, its `OnStart` `on_start` and its
     /// `OnEnd` `on_end`.
-    fn scripted(id: i16, duration: i16, on_start: &str, on_end: &str) -> CronRecord {
+    pub(in crate::session) fn scripted(
+        id: i16,
+        duration: i16,
+        on_start: &str,
+        on_end: &str,
+    ) -> CronRecord {
         CronRecord {
             duration,
             on_start: Script::parse(on_start),

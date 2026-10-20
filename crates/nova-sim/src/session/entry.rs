@@ -801,8 +801,9 @@ impl Session {
             notes,
         };
         self.announce(how, &resets, heard, stellars);
-        // A jump's arrival raised its `Explored` before its days, at the
-        // original's first nebula exploration (@0x6be12); a gate's or
+        // A jump's arrival explored its nebulae in `Session::arrive`,
+        // before its days (@0x6be12) and again before this entry
+        // (@0x6c1db; see the `jump_exploration` module); a gate's or
         // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
         // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
         // module).

@@ -136,7 +136,10 @@ impl Session {
     /// spreads the first `chär`'s statuses to its governments' allies and
     /// enemies, in both legal stores ([`legal::spread_statuses`](crate::legal::spread_statuses)),
     /// then runs its `OnStart` once, drawing on `chance` (see the module docs),
-    /// and nothing when the `chär` cannot be read, then refreshes the
+    /// and nothing when the `chär` cannot be read, the `Explored` events
+    /// it raises (a map granted) dispatched at once, with the activity of
+    /// `_DoNewPilot`'s refresh, and those raised before it left queued
+    /// (see the `jump_exploration` module), then refreshes the
     /// galaxy, so the systems its bits show are visible (`_PlayGame`
     /// @0x457e9; see the `story` module), keeping for the run the
     /// refresh from before the `OnStart` until play is entered
@@ -212,7 +215,14 @@ impl Session {
             if self.setup.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
+            // A map the `OnStart` grants explores at once, with
+            // `_DoNewPilot`'s activity (@0x1925e), before `_PlayGame`'s
+            // refresh reads the bits its `OnExplore`s set (see the
+            // `jump_exploration` module); the events raised before stay
+            // queued.
+            let mark = self.run.story_mark();
             self.run_script(&start.on_start, chance);
+            self.dispatch_explored_since(catalog, chance, mark);
         }
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's. It runs

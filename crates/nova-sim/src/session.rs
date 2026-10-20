@@ -469,6 +469,7 @@ mod intro;
 mod ionization;
 mod jump_arrival;
 mod jump_collapse;
+mod jump_exploration;
 mod kept_berths;
 mod kept_rescues;
 mod last_refresh;
@@ -2975,7 +2976,11 @@ impl Session {
     /// chain uses one jump's fuel and the days the stats give one jump;
     /// under [`MultiJumpRule::PerHop`] every hop does, and the chain stops
     /// at a hop the ship has not the fuel for. Each day steps the planetary
-    /// events, rolled on `chance`.
+    /// events, rolled on `chance`. A further hop's fuel is taken as it is
+    /// made, but every hop's days, the first's and each further one's,
+    /// pass together after the refresh, so a crön on any of the jump's
+    /// days reads the bits its `OnExplore`s set (the original has no
+    /// per-hop days to place).
     ///
     /// The systems hopped are taken off the course. Those passed through
     /// on the way are not entered; only the last is: explored, its
@@ -3005,25 +3010,34 @@ impl Session {
     /// (@0x6bdc1); they differ only if visibility changes during the warp,
     /// which no refresh point under `visibility_refresh = engine` allows.
     ///
-    /// Before its days it raises [`StoryEvent::Explored`] for each system
-    /// passed and the one arrived in, as the original explores their
-    /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
+    /// It explores at once, in the original's order (see the
+    /// `jump_exploration` module): each system passed as its hop is made
+    /// (@0x6bddb), then the one arrived in (@0x6be12), each
+    /// [`StoryEvent::Explored`] dispatched there and then with the
+    /// activity of the last refresh, so a nebula's `OnExplore` runs before
+    /// the refresh and the days, its `M`, `N` and `Q` waiting for the
+    /// caller's settling. Once the refresh is written it explores the
+    /// arrival again (@0x6c1db), the system the entry will resolve it to,
+    /// with the activity the refresh wrote, before it is entered and
+    /// populated. [`StoryEvent::EnteredSystem`] follows the days, and
+    /// waits, with the days' events, for the caller's settling.
     ///
     /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
     /// every system's `Visibility`, and every nebula's `ActiveOn`,
-    /// evaluated before the days, so a bit
-    /// their scripts set shows only at the next refresh, and written once
-    /// the hops and the systems explored are resolved by the flags as they
-    /// stood, before the system is entered, telling
+    /// evaluated after the explorations, so it reads the bits their
+    /// `OnExplore`s set, and before the days, so a bit the days' scripts
+    /// set shows only at the next refresh; and written once the days
+    /// have passed, with the hops and the systems explored resolved by the
+    /// flags as they stood, before the system is entered, telling
     /// [`SessionEvent::GalaxyChanged`] when it changed anything.
     ///
-    /// Its first draw on `chance` arms the escort-strength timer (see
-    /// [`strength`]). The original's order is `Rand(0x800)` (@0x6bfdd),
-    /// the escort-strength timer (@0x6c013), the roll table
-    /// (@0x6c040-0x6c066), the days (@0x6c144), then the setup
-    /// (@0x6c1f9). Ours lets the days go by (`take_jump_cost`) before
-    /// `enter_system` redraws the offers (`Offers::redraw`). That is
-    /// harmless: the fill reads nothing the days change, and the days
+    /// After its explorations' scripts, its first draw on `chance` arms
+    /// the escort-strength timer (see [`strength`]). The original's order
+    /// is `Rand(0x800)` (@0x6bfdd), the escort-strength timer (@0x6c013),
+    /// the roll table (@0x6c040-0x6c066), the days (@0x6c144), then the
+    /// setup (@0x6c1f9). Ours lets the days go by (`pass_jump_days`)
+    /// before `enter_system` redraws the offers (`Offers::redraw`). That
+    /// is harmless: the fill reads nothing the days change, and the days
     /// don't read the table. Only the order of the draws differs, and the
     /// engine doesn't match that.
     ///
@@ -3078,25 +3092,13 @@ impl Session {
             self.ship
                 .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
-        let mark = self.run.story_mark();
-        // The galaxy refresh evaluated before the days, so a bit their
-        // scripts set waits for the next refresh (@0x6bf3f, days
-        // @0x6c144); the `AvailBits` and the spawners' tests cached with
-        // it.
-        let refresh = self.refresh_now();
-        self.propagate_cached_tests();
-        // The escort-strength timer armed before the roll table, the days
-        // and the setup (@0x6c013).
-        self.space.arm_strength_timer(chance);
-        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
-        self.red_alert.clear_icon();
-        self.take_jump_cost(chance);
+        // The first hop's fuel (@0x6be31); every hop's days pass after the
+        // refresh (@0x6c144).
+        self.pilot.reserves.fuel.now -= JUMP_FUEL;
+        let mut jumps = 1;
         let departure = self.pilot.system;
         let (mut from, mut at) = (departure, first);
         let mut hops = 0;
-        // The systems passed on the way, each hop the visible system that
-        // stands for it, as the original resolves them (@0x6bd67-0x6bdc1).
-        let mut passed = Vec::new();
         if self
             .pilot
             .course
@@ -3109,14 +3111,20 @@ impl Session {
                 let Some(next) = next.and_then(|&hop| self.chart.galaxy.same_place(hop)) else {
                     break;
                 };
+                // By `PerHop` a further hop takes its own fuel here; its
+                // days wait with the first's.
                 if self.setup.multi_jump == MultiJumpRule::PerHop {
                     if self.pilot.reserves.fuel.now < JUMP_FUEL {
                         break;
                     }
-                    self.take_jump_cost(chance);
+                    self.pilot.reserves.fuel.now -= JUMP_FUEL;
+                    jumps += 1;
                 }
                 hops += 1;
-                passed.push(at);
+                // Each system passed on the way, the visible system that
+                // stands for its hop as the original resolves them
+                // (@0x6bd67-0x6bdc1), explored at once (@0x6bddb).
+                self.explore_now(catalog, &mut &mut *chance, at);
                 (from, at) = (at, next);
             }
         }
@@ -3126,12 +3134,26 @@ impl Session {
         let multi_jump =
             hops > 0 && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
         let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
-        // The systems passed, then the one arrived in, each explored before
-        // the days (@0x6bddb, @0x6be12). The written system shares its
-        // stand-in's place, so the same nebulae.
+        // The arrival explored at once (@0x6be12). The written system
+        // shares its stand-in's place, so the same nebulae.
         let arrived = self.chart.jump_explored(&self.setup, written);
-        for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
-            self.run.raise_at(mark + n, StoryEvent::Explored { system });
+        self.explore_now(catalog, &mut &mut *chance, arrived);
+        // The galaxy refresh evaluated after the explorations, so it reads
+        // the bits their `OnExplore`s set, and before the days, so a bit
+        // the days' scripts set waits for the next refresh (@0x6bf3f, days
+        // @0x6c144); the `AvailBits` and the spawners' tests cached with
+        // it.
+        let refresh = self.refresh_now();
+        self.propagate_cached_tests();
+        // The escort-strength timer armed before the roll table, the days
+        // and the setup (@0x6c013).
+        self.space.arm_strength_timer(chance);
+        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
+        self.red_alert.clear_icon();
+        // Every hop's days (@0x6c144), so the crons read the bits the
+        // jump's `OnExplore`s set.
+        for _ in 0..jumps {
+            self.pass_jump_days(chance);
         }
         let entered = Arrival {
             system: written,
@@ -3161,6 +3183,12 @@ impl Session {
         {
             self.out.emit(SessionEvent::GalaxyChanged);
         }
+        // The arrival explored again, with the activity the refresh wrote,
+        // before the setup populates it (`_AutoSetExploration` @0x6c1db,
+        // `_SetupShipsInSystem` @0x6c1f9): the system the entry will
+        // resolve it to, as the refresh's move left +0x74.
+        let explored_again = self.chart.entry_resolution(&self.setup, written).to;
+        self.explore_now(catalog, &mut &mut *chance, explored_again);
         self.pilot.jumped_from = Some(from);
         self.enter_system(
             Entry::Jump { hops, natural_end },
@@ -3175,12 +3203,6 @@ impl Session {
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
         Some(self.pilot.system)
-    }
-
-    /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
-    fn take_jump_cost(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.pilot.reserves.fuel.now -= JUMP_FUEL;
-        self.pass_jump_days(chance);
     }
 
     /// Lets the days the stats give a jump go by through the daily step
@@ -7095,6 +7117,7 @@ pub(super) mod tests {
             rate: crate::warp::warp_up_rate(session.player_warp_factor()),
         }
     }
+    use super::jump_exploration::tests::watching_explored;
     use super::*;
     use crate::catalog::{
         CharacterStart, GateSite, LandingSite, MissionId, RankId, SoundId, StellarId,
@@ -28880,16 +28903,17 @@ pub(super) mod tests {
             fly_out(&mut session);
             begin_jump_now(&mut session).expect("jumps");
             hide(&mut session, &catalog, &[131]);
-            session.run.drop_raised();
+            let (mut session, seen) = watching_explored(session, &[131, 134]);
             session.arrive(&catalog, &mut NeverFires);
             // By the engine's `arrival_system` the jump explores the system
             // it writes, 131, at 134's place (@0x6be12); by the other, the
-            // arrival resolved by place, with no event for the head.
+            // arrival resolved by place, with no event for the head. Each
+            // then explores again the system it enters (@0x6c1db).
             let explored = match source {
-                RuleSource::Engine => SystemId(131),
-                RuleSource::Bible => SystemId(134),
+                RuleSource::Engine => ids(&[131, 134]),
+                RuleSource::Bible => ids(&[134, 134]),
             };
-            assert_eq!(explored_raised(&session), [explored], "{source:?}");
+            assert_eq!(seen.systems(), explored, "{source:?}");
             assert_eq!(session.system(), SystemId(134), "{source:?}");
             assert!(session.pilot().has_explored(SystemId(134)));
             assert!(
@@ -28897,18 +28921,6 @@ pub(super) mod tests {
                 "131, its place's head, by the engine (see the `explored` module)"
             );
         }
-    }
-
-    /// The `Explored` events raised and not yet settled.
-    fn explored_raised(session: &Session) -> Vec<SystemId> {
-        session
-            .story_raised()
-            .into_iter()
-            .filter_map(|event| match event {
-                StoryEvent::Explored { system } => Some(system),
-                _ => None,
-            })
-            .collect()
     }
 
     /// [`chained`] of `mod_val` with 135 at 131's place, listing 132,
@@ -28926,13 +28938,13 @@ pub(super) mod tests {
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
         hide(&mut session, &catalog, &[131]);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
-        session.run.drop_raised();
+        let (mut session, seen) = watching_explored(session, &[131, 132, 135]);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
         );
         assert_eq!(session.course(), ids(&[134]));
-        assert_eq!(explored_raised(&session), ids(&[135, 132]), "135 passed");
+        assert_eq!(seen.systems(), ids(&[135, 132, 132]), "135 passed");
         assert!(on_the_map(&session));
     }
 
@@ -28944,7 +28956,7 @@ pub(super) mod tests {
                 .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
             hide(&mut session, &catalog, &[132]);
             assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-            session.run.drop_raised();
+            let (mut session, seen) = watching_explored(session, &[131, 132]);
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))
@@ -28957,7 +28969,7 @@ pub(super) mod tests {
                 RuleSource::Bible => ids(&[132, 134]),
             };
             assert_eq!(session.course(), kept, "{source:?}");
-            assert_eq!(explored_raised(&session), ids(&[131]));
+            assert_eq!(seen.systems(), ids(&[131, 131]));
         }
     }
 
