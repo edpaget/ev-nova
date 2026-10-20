@@ -203,12 +203,28 @@
 //! # `AppearOn`
 //!
 //! The `flët` and `shïp` `AppearOn` tests are asked through the
-//! [`ControlBits`](crate::ControlBits) port for the player's pilot, the
-//! [`Gate`] of the draw's [`PersonWorld`], when a ship spawns, so a bit
-//! set in flight counts from the next spawn. One that did not parse never
-//! holds. They are checked where the executable checks them, against the
-//! results `_PropagateMissionBitEffects` keeps (`shïp` @0x997e0, `flët`
-//! @0x9985a):
+//! [`ControlBits`](crate::ControlBits) port, the [`Gate`] of the draw's
+//! [`PersonWorld`], when a ship spawns, for the player as the last galaxy
+//! refresh read them ([`PersonWorld::refreshed`]): the original reads only
+//! the verdicts `_PropagateMissionBitEffects` caches at a landing, a
+//! jump's arrival, a new pilot and a load (`shïp` +0xa41 @0x997e0, `flët`
+//! +0x122 @0x9985a), so a bit set in between brings those ships only from
+//! the next refresh, and a bit cleared lets them keep coming until then.
+//! The session hands the player now as the refreshed one under the other
+//! reading of [`RuleKey::SpawnAvailability`](crate::RuleKey::SpawnAvailability).
+//! One that did not parse never holds.
+//!
+//! A person's `ActiveOn` is split the same way. A person drawn at random
+//! needs it to hold both at the last refresh and now
+//! ([`PersonWorld::drawn_active`]), as `_SpawnPerson`'s draw reads the
+//! cached përs +0x622 (@0x409b5) and then tests it again
+//! (@0x40b5d-0x40b6d): a bit set in between can take a person out at once
+//! but bring one in only from the next refresh. A system's person slot
+//! tests it now alone ([`PersonWorld::slot_active`]), as
+//! `_SetupShipsInSystem` does (@0x4334d-0x4335d) before spawning that
+//! person by ID, past the cache.
+//!
+//! The `AppearOn` tests are checked where the executable checks them:
 //!
 //! - **A `düde`'s ship types** whose `AppearOn` does not hold are left out
 //!   of its `Probability` before the draw, as `_SelectShipFieldFromDude`
@@ -485,7 +501,7 @@ impl<'a> PersonDraw<'a> {
                 person.linked
                     && record.ai_type > 0
                     && !self.world.gone.contains(id)
-                    && self.world.allows(&record.active_on)
+                    && self.world.drawn_active(&record.active_on)
                     && !(arriving && person.derelict)
                     && !self.world.in_fleet(**id)
                     && !self.named_here(table, &record.name)
@@ -617,7 +633,9 @@ pub fn initial(
             continue;
         };
         let world = draw.world;
-        if world.gone.contains(&id) || world.in_fleet(id) || !world.allows(&person.record.active_on)
+        if world.gone.contains(&id)
+            || world.in_fleet(id)
+            || !world.slot_active(&person.record.active_on)
         {
             continue;
         }
@@ -3425,6 +3443,171 @@ mod tests {
         };
         let (ships, asked) = set_up(&slot, world, &[0]);
         assert_eq!((persons_of(&ships), asked), (vec![], vec![100]));
+    }
+
+    // The refreshed pilot and the live one.
+
+    /// A new pilot's facts, bit 7 set or not.
+    #[derive(Debug)]
+    struct Pilot7(bool);
+
+    impl PilotFacts for Pilot7 {
+        fn bit(&self, bit: crate::control::Bit) -> bool {
+            self.0 && bit.get() == 7
+        }
+
+        fn gender(&self) -> crate::control::Gender {
+            crate::control::Gender::Male
+        }
+
+        fn paid(&self, _days: u16) -> bool {
+            true
+        }
+
+        fn has_outfit(&self, _outfit: crate::catalog::OutfitId) -> bool {
+            false
+        }
+
+        fn explored(&self, _system: crate::catalog::SystemId) -> bool {
+            false
+        }
+    }
+
+    static WITH_7: Pilot7 = Pilot7(true);
+    static WITHOUT_7: Pilot7 = Pilot7(false);
+
+    /// A world whose last refresh saw bit 7 `refreshed` and whose player
+    /// has it `live`, tested by Nova's control bits.
+    fn split(refreshed: bool, live: bool) -> PersonWorld<'static> {
+        let pilot = |set| if set { &WITH_7 } else { &WITHOUT_7 };
+        PersonWorld {
+            refreshed: pilot(refreshed),
+            pilot: pilot(live),
+            ..PersonWorld::NONE
+        }
+    }
+
+    #[test]
+    fn a_fleets_appear_on_reads_the_pilot_of_the_last_refresh_alone() {
+        // `_SpawnFleet` and `_HyperSpawnFleet` read flët +0x122, which
+        // `_PropagateMissionBitEffects` wrote (@0x99842-0x9987a).
+        let gated = fleet_appearing(table(), 141, "b7");
+        for (refreshed, live, comes) in [(true, false, 3), (false, true, 0)] {
+            let mut out = Vec::new();
+            fleet(
+                &gated,
+                FleetId(141),
+                split(refreshed, live).gate(),
+                Stellars::NONE,
+                FleetCall::default(),
+                &mut crate::NeverFires,
+                &mut out,
+            );
+            assert_eq!(out.len(), comes, "refreshed {refreshed}, live {live}");
+        }
+        // A named fleet (`_SelectFleetFromSystem` @0x6884): fleet 140 is
+        // dropped from the pick while the refresh saw bit 7 clear.
+        let mut gated = fleet_appearing(table(), 140, "b7");
+        gated.dude_fleets.push((FleetId(141), 20));
+        let mut chance = Draws::of(&[1, 49, 19, 0, 0]);
+        arrivals(
+            &gated,
+            0,
+            &mut PersonDraw::new(split(false, true)),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(&chance.asked[..3], [500, 100, 20], "only 141's odds");
+        let mut chance = Draws::of(&[1, 49, 0, 0, 0]);
+        arrivals(
+            &gated,
+            0,
+            &mut PersonDraw::new(split(true, false)),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(&chance.asked[..3], [500, 100, 50], "both fleets' odds");
+    }
+
+    #[test]
+    fn a_ship_types_appear_on_reads_the_pilot_of_the_last_refresh_alone() {
+        // `_SelectShipFieldFromDude` and `_HyperSpawnFleet` read shïp
+        // +0xa41 (@0x997c3-0x99800).
+        let gated = appearing(one_pass(), 201, "b7");
+        let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
+        initial(
+            &gated,
+            &mut PersonDraw::new(split(false, true)),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked[3], 50, "201 left out");
+        let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
+        initial(
+            &gated,
+            &mut PersonDraw::new(split(true, false)),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked[3], 100, "201 in");
+        // A fleet's escort type.
+        let gated = appearing(table(), 202, "b7");
+        for (refreshed, live, ships) in [(true, false, 4), (false, true, 1)] {
+            let mut out = Vec::new();
+            fleet(
+                &gated,
+                FleetId(140),
+                split(refreshed, live).gate(),
+                Stellars::NONE,
+                FleetCall::default(),
+                &mut Draws::of(&[0, 0, 2]),
+                &mut out,
+            );
+            assert_eq!(out.len(), ships, "refreshed {refreshed}, live {live}");
+        }
+    }
+
+    #[test]
+    fn a_drawn_person_needs_its_active_on_both_at_the_last_refresh_and_now() {
+        // `_SpawnPerson` reads përs +0x622 (@0x409b5), then tests
+        // `ActiveOn` again (@0x40b5d-0x40b6d).
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .record
+            .active_on = Test::parse("b7");
+        for (refreshed, live) in [(true, true), (true, false), (false, true), (false, false)] {
+            let eligible = PersonDraw::new(split(refreshed, live)).eligible(&table, false);
+            assert_eq!(
+                eligible.contains(&PersonId(510)),
+                refreshed && live,
+                "refreshed {refreshed}, live {live}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_person_reads_its_active_on_now_alone() {
+        // `_SetupShipsInSystem` tests a slot person's `ActiveOn` live
+        // (@0x4334d-0x4335d) and spawns it by ID, past the cache.
+        let mut table = SpawnTable {
+            avg_ships: 0,
+            ..peopled()
+        };
+        table
+            .persons
+            .get_mut(&PersonId(600))
+            .expect("there")
+            .record
+            .active_on = Test::parse("b7");
+        let (ships, _) = set_up(&table, split(false, true), &[49, 0, 0, 0]);
+        assert_eq!(persons_of(&ships), [Some(600)]);
+        let (ships, asked) = set_up(&table, split(true, false), &[49, 0, 0, 0]);
+        assert_eq!((persons_of(&ships), asked), (vec![], vec![]));
     }
 
     // Mission ships.

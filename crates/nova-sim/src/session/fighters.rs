@@ -3138,6 +3138,11 @@ pub(super) mod tests {
                 .facts(&session.pilot, &session.statics)
                 .has_outfit(OutfitId(159))
         );
+        let snapshot = super::super::spawn_availability::RefreshedFacts::of(
+            &session.ship.facts(&session.pilot, &session.statics),
+        );
+        assert!(snapshot.has_outfit(VIPERS), "the snapshot counts it too");
+        assert!(!snapshot.has_outfit(OutfitId(159)));
         // A carried escort of a type no bay launches docks into nothing.
         let stray = Escort {
             ship: WARSHIP,

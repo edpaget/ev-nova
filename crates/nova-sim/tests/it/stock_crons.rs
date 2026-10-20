@@ -12,6 +12,9 @@
 //!   !b333`, `OnStart b6021`, `OnEnd !b6021`, and government news in
 //!   slots 128 and 129 (`STR#` 15027 and 15053). No other crön touches
 //!   b6021, and none sets b6031 or b333.
+//! - Crön 129 (`EnableOn !(b17 & b9998)`, `OnEnd b9998`) and crön 381
+//!   (`EnableOn b450`, `OnEnd G342`) have `Duration` 0 and no holdoffs,
+//!   so they take `cron_zero_duration_no_holdoff`'s path.
 //!
 //! Every roll is 0 ([`NeverFires`]), which passes every `Random` of 0 or
 //! more by the engine's reading, so the other stock cröns start too:
@@ -156,5 +159,23 @@ fn a_rare_border_change_rearms_after_its_post_holdoff_and_by_the_engine_never_en
             "day {day}: {state:?}"
         );
         assert!(border_news(&session), "its news on day {day}");
+    }
+}
+
+#[test]
+fn stock_crons_129_and_381_take_the_no_holdoff_zero_duration_path() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let crons = data.crons();
+    for id in [129, 381] {
+        let record = crons
+            .iter()
+            .find(|record| record.id == CronId(id))
+            .unwrap_or_else(|| panic!("crön {id}"));
+        assert_eq!(record.duration, 0, "crön {id}'s Duration");
+        assert!(record.pre_holdoff <= 0, "crön {id}'s PreHoldoff");
+        assert!(record.post_holdoff <= 0, "crön {id}'s PostHoldoff");
     }
 }

@@ -52,6 +52,7 @@ mod stock_scan;
 mod stock_ship_display;
 mod stock_ship_goal_walk;
 mod stock_ship_lights;
+mod stock_spawn_availability;
 mod stock_stand_off;
 mod stock_star_map;
 mod stock_stellar_hazards;

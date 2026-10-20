@@ -1,10 +1,11 @@
 //! The missions' runtime state and the story runtime: the offers of the
 //! visit and their rolls, the venue they were entered at, the offers
 //! suppressed and those from ships, the offer dialog's state, the avail
-//! cache, the slots due a goal check or a swap, the slot whose script
-//! runs and those ending, the rank tags' governments and the rank last
-//! activated, the movie last loaded, what the set expressions queued, and
-//! the story runtime's raised events, subscriptions and watched ships.
+//! cache and the player as the last galaxy refresh read them, the slots
+//! due a goal check or a swap, the slot whose script runs and those
+//! ending, the rank tags' governments and the rank last activated, the
+//! movie last loaded, what the set expressions queued, and the story
+//! runtime's raised events, subscriptions and watched ships.
 //! The coordinators that read other state too stay on `Session`:
 //! `run_mission_script`, the offer rolls (`roll_offers`,
 //! `reoffer_missions`), `accept_mission`, `drop_offered`,
@@ -18,7 +19,7 @@ use crate::mission::Offers;
 use crate::text_tags::RankTagGovts;
 use crate::traffic::npc::NpcId;
 
-use super::{person_offers, script_effects, story};
+use super::{person_offers, script_effects, spawn_availability, story};
 
 /// The missions' runtime state and the story runtime, in `Session`'s
 /// former field order.
@@ -83,6 +84,11 @@ pub(super) struct MissionRun {
     /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`](super::Session::propagate_avail_bits)); never saved,
     /// as a load refreshes it.
     pub(super) avail_cache: BTreeMap<MissionId, bool>,
+    /// The player as the last galaxy refresh read them, what a spawn's
+    /// `AppearOn` reads by the engine (see the `spawn_availability`
+    /// module), cached with the `AvailBits` above; never saved, as a load
+    /// refreshes it.
+    pub(super) refreshed: spawn_availability::RefreshedFacts,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -124,6 +130,7 @@ impl MissionRun {
             loaded_movie: None,
             offering_ship: None,
             avail_cache: BTreeMap::new(),
+            refreshed: spawn_availability::RefreshedFacts::default(),
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),

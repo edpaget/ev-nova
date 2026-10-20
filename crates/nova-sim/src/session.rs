@@ -402,8 +402,9 @@
 //!   stay on `Session`.
 //! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, done):
 //!   the missions' runtime state (the offers and their dialog, the avail
-//!   cache, the slots due, the rank tags' governments, what the set
-//!   expressions queued) and the story runtime; the coordinators that read
+//!   cache and the spawners' snapshot of the last galaxy refresh, the
+//!   slots due, the rank tags' governments, what the set expressions
+//!   queued) and the story runtime; the coordinators that read
 //!   other state too (`run_mission_script`, the offer rolls,
 //!   `accept_mission`, and the text parsing that hands `Session` to
 //!   `TextSource::parse`) stay on `Session`.
@@ -523,6 +524,7 @@ mod slot_search;
 mod slot_visibility;
 mod smoke_frame;
 mod space;
+mod spawn_availability;
 mod stale_sprites;
 mod statics;
 mod status_cargo;
@@ -1796,6 +1798,11 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.setup.control_bits.0,
                 pilot: &facts,
+                refreshed: spawn_availability::appear_pilot(
+                    &self.setup.rules,
+                    &self.run.refreshed,
+                    &facts,
+                ),
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
@@ -1988,6 +1995,11 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.setup.control_bits.0,
                 pilot: &facts,
+                refreshed: spawn_availability::appear_pilot(
+                    &self.setup.rules,
+                    &self.run.refreshed,
+                    &facts,
+                ),
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(
@@ -2058,6 +2070,11 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.setup.control_bits.0,
                 pilot: self,
+                refreshed: spawn_availability::appear_pilot(
+                    &self.setup.rules,
+                    &self.run.refreshed,
+                    self,
+                ),
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(
@@ -3043,9 +3060,10 @@ impl Session {
         let mark = self.run.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
-        // @0x6c144); the `AvailBits` cached with it.
+        // @0x6c144); the `AvailBits` and the spawners' tests cached with
+        // it.
         let refresh = self.refresh_now();
-        self.propagate_avail_bits();
+        self.propagate_cached_tests();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);
@@ -16289,6 +16307,9 @@ pub(super) mod tests {
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "bit 7 is clear");
         session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        // Read as the last galaxy refresh saw it (see the
+        // `spawn_availability` module).
+        session.propagate_cached_tests();
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         let mut refusing = session.with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));

@@ -48,28 +48,43 @@
 //!    it is already assisting the player, its target the player and not
 //!    disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
 //!    @0x8213a, so not one a hit turned on an NPC); "Sorry sir, I'm just an
-//!    escort." for a mission escort, the original's AI type above 4
-//!    (@0x962ee-0x96304), which is busy whenever it keeps formation or
-//!    fights; else "I'm busy.".
+//!    escort." for a ship of the original's AI type above 4
+//!    ([`Hail::escort_ai`]: a mission escort, an NPC fleet escort or an
+//!    NPC's carried fighter, @0x962ee-0x96304), which is busy whenever it
+//!    keeps formation or fights; else "I'm busy.".
 //! 4. While any NPC threatens the player (`_IsPlayerThreatened`
-//!    @0x96310):
+//!    @0x96310), as the [`battle`](super::battle) module answers:
 //!    - unless an NPC of a government that is an enemy of the ship's
 //!      threatens it ([`Hail::threatened_by_enemy`],
 //!      `_IsPlayerThreatenedByMyEnemy` @0x96328-0x9632f): "In your
 //!      dreams, pal.";
 //!    - with battle help (a rank's `Flags` 0x0400, @0x96335): "Okay,
 //!      I'm on my way.", whatever its AI type, for nothing. It attacks a
-//!      ship picked uniformly among every other ship that threatens the
-//!      player, enemy or not ([`Deed::Defend`],
-//!      `_AIFightEnemyThreatToPlayer` @0x82c80), and calls for
-//!      reinforcements (`_AICallForReinforcements(ship, 1)` @0x9636d);
-//!    - otherwise "I'd rather not.". The original's AI-type ladder here
-//!      (@0x9638e-0x96514: a warship or interceptor's paid help, a
-//!      brave trader's when independent, an escort's free help) is
-//!      deferred; "I'd rather not." is its own answer for a wimpy trader
-//!      (@0x96399).
+//!      ship picked uniformly among the other ships that target the
+//!      player ([`Deed::Defend`], `_AIFightEnemyThreatToPlayer` @0x82c80,
+//!      enemy or not by
+//!      [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget)),
+//!      and calls for reinforcements whatever it picked
+//!      (`_AICallForReinforcements(ship, 1)` @0x9636d);
+//!    - otherwise by its AI type (@0x9638e-0x96514). Of AI type 0 or
+//!      above 4 ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), or
+//!      [`Hail::escort_ai`]): "Okay, I'm on my way." for nothing, and it
+//!      attacks a ship picked among those that threaten the player or a
+//!      ship it leads, its travel stellar dropped
+//!      (`_AIFightThreatToPlayer` @0x8183c), with no reinforcements. A
+//!      wimpy trader: "I'd rather not." (@0x96399). A warship or
+//!      interceptor, and by
+//!      [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp)
+//!      an independent brave trader whose ship-table slot divides by 3
+//!      (@0x963a9-0x963d9; any other brave trader would rather not): its
+//!      mood ("You'll have to pay me first." when even, not help's "I'll
+//!      help you out if you pay me.") and its price, free help or not.
+//!      Paid: "Okay, I'm on my way." and it attacks a threat picked as
+//!      battle help picks one, with no reinforcements; declined, "Ha ha
+//!      ha. What a comedian."; short, "Yeah, come back when you actually
+//!      have some money.".
 //! 5. A player who needs nothing: "You're not in any trouble.".
-//! 6. A mission escort, the original's AI type above 4: "Sorry, I can't
+//! 6. A ship of AI type above 4 ([`Hail::escort_ai`]): "Sorry, I can't
 //!    do that." (group 25, @0x96564-0x9656c), before any price.
 //! 7. It says its mood ("You're lucky - I'm in a good mood today.", "I'm
 //!    in a bad mood today, so it's going to cost you." or "I'll help you
@@ -81,7 +96,10 @@
 //!    What a comedian."; short, "Yeah, come back when you actually have
 //!    some money.".
 //!
-//! Request Assistance plays no sound (@0x9625d-0x96665).
+//! Request Assistance plays no sound (@0x9625d-0x96665), nor do
+//! `_DoShipCommPayment` (@0x920f3), `_DoHaggleDialog`,
+//! `_AIFightEnemyThreatToPlayer` (@0x82c80) or `_AIFightThreatToPlayer`
+//! (@0x8183c).
 //!
 //! **Release** (`STR#` 150 #32, key R, the escort dialog's), listed for
 //! the player's escort alone (`_DoCommDialog` @0x95721): it says "Goodbye,
@@ -125,9 +143,9 @@
 use super::reply::{
     self, BAD_MOOD, BUSY, CANT_DO_THAT, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU,
     IN_YOUR_DREAMS, JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST,
-    PLEASURE, RATHER_NOT, RELEASED, WASTING_TIME,
+    PLEASURE, RELEASED, WASTING_TIME,
 };
-use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
+use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply, battle};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -164,7 +182,7 @@ pub const ADVICE_LISTS: i16 = 7500;
 
 /// The group a ship of `mood` says before its price: a good or a bad
 /// mood's, else `neutral`.
-fn mood_reply(mood: f32, neutral: u8) -> u8 {
+pub(super) fn mood_reply(mood: f32, neutral: u8) -> u8 {
     match Mood::of(mood) {
         Mood::Good => GOOD_MOOD,
         Mood::Bad => BAD_MOOD,
@@ -269,15 +287,22 @@ impl HailOption for Greetings {
 pub struct RequestAssistance {
     /// What a quiet ship does.
     pub quiet_hails: RuleSource,
+    /// Which threats a helper picks among.
+    pub battle_help_target: RuleSource,
+    /// Whether a brave trader helps fight for a price.
+    pub brave_trader_help: RuleSource,
 }
 
 impl RequestAssistance {
     /// Request Assistance as `rulebook` chooses: its
-    /// [`RuleKey::QuietHails`] entry.
+    /// [`RuleKey::QuietHails`], [`RuleKey::BattleHelpTarget`] and
+    /// [`RuleKey::BraveTraderBattleHelp`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
             quiet_hails: rulebook.source_for(RuleKey::QuietHails),
+            battle_help_target: rulebook.source_for(RuleKey::BattleHelpTarget),
+            brave_trader_help: rulebook.source_for(RuleKey::BraveTraderBattleHelp),
         }
     }
 }
@@ -306,7 +331,7 @@ impl HailOption for RequestAssistance {
         if hail.busy {
             let group = if hail.assisting_player {
                 ON_MY_WAY
-            } else if hail.mission_escort() {
+            } else if hail.escort_ai() {
                 JUST_AN_ESCORT
             } else {
                 BUSY
@@ -314,12 +339,17 @@ impl HailOption for RequestAssistance {
             return Answer::say(Reply::Comm(group));
         }
         if hail.player_threatened {
-            return defend(hail, chance);
+            return battle::defend(
+                hail,
+                self.battle_help_target,
+                self.brave_trader_help,
+                chance,
+            );
         }
         let Some(need) = hail.need else {
             return Answer::say(Reply::Comm(NOT_IN_TROUBLE));
         };
-        if hail.mission_escort() {
+        if hail.escort_ai() {
             return Answer::say(Reply::Comm(CANT_DO_THAT));
         }
         let help = Some(Deed::Help(need));
@@ -339,38 +369,6 @@ impl HailOption for RequestAssistance {
             }),
             ..Answer::say(price)
         }
-    }
-}
-
-/// Request Assistance while the player is threatened (`_DoCommDialog`
-/// @0x96310-0x96372; see the module docs' item 4): "In your dreams, pal."
-/// unless an enemy of the ship's threatens the player (@0x9632f); with
-/// battle help (@0x96335), "Okay, I'm on my way." and it fights a threat
-/// picked on `chance`; else "I'd rather not.", in place of the AI-type
-/// ladder (@0x9638e-0x96514) that is deferred.
-///
-/// `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) draws `Rand(63)+1`
-/// until a slot holds a threat (@0x82d24-0x82d99): a uniform pick among
-/// every ship that threatens the player, with no government test, here
-/// one draw below their count. An enemy threatening the player is among
-/// them, so the list is never empty here; were it, nothing is drawn and
-/// the ship only says it is on its way, as the original sets no target
-/// (@0x82daa).
-fn defend(hail: &Hail, chance: &mut dyn Chance) -> Answer {
-    if !hail.threatened_by_enemy {
-        return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
-    }
-    if !hail.dispositions.battle_help {
-        return Answer::say(Reply::Comm(RATHER_NOT));
-    }
-    let threats: Vec<_> = hail.threats_to_player().map(|npc| npc.id).collect();
-    let count = u32::try_from(threats.len()).unwrap_or(u32::MAX);
-    let target = (count > 0)
-        .then(|| threats.get(chance.below(count) as usize).copied())
-        .flatten();
-    Answer {
-        deed: target.map(Deed::Defend),
-        ..Answer::say(Reply::Comm(ON_MY_WAY))
     }
 }
 
@@ -513,7 +511,8 @@ impl HailOption for JoinFleet {
 #[cfg(test)]
 mod tests {
     use super::super::fixture::{hail, ship};
-    use super::super::{Dispositions, Help, MissionHail};
+    use super::super::reply::RATHER_NOT;
+    use super::super::{Defence, Dispositions, Help, MissionHail};
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
@@ -925,7 +924,7 @@ mod tests {
             busy: true,
             ..needy(&npc)
         };
-        assert!(busy.mission_escort());
+        assert!(busy.escort_ai());
         assert!(request.applies(&busy), "not the hired escort's dialog");
         assert!(!Release.applies(&busy));
         assert_eq!(press(&request, &busy), says(JUST_AN_ESCORT));
@@ -939,7 +938,7 @@ mod tests {
             ..busy
         };
         assert_ne!(press(&request, &idle), says(JUST_AN_ESCORT));
-        assert!(!needy(&ship()).mission_escort());
+        assert!(!needy(&ship()).escort_ai());
     }
 
     #[test]
@@ -956,8 +955,8 @@ mod tests {
     }
 
     #[test]
-    fn while_an_enemy_threatens_the_player_it_would_rather_not_without_battle_help() {
-        let npc = ship();
+    fn while_an_enemy_threatens_the_player_a_wimpy_trader_would_rather_not_without_battle_help() {
+        let npc = of(AiType::WimpyTrader, Some(140), 0);
         let hail = Hail {
             player_threatened: true,
             threatened_by_enemy: true,
@@ -1036,7 +1035,11 @@ mod tests {
                     Answer {
                         first: None,
                         reply: Some(Reply::Comm(ON_MY_WAY)),
-                        deed: Some(Deed::Defend(NpcId(2))),
+                        deed: Some(Deed::Defend(Defence {
+                            threat: Some(NpcId(2)),
+                            reinforce: true,
+                            drop_travel: false
+                        })),
                         ask: None,
                     },
                     "{:?} {need:?}",
@@ -1054,16 +1057,17 @@ mod tests {
         let hail = helping(&npcs[0], &npcs, None);
         for (draw, picked) in [(0, NpcId(2)), (1, NpcId(3))] {
             let (answer, asked) = press_drawing(&hail, &[draw]);
-            assert_eq!(answer.deed, Some(Deed::Defend(picked)), "{draw}");
+            assert_eq!(
+                answer.deed,
+                Some(Deed::Defend(Defence {
+                    threat: Some(picked),
+                    reinforce: true,
+                    drop_travel: false
+                })),
+                "{draw}"
+            );
             assert_eq!(asked, [2]);
         }
-    }
-
-    #[test]
-    fn battle_help_with_no_threat_to_pick_draws_nothing_and_does_nothing() {
-        let npc = ship();
-        let hail = helping(&npc, &[], None);
-        assert_eq!(press(&RequestAssistance::default(), &hail), says(ON_MY_WAY));
     }
 
     #[test]
@@ -1175,9 +1179,51 @@ mod tests {
         }
     }
 
+    /// The ships the original reads as of AI type above 4 but the
+    /// player's own: a mission escort, an NPC fleet escort and an NPC's
+    /// carried fighter.
+    fn above_four() -> [Npc; 3] {
+        let mut fleet = ship();
+        fleet.leader = Some(NpcId(9));
+        let mut fighter = ship();
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(NpcId(9)),
+            window: 100.0,
+            reach: 40.0,
+        });
+        [mission_escort(), fleet, fighter]
+    }
+
     #[test]
-    fn a_mission_escort_will_not_refuel_or_repair() {
-        let npc = mission_escort();
+    fn a_fleet_escort_or_carried_fighter_is_just_an_escort_when_busy_as_a_mission_escort_is() {
+        // @0x962ee-0x96304 read the AI type above 4.
+        let request = RequestAssistance::default();
+        for npc in above_four() {
+            let busy = Hail {
+                busy: true,
+                ..needy(&npc)
+            };
+            assert!(busy.escort_ai(), "{npc:?}");
+            assert_eq!(press(&request, &busy), says(JUST_AN_ESCORT));
+            let mut spared = npc.clone();
+            spared.spared = true;
+            let busy = Hail {
+                busy: true,
+                ..needy(&spared)
+            };
+            assert!(!busy.escort_ai(), "paid off, it is a wimpy trader");
+            assert_eq!(press(&request, &busy), says(BUSY));
+        }
+    }
+
+    #[test]
+    fn no_ship_above_ai_type_four_will_refuel_or_repair() {
+        for npc in above_four() {
+            a_ship_above_ai_type_four_will_not_refuel_or_repair(&npc);
+        }
+    }
+
+    fn a_ship_above_ai_type_four_will_not_refuel_or_repair(npc: &Npc) {
         for free_help in [false, true] {
             for need in [Help::Refuel, Help::Repair] {
                 let hail = Hail {
@@ -1186,7 +1232,7 @@ mod tests {
                         ..Dispositions::default()
                     },
                     need: Some(need),
-                    ..hail(&npc)
+                    ..hail(npc)
                 };
                 assert_eq!(
                     press(&RequestAssistance::default(), &hail),
@@ -1196,7 +1242,7 @@ mod tests {
             }
         }
         assert_eq!(
-            press(&RequestAssistance::default(), &hail(&npc)),
+            press(&RequestAssistance::default(), &hail(npc)),
             says(NOT_IN_TROUBLE),
             "it needs nothing first"
         );
@@ -1215,6 +1261,7 @@ mod tests {
         );
         let bible = RequestAssistance {
             quiet_hails: RuleSource::Bible,
+            ..RequestAssistance::default()
         };
         assert_eq!(
             press(&bible, &hail).ask,

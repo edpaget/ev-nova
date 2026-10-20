@@ -4875,13 +4875,31 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
 /// A new pilot, "Stock", flying in `sÿst` `system`, with `gone` gone for
 /// good, its persons appearing as `rules` say.
 fn flying_in(data: &GameData, system: i16, gone: &[i16], rules: NovaPersons) -> Session {
+    flying_in_with_bits(data, system, gone, rules, &[])
+}
+
+/// [`flying_in`] with the control bits `bits` set on the pilot before it
+/// flies, so the galaxy refresh it starts with reads them (see
+/// `RuleKey::SpawnAvailability`).
+fn flying_in_with_bits(
+    data: &GameData,
+    system: i16,
+    gone: &[i16],
+    rules: NovaPersons,
+    bits: &[u16],
+) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["system"] = serde_json::json!(system);
     save["stellar"] = serde_json::Value::Null;
     save["gone_persons"] = serde_json::json!(gone);
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    for &bit in bits {
+        pilot
+            .bits_mut()
+            .set(nova_sim::Bit::new(bit).expect("a bit"));
+    }
     Session::fly(data, pilot)
         .expect("flies")
         .with_person_rules(std::rc::Rc::new(rules))
@@ -4900,7 +4918,7 @@ fn persons_in(
 }
 
 /// The persons `sÿst` `system` is populated with, as [`persons_in`] says,
-/// with the control bits `bits` set.
+/// with the control bits `bits` set before the pilot flies.
 fn persons_with_bits(
     data: &GameData,
     system: i16,
@@ -4909,10 +4927,7 @@ fn persons_with_bits(
     bits: &[u16],
     chance: &mut ByBound,
 ) -> Vec<i16> {
-    let mut session = flying_in(data, system, gone, rules);
-    for &bit in bits {
-        session.set_control_bit(nova_sim::Bit::new(bit).expect("a bit"), true);
-    }
+    let mut session = flying_in_with_bits(data, system, gone, rules, bits);
     session.populate(data, chance);
     session
         .npcs()

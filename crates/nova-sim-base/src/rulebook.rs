@@ -131,6 +131,7 @@
 //! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see `nova_sim::text_tags`) | each reads government nnn's own rank |
 //! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see `nova_sim::text_tags`) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
 //! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
+//! | [`SpawnAvailability`](RuleKey::SpawnAvailability) | `spawn_availability` | a shïp's or flët's `AppearOn` and a randomly drawn përs's `ActiveOn` are read as the last galaxy refresh (a landing, a jump's arrival, a new pilot or a load) evaluated them, a drawn person's also now, so a bit set in between brings those ships only from the next refresh; a system's person slots read `ActiveOn` now (`_PropagateMissionBitEffects` @0x997c3-0x9987a, `_SpawnPerson` @0x409b5, @0x40b5d; see the session's `spawn_availability` module) | every test is read now, at each spawn\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see `nova_sim::mission::ships`) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see `nova_sim::red_alert`) | the icon blinks with every alert\* |
@@ -148,6 +149,9 @@
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see `nova_sim::story`) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see `nova_sim::cron`) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see `nova_sim::cron`) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
+//! | [`CronZeroDurationNoHoldoff`](RuleKey::CronZeroDurationNoHoldoff) | `cron_zero_duration_no_holdoff` | a `Duration` 0 crön with no holdoffs runs `OnStart` and `OnEnd`, sets its days to -1 and stays active (`_CronEventHandler` @0x388cb-0x388ff), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and it goes inactive (see `nova_sim::cron`) | `OnEnd` once, inactive at once |
+//! | [`BattleHelpTarget`](RuleKey::BattleHelpTarget) | `battle_help_target` | a helper sent to fight a threat to the player, by rank battle help or for a price, picks uniformly among every other ship that targets the player in AI state 3 or 4, enemy of the helper or not (`_AIFightEnemyThreatToPlayer` @0x82c9f-0x82d99; see `nova_sim_ai::hail::battle`) | only among those of a government that is an enemy of the helper's, as the routine's name says |
+//! | [`BraveTraderBattleHelp`](RuleKey::BraveTraderBattleHelp) | `brave_trader_battle_help` | an independent brave trader whose ship-table slot is divisible by 3 asks a price to fight a threat to the player, as a warship does (`_DoCommDialog` @0x963a9-0x963d9; see `nova_sim_ai::hail::battle`) | no brave trader does: each says "I'd rather not." |
 //! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at each of the original's resets (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981), the end of every set expression that is not empty among them, so a `K` or `L` blesses or stops blessing as its expression ends, not between its operators, and a crime's rank loss (`_SlapWithPenalty`, which reaches no reset) only at the next reset (see `nova_sim::rank`) | live, from the active ranks: within an expression, and from the crime on\* |
 //! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see `nova_sim::landing`) | past `MinStatus` only, so `Require` still refuses |
 //! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see `nova_sim::ai::warship`) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
@@ -296,7 +300,7 @@
 //! `reused_slot_exits`, `reused_slot_search`, `stray_beam_exit`,
 //! `sound_voices`, `looped_sound_wait`, `bomb_heading_wrap`, `translucent_shot_fade`,
 //! `lightning_zig_zag`, `independent_kin`,
-//! `cached_avail_bits`,
+//! `cached_avail_bits`, `spawn_availability`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`, `shot_overlap`,
 //! `submunition_source_slot`, `reused_shot_slot_roll`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
@@ -2021,6 +2025,27 @@ rule_keys! {
     /// are tested now. The Bible says nothing of it, so the other reading is
     /// the intended behaviour, not anything the Bible says.
     CachedAvailBits => "cached_avail_bits",
+    /// When a ship type's or fleet's `AppearOn`, and a randomly drawn
+    /// person's `ActiveOn`, are read (see the session's
+    /// `spawn_availability` module, `nova_sim_ai::traffic::spawn` and
+    /// `nova_sim_ai::traffic::persons`). By the engine, as
+    /// `_PropagateMissionBitEffects` caches them at each galaxy refresh (a
+    /// landing, a jump's arrival, a new pilot and a load; shïp +0xa41
+    /// @0x997c3-0x99800, përs +0x622 @0x99802-0x99840, flët +0x122
+    /// @0x99842-0x9987a) and the spawners read only the cache
+    /// (`_SelectShipFieldFromDude`, `_HyperSpawnFleet`,
+    /// `_SelectFleetFromSystem`, `_SpawnFleet`): the tests are read
+    /// against the player as the last refresh saw them, so a bit set in
+    /// between brings those ships only from the next refresh, and a bit
+    /// cleared lets them keep coming until then. A drawn person
+    /// (`_SpawnPerson` @0x409b5) is also tested now (@0x40b5d-0x40b6d), so
+    /// it needs both verdicts; a system's person slots are tested now
+    /// alone (`_SetupShipsInSystem` @0x4334d-0x4335d). Under
+    /// `visibility_refresh = bible`, the refresh after every settled
+    /// script takes the snapshot too. By the other reading every test is
+    /// read now, at each spawn. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
+    SpawnAvailability => "spawn_availability",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -2142,6 +2167,37 @@ rule_keys! {
     /// end: `PostHoldoff` days with the days at -1. The other reading is
     /// the default (see `nova_sim::cron`).
     CronPostHoldoff => "cron_post_holdoff",
+    /// What a `Duration` 0 crön with no `PreHoldoff` does when it starts
+    /// with `PostHoldoff` 0 or below: by the engine, `OnStart` and `OnEnd`
+    /// run, `days` is set to -1 and the holdoff left 0
+    /// (`_CronEventHandler` @0x388cb-0x388ff), so it stays active and
+    /// contributing, and the next day's running branch runs `OnEnd` again
+    /// (@0x387d3-0x387e8) and it goes inactive (@0x387fc), able to
+    /// restart the day after; by the other reading, `OnEnd` once and
+    /// inactive at once. The engine is the default, unlike
+    /// [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff), as
+    /// no stock storyline depends on it (stock cröns 129 and 381; see
+    /// `nova_sim::cron`).
+    CronZeroDurationNoHoldoff => "cron_zero_duration_no_holdoff",
+    /// Which ships a helper sent to fight a threat to the player picks
+    /// among (`_AIFightEnemyThreatToPlayer` @0x82c80-0x82dba, called by
+    /// rank battle help and by a paid helper; see
+    /// `nova_sim_ai::hail::battle`). By the engine, every other ship that
+    /// targets the player in AI state 3 or 4, enemy of the helper or not,
+    /// as the routine reads no government (@0x82c9f-0x82d99). By the
+    /// other reading, only those whose government
+    /// `Governments::npc_enemies` finds an enemy of the helper's, as the
+    /// routine's name says. A free helper of AI type 0 or above 4
+    /// (`_AIFightThreatToPlayer` @0x8183c) is not governed by it.
+    BattleHelpTarget => "battle_help_target",
+    /// Whether a brave trader helps fight a threat to the player for a
+    /// price (`_DoCommDialog` @0x9639f-0x963d9; see
+    /// `nova_sim_ai::hail::battle`). By the engine, an independent one
+    /// whose ship-table slot (`Npc::berth`, +0x86) is divisible by 3 asks
+    /// its price and fights as a warship does (@0x963a9-0x963d9), and any
+    /// other says "I'd rather not."; by the other reading, no brave trader
+    /// does, and each says "I'd rather not." as a wimpy trader does.
+    BraveTraderBattleHelp => "brave_trader_battle_help",
     /// When the ranks' blessing table is taken. By the engine, at each of
     /// the original's resets (`_ResetPlayerPrecalcedValues`
     /// @0xc8be-0xc981; the session's `precalced` module lists them), the
@@ -3744,7 +3800,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(159),
+            RuleKey::ALL.iter().rev().nth(163),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -3761,7 +3817,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(158),
+            RuleKey::ALL.iter().rev().nth(162),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -3775,7 +3831,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(157),
+            RuleKey::ALL.iter().rev().nth(161),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -3792,7 +3848,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(156),
+            RuleKey::ALL.iter().rev().nth(160),
             Some(&RuleKey::DescMovieGlobals)
         );
     }
@@ -3832,7 +3888,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(155),
+            RuleKey::ALL.iter().rev().nth(159),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -3854,7 +3910,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(154),
+            RuleKey::ALL.iter().rev().nth(158),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -3879,7 +3935,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(153),
+            RuleKey::ALL.iter().rev().nth(157),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -3905,7 +3961,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(152),
+            RuleKey::ALL.iter().rev().nth(156),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -3925,7 +3981,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(151),
+            RuleKey::ALL.iter().rev().nth(155),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -3942,7 +3998,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(150),
+            RuleKey::ALL.iter().rev().nth(154),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -3962,7 +4018,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(149),
+            RuleKey::ALL.iter().rev().nth(153),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -3982,7 +4038,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(146),
+            RuleKey::ALL.iter().rev().nth(150),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -4004,7 +4060,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(145),
+            RuleKey::ALL.iter().rev().nth(149),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -4914,7 +4970,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(144), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(148), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -4929,7 +4985,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(143),
+            RuleKey::ALL.iter().rev().nth(147),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -4946,7 +5002,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(142),
+            RuleKey::ALL.iter().rev().nth(146),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -4963,7 +5019,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(141),
+            RuleKey::ALL.iter().rev().nth(145),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -4980,7 +5036,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(140),
+            RuleKey::ALL.iter().rev().nth(144),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -4997,7 +5053,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(139),
+            RuleKey::ALL.iter().rev().nth(143),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -5014,7 +5070,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(138),
+            RuleKey::ALL.iter().rev().nth(142),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -5031,7 +5087,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(137),
+            RuleKey::ALL.iter().rev().nth(141),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -5048,7 +5104,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(136),
+            RuleKey::ALL.iter().rev().nth(140),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -5062,7 +5118,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(135),
+            RuleKey::ALL.iter().rev().nth(139),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -5079,7 +5135,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(134),
+            RuleKey::ALL.iter().rev().nth(138),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -5096,7 +5152,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(133),
+            RuleKey::ALL.iter().rev().nth(137),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -5113,8 +5169,31 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(132),
+            RuleKey::ALL.iter().rev().nth(136),
             Some(&RuleKey::CachedAvailBits)
+        );
+    }
+
+    #[test]
+    fn the_spawn_availability_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SpawnAvailability.key(), "spawn_availability");
+        assert_eq!(
+            RuleKey::from_key("spawn_availability"),
+            Some(RuleKey::SpawnAvailability)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SpawnAvailability),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::SpawnAvailability, RuleSource::Bible)
+                .source_for(RuleKey::SpawnAvailability),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(135),
+            Some(&RuleKey::SpawnAvailability)
         );
     }
 
@@ -5127,7 +5206,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(131),
+            RuleKey::ALL.iter().rev().nth(134),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -5141,7 +5220,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(130),
+            RuleKey::ALL.iter().rev().nth(133),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -5154,7 +5233,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(148),
+            RuleKey::ALL.iter().rev().nth(152),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -5172,7 +5251,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(128),
+            RuleKey::ALL.iter().rev().nth(131),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -5189,7 +5268,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(127),
+            RuleKey::ALL.iter().rev().nth(130),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -5206,11 +5285,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(126),
+            RuleKey::ALL.iter().rev().nth(129),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(125),
+            RuleKey::ALL.iter().rev().nth(128),
             Some(&RuleKey::SalaryCap)
         );
     }
@@ -5227,7 +5306,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(124),
+            RuleKey::ALL.iter().rev().nth(127),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -5246,15 +5325,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(123),
+            RuleKey::ALL.iter().rev().nth(126),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(122),
+            RuleKey::ALL.iter().rev().nth(125),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(121),
+            RuleKey::ALL.iter().rev().nth(124),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -5271,7 +5350,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(120),
+            RuleKey::ALL.iter().rev().nth(123),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -5285,11 +5364,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(119),
+            RuleKey::ALL.iter().rev().nth(122),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(118),
+            RuleKey::ALL.iter().rev().nth(121),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -5310,13 +5389,51 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(117),
+            RuleKey::ALL.iter().rev().nth(120),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(116),
+            RuleKey::ALL.iter().rev().nth(119),
             Some(&RuleKey::CronPostHoldoff)
         );
+    }
+
+    #[test]
+    fn the_cron_zero_duration_no_holdoff_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::CronZeroDurationNoHoldoff;
+        assert_eq!(rule.key(), "cron_zero_duration_no_holdoff");
+        assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(118), Some(&rule));
+    }
+
+    #[test]
+    fn the_battle_help_rules_are_found_by_their_keys_and_read_the_engine() {
+        for (rule, key, at) in [
+            (RuleKey::BattleHelpTarget, "battle_help_target", 117),
+            (
+                RuleKey::BraveTraderBattleHelp,
+                "brave_trader_battle_help",
+                116,
+            ),
+        ] {
+            assert_eq!(rule.key(), key);
+            assert_eq!(RuleKey::from_key(key), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+            assert_eq!(
+                Rulebook::default()
+                    .with_override(rule, RuleSource::Bible)
+                    .source_for(rule),
+                RuleSource::Bible
+            );
+            assert_eq!(RuleKey::ALL.iter().rev().nth(at), Some(&rule), "{key}");
+        }
     }
 
     #[test]
@@ -5577,7 +5694,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(161),
+            RuleKey::ALL.iter().rev().nth(165),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -5747,6 +5864,7 @@ mod tests {
                 RuleKey::CrossedRankTags,
                 RuleKey::OfferingShipName,
                 RuleKey::CachedAvailBits,
+                RuleKey::SpawnAvailability,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
@@ -5763,6 +5881,9 @@ mod tests {
                 RuleKey::VisibilityRefresh,
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
+                RuleKey::CronZeroDurationNoHoldoff,
+                RuleKey::BattleHelpTarget,
+                RuleKey::BraveTraderBattleHelp,
                 RuleKey::BlessingRefresh,
                 RuleKey::BlessingLanding,
                 RuleKey::BlessingAlwaysAttacks,

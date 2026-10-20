@@ -459,7 +459,7 @@ impl Session {
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
-        self.propagate_avail_bits();
+        self.propagate_cached_tests();
         let refresh = self.refresh_now();
         self.change_galaxy(catalog, |overlay| {
             refresh.write(overlay);
@@ -477,7 +477,7 @@ impl Session {
     /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
     /// stellars shown are those the refreshed galaxy gives.
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
-        self.propagate_avail_bits();
+        self.propagate_cached_tests();
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
             return;
         }

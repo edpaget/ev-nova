@@ -448,6 +448,32 @@ fn the_timer_running_blocks_a_second_call() {
     assert_eq!(timer(&session), i32::from(TIME) - 1);
 }
 
+#[test]
+fn the_fleets_appear_on_reads_the_last_galaxy_refresh_by_the_engine() {
+    // `_HandleReinforcements` → `_HyperSpawnFleet` reads flët +0x122
+    // (@0x390e0, @0x41cd3): b7, set in flight, is unseen by the engine.
+    let mut catalog = reinforced();
+    catalog.fleets[0].appear_on = Test::parse("b7");
+    let b7 = crate::control::Bit::new(7).expect("a bit");
+    for (source, comes) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+        let mut session = flying(&catalog);
+        session.setup.rules =
+            crate::rulebook::Rulebook::default().with_override(RuleKey::SpawnAvailability, source);
+        session.set_control_bit(b7, true);
+        let warship = fight(&mut session, FED, 100.0);
+        session.call_for_reinforcements(warship, false, None);
+        let before = session.npcs().len();
+        let messages = heard(&mut session, &catalog, TIME);
+        assert_eq!(timer(&session), reinforcements::ARRIVED, "{source:?}");
+        assert_eq!(
+            messages.contains(&SimMessage::FleetArrivalQuote("Here we come.".to_owned())),
+            comes,
+            "{source:?}"
+        );
+        assert_eq!(session.npcs().len() > before, comes, "{source:?}");
+    }
+}
+
 /// `session` with its fleet called and arrived.
 fn arrived(session: &mut Session, catalog: &FakePilotCatalog, warship: NpcId) {
     session.call_for_reinforcements(warship, false, None);
