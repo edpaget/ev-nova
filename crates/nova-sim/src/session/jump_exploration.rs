@@ -367,6 +367,47 @@ pub(super) mod tests {
         assert!(on(&session, 20));
     }
 
+    /// One message, `Go.`, in `STR#` 25048.
+    #[derive(Debug)]
+    struct Go;
+
+    impl crate::catalog::CommCatalog for Go {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == 25048 {
+                vec!["Go.".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn an_on_explores_leave_waits_for_the_settling() {
+        let catalog = nebulous(vec![nebula(128, (500, -100, 200, 200), "", "b7 Q25048")]);
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine).with_strings(Rc::new(Go));
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert!(on(&session, 7), "the OnExplore ran");
+        let settled = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(settled.message.as_deref(), Some("Go."), "its Q, held");
+    }
+
+    #[test]
+    fn a_new_pilots_start_exploration_kept_by_the_other_reading_waits_for_the_settling() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let catalog = nebulous(vec![nebula(128, (-100, -100, 200, 200), "", "b7")]);
+        let rules = Rulebook::default().with_override(RuleKey::NebulaNewPilot, RuleSource::Bible);
+        let mut session = Session::fly(&catalog, Pilot::new(&catalog, "").expect("starts"))
+            .expect("flies")
+            .with_rules(rules);
+        session.begin(&catalog, &mut NeverFires);
+        assert!(!on(&session, 7), "raised before the OnStart: it waits");
+        assert!(session.story_raised().contains(&StoryEvent::Explored {
+            system: SystemId(130)
+        }));
+        settle(&mut session, &catalog);
+        assert!(on(&session, 7));
+    }
+
     #[test]
     fn a_new_pilots_on_start_map_explores_with_the_activity_from_before_it() {
         // OnStart sets b5 and maps 130, 131 and 132: the nebula around 131,
