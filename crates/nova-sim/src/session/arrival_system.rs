@@ -29,10 +29,13 @@
 //! (the `nav` module's `Chart::selected_slot`), and reads its raw Con
 //! target ([`Chart::selected_con_target`]) as the arrival begins, before
 //! the jump's fuel and days, as the original reads +0x6c (@0x6bd3a) before
-//! its days (@0x6c144). The nav refuses every write while a jump is under
-//! way, so the selection at arrival is the jump's. A selection that
-//! stands in no Con slot can't be jumped to, so the engine's fallback, the
-//! stand-in J took, is never reached in play.
+//! its days (@0x6c144). The player's nav writes are refused while a jump
+//! is under way (the keys, the map's key and the floating map's click),
+//! so the selection at arrival is the jump's. The engine falls back on the
+//! stand-in J took when the selection stands in no Con slot, which can't
+//! be jumped to, or names a system away from J's place, which only
+//! [`Session::plot_course`](super::Session::plot_course), a helper for
+//! tests and tools, can make during the warp: neither is reached in play.
 //!
 //! **A wormhole** (`_PlayerEnterWormhole` 0x64005). Its three
 //! `_FindActiveCoLocatedSystem` calls (@0x64085, @0x64155, @0x64204) only
@@ -379,6 +382,34 @@ mod tests {
             assert_eq!(
                 landed_in(&session),
                 (SystemId(system), vec![StellarId(stellar)], vec![]),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_jump_ship_off_any_course_enters_the_raw_target() {
+        // No course: the multi-jump branch needs one (@0x6bd5b), so even a
+        // ship of two hops a jump writes the raw Con link.
+        let base = alternates();
+        let catalog = FakePilotCatalog {
+            star_map: base.star_map.clone(),
+            ..chained(base, 2)
+        };
+        for source in RuleSource::ALL {
+            let mut session = shadowing(&catalog, source).with_multi_jump(MultiJumpRule::default());
+            assert_eq!(
+                session.select_next_system(),
+                Some(SystemId(134)),
+                "standing in 130's one slot, which names 131"
+            );
+            fly_out(&mut session);
+            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
+            session.pilot.bits_mut().clear(hiding_bit(131));
+            // By the other reading, 134 resolved by place once 131 shows.
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131)),
                 "{source:?}"
             );
         }
