@@ -201,6 +201,28 @@ fn starting_data(on_start: &[u8]) -> Rc<GameData> {
     game_data_starting(false, false, false, on_start, b"")
 }
 
+/// [`data`], where Alpha (128) links Beta (129), which is visible
+/// until bit 5 is set (`Visibility` `!b5`), and the `chär`'s `OnStart`
+/// sets bit 5: a new pilot hides Beta as its game begins.
+fn hiding_beta_data() -> Rc<GameData> {
+    let mut built = game_data_fork(false, false, false, 100, b"b5", b"", None).build();
+    let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+    built.put_u16(alpha + 0x04, 129);
+    let beta = built.layout.data_entry(System::TYPE, 129) + 4;
+    for (at, byte) in b"!b5".iter().enumerate() {
+        built.put_u8(beta + 0x96 + at, *byte);
+    }
+    loaded_bytes(built.bytes)
+}
+
+/// Whether the pilot of `flight` has explored Beta (129).
+fn explored_beta(flight: &FlightView<Rc<GameData>>) -> bool {
+    flight
+        .pilot()
+        .expect("a pilot")
+        .has_explored(nova_sim::SystemId(129))
+}
+
 /// [`outfitting_data`], where the booster's `OnPurchase` is
 /// `on_purchase`, and `STR#` 25048 holds "Off you go, <PSN>."
 fn hooked_outfitting_data(on_purchase: &[u8]) -> Rc<GameData> {

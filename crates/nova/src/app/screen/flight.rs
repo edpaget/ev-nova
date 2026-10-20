@@ -271,12 +271,15 @@ impl AppScreen {
     }
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
-    /// its stellar sprite pool, what its berths keep, its course map's
-    /// zoom and whether the map shows the borders, for the next flight in
-    /// this run.
+    /// its stellar sprite pool, what its berths keep, what its last galaxy
+    /// refresh left hidden, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(last_refresh) = flight.last_refresh() {
+            self.last_refresh = Some(last_refresh);
         }
         if let Some(pool) = flight.stellar_sprite_pool() {
             self.stellar_sprites = pool.clone();

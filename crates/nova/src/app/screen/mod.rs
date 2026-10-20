@@ -44,7 +44,12 @@
 //! original. Each flight put away or held leaves its ship slots'
 //! draw-layer history, which every later flight of the run starts from,
 //! as the original's sprite layers outlive a pilot
-//! ([`nova_sim::ship_layer`]).
+//! ([`nova_sim::ship_layer`]). A new pilot's neighbour pass reads what
+//! the game held, else the last flight put away, left of its galaxy
+//! refreshes ([`nova_sim::LastRefresh`]), or, with neither, the
+//! launch's, as `_DoNewPilot` reads the visible flags the run's last
+//! refresh wrote (@0x18fc5); entering play from the menu takes the held
+//! game's afresh ([`FlightView::enter_game`]).
 //!
 //! A pilot with a name is saved through the [`PilotKeeper`] on creation,
 //! on landing, on taking off, after each change made in the spaceport
@@ -310,13 +315,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
     PersonRules, PilotKeeper, PilotStore, PointDefenceRule, Rulebook,
 };
+use nova_sim::{KeptBerths, LastRefresh};
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
@@ -510,6 +515,11 @@ pub struct AppScreen {
     /// [`nova_sim::traffic::kept_berths`]). Empty at launch, as the
     /// table's fresh pages read 0.
     kept_berths: KeptBerths,
+    /// What the galaxy refreshes of the last flight put away left
+    /// hidden, which a new pilot's neighbour pass reads when no game is
+    /// held ([`AppScreen::run_refresh`]); `None` at launch, when the
+    /// launch's own refresh is read.
+    last_refresh: Option<LastRefresh>,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.

@@ -55,6 +55,7 @@ impl AppScreen {
             slot_sprites: SlotSprites::default(),
             stellar_sprites: StellarSpritePool::default(),
             kept_berths: KeptBerths::default(),
+            last_refresh: None,
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,

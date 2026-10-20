@@ -639,6 +639,65 @@ fn a_game_held_in_place_of_another_hands_on_its_berths() {
     assert_eq!(game.kept_berths(), Some(ace_at_berth_1()));
 }
 
+/// A router over [`hiding_beta_data`], its pilots kept in `store`.
+fn hiding_beta(store: &MemoryPilots) -> AppScreen {
+    AppScreen::new(hiding_beta_data())
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
+}
+
+#[test]
+fn a_new_pilot_reads_the_launchs_refresh_when_nothing_has_been_flown() {
+    let store = MemoryPilots::new();
+    let mut screen = hiding_beta(&store);
+    create_held(&mut screen, "Ada");
+    let ada = screen.game.as_ref().expect("Ada's game held");
+    assert!(explored_beta(ada), "Beta visible at launch");
+    assert!(
+        !ada.session()
+            .expect("flying")
+            .galaxy()
+            .visible(nova_sim::SystemId(129)),
+        "hidden since"
+    );
+}
+
+#[test]
+fn a_new_pilot_reads_the_refresh_the_game_held_left() {
+    let store = MemoryPilots::new();
+    let mut screen = hiding_beta(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    create_held(&mut screen, "Bea");
+    let bea = screen.game.as_ref().expect("Bea's game held");
+    assert!(!explored_beta(bea), "Ada's play left Beta hidden");
+}
+
+#[test]
+fn a_new_pilot_after_one_not_yet_played_reads_its_refresh_before_on_start() {
+    let store = MemoryPilots::new();
+    let mut screen = hiding_beta(&store);
+    create_held(&mut screen, "Ada");
+    create_held(&mut screen, "Bea");
+    let bea = screen.game.as_ref().expect("Bea's game held");
+    assert!(explored_beta(bea), "Ada's @0x1925e, before her OnStart");
+}
+
+#[test]
+fn a_new_pilot_with_no_game_held_reads_the_refresh_the_last_flight_left() {
+    let store = MemoryPilots::new();
+    let mut screen = hiding_beta(&store);
+    assert_eq!(screen.last_refresh, None, "none at launch");
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    let ada = screen.game.take().expect("Ada's game held");
+    screen.remember_flight(&ada);
+    assert_eq!(screen.last_refresh, ada.last_refresh());
+    create_held(&mut screen, "Bea");
+    let bea = screen.game.as_ref().expect("Bea's game held");
+    assert!(!explored_beta(bea), "Ada's play left Beta hidden");
+}
+
 #[test]
 fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
     let store = MemoryPilots::new();
