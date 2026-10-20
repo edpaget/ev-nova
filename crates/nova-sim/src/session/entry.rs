@@ -19,12 +19,17 @@
 //! drawn after the arrival shows it.
 //!
 //! Before any write, the system entered is resolved through the galaxy
-//! overlay, so the player is always in a visible system: the system
-//! itself when it is visible, else the visible system at its place, else
-//! the chain head, made visible ([`OverlaidGalaxy::arrival`]; see the
-//! `story` module's "Galaxy overlay"). The stellars of a system resolved
-//! to another are read again; the caller's placement is kept, a system at
-//! the same place being at the same map position.
+//! overlay, so the player is always in a visible system, as
+//! [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem) says
+//! (`Chart::entry_resolution`; see the `arrival_system` module): by the
+//! engine, the system itself while it is visible, a visible system
+//! shadowed at its place too ([`OverlaidGalaxy::entered`]); by the other
+//! reading, the visible system that stands for it
+//! ([`OverlaidGalaxy::arrival`]). Under both, a hidden system goes to the
+//! visible system at its place, else the chain head, made visible (see
+//! the `story` module's "Galaxy overlay"). The stellars of a system
+//! resolved to another are read again; the caller's placement is kept, a
+//! system at the same place being at the same map position.
 //!
 //! **The stellars shown.** [`Session::set_player_system`] is the one owner
 //! of which stellars the session shows, and every move of the player's
@@ -650,7 +655,8 @@ impl TrafficCatalog for NoTraffic {
 
 impl Session {
     /// Enters `arrival`'s system `how`, resolved through the galaxy
-    /// overlay, its stellars read again from `stellars` when it resolves to
+    /// overlay as [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem)
+    /// says, its stellars read again from `stellars` when it resolves to
     /// another: places the ship as the caller chose, makes the arrival
     /// writes, and resets what the row of [`resets`] for `how` says,
     /// populating from `catalog` on `chance` where it says so (see the
@@ -674,7 +680,7 @@ impl Session {
             sites,
             placement,
         } = arrival;
-        let resolved = self.chart.galaxy.arrival(asked);
+        let resolved = self.chart.entry_resolution(&self.setup, asked);
         if story::show(&mut self.pilot, &mut self.chart.galaxy, resolved) {
             self.out.save_due = true;
             self.out.emit(SessionEvent::GalaxyChanged);

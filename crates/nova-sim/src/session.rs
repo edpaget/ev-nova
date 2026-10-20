@@ -419,6 +419,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
+mod arrival_system;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -2986,7 +2987,17 @@ impl Session {
     ///
     /// It enters that system as every way in does, by its row of the
     /// table in the `entry` module, which also lets go of the strikes, the
-    /// target, the boarding, the hail and a held `P` sound.
+    /// target, the boarding, the hail and a held `P` sound. Which system
+    /// that is, [`RuleKey::ArrivalSystem`] decides before the refresh (see
+    /// the `arrival_system` module): by the engine, the last hop's
+    /// stand-in on the multi-jump branch (a course followed, more than
+    /// one hop a jump), else the raw Con target of the slot the jump was
+    /// selected from (+0x6c), read before the days; it is entered as it
+    /// is unless the refresh left it hidden. By the other reading, the
+    /// stand-in J took, resolved by place after the refresh. The first
+    /// hop is the one J took, where the original takes it at arrival
+    /// (@0x6bdc1); they differ only if visibility changes during the warp,
+    /// which no refresh point under `visibility_refresh = engine` allows.
     ///
     /// Before its days it raises [`StoryEvent::Explored`] for each system
     /// passed and the one arrived in, as the original explores their
@@ -3036,6 +3047,10 @@ impl Session {
         let Some(Jump::Hyperspace { to: first, .. }) = self.mode.jump() else {
             return None;
         };
+        // The raw Con target the jump was selected from, read before its
+        // fuel and days (+0x6c @0x6bd3a, the days @0x6c144; see the
+        // `arrival_system` module).
+        let raw = self.chart.selected_con_target(&self.pilot, first);
         self.mode.end_jump();
         self.ship.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
@@ -3099,16 +3114,22 @@ impl Session {
                 (from, at) = (at, next);
             }
         }
-        // The systems passed, then the one arrived in, each reached before
-        // the days (@0x6bddb, @0x6be12): the one entering it will resolve
-        // to, should the galaxy have hidden it on the way.
-        let arrived = self.chart.galaxy.arrival(at).to;
+        // The system the jump writes before its refresh (@0x6be0b): the
+        // last hop's stand-in on the multi-jump branch, else the raw Con
+        // target, by the engine's `arrival_system`.
+        let multi_jump =
+            hops > 0 && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
+        let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
+        // The systems passed, then the one arrived in, each explored before
+        // the days (@0x6bddb, @0x6be12). The written system shares its
+        // stand-in's place, so the same nebulae.
+        let arrived = self.chart.jump_explored(&self.setup, written);
         for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
             self.run.raise_at(mark + n, StoryEvent::Explored { system });
         }
         let entered = Arrival {
-            system: at,
-            sites: self.chart.read_sites(catalog, at),
+            system: written,
+            sites: self.chart.read_sites(catalog, written),
             placement: Placement {
                 ship: self.jump_arrival(departure, first, from, at),
                 stellar: None,
@@ -3117,8 +3138,10 @@ impl Session {
         };
         // The refresh written, with the hops and the systems explored
         // resolved by the flags as they stood (@0x6bd67-0x6bdd4,
-        // @0x6be0b). The player is between systems: its entry resolves the
-        // arrival by the same rule as any move out of a hidden system.
+        // @0x6be0b). The entry then moves the player only out of a system
+        // the refresh left hidden, by the engine's `arrival_system`, as the
+        // refresh's move does (@0x99918); by its other reading it resolves
+        // the arrival by place.
         if self
             .chart
             .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
@@ -3481,7 +3504,11 @@ impl Session {
     /// course cleared and the nav selection let go, its thrust stopped,
     /// populated with its traffic ([`Session::populate`]), even when it is
     /// the system gone in, the fight left behind and
-    /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
+    /// [`SimSound::Arrived`]. A wormhole comes out in its exit's owner as
+    /// it is, a visible system shadowed at its place too, by the engine's
+    /// [`RuleKey::ArrivalSystem`] (`_PlayerEnterWormhole` @0x642a7); a
+    /// hypergate in the stand-in the player picked. It raises
+    /// [`SimMessage::PassedWormhole`] or
     /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
     /// The ship enters the system by the gate's row of the table in the
     /// `entry` module, which keeps a held `P` sound and lets go of the
@@ -26892,7 +26919,7 @@ pub(super) mod tests {
 
     /// Stellar `id` at (`x`, `y`), with `flags2`, its `links` and its exit
     /// angle.
-    fn gate_site(
+    pub(super) fn gate_site(
         id: i16,
         (x, y): (f32, f32),
         flags2: u16,
@@ -26913,7 +26940,7 @@ pub(super) mod tests {
     }
 
     /// A landable stellar `id` at the centre with `flags2`.
-    fn gate_landing(id: i16, flags2: u16) -> LandingSite {
+    pub(super) fn gate_landing(id: i16, flags2: u16) -> LandingSite {
         LandingSite {
             flags2,
             ..planet(id, 0.0, 0.0)
@@ -28115,6 +28142,8 @@ pub(super) mod tests {
 
     #[test]
     fn by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one() {
+        // Which of the two an arrival enters is `arrival_system`'s (see the
+        // `arrival_system` module).
         let catalog = alternates();
         let mut session = resolving(&catalog, RuleSource::Engine);
         assert_eq!(
@@ -28128,12 +28157,6 @@ pub(super) mod tests {
             Err(RouteError::Unreachable),
             "134 is shadowed by 131"
         );
-        land_now(&mut session).expect("lands");
-        session
-            .relocate(&catalog, SystemId(134), StellarId(141))
-            .expect("relocates");
-        assert_eq!(session.system(), SystemId(131), "resolved to the lowest");
-        assert!(session.galaxy().visible(SystemId(134)), "still visible");
     }
 
     #[test]
@@ -28791,27 +28814,31 @@ pub(super) mod tests {
     #[test]
     fn a_jump_into_a_system_hidden_on_the_way_explores_the_one_it_arrives_in() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
-        hide(&mut session, &catalog, &[131]);
-        session.run.drop_raised();
-        session.arrive(&catalog, &mut NeverFires);
-        let explored: Vec<SystemId> = session
-            .story_raised()
-            .into_iter()
-            .filter_map(|event| match event {
-                StoryEvent::Explored { system } => Some(system),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(explored, [SystemId(134)], "no event for the head");
-        assert!(session.pilot().has_explored(SystemId(134)));
-        assert!(
-            session.pilot().has_explored(SystemId(131)),
-            "131, its place's head, by the engine (see the `explored` module)"
-        );
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::ArrivalSystem, source));
+            session.plot_course(SystemId(131)).expect("a route");
+            fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            hide(&mut session, &catalog, &[131]);
+            session.run.drop_raised();
+            session.arrive(&catalog, &mut NeverFires);
+            // By the engine's `arrival_system` the jump explores the system
+            // it writes, 131, at 134's place (@0x6be12); by the other, the
+            // arrival resolved by place, with no event for the head.
+            let explored = match source {
+                RuleSource::Engine => SystemId(131),
+                RuleSource::Bible => SystemId(134),
+            };
+            assert_eq!(explored_raised(&session), [explored], "{source:?}");
+            assert_eq!(session.system(), SystemId(134), "{source:?}");
+            assert!(session.pilot().has_explored(SystemId(134)));
+            assert!(
+                session.pilot().has_explored(SystemId(131)),
+                "131, its place's head, by the engine (see the `explored` module)"
+            );
+        }
     }
 
     /// The `Explored` events raised and not yet settled.
