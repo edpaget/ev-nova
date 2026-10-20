@@ -2,8 +2,7 @@
 //! last one hid ([`LastRefresh`]), the original's visible flags (`sÿst`
 //! +0x1eb) as the last `_PropagateMissionBitEffects` left them. A new
 //! pilot's neighbour pass reads them by the engine's reading of
-//! [`RuleKey::NewPilotVisibility`](crate::RuleKey::NewPilotVisibility)
-//! (see the `explored` module's "A new pilot").
+//! [`RuleKey::NewPilotVisibility`] (see the `explored` module's "A new pilot").
 //!
 //! **Why it is carried.** `_DoNewPilot` (@0x18b0a) tests +0x1eb of each
 //! of its start system's links (@0x18fc5) before its own refresh
