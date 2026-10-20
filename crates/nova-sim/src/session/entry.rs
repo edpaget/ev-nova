@@ -690,7 +690,7 @@ impl Session {
             // their grudges are held first, against the system left, its
             // NPCs and the player as they stand before the entry moves
             // either.
-            let left = std::mem::take(&mut self.strikes);
+            let left = std::mem::take(&mut self.space.strikes);
             self.hold_left_grudges(&left);
         }
         // A way in that docks docks at a stellar of the system asked for.
@@ -925,7 +925,7 @@ impl Session {
             self.ship.warp.gate = None;
         }
         if resets.has(Reset::Combat) {
-            self.combat.clear();
+            self.space.combat.clear();
         }
         if resets.has(Reset::Boxes) {
             self.clear_boxes();
@@ -934,7 +934,7 @@ impl Session {
             self.kill_asteroids();
         }
         if resets.has(Reset::Strikes) {
-            self.strikes.clear();
+            self.space.strikes.clear();
         }
         if resets.has(Reset::Target) {
             self.target = None;
@@ -943,10 +943,10 @@ impl Session {
             self.dock = None;
         }
         if resets.has(Reset::Boarding) {
-            self.aboard = None;
+            self.space.escorts.aboard = None;
         }
         if resets.has(Reset::Hail) {
-            self.talk = None;
+            self.space.escorts.talk = None;
         }
         if resets.has(Reset::FightersOut) {
             self.leave_with_fighters(false);
@@ -986,35 +986,38 @@ impl Session {
                         self.give_back_aux_ships(&led);
                         Leave::Dropped
                     };
-                self.traffic.retarget(table, &led, leave);
+                self.space.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
                 // The berths' odds, search timers and persons outlast the
                 // traffic, as the original's ship table does (see the
                 // `kept_berths` module).
-                let kept = self.traffic.kept_berths();
-                self.traffic = Traffic::new();
+                let kept = self.space.traffic.kept_berths();
+                self.space.traffic = Traffic::new();
                 // A new traffic reads reused slots' picks, exit cursors and
                 // blink timers and search timers by the rulebook.
-                self.traffic
+                self.space
+                    .traffic
                     .set_reused_slot_pick(self.setup.rules.source_for(RuleKey::ReusedSlotPick));
-                self.traffic
+                self.space
+                    .traffic
                     .set_reused_slot_exits(self.setup.rules.source_for(RuleKey::ReusedSlotExits));
-                self.traffic.set_reused_slot_blink_timer(
+                self.space.traffic.set_reused_slot_blink_timer(
                     self.setup.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
                 );
-                self.traffic.set_spawn_anim_rolls_first_class(
+                self.space.traffic.set_spawn_anim_rolls_first_class(
                     self.setup
                         .rules
                         .source_for(RuleKey::SpawnAnimRollsFirstClass),
                 );
-                self.traffic
+                self.space
+                    .traffic
                     .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
-                self.traffic.keep_berths(kept);
+                self.space.traffic.keep_berths(kept);
                 self.set_first_class();
-                self.traffic_due = true;
-                self.fleet.clear();
+                self.space.traffic_due = true;
+                self.space.escorts.fleet.clear();
                 self.story.watched.clear();
             }
         }

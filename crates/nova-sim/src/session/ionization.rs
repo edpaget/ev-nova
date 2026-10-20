@@ -711,7 +711,7 @@ mod tests {
             ..armed()
         };
         let mut session = knocking(&catalog, (None, 100.0), (Some(held_gun()), 100.0));
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         assert_eq!(npc.stats.ion.rate(Flyer::Npc), 1.0);
         npc.ion.charge = charge;
         (session, catalog)
@@ -829,7 +829,7 @@ mod tests {
             ..blaster()
         };
         let mut session = knocking(&catalog, (None, 100.0), (Some(gun), 100.0));
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         assert_eq!(npc.stats.ion.capacity(Flyer::Npc), 100.0, "its class's");
         npc.ion.charge = charge;
         let mut fired = Vec::new();

@@ -97,7 +97,7 @@ impl Session {
     /// or always by the other reading (see the module docs).
     pub(super) fn is_displayed(&self, ship: ShipRef, slot: Slot) -> bool {
         self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
-            || self.slot_shown.get(&slot) == Some(&ship)
+            || self.space.slot_shown.get(&slot) == Some(&ship)
     }
 
     /// Notes `slot`'s display of `ship`: shown, it is displayed from now;
@@ -107,9 +107,9 @@ impl Session {
     /// at none), which its hover box reads ([`Session::hover_place`]).
     pub(super) fn note_display(&mut self, ship: ShipRef, slot: Slot, shown: bool) {
         if shown {
-            self.slot_shown.insert(slot, ship);
+            self.space.slot_shown.insert(slot, ship);
         } else {
-            self.slot_shown.remove(&slot);
+            self.space.slot_shown.remove(&slot);
         }
         let offset = match ship {
             ShipRef::Player => Some(Vec2::ZERO),
@@ -118,8 +118,8 @@ impl Session {
                 .map(|npc| npc.state.position - self.ship.player.position),
         };
         if let Some(offset) = offset {
-            self.slot_placed.insert(slot, ship);
-            self.slot_sprites.places.place(slot, offset);
+            self.space.slot_placed.insert(slot, ship);
+            self.space.slot_sprites.places.place(slot, offset);
         }
     }
 
@@ -128,7 +128,7 @@ impl Session {
     /// has it, or always by the other reading.
     pub(super) fn is_laid_out(&self, ship: ShipRef, slot: Slot) -> bool {
         self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
-            || self.slot_placed.get(&slot) == Some(&ship)
+            || self.space.slot_placed.get(&slot) == Some(&ship)
     }
 
     /// Where `ship`'s hover and click box is: `_HandleMouse` (@0x380e3-0x381ec)
@@ -155,7 +155,8 @@ impl Session {
         if self.is_laid_out(ship, slot) {
             return HoverPlace::Own;
         }
-        self.slot_sprites
+        self.space
+            .slot_sprites
             .places
             .of(slot)
             .map_or(HoverPlace::Unplaced, HoverPlace::Stale)
@@ -171,11 +172,11 @@ impl Session {
         at: Vec2,
     ) -> Option<crate::traffic::npc::NpcId> {
         let mut copy = self.npc(id)?.clone();
-        self.traffic.remove(id);
+        self.space.traffic.remove(id);
         copy.state.position = at;
         copy.state.velocity = Vec2::ZERO;
         let berth = copy.berth;
-        Some(self.traffic.add_npc_at(copy, berth))
+        Some(self.space.traffic.add_npc_at(copy, berth))
     }
 
     /// `_PrepareAllSprites`' ship part (@0x3a776-0x3a78e): every slot is
@@ -209,13 +210,14 @@ impl Session {
             .collect();
         npcs.sort_by_key(|&(_, slot, _, _)| slot);
         slots.extend(npcs);
-        self.slot_shown.clear();
-        self.slot_placed.clear();
+        self.space.slot_shown.clear();
+        self.space.slot_placed.clear();
         for (ship, slot, disabled, led) in slots {
             let shown = !self.is_hidden(ship);
             self.note_display(ship, slot, shown);
             if shown {
-                self.slot_sprites
+                self.space
+                    .slot_sprites
                     .layers
                     .put(slot, ShipLayer::of(disabled, led));
             }
@@ -261,7 +263,7 @@ mod tests {
     fn newcomer(session: &mut Session) -> NpcId {
         let mut npc = session.npcs()[0].clone();
         npc.state.position.x += 500.0;
-        session.traffic.add_npc(npc)
+        session.space.traffic.add_npc(npc)
     }
 
     fn walked(session: &Session, ship: ShipRef) -> bool {
@@ -304,10 +306,10 @@ mod tests {
     fn a_slot_freed_and_refilled_shows_the_new_ship_only_after_its_display() {
         let (_, mut session) = flying(Rulebook::default());
         let old = session.npcs()[0].clone();
-        session.traffic.remove(old.id);
+        session.space.traffic.remove(old.id);
         let mut npc = old.clone();
         npc.state.position.x += 500.0;
-        let new = session.traffic.add_npc_at(npc, old.berth);
+        let new = session.space.traffic.add_npc_at(npc, old.berth);
         assert!(
             !drawn(&session, ShipRef::Npc(new)),
             "its slot showed another"
@@ -325,6 +327,7 @@ mod tests {
         let mut session = accepted(&catalog);
         for berth in 1..=2 {
             session
+                .space
                 .slot_sprites
                 .layers
                 .put(Slot::Berth(berth), ShipLayer::Disabled);
@@ -402,6 +405,7 @@ mod tests {
         let id = session.npcs()[0].id;
         session.npc_mut(id).expect("there").condition = crate::combat::hull::Condition::Intact;
         session
+            .space
             .slot_sprites
             .layers
             .put(slot_of(&session.npcs()[0]), ShipLayer::Ships);

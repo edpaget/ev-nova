@@ -321,7 +321,7 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
         });
         self.take_shoves();
-        let sorties = self.combat.take_sorties();
+        let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, _| {
             combat.regenerate_player(fighters, arena);
@@ -344,13 +344,13 @@ impl Session {
     /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
     pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
-        self.traffic.ease_stray();
+        self.space.traffic.ease_stray();
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.handle_npcs(fighters, arena, chance);
         });
         self.lay_out_displayed();
-        self.traffic.step_fades();
-        self.traffic.after_firing(&self.statics.arsenal);
+        self.space.traffic.step_fades();
+        self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
@@ -370,7 +370,7 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut dyn Chance,
     ) -> Option<TrafficMarks> {
-        if self.traffic_due {
+        if self.space.traffic_due {
             // No system is set up while the jump is under way.
             if self.jumping().is_none() {
                 self.populate(catalog, chance);
@@ -388,7 +388,12 @@ impl Session {
     /// Every NPC as it is now, for the strikes that follow to be read
     /// against.
     fn npcs_before(&self) -> Vec<NpcBefore> {
-        self.traffic.npcs().iter().map(NpcBefore::of).collect()
+        self.space
+            .traffic
+            .npcs()
+            .iter()
+            .map(NpcBefore::of)
+            .collect()
     }
 
     /// Runs `phase` of the fight on `pass` by `rules`, drawing on
@@ -465,7 +470,7 @@ impl Session {
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
         }];
-        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
+        let npcs = self.space.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
         let arena = Arena {
             pass,
@@ -474,7 +479,7 @@ impl Session {
             rules,
             field,
         };
-        phase(&mut self.combat, &mut fighters, arena, chance);
+        phase(&mut self.space.combat, &mut fighters, arena, chance);
     }
 
     /// Settles the hits a phase of the fight on `pass` landed, against
@@ -515,7 +520,7 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let (strikes, losses) = self.combat.take_landed();
+        let (strikes, losses) = self.space.combat.take_landed();
         let struck = super::struck_npcs(&strikes);
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
@@ -603,8 +608,8 @@ impl Session {
     /// separate parts, after the beams (`Session::fight`; see the
     /// `npc_escape` module).
     pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.traffic.keep_berth_exits();
-        let sorties = self.combat.take_sorties();
+        self.space.traffic.keep_berth_exits();
+        let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
         // The words the pass's stray beams stepped (`_HandleBeams`' among
         // them, after the ship loop). The original steps at the beam's
@@ -776,7 +781,7 @@ mod tests {
         // (@0x44483) counts the hold down.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.mode = Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
@@ -802,7 +807,7 @@ mod tests {
             };
             let mut session = facing_an_npc(&catalog, 180);
             // Its class, of no mass in the fixture, given one.
-            session.traffic.npcs_mut()[0].hull.mass = 40.0;
+            session.space.traffic.npcs_mut()[0].hull.mass = 40.0;
             let start = session.npcs()[0].state.position;
             let behaviour = Recording::default();
             until_hit(&mut session, &catalog, &behaviour);
@@ -979,7 +984,7 @@ mod tests {
         session.ship.fit.stats.shield_regen = 1.0;
         let full = session.reserves().shield.max;
         session.pilot.reserves.shield.now = full - 0.5;
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.stats.shield_regen = 1.0;
         let npc_full = npc.reserves.shield.max;
         npc.reserves.shield.now = npc_full - 0.5;
@@ -1002,7 +1007,7 @@ mod tests {
         // the ship reads cloaked after.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+        session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
             fade: 15.5,
             direction: 1,
         };
@@ -1039,7 +1044,7 @@ mod tests {
             fade: 4.0,
             direction: 1,
         };
-        let id = session.traffic.add_npc(npc);
+        let id = session.space.traffic.add_npc(npc);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.npc(id).expect("there").cloak.fade, 4.0);
     }
@@ -1060,7 +1065,7 @@ mod tests {
             fade: 4.0,
             direction: 1,
         };
-        let id = session.traffic.add_npc(npc);
+        let id = session.space.traffic.add_npc(npc);
         session.begin_jump().expect("jumps");
         assert!(session.in_warp_lead_in());
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -1074,8 +1079,8 @@ mod tests {
         // passes, and no later phase raises it again.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.traffic.npcs_mut()[0].reserves.shield.now = 0.0;
-        session.traffic.npcs_mut()[0].reserves.armor.now = 16.0;
+        session.space.traffic.npcs_mut()[0].reserves.shield.now = 0.0;
+        session.space.traffic.npcs_mut()[0].reserves.armor.now = 16.0;
         session.hold_trigger(FIRE);
         let mut ticks = 0;
         while session.npcs()[0].condition == Condition::Intact {

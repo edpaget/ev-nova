@@ -158,10 +158,10 @@ fn the_rules_hand_the_fight_the_speed_caps_reading() {
     let circled = Session::start(&catalog)
         .expect("starts")
         .with_rules(circle());
-    let mut expected = engine.combat.clone();
-    assert_ne!(circled.combat, expected);
+    let mut expected = engine.space.combat.clone();
+    assert_ne!(circled.space.combat, expected);
     expected.set_speed_cap(RuleSource::Bible);
-    assert_eq!(circled.combat, expected);
+    assert_eq!(circled.space.combat, expected);
 }
 
 /// A class of no `Speed` and no `Accel`, ship 204.
@@ -195,6 +195,7 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         // The first tick places it on its slot.
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         let npc = session
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()

@@ -150,10 +150,10 @@ impl Session {
                     self.destroy_cargo_share(holds, false);
                 }
                 self.pilot.escorts.remove(index);
-                if index < self.fleet.len()
-                    && let Some(id) = self.fleet.remove(index)
+                if index < self.space.escorts.fleet.len()
+                    && let Some(id) = self.space.escorts.fleet.remove(index)
                 {
-                    self.traffic.remove(id);
+                    self.space.traffic.remove(id);
                 }
                 defected = defected.saturating_add(1);
             }
@@ -249,13 +249,13 @@ impl Session {
         self.hire_rolls.redraw(&ship);
         if let Some(berth) = berth {
             let index = self.pilot.escorts.len() - 1;
-            self.fleet.resize(index, None);
+            self.space.escorts.fleet.resize(index, None);
             let placed = self.place_escort_at(index, Some(berth), None, chance);
             // `_SpawnEscort` rolls its afterburner (@0x3ff51).
             if let Some(id) = placed {
                 self.roll_escort_afterburner(id, chance);
             }
-            self.fleet.push(placed);
+            self.space.escorts.fleet.push(placed);
             self.reform();
         }
         Ok(Hired {
@@ -276,10 +276,19 @@ impl Session {
         let unplaced: BTreeSet<u32> = berths
             .iter()
             .enumerate()
-            .filter(|&(index, _)| self.fleet.get(index).copied().flatten().is_none())
+            .filter(|&(index, _)| {
+                self.space
+                    .escorts
+                    .fleet
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .is_none()
+            })
             .map(|(_, &berth)| berth)
             .collect();
-        self.traffic
+        self.space
+            .traffic
             .free_berth_skipping(self.setup.spawn_reserve(SPAWN_RESERVE), &unplaced)
     }
 }
@@ -809,7 +818,7 @@ mod tests {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000);
         session.pilot.escorts = vec![escort(false); MAX_ESCORTS + 1];
-        session.fleet = (0..session.pilot.escorts.len())
+        session.space.escorts.fleet = (0..session.pilot.escorts.len())
             .map(|index| {
                 (index < MAX_ESCORTS - 1)
                     .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
@@ -818,7 +827,7 @@ mod tests {
             .collect();
         assert!(list(&mut session).room, "five of the seven in the system");
         assert_eq!(row(&list(&mut session), 129).hire, Ok(()));
-        session.fleet[MAX_ESCORTS - 1] =
+        session.space.escorts.fleet[MAX_ESCORTS - 1] =
             session.place_escort(MAX_ESCORTS - 1, &mut crate::chance::NeverFires);
         assert!(!list(&mut session).room, "six in the system");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
@@ -901,7 +910,7 @@ mod tests {
         let mut chance = Draws::of(&[]).keyed(75, 0);
         assert!(session.hire(ShipId(129), &mut chance).is_ok());
         assert_eq!(chance.times_asked(75), 1);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let npc = session.npc(id).expect("in the system");
         assert_eq!((npc.skill, npc.skill_mult), ((0.63_f64) as f32, 1.0));
     }
@@ -912,7 +921,7 @@ mod tests {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000);
         assert!(session.hire(ShipId(129), &mut NeverFires).is_ok());
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let npc = session.npc(id).expect("in the system");
         assert_eq!(npc.display.glow, GLOW_SPAWN, "`_SpawnEscort`'s spawn");
         assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass);
@@ -1022,7 +1031,7 @@ mod tests {
         );
         assert_eq!(session.pilot().cash(), 24_000, "the fee is gone");
         assert_eq!(session.pilot().escorts(), [], "no escort record");
-        assert_eq!(session.fleet, []);
+        assert_eq!(session.space.escorts.fleet, []);
         assert_eq!(session.npcs().len(), npcs, "nothing placed");
         assert!(session.take_save_due(), "the pilot changed (@0x5f1df)");
         let list = session.escorts_for_hire(&mut chance).expect("a bar");
@@ -1088,10 +1097,10 @@ mod tests {
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
-        assert_eq!(session.fleet, [], "none placed yet");
+        assert_eq!(session.space.escorts.fleet, [], "none placed yet");
         for berth in 2..=55 {
             let hulk = crate::testkit::npc(0, ShipStats::default());
-            session.traffic.add_npc_at(hulk, berth);
+            session.space.traffic.add_npc_at(hulk, berth);
         }
         let hired = session.hire(ShipId(129), &mut NeverFires).expect("hired");
         assert!(!hired.joined, "berth 1 is the loaded escort's");
@@ -1106,7 +1115,7 @@ mod tests {
         crowd(&mut session, 55);
         let hired = session.hire(ShipId(129), &mut NeverFires).expect("hired");
         assert!(hired.joined);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         assert_eq!(session.npc(id).map(|npc| npc.berth), Some(56));
     }
 
@@ -1116,7 +1125,7 @@ mod tests {
         npc.ship = ShipId(152);
         npc.ai_type = AiType::Interceptor;
         npc.state.position = crate::Vec2::new(x, y);
-        session.traffic.add_npc(npc)
+        session.space.traffic.add_npc(npc)
     }
 
     #[test]
@@ -1128,7 +1137,7 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         let placed = |session: &Session| {
-            let id = session.fleet[0].expect("placed");
+            let id = session.space.escorts.fleet[0].expect("placed");
             session.npc(id).expect("in the system").clone()
         };
         let npc = placed(&session);
@@ -1237,6 +1246,8 @@ mod tests {
     /// The ship types of the fleet's NPCs in the system, in fleet order.
     fn placed_ships(session: &Session) -> Vec<i16> {
         session
+            .space
+            .escorts
             .fleet
             .iter()
             .flatten()
@@ -1262,7 +1273,7 @@ mod tests {
     /// A deadly stellar over `session`'s escort `index`, listed and
     /// shown, and the fight's tick that kills it: its NPC.
     fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
-        let id = session.fleet[index].expect("placed");
+        let id = session.space.escorts.fleet[index].expect("placed");
         let at = session.npc(id).expect("there").state.position;
         session.sites = vec![LandingSite {
             flags2: crate::deadly_stellar::DEADLY_STELLAR,
@@ -1358,14 +1369,23 @@ mod tests {
     #[test]
     fn a_defector_leaves_the_system_with_the_fleet_lined_up_with_its_records() {
         let mut session = payer(350, payroll(), 1, RuleSource::Engine);
-        let defector = session.fleet[1].expect("placed");
-        let others = [session.fleet[0], session.fleet[2], session.fleet[3]];
+        let defector = session.space.escorts.fleet[1].expect("placed");
+        let others = [
+            session.space.escorts.fleet[0],
+            session.space.escorts.fleet[2],
+            session.space.escorts.fleet[3],
+        ];
         session.pay_escorts(1);
         assert_eq!(session.pilot().cash(), 250);
-        assert_eq!(session.fleet, others, "the fleet lined up with the records");
+        assert_eq!(
+            session.space.escorts.fleet, others,
+            "the fleet lined up with the records"
+        );
         assert!(session.npc(defector).is_none(), "gone from the system");
         assert_eq!(placed_ships(&session), [129, 129, 129]);
         let slots: Vec<u8> = session
+            .space
+            .escorts
             .fleet
             .iter()
             .flatten()
@@ -1420,7 +1440,7 @@ mod tests {
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(land_now(&mut session), Ok(BAR_AT), "landed on resuming");
-        assert_eq!(session.fleet, [], "none placed yet");
+        assert_eq!(session.space.escorts.fleet, [], "none placed yet");
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
@@ -1437,15 +1457,17 @@ mod tests {
         pilot.stellar = Some(BAR_AT);
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
-        assert_eq!(session.fleet, [], "none placed yet");
+        assert_eq!(session.space.escorts.fleet, [], "none placed yet");
         session.hire(ShipId(129), &mut NeverFires).expect("hired");
-        assert_eq!(session.fleet.len(), 3);
-        let hired = session.fleet[2].expect("placed while landed");
+        assert_eq!(session.space.escorts.fleet.len(), 3);
+        let hired = session.space.escorts.fleet[2].expect("placed while landed");
         assert_eq!(session.npc(hired).map(|npc| npc.berth), Some(3));
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         let berths: Vec<Option<u32>> = session
+            .space
+            .escorts
             .fleet
             .iter()
             .map(|id| id.and_then(|id| session.npc(id)).map(|npc| npc.berth))
@@ -1556,7 +1578,7 @@ mod tests {
             .with_rules(Rulebook::default().with_override(RuleKey::EscortWage, rule));
         assert_eq!(session.rules().source_for(RuleKey::EscortWage), rule);
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
-        let id = session.fleet[0];
+        let id = session.space.escorts.fleet[0];
         (session, id)
     }
 

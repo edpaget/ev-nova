@@ -110,7 +110,7 @@ impl Session {
         reserves.armor.now = -1.0;
         self.target = None;
         let player = self.ship.player;
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if docked_with_player(npc, &player) {
                 npc.reserves.armor.now = -1.0;
             }
@@ -248,9 +248,9 @@ mod tests {
         let mut session = flying(&catalog);
         let at = session.player().position;
         let velocity = session.player().velocity;
-        let docked = session.traffic.npcs()[0].id;
+        let docked = session.space.traffic.npcs()[0].id;
         {
-            let pirate = &mut session.traffic.npcs_mut()[0];
+            let pirate = &mut session.space.traffic.npcs_mut()[0];
             pirate.state.position = at + Vec2::new(10.0, -10.0);
             pirate.state.velocity = velocity;
             pirate.docking = Some(Docking {
@@ -258,9 +258,9 @@ mod tests {
                 sub: DockSub::Dock,
             });
         }
-        let mut beside = session.traffic.npcs()[0].clone();
+        let mut beside = session.space.traffic.npcs()[0].clone();
         beside.docking = None;
-        let beside = session.traffic.add_npc(beside);
+        let beside = session.space.traffic.add_npc(beside);
         let shield = |session: &Session, id| {
             let npc = session.npcs().iter().find(|npc| npc.id == id);
             npc.expect("there").reserves.shield.now

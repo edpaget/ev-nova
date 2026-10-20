@@ -91,7 +91,7 @@ mod tests {
 
     /// Adds an NPC attacking the player and gives its number.
     fn attacker(session: &mut Session) -> NpcId {
-        session.traffic.add_npc(crate::traffic::npc::Npc {
+        session.space.traffic.add_npc(crate::traffic::npc::Npc {
             goal: Goal::Attack(ShipRef::Player),
             ..npc(0, ShipStats::default())
         })
@@ -99,6 +99,7 @@ mod tests {
 
     fn calm(session: &mut Session, id: NpcId) {
         let npc = session
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()
@@ -147,7 +148,7 @@ mod tests {
         let mut session = session(catalog);
         session.set_sound_quiet(true);
         attacker(&mut session);
-        session.frame = 1;
+        session.space.frame = 1;
         session
     }
 
@@ -155,7 +156,7 @@ mod tests {
     fn the_player_is_threatened_by_any_npc_that_threatens_it() {
         let mut session = session(&catalog());
         assert!(!session.player_threatened());
-        session.traffic.add_npc(npc(0, ShipStats::default()));
+        session.space.traffic.add_npc(npc(0, ShipStats::default()));
         assert!(!session.player_threatened());
         attacker(&mut session);
         assert!(session.player_threatened());
@@ -166,20 +167,21 @@ mod tests {
         // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590).
         let mut session = session(&catalog());
         session.set_sound_quiet(true);
-        let escort = session.traffic.add_npc(crate::traffic::npc::Npc {
+        let escort = session.space.traffic.add_npc(crate::traffic::npc::Npc {
             escort: Some(crate::escort::EscortDuty {
                 formation: crate::escort::FormationSlot::default(),
                 order: None,
             }),
             ..npc(0, ShipStats::default())
         });
-        let stranger = session.traffic.add_npc(npc(0, ShipStats::default()));
-        let hunter = session.traffic.add_npc(crate::traffic::npc::Npc {
+        let stranger = session.space.traffic.add_npc(npc(0, ShipStats::default()));
+        let hunter = session.space.traffic.add_npc(crate::traffic::npc::Npc {
             goal: Goal::Attack(ShipRef::Npc(stranger)),
             ..npc(0, ShipStats::default())
         });
         assert!(!session.player_threatened(), "a stranger's foe");
         let foe = session
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()
@@ -187,7 +189,7 @@ mod tests {
             .expect("there");
         foe.goal = Goal::Attack(ShipRef::Npc(escort));
         assert!(session.player_threatened());
-        session.frame = 1;
+        session.space.frame = 1;
         assert_eq!(alerts_over(&mut session, 60), 1);
     }
 
@@ -224,7 +226,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::AlertBlink, RuleSource::Bible);
         let mut session = session(&catalog).with_rules(rules);
         attacker(&mut session);
-        session.frame = 1;
+        session.space.frame = 1;
         assert_eq!(alerts_over(&mut session, 60), 1);
         assert_eq!(session.red_alert_icon(), Some(AlertIcon::Red));
     }
@@ -239,7 +241,7 @@ mod tests {
     fn no_threat_no_alert() {
         let mut session = session(&catalog());
         session.set_sound_quiet(true);
-        session.frame = 1;
+        session.space.frame = 1;
         for _ in 0..600 {
             assert_eq!(alerts(&mut session), 0);
             assert_eq!(session.red_alert_icon(), None);
@@ -253,14 +255,14 @@ mod tests {
         assert_eq!(alerts_over(&mut session, 60), 1, "frame 60");
         calm(&mut session, id);
         assert_eq!(alerts_over(&mut session, 60), 0, "frame 120 finds none");
-        session.traffic.npcs_mut()[0].goal = Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].goal = Goal::Attack(ShipRef::Player);
         assert_eq!(alerts_over(&mut session, 60), 1, "frame 180 finds it");
     }
 
     #[test]
     fn a_threat_between_two_checks_is_never_seen() {
         let mut session = session(&catalog());
-        session.frame = 1;
+        session.space.frame = 1;
         assert_eq!(alerts_over(&mut session, 60), 0, "frames 1 to 60");
         let id = attacker(&mut session);
         assert_eq!(alerts_over(&mut session, 59), 0, "frames 61 to 119");
@@ -271,7 +273,7 @@ mod tests {
     #[test]
     fn the_check_after_frame_1020_falls_five_ticks_later_at_0() {
         let mut session = threatened(&catalog());
-        session.frame = 1021;
+        session.space.frame = 1021;
         assert_eq!(alerts_over(&mut session, 4), 0, "1021 to 1024");
         assert_eq!(alerts(&mut session), 1, "0");
     }
@@ -324,7 +326,7 @@ mod tests {
     fn the_second_pass_checks_on_the_same_frame_and_shows_from_the_next_tick() {
         let mut session = session(&catalog());
         session.set_sound_quiet(true);
-        session.frame = 1;
+        session.space.frame = 1;
         for _ in 0..59 {
             assert_eq!(doubled_alerts(&mut session), (0, 0));
         }
@@ -377,7 +379,7 @@ mod tests {
         let mut session = threatened(&catalog());
         assert_eq!(alerts_over(&mut session, 64), 1, "to frame 64");
         session.tick(Controls::default());
-        assert_eq!(session.pass_frame, 65, "a step frame");
+        assert_eq!(session.space.pass_frame, 65, "a step frame");
         let blink = session.red_alert;
         again(&mut session);
         assert_eq!(session.red_alert, blink);
@@ -455,7 +457,7 @@ mod tests {
     fn alerted(mut session: Session) -> Session {
         session.set_sound_quiet(true);
         attacker(&mut session);
-        session.frame = 1;
+        session.space.frame = 1;
         assert_eq!(alerts_over(&mut session, 60), 1);
         session
     }

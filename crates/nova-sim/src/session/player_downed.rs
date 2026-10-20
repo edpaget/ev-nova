@@ -481,7 +481,7 @@ mod tests {
         let catalog = shooting(vec![], 1);
         for armor in [10.6, 0.5] {
             let mut session = facing_an_npc(&catalog, 180);
-            session.traffic.npcs_mut()[0].reserves.armor.now = armor;
+            session.space.traffic.npcs_mut()[0].reserves.armor.now = armor;
             session.hold_trigger(FIRE);
             session.target = Some(NpcId(0));
             let _ = session.take_sounds();

@@ -785,7 +785,7 @@ mod tests {
             .pilot
             .missions
             .put(3, crate::testkit::carrying(130, 0));
-        let marked = session.traffic.add_npc(crate::traffic::npc::Npc {
+        let marked = session.space.traffic.add_npc(crate::traffic::npc::Npc {
             mission: Some(crate::traffic::npc::MissionMark {
                 slot: 0,
                 behav: crate::mission::ships::ShipBehav::Own,
@@ -919,6 +919,7 @@ mod tests {
         catalog.ship_records.push(ship(129, FAST));
         let mut session = due(&catalog);
         let hulk = session
+            .space
             .traffic
             .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
         session.ship.player.velocity = Vec2::new(3.0, 4.0);
@@ -1053,8 +1054,8 @@ mod tests {
         session.ship.fate.rescue_due = true;
         session.pilot.reinforcement_days =
             std::collections::BTreeMap::from([(died_in, 2), (SystemId(999), 3)]);
-        session.reinforcements.timers.insert(died_in, 12);
-        session.reinforcements.timers.insert(SystemId(999), 7);
+        session.space.reinforcements.timers.insert(died_in, 12);
+        session.space.reinforcements.timers.insert(SystemId(999), 7);
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(
             session.pilot.reinforcement_days.get(&died_in),
@@ -1062,11 +1063,14 @@ mod tests {
             "@0x1db30"
         );
         assert_eq!(
-            session.reinforcements.timers.get(&died_in),
+            session.space.reinforcements.timers.get(&died_in),
             None,
             "@0x1db17"
         );
-        assert_eq!(session.reinforcements.timers.get(&SystemId(999)), Some(&7));
+        assert_eq!(
+            session.space.reinforcements.timers.get(&SystemId(999)),
+            Some(&7)
+        );
     }
 
     #[test]

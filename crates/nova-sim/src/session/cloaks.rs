@@ -110,7 +110,7 @@ impl Session {
         test: fn(Area, Vec2, f32, f32) -> bool,
     ) -> bool {
         test(
-            self.play_area.offset(self.ship.player.position),
+            self.space.play_area.offset(self.ship.player.position),
             npc.state.position,
             npc.hull.sprite_size.unwrap_or(0.0),
             npc.hull.sprite_height.unwrap_or(0.0),
@@ -120,14 +120,14 @@ impl Session {
     /// Says what the view shows of space, about the player's ship: the
     /// play area, as world units from the player (x right, y down).
     pub fn set_play_area(&mut self, area: Area) {
-        self.play_area = area;
+        self.space.play_area = area;
     }
 
     /// The play area the view shows about the player, or
     /// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) until it says.
     #[must_use]
     pub fn play_area(&self) -> Area {
-        self.play_area
+        self.space.play_area
     }
 
     /// Whether a watched `npc` is observed now: seen, and, when it can
@@ -148,7 +148,13 @@ impl Session {
                 continue;
             };
             let arsenal = &self.statics.arsenal;
-            let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+            let Some(npc) = self
+                .space
+                .traffic
+                .npcs_mut()
+                .iter_mut()
+                .find(|npc| npc.id == id)
+            else {
                 continue;
             };
             let can_cloak = npc.can_cloak();
@@ -249,7 +255,7 @@ mod tests {
             answered: false,
             ..hit
         };
-        session.traffic.npcs_mut()[0].cloak_gear = CloakGear {
+        session.space.traffic.npcs_mut()[0].cloak_gear = CloakGear {
             flags2: CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
@@ -257,7 +263,7 @@ mod tests {
         assert_eq!(session.npcs()[0].cloak, Cloak::default());
         session.cloak_hits(&[hit]);
         assert_eq!(session.npcs()[0].cloak.direction, 1, "answered");
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = CloakGear {
             decloaks_when_hit: true,
             ..CAN_CLOAK
@@ -293,7 +299,7 @@ mod tests {
         use crate::combat::weapon::WeaponSpec;
         let catalog = bursting();
         let mut session = facing_an_npc(&catalog, 180);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = CloakGear {
             flags2: CLOAK_WHEN_HIT,
             device: can_cloak,
@@ -358,7 +364,7 @@ mod tests {
         use crate::traffic::npc::NpcId;
         let catalog = bursting();
         let mut session = facing_an_npc(&catalog, 180);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
@@ -374,7 +380,7 @@ mod tests {
     /// Marks `session`'s NPC 0 a mission escort that has joined the
     /// player's formation.
     fn lead(session: &mut Session) {
-        session.traffic.npcs_mut()[0].mission = Some(MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = Some(MissionMark {
             slot: 0,
             behav: ShipBehav::EscortPlayer,
             formation: Some(FormationSlot::default()),
@@ -385,7 +391,7 @@ mod tests {
 
     /// How NPC 0 is shown with its cloak at `fade`, fading `direction`.
     fn shown(session: &mut Session, fade: f32, direction: i8) -> CloakShown {
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak.fade = fade;
         npc.cloak.direction = direction;
         session.cloak_shown(&session.npcs()[0])
@@ -406,7 +412,7 @@ mod tests {
         let player = session.player().position;
         let id = session.npcs()[0].id;
         crate::fixture::cloak(&mut session, id, CLOAKED);
-        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(1000.0, -1000.0);
+        session.space.traffic.npcs_mut()[0].state.position = player + Vec2::new(1000.0, -1000.0);
         assert!(!session.sees_past_cloak(&session.npcs()[0]), "out of sight");
         assert_eq!(
             session.cloak_shown(&session.npcs()[0]),

@@ -144,7 +144,7 @@ mod tests {
         let catalog = goal_catalog(0, 0);
         let mut session = in_flight(&catalog);
         fail(&mut session);
-        session.class_orders = [Some(EscortOrder::Hold); 4];
+        session.space.escorts.class_orders = [Some(EscortOrder::Hold); 4];
         let id = first_marked(&session);
         let before = session.npc(id).and_then(|npc| npc.mission).expect("marked");
         session.take_save_due();
@@ -155,7 +155,7 @@ mod tests {
         assert!(npc.mission_escort());
         assert_eq!(npc.escort, None, "no hired duty");
         assert!(session.pilot().escorts().is_empty(), "no escort record");
-        assert!(session.fleet.is_empty(), "no fleet slot");
+        assert!(session.space.escorts.fleet.is_empty(), "no fleet slot");
         assert_eq!(npc.condition, Condition::Intact);
         assert_eq!(npc.reserves.armor.now, npc.reserves.armor.max * 0.5);
         assert_eq!(npc.goal, Goal::Formation { guard: None });
@@ -178,7 +178,7 @@ mod tests {
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
         fail(&mut session);
-        let hired_id = session.fleet[0].expect("placed");
+        let hired_id = session.space.escorts.fleet[0].expect("placed");
         let counted = session.led_escorts();
         let can_hire = session.can_hire_escorts();
         let id = first_marked(&session);
@@ -288,7 +288,7 @@ mod tests {
             "_DeleteAllComputerShips @0x3bf9c"
         );
         assert!(session.pilot().escorts().is_empty());
-        assert!(session.fleet.iter().all(Option::is_none));
+        assert!(session.space.escorts.fleet.iter().all(Option::is_none));
         assert_eq!(ships_of(&session).left, left, "no count changed (@0x3c082)");
     }
 
@@ -346,7 +346,7 @@ mod tests {
         let id = first_marked(&session);
         let ship = session.npc(id).map(|npc| npc.ship).expect("here");
         let ships = ships_of(&session);
-        session.aboard = Some(crate::session::Aboard {
+        session.space.escorts.aboard = Some(crate::session::Aboard {
             npc: id,
             ship,
             plunder: crate::board::Plunder::default(),

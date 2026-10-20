@@ -116,10 +116,12 @@ mod tests {
         assert!(rank(&at_launch, npc(first)) < rank(&at_launch, ShipRef::Player));
         // Berth 2 re-enters the layer, on top of every ship in it.
         session
+            .space
             .slot_sprites
             .layers
             .put(Slot::Berth(2), ShipLayer::Disabled);
         session
+            .space
             .slot_sprites
             .layers
             .put(Slot::Berth(2), ShipLayer::Ships);
@@ -239,7 +241,7 @@ mod tests {
     /// armour of 45 at 16: one tick of the beam disables it.
     fn facing_a_frail_npc(catalog: &FakePilotCatalog) -> (Session, ShipRef) {
         let mut session = facing_an_npc(catalog, 180);
-        let target = &mut session.traffic.npcs_mut()[0];
+        let target = &mut session.space.traffic.npcs_mut()[0];
         target.reserves.shield.now = 0.0;
         target.reserves.armor.now = 16.0;
         let id = ShipRef::Npc(target.id);

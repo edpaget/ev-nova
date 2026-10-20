@@ -168,7 +168,10 @@ impl Session {
         if let Some(name) = self.mission_ship_text(npc.mission, |ships| &ships.name) {
             return Some(name);
         }
-        match npc.person.and_then(|person| self.traffic.person(person.id)) {
+        match npc
+            .person
+            .and_then(|person| self.space.traffic.person(person.id))
+        {
             Some(person) => Some(&person.record.name),
             None => self.ship_name(npc.ship),
         }
@@ -183,7 +186,7 @@ impl Session {
         if npc.mission.is_some() {
             return self.mission_ship_text(npc.mission, |ships| &ships.subtitle);
         }
-        let person = self.traffic.person(npc.person?.id)?;
+        let person = self.space.traffic.person(npc.person?.id)?;
         Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
     }
 
@@ -208,7 +211,7 @@ impl Session {
         }
         self.count_down_comm_line();
         self.roll_quotes(catalog, chance);
-        self.quote_clock.ticks += 1;
+        self.space.escorts.quote_clock.ticks += 1;
     }
 
     /// Double time's second pass of the hail quotes: the attack quotes
@@ -255,6 +258,7 @@ impl Session {
                     // One gone for good says none (@0x33c62).
                     let person = npc.person.filter(|person| !self.pilot.gone(person.id))?;
                     let linked = self
+                        .space
                         .traffic
                         .person(person.id)
                         .and_then(|spawned| spawned.record.link_mission);
@@ -277,13 +281,19 @@ impl Session {
             // -1 back (@0x33dfb, @0x33e25).
             self.offering_ship = None;
         }
-        let ticks = self.quote_clock.ticks;
+        let ticks = self.space.escorts.quote_clock.ticks;
         for (id, eligible) in decided {
             if eligible == Eligible::No {
                 continue;
             }
             let draw = chance.below(QUOTE_ODDS);
-            let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+            let Some(npc) = self
+                .space
+                .traffic
+                .npcs_mut()
+                .iter_mut()
+                .find(|npc| npc.id == id)
+            else {
                 continue;
             };
             let Some(person) = npc.person.as_mut() else {
@@ -291,7 +301,7 @@ impl Session {
             };
             // No quote showing: the message line free, whatever shows on
             // it (`_HandleShip` @0x33f42-0x33f4b reads `_commCount`).
-            let quiet = self.comm_line.free_for_calls();
+            let quiet = self.space.comm_line.free_for_calls();
             let rested = person
                 .quoted_at
                 .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
@@ -314,7 +324,7 @@ impl Session {
         lines: &[String],
         chance: &mut dyn Chance,
     ) {
-        for id in self.traffic.take_attack_quotes() {
+        for id in self.space.traffic.take_attack_quotes() {
             self.say_hail_quote(id, catalog, lines, chance);
         }
     }
@@ -344,6 +354,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let Some(person) = self
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()
@@ -354,13 +365,14 @@ impl Session {
         };
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
-        self.comm_line.show(QUOTE_SHOWN_TICKS);
+        self.space.comm_line.show(QUOTE_SHOWN_TICKS);
         let patch = hail_quote_patch_id(hail_quote)
             .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
         let line = hail_quote_text(hail_quote, patch, lines);
         let line = self.take_in(TextSource::Quote, &line, chance);
         let tags = QuoteTags {
             person: self
+                .space
                 .traffic
                 .person(person)
                 .map_or("", |person| &person.record.name),
@@ -406,7 +418,7 @@ impl Session {
         if let Some(person) = person.filter(|person| person.flags & ESCAPE_POD == 0) {
             self.go(person.id);
         }
-        self.traffic.remove_destroyed(id);
+        self.space.traffic.remove_destroyed(id);
     }
 
     /// NPC `id`, captured, no longer flies as its person, its slot holds
@@ -427,13 +439,18 @@ impl Session {
     /// (@0x9ea2a, @0x99ab5), and Use As My Ship takes the NPC out of the
     /// system, so that stale mark is never seen.
     pub(super) fn lose_captured(&mut self, id: NpcId, gone: bool) {
-        let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+        let npc = self
+            .space
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id);
         let taken = npc.map(|npc| {
             npc.booty = None;
             (npc.berth, npc.person.take())
         });
         if let Some((berth, person)) = taken {
-            self.traffic.forget_berth_person(berth);
+            self.space.traffic.forget_berth_person(berth);
             if let Some(person) = person.filter(|_| gone) {
                 self.go(person.id);
             }
@@ -451,7 +468,12 @@ impl Session {
     /// due.
     pub(super) fn hold_grudges(&mut self, hit: &[NpcId]) {
         for &id in hit {
-            let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+            let npc = self
+                .space
+                .traffic
+                .npcs_mut()
+                .iter_mut()
+                .find(|npc| npc.id == id);
             let Some(person) = npc.and_then(|npc| npc.person.as_mut()) else {
                 continue;
             };
@@ -474,7 +496,7 @@ impl Session {
     pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike]) {
         let hit: Vec<NpcId> = {
             let world = self.world();
-            let around = world.around(self.traffic.npcs());
+            let around = world.around(self.space.traffic.npcs());
             strikes
                 .iter()
                 .filter_map(|strike| crate::traffic::in_turn::grudge(strike, &around))
@@ -488,7 +510,7 @@ impl Session {
     /// hit among `strikes` disabled or broke it up (`_HandleShip`
     /// @0x33c0d-0x33c38 refills every frame).
     pub(super) fn refill_invincible(&mut self, strikes: &mut [Strike]) {
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if !npc.person.is_some_and(|person| person.invincible) {
                 continue;
             }
@@ -554,13 +576,13 @@ mod tests {
         let mut attacker = crate::traffic::fixture::npc(0, ShipStats::default());
         attacker.ai_type = AiType::Warship;
         attacker.state.position = crate::geometry::Vec2::new(300.0, 0.0);
-        let attacker = session.traffic.add_npc_at(attacker, 2);
+        let attacker = session.space.traffic.add_npc_at(attacker, 2);
         let mut trader = crate::traffic::fixture::npc(1, ShipStats::default());
         trader.ai_type = AiType::BraveTrader;
         trader.provoked = 10.0;
         trader.target = Some(ShipRef::Npc(attacker));
         trader.goal = Goal::Flee(ShipRef::Npc(attacker));
-        let trader = session.traffic.add_npc_at(trader, 1);
+        let trader = session.space.traffic.add_npc_at(trader, 1);
         session.npc_mut(attacker).expect("there").condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
         session.tick(Controls::default());
@@ -887,7 +909,7 @@ mod tests {
     /// assignment.
     fn captured(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_ace(catalog, ada(catalog));
-        session.aboard = Some(super::super::Aboard {
+        session.space.escorts.aboard = Some(super::super::Aboard {
             npc: NpcId(0),
             ship: ShipId(129),
             plunder: crate::board::Plunder::default(),
@@ -977,7 +999,7 @@ mod tests {
         use crate::board::Assignment;
         let catalog = duel(0, 0);
         let mut session = captured(&catalog);
-        session.traffic.npcs_mut()[0].booty = Some(0x0141);
+        session.space.traffic.npcs_mut()[0].booty = Some(0x0141);
         assert!(
             session
                 .assign(Assignment::Escort, &mut NeverFires)
@@ -1110,8 +1132,8 @@ mod tests {
         let mut quarry = session.npcs()[0].clone();
         quarry.person = None;
         quarry.state.position = Vec2::new(0.0, -100.0 - above);
-        let quarry = session.traffic.add_npc(quarry);
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let quarry = session.space.traffic.add_npc(quarry);
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
         ace.target = Some(ShipRef::Npc(quarry));
         ace.state.heading = 0.0;
@@ -1139,7 +1161,7 @@ mod tests {
 
     /// `session` once the traffic has answered `strikes` in one pass.
     fn answer_in_one_pass(session: &mut Session, strikes: &[Strike]) {
-        session.strikes.extend_from_slice(strikes);
+        session.space.strikes.extend_from_slice(strikes);
         session.answer_strikes(&crate::ai::NovaAi::default());
     }
 
@@ -1156,7 +1178,7 @@ mod tests {
         ship.goal = crate::ai::Goal::Attack(ShipRef::Npc(NpcId(0)));
         ship.target = Some(ShipRef::Npc(NpcId(0)));
         ship.state.position = Vec2::new(0.0, -120.0);
-        let near = ShipRef::Npc(session.traffic.add_npc(ship));
+        let near = ShipRef::Npc(session.space.traffic.add_npc(ship));
         let ace = ShipRef::Npc(NpcId(0));
         answer_in_one_pass(
             &mut session,
@@ -1180,8 +1202,8 @@ mod tests {
         let mut ship = session.npcs()[0].clone();
         ship.person = None;
         ship.state.position = Vec2::new(0.0, -500.0);
-        let quarry = ShipRef::Npc(session.traffic.add_npc(ship));
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let quarry = ShipRef::Npc(session.space.traffic.add_npc(ship));
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.goal = crate::ai::Goal::Attack(quarry);
         ace.target = Some(quarry);
         ace.pursuit.frame = None;
@@ -1214,8 +1236,8 @@ mod tests {
         let mut ship = session.npcs()[0].clone();
         ship.person = None;
         ship.state.position = quarry;
-        let quarry = session.traffic.add_npc(ship);
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let quarry = session.space.traffic.add_npc(ship);
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
         ace.target = Some(ShipRef::Npc(quarry));
         ace.pursuit.frame = None;
@@ -1382,13 +1404,18 @@ mod tests {
             assert_eq!(ace.condition, Condition::Intact);
         }
         let hits = session
+            .space
             .strikes
             .iter()
             .filter(|strike| strike.ship == ShipRef::Npc(NpcId(0)) && strike.damage > 0.0)
             .count();
         assert!(hits > 100, "the blaster hit it: {hits}");
         assert!(
-            session.strikes.iter().all(|strike| strike.downed.is_none()),
+            session
+                .space
+                .strikes
+                .iter()
+                .all(|strike| strike.downed.is_none()),
             "never downed"
         );
         assert!(!session.pilot().gone(PersonId(600)));
@@ -1442,7 +1469,7 @@ mod tests {
             .with_rules(Rulebook::default().with_override(RuleKey::CommQuote, rule));
         session.populate(catalog, &mut NeverFires);
         if hostile {
-            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         }
         session.target = Some(NpcId(0));
         let options = HailOptions::default();
@@ -1592,9 +1619,9 @@ mod tests {
     #[test]
     fn a_person_says_its_attack_quote_once_it_begins_to_attack_the_player() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK | QUOTE_ONCE, QUOTE_ON_ATTACK]);
-        session.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[1].person = None;
         assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, asked) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
         assert_eq!(asked, [140], "drawn whatever it gives");
@@ -1616,8 +1643,8 @@ mod tests {
         pilot.ship_name = Some("Kestrel".to_owned());
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(
             said,
@@ -1641,8 +1668,8 @@ mod tests {
             &crate::control::SetExpr::parse("K128").expect("parses"),
             &mut crate::testkit::Scripted::default(),
         );
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Halt, Cmdr! A Commander?"], "not captain");
     }
@@ -1667,8 +1694,8 @@ mod tests {
             &crate::control::SetExpr::parse("K200 K201").expect("parses"),
             &mut crate::testkit::Scripted::default(),
         );
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         (catalog, session)
     }
 
@@ -1707,8 +1734,8 @@ mod tests {
             let pilot = Pilot::new(catalog, "Stock").expect("a pilot");
             let mut session = Session::fly(catalog, pilot).expect("flies");
             session.populate(catalog, &mut NeverFires);
-            session.traffic.npcs_mut()[1].person = None;
-            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            session.space.traffic.npcs_mut()[1].person = None;
+            session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
             quote_tick(catalog, &mut session, &[77]).0
         };
         let quote = catalog.persons[0].hail_quote;
@@ -1729,11 +1756,11 @@ mod tests {
     #[test]
     fn each_quote_said_beeps_154() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
-        session.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[1].person = None;
         let _ = session.take_sounds();
         assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
         assert_eq!(session.take_sounds(), [], "none said");
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said.len(), 1);
         assert_eq!(
@@ -1765,8 +1792,8 @@ mod tests {
             .expect("flies")
             .with_strings(Rc::new(Leet));
         session.populate(&catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         // The draws after the quote's own land on 0, which would turn each
         // a to 4 and o to 0 were the letters drawn.
         let (said, asked) = quote_tick(&catalog, &mut session, &[77, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -1795,8 +1822,8 @@ mod tests {
                 .with_gender(gender);
             let mut session = Session::fly(&catalog, pilot).expect("flies");
             session.populate(&catalog, &mut NeverFires);
-            session.traffic.npcs_mut()[1].person = None;
-            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            session.space.traffic.npcs_mut()[1].person = None;
+            session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
             let (quotes, _) = quote_tick(&catalog, &mut session, &[77]);
             assert_eq!(quotes, [said], "parsed (@0x445ee)");
         }
@@ -1804,7 +1831,7 @@ mod tests {
 
     /// A hailed ship named for `<OSN>` that is not among the NPCs: "Earlier".
     fn named_earlier(session: &mut Session) {
-        session.traffic.set_berth_person(99, "Earlier");
+        session.space.traffic.set_berth_person(99, "Earlier");
         session.offering_ship = Some(super::super::person_offers::OfferingShip { berth: 99 });
         assert_eq!(session.plain_text("<OSN>"), "Earlier");
     }
@@ -1812,11 +1839,11 @@ mod tests {
     #[test]
     fn by_the_engine_a_quote_names_its_speaker_and_then_nobody() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
-        session.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[1].person = None;
         named_earlier(&mut session);
         assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
         assert_eq!(session.plain_text("<OSN>"), "Earlier", "no quote said");
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
         assert_eq!(
@@ -1842,7 +1869,7 @@ mod tests {
         let mut session = Session::fly(&linked, pilot).expect("flies");
         session.populate(&linked, &mut NeverFires);
         named_earlier(&mut session);
-        session.traffic.npcs_mut()[0].condition = Condition::Dying {
+        session.space.traffic.npcs_mut()[0].condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
@@ -1852,7 +1879,7 @@ mod tests {
             "Earlier",
             "a dying ship: no check"
         );
-        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         let _ = quote_tick(&linked, &mut session, &[1, 1]);
         assert_eq!(
             session.plain_text("<OSN>"),
@@ -1892,14 +1919,20 @@ mod tests {
     #[test]
     fn by_the_engine_the_0x0400_mission_check_skips_a_person_with_no_hail_quote() {
         let (catalog, mut session) = linked_quoting();
-        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        let ace = session.space.traffic.npcs_mut()[0]
+            .person
+            .as_mut()
+            .expect("Ace");
         ace.hail_quote = -1;
         assert_eq!(
             osn_after_tick(&catalog, &mut session),
             "Earlier",
             "hail quote -1: no check"
         );
-        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        let ace = session.space.traffic.npcs_mut()[0]
+            .person
+            .as_mut()
+            .expect("Ace");
         ace.hail_quote = 1;
         assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
     }
@@ -1923,26 +1956,26 @@ mod tests {
     #[test]
     fn by_the_engine_the_0x0400_mission_check_skips_a_ship_not_flying() {
         let (catalog, mut session) = linked_quoting();
-        session.traffic.npcs_mut()[0].mode = Mode::JumpingIn { tick: 0 };
+        session.space.traffic.npcs_mut()[0].mode = Mode::JumpingIn { tick: 0 };
         assert_eq!(
             osn_after_tick(&catalog, &mut session),
             "Earlier",
             "gliding in: no check"
         );
-        session.traffic.npcs_mut()[0].mode = Mode::Flying;
+        session.space.traffic.npcs_mut()[0].mode = Mode::Flying;
         assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
     }
 
     #[test]
     fn by_the_engine_the_0x0400_mission_check_skips_a_destroyed_ship() {
         let (catalog, mut session) = linked_quoting();
-        session.traffic.npcs_mut()[0].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
         assert_eq!(
             osn_after_tick(&catalog, &mut session),
             "Earlier",
             "destroyed: no check"
         );
-        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
     }
 
@@ -1950,12 +1983,12 @@ mod tests {
     fn by_the_other_reading_quotes_leave_osn_as_it_was() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
         let mut session = {
-            session.traffic.npcs_mut()[1].person = None;
+            session.space.traffic.npcs_mut()[1].person = None;
             session.with_rules(
                 Rulebook::default().with_override(RuleKey::OfferingShipName, RuleSource::Bible),
             )
         };
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"], "the speaker");
         assert_eq!(session.plain_text("<OSN>"), "[Error]");
@@ -1996,7 +2029,7 @@ mod tests {
         // (@0x33f0f-0x33fba) tests no pass.
         let (catalog, mut session) = quoting([QUOTE_ONCE, 0]);
         quiet_ticks(&catalog, &mut session, 1);
-        let ticks = session.quote_clock.ticks;
+        let ticks = session.space.escorts.quote_clock.ticks;
         assert_eq!(
             quote_again(&catalog, &mut session, &[1, 1]),
             (vec![], vec![140, 140])
@@ -2014,7 +2047,10 @@ mod tests {
             (vec![], vec![140]),
             "Ace, quoted once, draws none"
         );
-        assert_eq!(session.quote_clock.ticks, ticks, "the clock stands");
+        assert_eq!(
+            session.space.escorts.quote_clock.ticks, ticks,
+            "the clock stands"
+        );
     }
 
     #[test]
@@ -2029,7 +2065,7 @@ mod tests {
             (vec![], vec![140]),
             "Ace draws, and stays quiet"
         );
-        session.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
         let (said, asked) = quote_again(&catalog, &mut session, &[0, 77]);
         assert_eq!(said, ["Bee: Prepare to die, Stock!"]);
         assert_eq!(asked, [140, 140]);
@@ -2127,7 +2163,7 @@ mod tests {
             .expect("flies")
             .with_rules(rules);
         session.populate(&catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[1].person = None;
         (catalog, session)
     }
 
@@ -2173,7 +2209,7 @@ mod tests {
             &crate::hail::HailOptions::default(),
             &mut NeverFires,
         );
-        session.talk = None;
+        session.space.escorts.talk = None;
         let (said, _) = quote_tick(&catalog, &mut session, &[0]);
         assert_eq!(
             said,
@@ -2201,7 +2237,7 @@ mod tests {
         let catalog = mixed("");
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut Draws::of(&[]));
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.person = None;
         }
         assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
@@ -2222,6 +2258,7 @@ mod tests {
     fn turn_ace(session: &mut Session) {
         let ace = session.npcs()[0].id;
         session
+            .space
             .traffic
             .turn_with_quote(ace, crate::person::GateView::default());
     }
@@ -2260,12 +2297,15 @@ mod tests {
         let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].armament = crate::combat::armament::Armament::new([(
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].armament = crate::combat::armament::Armament::new([(
             crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
             1,
         )]);
-        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        let ace = session.space.traffic.npcs_mut()[0]
+            .person
+            .as_mut()
+            .expect("Ace");
         ace.quoted = true;
         assert!(!ace.grudge);
         session.take_sounds();
@@ -2301,7 +2341,7 @@ mod tests {
             .pilot
             .missions
             .put(0, crate::testkit::carrying(140, 3));
-        session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
             behav: crate::mission::ships::ShipBehav::AttackPlayer,
             formation: None,
@@ -2359,8 +2399,8 @@ mod tests {
         assert_eq!(said.len(), 1);
         assert_eq!(session.take_sounds(), [SimSound::HailQuote], "at random");
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
-        session.traffic.npcs_mut()[1].person = None;
-        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        session.space.traffic.npcs_mut()[1].person = None;
+        session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
         session.take_sounds();
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said.len(), 1);
@@ -2371,7 +2411,7 @@ mod tests {
     fn an_attack_quote_of_an_out_of_range_hail_quote_shows_an_empty_line_and_beeps() {
         for hail_quote in [0, 5] {
             let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
-            session.traffic.npcs_mut()[0]
+            session.space.traffic.npcs_mut()[0]
                 .person
                 .as_mut()
                 .expect("Ace")

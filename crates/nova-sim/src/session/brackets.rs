@@ -286,7 +286,7 @@ mod tests {
         ship.state.position = at;
         ship.hull.sprite_size = Some(40.0);
         ship.hull.sprite_height = Some(20.0);
-        session.traffic.add_npc(ship)
+        session.space.traffic.add_npc(ship)
     }
 
     fn attack(session: &mut Session, id: NpcId) {
@@ -376,7 +376,7 @@ mod tests {
         let ship = ship_at(&mut session, Vec2::new(50.0, 0.0));
         session.select_target(TargetPick::Next);
         target_over(&mut session, 1);
-        session.traffic.remove(ship);
+        session.space.traffic.remove(ship);
         session.target = None;
         assert_eq!(session.target_brackets(), None);
         session.tick(Controls::default());
@@ -407,7 +407,7 @@ mod tests {
         });
         assert_eq!(standing(&session), Standing::Escort);
         assert_eq!(session.target_brackets().expect("bracketed").npc, fighter);
-        session.traffic.remove(escort);
+        session.space.traffic.remove(escort);
         attack(&mut session, fighter);
         assert_eq!(standing(&session), Standing::Hostile, "its leader gone");
     }

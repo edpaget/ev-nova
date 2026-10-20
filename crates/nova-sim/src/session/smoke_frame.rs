@@ -19,7 +19,7 @@ impl Session {
     /// the module docs).
     #[must_use]
     pub fn smoke_frame(&self) -> bool {
-        self.pass_frame % 3 == 0
+        self.space.pass_frame % 3 == 0
     }
 }
 
@@ -37,7 +37,7 @@ mod tests {
 
     /// The smoke frame after an advance pass run on `frame`.
     fn after_pass_on(session: &mut Session, frame: i16) -> bool {
-        session.frame = frame;
+        session.space.frame = frame;
         session.tick(Controls::default());
         session.smoke_frame()
     }
@@ -68,7 +68,7 @@ mod tests {
     fn the_smoke_frame_follows_the_counter_across_its_wrap_and_below_zero() {
         let catalog = catalog();
         let mut session = session(&catalog);
-        session.frame = 1023;
+        session.space.frame = 1023;
         let mut seen = Vec::new();
         for _ in 0..3 {
             session.tick(Controls::default());

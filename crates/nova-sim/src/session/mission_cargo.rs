@@ -221,14 +221,14 @@ impl Session {
     /// [`SimSound::Smuggling`], and clears its latch. The player is always
     /// visible to the scanner (no cloak).
     pub(super) fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
-        let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
+        let Some(npc) = self.space.traffic.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
         let (scanner, ai_type) = (npc.ship, npc.ai_type);
         let off = self.ship.player.position - npc.state.position;
         let person = npc
             .person
-            .and_then(|person| self.traffic.person(person.id))
+            .and_then(|person| self.space.traffic.person(person.id))
             .map(|person| person.record.name.clone());
         let Some(govt_id) = npc.govt else {
             return;
@@ -348,7 +348,13 @@ impl Session {
     /// the player, no stellar, AI state attack (+0x70, +0x6c, +0xc8c8, as
     /// `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d sets them).
     fn set_on_player(&mut self, id: NpcId) {
-        if let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) {
+        if let Some(npc) = self
+            .space
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+        {
             npc.goal = Goal::Attack(ShipRef::Player);
             npc.target = Some(ShipRef::Player);
         }
@@ -1330,7 +1336,7 @@ mod tests {
         police.ship = ShipId(129);
         police.goal = Goal::Inspect(ShipRef::Player);
         police.state.position = session.ship.player.position;
-        session.traffic.add_npc(police);
+        session.space.traffic.add_npc(police);
         let _ = session.take_messages();
         session
     }
@@ -1435,7 +1441,7 @@ mod tests {
                     active.ships.name = name.to_owned();
                 }
             }
-            if let Some(police) = session.traffic.npcs_mut().last_mut() {
+            if let Some(police) = session.space.traffic.npcs_mut().last_mut() {
                 police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
                     order: None,
                     slot,
@@ -1501,7 +1507,7 @@ mod tests {
                     active.ships.name = name.to_owned();
                 }
             }
-            if let Some(police) = session.traffic.npcs_mut().last_mut() {
+            if let Some(police) = session.space.traffic.npcs_mut().last_mut() {
                 police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
                     order: None,
                     slot,
@@ -1593,6 +1599,7 @@ mod tests {
     /// The interceptor, the last NPC.
     fn police(session: &mut Session) -> &mut Npc {
         session
+            .space
             .traffic
             .npcs_mut()
             .last_mut()
@@ -1844,6 +1851,7 @@ mod tests {
         session.pilot.cargo.insert(Good::Junk(BIO_WEAPONS), 1);
         let at = session.ship.player.position;
         let ace = session
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()

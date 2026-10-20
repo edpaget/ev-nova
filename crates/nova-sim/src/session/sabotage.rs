@@ -112,7 +112,9 @@ impl Session {
                 one: bomb.one,
             });
             if let Some(explosion) = bomb.explosion {
-                self.combat.explode(self.ship.player.position, explosion);
+                self.space
+                    .combat
+                    .explode(self.ship.player.position, explosion);
             }
             self.pilot.outfits.remove(&bomb.outfit);
             let armor = self.pilot.reserves.armor;

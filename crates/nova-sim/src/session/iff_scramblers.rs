@@ -45,7 +45,7 @@ impl Session {
     /// reading of [`RuleKey::IffScrambler`], in place of them by the other.
     pub(super) fn reset_iff_scramblers(&mut self) {
         if self.setup.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
-            self.iff_marked.clear();
+            self.space.iff_marked.clear();
         }
         for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
             if owned.mod_type != IFF_SCRAMBLER || owned.mod_val == NO_CLASS {
@@ -62,7 +62,7 @@ impl Session {
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })
                 .collect();
-            self.iff_marked.extend(classed);
+            self.space.iff_marked.extend(classed);
         }
     }
 }
@@ -129,7 +129,7 @@ mod tests {
             session.pilot.outfits.insert(outfit, 1);
         }
         session.reset_precalced();
-        session.iff_marked
+        session.space.iff_marked
     }
 
     #[test]
@@ -161,10 +161,10 @@ mod tests {
         );
         session.pilot.outfits.insert(CLASS_1, 1);
         session.reset_precalced();
-        assert!(session.iff_marked.contains(&GovtId(128)), "marked");
+        assert!(session.space.iff_marked.contains(&GovtId(128)), "marked");
         session.pilot.outfits.remove(&CLASS_1);
         session.reset_precalced();
-        session.iff_marked.contains(&GovtId(128))
+        session.space.iff_marked.contains(&GovtId(128))
     }
 
     #[test]

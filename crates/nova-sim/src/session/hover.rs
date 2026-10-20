@@ -184,7 +184,7 @@ mod tests {
     fn a_ship_under_the_pointer_comes_before_the_stellar() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
-        let id = session.traffic.add_npc(npc(0, ShipStats::default()));
+        let id = session.space.traffic.add_npc(npc(0, ShipStats::default()));
         assert_eq!(
             session.hover(OVER_128, &AllAt(OVER_128)),
             Some(Hover::Ship(id))
@@ -269,7 +269,7 @@ mod tests {
     fn flying(ships: u32) -> (Session, Vec<NpcId>) {
         let mut session = Session::start(&catalog()).expect("starts");
         let ids = (0..ships)
-            .map(|n| session.traffic.add_npc(npc(n, ShipStats::default())))
+            .map(|n| session.space.traffic.add_npc(npc(n, ShipStats::default())))
             .collect();
         session.take_sounds();
         (session, ids)
@@ -362,7 +362,7 @@ mod tests {
     fn a_click_passes_over_a_cloaked_ship_without_the_scanner_and_takes_it_with_it() {
         use crate::cloak::{Cloak, FADE_FULL, MOD_SCANNER, SCAN_TARGET};
         let (mut session, ids) = flying(2);
-        session.traffic.npcs_mut()[0].cloak = Cloak {
+        session.space.traffic.npcs_mut()[0].cloak = Cloak {
             fade: FADE_FULL,
             direction: 0,
         };

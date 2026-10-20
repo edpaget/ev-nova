@@ -114,7 +114,7 @@ impl Session {
             return;
         };
         let items = self.setup.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.statics.ships,
@@ -127,8 +127,9 @@ impl Session {
             dude,
             count: coming,
         };
-        let ships = spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.gate(), chance);
-        let came = self.traffic.bring_in_within(
+        let ships =
+            spawn::arriving_aux_ships(self.space.traffic.table(), &spawn, self.gate(), chance);
+        let came = self.space.traffic.bring_in_within(
             ships,
             self.setup.spawn_reserve(SPAWN_RESERVE),
             &self.statics.govts,
@@ -344,7 +345,7 @@ mod tests {
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
     fn destroy(session: &mut Session, index: usize) {
-        session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
 
@@ -692,7 +693,7 @@ mod tests {
         session.give_back_aux_ships(&BTreeSet::new());
         assert_eq!(aux_of(&session).left, 3, "capped at the count");
         // A ship gone already (jumped out, landed) gives nothing.
-        session.traffic.remove(ids[1]);
+        session.space.traffic.remove(ids[1]);
         let aux = aux_of(&session);
         set_aux(&mut session, AuxShips { left: 0, ..aux });
         session.give_back_aux_ships(&BTreeSet::new());
@@ -838,7 +839,7 @@ mod tests {
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
         land_and_take_off(&mut session, &catalog);
-        let escort = session.fleet[0].expect("placed");
+        let escort = session.space.escorts.fleet[0].expect("placed");
         assert_eq!(session.npc(escort).expect("in").aux, Some(0));
     }
 
@@ -854,6 +855,8 @@ mod tests {
         session.fleet_up(ids[1], None);
         land_and_take_off(&mut session, &catalog);
         let marks: Vec<Option<u8>> = session
+            .space
+            .escorts
             .fleet
             .iter()
             .map(|id| session.npc(id.expect("placed")).expect("in").aux)
@@ -871,7 +874,7 @@ mod tests {
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
         land_and_take_off(&mut session, &catalog);
-        let escort = session.fleet[0].expect("placed");
+        let escort = session.space.escorts.fleet[0].expect("placed");
         session.release(escort);
         land_and_take_off(&mut session, &catalog);
         assert_eq!(aux_of(&session).left, 3, "the released one given back");
@@ -925,10 +928,10 @@ mod tests {
         let _ = three_in(&mut session, &catalog);
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
-        assert_eq!(session.traffic.berths_taken(), 3, "held");
+        assert_eq!(session.space.traffic.berths_taken(), 3, "held");
         session.populate(&catalog, &mut NeverFires);
         assert_eq!(
-            session.traffic.berths_taken(),
+            session.space.traffic.berths_taken(),
             session.npcs().len(),
             "dropped"
         );

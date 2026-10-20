@@ -47,7 +47,7 @@ impl Session {
     /// The player's frame's hold on `pass` (see the module docs).
     pub(super) fn hold_player(&mut self, pass: GamePass) {
         let step = self.ship.tractor_step(&self.pilot, &self.setup, self.jump);
-        let npcs = self.traffic.npcs();
+        let npcs = self.space.traffic.npcs();
         player_pass(
             &mut self.ship.tractor,
             &mut self.ship.player.velocity,
@@ -128,7 +128,7 @@ mod tests {
         session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
-        session.traffic.npcs_mut()[0].state.velocity = velocity;
+        session.space.traffic.npcs_mut()[0].state.velocity = velocity;
         session.ship.tractor = Some(TractorLock::by(NPC));
         session
     }
@@ -186,7 +186,7 @@ mod tests {
         session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(-step, 0.0));
         // NPC 0, held by the player, disabled so it drifts.
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.tractor = Some(TractorLock::by(ShipRef::Player));
         npc.condition = Condition::Disabled;
         let step = session
@@ -269,7 +269,7 @@ mod tests {
         };
         for condition in [Condition::Disabled, dying] {
             let mut session = held(Vec2::new(-2.0, 2.0));
-            session.traffic.npcs_mut()[0].condition = condition;
+            session.space.traffic.npcs_mut()[0].condition = condition;
             session.tick(Controls::default());
             assert_eq!(session.tractor(), None, "{condition:?}");
             assert_eq!(session.player().velocity, Vec2::ZERO, "{condition:?}");
@@ -285,13 +285,13 @@ mod tests {
     fn a_real_beams_hold_lapses_15_ticks_after_its_last_touch() {
         let catalog = armed();
         let mut session = knocking(&catalog, (None, 100.0), (Some(tractor_beam()), 200.0));
-        session.traffic.npcs_mut()[0].trigger = Trigger::default();
-        session.traffic.npcs_mut()[0].trigger.primary = true;
+        session.space.traffic.npcs_mut()[0].trigger = Trigger::default();
+        session.space.traffic.npcs_mut()[0].trigger.primary = true;
         let mut last_touch = None;
         let mut lapsed = None;
         for tick in 0..60 {
             if tick == 5 {
-                session.traffic.npcs_mut()[0].trigger = Trigger::default();
+                session.space.traffic.npcs_mut()[0].trigger = Trigger::default();
             }
             session.tick_combat(Rules::default(), &mut NeverFires);
             if session

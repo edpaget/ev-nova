@@ -161,7 +161,7 @@ fn add(session: &mut Session, govt: GovtId, strength: f32, goal: Goal) -> NpcId 
     ship.hull.strength = strength;
     ship.goal = goal;
     ship.state.position = session.ship.player.position;
-    session.traffic.add_npc(ship)
+    session.space.traffic.add_npc(ship)
 }
 
 /// A warship of `govt` and strength 100 fighting a pirate of strength
@@ -173,7 +173,7 @@ fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
     if let Some(npc) = npc_mut(session, warship) {
         npc.goal = Goal::Attack(ShipRef::Npc(pirate));
     }
-    session.traffic.cache_odds(warship, foe / 100.0);
+    session.space.traffic.cache_odds(warship, foe / 100.0);
     warship
 }
 
@@ -195,7 +195,7 @@ fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 150.0);
-    session.traffic.cache_odds(warship, STALE);
+    session.space.traffic.cache_odds(warship, STALE);
     let calls = Calling(vec![warship]);
     step(&mut session, &catalog, &calls);
     assert_eq!(timer(&session), 0, "-1 at its think");
@@ -245,7 +245,7 @@ fn a_forced_call_reads_the_cache_and_needs_odds_above_0() {
     for (odds, comes) in [(STALE, false), (0.0, false), (0.25, true), (1.5, true)] {
         let mut session = flying(&catalog);
         let warship = fight(&mut session, FED, 150.0);
-        session.traffic.cache_odds(warship, odds);
+        session.space.traffic.cache_odds(warship, odds);
         session.call_for_reinforcements(warship, true, None);
         assert_eq!(timer(&session) > 0, comes, "cached at {odds}");
     }
@@ -258,14 +258,14 @@ fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
     session.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut session, FED, 150.0);
-    session.traffic.cache_odds(warship, STALE);
+    session.space.traffic.cache_odds(warship, STALE);
     session.call_for_reinforcements(warship, false, Some(STALE));
     assert_eq!(timer(&session), i32::from(TIME), "1.5 now, stale or not");
     let mut calm = flying(&catalog);
     calm.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut calm, FED, 50.0);
-    calm.traffic.cache_odds(warship, 0.0);
+    calm.space.traffic.cache_odds(warship, 0.0);
     calm.call_for_reinforcements(warship, true, None);
     assert_eq!(
         timer(&calm),
@@ -276,7 +276,7 @@ fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
     alone.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let lone = add(&mut alone, FED, 100.0, Goal::Idle);
-    alone.traffic.cache_odds(lone, 1.5);
+    alone.space.traffic.cache_odds(lone, 1.5);
     alone.call_for_reinforcements(lone, true, Some(1.5));
     assert_eq!(timer(&alone), 0, "no odds now, though cached and thought");
 }
@@ -284,6 +284,7 @@ fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
 /// NPC `id` of `session`, to change.
 fn npc_mut(session: &mut Session, id: NpcId) -> Option<&mut Npc> {
     session
+        .space
         .traffic
         .npcs_mut()
         .iter_mut()
@@ -511,7 +512,7 @@ fn a_full_ship_table_brings_no_fleet_and_no_quote_but_sets_the_countdown() {
     let warship = fight(&mut session, FED, 100.0);
     for berth in 3..=55 {
         let filler = npc(0, session.stats());
-        session.traffic.add_npc_at(filler, berth);
+        session.space.traffic.add_npc_at(filler, berth);
     }
     let crowd = session.npcs().len();
     session.call_for_reinforcements(warship, false, None);
@@ -604,7 +605,7 @@ fn only_a_mod_val_of_minus_1_sets_the_global_inhibitor_and_others_inhibit_their_
         let mut session = flying(&catalog);
         session.pilot.outfits.insert(owned, 1);
         session.reset_precalced();
-        session.reinforcements
+        session.space.reinforcements
     };
     let global = reset_with(JAMMER);
     assert!(global.every_government);
@@ -640,7 +641,7 @@ fn leaving_the_system_freezes_its_timer_and_returning_resumes_it() {
     heard(&mut session, &catalog, 50);
     assert_eq!(timer(&session), 0, "no fleet called here");
     assert_eq!(
-        session.reinforcements.timers.get(&SystemId(130)),
+        session.space.reinforcements.timers.get(&SystemId(130)),
         Some(&(i32::from(TIME) - 5)),
         "frozen"
     );
@@ -727,15 +728,22 @@ fn the_escape_pods_reset_cancels_the_timer_and_clears_the_countdown_here() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     session.pilot.reinforcement_days = BTreeMap::from([(SystemId(130), 2), (SystemId(131), 3)]);
-    session.reinforcements.timers.insert(SystemId(130), 12);
-    session.reinforcements.timers.insert(SystemId(131), 7);
+    session
+        .space
+        .reinforcements
+        .timers
+        .insert(SystemId(130), 12);
+    session.space.reinforcements.timers.insert(SystemId(131), 7);
     session.reset_reinforcements_here();
     assert_eq!(session.clock_here(), Clock::default());
     assert_eq!(
         session.pilot().reinforcement_days,
         BTreeMap::from([(SystemId(131), 3)])
     );
-    assert_eq!(session.reinforcements.timers.get(&SystemId(131)), Some(&7));
+    assert_eq!(
+        session.space.reinforcements.timers.get(&SystemId(131)),
+        Some(&7)
+    );
 }
 
 #[test]

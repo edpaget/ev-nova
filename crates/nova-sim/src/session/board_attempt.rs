@@ -79,7 +79,7 @@ impl Session {
         if !calls_good_samaritan(npc) {
             return;
         }
-        self.strikes.push(Strike {
+        self.space.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: Some(ShipRef::Player),
             damage: 0.0,
@@ -301,12 +301,12 @@ mod tests {
         let refusals: [Refusal; 4] = [
             (
                 "boarded already",
-                |session| session.traffic.npcs_mut()[0].boarded = true,
+                |session| session.space.traffic.npcs_mut()[0].boarded = true,
                 BoardRefusal::CantBoard,
             ),
             (
                 "not disabled",
-                |session| session.traffic.npcs_mut()[0].condition = Condition::Intact,
+                |session| session.space.traffic.npcs_mut()[0].condition = Condition::Intact,
                 BoardRefusal::CantBoard,
             ),
             (
@@ -316,7 +316,9 @@ mod tests {
             ),
             (
                 "too far",
-                |session| session.traffic.npcs_mut()[0].state.position = Vec2::new(0.0, 500.0),
+                |session| {
+                    session.space.traffic.npcs_mut()[0].state.position = Vec2::new(0.0, 500.0);
+                },
                 BoardRefusal::TooFar,
             ),
         ];
@@ -397,7 +399,7 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Offered(_))
         ));
-        assert_eq!(session.strikes, [], "the offer (@0x65907)");
+        assert_eq!(session.space.strikes, [], "the offer (@0x65907)");
 
         let mut unavailable = person::boardable(0);
         unavailable.missions[0].avail_random = 50;
@@ -407,7 +409,7 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [], "its plunder (@0x65991)");
+        assert_eq!(session.space.strikes, [], "its plunder (@0x65991)");
 
         let mut hailed = person::boardable(0);
         hailed.persons[0].flags = 0;
@@ -416,7 +418,11 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [], "without 0x0200 (@0x65a21 → @0x65ede)");
+        assert_eq!(
+            session.space.strikes,
+            [],
+            "without 0x0200 (@0x65a21 → @0x65ede)"
+        );
     }
 
     /// The zero-damage strike by the player on NPC `npc` that calls the
@@ -441,7 +447,7 @@ mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         board_by(&mut session, &NovaLaw::default()).expect("boards");
-        assert_eq!(session.strikes, [samaritan_call(0)], "unnamed");
+        assert_eq!(session.space.strikes, [samaritan_call(0)], "unnamed");
 
         let mut unlinked = person::boardable(0);
         unlinked.persons[0].link_mission = None;
@@ -450,7 +456,7 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [samaritan_call(0)], "no LinkMission");
+        assert_eq!(session.space.strikes, [samaritan_call(0)], "no LinkMission");
 
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
@@ -458,7 +464,11 @@ mod tests {
         let (boarding, _) = board_first(&mut session);
         assert!(matches!(boarding, Ok(Boarding::Opened(_))), "{boarding:?}");
         let id = session.npcs()[0].id;
-        assert_eq!(session.strikes, [samaritan_call(id.0)], "a failed mission");
+        assert_eq!(
+            session.space.strikes,
+            [samaritan_call(id.0)],
+            "a failed mission"
+        );
     }
 
     /// [`alongside`]'s trader (NPC 0) escorting the police (NPC 1), an
@@ -467,7 +477,7 @@ mod tests {
     fn board_escort_of(ai_type: AiType) -> Session {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        let npcs = session.traffic.npcs_mut();
+        let npcs = session.space.traffic.npcs_mut();
         npcs[0].leader = Some(NpcId(1));
         npcs[1].ai_type = ai_type;
         npcs[1].goal = Goal::Idle;
@@ -610,7 +620,7 @@ mod tests {
         let mut session = in_flight_with(&catalog, 1);
         // A rescue ship held disabled at its full armour, so intact once
         // boarded.
-        let armor = &mut session.traffic.npcs_mut()[0].reserves.armor;
+        let armor = &mut session.space.traffic.npcs_mut()[0].reserves.armor;
         armor.now = armor.max;
         let (boarding, _) = board_first(&mut session);
         assert_eq!(

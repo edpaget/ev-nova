@@ -97,7 +97,13 @@ impl Session {
     /// module docs): nothing when the pirate has gone.
     fn plundered_by(&mut self, pirate: NpcId, chance: &mut dyn Chance) {
         let reading = self.setup.rules.source_for(RuleKey::PlunderMarines);
-        let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == pirate) else {
+        let Some(npc) = self
+            .space
+            .traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == pirate)
+        else {
             return;
         };
         let attacker = Side {
@@ -255,6 +261,7 @@ mod tests {
     /// `drawn`.
     fn answer(session: &mut Session, pirate: NpcId, drawn: u32) {
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlunderPlayer { pirate });
         settle(session, &mut Draws::of(&[drawn; 16]));
@@ -420,6 +427,7 @@ mod tests {
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(!session.player_boarded());
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlayerDockedWith { pirate });
         settle(&mut session, &mut Draws::of(&[]));
@@ -456,7 +464,7 @@ mod tests {
             plundered(None, Some(Taken::Silently)),
             plundered(None, None),
         ] {
-            session.traffic.queue_pirate_event(event);
+            session.space.traffic.queue_pirate_event(event);
         }
         settle(&mut session, &mut Draws::of(&[]));
         assert_eq!(

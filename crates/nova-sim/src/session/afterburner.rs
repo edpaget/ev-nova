@@ -665,7 +665,7 @@ mod tests {
             let top = session.top_speed();
             session.ship.player.velocity = Vec2::new(afterburner_top(top) - 0.5, 0.0);
             session.ship.afterburner_on = burning;
-            let npc = &mut session.traffic.npcs_mut()[0];
+            let npc = &mut session.space.traffic.npcs_mut()[0];
             on_its_last_tick(&mut npc.reserves, &mut npc.condition);
             session.tick_combat(
                 crate::combat::Rules::default(),

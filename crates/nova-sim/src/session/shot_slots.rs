@@ -15,7 +15,7 @@ impl Session {
     /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
     #[must_use]
     pub fn shots_drawn(&self) -> Vec<&Shot> {
-        self.combat.shots_drawn()
+        self.space.combat.shots_drawn()
     }
 }
 
@@ -25,8 +25,8 @@ mod tests {
     use super::super::*;
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
-    use crate::combat::Rules;
     use crate::combat::shot_layer::ShotLayer;
+    use crate::combat::{Combat, Rules};
     use crate::rulebook::{RuleSource, Rulebook};
     use nova_sim_catalog::fixture::weapon;
 
@@ -38,12 +38,12 @@ mod tests {
         while session.shots().len() < 2 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
-        session.combat.shots_mut()[0].layer = ShotLayer::OverShips;
+        session.space.combat.shots_mut()[0].layer = ShotLayer::OverShips;
         let ids = |shots: Vec<&Shot>| shots.iter().map(|shot| shot.id).collect::<Vec<_>>();
         let first = session.shots()[0].id;
         assert_eq!(
             ids(session.shots_drawn()),
-            ids(session.combat.shots_drawn())
+            ids(session.space.combat.shots_drawn())
         );
         assert_eq!(ids(session.shots_drawn())[1], first, "over the ships");
     }
@@ -56,8 +56,8 @@ mod tests {
         firing.set_shot_overlap(RuleSource::Bible);
         assert_ne!(firing, Combat::default());
         let other = Rulebook::default().with_override(RuleKey::ShotOverlap, RuleSource::Bible);
-        assert_eq!(session(other).combat, firing);
-        assert_eq!(session(Rulebook::default()).combat, Combat::default());
+        assert_eq!(session(other).space.combat, firing);
+        assert_eq!(session(Rulebook::default()).space.combat, Combat::default());
     }
 
     #[test]
@@ -69,19 +69,19 @@ mod tests {
         assert_ne!(firer, Combat::default());
         let other =
             Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, RuleSource::Bible);
-        assert_eq!(session(other).combat, firer);
+        assert_eq!(session(other).space.combat, firer);
         let mut no_roll = Combat::default();
         no_roll.set_reused_shot_slot_roll(RuleSource::Bible);
         assert_ne!(no_roll, Combat::default());
         let other =
             Rulebook::default().with_override(RuleKey::ReusedShotSlotRoll, RuleSource::Bible);
-        assert_eq!(session(other).combat, no_roll);
+        assert_eq!(session(other).space.combat, no_roll);
         let mut no_spin = Combat::default();
         no_spin.set_reused_shot_slot_spin(RuleSource::Bible);
         assert_ne!(no_spin, Combat::default());
         let other =
             Rulebook::default().with_override(RuleKey::ReusedShotSlotSpin, RuleSource::Bible);
-        assert_eq!(session(other).combat, no_spin);
+        assert_eq!(session(other).space.combat, no_spin);
     }
 
     /// [`armed`] with its ships firing a shell that releases one turret
@@ -125,7 +125,7 @@ mod tests {
         ] {
             let rules = Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, source);
             let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
-            let npc = &mut session.traffic.npcs_mut()[0];
+            let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.trigger = FIRE;
             npc.target = Some(ShipRef::Player);
             let berth = npc.berth;
@@ -134,8 +134,8 @@ mod tests {
             let mut next = session.npcs()[0].clone();
             next.ship = ShipId(131);
             next.trigger = Trigger::default();
-            session.traffic.remove(next.id);
-            let id = session.traffic.add_npc(next);
+            session.space.traffic.remove(next.id);
+            let id = session.space.traffic.add_npc(next);
             assert_eq!(session.npc(id).map(|npc| npc.berth), Some(berth));
             for _ in 0..5 {
                 session.tick_combat(Rules::default(), &mut NeverFires);
@@ -165,7 +165,11 @@ mod tests {
         let mut session = Session::start(&catalog)
             .expect("starts")
             .with_slot_sprites(sprites);
-        assert_eq!(session.combat.shot_slots(), history, "handed to the fight");
+        assert_eq!(
+            session.space.combat.shot_slots(),
+            history,
+            "handed to the fight"
+        );
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.shots().len(), 1);
@@ -179,7 +183,7 @@ mod tests {
         let next = Session::start(&catalog)
             .expect("starts")
             .with_slot_sprites(session.slot_sprites().clone());
-        assert_eq!(next.combat.shot_slots(), left);
+        assert_eq!(next.space.combat.shot_slots(), left);
     }
 
     #[test]
@@ -209,6 +213,6 @@ mod tests {
         let next = Session::start(&catalog)
             .expect("starts")
             .with_slot_sprites(session.slot_sprites().clone());
-        assert_eq!(next.combat.shot_slots().spin(0), left);
+        assert_eq!(next.space.combat.shot_slots().spin(0), left);
     }
 }

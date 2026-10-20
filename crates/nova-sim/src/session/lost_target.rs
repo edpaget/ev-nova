@@ -146,7 +146,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.select_target(TargetPick::Next);
-        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+        session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
             fade: 15.5,
             direction: 1,
         };
@@ -211,7 +211,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.select_target(TargetPick::Next);
-        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+        session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
             fade: 15.5,
             direction: 1,
         };
@@ -232,7 +232,7 @@ mod tests {
         catalog.hulls[1].death_delay = 0;
         let mut session = facing_an_npc(&catalog, 180);
         session.select_target(TargetPick::Next);
-        session.traffic.npcs_mut()[0].reserves.armor.now = 0.0;
+        session.space.traffic.npcs_mut()[0].reserves.armor.now = 0.0;
         pass(&mut session, &catalog);
         assert!(session.npcs().is_empty(), "destroyed and taken out");
         assert_eq!(session.target, None);

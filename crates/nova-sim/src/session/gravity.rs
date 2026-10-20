@@ -210,11 +210,11 @@ mod tests {
     }
 
     fn npc(session: &Session) -> &Npc {
-        &session.traffic.npcs()[0]
+        &session.space.traffic.npcs()[0]
     }
 
     fn npc_mut(session: &mut Session) -> &mut Npc {
-        &mut session.traffic.npcs_mut()[0]
+        &mut session.space.traffic.npcs_mut()[0]
     }
 
     fn near(a: Vec2, b: Vec2) -> bool {

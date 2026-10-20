@@ -26,7 +26,7 @@ impl Session {
     /// The fuel the ships refuelling the player gave it this tick lands in
     /// its tank (see the module docs).
     pub(super) fn take_refuel(&mut self) {
-        self.pilot.reserves.fuel.now += self.traffic.take_fuel_given();
+        self.pilot.reserves.fuel.now += self.space.traffic.take_fuel_given();
     }
 }
 
@@ -74,7 +74,7 @@ mod tests {
         session.pilot.ship_name = Some("Kestrel".to_owned());
         session.pilot.reserves.fuel = Gauge { now: fuel, max };
         let _ = session.take_sounds();
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.goal = Goal::Assist(Help::Refuel);
         npc.target = Some(ShipRef::Player);
         npc.hull.class_turn = 3.0;

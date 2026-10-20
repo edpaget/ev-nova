@@ -44,7 +44,7 @@ impl Session {
     /// (@0x949a1), counting the message line down one tick (see the
     /// module docs). Gives `taken`.
     pub(super) fn keep_plunder_open(&mut self, aboard: Aboard, taken: Taken) -> Taken {
-        self.aboard = Some(aboard);
+        self.space.escorts.aboard = Some(aboard);
         self.count_down_comm_line();
         taken
     }
@@ -54,7 +54,7 @@ impl Session {
     /// the flight's way out when it has no dialog to show it in. A capture
     /// awaiting its assignment is let go too.
     pub fn let_go_of_boarding(&mut self) {
-        if self.aboard.is_some() {
+        if self.space.escorts.aboard.is_some() {
             self.close_plunder();
         }
     }
@@ -258,12 +258,13 @@ mod tests {
         let mut session = captured(&catalog);
         session.take_sounds();
         while session
+            .space
             .traffic
             .free_berth(session.setup.spawn_reserve(crate::traffic::CAPTURE_RESERVE))
             .is_some()
         {
-            let filler = session.traffic.npcs()[1].clone();
-            session.traffic.add_npc(filler);
+            let filler = session.space.traffic.npcs()[1].clone();
+            session.space.traffic.add_npc(filler);
         }
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
@@ -280,7 +281,7 @@ mod tests {
         crate::session::precalced::tests::convicted(&mut session);
         session.let_go_of_boarding();
         assert_eq!(session.boarding(), None);
-        assert_eq!(session.aboard, None);
+        assert_eq!(session.space.escorts.aboard, None);
         assert_eq!(sounds(&mut session), []);
         assert_eq!(
             session.ship.latches.scan_latches,
@@ -372,7 +373,7 @@ mod tests {
     #[test]
     fn a_capture_at_no_odds_fails_and_closes() {
         let mut session = quiet(&boardable());
-        if let Some(aboard) = &mut session.aboard {
+        if let Some(aboard) = &mut session.space.escorts.aboard {
             aboard.plunder.odds = 0;
         }
         assert_eq!(

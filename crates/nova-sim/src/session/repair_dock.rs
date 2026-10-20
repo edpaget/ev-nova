@@ -182,6 +182,7 @@ mod tests {
     fn answer(session: &mut Session, helper: NpcId) {
         let ship = session.npc(helper).expect("here").ship;
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlayerRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -237,8 +238,9 @@ mod tests {
             now: 10.0,
             max: 45.0,
         };
-        let ship = session.traffic.add_npc(downed);
+        let ship = session.space.traffic.add_npc(downed);
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -293,6 +295,7 @@ mod tests {
         assert!(session.npc(gone).is_none());
         let npcs = session.npcs().to_vec();
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship: gone });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -323,6 +326,7 @@ mod tests {
             "the rule alone would let it fly at its most"
         );
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));

@@ -121,7 +121,7 @@ impl Session {
         let orders = EscortClass::ALL.map(|class| (class, self.class_order(class)));
         let missions = &self.pilot.missions;
         let mut joined = false;
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             let Some(mark) = &mut npc.mission else {
                 continue;
             };
@@ -194,6 +194,7 @@ impl Session {
     /// fleet's, a marked ship's never being (@0xced9). The rest re-form.
     pub(super) fn lose_dying_mission_escorts(&mut self) {
         let dying: Vec<(NpcId, ShipId)> = self
+            .space
             .traffic
             .npcs()
             .iter()
@@ -391,7 +392,7 @@ mod tests {
         take_off(&mut session, &catalog);
         ticks(&mut session, &catalog, 5);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
-        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
         ticks(&mut session, &catalog, 5);
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "keeps its place");
     }
@@ -401,7 +402,7 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         if let Some(mark) = &mut npc.mission {
             mark.formation = None;
         }
@@ -409,7 +410,7 @@ mod tests {
         session.reform();
         tick(&mut session, &catalog);
         assert_eq!(slots(&session), [(2, 2)], "only the other");
-        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         tick(&mut session, &catalog);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
     }
@@ -464,7 +465,7 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         let id = npc.id;
         if let Some(mark) = &mut npc.mission {
             mark.formation = None;
@@ -472,7 +473,7 @@ mod tests {
         npc.condition = Condition::Disabled;
         session.reform();
         tick(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         assert!(!session.npcs()[0].mission_escort(), "out of formation");
         let asked = std::rc::Rc::new(Asked::default());
         let ai = crate::ai::NovaAi::default()
@@ -576,7 +577,7 @@ mod tests {
         let mut session = accepted(&catalog);
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
-        let hired_id = session.fleet[0].expect("placed");
+        let hired_id = session.space.escorts.fleet[0].expect("placed");
         let duty = session
             .npc(hired_id)
             .and_then(|npc| npc.escort)
@@ -627,7 +628,10 @@ mod tests {
             session.tick(crate::flight::Controls::default());
             session.tick_traffic(&catalog, &ai, &mut NeverFires);
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
-            assert!(session.traffic.departed().is_empty(), "none leaves alone");
+            assert!(
+                session.space.traffic.departed().is_empty(),
+                "none leaves alone"
+            );
             braking += 1;
             assert!(braking < 1000, "the jump never began");
         }
@@ -646,7 +650,10 @@ mod tests {
                     npc.id
                 );
             }
-            assert!(session.traffic.departed().is_empty(), "none leaves alone");
+            assert!(
+                session.space.traffic.departed().is_empty(),
+                "none leaves alone"
+            );
         }
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -654,7 +661,7 @@ mod tests {
         );
         settle(&mut session, &catalog);
         assert_eq!(session.pilot().escorts().len(), 1);
-        assert!(session.fleet[0].is_some_and(|id| session.npc(id).is_some()));
+        assert!(session.space.escorts.fleet[0].is_some_and(|id| session.npc(id).is_some()));
         assert_eq!(slots(&session).len(), 2, "both mission escorts came");
         assert_eq!(session.player_led().count(), 3);
     }
@@ -664,7 +671,7 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert_eq!(session.npcs().len(), 1);
         assert_eq!(slots(&session), [(2, 2)]);
@@ -696,7 +703,7 @@ mod tests {
     /// The first mission escort's armour goes to 0, and the fight ticks:
     /// it starts to break up, for 5 ticks. Its NPC.
     fn break_up(session: &mut Session) -> NpcId {
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.reserves.armor.now = 0.0;
         npc.hull.death_delay = 5;
         let id = npc.id;
@@ -740,7 +747,7 @@ mod tests {
             assert_eq!(slots(&session), [(2, 3), (3, 3)]);
             // Apart from the other escort and the player.
             let at = crate::geometry::Vec2::new(3000.0, 3000.0);
-            let npc = &mut session.traffic.npcs_mut()[0];
+            let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.state.position = at;
             let id = npc.id;
             session.sites = vec![crate::catalog::LandingSite {
@@ -832,7 +839,7 @@ mod tests {
     #[test]
     fn a_disabled_mission_escort_destroys_no_cargo() {
         let mut session = laden(1, RuleSource::Engine);
-        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert_eq!(session.pilot.cargo, BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
         assert!(session.npcs()[0].mission_escort());
@@ -841,7 +848,7 @@ mod tests {
     #[test]
     fn a_mission_escort_disabled_or_breaking_up_remembers_no_former_escort() {
         let mut session = laden(1, RuleSource::Engine);
-        session.traffic.npcs_mut()[1].reserves.armor.now = 5.0;
+        session.space.traffic.npcs_mut()[1].reserves.armor.now = 5.0;
         let id = break_up(&mut session);
         let disabled = &session.npcs()[1];
         assert_eq!(disabled.condition, Condition::Disabled);
@@ -853,7 +860,7 @@ mod tests {
     fn a_disabled_mission_escort_that_repairs_itself_resumes_and_never_joins_the_fleet() {
         let mut session = laden(1, RuleSource::Engine);
         let _ = (session.take_messages(), session.take_sounds());
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.self_repair = true;
         npc.reserves.armor.now = 1.0;
         let id = npc.id;
@@ -931,7 +938,7 @@ mod tests {
 
     /// The hired escort's slot and formation size.
     fn hired_slot(session: &Session) -> (u8, u8) {
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let duty = session.npc(id).and_then(|npc| npc.escort).expect("hired");
         (duty.formation.slot, duty.formation.ships)
     }
@@ -968,7 +975,7 @@ mod tests {
         for expr in ["M131", "N131"] {
             let catalog = ships_catalog(escorting(-1, 0));
             let (mut session, ids) = flying_with_escorts(&catalog);
-            let hired = session.fleet[0].expect("placed");
+            let hired = session.space.escorts.fleet[0].expect("placed");
             let at = |session: &Session| -> Vec<_> {
                 session
                     .player_led()
@@ -1020,7 +1027,7 @@ mod tests {
         let catalog = inherent_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             if let Some(mark) = &mut npc.mission {
                 mark.formation = None;
             }
@@ -1140,7 +1147,7 @@ mod tests {
             request_assistance(&mut session, &catalog, &view),
             line(IN_YOUR_DREAMS)
         );
-        session.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[0].mission = None;
         let view = session
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("answered");
@@ -1166,7 +1173,7 @@ mod tests {
                 .map(|view| view.reply),
             Err(HailRefusal::NoResponse)
         );
-        session.target = session.fleet[0];
+        session.target = session.space.escorts.fleet[0];
         let view = session
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("the hired escort answers");
@@ -1219,7 +1226,10 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        assert!(session.fleet.is_empty(), "none waits in the record");
+        assert!(
+            session.space.escorts.fleet.is_empty(),
+            "none waits in the record"
+        );
     }
 
     #[test]
@@ -1272,11 +1282,11 @@ mod tests {
         catalog.missions[0].can_abort = 0;
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[1].condition = Condition::Disabled;
-        session.traffic.npcs_mut()[0].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[1].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert!(session.pilot().escorts().is_empty());
-        assert!(session.fleet.is_empty());
+        assert!(session.space.escorts.fleet.is_empty());
         assert_eq!(ships_of(&session).destroyed, 1);
         let failed = session
             .pilot()
@@ -1297,7 +1307,7 @@ mod tests {
         let mut hunter = crate::testkit::npc(0, crate::stats::ShipStats::default());
         hunter.state.position = player + crate::geometry::Vec2::new(0.0, 400.0);
         hunter.goal = Goal::Attack(crate::combat::ShipRef::Npc(escort));
-        let attacker = session.traffic.add_npc(hunter);
+        let attacker = session.space.traffic.add_npc(hunter);
         assert_eq!(
             session.select_target(TargetPick::NearestThreat),
             Some(attacker)
@@ -1335,13 +1345,13 @@ mod tests {
         // Closest Target skips every ship led by the player, mission
         // escorts too (`_FindNearestShipToPlayer` @0x92a6-0x92ae,
         // `_FindNearestThreatToPlayer` @0x94db), even one attacking him.
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.goal = Goal::Attack(crate::combat::ShipRef::Player);
         }
         assert_eq!(session.select_target(TargetPick::Nearest), None);
         assert_eq!(session.select_target(TargetPick::NearestThreat), None);
         let player = session.ship.player.position;
-        let npcs = session.traffic.npcs_mut();
+        let npcs = session.space.traffic.npcs_mut();
         npcs[0].state.position = player + crate::geometry::Vec2::new(5.0, 0.0);
         npcs[1].state.position = player + crate::geometry::Vec2::new(500.0, 0.0);
         npcs[1].mission = None;
@@ -1351,7 +1361,7 @@ mod tests {
             session.select_target(TargetPick::NearestThreat),
             Some(ordinary)
         );
-        session.traffic.npcs_mut()[1].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[1].condition = Condition::Destroyed;
         assert_eq!(
             session.select_target(TargetPick::Nearest),
             Some(ordinary),
@@ -1523,12 +1533,12 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         let class = mission_escorts(&session)[0].class;
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.condition = Condition::Disabled;
         }
         assert!(row(&session, class).present);
         assert!(!session.escorts_flying());
-        session.traffic.npcs_mut()[1].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[1].condition = Condition::Intact;
         assert!(session.escorts_flying());
     }
 

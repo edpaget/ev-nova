@@ -168,7 +168,7 @@ impl Session {
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
-        self.talk = None;
+        self.space.escorts.talk = None;
         self.out
             .beep_unanswered(self.answering().map(|npc| npc.id))?;
         let npc = self.answering()?;
@@ -198,7 +198,7 @@ impl Session {
             }
             _ => opening,
         };
-        self.talk = Some(Talk {
+        self.space.escorts.talk = Some(Talk {
             npc: npc.id,
             conversation,
             first: None,
@@ -284,6 +284,8 @@ impl Session {
             return None;
         }
         let wage = self
+            .space
+            .escorts
             .fleet
             .iter()
             .position(|&placed| placed == Some(npc.id))
@@ -357,7 +359,7 @@ impl Session {
     /// (`_CanHireEscorts`, [`Session::can_hire_escorts`]).
     fn joins(&self, npc: &Npc) -> bool {
         npc.person
-            .and_then(|person| self.traffic.person(person.id))
+            .and_then(|person| self.space.traffic.person(person.id))
             .is_some_and(|person| {
                 offers_to_join(&person.record)
                     && person
@@ -383,7 +385,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let talk = self.talk.as_ref()?;
+        let talk = self.space.escorts.talk.as_ref()?;
         let npc = self.npcs().iter().find(|npc| npc.id == talk.npc)?;
         let hail = self.hail_of(npc, &talk.conversation);
         let buttons = options
@@ -441,7 +443,7 @@ impl Session {
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Option<HailView> {
-        let mut talk = self.talk.clone()?;
+        let mut talk = self.space.escorts.talk.clone()?;
         if talk.ask.is_some() {
             return self.hailing(catalog, options);
         }
@@ -460,7 +462,7 @@ impl Session {
             talk.ask = Some(ask);
         }
         let npc = talk.npc;
-        self.talk = Some(talk);
+        self.space.escorts.talk = Some(talk);
         if let Some(deed) = answer.deed {
             self.act(npc, deed);
         }
@@ -478,7 +480,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let mut talk = self.talk.clone()?;
+        let mut talk = self.space.escorts.talk.clone()?;
         let ask = talk.ask?;
         let settled = talk.conversation.haggle(choice, self.pilot.cash)?;
         let (said, deed) = match settled {
@@ -497,7 +499,7 @@ impl Session {
         talk.reply = said;
         talk.said = None;
         let npc = talk.npc;
-        self.talk = Some(talk);
+        self.space.escorts.talk = Some(talk);
         if let Some(deed) = deed {
             self.act(npc, deed);
         }
@@ -535,7 +537,7 @@ impl Session {
     /// Ends the hail under way, if any; an escort Release was pressed
     /// for is released now.
     pub fn hang_up(&mut self) {
-        if let Some(talk) = self.talk.take()
+        if let Some(talk) = self.space.escorts.talk.take()
             && talk.release
         {
             self.release(talk.npc);
@@ -545,7 +547,7 @@ impl Session {
     /// NPC `id` does `deed` (see the module docs).
     fn act(&mut self, id: NpcId, deed: Deed) {
         if deed == Deed::Release {
-            if let Some(talk) = &mut self.talk {
+            if let Some(talk) = &mut self.space.escorts.talk {
                 talk.release = true;
             }
             return;
@@ -558,9 +560,15 @@ impl Session {
             // `_AIMakeShipAttackPlayer` (@0x9621f) asks its quote's gate
             // before it sets the goal (@0x89c50-0x89c9b).
             let view = self.world().gate_view();
-            self.traffic.turn_with_quote(id, view);
+            self.space.traffic.turn_with_quote(id, view);
         }
-        let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+        let Some(npc) = self
+            .space
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+        else {
             return;
         };
         match deed {
@@ -617,7 +625,7 @@ impl Session {
             ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
             done,
         };
-        self.comm_line.show(note.ticks());
+        self.space.comm_line.show(note.ticks());
         self.out.comm.push(note);
         self.out.sounds.push(sound);
     }
@@ -868,7 +876,7 @@ mod tests {
 
     /// NPC 0 of `session`.
     fn npc(session: &mut Session) -> &mut Npc {
-        &mut session.traffic.npcs_mut()[0]
+        &mut session.space.traffic.npcs_mut()[0]
     }
 
     /// A conversation's opening draws: variant `variant`, an even mood,
@@ -1116,7 +1124,7 @@ mod tests {
     fn with_no_ship_target_a_dockable_inhabited_nav_stellar_answers_silently() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.talk = Some(Talk::opened(NpcId(0)));
+        session.space.escorts.talk = Some(Talk::opened(NpcId(0)));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
         assert_eq!(
             hailed,
@@ -1656,7 +1664,7 @@ mod tests {
         other.goal = Goal::Idle;
         other.target = None;
         other.state.position.x += 200.0;
-        let other = session.traffic.add_npc(other);
+        let other = session.space.traffic.add_npc(other);
         npc(&mut session).provoked = provoked;
         npc(&mut session).target = Some(ShipRef::Npc(other));
         hail(&mut session, catalog);
@@ -1669,7 +1677,7 @@ mod tests {
 
     /// `by` hits NPC 0 for no damage, answered.
     fn hit_for_nothing(session: &mut Session, by: NpcId) {
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Npc(by)),
             damage: 0.0,
@@ -1685,7 +1693,7 @@ mod tests {
 
     /// Whether NPC 0's distress call is on the line.
     fn calls_for_help(session: &mut Session) -> bool {
-        session.traffic.take_on_line().iter().any(|work| {
+        session.space.traffic.take_on_line().iter().any(|work| {
             matches!(
                 work,
                 crate::traffic::on_line::OnLine::Call(NpcId(0), crate::ai::CommCall::Distress, _)
@@ -1757,7 +1765,7 @@ mod tests {
             assert!(!npc.goal.fights(), "{:?}", npc.goal);
             assert_ne!(npc.target, Some(ShipRef::Player));
         });
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Player),
             damage: 5.0,
@@ -1863,7 +1871,7 @@ mod tests {
             }
             let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
             assert_eq!(view.reply, "What? How dare you! Prepare to die!");
-            session.traffic.take_attack_quotes()
+            session.space.traffic.take_attack_quotes()
         };
         assert_eq!(declined(false), [NpcId(0)]);
         assert_eq!(declined(true), [], "already attacking the player");
@@ -1994,7 +2002,7 @@ mod tests {
             goal: Goal::Attack(ShipRef::Player),
             ..session.npcs()[0].clone()
         };
-        let pirate = session.traffic.add_npc(pirate);
+        let pirate = session.space.traffic.add_npc(pirate);
         hail(&mut session, &catalog);
         let view = press(&mut session, &catalog, 1, 0);
         assert_eq!(view.reply, "Okay, I'm on my way.");
@@ -2046,11 +2054,11 @@ mod tests {
             },
             ..session.npcs()[0].clone()
         };
-        session.traffic.add_npc(pirate);
+        session.space.traffic.add_npc(pirate);
         // Its odds as the frame's pass left them: the pirate's 20 over
         // its 100 (see `odds_cache`).
         let hailed = session.npcs()[0].id;
-        session.traffic.cache_odds(hailed, 0.2);
+        session.space.traffic.cache_odds(hailed, 0.2);
         assert_eq!(session.reinforcements_coming(), None);
         hail(&mut session, &catalog);
         press(&mut session, &catalog, 1, 0);
@@ -2286,17 +2294,17 @@ mod tests {
         let catalog = hailable();
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
         session.populate(&catalog, &mut placed(0, -300));
-        assert!(session.talk.is_none(), "populated afresh");
+        assert!(session.space.escorts.talk.is_none(), "populated afresh");
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
         session.ship.player.position = Vec2::new(30.0, -40.0);
         land_now(&mut session).expect("lands");
-        assert!(session.talk.is_none(), "landed");
+        assert!(session.space.escorts.talk.is_none(), "landed");
     }
 
     #[test]
@@ -2339,7 +2347,7 @@ mod tests {
         decide(&mut session, &catalog, 5, |npc| {
             assert_eq!(npc.goal, Goal::Assist(Help::Refuel));
         });
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Player),
             damage: 5.0,
@@ -2741,7 +2749,7 @@ mod tests {
         let bible = joining_options(RuleSource::Bible);
         let mut session = targeting_merchant(&catalog);
         session.pilot.escorts = vec![escort_of(false); 7];
-        session.fleet = (0..7)
+        session.space.escorts.fleet = (0..7)
             .map(|index| {
                 (index < 5)
                     .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
@@ -2756,7 +2764,7 @@ mod tests {
             hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "five of the seven in the system"
         );
-        session.fleet[5] = session.place_escort(5, &mut crate::chance::NeverFires);
+        session.space.escorts.fleet[5] = session.place_escort(5, &mut crate::chance::NeverFires);
         assert!(
             !hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "six in the system"
@@ -2833,7 +2841,7 @@ mod tests {
         let mut other = crate::testkit::npc(9, session.npcs()[0].stats);
         other.target = Some(ShipRef::Npc(NpcId(0)));
         other.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        let other = session.traffic.add_npc(other);
+        let other = session.space.traffic.add_npc(other);
         session.take_save_due();
         session
             .hail(&catalog, &bible, &mut Draws::of(&opening(0)))

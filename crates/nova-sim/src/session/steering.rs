@@ -201,7 +201,7 @@ mod tests {
     fn target_at(session: &mut Session, at: Vec2) {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.state.position = at;
-        let id = session.traffic.add_npc(npc);
+        let id = session.space.traffic.add_npc(npc);
         session.target = Some(id);
     }
 

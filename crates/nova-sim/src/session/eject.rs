@@ -261,9 +261,9 @@ impl Session {
         let hulk = self
             .ship
             .hulk(&self.pilot, &self.statics, &self.setup, old, hulk, chance);
-        let hulk = self.traffic.add_npc(hulk);
+        let hulk = self.space.traffic.add_npc(hulk);
         if let Some(slot) = self.npc(hulk).map(slot_of) {
-            self.slot_sprites.frames.clone_frames(slot, old.id);
+            self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
         self.target = None;
         self.deselect();
@@ -288,7 +288,8 @@ impl Session {
         if let Some(record) = &record {
             let defaults = crate::pilot::tally(record.defaults.iter().copied());
             self.board_class(record, &defaults);
-            self.slot_sprites
+            self.space
+                .slot_sprites
                 .frames
                 .clone_frames(Slot::Player, record.id);
             self.reset_precalced();
@@ -360,7 +361,7 @@ impl Session {
     /// with no target is state 0 with +0x96 0 (@0x8e228-0x8e23d).
     fn drop_the_player(&mut self) {
         let player = ShipRef::Player;
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if npc.target == Some(player) {
                 npc.target = None;
             }
@@ -378,11 +379,11 @@ impl Session {
     /// other ship the player leads is released.
     fn walk_the_threats(&mut self, hulk: NpcId, pod: bool) {
         let to = ShipRef::Npc(hulk);
-        for index in 0..self.traffic.npcs().len() {
-            let npcs = self.traffic.npcs();
+        for index in 0..self.space.traffic.npcs().len() {
+            let npcs = self.space.traffic.npcs();
             let npc = &npcs[index];
             if npc.threatens_player_among(npcs) {
-                let npc = &mut self.traffic.npcs_mut()[index];
+                let npc = &mut self.space.traffic.npcs_mut()[index];
                 if npc.target == Some(ShipRef::Player) {
                     npc.target = Some(to);
                 }
@@ -401,12 +402,12 @@ impl Session {
     /// fleet (see the module docs).
     fn drop_unplaced_escorts(&mut self) {
         let escorts = std::mem::take(&mut self.pilot.escorts);
-        let fleet = std::mem::take(&mut self.fleet);
+        let fleet = std::mem::take(&mut self.space.escorts.fleet);
         let placed = fleet.into_iter().chain(std::iter::repeat(None));
         for (escort, placed) in escorts.into_iter().zip(placed) {
             if placed.is_some() {
                 self.pilot.escorts.push(escort);
-                self.fleet.push(placed);
+                self.space.escorts.fleet.push(placed);
             }
         }
     }
@@ -791,7 +792,7 @@ mod tests {
         while session.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM {
             let mut far = npc(0, ShipStats::default());
             far.state.position = Vec2::new(5000.0, 5000.0);
-            last = Some(session.traffic.add_npc(far));
+            last = Some(session.space.traffic.add_npc(far));
         }
         last.expect("room to fill")
     }
@@ -1104,7 +1105,7 @@ mod tests {
             },
             "the breakup runs"
         );
-        session.traffic.remove(extra);
+        session.space.traffic.remove(extra);
         let mut last = three;
         loop {
             let (sounds, _) = fight(&mut session, false);
@@ -1487,7 +1488,7 @@ mod tests {
 
     /// An NPC of `goal`, targeting `target`.
     fn aimed(session: &mut Session, goal: Goal, target: Option<ShipRef>) -> NpcId {
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             goal,
             target,
             ..npc(0, ShipStats::default())
@@ -1496,7 +1497,7 @@ mod tests {
 
     /// An escort hired into the fleet, as placed.
     fn escort(session: &mut Session) -> NpcId {
-        let id = session.traffic.add_npc(Npc {
+        let id = session.space.traffic.add_npc(Npc {
             escort: Some(EscortDuty {
                 formation: FormationSlot::default(),
                 order: None,
@@ -1505,7 +1506,7 @@ mod tests {
             ..npc(0, ShipStats::default())
         });
         session.pilot.escorts.push(hired());
-        session.fleet.push(Some(id));
+        session.space.escorts.fleet.push(Some(id));
         id
     }
 
@@ -1547,7 +1548,7 @@ mod tests {
             Some(ShipRef::Npc(hired)),
         );
         session.npc_mut(raider).expect("here").provoked = 2.0;
-        let mission = session.traffic.add_npc(Npc {
+        let mission = session.space.traffic.add_npc(Npc {
             mission: Some(MissionMark {
                 slot: 0,
                 behav: ShipBehav::EscortPlayer,
@@ -1558,7 +1559,7 @@ mod tests {
         });
         // A pilot's escort not placed in the system.
         session.pilot.escorts.push(super::tests::hired());
-        session.fleet.push(None);
+        session.space.escorts.fleet.push(None);
         let fuel = session.pilot.reserves.fuel.now;
         session.ship.condition = Condition::Disabled;
         fight(&mut session, true);
@@ -1609,7 +1610,7 @@ mod tests {
         assert!(!npc(hired).escorts_player());
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
-        assert_eq!(session.fleet, []);
+        assert_eq!(session.space.escorts.fleet, []);
     }
 
     #[test]
@@ -1808,7 +1809,7 @@ mod tests {
             "goal 0xd kept, +0x70 the hulk"
         );
         assert!(session.npc(hired).expect("here").escorts_player(), "kept");
-        assert_eq!(session.fleet, [Some(hired)]);
+        assert_eq!(session.space.escorts.fleet, [Some(hired)]);
     }
 
     #[test]

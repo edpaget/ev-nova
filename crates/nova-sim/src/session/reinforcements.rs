@@ -108,6 +108,7 @@ impl Session {
         let system = self.pilot.system;
         Clock {
             timer: self
+                .space
                 .reinforcements
                 .timers
                 .get(&system)
@@ -126,9 +127,9 @@ impl Session {
     fn set_clock_here(&mut self, clock: Clock) {
         let system = self.pilot.system;
         if clock.timer == 0 {
-            self.reinforcements.timers.remove(&system);
+            self.space.reinforcements.timers.remove(&system);
         } else {
-            self.reinforcements.timers.insert(system, clock.timer);
+            self.space.reinforcements.timers.insert(system, clock.timer);
         }
         if clock.countdown == 0 {
             self.pilot.reinforcement_days.remove(&system);
@@ -143,10 +144,10 @@ impl Session {
     /// `fleet_govt` reads (@0x7f6b2-0x7f6ed).
     fn inhibitors(&self, ship_govt: Option<GovtId>, fleet_govt: Option<GovtId>) -> Inhibitors {
         let inhibited = |govt: Option<GovtId>| {
-            govt.is_some_and(|govt| self.reinforcements.inhibited.contains(&govt))
+            govt.is_some_and(|govt| self.space.reinforcements.inhibited.contains(&govt))
         };
         Inhibitors {
-            global: self.reinforcements.every_government,
+            global: self.space.reinforcements.every_government,
             ship_govt: inhibited(ship_govt),
             fleet_govt: inhibited(fleet_govt),
         }
@@ -169,7 +170,7 @@ impl Session {
         force: bool,
         think_odds: Option<f32>,
     ) {
-        let fleet = self.traffic.reinforcement_fleet();
+        let fleet = self.space.traffic.reinforcement_fleet();
         let facts = {
             let world = self.world();
             let around = world.around(self.npcs());
@@ -201,10 +202,10 @@ impl Session {
     /// arriving fleet on `chance`: in flight, a jump's frames included,
     /// once the system is set up.
     pub(super) fn tick_reinforcements(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if self.landed.is_some() || self.traffic_due {
+        if self.landed.is_some() || self.space.traffic_due {
             return;
         }
-        let fleet = self.traffic.reinforcement_fleet();
+        let fleet = self.space.traffic.reinforcement_fleet();
         let name = fleet
             .and_then(|fleet| fleet.govt)
             .and_then(|govt| self.statics.govts.get(govt))
@@ -239,7 +240,7 @@ impl Session {
     /// The fleet coming to the player's system, while its timer runs: what
     /// the warships' and interceptors' odds retreat read.
     pub(super) fn reinforcements_coming(&self) -> Option<Coming> {
-        let fleet = self.traffic.reinforcement_fleet()?;
+        let fleet = self.space.traffic.reinforcement_fleet()?;
         self.clock_here()
             .coming()
             .then_some(Coming { govt: fleet.govt })
@@ -269,15 +270,15 @@ impl Session {
     /// the other.
     pub(super) fn reset_inhibitors(&mut self) {
         if self.setup.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
-            self.reinforcements.every_government = false;
-            self.reinforcements.inhibited.clear();
+            self.space.reinforcements.every_government = false;
+            self.space.reinforcements.inhibited.clear();
         }
         for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
             if owned.mod_type != INHIBITOR {
                 continue;
             }
             if owned.mod_val == EVERY_GOVERNMENT {
-                self.reinforcements.every_government = true;
+                self.space.reinforcements.every_government = true;
                 continue;
             }
             let classed: Vec<GovtId> = self
@@ -291,7 +292,7 @@ impl Session {
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })
                 .collect();
-            self.reinforcements.inhibited.extend(classed);
+            self.space.reinforcements.inhibited.extend(classed);
         }
     }
 }

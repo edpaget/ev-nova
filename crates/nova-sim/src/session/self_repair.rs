@@ -59,7 +59,7 @@ impl Session {
     /// forgets being an escort (see the module docs).
     pub(super) fn self_repair(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         let mut disabled = Vec::new();
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             match npc.condition {
                 Condition::Intact => npc.former = None,
                 Condition::Disabled if npc.self_repair => disabled.push(npc.id),
@@ -219,7 +219,14 @@ mod tests {
 
     /// The NPCs of the fleet, in fleet order.
     fn placed(session: &Session) -> Vec<NpcId> {
-        session.fleet.iter().flatten().copied().collect()
+        session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect()
     }
 
     /// Escort NPC `id` is disabled (armour 3 of 45, below a tenth) and
@@ -472,7 +479,7 @@ mod tests {
             .iter()
             .position(|record| record.wage == Some(50))
             .expect("still in the fleet");
-        let npc = session.fleet[index].and_then(|id| session.npc(id));
+        let npc = session.space.escorts.fleet[index].and_then(|id| session.npc(id));
         assert_eq!(
             npc.map(|npc| (npc.ship, npc.escort.is_some())),
             Some((WARSHIP, true)),

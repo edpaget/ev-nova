@@ -48,7 +48,7 @@ fn escorted(catalog: &FakePilotCatalog) -> Session {
     let mut bystander = session.npcs()[0].clone();
     bystander.state.position.x += 3000.0;
     bystander.goal = Goal::Idle;
-    session.traffic.add_npc(bystander);
+    session.space.traffic.add_npc(bystander);
     let ship = session.npcs()[0].ship;
     let reserves = session.npcs()[0].reserves;
     session.enlist(
@@ -82,6 +82,7 @@ fn shot_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) {
     session.hold_trigger(crate::combat::armament::Trigger::default());
     let at = session.npc(NpcId(0)).expect("there").state.position;
     let shot = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()
@@ -150,7 +151,7 @@ fn mission_escorted(catalog: &FakePilotCatalog) -> Session {
     let mut bystander = session.npcs()[0].clone();
     bystander.state.position.x += 3000.0;
     bystander.goal = Goal::Idle;
-    session.traffic.add_npc(bystander);
+    session.space.traffic.add_npc(bystander);
     assert!(
         session
             .pilot
@@ -176,6 +177,7 @@ fn fire_until_two_shots(session: &mut Session, catalog: &FakePilotCatalog) {
     session.hold_trigger(FIRE);
     let players = |session: &Session| {
         session
+            .space
             .combat
             .shots()
             .iter()
@@ -207,6 +209,7 @@ fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) 
     fire_until_two_shots(session, catalog);
     let at = session.npc(NpcId(0)).expect("there").state.position;
     let mut shots = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()
@@ -236,7 +239,12 @@ fn passes_through(session: &mut Session, catalog: &FakePilotCatalog, id: ShotId)
         crate::combat::hull::Condition::Intact,
         "the first shot disabled it"
     );
-    session.combat.shots().iter().any(|shot| shot.id == id)
+    session
+        .space
+        .combat
+        .shots()
+        .iter()
+        .any(|shot| shot.id == id)
 }
 
 #[test]
@@ -298,6 +306,7 @@ fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
         (ShotLayer::Homing, ShotLayer::Shots)
     };
     let mut shots = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()

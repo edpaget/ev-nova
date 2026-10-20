@@ -78,7 +78,7 @@ impl Session {
     /// The asteroids in the field about the player, in slot order (see
     /// [`asteroid`](crate::asteroid)).
     pub fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
-        self.asteroids.iter()
+        self.space.asteroids.iter()
     }
 
     /// Runs one game-work pass's asteroid work, drawing on `chance`: an
@@ -90,30 +90,31 @@ impl Session {
         if self.landed.is_some() {
             // The landing's kill is spent: the field stays empty until the
             // take-off, and a later frame's counter can't match it.
-            self.asteroid_kill = None;
+            self.space.asteroid_kill = None;
             return;
         }
         self.settle_asteroid_field(chance);
-        if self.asteroid_kill == Some(self.pass_frame) {
-            self.asteroids.clear();
+        if self.space.asteroid_kill == Some(self.space.pass_frame) {
+            self.space.asteroids.clear();
             return;
         }
-        self.asteroid_kill = None;
+        self.space.asteroid_kill = None;
         let ring = match self.setup.rules.source_for(RuleKey::AsteroidRespawnRing) {
             RuleSource::Engine => Ring::Original,
             RuleSource::Bible => Ring::Outside,
         };
         let player = self.ship.player.position;
-        self.asteroids.spawn(
+        self.space.asteroids.spawn(
             Origin::Edge(ring),
             self.field_spec(),
             &self.statics.asteroid_types,
             player,
-            self.play_area,
+            self.space.play_area,
             chance,
         );
-        self.asteroids
-            .step(&self.statics.asteroid_types, player, self.play_area);
+        self.space
+            .asteroids
+            .step(&self.statics.asteroid_types, player, self.space.play_area);
     }
 
     /// Places the field of a session started or loaded in flight, once,
@@ -122,7 +123,7 @@ impl Session {
     /// it places none (see the module docs). The view runs it before it
     /// draws a frame; [`Session::tick_asteroids`] runs it too.
     pub fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if !std::mem::take(&mut self.asteroid_field_due) || self.landed.is_some() {
+        if !std::mem::take(&mut self.space.asteroid_field_due) || self.landed.is_some() {
             return;
         }
         if self.setup.places_asteroids() {
@@ -133,8 +134,8 @@ impl Session {
     /// Kills the field, through the rest of the pass frame, as
     /// `_killAsteroids` kills it (see the module docs).
     pub(super) fn kill_asteroids(&mut self) {
-        self.asteroids.clear();
-        self.asteroid_kill = Some(self.pass_frame);
+        self.space.asteroids.clear();
+        self.space.asteroid_kill = Some(self.space.pass_frame);
     }
 
     /// Places the field of the player's system about the ship afresh,
@@ -142,14 +143,14 @@ impl Session {
     /// arrival by the other reading of [`RuleKey::AsteroidEntryField`]
     /// (see the module docs).
     pub(super) fn place_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.asteroids.clear();
-        self.asteroid_kill = None;
+        self.space.asteroids.clear();
+        self.space.asteroid_kill = None;
         let player = self.ship.player.position;
-        self.asteroids.place_field(
+        self.space.asteroids.place_field(
             self.field_spec(),
             &self.statics.asteroid_types,
             player,
-            self.play_area,
+            self.space.play_area,
             chance,
         );
     }
@@ -158,7 +159,8 @@ impl Session {
     /// type's radius and `Mass` (see
     /// [`asteroid_hit`](crate::combat::asteroid_hit)).
     pub(super) fn asteroid_targets(&self) -> Vec<AsteroidTarget> {
-        self.asteroids
+        self.space
+            .asteroids
             .indexed()
             .map(|(slot, asteroid)| {
                 let kind_type = self
@@ -200,27 +202,32 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         for target in targets {
-            if let Some(asteroid) = self.asteroids.get_mut(target.slot) {
+            if let Some(asteroid) = self.space.asteroids.get_mut(target.slot) {
                 asteroid.strength = target.strength;
                 asteroid.velocity = target.velocity;
             }
         }
-        for slot in self.combat.take_broken_asteroids() {
-            let Some(remains) = self
-                .asteroids
-                .destroy(slot, &self.statics.asteroid_types, chance)
+        for slot in self.space.combat.take_broken_asteroids() {
+            let Some(remains) =
+                self.space
+                    .asteroids
+                    .destroy(slot, &self.statics.asteroid_types, chance)
             else {
                 continue;
             };
             for _ in 0..remains.boxes {
-                self.boxes
-                    .spawn_scoopable(remains.at, remains.contents, remains.graphic, chance);
+                self.space.boxes.spawn_scoopable(
+                    remains.at,
+                    remains.contents,
+                    remains.graphic,
+                    chance,
+                );
             }
             if let Some(particles) = remains.particles {
-                self.combat.particles(particles);
+                self.space.combat.particles(particles);
             }
             if let Some(explosion) = remains.explosion {
-                self.combat.explode(remains.at, explosion);
+                self.space.combat.explode(remains.at, explosion);
             }
         }
     }
@@ -585,7 +592,7 @@ mod tests {
         );
         zephyr.miner = MINES;
         zephyr.state.position = Vec2::new(600.0, 600.0);
-        let id = session.traffic.add_npc(zephyr);
+        let id = session.space.traffic.add_npc(zephyr);
         let think = |session: &mut Session| {
             for _ in 0..4 {
                 session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
@@ -594,7 +601,7 @@ mod tests {
         };
         assert_eq!(think(&mut session), Goal::Wait, "state 6");
         grown(&mut session, 1);
-        assert!(session.asteroids.get(0).is_some(), "slot 0");
+        assert!(session.space.asteroids.get(0).is_some(), "slot 0");
         assert_eq!(think(&mut session), Goal::Mine, "state 16");
     }
 
@@ -625,7 +632,7 @@ mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
-        session.asteroids.clear();
+        session.space.asteroids.clear();
         grown(&mut session, 4);
         assert_eq!(kinds(&session), [0; 4]);
         session.arrive(catalog, &mut NeverFires);
@@ -697,7 +704,7 @@ mod tests {
         let mut session = flying(&catalog).with_rules(other(RuleKey::AsteroidEntryField));
         session.settle_asteroid_field(&mut NeverFires);
         assert_eq!(kinds(&session), [0; 4], "placed");
-        session.asteroids.clear();
+        session.space.asteroids.clear();
         session.settle_asteroid_field(&mut NeverFires);
         assert_eq!(session.asteroids().count(), 0, "once");
     }
@@ -783,6 +790,7 @@ mod tests {
     /// at rest in `session`'s field; its slot.
     fn put(session: &mut Session, kind: u8, strength: i16, x: f32, y: f32) -> usize {
         session
+            .space
             .asteroids
             .place(Asteroid {
                 position: Vec2::new(x, y),
@@ -798,6 +806,7 @@ mod tests {
     /// The asteroid in `slot`.
     fn slot(session: &Session, slot: usize) -> Asteroid {
         *session
+            .space
             .asteroids
             .indexed()
             .find(|&(at, _)| at == slot)
@@ -1134,7 +1143,7 @@ mod tests {
             put(&mut session, 0, 100, 200.0, 20.0 * n as f32 - 150.0);
         }
         let at = put(&mut session, 4, strength, 0.0, -100.0);
-        session.asteroids.get_mut(at).expect("there").velocity = Vec2::new(0.5, 0.0);
+        session.space.asteroids.get_mut(at).expect("there").velocity = Vec2::new(0.5, 0.0);
         let events = shoot_once(&mut session, 6);
         (session, at, events)
     }
@@ -1200,7 +1209,11 @@ mod tests {
             assert_eq!(fragment.velocity, Vec2::new(-1.0, -1.0), "not its parent's");
         }
         assert!(
-            session.asteroids.indexed().all(|(slot, _)| slot != at),
+            session
+                .space
+                .asteroids
+                .indexed()
+                .all(|(slot, _)| slot != at),
             "the parent gone"
         );
     }
@@ -1247,7 +1260,7 @@ mod tests {
     /// 25 a tick toward it: 5 off it after a step.
     fn drifting_in(session: &mut Session) -> usize {
         let at = put(session, 0, 100, -30.0, 0.0);
-        session.asteroids.get_mut(at).expect("there").velocity = Vec2::new(25.0, 0.0);
+        session.space.asteroids.get_mut(at).expect("there").velocity = Vec2::new(25.0, 0.0);
         at
     }
 

@@ -121,7 +121,7 @@ impl Session {
     /// as the tick's hits left it. The player's condition just before its
     /// kill, when it was killed.
     pub(super) fn hold_stellar_kills(&mut self) -> Option<Condition> {
-        let kills = self.combat.stellar_kills().to_vec();
+        let kills = self.space.combat.stellar_kills().to_vec();
         let mut player = None;
         for kill in kills {
             match kill.ship {
@@ -156,6 +156,7 @@ impl Session {
         let rule = DeadlyStellarKill::from(self.setup.rules.source_for(RuleKey::DeadlyStellarKill));
         let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
         let killed: BTreeSet<NpcId> = self
+            .space
             .combat
             .take_stellar_kills()
             .into_iter()
@@ -170,7 +171,7 @@ impl Session {
         }
         for &id in &killed {
             match rule {
-                DeadlyStellarKill::Vanishes => self.traffic.remove(id),
+                DeadlyStellarKill::Vanishes => self.space.traffic.remove(id),
                 DeadlyStellarKill::Destroyed => {
                     if let Some(npc) = self.npc_mut(id) {
                         npc.condition = Condition::Destroyed;
@@ -252,7 +253,7 @@ pub(super) mod tests {
     }
 
     fn npc_mut(session: &mut Session) -> &mut Npc {
-        &mut session.traffic.npcs_mut()[0]
+        &mut session.space.traffic.npcs_mut()[0]
     }
 
     fn exploded(events: &[CombatEvent]) -> Vec<CombatEvent> {
@@ -705,6 +706,7 @@ pub(super) mod tests {
                 let legal = session.pilot.legal.clone();
                 fight(&mut session);
                 let strikes: Vec<_> = session
+                    .space
                     .strikes
                     .iter()
                     .filter(|strike| strike.ship == ShipRef::Npc(NpcId(0)))
@@ -734,6 +736,7 @@ pub(super) mod tests {
         let mut session = among(catalog, &[planet(140, 3000.0, 0.0)], 1, Rulebook::default());
         let struck = |session: &Session| {
             session
+                .space
                 .strikes
                 .iter()
                 .any(|strike| strike.ship == ShipRef::Player)
@@ -883,7 +886,7 @@ pub(super) mod tests {
                 npc.state.heading = heading;
                 npc.armament = armed();
                 npc.target = Some(ShipRef::Npc(target));
-                Some(session.traffic.add_npc(npc))
+                Some(session.space.traffic.add_npc(npc))
             }
         };
         let fire = |session: &mut Session| {
@@ -905,6 +908,7 @@ pub(super) mod tests {
                 assert_eq!(now, Some(Condition::Disabled), "the hit disables it");
                 assert!(
                     trial
+                        .space
                         .strikes
                         .iter()
                         .any(|strike| strike.ship == ShipRef::Npc(target)),

@@ -41,7 +41,7 @@ impl Session {
         berth: u32,
         chance: &mut dyn Chance,
     ) -> bool {
-        if swarm::named(berth, self.traffic.npcs()) {
+        if swarm::named(berth, self.space.traffic.npcs()) {
             return false;
         }
         let side = self.player_side();
@@ -130,7 +130,7 @@ mod tests {
 
     /// The last escort of the fleet's NPC, if it is in the system.
     fn last_escort(session: &Session) -> Option<&crate::traffic::npc::Npc> {
-        let id = session.fleet.last().copied().flatten()?;
+        let id = session.space.escorts.fleet.last().copied().flatten()?;
         session.npc(id)
     }
 
@@ -297,7 +297,7 @@ mod tests {
         let catalog = boardable_burning();
         for own in [true, false] {
             let mut session = captured(&catalog);
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.afterburner = own;
             }
             let mut chance = Ranged::of(&[]);
@@ -318,7 +318,7 @@ mod tests {
         let mut session = landed(&catalog);
         let mut swarmer = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
         swarmer.swarm_leader = Some(1);
-        session.traffic.add_npc_at(swarmer, 2);
+        session.space.traffic.add_npc_at(swarmer, 2);
         let mut chance = Ranged::of(&[PASSES]);
         assert_eq!(hired(&mut session, &mut chance), Some(false));
         assert_eq!(last_escort(&session).map(|npc| npc.berth), Some(1));

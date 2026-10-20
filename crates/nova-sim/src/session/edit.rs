@@ -729,20 +729,29 @@ mod tests {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.arm_strength_timer(&mut NeverFires);
-        assert!(session.traffic.strength_armed(), "armed before the move");
+        assert!(
+            session.space.traffic.strength_armed(),
+            "armed before the move"
+        );
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert!(!session.traffic.strength_armed(), "a move");
+        assert!(!session.space.traffic.strength_armed(), "a move");
         let mut session = landed(&catalog);
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        assert!(session.traffic.strength_armed(), "armed by the take-off");
+        assert!(
+            session.space.traffic.strength_armed(),
+            "armed by the take-off"
+        );
         session
             .land_at(&catalog, SystemId(131), StellarId(140))
             .expect("lands");
-        assert!(!session.traffic.strength_armed(), "a landing from flight");
+        assert!(
+            !session.space.traffic.strength_armed(),
+            "a landing from flight"
+        );
     }
 
     #[test]
@@ -1097,14 +1106,14 @@ mod tests {
         session.hold_fire(true, false);
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         session.hold_fire(false, false);
-        let combat = session.combat.clone();
+        let combat = session.space.combat.clone();
         assert_eq!(combat.shots().len(), 1);
         land_now(&mut session).expect("lands");
-        session.combat = combat;
+        session.space.combat = combat;
         session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.ship.warp.gate = Some(StellarId(129));
         session.stage_scene(session.npcs()[0].id);
-        assert_eq!(session.fleet.len(), 2);
+        assert_eq!(session.space.escorts.fleet.len(), 2);
         session.run_set(
             &crate::control::SetExpr::parse("P300").expect("parses"),
             &mut NeverFires,
@@ -1119,8 +1128,8 @@ mod tests {
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.ship.warp.gate, None);
         session.assert_scene_left("a relocation");
-        assert_eq!(session.fleet, []);
-        assert!(session.traffic_due);
+        assert_eq!(session.space.escorts.fleet, []);
+        assert!(session.space.traffic_due);
         assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
         assert_eq!(session.take_fighter_notes(), []);
         session.take_off(&catalog, &mut NeverFires);

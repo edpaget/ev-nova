@@ -136,7 +136,7 @@ impl Session {
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
     #[must_use]
     pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
-        self.rebuilt.dead(stellar)
+        self.space.rebuilt.dead(stellar)
     }
 
     /// A rebuild point (see the module docs): in flight the stellars shown
@@ -166,7 +166,7 @@ impl Session {
         self.rework_known();
         let reshown = self.reshow();
         let galaxy = &self.galaxy;
-        let rebuilt = self.rebuilt.rebuild(
+        let rebuilt = self.space.rebuilt.rebuild(
             &self.sites,
             |id| galaxy.destroyed(id),
             self.statics.fallback_frame.is_some(),
@@ -187,7 +187,7 @@ impl Session {
         match site.dead_frame_size {
             Some(dead) if site.destroyed => Some(dead),
             _ if site.destroyed
-                && self.rebuilt.dead(site.id)
+                && self.space.rebuilt.dead(site.id)
                 && self.setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
             {
                 self.statics.fallback_frame
@@ -201,7 +201,9 @@ impl Session {
     /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.galaxy;
-        self.rebuilt.frame(&self.sites, |id| galaxy.destroyed(id));
+        self.space
+            .rebuilt
+            .frame(&self.sites, |id| galaxy.destroyed(id));
         self.place_stellar_sprites();
     }
 
@@ -211,8 +213,8 @@ impl Session {
     /// of its sprite slot and its `Type` master (see the module docs).
     pub(super) fn landing_reach(&self, site: &LandingSite) -> LandingReach {
         let shown = StellarShown {
-            frame: self.rebuilt.shows_frame(site.id),
-            type_width: self.rebuilt.type_width(site),
+            frame: self.space.rebuilt.shows_frame(site.id),
+            type_width: self.space.rebuilt.type_width(site),
         };
         landing_reach(
             site,
@@ -228,7 +230,7 @@ impl Session {
         self.sites
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
-            .map(|site| (site.id, self.rebuilt.type_width(site)))
+            .map(|site| (site.id, self.space.rebuilt.type_width(site)))
             .collect()
     }
 
@@ -247,9 +249,9 @@ impl Session {
         if let Some(site) = site
             && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
         {
-            self.combat.explode(site.position, explosion);
+            self.space.combat.explode(site.position, explosion);
         }
-        self.strength.remove(&stellar);
+        self.space.strength.remove(&stellar);
         if wreck::destroys(
             &life,
             self.setup.rules.source_for(RuleKey::DestroyInvincible),
@@ -268,7 +270,7 @@ impl Session {
     /// new pilot's stellars destroy one, each within the original's
     /// slots, so any other is never destroyed.
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
-        self.strength.remove(&stellar);
+        self.space.strength.remove(&stellar);
         self.set_stellar_state(stellar, None);
     }
 
@@ -283,14 +285,14 @@ impl Session {
         script: &Script,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if !self.destroying.insert(stellar) {
+        if !self.space.destroying.insert(stellar) {
             self.out
                 .script_notes
                 .push(ScriptNote::OnDestroyReentered { stellar });
             return;
         }
         self.run_script(script, chance);
-        self.destroying.remove(&stellar);
+        self.space.destroying.remove(&stellar);
     }
 
     /// The stellars shown that shots can hit this tick: each whole one of
@@ -307,6 +309,7 @@ impl Session {
                     position: site.position,
                     radius: landing_radius(site),
                     strength: self
+                        .space
                         .strength
                         .get(&site.id)
                         .copied()
@@ -332,12 +335,12 @@ impl Session {
                 .get(&target.stellar)
                 .map(wreck::full_strength);
             if full == Some(target.strength) {
-                self.strength.remove(&target.stellar);
+                self.space.strength.remove(&target.stellar);
             } else {
-                self.strength.insert(target.stellar, target.strength);
+                self.space.strength.insert(target.stellar, target.strength);
             }
         }
-        for strike in self.combat.take_stellar_strikes() {
+        for strike in self.space.combat.take_stellar_strikes() {
             if strike.destroyed {
                 self.shoot_down(strike.stellar, strike.by, law, chance);
             }
@@ -367,13 +370,13 @@ impl Session {
             return;
         };
         if let Some(explosion) = life.explosion {
-            self.combat.explode(site.position, explosion);
+            self.space.combat.explode(site.position, explosion);
         }
         let countdown = wreck::countdown_on_destroy(&life);
         self.set_stellar_state(stellar, Some(countdown));
         self.run_on_destroy(stellar, &life.on_destroy, chance);
         self.set_stellar_state(stellar, Some(countdown));
-        self.strength.remove(&stellar);
+        self.space.strength.remove(&stellar);
         if by == Some(ShipRef::Player) {
             for _ in 0..STELLAR_KILLINGS {
                 self.convict_of(law, Crime::Kill, site.govt);
@@ -393,7 +396,7 @@ impl Session {
     /// higher, as the original's pass by index does. A destroyed stellar
     /// with no record is left as it is.
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.strength.clear();
+        self.space.strength.clear();
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
@@ -960,7 +963,7 @@ mod tests {
     /// The goal of every NPC in `session`'s system after one traffic tick,
     /// each bound for 128 before it.
     fn goals_bound_for_128(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<Goal> {
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.goal = Goal::Land(StellarId(128));
         }
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
@@ -1522,7 +1525,7 @@ mod tests {
         session.tick_combat(rules, &mut NeverFires);
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
-            for shot in session.combat.shots_mut() {
+            for shot in session.space.combat.shots_mut() {
                 shot.source = Source::Other;
                 shot.target = Some(ShipRef::Player);
                 shot.aimed_at = Some(ShipRef::Player);
@@ -1679,10 +1682,10 @@ mod tests {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
         fire(&mut session, 1);
-        assert_eq!(session.strength.get(&StellarId(128)), Some(&50));
+        assert_eq!(session.space.strength.get(&StellarId(128)), Some(&50));
         run(&mut session, "Y128");
         assert!(
-            session.strength.is_empty(),
+            session.space.strength.is_empty(),
             "destroyed: no current strength"
         );
     }
@@ -1706,9 +1709,9 @@ mod tests {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
         fire(&mut session, 1);
-        assert!(!session.strength.is_empty(), "damaged");
+        assert!(!session.space.strength.is_empty(), "damaged");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
-        assert!(session.strength.is_empty());
+        assert!(session.space.strength.is_empty());
     }
 
     // `Y`'s explosion.
@@ -1853,7 +1856,7 @@ mod tests {
             "once: a toggle run again clears it"
         );
         assert_eq!(session.take_script_notes(), [reentered(128)]);
-        assert!(session.destroying.is_empty(), "done");
+        assert!(session.space.destroying.is_empty(), "done");
         run(&mut session, "U128 Y128");
         assert!(!session.control_bit(bit(5)), "run again once it had ended");
     }
@@ -1883,7 +1886,7 @@ mod tests {
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert!(session.control_bit(bit(5)));
         assert_eq!(session.take_script_notes(), [reentered(128)]);
-        assert!(session.destroying.is_empty());
+        assert!(session.space.destroying.is_empty());
     }
 
     // Rebuild points.
@@ -2157,7 +2160,7 @@ mod tests {
         session.hold_trigger(Trigger::default());
         assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
-        session.strength.insert(StellarId(128), 0);
+        session.space.strength.insert(StellarId(128), 0);
         // The next frame's hit pass shoots it down before the frame
         // samples it.
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -2403,7 +2406,7 @@ mod tests {
                 crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
             npc.goal = Goal::EnterGate(StellarId(128));
             npc.state.position = Vec2::new(30.0, 0.0);
-            let id = session.traffic.add_npc(npc);
+            let id = session.space.traffic.add_npc(npc);
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
             session.npc(id).expect("there").entering_gate()
         };
@@ -2416,7 +2419,7 @@ mod tests {
         let catalog = ruin(100, false);
         let session = quiet(&catalog);
         let site = session.sites[0];
-        assert_eq!(session.rebuilt.type_width(&site), TypeWidth::Frame);
+        assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
             session.landing_reach(&site),
             crate::landing::LandingReach::Box(175.0)

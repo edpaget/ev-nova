@@ -201,7 +201,7 @@ mod tests {
     /// it: led by the carrier (one with no lead of its own), with no
     /// escort duty and no mission.
     fn fighter_of(session: &mut Session, carrier: Npc) -> Npc {
-        let carrier = session.traffic.add_npc(carrier);
+        let carrier = session.space.traffic.add_npc(carrier);
         Npc {
             leader: Some(carrier),
             carrier: Some(crate::bay::Carrier {
@@ -243,8 +243,8 @@ mod tests {
         // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590), read over
         // the system's ships.
         let mut session = session(&radar_catalog());
-        let escort = session.traffic.add_npc(hired(1));
-        let stranger = session.traffic.add_npc(npc(2, ShipStats::default()));
+        let escort = session.space.traffic.add_npc(hired(1));
+        let stranger = session.space.traffic.add_npc(npc(2, ShipStats::default()));
         let hunting = |target| Npc {
             goal: crate::ai::Goal::Attack(crate::ShipRef::Npc(target)),
             ..npc(3, ShipStats::default())

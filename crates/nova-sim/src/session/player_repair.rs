@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(session.take_messages(), [SimMessage::ShipDisabled]);
         // The NPC leaves, and the player's armour is put back, so the
         // next tick finds it intact, regenerating a point a tick.
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         session.pilot.reserves.armor.now = 40.0;
         session.ship.fit.stats.armor_regen = 1.0;
         for tick in 0..REPAIR_INHIBIT_TICKS {

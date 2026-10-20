@@ -185,7 +185,8 @@ impl Session {
         self.ship.ship_display.ion_tint =
             ion_tint::display(&mut self.ship.ion, capacity, &mut *chance);
         let govts = &self.statics.govts;
-        self.traffic
+        self.space
+            .traffic
             .display_ships(|govt| govts.derelict(govt), rules, chance);
     }
 
@@ -198,7 +199,7 @@ impl Session {
             .arsenal
             .hull(crate::catalog::ShipId(128))
             .frames;
-        self.traffic.set_first_class(first);
+        self.space.traffic.set_first_class(first);
     }
 
     /// The sets the player's ship was last drawn on: its hull's, and its
@@ -783,7 +784,7 @@ mod tests {
             .escorts
             .push(crate::session::tests::trader_escort());
         session.populate(&catalog, &mut NeverFires);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let escort = session.npc(id).expect("in the system");
         assert_eq!(escort.armament.fold().set, 3, "the player's last set");
         assert_eq!(escort.display.glow, 0, "_RespawnEscort's");
@@ -794,7 +795,7 @@ mod tests {
         npc.display.glow = 20;
         // Its berth keeps a timer of 9; its own, carried, is 3.
         npc.display.frames.lights.timer = 9.0;
-        session.traffic.keep_berth_blink();
+        session.space.traffic.keep_berth_blink();
         let lights = crate::combat::ship_lights::ShipLights {
             intensity: 12.5,
             count: 1,
@@ -803,7 +804,7 @@ mod tests {
         let npc = session.npc_mut(id).expect("in the system");
         npc.display.frames.lights = lights;
         session.populate(&catalog, &mut NeverFires);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let escort = session.npc(id).expect("in the system");
         let fold = escort.armament.fold();
         assert_eq!((fold.set, fold.dir), (1, -1), "kept");
@@ -911,13 +912,13 @@ mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotBlinkTimer, reading);
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
-            assert_eq!(session.traffic.reused_slot_blink_timer(), reading);
+            assert_eq!(session.space.traffic.reused_slot_blink_timer(), reading);
             let stellar = session.sites[0].id;
             session
                 .land_at(&catalog, session.pilot.system, stellar)
                 .expect("relocates");
             assert_eq!(
-                session.traffic.reused_slot_blink_timer(),
+                session.space.traffic.reused_slot_blink_timer(),
                 reading,
                 "re-applied"
             );
@@ -931,14 +932,14 @@ mod tests {
             let rules =
                 Rulebook::default().with_override(RuleKey::SpawnAnimRollsFirstClass, reading);
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
-            let first = session.traffic.first_class();
+            let first = session.space.traffic.first_class();
             assert_eq!(first.spec, session.ship.fit.hull.frames, "the player's 128");
             assert_eq!(first.reading, reading);
             let stellar = session.sites[0].id;
             session
                 .land_at(&catalog, session.pilot.system, stellar)
                 .expect("relocates");
-            let first = session.traffic.first_class();
+            let first = session.space.traffic.first_class();
             assert_eq!(
                 (first.spec, first.reading),
                 (session.ship.fit.hull.frames, reading),
@@ -956,6 +957,7 @@ mod tests {
             ..crate::stats::ShipStats::default()
         };
         let id = session
+            .space
             .traffic
             .add_npc(crate::traffic::fixture::npc(0, stats));
         crate::fixture::disable(&mut session, id);
@@ -999,7 +1001,7 @@ mod tests {
             .escorts
             .push(crate::session::tests::trader_escort());
         session.populate(&catalog, &mut NeverFires);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let owed = session.npc(id).expect("in the system").display.rolls.anim;
         assert_eq!(owed, AnimRoll::FirstClass, "`_SpawnEscort`'s");
         // Its first display spends it, on class 128's four sets.
@@ -1012,7 +1014,7 @@ mod tests {
         // Entering again, it keeps its set: no roll asked of class 128's
         // four sets or its own six.
         session.populate(&catalog, &mut NeverFires);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let mut again = Draws::of(&[]).keyed(4, 3).keyed(6, 5);
         session.display_ships(&mut again);
         assert_eq!((again.times_asked(4), again.times_asked(6)), (0, 0));
@@ -1030,7 +1032,7 @@ mod tests {
             .push(crate::session::tests::trader_escort());
         session.populate(&catalog, &mut NeverFires);
         session.populate(&catalog, &mut NeverFires);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let npc = session.npc(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass, "carried");
     }

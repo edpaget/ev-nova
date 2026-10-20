@@ -29,7 +29,8 @@ impl Session {
         let site = self.gate_site(gate)?;
         let anim = GateAnimation::of(site);
         Some(
-            self.gate_sprites
+            self.space
+                .gate_sprites
                 .get(&gate)
                 .map_or(0, |sprite| sprite.shown(&anim, site.destroyed)),
         )
@@ -40,7 +41,8 @@ impl Session {
     #[must_use]
     pub fn gate_open(&self, gate: StellarId) -> bool {
         self.gate_site(gate).is_some_and(|site| {
-            self.gate_sprites
+            self.space
+                .gate_sprites
                 .get(&gate)
                 .is_some_and(|sprite| sprite.is_open(&GateAnimation::of(site)))
         })
@@ -61,9 +63,9 @@ impl Session {
             .filter(|site| is_hypergate(site))
             .map(|site| site.id)
             .collect();
-        self.gate_sprites.retain(|id, _| gates.contains(id));
+        self.space.gate_sprites.retain(|id, _| gates.contains(id));
         for gate in gates {
-            self.gate_sprites.entry(gate).or_default();
+            self.space.gate_sprites.entry(gate).or_default();
         }
     }
 
@@ -80,9 +82,9 @@ impl Session {
         for site in self.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self.slot_sprite_width(site);
             let anim = GateAnimation::of(site);
-            if let Some(sprite) = self.gate_sprites.get_mut(&site.id) {
+            if let Some(sprite) = self.space.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
-                let held = held_open(site, reach, dock, self.traffic.npcs());
+                let held = held_open(site, reach, dock, self.space.traffic.npcs());
                 sprite.step(&anim, site.destroyed, held, chance);
             }
         }
@@ -93,7 +95,7 @@ impl Session {
     /// (@0x26d4-0x2701).
     fn slot_sprite_width(&self, site: &LandingSite) -> u32 {
         self.drawn_frame_size(site)
-            .filter(|_| self.rebuilt.shows_frame(site.id))
+            .filter(|_| self.space.rebuilt.shows_frame(site.id))
             .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
     }
 }
@@ -158,7 +160,7 @@ mod tests {
     /// ticks.
     fn emerging(session: &mut Session, wait: u32) {
         let fields = crate::stats::ShipStats::new(FAST, &[]);
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             state: ShipState {
                 position: GATE_AT,
                 velocity: Vec2::ZERO,
@@ -173,7 +175,7 @@ mod tests {
     /// Adds a ship of `fields` at (`x`, 0), at rest facing the gate,
     /// bound to enter hypergate 300.
     fn heading_in(session: &mut Session, fields: crate::handling::ShipFields, x: f32) {
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             state: ShipState {
                 position: Vec2::new(x, 0.0),
                 velocity: Vec2::ZERO,
@@ -271,7 +273,11 @@ mod tests {
             heading_in(&mut session, still, GATE_AT.x + 210.0);
             if open_first {
                 let site = *session.gate_site(StellarId(300)).expect("a gate");
-                let sprite = session.gate_sprites.get_mut(&StellarId(300)).expect("kept");
+                let sprite = session
+                    .space
+                    .gate_sprites
+                    .get_mut(&StellarId(300))
+                    .expect("kept");
                 for _ in 0..3 {
                     sprite.step(&GateAnimation::of(&site), false, true, &mut NeverFires);
                 }
@@ -303,7 +309,7 @@ mod tests {
                 for site in &mut unreadable {
                     site.frame_size = None;
                 }
-                session.rebuilt.rebuild(&unreadable, |_| false, false);
+                session.space.rebuilt.rebuild(&unreadable, |_| false, false);
             }
             heading_in(&mut session, still, GATE_AT.x + out);
             tick(&mut session, &catalog);
@@ -379,9 +385,9 @@ mod tests {
         };
         let mut released = false;
         for tick in 0..40 {
-            let before = session.gate_sprites[&gate];
+            let before = session.space.gate_sprites[&gate];
             self::tick(&mut session, &catalog);
-            let after = session.gate_sprites[&gate];
+            let after = session.space.gate_sprites[&gate];
             match session.npcs()[0].mode {
                 // Waiting, or its wait just run out: goal still 0x15.
                 Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {
@@ -438,11 +444,11 @@ mod tests {
         let shown = session.sites.clone();
         session.sites.retain(|site| site.id != StellarId(300));
         session.keep_gate_sprites();
-        assert!(session.gate_sprites.is_empty(), "let go");
+        assert!(session.space.gate_sprites.is_empty(), "let go");
         session.sites = shown;
         session.keep_gate_sprites();
         assert_eq!(
-            session.gate_sprites.get(&StellarId(300)),
+            session.space.gate_sprites.get(&StellarId(300)),
             Some(&crate::gate_sprite::GateSprite::new()),
             "shown again, closed"
         );
@@ -453,7 +459,12 @@ mod tests {
         let catalog = gated();
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(
-            session.gate_sprites.keys().copied().collect::<Vec<_>>(),
+            session
+                .space
+                .gate_sprites
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
             [StellarId(300)]
         );
     }

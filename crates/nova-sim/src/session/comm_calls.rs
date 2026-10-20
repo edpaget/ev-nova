@@ -138,7 +138,7 @@ impl Session {
     /// Raises `message` on the message line, setting the line's count to
     /// its ticks as `_DisplayComm` does (@0x9024b).
     pub(super) fn say(&mut self, message: SimMessage) {
-        self.comm_line.show(message.ticks());
+        self.space.comm_line.show(message.ticks());
         self.out.messages.push(message);
     }
 
@@ -146,19 +146,19 @@ impl Session {
     /// raises and words itself, or composes from the session's (see the
     /// module docs). A line the session raised is not shown again here.
     pub fn comm_shown(&mut self, ticks: u16) {
-        self.comm_line.show(ticks);
+        self.space.comm_line.show(ticks);
     }
 
     /// Return (`ackComm`) clears the message line: for a tick, while a
     /// line shows (`_HandlePlayer` @0x6dd22-0x6dd65).
     pub fn comm_acknowledged(&mut self) {
-        self.comm_line.acknowledge();
+        self.space.comm_line.acknowledge();
     }
 
     /// The message line's countdown, as the calls read it.
     #[must_use]
     pub fn comm_line(&self) -> CommLine {
-        self.comm_line
+        self.space.comm_line
     }
 
     /// The flight counts the message line down a tick of a pass it
@@ -172,13 +172,13 @@ impl Session {
 
     /// The frame's countdown of the message line (see the module docs).
     pub(super) fn count_down_comm_line(&mut self) {
-        self.comm_line.tick();
+        self.space.comm_line.tick();
     }
 
     /// A landing sets the line's count to 0 (`_HandlePlayerDockRequest`
     /// @0x66d7f).
     pub(super) fn reset_comm_line(&mut self) {
-        self.comm_line.reset();
+        self.space.comm_line.reset();
     }
 
     /// Answers NPC `id`'s `call`, made by a think that read the `odds`
@@ -230,7 +230,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
-        for work in self.traffic.take_on_line() {
+        for work in self.space.traffic.take_on_line() {
             match work {
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
                 OnLine::Call(id, call, odds) => self.answer_call(id, call, odds, chance),
@@ -242,7 +242,7 @@ impl Session {
                 }
             }
         }
-        if std::mem::take(&mut self.reinforcements_held) {
+        if std::mem::take(&mut self.space.reinforcements_held) {
             self.tick_reinforcements(chance);
         }
     }
@@ -261,7 +261,7 @@ impl Session {
             person: npc.person.is_some(),
             quiet: self.statics.govts.flag2(npc.govt, QUIET),
             quiet_inherent: self.statics.govts.flag2(inherent, QUIET),
-            line_free: self.comm_line.free_for_calls(),
+            line_free: self.space.comm_line.free_for_calls(),
             liked: likes_player(npc, &around, self.mission_hail(npc)),
             threatens: threatens_player(npc, &around, self.ship.condition == Condition::Intact),
             player_dying: matches!(
@@ -306,7 +306,7 @@ impl Session {
         let found = hail_finds(govt, &self.pilot.missions, |mission| {
             self.statics.lifecycle_record(mission)
         });
-        if !found || !self.comm_line.idle() {
+        if !found || !self.space.comm_line.idle() {
             return;
         }
         let class = self.ship_name(npc.ship).unwrap_or_default();
@@ -464,7 +464,7 @@ mod tests {
             .with_strings(Rc::new(Lines));
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
         let _ = (session.take_messages(), session.take_sounds());
-        session.comm_line = CommLine::default();
+        session.space.comm_line = CommLine::default();
         session
     }
 
@@ -476,7 +476,7 @@ mod tests {
         ship.govt = govt;
         ship.ship = class;
         ship.state.position = session.ship.player.position;
-        session.traffic.add_npc(ship)
+        session.space.traffic.add_npc(ship)
     }
 
     /// A trader of `govt` and `class` fleeing a pirate, calling for help;
@@ -1140,7 +1140,10 @@ mod tests {
         let pirate = add(&mut session, None, ShipId(128));
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session.traffic.queue_pirate_event(escort_stolen(pirate));
+            session
+                .space
+                .traffic
+                .queue_pirate_event(escort_stolen(pirate));
         });
         assert_eq!(messages, [SimMessage::ShipStolen { fighter: false }]);
         assert_eq!(sounds, [SimSound::ShipStolen]);
@@ -1153,7 +1156,10 @@ mod tests {
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let pirate = add(&mut session, None, ShipId(128));
         let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session.traffic.queue_pirate_event(escort_stolen(pirate));
+            session
+                .space
+                .traffic
+                .queue_pirate_event(escort_stolen(pirate));
         });
         assert_eq!(
             messages,
@@ -1217,7 +1223,7 @@ mod tests {
         };
         let (messages, notes, sounds) =
             stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.traffic.queue_pirate_event(repaired);
+                session.space.traffic.queue_pirate_event(repaired);
             });
         assert_eq!(messages, [], "no call for help");
         assert_eq!(notes.len(), 1);
@@ -1236,7 +1242,7 @@ mod tests {
         };
         let (messages, notes, sounds) =
             stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.traffic.queue_pirate_event(repaired);
+                session.space.traffic.queue_pirate_event(repaired);
             });
         assert_eq!(messages, help("Ship 129:  Help 1"));
         assert_eq!(notes.len(), 1);
@@ -1369,7 +1375,7 @@ mod tests {
             ship.govt = Some(TRADERS);
             ship.ship = class;
             ship.state.position = session.ship.player.position;
-            session.traffic.add_npc_at(ship, at)
+            session.space.traffic.add_npc_at(ship, at)
         };
         let high = flee(5, CALLER, &mut session);
         let low = flee(2, ShipId(128), &mut session);

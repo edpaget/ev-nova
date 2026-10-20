@@ -201,7 +201,7 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let pass = GamePass::Again;
-        self.before_move(self.pass_frame, pass);
+        self.before_move(self.space.pass_frame, pass);
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
@@ -784,9 +784,13 @@ mod tests {
         again(&mut doubled, THRUST);
         assert_eq!(doubled.player(), twice.player());
         assert_ne!(*doubled.player(), ShipState::default(), "moved");
-        assert_eq!((doubled.frame, doubled.pass_frame), (1, 0), "once");
+        assert_eq!(
+            (doubled.space.frame, doubled.space.pass_frame),
+            (1, 0),
+            "once"
+        );
         doubled.tick(THRUST);
-        assert_eq!((doubled.frame, doubled.pass_frame), (2, 1));
+        assert_eq!((doubled.space.frame, doubled.space.pass_frame), (2, 1));
     }
 
     #[test]
@@ -794,7 +798,7 @@ mod tests {
         let catalog = catalog();
         let mut session = session(&catalog);
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
-        session.traffic.add_npc(crate::traffic::npc::Npc {
+        session.space.traffic.add_npc(crate::traffic::npc::Npc {
             state: ShipState {
                 velocity: Vec2::new(2.0, 0.0),
                 ..ShipState::default()
@@ -810,7 +814,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         assert!(session.led_speed() > 1.0, "a pilot without Strict Play");
-        let escort = &mut session.traffic.npcs_mut()[0];
+        let escort = &mut session.space.traffic.npcs_mut()[0];
         escort.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
@@ -834,7 +838,7 @@ mod tests {
         let catalog = catalog();
         let mut session = session(&catalog);
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
-        session.traffic.table_mut().avg_ships = 3;
+        session.space.traffic.table_mut().avg_ships = 3;
         let mut chance = Draws::of(&[]);
         let behaviour = crate::ai::NovaAi::default();
         session.tick_again(
@@ -881,7 +885,7 @@ mod tests {
         let npc = &session.npcs()[0];
         assert!(npc.provoked > 0.0, "answered in the pass: {npc:?}");
         assert_eq!(npc.target, Some(ShipRef::Player));
-        assert_eq!(session.strikes, [], "none left over");
+        assert_eq!(session.space.strikes, [], "none left over");
     }
 
     #[test]
@@ -891,7 +895,7 @@ mod tests {
         // counts the hold down.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
@@ -973,7 +977,7 @@ mod tests {
             &mut NeverFires,
         );
         session.hold_trigger(Trigger::default());
-        session.traffic.npcs_mut()[0].trigger.point_defence = true;
+        session.space.traffic.npcs_mut()[0].trigger.point_defence = true;
         assert!(session.shots().iter().any(|shot| shot.weapon.id.0 == 134));
         session.take_combat_events();
         let quad_fired = |events: &[CombatEvent]| {
@@ -1016,9 +1020,20 @@ mod tests {
         let catalog = catalog();
         let mut landed = session(&catalog);
         land_now(&mut landed).expect("lands");
-        let before = (*landed.player(), landed.frame, landed.pass_frame);
+        let before = (
+            *landed.player(),
+            landed.space.frame,
+            landed.space.pass_frame,
+        );
         again(&mut landed, THRUST);
-        assert_eq!((*landed.player(), landed.frame, landed.pass_frame), before);
+        assert_eq!(
+            (
+                *landed.player(),
+                landed.space.frame,
+                landed.space.pass_frame
+            ),
+            before
+        );
         let mut jumping = session(&catalog);
         jumping
             .plot_course(crate::catalog::SystemId(131))
@@ -1045,7 +1060,7 @@ mod tests {
             .expect("a route");
         fly_out(&mut session);
         session.begin_jump().expect("jumps");
-        session.traffic.npcs_mut()[0].state.velocity = Vec2::new(2.0, 0.0);
+        session.space.traffic.npcs_mut()[0].state.velocity = Vec2::new(2.0, 0.0);
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()
@@ -1068,7 +1083,7 @@ mod tests {
         }
         session.take_combat_events();
         let npc = session.npcs()[0].state;
-        let strikes = session.strikes.clone();
+        let strikes = session.space.strikes.clone();
         again(&mut session, Controls::default());
         assert_eq!(session.jumping(), Some(crate::catalog::SystemId(131)));
         assert_ne!(session.npcs()[0].state, npc, "the traffic flew on");
@@ -1082,6 +1097,6 @@ mod tests {
             )),
             "the player's trigger rests in a jump"
         );
-        assert_eq!(session.strikes, strikes);
+        assert_eq!(session.space.strikes, strikes);
     }
 }

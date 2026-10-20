@@ -1054,13 +1054,13 @@ mod tests {
             session.select_stellar(crate::session::StellarPick::Slot(0));
             session.target = Some(NpcId(0));
             session.ship.warp.gate = Some(StellarId(128));
-            session.strikes = session.combat.take_strikes();
+            session.space.strikes = session.space.combat.take_strikes();
             moved(&mut session, &catalog, text);
             assert_eq!(session.shots(), [], "{text}");
             assert_eq!(session.nav_target(), None, "{text}");
             assert_eq!(session.target, None, "{text}");
             assert_eq!(session.ship.warp.gate, None, "{text}");
-            assert_eq!(session.strikes, [], "{text}");
+            assert_eq!(session.space.strikes, [], "{text}");
         }
     }
 
@@ -1103,14 +1103,25 @@ mod tests {
         pilot.escorts = vec![escort(129, false), escort(130, true)];
         let mut session = flying_with(&catalog, pilot);
         assert_eq!(session.npcs().len(), 4);
-        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let fleet: Vec<NpcId> = session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         assert_eq!(fleet.len(), 2);
         moved(&mut session, &catalog, "M131");
         let left: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
         assert_eq!(left, fleet, "the others stay behind");
         assert_eq!(session.pilot().escorts().len(), 2, "the dry fighter too");
         assert_eq!(session.take_fighter_notes(), []);
-        assert_eq!(session.traffic.ship_types(), [ShipId(129)], "131's table");
+        assert_eq!(
+            session.space.traffic.ship_types(),
+            [ShipId(129)],
+            "131's table"
+        );
         for _ in 0..3 {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
         }
@@ -1142,7 +1153,7 @@ mod tests {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
             assert_eq!(berths(&session), [berth], "{reading:?}");
             assert_eq!(
-                session.traffic.berths_taken(),
+                session.space.traffic.berths_taken(),
                 1,
                 "{reading:?}: freed by the tick's end"
             );
@@ -1179,7 +1190,7 @@ mod tests {
         let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.npcs().len(), 3, "populated");
-        assert_eq!(session.traffic.berths_taken(), 3, "none held");
+        assert_eq!(session.space.traffic.berths_taken(), 3, "none held");
         assert_eq!(berths(&session), [1, 2, 3]);
     }
 
@@ -1232,7 +1243,7 @@ mod tests {
             [crate::bay::FighterNote::Abandoned(1)]
         );
         assert_eq!(session.npcs().len(), 4, "three ships and the escort");
-        assert_eq!(session.fleet.iter().flatten().count(), 1);
+        assert_eq!(session.space.escorts.fleet.iter().flatten().count(), 1);
     }
 
     // What a move lets go of and keeps, by either reading of
@@ -2032,7 +2043,7 @@ mod tests {
         session.select_stellar(crate::session::StellarPick::Slot(0));
         session.target = Some(NpcId(0));
         session.ship.warp.gate = Some(StellarId(128));
-        session.strikes = session.combat.take_strikes();
+        session.space.strikes = session.space.combat.take_strikes();
         session.stage_scene(NpcId(0));
         session.take_events();
         let npcs = session.npcs().to_vec();
@@ -2055,7 +2066,7 @@ mod tests {
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.target, None);
         assert_eq!(session.ship.warp.gate, None);
-        assert_eq!(session.strikes, []);
+        assert_eq!(session.space.strikes, []);
         session.assert_scene_left("N9999");
         assert_eq!(session.npcs(), npcs, "the traffic kept");
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);

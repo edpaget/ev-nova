@@ -115,13 +115,15 @@ impl Session {
             .iter()
             .enumerate()
             .filter(|(_, escort)| !escort.carried)
-            .filter_map(|(index, escort)| match self.fleet.get(index) {
-                None => Some(escort.ship),
-                Some(placed) => placed
-                    .and_then(|id| self.npc(id))
-                    .filter(|npc| npc.mission.is_none())
-                    .map(|npc| npc.ship),
-            })
+            .filter_map(
+                |(index, escort)| match self.space.escorts.fleet.get(index) {
+                    None => Some(escort.ship),
+                    Some(placed) => placed
+                        .and_then(|id| self.npc(id))
+                        .filter(|npc| npc.mission.is_none())
+                        .map(|npc| npc.ship),
+                },
+            )
             .collect()
     }
 
@@ -271,7 +273,7 @@ mod tests {
     /// `unplaced` names its index.
     fn with_fleet(session: &mut Session, escorts: Vec<Escort>, unplaced: &[usize]) {
         session.pilot.escorts = escorts;
-        session.fleet = (0..session.pilot.escorts.len())
+        session.space.escorts.fleet = (0..session.pilot.escorts.len())
             .map(|index| {
                 if unplaced.contains(&index) {
                     None
@@ -326,7 +328,7 @@ mod tests {
             &[0],
         );
         assert_eq!(session.led_escorts(), [ShipId(131)], "no NPC in the system");
-        let id = session.fleet[1].expect("placed");
+        let id = session.space.escorts.fleet[1].expect("placed");
         session.npc_mut(id).expect("there").mission = Some(MissionMark {
             slot: 0,
             behav: crate::traffic::ShipBehav::Own,
@@ -602,7 +604,7 @@ mod tests {
             .pilot
             .missions
             .put(0, crate::testkit::carrying(140, 2));
-        session.traffic.npcs_mut()[0].cargo =
+        session.space.traffic.npcs_mut()[0].cargo =
             NpcHold::of(Some((crate::market::Good::Commodity(2), 7)));
         session
     }
@@ -626,7 +628,7 @@ mod tests {
             session.pilot().missions().get(0).map(|m| m.cargo_tons),
             Some(2)
         );
-        let old = session.fleet[0]
+        let old = session.space.escorts.fleet[0]
             .and_then(|id| session.npc(id))
             .expect("placed");
         assert_eq!(
@@ -649,7 +651,7 @@ mod tests {
             [(Good::Commodity(0), 4), (Good::Commodity(3), 6), (JUNK, 5)],
             "the other reading keeps them, and the captured hold is lost"
         );
-        let old = session.fleet[0]
+        let old = session.space.escorts.fleet[0]
             .and_then(|id| session.npc(id))
             .expect("placed");
         assert_eq!(old.cargo, NpcHold::default());
@@ -711,7 +713,7 @@ mod tests {
             Some(Assigned::MyShip)
         );
         assert_eq!(chance.times_asked(75), 1);
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let old = session.npc(id).expect("in the system");
         assert_eq!(
             (old.skill, old.skill_mult),
@@ -732,20 +734,20 @@ mod tests {
         let mut session = alongside(&catalog);
         session.ship.player.velocity = Vec2::new(0.25, -0.125);
         session.ship.player.heading = 90.0;
-        session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.25, -0.125);
-        session.traffic.npcs_mut()[0].state.heading = 90.0;
+        session.space.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.25, -0.125);
+        session.space.traffic.npcs_mut()[0].state.heading = 90.0;
         board_by(&mut session, &NovaLaw::default()).expect("boards");
         assert_eq!(
             take(&mut session, Take::Capture, &[43, 1]).0,
             Taken::Captured
         );
-        session.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
+        session.space.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
         let left = session.ship.player;
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
         );
-        let id = session.fleet[0].expect("placed");
+        let id = session.space.escorts.fleet[0].expect("placed");
         let old = session.npc(id).expect("in the system");
         assert_eq!(old.state, left, "the player's place, velocity and heading");
         assert_eq!(

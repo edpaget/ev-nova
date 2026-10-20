@@ -71,7 +71,7 @@ mod tests {
         police.ai_type = AiType::Warship;
         police.state.position.x += 3000.0;
         police.goal = Goal::Idle;
-        session.traffic.add_npc(police)
+        session.space.traffic.add_npc(police)
     }
 
     /// Fires one shot at NPC 0, the player's target, then lets the target
@@ -130,8 +130,8 @@ mod tests {
         lead.ai_type = ai_type;
         lead.goal = Goal::Idle;
         lead.state.position.x += 3000.0;
-        let lead = session.traffic.add_npc(lead);
-        session.traffic.npcs_mut()[0].leader = Some(lead);
+        let lead = session.space.traffic.add_npc(lead);
+        session.space.traffic.npcs_mut()[0].leader = Some(lead);
         session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {

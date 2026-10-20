@@ -85,7 +85,7 @@ mod tests {
 
     /// Sets every NPC's armour to `fraction` of what it holds.
     fn armour(session: &mut Session, fraction: f32) {
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.reserves.armor.now = npc.reserves.armor.max * fraction;
         }
     }
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn a_tough_held_ship_waits_down_to_a_tenth_of_its_armour() {
         let mut session = rescue();
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.hull.tough = true;
             npc.reserves.armor.max = 1000.0;
         }
@@ -123,7 +123,7 @@ mod tests {
     fn a_boarded_rescue_ship_or_one_whose_goals_are_met_is_disabled() {
         let mut session = rescue();
         armour(&mut session, 1.0);
-        session.traffic.npcs_mut()[0].boarded = true;
+        session.space.traffic.npcs_mut()[0].boarded = true;
         assert_eq!(
             statuses(&session),
             [TargetStatus::Disabled, TargetStatus::Waiting]
@@ -145,7 +145,7 @@ mod tests {
         let mut catalog = goal_catalog(2, 0);
         catalog.ship_records.push(ship(300, fields));
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.ship = crate::ShipId(300);
             npc.reserves.shield.now = 0.0;
             npc.condition = Condition::Intact;
@@ -168,8 +168,8 @@ mod tests {
     #[test]
     fn the_hulls_flags_reach_the_status_line() {
         let mut session = typed(FAST);
-        session.traffic.npcs_mut()[0].hull.shows_armor = true;
-        session.traffic.npcs_mut()[1].hull.hides_status = true;
+        session.space.traffic.npcs_mut()[0].hull.shows_armor = true;
+        session.space.traffic.npcs_mut()[1].hull.hides_status = true;
         let armour = session.npcs()[0].reserves.armor;
         assert!(armour.now >= armour.max, "{armour:?}");
         assert_eq!(
@@ -198,8 +198,8 @@ mod tests {
     #[test]
     fn an_invincible_persons_status_line_is_hidden() {
         let mut session = typed(FAST);
-        session.traffic.npcs_mut()[0].person = Some(person(true));
-        session.traffic.npcs_mut()[1].person = Some(person(false));
+        session.space.traffic.npcs_mut()[0].person = Some(person(true));
+        session.space.traffic.npcs_mut()[1].person = Some(person(false));
         assert_eq!(
             statuses(&session),
             [TargetStatus::Hidden, TargetStatus::ShieldsDown]
@@ -224,15 +224,15 @@ mod tests {
     #[test]
     fn a_ship_with_a_government_shows_its_code_and_one_without_nothing() {
         let mut session = typed(FAST);
-        session.traffic.npcs_mut()[0].govt = Some(GovtId(128));
-        session.traffic.npcs_mut()[1].govt = None;
+        session.space.traffic.npcs_mut()[0].govt = Some(GovtId(128));
+        session.space.traffic.npcs_mut()[1].govt = None;
         assert_eq!(tags(&session), [Some(TargetTag::Code(GovtId(128))), None]);
     }
 
     #[test]
     fn the_players_escort_and_mission_escort_with_no_government_are_escorts() {
         let mut session = typed(FAST);
-        let npcs = session.traffic.npcs_mut();
+        let npcs = session.space.traffic.npcs_mut();
         npcs[0].govt = None;
         npcs[0].escort = Some(duty());
         npcs[1].govt = None;
@@ -257,7 +257,7 @@ mod tests {
     fn the_players_fighter_of_99_tons_is_a_fighter_and_of_100_an_escort() {
         for (mass, expected) in [(99, TargetTag::Fighter), (100, TargetTag::Escort)] {
             let mut session = typed(ShipFields { mass, ..FAST });
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.govt = None;
                 npc.escort = Some(duty());
                 npc.carrier = Some(carried_by(ShipRef::Player));
@@ -270,7 +270,7 @@ mod tests {
     fn an_escorts_own_fighter_is_not_the_players() {
         let mut session = typed(ShipFields { mass: 10, ..FAST });
         let escort = session.npcs()[0].id;
-        let npcs = session.traffic.npcs_mut();
+        let npcs = session.space.traffic.npcs_mut();
         npcs[0].govt = None;
         npcs[0].escort = Some(duty());
         npcs[1].govt = None;

@@ -644,7 +644,7 @@ impl Session {
         if kept.is_some() {
             return kept;
         }
-        let table = table.unwrap_or_else(|| self.traffic.table());
+        let table = table.unwrap_or_else(|| self.space.traffic.table());
         let dude = table.dude_records.get(&record.ships.dude?)?;
         let drawn = dude_ship_type(dude, |ship| table.appear_on(ship), self.gate(), chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
@@ -849,7 +849,7 @@ impl Session {
             return 0;
         };
         let items = self.setup.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.statics.ships,
@@ -872,14 +872,14 @@ impl Session {
             expired: false,
         };
         let ships = spawn::arriving_mission_ships(
-            self.traffic.table(),
+            self.space.traffic.table(),
             &spawn,
             self.way_back(),
             self.gate(),
             chance,
         );
         let last = self.last_npc();
-        let came = self.traffic.bring_in_within(
+        let came = self.space.traffic.bring_in_within(
             ships,
             self.setup.spawn_reserve(SPAWN_RESERVE),
             &self.statics.govts,
@@ -946,7 +946,7 @@ impl Session {
             .unwrap_or_default();
         let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
         let items = self.setup.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.statics.ships,
@@ -958,7 +958,7 @@ impl Session {
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with
         // no slot nothing of the mission changes.
         let reserve = self.setup.spawn_reserve(SPAWN_RESERVE);
-        if self.traffic.free_berth(reserve).is_none() {
+        if self.space.traffic.free_berth(reserve).is_none() {
             return;
         }
         let preset = if let Some(ship) = swapped {
@@ -982,7 +982,7 @@ impl Session {
             expired: false,
         };
         let Some(mut ship) = spawn::swapped_mission_ship(
-            self.traffic.table(),
+            self.space.traffic.table(),
             &spawn,
             state,
             preset,
@@ -995,15 +995,18 @@ impl Session {
             ship.held = false;
         }
         let last = self.last_npc();
-        let came =
-            self.traffic
-                .bring_in_within(vec![ship], reserve, &self.statics.govts, &mut *chance);
+        let came = self.space.traffic.bring_in_within(
+            vec![ship],
+            reserve,
+            &self.statics.govts,
+            &mut *chance,
+        );
         if came == 0 {
             return;
         }
         let targeted = self.target == Some(npc);
         self.drop_quarry(npc);
-        self.traffic.remove(npc);
+        self.space.traffic.remove(npc);
         // The ship brought in above is numbered last.
         let swapped_in = self.last_npc();
         if targeted {
@@ -1216,7 +1219,7 @@ impl Session {
             .filter(|npc| came.iter().any(|&(id, _)| id == npc.id) && self.mission_ship_held(npc))
             .map(|npc| npc.id)
             .collect();
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if held.contains(&npc.id) {
                 npc.condition = Condition::Disabled;
             }
@@ -1281,6 +1284,7 @@ impl Session {
         let gate_exit_counts =
             self.setup.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
         let left: Vec<(NpcId, MissionMark, bool)> = self
+            .space
             .traffic
             .departed()
             .iter()
@@ -1445,7 +1449,7 @@ impl Session {
         let mut reform = false;
         for &id in ids {
             if self.landed.is_some() {
-                self.traffic.remove(id);
+                self.space.traffic.remove(id);
             } else {
                 reform |= self.unmark_mission_ship(id);
             }
@@ -1932,7 +1936,7 @@ pub(super) mod tests {
             .expect("starts")
             .with_strings(Rc::new(Names));
         tick(&mut session, &catalog);
-        assert!(session.traffic.table().dude_records.is_empty());
+        assert!(session.space.traffic.table().dude_records.is_empty());
         session.run_set(&SetExpr::parse("S140").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
         assert_eq!(ships_of(&session).appear, 199);
@@ -1963,7 +1967,7 @@ pub(super) mod tests {
         while session.npcs().len() < berths {
             let mut hulk = crate::testkit::npc(0, crate::stats::ShipStats::default());
             hulk.condition = Condition::Disabled;
-            session.traffic.add_npc(hulk);
+            session.space.traffic.add_npc(hulk);
         }
     }
 
@@ -2478,7 +2482,7 @@ pub(super) mod tests {
         let id = session.npcs()[0].id;
         session.count_lost_mission_ship(id, &mut NeverFires);
         assert_eq!(ships_of(&session).left, 1);
-        session.traffic.remove(id);
+        session.space.traffic.remove(id);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
@@ -2494,7 +2498,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].condition = crate::combat::hull::Condition::Destroyed;
+        session.space.traffic.npcs_mut()[0].condition = crate::combat::hull::Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
         assert_eq!(ships_of(&session).left, 1);
         assert_eq!(marked(&session), [0]);
@@ -2515,7 +2519,7 @@ pub(super) mod tests {
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             // Apart from the other ship and the player.
             let at = Vec2::new(3000.0, 3000.0);
-            let npc = &mut session.traffic.npcs_mut()[0];
+            let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.state.position = at;
             let id = npc.id;
             assert!(npc.mission.is_some(), "a mission ship");
@@ -2558,7 +2562,7 @@ pub(super) mod tests {
             assert!(session.npcs()[0].mission.is_some(), "a mission ship");
             // The other ships well clear, so the player's shots meet the
             // target alone, whatever the collision walk's order.
-            for npc in session.traffic.npcs_mut().iter_mut().skip(1) {
+            for npc in session.space.traffic.npcs_mut().iter_mut().skip(1) {
                 npc.state.position = Vec2::new(20_000.0, 20_000.0);
             }
             session.story_raised();
@@ -2582,7 +2586,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[0].mission = None;
         let id = session.npcs()[0].id;
         session.count_lost_mission_ship(id, &mut NeverFires);
         assert_eq!(ships_of(&session).left, 2);
@@ -2595,7 +2599,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         let _ = session.take_save_due();
         let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
-        session.traffic.npcs_mut()[1].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = None;
         session.count_lost_mission_ship(second, &mut NeverFires);
         assert!(!session.take_save_due(), "not a mission ship");
         session.count_lost_mission_ship(first, &mut NeverFires);
@@ -2650,7 +2654,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -2734,7 +2738,7 @@ pub(super) mod tests {
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
     pub(in crate::session) fn destroy(session: &mut Session, index: usize) {
-        session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
 
@@ -2745,7 +2749,7 @@ pub(super) mod tests {
             .iter()
             .map(crate::session::NpcBefore::of)
             .collect();
-        session.traffic.npcs_mut()[index].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Disabled;
         session.raise_disabled(&was, &mut NeverFires);
     }
 
@@ -2858,7 +2862,7 @@ pub(super) mod tests {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
-        session.traffic.npcs_mut()[0].boarded = true;
+        session.space.traffic.npcs_mut()[0].boarded = true;
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), []);
         assert_eq!(failed(&session), None);
@@ -2966,8 +2970,8 @@ pub(super) mod tests {
         let catalog = goal_catalog(3, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
-        session.traffic.npcs_mut()[0].mission = None;
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -3098,7 +3102,7 @@ pub(super) mod tests {
     /// Puts the NPC at `index` at the end of its warp out, far out, its
     /// clock past d / w (see `nova_sim::traffic::warp_out`).
     fn warped(session: &mut Session, index: usize) {
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.state.position = Vec2::new(0.0, -100_000.0);
         npc.begin_own_jump();
         npc.warp.stage = 2.0;
@@ -3116,7 +3120,7 @@ pub(super) mod tests {
     /// over it, on one traffic tick.
     fn land_ship(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
         let site = session.sites[0];
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.goal = Goal::Land(site.id);
         npc.state.position = site.position;
         npc.state.velocity = Vec2::ZERO;
@@ -3126,7 +3130,7 @@ pub(super) mod tests {
     /// Takes the NPC at `index` out of the system through gate 300, its
     /// entry's wait running out on one traffic tick.
     fn gate_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.goal = Goal::EnterGate(StellarId(300));
         npc.mode = Mode::EnteringGate {
             gate: StellarId(300),
@@ -3181,7 +3185,7 @@ pub(super) mod tests {
     fn a_ship_of_no_mission_jumping_out_raises_nothing() {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
-        session.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[0].mission = None;
         let id = session.npcs()[0].id;
         jump_out(&mut session, &catalog, 0);
         assert!(!departed(&session, id));
@@ -3747,7 +3751,7 @@ pub(super) mod tests {
             }
         }));
         assert!(!observed_after(|session| {
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.mission = Some(crate::traffic::npc::MissionMark {
                     order: None,
                     slot: 5,
@@ -3765,14 +3769,14 @@ pub(super) mod tests {
             direction: 0,
         };
         assert!(!observed_after(|session| {
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak = full;
             }
         }));
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
         settle(&mut session, &catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.cloak = full;
         }
         // The sighting (`_MissionHandler` @0x44214) reads the fades the
@@ -3800,14 +3804,14 @@ pub(super) mod tests {
         };
         assert!(!observed_after(|session| {
             let far = session.player().position + Vec2::new(0.0, 5000.0);
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak_gear = able;
                 npc.state.position = far;
             }
         }));
         assert!(observed_after(|session| {
             let near = session.player().position + Vec2::new(0.0, 100.0);
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak_gear = able;
                 npc.state.position = near;
             }
@@ -3820,7 +3824,7 @@ pub(super) mod tests {
         // this mission's is in the system, unseen.
         assert!(!observed_after(|session| {
             let first = session.npcs()[0].id;
-            session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            session.space.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
                 behav: ShipBehav::Own,
@@ -4465,7 +4469,7 @@ pub(super) mod tests {
     fn escort_gone(destroyed: i16) -> (FakePilotCatalog, Session) {
         let catalog = returning(3, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.mission = None;
         }
         if let Some(active) = session.pilot.missions.get_mut(0) {
@@ -4564,7 +4568,7 @@ pub(super) mod tests {
         Vec<crate::legal::Crime>,
     ) {
         session.ship.player = crate::flight::ShipState::default();
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.state = crate::flight::ShipState {
             velocity,
             ..crate::flight::ShipState::default()
@@ -4759,7 +4763,7 @@ pub(super) mod tests {
             );
             assert_eq!(crimes, [], "no BoardPenalty");
             assert_eq!(session.boarding(), None, "no plunder");
-            assert!(session.strikes.is_empty(), "no help called");
+            assert!(session.space.strikes.is_empty(), "no help called");
             assert!(cargo_aboard(&session), "{goal}");
             assert_eq!(ships_of(&session).boarded, 1, "{goal}");
             assert!(session.npcs()[0].boarded, "{goal}");
@@ -4831,7 +4835,7 @@ pub(super) mod tests {
             "the refusal's snd 153 is the board refusal's, not this line's"
         );
         assert_eq!(crimes, []);
-        assert!(session.strikes.is_empty(), "no help called");
+        assert!(session.space.strikes.is_empty(), "no help called");
         assert_eq!(session.boarding(), None);
         assert!(!cargo_aboard(&session));
         assert_eq!(ships_of(&session).boarded, 0);
@@ -4853,7 +4857,7 @@ pub(super) mod tests {
     fn a_ship_whose_slot_is_free_is_boarded_without_plunder() {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
-        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+        if let Some(npc) = session.space.traffic.npcs_mut().first_mut() {
             npc.mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
@@ -4892,7 +4896,7 @@ pub(super) mod tests {
         assert_eq!(airlocks(&mut session), 0, "the mission stands");
 
         let mut session = in_flight_with(&catalog, 1);
-        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+        if let Some(npc) = session.space.traffic.npcs_mut().first_mut() {
             npc.mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
@@ -4940,7 +4944,7 @@ pub(super) mod tests {
 
     /// Fills the armour of every NPC in the system.
     fn full_armour(session: &mut Session) {
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.reserves.armor.now = npc.reserves.armor.max;
         }
     }
@@ -5105,7 +5109,7 @@ pub(super) mod tests {
                 "from the ship type's base Armor"
             );
         }
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.boarded = true;
         }
         fight(&mut session, 1);
@@ -5149,7 +5153,7 @@ pub(super) mod tests {
         let mut session = in_flight_with(&catalog, 1);
         assert_eq!(conditions(&session), [Condition::Disabled]);
         session.ship.player = crate::flight::ShipState::default();
-        session.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
+        session.space.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
         session.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
@@ -5185,8 +5189,8 @@ pub(super) mod tests {
     fn a_rescue_ship_unmarked_or_of_a_freed_slot_is_released() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        session.traffic.npcs_mut()[0].mission = None;
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -5201,7 +5205,7 @@ pub(super) mod tests {
     fn a_held_rescue_ship_that_repairs_itself_gets_its_armour_back_and_stays_disabled() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.self_repair = true;
         }
         let mut chance = crate::testkit::Draws::of(&[0, 0]);
@@ -5219,7 +5223,7 @@ pub(super) mod tests {
     fn a_rescue_ship_held_at_low_armour_stays_disabled_once_released() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.boarded = true;
             npc.reserves.armor.now = 1.0;
         }
@@ -5453,7 +5457,7 @@ pub(super) mod tests {
             .expect("flies")
             .with_strings(Rc::new(Names));
         session.populate(catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[0].state = ACE_AT;
+        session.space.traffic.npcs_mut()[0].state = ACE_AT;
         session.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
@@ -5521,11 +5525,11 @@ pub(super) mod tests {
             .expect("flies")
             .with_strings(Rc::new(Names));
         session.populate(catalog, &mut NeverFires);
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = ACE_AT;
         ace.berth = 2;
-        session.traffic.set_berth_person(2, "Ace");
-        session.traffic.forget_berth_person(1);
+        session.space.traffic.set_berth_person(2, "Ace");
+        session.space.traffic.forget_berth_person(1);
         session.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
@@ -5565,7 +5569,7 @@ pub(super) mod tests {
             "[Error]",
             "its slot holds no person, though Ace's old slot still names Ace"
         );
-        assert_eq!(session.traffic.berth_person(2), Some("Ace"));
+        assert_eq!(session.space.traffic.berth_person(2), Some("Ace"));
     }
 
     #[test]
@@ -6008,7 +6012,7 @@ pub(super) mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         settle(&mut session, &catalog);
         assert!(session.npcs().is_empty(), "Ace left: nothing comes");
         let mut dudeless = swapping(REPLACED_BY_MISSION_SHIP);
@@ -6031,7 +6035,7 @@ pub(super) mod tests {
         let mut state = *session.player();
         state.velocity = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = state;
         ace.condition = Condition::Disabled;
         session.target = Some(NpcId(0));
@@ -6074,7 +6078,7 @@ pub(super) mod tests {
         assert_eq!(conditions(&session), [Condition::Disabled]);
         assert_eq!(disabled_fates(&session), 0);
         session.ship.player = ShipState::default();
-        session.traffic.npcs_mut()[0].state = ShipState::default();
+        session.space.traffic.npcs_mut()[0].state = ShipState::default();
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -6184,7 +6188,7 @@ pub(super) mod tests {
         let mut hunter = crate::testkit::npc(9, session.npcs()[0].stats);
         hunter.target = Some(ShipRef::Npc(NpcId(0)));
         hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        session.traffic.add_npc(hunter);
+        session.space.traffic.add_npc(hunter);
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
@@ -6455,7 +6459,7 @@ pub(super) mod tests {
         take_off(&mut session, catalog);
         session.pilot.ship_name = Some("Pathfinder".to_owned());
         assert_eq!(marked(&session), [0, 0]);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         if hostile {
             npc.goal = Goal::Attack(ShipRef::Player);
         }

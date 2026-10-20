@@ -304,7 +304,7 @@ impl Session {
     /// watching one not yet observed, and forgets one no longer here.
     pub(super) fn observe_watched(&mut self) {
         for ship in std::mem::take(&mut self.story.watched) {
-            let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == ship) else {
+            let Some(npc) = self.space.traffic.npcs().iter().find(|npc| npc.id == ship) else {
                 continue;
             };
             if self.observes(npc) {
@@ -529,8 +529,9 @@ impl Session {
         }
         if moved || self.galaxy.govt(self.pilot.system) != govt {
             let table = self.spawn_table(catalog);
-            let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
-            self.traffic.retarget(table, &every, Leave::Dropped);
+            let every: BTreeSet<NpcId> =
+                self.space.traffic.npcs().iter().map(|npc| npc.id).collect();
+            self.space.traffic.retarget(table, &every, Leave::Dropped);
         }
         self.out.emit(SessionEvent::GalaxyChanged);
     }

@@ -55,7 +55,8 @@ impl Session {
     /// A rebuild point's sprite pool: the stellars shown take its slots,
     /// each placed where it is drawn (see the module docs).
     pub(super) fn rebuild_sprite_pool(&mut self) {
-        self.stellar_sprites
+        self.space
+            .stellar_sprites
             .rebuild(self.sites.iter().map(|site| site.id));
         self.place_stellar_sprites();
     }
@@ -75,7 +76,7 @@ impl Session {
             })
             .collect();
         for (stellar, top_left) in placed {
-            self.stellar_sprites.place(stellar, top_left);
+            self.space.stellar_sprites.place(stellar, top_left);
         }
     }
 
@@ -91,7 +92,7 @@ impl Session {
                 let shown = self.shown_site(listed);
                 let sprite = match shown {
                     Some(_) => SlotSprite::Own,
-                    None if stale => self.stellar_sprites.sprite_of(listed.id, false),
+                    None if stale => self.space.stellar_sprites.sprite_of(listed.id, false),
                     None => SlotSprite::None,
                 };
                 match sprite {
@@ -124,7 +125,7 @@ impl Session {
     /// same run (see the module docs).
     #[must_use]
     pub fn stellar_sprite_pool(&self) -> &StellarSpritePool {
-        &self.stellar_sprites
+        &self.space.stellar_sprites
     }
 
     /// Takes on `pool`, the last session's in the same run, and hands it
@@ -132,7 +133,7 @@ impl Session {
     /// rebuild point would have, had the pool been its own then (see the
     /// module docs).
     pub fn carry_stellar_sprite_pool(&mut self, pool: StellarSpritePool) {
-        self.stellar_sprites = pool;
+        self.space.stellar_sprites = pool;
         self.rebuild_sprite_pool();
     }
 }
@@ -236,7 +237,7 @@ mod tests {
             let mut session = among(&catalog, &[hidden], Rulebook::default());
             shown_then(&mut session, &[hidden], &[]);
             session.ship.player.position = player;
-            session.traffic.npcs_mut()[0].state.position = npc;
+            session.space.traffic.npcs_mut()[0].state.position = npc;
             fight(&mut session);
             session.npcs().len()
         };
@@ -334,14 +335,14 @@ mod tests {
         };
         let mut session = among(&catalog, &[dead], Rulebook::default());
         session.sites = vec![dead];
-        session.rebuilt.rebuild(&[dead], |_| true, true);
+        session.space.rebuilt.rebuild(&[dead], |_| true, true);
         assert!(session.dead_since_rebuild(dead.id));
         fight(&mut session);
         assert_eq!(session.npcs(), [], "graphic type 0's frame reaches");
         // Not dead since the rebuild: its slot keeps its `Type` frames.
         let mut whole_then = among(&catalog, &[dead], Rulebook::default());
         whole_then.sites = vec![dead];
-        whole_then.rebuilt.rebuild(&[dead], |_| false, true);
+        whole_then.space.rebuilt.rebuild(&[dead], |_| false, true);
         fight(&mut whole_then);
         assert_eq!(whole_then.npcs().len(), 1, "its Type frame");
     }

@@ -111,10 +111,10 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        self.traffic.ease_stray();
+        self.space.traffic.ease_stray();
         let again_marks = matches!(motion, Motion::Again)
             .then(|| self.mission_marks())
-            .filter(|_| !self.traffic_due);
+            .filter(|_| !self.space.traffic_due);
         let mut fly = match &motion {
             Motion::Fly(_) => Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Advance)),
             Motion::Again if again_marks.is_some() => {
@@ -155,7 +155,7 @@ impl Session {
             });
         }
         if let Some(fly) = fly {
-            self.traffic.end_fly(fly);
+            self.space.traffic.end_fly(fly);
         }
         match motion {
             Motion::Fly(marks) => {
@@ -174,8 +174,8 @@ impl Session {
             }
         }
         self.lay_out_displayed();
-        self.traffic.step_fades();
-        self.traffic.after_firing(&self.statics.arsenal);
+        self.space.traffic.step_fades();
+        self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The NPC in the lowest berth above `after` (any, with none), and
@@ -183,7 +183,8 @@ impl Session {
     /// fighter launched into a berth above the one it is at, and passes
     /// one launched below.
     fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
-        self.traffic
+        self.space
+            .traffic
             .npcs()
             .iter()
             .map(|npc| (npc.berth, npc.id))
@@ -268,7 +269,7 @@ mod tests {
     /// `catalog`'s session in flight, its traffic set up and emptied.
     fn empty(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         session
     }
 
@@ -279,7 +280,7 @@ mod tests {
         ship.hull.mass = 40.0;
         ship.state.position = at;
         ship.state.velocity = velocity;
-        session.traffic.add_npc_at(ship, berth)
+        session.space.traffic.add_npc_at(ship, berth)
     }
 
     /// A ship of mass 200 at berth `berth` at `at`, at rest, breaking up
@@ -295,7 +296,7 @@ mod tests {
             starting: false,
         };
         ship.state.position = at;
-        session.traffic.add_npc_at(ship, berth)
+        session.space.traffic.add_npc_at(ship, berth)
     }
 
     fn state(session: &Session, id: NpcId) -> crate::flight::ShipState {
@@ -418,7 +419,7 @@ mod tests {
             } else {
                 Vec2::ZERO
             };
-            let shooter = &mut session.traffic.npcs_mut()[0];
+            let shooter = &mut session.space.traffic.npcs_mut()[0];
             shooter.berth = shooter_berth;
             shooter.state.position = WRECKED;
             shooter.state.velocity = velocity;
@@ -450,7 +451,7 @@ mod tests {
         let mut session = empty(&catalog);
         let site = session.sites[0];
         let lander = place(&mut session, 1, site.position, Vec2::ZERO);
-        session.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
+        session.space.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
         wreck(&mut session, 2, site.position + Vec2::new(20.0, 0.0));
         session.take_combat_events();
         pass(&mut session, &catalog, &Keep);

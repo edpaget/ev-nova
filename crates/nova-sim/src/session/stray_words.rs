@@ -75,7 +75,7 @@ impl Session {
     /// pods left, skipped if it is gone, or the player's pod countdown
     /// (see the module docs).
     pub(super) fn step_stray_words(&mut self, chance: &mut dyn Chance) {
-        for (ship, word) in self.combat.take_stray_steps() {
+        for (ship, word) in self.space.combat.take_stray_steps() {
             match (ship, word) {
                 (ShipRef::Npc(id), StrayWord::Pods) => {
                     if let Some(npc) = self.npc_mut(id) {

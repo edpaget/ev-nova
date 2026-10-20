@@ -159,7 +159,7 @@ impl Session {
             GateArrivalRule::LikeJump => self.ship.player.position,
         };
         let heading = self.ship.player.heading;
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if !npc
                 .mission
                 .is_some_and(|mark| followers.contains(&mark.slot))
@@ -557,7 +557,7 @@ pub(super) mod tests {
             primary: true,
             ..Trigger::default()
         };
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.trigger = firing;
             npc.target = Some(ShipRef::Player);
         }
@@ -583,7 +583,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.provoked = 7.0;
         }
         session.emerge_followers(

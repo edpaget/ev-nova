@@ -321,10 +321,10 @@ mod tests {
                 fade: crate::cloak::FADE_FULL,
                 direction: 0,
             };
-            let before = session.fleet[0].expect("placed");
+            let before = session.space.escorts.fleet[0].expect("placed");
             session.npc_mut(before).expect("here").cloak = cloaked;
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
-            let hired = session.fleet[0].expect("placed");
+            let hired = session.space.escorts.fleet[0].expect("placed");
             assert_ne!(hired, before, "{kind:?}: a new NPC");
             assert_eq!(session.npc(hired).expect("here").cloak, cloaked, "{kind:?}");
         }
@@ -336,7 +336,7 @@ mod tests {
         let mut session =
             flying(&catalog, Rulebook::default()).with_gate_arrival(GateArrivalRule::LikeJump);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
-        let hired = session.fleet[0].expect("placed");
+        let hired = session.space.escorts.fleet[0].expect("placed");
         let npc = session.npc(hired).expect("here").clone();
         assert!(on_slot(&session, &npc), "{:?}", npc.state);
         assert!(!npc.emerging());
@@ -356,7 +356,7 @@ mod tests {
         let mut session = session;
         jump_to(&mut session, &catalog, 131);
         assert_eq!(session.pilot.system, SystemId(131));
-        let hired = session.fleet[0].expect("placed");
+        let hired = session.space.escorts.fleet[0].expect("placed");
         let npc = session.npc(hired).expect("here").clone();
         assert!(on_slot(&session, &npc), "jump: {:?}", npc.state);
         assert!(!npc.emerging());

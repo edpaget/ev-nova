@@ -159,7 +159,7 @@ mod tests {
         let mut session = new_pilot(&catalog);
         tick(&mut session);
         session.ship.player.position = Vec2::new(1500.0, 0.0);
-        session.frame = 60;
+        session.space.frame = 60;
         assert_eq!(
             tick(&mut session),
             (
@@ -168,11 +168,11 @@ mod tests {
             )
         );
         session.ship.player.position = Vec2::new(0.0, 3200.0);
-        session.frame = 120;
+        session.space.frame = 120;
         session.ship.condition = Condition::Disabled;
         assert_eq!(tick(&mut session).0, [], "not while disabled");
         session.ship.condition = Condition::Intact;
-        session.frame = 120;
+        session.space.frame = 120;
         assert_eq!(
             tick(&mut session).0,
             [SimMessage::Tutorial(TutorialHint::NothingOutHere)]
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.tutorial().flag(), -1);
         session.take_sounds();
-        session.frame = 0;
+        session.space.frame = 0;
         assert_eq!(
             tick(&mut session),
             (
