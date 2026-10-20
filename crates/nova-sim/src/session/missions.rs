@@ -407,7 +407,7 @@ impl Session {
     pub(super) fn room_for(&self, tons: i64) -> Room {
         Room {
             tons,
-            holds: i64::from(self.stats.capacity),
+            holds: i64::from(self.ship.fit.stats.capacity),
             space: self.mission_cargo_space(),
         }
     }
@@ -1267,7 +1267,7 @@ impl Session {
     /// (@0xd0c7-0xd0eb); below 0 when it holds more. With no escort's
     /// holds this is the holds less `_TotalCargo` (@0xd0ed).
     pub(super) fn mission_cargo_space(&self) -> i64 {
-        let own = i64::from(self.stats.capacity);
+        let own = i64::from(self.ship.fit.stats.capacity);
         let escorts = i64::from(self.capacity()) - own;
         let spilled = (self.pilot.goods_held() - escorts).max(0);
         own - (spilled + self.pilot.missions.cargo_aboard())
@@ -1933,8 +1933,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(128))
             .expect("128 shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
     }
 
     #[test]
@@ -1947,7 +1947,7 @@ mod tests {
         );
         let _ = session.settle_script(&catalog, &mut NeverFires);
         // From the centre, where `fly_out` heads straight out.
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(
@@ -1974,7 +1974,7 @@ mod tests {
             Some(StellarId(128))
         );
         let _ = session.settle_script(&catalog, &mut NeverFires);
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         let mut chance = crate::testkit::Scripted::rolling(&[41]);
         assert_eq!(
             crate::testkit::jump_with(&mut session, &catalog, 131, &mut chance),
@@ -2616,8 +2616,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(stellar))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(session), Ok(StellarId(stellar)));
         settle(session, catalog);
     }
@@ -4967,8 +4967,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(129))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(129)));
         assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(FILLED));
         assert_eq!(held(&session), [], "failed at its return");

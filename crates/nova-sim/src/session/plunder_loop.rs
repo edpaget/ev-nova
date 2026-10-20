@@ -282,7 +282,11 @@ mod tests {
         assert_eq!(session.boarding(), None);
         assert_eq!(session.aboard, None);
         assert_eq!(sounds(&mut session), []);
-        assert_eq!(session.scan_latches, Latches::ARMED, "the close's reset");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "the close's reset"
+        );
         let mut captured = captured(&catalog);
         captured.let_go_of_boarding();
         assert_eq!(

@@ -43,21 +43,21 @@ impl Session {
     /// `IonizeMax` and its Ion Absorbers' (see the module docs).
     #[must_use]
     pub fn ion_capacity(&self) -> f32 {
-        self.stats.ion.capacity(Flyer::Player)
+        self.ship.fit.stats.ion.capacity(Flyer::Player)
     }
 
     /// The ion charge the player sheds a tick: its class's rate and its
     /// Ion Dissipaters' (see the module docs).
     #[must_use]
     pub fn ion_rate(&self) -> f32 {
-        self.stats.ion.rate(Flyer::Player)
+        self.ship.fit.stats.ion.rate(Flyer::Player)
     }
 
     /// The player's ionization factor, `_ShipIonizationFactor`: its charge
     /// over its capacity ([`factor`]).
     #[must_use]
     pub fn ion_factor(&self) -> f32 {
-        factor(self.ion.charge, self.ion_capacity())
+        factor(self.ship.ion.charge, self.ion_capacity())
     }
 
     /// What the player's handling reads of its ionization now: its
@@ -65,7 +65,7 @@ impl Session {
     #[must_use]
     pub fn ionization(&self) -> Ionization {
         Ionization {
-            charge: self.ion.charge,
+            charge: self.ship.ion.charge,
             factor: self.ion_factor(),
             jumping: self.jump.is_some(),
         }
@@ -81,7 +81,7 @@ impl Session {
     /// [`fixture::set_player_ion`](crate::fixture::set_player_ion).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_ion(&mut self, ion: crate::combat::ion::Ion) {
-        self.ion = ion;
+        self.ship.ion = ion;
     }
 
     /// The player's frame's ion block (see the module docs): a charge
@@ -90,16 +90,16 @@ impl Session {
     /// What it took off is kept in the ion's `shed`, for the fight's
     /// lockout ([`Ion::as_block_found`](crate::combat::ion::Ion::as_block_found)).
     pub(super) fn ionize_tick(&mut self) {
-        let found = self.ion.charge;
+        let found = self.ship.ion.charge;
         let Some(charge) = deionize(found, self.ion_rate()) else {
-            self.ion.charge = 0.0;
-            self.ion.shed = found;
+            self.ship.ion.charge = 0.0;
+            self.ship.ion.shed = found;
             return;
         };
-        self.ion.charge = charge;
-        self.ion.shed = found - charge;
+        self.ship.ion.charge = charge;
+        self.ship.ion.shed = found - charge;
         let cap = lowered_top(self.top_speed(), self.ion_factor());
-        self.player.velocity = pull(self.player.velocity, cap);
+        self.ship.player.velocity = pull(self.ship.player.velocity, cap);
     }
 }
 
@@ -155,10 +155,10 @@ mod tests {
         let mut session = Session::start(catalog).expect("starts");
         session.tick(Controls::default());
         session.settle_box();
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.player.heading = 90.0;
-        session.ion.charge = charge;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = 90.0;
+        session.ship.ion.charge = charge;
         session
     }
 
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn the_colour_outlasts_the_charge() {
         let mut session = flying(&ionizing(), 0.25);
-        session.ion.colour = 0x0000_80ff;
+        session.ship.ion.colour = 0x0000_80ff;
         session.tick(Controls::default());
         session.tick(Controls::default());
         assert_eq!(session.ion().colour, 0x0000_80ff, "the display clears it");
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn a_destroyed_player_and_its_pod_shed_nothing() {
         let mut destroyed = flying(&ionizing(), 10.0);
-        destroyed.condition = Condition::Destroyed;
+        destroyed.ship.condition = Condition::Destroyed;
         destroyed.tick(Controls::default());
         assert_eq!(destroyed.ion().charge, 10.0);
         let mut pod = flying(&ionizing(), 10.0);
@@ -243,7 +243,7 @@ mod tests {
         };
         for condition in [Condition::Disabled, dying] {
             let mut session = flying(&ionizing(), 10.0);
-            session.condition = condition;
+            session.ship.condition = condition;
             session.tick(Controls::default());
             assert_eq!(session.ion().charge, 9.5, "{condition:?}");
         }
@@ -259,7 +259,7 @@ mod tests {
         );
         session.tick(Controls::default());
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        session.ion.charge = 100.0;
+        session.ship.ion.charge = 100.0;
         for tick in 1..=20 {
             session.tick(Controls::default());
             assert!(session.jump.is_some(), "{tick}");
@@ -286,7 +286,7 @@ mod tests {
     fn an_ionized_player_thrusts_slower_by_the_slowdown() {
         let mut plain = flying(&ionizing(), 0.0);
         plain.tick(thrust());
-        let full = plain.player.velocity;
+        let full = plain.ship.player.velocity;
         // A factor of 0.25 after the tick's thrust: 100.5 of 400 as it
         // thrusts.
         let mut session = flying(&ionizing(), 100.5);
@@ -294,9 +294,9 @@ mod tests {
         session.tick(thrust());
         let expected = (f64::from(full.y.abs()) * (1.0 - f64::from(100.5_f32 / 400.0))) as f32;
         assert!(
-            (session.player.velocity.y.abs() - expected).abs() < 1e-6,
+            (session.ship.player.velocity.y.abs() - expected).abs() < 1e-6,
             "{:?} {expected}",
-            session.player.velocity
+            session.ship.player.velocity
         );
     }
 
@@ -330,10 +330,10 @@ mod tests {
         let mut session = flying(&ionizing(), 200.5);
         session.tick(turn);
         assert!(
-            session.player.heading - 90.0 < plain.player.heading - 90.0,
+            session.ship.player.heading - 90.0 < plain.ship.player.heading - 90.0,
             "{} {}",
-            session.player.heading,
-            plain.player.heading
+            session.ship.player.heading,
+            plain.ship.player.heading
         );
     }
 
@@ -346,7 +346,7 @@ mod tests {
             0.0,
         );
         session.tick(Controls::default());
-        session.ion.charge = 200.0;
+        session.ship.ion.charge = 200.0;
         let out = session.flying_handling();
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let jumping = session.flying_handling();
@@ -370,18 +370,22 @@ mod tests {
     fn past_the_lowered_top_the_player_is_pulled_back_0_025_a_tick_after_the_move() {
         let mut session = flying(&ionizing(), 200.5);
         let top = session.top_speed();
-        session.player.velocity = Vec2::new(top, -top);
+        session.ship.player.velocity = Vec2::new(top, -top);
         session.tick(Controls::default());
-        assert_eq!(session.player.position, Vec2::new(top, -top), "moved first");
+        assert_eq!(
+            session.ship.player.position,
+            Vec2::new(top, -top),
+            "moved first"
+        );
         let pulled = |v: f32| (f64::from(v) - 0.025) as f32;
         assert_eq!(
-            session.player.velocity,
+            session.ship.player.velocity,
             Vec2::new(pulled(top), -pulled(top))
         );
         for _ in 0..9 {
             session.tick(Controls::default());
         }
-        let x = session.player.velocity.x;
+        let x = session.ship.player.velocity.x;
         assert!((x - (top - 0.25)).abs() < 1e-5, "{x}");
     }
 
@@ -389,18 +393,18 @@ mod tests {
     fn within_the_lowered_top_the_player_is_not_pulled() {
         let mut session = flying(&ionizing(), 200.5);
         let slow = Vec2::new(session.top_speed() * 0.25, 0.0);
-        session.player.velocity = slow;
+        session.ship.player.velocity = slow;
         session.tick(Controls::default());
-        assert_eq!(session.player.velocity, slow);
+        assert_eq!(session.ship.player.velocity, slow);
     }
 
     #[test]
     fn an_uncharged_player_is_not_pulled() {
         let mut session = flying(&ionizing(), 0.0);
         let top = session.top_speed();
-        session.player.velocity = Vec2::new(top, 0.0);
+        session.ship.player.velocity = Vec2::new(top, 0.0);
         session.tick(Controls::default());
-        assert_eq!(session.player.velocity, Vec2::new(top, 0.0));
+        assert_eq!(session.ship.player.velocity, Vec2::new(top, 0.0));
     }
 
     #[test]
@@ -424,7 +428,7 @@ mod tests {
             .accel;
         session.tick(afterburner);
         assert!(session.afterburner_on());
-        let pushed = session.player.velocity.length();
+        let pushed = session.ship.player.velocity.length();
         assert!((pushed - full * 2.75).abs() < 1e-5, "{pushed} {full}");
     }
 
@@ -450,7 +454,7 @@ mod tests {
     fn the_players_display_tints_it_and_clears_a_spent_colour() {
         use crate::combat::ion_tint::IonTint;
         let mut session = flying(&ionizing(), 200.5);
-        session.ion.colour = 0x0000_80ff;
+        session.ship.ion.colour = 0x0000_80ff;
         session.tick(Controls::default());
         session.tick_combat(
             crate::combat::Rules::default(),
@@ -463,7 +467,7 @@ mod tests {
                 colour: 0x0000_80ff
             })
         );
-        session.ion.charge = 0.0;
+        session.ship.ion.charge = 0.0;
         session.tick(Controls::default());
         session.tick_combat(
             crate::combat::Rules::default(),
@@ -503,7 +507,7 @@ mod tests {
             }),
         )];
         let mut session = Session::start(&catalog).expect("starts");
-        session.ion.charge = charge;
+        session.ship.ion.charge = charge;
         session.hold_fire(true, false);
         let mut fired = Vec::new();
         for tick in 1..=8 {
@@ -735,7 +739,7 @@ mod tests {
             }),
         )];
         let mut session = Session::start(&catalog).expect("starts");
-        session.ion.charge = 1.5;
+        session.ship.ion.charge = 1.5;
         session.hold_fire(true, false);
         session.tick(Controls::default());
         session.tick_combat(
@@ -751,7 +755,7 @@ mod tests {
             &mut crate::chance::NeverFires,
         );
         assert_eq!(session.ion().charge, -0.5);
-        let reload = session.armament.mounts()[0].reload;
+        let reload = session.ship.fit.armament.mounts()[0].reload;
         assert_eq!(reload, crate::combat::ion::HELD_RELOAD);
     }
 

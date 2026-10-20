@@ -191,7 +191,7 @@ impl Session {
     /// starts the hold (see the module docs).
     fn kill_player_by_stellar(&mut self) {
         self.pod = None;
-        self.player_exploded_this_tick = true;
+        self.ship.fate.player_exploded_this_tick = true;
         self.player_end = Some(Ending::Holding {
             ticks_left: HOLD_TICKS,
         });
@@ -240,8 +240,8 @@ pub(super) mod tests {
         rules: Rulebook,
     ) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.listed = listed.to_vec();
         session.sites = listed[..shown].to_vec();
         session
@@ -332,7 +332,11 @@ pub(super) mod tests {
         assert_eq!(fates(&session), [], "no fate");
         assert_eq!(session.pilot.combat_rating, rating, "no kill credit");
         assert_eq!(session.pilot.legal, record.legal, "no crime");
-        assert_eq!(session.condition, Condition::Intact, "the player is spared");
+        assert_eq!(
+            session.ship.condition,
+            Condition::Intact,
+            "the player is spared"
+        );
     }
 
     #[test]
@@ -496,7 +500,7 @@ pub(super) mod tests {
             let mut session = among(&catalog, &[on_the_player], 1, rules);
             session.take_sounds();
             fight(&mut session);
-            assert_eq!(session.condition, Condition::Destroyed);
+            assert_eq!(session.ship.condition, Condition::Destroyed);
             assert_eq!(session.pilot.reserves.armor.now, -1000.0);
             assert_eq!(
                 session.player_end,
@@ -517,7 +521,7 @@ pub(super) mod tests {
                 exploded(&events),
                 [CombatEvent::Exploded {
                     at: Vec2::ZERO,
-                    explosion: session.hull.explosion.expect("an Explode2"),
+                    explosion: session.ship.fit.hull.explosion.expect("an Explode2"),
                     size: 0.0,
                 }]
             );
@@ -533,21 +537,24 @@ pub(super) mod tests {
             catalog.defaults = vec![(ShipId(128), vec![(OutfitId(197), 1)])];
             let on_the_player = deadly_at(140, 0.0, 40.0);
             let mut outfitted = among(&catalog, &[on_the_player], 1, rules);
-            assert!(outfitted.stats.deadly_resistance);
+            assert!(outfitted.ship.fit.stats.deadly_resistance);
             fight(&mut outfitted);
-            assert_eq!(outfitted.condition, Condition::Intact);
+            assert_eq!(outfitted.ship.condition, Condition::Intact);
             let plain = armed();
             let mut immune = among(&plain, &[on_the_player], 1, rules);
-            immune.hull.stellar_immune = true;
+            immune.ship.fit.hull.stellar_immune = true;
             fight(&mut immune);
-            assert_eq!(immune.condition, Condition::Intact);
+            assert_eq!(immune.ship.condition, Condition::Intact);
             let mut dying = among(&plain, &[on_the_player], 1, rules);
-            dying.condition = Condition::Dying {
+            dying.ship.condition = Condition::Dying {
                 ticks_left: 100,
                 starting: false,
             };
             fight(&mut dying);
-            assert!(matches!(dying.condition, Condition::Dying { .. }), "spared");
+            assert!(
+                matches!(dying.ship.condition, Condition::Dying { .. }),
+                "spared"
+            );
         }
     }
 
@@ -558,7 +565,7 @@ pub(super) mod tests {
             let on_the_player = deadly_at(140, 0.0, 40.0);
             let mut session = among(&catalog, &[on_the_player], 1, rules);
             fight(&mut session);
-            assert_eq!(session.condition, Condition::Destroyed);
+            assert_eq!(session.ship.condition, Condition::Destroyed);
             let mut events = session.take_combat_events();
             session.tick(Controls::default());
             fight(&mut session);
@@ -603,7 +610,7 @@ pub(super) mod tests {
             for _ in 0..400 {
                 session.tick(Controls::default());
                 fight(&mut session);
-                assert!(!session.rescue_due, "never rescued");
+                assert!(!session.ship.fate.rescue_due, "never rescued");
             }
         }
     }
@@ -622,10 +629,10 @@ pub(super) mod tests {
             session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
             session.pod = Some(1);
             session.tick(Controls::default());
-            assert!(session.rescue_due, "its countdown ran out");
+            assert!(session.ship.fate.rescue_due, "its countdown ran out");
             assert!(session.rescue_if_due(&catalog, &mut NeverFires));
             fight(&mut session);
-            assert_ne!(session.condition, Condition::Destroyed);
+            assert_ne!(session.ship.condition, Condition::Destroyed);
             assert_eq!(session.player_end, None);
             assert_eq!(exploded(&session.take_combat_events()), []);
         }
@@ -645,9 +652,9 @@ pub(super) mod tests {
                 Rules::default(),
                 &mut NeverFires,
             );
-            assert!(session.rescue_due, "its countdown ran out");
+            assert!(session.ship.fate.rescue_due, "its countdown ran out");
             assert_eq!(session.pod, Some(0), "not killed");
-            assert_ne!(session.condition, Condition::Destroyed);
+            assert_ne!(session.ship.condition, Condition::Destroyed);
             assert_eq!(exploded(&session.take_combat_events()), []);
             assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         }
@@ -786,7 +793,7 @@ pub(super) mod tests {
         let mut session = hit_as_a_deadly_stellar_covers_the_player(&catalog, |session| {
             session.pilot.reserves.armor.now = 100_000.0;
         });
-        assert_eq!(session.condition, Condition::Destroyed, "and killed");
+        assert_eq!(session.ship.condition, Condition::Destroyed, "and killed");
         assert_eq!(downed_lines(&mut session), (vec![], vec![]));
     }
 
@@ -800,7 +807,7 @@ pub(super) mod tests {
             reserves.shield.now = 0.0;
             reserves.armor.now = reserves.armor.max / 3.0 + 3.0;
         });
-        assert_eq!(session.condition, Condition::Destroyed, "and killed");
+        assert_eq!(session.ship.condition, Condition::Destroyed, "and killed");
         assert_eq!(
             downed_lines(&mut session),
             (vec![SimMessage::ShipDisabled], vec![SimSound::ShipDowned]),
@@ -816,9 +823,9 @@ pub(super) mod tests {
             session.pilot.reserves.armor.now = 1.0;
         });
         assert!(
-            matches!(session.condition, Condition::Dying { .. }),
+            matches!(session.ship.condition, Condition::Dying { .. }),
             "breaking up, so spared: {:?}",
-            session.condition
+            session.ship.condition
         );
         assert_eq!(session.player_end, None, "no hold");
         let (messages, sounds) = downed_lines(&mut session);
@@ -856,16 +863,16 @@ pub(super) mod tests {
         npc.reserves.armor.now = npc.reserves.armor.max / 3.0 + 3.0;
         let at = npc.state.position;
         let heading = match gunner {
-            Gunner::Player => session.player.heading,
+            Gunner::Player => session.ship.player.heading,
             Gunner::Npc => 0.0,
         };
         let from = at - crate::flight::facing(heading) * 60.0;
         let armed = || crate::combat::armament::Armament::new([(spec, 1)]);
         let gun = match gunner {
             Gunner::Player => {
-                session.player.position = from;
-                session.player.velocity = Vec2::ZERO;
-                session.armament = armed();
+                session.ship.player.position = from;
+                session.ship.player.velocity = Vec2::ZERO;
+                session.ship.fit.armament = armed();
                 session.hold_trigger(crate::session::tests::FIRE);
                 None
             }

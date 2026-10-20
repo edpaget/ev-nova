@@ -1631,7 +1631,7 @@ pub(super) mod tests {
     /// Jumps from the centre, where `fly_out` heads straight out, to `to`,
     /// and settles.
     pub(in crate::session) fn jump_to(session: &mut Session, catalog: &FakePilotCatalog, to: i16) {
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         assert_eq!(jump(session, catalog, to), Some(SystemId(to)));
         settle(session, catalog);
     }
@@ -2291,8 +2291,8 @@ pub(super) mod tests {
 
     /// Lands at 140, at 131's centre, settles, and takes off again.
     fn land_and_take_off_in_131(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.nav = crate::navigation::NavMode::Off;
         assert_eq!(land_now(session), Ok(StellarId(140)));
         settle(session, catalog);
@@ -3550,7 +3550,7 @@ pub(super) mod tests {
             [ship_done("Rover done.")],
             "a second ShipDone"
         );
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
@@ -3907,7 +3907,7 @@ pub(super) mod tests {
             Vec::<u16>::new(),
             "no OnShipDone with no goal"
         );
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
@@ -4563,7 +4563,7 @@ pub(super) mod tests {
         Result<crate::board::Boarding, crate::board::BoardRefusal>,
         Vec<crate::legal::Crime>,
     ) {
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         let npc = &mut session.traffic.npcs_mut()[index];
         npc.state = crate::flight::ShipState {
             velocity,
@@ -4764,7 +4764,7 @@ pub(super) mod tests {
             assert_eq!(ships_of(&session).boarded, 1, "{goal}");
             assert!(session.npcs()[0].boarded, "{goal}");
             assert_eq!(boarded_fates(&session), 1, "{goal}");
-            assert_eq!(session.player.velocity, DRIFT, "{goal}");
+            assert_eq!(session.ship.player.velocity, DRIFT, "{goal}");
             assert_eq!(shown(&mut session), [], "no LoadCargText");
             settle(&mut session, &catalog);
             assert_eq!(shown(&mut session), [ship_done("Rover done.")], "{goal}");
@@ -4837,7 +4837,7 @@ pub(super) mod tests {
         assert_eq!(ships_of(&session).boarded, 0);
         assert!(!session.npcs()[0].boarded);
         assert_eq!(boarded_fates(&session), 0);
-        assert_eq!(session.player.velocity, Vec2::ZERO, "not matched");
+        assert_eq!(session.ship.player.velocity, Vec2::ZERO, "not matched");
         assert_eq!(
             shown(&mut session),
             [(
@@ -5148,7 +5148,7 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
         assert_eq!(conditions(&session), [Condition::Disabled]);
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         session.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
         session.target = Some(session.npcs()[0].id);
         let boarding = session.board(
@@ -5266,7 +5266,7 @@ pub(super) mod tests {
                 .all(|npc| npc.state.position.length() < 1100.0),
             "glided in to about 1000 out"
         );
-        session.player = session.npcs()[0].state;
+        session.ship.player = session.npcs()[0].state;
         session.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
@@ -6030,7 +6030,7 @@ pub(super) mod tests {
         session.populate(&catalog, &mut NeverFires);
         let mut state = *session.player();
         state.velocity = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         let ace = &mut session.traffic.npcs_mut()[0];
         ace.state = state;
         ace.condition = Condition::Disabled;
@@ -6073,7 +6073,7 @@ pub(super) mod tests {
         fight(&mut session, 10);
         assert_eq!(conditions(&session), [Condition::Disabled]);
         assert_eq!(disabled_fates(&session), 0);
-        session.player = ShipState::default();
+        session.ship.player = ShipState::default();
         session.traffic.npcs_mut()[0].state = ShipState::default();
         let boarding = session.board(
             &Witness::default(),
@@ -6312,19 +6312,20 @@ pub(super) mod tests {
         let place = ship.formation().expect("in formation");
         assert_eq!((place.slot, place.ships), (2, 2));
         assert_eq!(ship.goal, Goal::Formation { guard: None });
-        session.player.velocity = Vec2::new(1.0, 0.0);
+        session.ship.player.velocity = Vec2::new(1.0, 0.0);
         for _ in 0..600 {
             tick(&mut session, &catalog);
-            session.player.position = session.player.position + session.player.velocity;
+            session.ship.player.position =
+                session.ship.player.position + session.ship.player.velocity;
         }
         let ship = &session.npcs()[0];
-        let off = place.position(&session.player) - ship.state.position;
+        let off = place.position(&session.ship.player) - ship.state.position;
         assert!(
             off.x.abs() <= crate::escort::KEEP_FORMATION
                 && off.y.abs() <= crate::escort::KEEP_FORMATION,
             "{off:?}"
         );
-        assert_eq!(ship.state.velocity, session.player.velocity, "with it");
+        assert_eq!(ship.state.velocity, session.ship.player.velocity, "with it");
     }
 
     #[test]

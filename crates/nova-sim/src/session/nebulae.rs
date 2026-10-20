@@ -213,8 +213,8 @@ mod tests {
 
     /// Puts the ship at rest at its system's centre and lands there.
     fn land_at_centre(session: &mut Session) -> StellarId {
-        session.player.position = crate::geometry::Vec2::ZERO;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.position = crate::geometry::Vec2::ZERO;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session).expect("lands")
     }
 

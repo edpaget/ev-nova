@@ -1104,7 +1104,7 @@ mod tests {
     fn a_jump_raises_a_day_passed_for_each_of_its_days_dated_that_day() {
         let catalog = crate::session::tests::surplus();
         let mut session = quiet(Session::start(&catalog).expect("starts"));
-        session.stats.jump_days = 3;
+        session.ship.fit.stats.jump_days = 3;
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
         let days: Vec<StoryEvent> = session
@@ -1150,7 +1150,7 @@ mod tests {
     fn a_jump_raises_the_arrivals_explored_then_its_days_then_entered_system() {
         let catalog = testkit::catalog();
         let mut session = quiet(Session::start(&catalog).expect("starts"));
-        session.stats.jump_days = 2;
+        session.ship.fit.stats.jump_days = 2;
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
         let mut expected = vec![explored(131)];
@@ -1832,8 +1832,8 @@ mod tests {
 
     /// Puts the ship at rest over 140, at 131's centre, and lands there.
     fn land_on_140(session: &mut Session) -> Result<StellarId, crate::landing::LandingRefusal> {
-        session.player.position = crate::geometry::Vec2::ZERO;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.position = crate::geometry::Vec2::ZERO;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session)
     }
 

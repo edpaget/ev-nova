@@ -64,7 +64,7 @@ impl Session {
     #[must_use]
     pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
         let observer = Observer {
-            at: self.player.position,
+            at: self.ship.player.position,
             scanner: self.scanner().on_screen,
             cloaked_escort: false,
         };
@@ -126,7 +126,7 @@ impl Session {
         test: fn(Area, Vec2, f32, f32) -> bool,
     ) -> bool {
         test(
-            self.play_area.offset(self.player.position),
+            self.play_area.offset(self.ship.player.position),
             npc.state.position,
             npc.hull.sprite_size.unwrap_or(0.0),
             npc.hull.sprite_height.unwrap_or(0.0),

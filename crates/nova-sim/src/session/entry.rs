@@ -719,13 +719,13 @@ impl Session {
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
-            self.touchdown = self.player.position;
+            self.touchdown = self.ship.player.position;
         }
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
             self.bar_news = None;
             self.bar_nav = None;
-            self.warp_ups.clear();
+            self.ship.warp.warp_ups.clear();
             // The warp-out needs no clearing here: a relocation from
             // flight docks after (`Session::land_at`), and one already
             // landed has none playing, as landing ended it.
@@ -882,17 +882,17 @@ impl Session {
     fn place(&mut self, placement: Placement) {
         match placement.ship {
             ShipPlacement::Arrive(state) => {
-                self.player = state;
+                self.ship.player = state;
                 self.arrive_at_speed();
             }
             ShipPlacement::ArriveAtSpeed { ship, speed } => {
-                self.player = ship;
-                self.player_speed = speed;
+                self.ship.player = ship;
+                self.ship.player_speed = speed;
             }
             ShipPlacement::AtRest(position) => {
-                self.player.position = position;
-                self.player.velocity = Vec2::ZERO;
-                self.player_speed = 0.0;
+                self.ship.player.position = position;
+                self.ship.player.velocity = Vec2::ZERO;
+                self.ship.player_speed = 0.0;
             }
             ShipPlacement::Keep => {}
         }
@@ -922,7 +922,7 @@ impl Session {
             }
         }
         if resets.has(Reset::GateEntry) {
-            self.gate = None;
+            self.ship.warp.gate = None;
         }
         if resets.has(Reset::Combat) {
             self.combat.clear();
@@ -1024,7 +1024,7 @@ impl Session {
     /// countdown started: on an arrival ([`Session::announce`]) or on the
     /// warp end's fallback pass (see the `warp_stage` module).
     pub(super) fn sound_warp_out(&mut self) {
-        self.warp_out.start(self.statics.warp_out_sound);
+        self.ship.warp.warp_out.start(self.statics.warp_out_sound);
         self.out.sounds.push(SimSound::Arrived);
     }
 
@@ -1041,7 +1041,7 @@ impl Session {
                 natural_end: true,
                 ..
             }
-        ) || !self.warp_out.playing()
+        ) || !self.ship.warp.warp_out.playing()
     }
 
     /// Sounds and raises the arrival in `heard`'s system, as `resets`

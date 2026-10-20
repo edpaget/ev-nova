@@ -936,9 +936,9 @@ mod tests {
     fn m_in_flight_puts_the_ship_at_rest_on_the_first_stellar() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
-        session.player.heading = 1.5;
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.heading = 1.5;
         run(&mut session, "M131");
         assert_eq!(settle(&mut session, &catalog).moved, Some(SystemId(131)));
         assert_eq!(session.system(), SystemId(131));
@@ -1006,8 +1006,8 @@ mod tests {
     fn n_in_flight_keeps_the_position_and_velocity() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
@@ -1019,8 +1019,8 @@ mod tests {
     fn m_into_a_system_with_no_stellar_keeps_the_ship_moving_by_the_engine() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "M132");
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
@@ -1033,12 +1033,12 @@ mod tests {
         let catalog = moving();
         let rules = Rulebook::default().with_override(RuleKey::MoveStarless, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "M132");
         assert_eq!(session.player().position, Vec2::ZERO);
         assert_eq!(session.player().velocity, Vec2::ZERO);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0), "N keeps");
     }
@@ -1053,13 +1053,13 @@ mod tests {
             assert_eq!(session.shots().len(), 1, "{text}");
             session.select_stellar(crate::session::StellarPick::Slot(0));
             session.target = Some(NpcId(0));
-            session.gate = Some(StellarId(128));
+            session.ship.warp.gate = Some(StellarId(128));
             session.strikes = session.combat.take_strikes();
             moved(&mut session, &catalog, text);
             assert_eq!(session.shots(), [], "{text}");
             assert_eq!(session.nav_target(), None, "{text}");
             assert_eq!(session.target, None, "{text}");
-            assert_eq!(session.gate, None, "{text}");
+            assert_eq!(session.ship.warp.gate, None, "{text}");
             assert_eq!(session.strikes, [], "{text}");
         }
     }
@@ -1070,7 +1070,7 @@ mod tests {
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        session.player.velocity = Vec2::new(0.0, 5.0);
+        session.ship.player.velocity = Vec2::new(0.0, 5.0);
         session.begin_jump().expect("accepted");
         assert!(session.preparing_jump().is_some());
         session.tick(crate::flight::Controls::default());
@@ -1426,7 +1426,7 @@ mod tests {
     fn the_take_off_after_a_landed_n_is_from_where_the_ship_touched_down() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         assert_eq!(session.player().position, Vec2::new(30.0, -40.0), "docked");
         moved(&mut session, &catalog, "N131");
@@ -1436,7 +1436,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
         assert_eq!(ids(&session.sites), [140, 141]);
-        session.player.position = Vec2::new(-45.0, 0.0);
+        session.ship.player.position = Vec2::new(-45.0, 0.0);
         land_now(&mut session).expect("lands on 141");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(
@@ -1450,7 +1450,7 @@ mod tests {
     fn a_relocation_after_a_landed_n_takes_off_from_the_stellar_moved_to() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N131");
         session
@@ -1501,7 +1501,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag);
         let mut session = flying(&catalog).with_rules(rules);
         moved(&mut session, &catalog, text);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
         session.player().position
@@ -1533,7 +1533,7 @@ mod tests {
         let catalog = moving();
         let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N130");
         session.take_off(&catalog, &mut NeverFires);
@@ -2027,11 +2027,11 @@ mod tests {
         session.hold_fire(true, false);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.shots().len(), 1);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         session.select_stellar(crate::session::StellarPick::Slot(0));
         session.target = Some(NpcId(0));
-        session.gate = Some(StellarId(128));
+        session.ship.warp.gate = Some(StellarId(128));
         session.strikes = session.combat.take_strikes();
         session.stage_scene(NpcId(0));
         session.take_events();
@@ -2054,7 +2054,7 @@ mod tests {
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.target, None);
-        assert_eq!(session.gate, None);
+        assert_eq!(session.ship.warp.gate, None);
         assert_eq!(session.strikes, []);
         session.assert_scene_left("N9999");
         assert_eq!(session.npcs(), npcs, "the traffic kept");
@@ -2071,8 +2071,8 @@ mod tests {
             session.hold_fire(true, false);
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.shots().len(), 1, "{text}");
-            session.player.position = Vec2::new(10.0, 10.0);
-            session.player.velocity = Vec2::new(5.0, -1.0);
+            session.ship.player.position = Vec2::new(10.0, 10.0);
+            session.ship.player.velocity = Vec2::new(5.0, -1.0);
             session.stage_scene(NpcId(0));
             session.take_events();
             session.drop_raised();

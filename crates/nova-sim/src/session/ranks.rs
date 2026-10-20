@@ -168,7 +168,7 @@ impl Session {
     pub fn blessing(&self) -> Blessing {
         let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
         let active = match self.setup.rules.source_for(RuleKey::BlessingRefresh) {
-            RuleSource::Engine => &self.blessing_ranks,
+            RuleSource::Engine => &self.ship.latches.blessing_ranks,
             RuleSource::Bible => &self.pilot.ranks,
         };
         rank::blessing(&self.statics.ranks, active, &self.statics.govts, reach)
@@ -685,8 +685,8 @@ pub(super) mod tests {
             .expect("takes off");
         let _ = session.settle_script(catalog, &mut NeverFires);
         let site = session.sites[0];
-        session.player.position = site.position;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session).expect("lands again");
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
@@ -1408,8 +1408,8 @@ pub(super) mod tests {
         let mut session = holding(&catalog, Rulebook::default(), &[]);
         let at = |session: &mut Session, stellar: usize| {
             let site = session.sites[stellar];
-            session.player.position = site.position;
-            session.player.velocity = crate::geometry::Vec2::ZERO;
+            session.ship.player.position = site.position;
+            session.ship.player.velocity = crate::geometry::Vec2::ZERO;
             session.nav = crate::navigation::NavMode::Off;
         };
         at(&mut session, 1);

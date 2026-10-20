@@ -141,7 +141,7 @@ impl Session {
     /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]).
     pub(super) fn contributed(&self) -> u64 {
         let by = Contributors {
-            ship: self.fields.contribute,
+            ship: self.ship.fit.fields.contribute,
             outfits: &self.statics.outfits,
             crons: &self.statics.crons,
             ranks: &self.statics.ranks,

@@ -47,7 +47,7 @@ impl Session {
     /// ([`held_by_other`]): its jump is refused.
     #[must_use]
     pub fn held_by_other(&self) -> bool {
-        held_by_other(self.tractor, ShipRef::Player)
+        held_by_other(self.ship.tractor, ShipRef::Player)
     }
 
     /// The player's frame's hold on `pass` (see the module docs).
@@ -55,8 +55,8 @@ impl Session {
         let step = self.tractor_step();
         let npcs = self.traffic.npcs();
         player_pass(
-            &mut self.tractor,
-            &mut self.player.velocity,
+            &mut self.ship.tractor,
+            &mut self.ship.player.velocity,
             |ship| {
                 let ShipRef::Npc(id) = ship else {
                     return Holder::Gone;
@@ -77,13 +77,13 @@ impl Session {
     /// [`fixture::set_player_tractor`](crate::fixture::set_player_tractor).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_tractor(&mut self, lock: Option<crate::combat::impact::TractorLock>) {
-        self.tractor = lock;
+        self.ship.tractor = lock;
     }
 
     /// Drops the player's lock, as a landing completes and as a jump
     /// arrives (see the module docs).
     pub(super) fn clear_tractor(&mut self) {
-        self.tractor = None;
+        self.ship.tractor = None;
     }
 }
 
@@ -109,10 +109,10 @@ mod tests {
     fn held(velocity: Vec2) -> Session {
         let mut session = facing_an_npc(&armed(), 180);
         session.settle_box();
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.traffic.npcs_mut()[0].state.velocity = velocity;
-        session.tractor = Some(TractorLock::by(NPC));
+        session.ship.tractor = Some(TractorLock::by(NPC));
         session
     }
 
@@ -141,8 +141,8 @@ mod tests {
         );
         let catalog = armed();
         let mut session = held(Vec2::new(-5.0, 0.0)).with_rules(divided);
-        session.stats.ion.class_capacity = 400.0;
-        session.ion.charge = 200.0;
+        session.ship.fit.stats.ion.class_capacity = 400.0;
+        session.ship.ion.charge = 200.0;
         let step = session.tractor_step();
         assert_eq!(step, session.flying_handling().accel * 0.25);
         // What the NPCs see of the player's thrust skips the divisor.
@@ -182,8 +182,8 @@ mod tests {
     #[test]
     fn the_player_holding_itself_brakes_toward_rest() {
         let mut session = held(Vec2::ZERO);
-        session.tractor = Some(TractorLock::by(ShipRef::Player));
-        session.player.velocity = Vec2::new(1.0, -1.0);
+        session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
+        session.ship.player.velocity = Vec2::new(1.0, -1.0);
         let step = session.tractor_step();
         session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(1.0 - step, step - 1.0));
@@ -206,7 +206,7 @@ mod tests {
         let handling = session.flying_handling();
         let top = session.top_speed();
         assert!(session.held_by_other());
-        session.tractor = None;
+        session.ship.tractor = None;
         assert_eq!(session.flying_handling(), handling);
         assert_eq!(session.top_speed(), top);
     }
@@ -225,7 +225,7 @@ mod tests {
             assert_eq!(session.player().velocity, Vec2::ZERO, "{condition:?}");
         }
         let mut gone = held(Vec2::new(-2.0, 2.0));
-        gone.tractor = Some(TractorLock::by(ShipRef::Npc(NpcId(7))));
+        gone.ship.tractor = Some(TractorLock::by(ShipRef::Npc(NpcId(7))));
         gone.tick(Controls::default());
         assert_eq!(gone.tractor(), None);
         assert_eq!(gone.player().velocity, Vec2::ZERO);
@@ -275,12 +275,12 @@ mod tests {
     fn a_jumps_arrival_clears_the_lock() {
         let catalog = catalog();
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
-        session.tractor = Some(TractorLock::by(ShipRef::Player));
+        session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
         session.begin_jump().expect("jumps");
         while session.jumping().is_none() {
             session.tick(Controls::default());
         }
-        session.tractor = Some(TractorLock::by(ShipRef::Player));
+        session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -294,7 +294,7 @@ mod tests {
     /// `lock`.
     fn bound(catalog: &crate::testkit::FakePilotCatalog, lock: Option<TractorLock>) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
-        session.tractor = lock;
+        session.ship.tractor = lock;
         session.take_sounds();
         session
     }
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
         assert_eq!(session.preparing_jump(), None);
         // Too close is told as the tractor too.
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Tractored));
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
     }
@@ -326,7 +326,7 @@ mod tests {
         let catalog = catalog();
         let mut session = bound(&catalog, None);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        session.tractor = Some(TractorLock::by(NPC));
+        session.ship.tractor = Some(TractorLock::by(NPC));
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
     }
 
@@ -340,7 +340,7 @@ mod tests {
         while session.jumping().is_none() {
             session.tick(Controls::default());
         }
-        session.tractor = Some(TractorLock::by(NPC));
+        session.ship.tractor = Some(TractorLock::by(NPC));
         session.take_sounds();
         assert_ne!(session.begin_jump(), Err(JumpRefusal::Tractored));
         assert!(!session.take_sounds().contains(&SimSound::Refused));

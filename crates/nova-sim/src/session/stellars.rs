@@ -856,7 +856,7 @@ mod tests {
     fn days_passed_together_each_count_a_day() {
         let catalog = regenerating([(129, 5, ""), (128, 0, "")]);
         let mut session = quiet(&catalog);
-        session.stats.jump_days = 3;
+        session.ship.fit.stats.jump_days = 3;
         run(&mut session, "Y129");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(destroyed(&session, 129), Some(left(2)));
@@ -1504,7 +1504,7 @@ mod tests {
         let mut session = ranked(shooting([life(128, 2)]));
         let fine = Fine::default();
         fire_by(&mut session, 2, &fine);
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(30.0 - 200.0, -40.0),
             velocity: Vec2::ZERO,
             heading: 90.0,
@@ -1518,7 +1518,7 @@ mod tests {
         session.hold_trigger(Trigger::default());
         // The player moves off, and the hit pass meets it where it stood a
         // tick later, before the shot can turn on it.
-        session.player.position.y += 1000.0;
+        session.ship.player.position.y += 1000.0;
         session.tick_combat(rules, &mut NeverFires);
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
@@ -1614,7 +1614,7 @@ mod tests {
     fn shot_from_afar(off: f32) -> Vec<CombatEvent> {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(30.0 - 200.0, -40.0 + off),
             velocity: Vec2::ZERO,
             heading: 90.0,
@@ -1993,7 +1993,7 @@ mod tests {
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
         );
-        session.player.position = Vec2::new(2000.0, 0.0);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
         assert_eq!(land_now(&mut session), Ok(StellarId(129)));
         run(&mut session, "Y140");
         assert_eq!(
@@ -2236,7 +2236,7 @@ mod tests {
     ) -> Result<StellarId, LandingRefusal> {
         let mut session = quiet(catalog).with_rules(*rules);
         setup(&mut session);
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: offset,
             ..ShipState::default()
         };
@@ -2578,8 +2578,8 @@ mod tests {
             [140],
             "a galaxy change is no rebuild point"
         );
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(
             shown(&session),
@@ -2610,8 +2610,8 @@ mod tests {
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         run(&mut session, "Y200");
         crate::session::tests::hide(&mut session, &catalog, &[130]);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         session.take_events();
         session
@@ -2649,8 +2649,8 @@ mod tests {
             overlay.set_stellar_govt(StellarId(200), Some(Some(GovtId(150))));
         });
         crate::session::tests::hide(&mut session, &catalog, &[130]);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         session
             .take_off(&catalog, &mut Scripted::default())

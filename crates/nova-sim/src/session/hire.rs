@@ -174,7 +174,7 @@ impl Session {
         let facts = Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.armament,
+            armament: &self.ship.fit.armament,
         };
         let bar = Bar {
             ships: &self.statics.ships,
@@ -943,10 +943,18 @@ mod tests {
         let mut session = landed(&catalog, 25_000);
         convicted(&mut session);
         session.hire(ShipId(129), &mut NeverFires).expect("hires");
-        assert_ne!(session.scan_latches, Latches::ARMED, "the hire alone");
+        assert_ne!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "the hire alone"
+        );
         let trimmed = overloaded(&mut session);
         session.close_hire();
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x49235");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x49235"
+        );
         assert_eq!(
             session
                 .pilot()
@@ -1387,7 +1395,11 @@ mod tests {
             convicted(&mut session);
             session.pay_escorts(1);
             assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
-            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x40240");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{source:?}: @0x40240"
+            );
             assert_eq!(
                 session.pilot().held(Good::Commodity(0)),
                 45,

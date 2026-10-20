@@ -115,7 +115,7 @@ impl Session {
             ShipRef::Player => Some(Vec2::ZERO),
             ShipRef::Npc(id) => self
                 .npc(id)
-                .map(|npc| npc.state.position - self.player.position),
+                .map(|npc| npc.state.position - self.ship.player.position),
         };
         if let Some(offset) = offset {
             self.slot_placed.insert(slot, ship);

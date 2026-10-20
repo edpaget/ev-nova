@@ -116,7 +116,7 @@ impl Session {
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn put_player_over(&mut self, id: NpcId) {
         if let Some(state) = self.npc(id).map(|npc| npc.state) {
-            self.player = state;
+            self.ship.player = state;
             self.target = Some(id);
         }
     }
@@ -252,7 +252,7 @@ mod tests {
             (RuleSource::Bible, BoardRefusal::CantBoard),
         ] {
             let mut session = alongside(&catalog).with_rules(crewless_rule(source));
-            session.player.velocity = Vec2::new(0.0, 0.6);
+            session.ship.player.velocity = Vec2::new(0.0, 0.6);
             assert_eq!(
                 board_by(&mut session, &NovaLaw::default()),
                 Err(refusal),
@@ -311,7 +311,7 @@ mod tests {
             ),
             (
                 "too fast",
-                |session| session.player.velocity = Vec2::new(0.6, 0.0),
+                |session| session.ship.player.velocity = Vec2::new(0.6, 0.0),
                 BoardRefusal::TooFast,
             ),
             (
@@ -352,7 +352,7 @@ mod tests {
             ),
             (
                 "not facing it",
-                |session| session.player.heading = 90.0,
+                |session| session.ship.player.heading = 90.0,
                 BoardRefusal::Misaligned,
             ),
             (
@@ -539,7 +539,7 @@ mod tests {
             session.take_board_line(),
             Some(MissionBoardLine::Retrieved { cargo: Some(1) })
         );
-        assert_eq!(session.player.velocity, DRIFT);
+        assert_eq!(session.ship.player.velocity, DRIFT);
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "no hold");
     }
 
@@ -574,8 +574,8 @@ mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         session.target = None;
-        session.player.position = Vec2::new(300.0, -40.0);
-        session.player.heading = 90.0;
+        session.ship.player.position = Vec2::new(300.0, -40.0);
+        session.ship.player.heading = 90.0;
         let police = session.npcs()[1].clone();
         crate::fixture::put_player_over(&mut session, police.id);
         assert_eq!(session.target().map(|npc| npc.id), Some(police.id));

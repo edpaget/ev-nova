@@ -315,7 +315,7 @@ mod tests {
         session.set_reserve(Reserve::Shield, 0.0);
         assert_eq!(session.player_condition(), Condition::Intact);
         assert!(session.take_save_due());
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.set_reserve(Reserve::Armor, 1000.0);
         assert_eq!(session.player_condition(), Condition::Disabled);
         assert!(session.take_save_due());
@@ -460,7 +460,7 @@ mod tests {
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut preparing);
-        preparing.player.velocity = Vec2::new(5.0, 0.0);
+        preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
@@ -532,7 +532,7 @@ mod tests {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.plot_course(SystemId(132)).expect("a route");
-        session.player.heading = 1.25;
+        session.ship.player.heading = 1.25;
         let (stats, reserves) = (session.stats(), session.reserves());
         assert_eq!(session.npcs().len(), 2);
         assert_eq!(
@@ -566,13 +566,13 @@ mod tests {
         // so it raises no halt.
         let catalog = atlas();
         let mut session = landed(&catalog);
-        session.warp_ups.start(false, 364);
-        session.warp_ups.start(true, 252);
+        session.ship.warp.warp_ups.start(false, 364);
+        session.ship.warp.warp_ups.start(true, 252);
         session.take_sounds();
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.ship.warp.warp_ups, crate::warp::WarpUps::default());
         assert_eq!(session.take_sounds(), [], "silently");
     }
 
@@ -961,7 +961,7 @@ mod tests {
                 .take_off(&catalog, &mut NeverFires)
                 .expect("takes off");
             let _ = session.settle_script(&catalog, &mut NeverFires);
-            session.player.velocity = Vec2::new(5.0, 0.0);
+            session.ship.player.velocity = Vec2::new(5.0, 0.0);
             session.drop_raised();
             assert_eq!(
                 session.land_at(&catalog, SystemId(system), StellarId(stellar)),
@@ -1030,7 +1030,7 @@ mod tests {
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut preparing);
-        preparing.player.velocity = Vec2::new(5.0, 0.0);
+        preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_landing_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
@@ -1102,7 +1102,7 @@ mod tests {
         land_now(&mut session).expect("lands");
         session.combat = combat;
         session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
-        session.gate = Some(StellarId(129));
+        session.ship.warp.gate = Some(StellarId(129));
         session.stage_scene(session.npcs()[0].id);
         assert_eq!(session.fleet.len(), 2);
         session.run_set(
@@ -1117,7 +1117,7 @@ mod tests {
         session.assert_docked_among_shown();
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
-        assert_eq!(session.gate, None);
+        assert_eq!(session.ship.warp.gate, None);
         session.assert_scene_left("a relocation");
         assert_eq!(session.fleet, []);
         assert!(session.traffic_due);

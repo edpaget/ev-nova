@@ -361,7 +361,7 @@ impl Session {
             }),
             stats: kind.stats,
             reserves: escort.reserves,
-            state: self.player,
+            state: self.ship.player,
             // `_RespawnEscort` zeroes +0x48 (@0x3d59d).
             speed: 0.0,
             mode: Mode::Flying,
@@ -527,7 +527,7 @@ impl Session {
             .collect();
         let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
         let widths: Vec<Option<f32>> = placed.iter().map(|npc| npc.hull.sprite_size).collect();
-        let spacing = escort::spacing(self.hull.sprite_size, &widths);
+        let spacing = escort::spacing(self.ship.fit.hull.sprite_size, &widths);
         placed
             .iter()
             .enumerate()
@@ -546,7 +546,7 @@ impl Session {
     /// Puts escort NPC `id`, hired or a mission escort, on its slot beside
     /// the player, with the player's heading and velocity.
     pub(super) fn snap(&mut self, id: NpcId) {
-        let player = self.player;
+        let player = self.ship.player;
         if let Some(npc) = self.npc_mut(id)
             && let Some(formation) = npc.formation()
         {
@@ -680,7 +680,7 @@ impl Session {
     pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool) {
         let share = market::lost_share(
             holds,
-            self.stats.capacity,
+            self.ship.fit.stats.capacity,
             market::escort_tons(self.escort_holds()),
             counted,
         );
@@ -2057,10 +2057,14 @@ mod tests {
             .put(0, crate::testkit::carrying(140, 50));
         convicted(&mut session);
         hit(&mut session, 0, 0.0);
-        assert_ne!(session.scan_latches, Latches::ARMED, "a warship: no call");
+        assert_ne!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "a warship: no call"
+        );
         assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
         hit(&mut session, 0, 0.0);
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0xcff6");
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED, "@0xcff6");
         assert_eq!(
             cargo(&session),
             BTreeMap::from([(FOOD, 3), (OPALS, 2)]),
@@ -2134,7 +2138,7 @@ mod tests {
                 "{reading:?}: it is lost"
             );
             assert_eq!(cargo(&session), left, "{reading:?}");
-            assert_eq!(session.condition, Condition::Intact);
+            assert_eq!(session.ship.condition, Condition::Intact);
         }
     }
 

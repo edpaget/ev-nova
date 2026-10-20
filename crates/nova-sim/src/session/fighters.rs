@@ -142,7 +142,7 @@ impl Session {
         // It takes its carrier's speed along the heading
         // (`_LaunchFighter` @0x3d6d5-0x3d6e0).
         let speed = match sortie.carrier {
-            ShipRef::Player => self.player_speed,
+            ShipRef::Player => self.ship.player_speed,
             ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
         };
         let at = ShipState {
@@ -181,7 +181,7 @@ impl Session {
     /// or [`NO_SPRITE`] with none.
     pub(super) fn reach_of(&self, carrier: ShipRef) -> f32 {
         let sprite = match carrier {
-            ShipRef::Player => self.hull.sprite_size,
+            ShipRef::Player => self.ship.fit.hull.sprite_size,
             ShipRef::Npc(id) => self.npc(id).and_then(|npc| npc.hull.sprite_size),
         };
         sprite.unwrap_or(NO_SPRITE)
@@ -275,7 +275,7 @@ impl Session {
                     owned: &mut self.pilot.outfits,
                     sources: &self.statics.ammo_outfits,
                 };
-                let stowed = self.armament.stow(ship, &mut rounds);
+                let stowed = self.ship.fit.armament.stow(ship, &mut rounds);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -361,7 +361,7 @@ impl Session {
                 owned: &mut self.pilot.outfits,
                 sources: &self.statics.ammo_outfits,
             };
-            if !self.armament.stow(fighter.ship, &mut rounds) {
+            if !self.ship.fit.armament.stow(fighter.ship, &mut rounds) {
                 self.out.save_due = true;
             }
         }
@@ -415,6 +415,8 @@ impl Session {
                 continue;
             };
             let bays: u32 = self
+                .ship
+                .fit
                 .armament
                 .mounts()
                 .iter()
@@ -462,6 +464,8 @@ impl Session {
                 continue;
             };
             let launchers: u32 = self
+                .ship
+                .fit
                 .armament
                 .mounts()
                 .iter()
@@ -2584,7 +2588,7 @@ pub(super) mod tests {
     fn a_fighter_takes_its_carriers_speed_along_its_heading() {
         let catalog = carrying();
         let (mut session, raider, _) = raided(&catalog);
-        session.player_speed = 2.5;
+        session.ship.player_speed = 2.5;
         session.npc_mut(raider).expect("there").speed = 1.5;
         for (carrier, speed) in [(ShipRef::Player, 2.5), (ShipRef::Npc(raider), 1.5)] {
             let sortie = Sortie {

@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn a_disabled_players_land_key_selecting_a_stellar_flies_it_in() {
         let mut session = session(&three_stellars());
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_eq!(session.land(), Err(LandingRefusal::Disabled));
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(nav_expand(&session), 196.0, "@0x6a8fb-0x6a932");
@@ -335,7 +335,7 @@ mod tests {
         let mut session = session(&three_stellars());
         session.set_play_area(Area::centred(Vec2::ZERO, 200.0, 200.0));
         let ship = ship_at(&mut session, Vec2::new(1000.0, 0.0));
-        session.player.position = Vec2::new(950.0, 0.0);
+        session.ship.player.position = Vec2::new(950.0, 0.0);
         assert_eq!(session.select_target(TargetPick::Next), Some(ship));
         assert_eq!(target_expand(&session), 196.0);
     }

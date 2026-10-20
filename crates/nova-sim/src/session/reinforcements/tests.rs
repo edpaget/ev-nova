@@ -160,7 +160,7 @@ fn add(session: &mut Session, govt: GovtId, strength: f32, goal: Goal) -> NpcId 
     ship.govt = Some(govt);
     ship.hull.strength = strength;
     ship.goal = goal;
-    ship.state.position = session.player.position;
+    ship.state.position = session.ship.player.position;
     session.traffic.add_npc(ship)
 }
 
@@ -494,7 +494,7 @@ fn the_daily_step_counts_the_countdowns_down() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     session.pilot.reinforcement_days = BTreeMap::from([(SystemId(130), 30)]);
-    session.stats.jump_days = 3;
+    session.ship.fit.stats.jump_days = 3;
     jump(&mut session, &catalog, 131);
     let left = session
         .pilot()
@@ -816,7 +816,7 @@ fn scanner(session: &mut Session) -> NpcId {
 
 /// The scanner inspects the player again, at its side.
 fn inspect_again(session: &mut Session, scanner: NpcId) {
-    let at = session.player.position;
+    let at = session.ship.player.position;
     if let Some(npc) = npc_mut(session, scanner) {
         npc.goal = Goal::Inspect(ShipRef::Player);
         npc.state.position = at;

@@ -225,7 +225,7 @@ impl Session {
             return;
         };
         let (scanner, ai_type) = (npc.ship, npc.ai_type);
-        let off = self.player.position - npc.state.position;
+        let off = self.ship.player.position - npc.state.position;
         let person = npc
             .person
             .and_then(|person| self.traffic.person(person.id))
@@ -250,9 +250,13 @@ impl Session {
             outfits_past_junk: self.setup.rules.source_for(RuleKey::ScanOutfitsPastJunk),
             outfit_fine: self.setup.rules.source_for(RuleKey::OutfitScanFine),
         };
-        let Some(found) =
-            scan::contraband(&govt, &carried, self.pilot.cash, self.scan_latches, rules)
-        else {
+        let Some(found) = scan::contraband(
+            &govt,
+            &carried,
+            self.pilot.cash,
+            self.ship.latches.scan_latches,
+            rules,
+        ) else {
             return;
         };
         self.convict_of(law, Crime::Smuggle, Some(govt_id));
@@ -280,7 +284,7 @@ impl Session {
                 fine,
             },
         });
-        self.scan_latches.clear(&found);
+        self.ship.latches.scan_latches.clear(&found);
     }
 
     /// The mission cargo's part of the scan by NPC `id`, of ship type
@@ -615,8 +619,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(stellar))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(session), Ok(StellarId(stellar)));
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
@@ -844,8 +848,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(129))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(129)));
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(aboard(&session, 0));
@@ -871,7 +875,11 @@ mod tests {
             convicted(&mut session);
             session.cargo_at_landing(0, StellarId(128), &mut NeverFires);
             assert!(!aboard(&session, 0), "{dump:?}: dropped off");
-            assert_eq!(session.scan_latches == Latches::ARMED, resets, "{dump:?}");
+            assert_eq!(
+                session.ship.latches.scan_latches == Latches::ARMED,
+                resets,
+                "{dump:?}"
+            );
             let food = if resets { 20 } else { 30 };
             assert_eq!(session.pilot().held(Good::Commodity(0)), food, "{dump:?}");
         }
@@ -1317,7 +1325,7 @@ mod tests {
         police.ai_type = AiType::Interceptor;
         police.ship = ShipId(129);
         police.goal = Goal::Inspect(ShipRef::Player);
-        police.state.position = session.player.position;
+        police.state.position = session.ship.player.position;
         session.traffic.add_npc(police);
         let _ = session.take_messages();
         session
@@ -1589,7 +1597,7 @@ mod tests {
 
     /// The interceptor inspects the player again, where it is.
     fn inspect_again(session: &mut Session) {
-        let at = session.player.position;
+        let at = session.ship.player.position;
         let police = police(session);
         police.goal = Goal::Inspect(ShipRef::Player);
         police.state.position = at;
@@ -1643,7 +1651,7 @@ mod tests {
         assert_eq!(police.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(police.target, Some(ShipRef::Player));
         assert_eq!(
-            session.scan_latches,
+            session.ship.latches.scan_latches,
             Latches {
                 junk: false,
                 outfits: true
@@ -1695,7 +1703,7 @@ mod tests {
         // A jettison is a reset (@0x3e3b5): it re-arms both latches, and the
         // bio-weapons are gone with it, so the blaster is found again.
         session.jettison_cargo(false, &mut NeverFires);
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         let _ = session.take_messages();
         inspect_again(&mut session);
         looked_over(&mut session, &catalog, 0);
@@ -1708,12 +1716,16 @@ mod tests {
         let mut session = smuggler(&catalog, 2, 0, 100_000);
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.take_messages(), [illegal_junk(500)]);
-        assert!(!session.scan_latches.junk);
+        assert!(!session.ship.latches.scan_latches.junk);
         session.run_set(
             &crate::control::SetExpr::parse("b1").expect("parses"),
             &mut NeverFires,
         );
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x99a85");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x99a85"
+        );
         inspect_again(&mut session);
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.take_messages(), [illegal_junk(500)], "found again");
@@ -1730,7 +1742,7 @@ mod tests {
         assert_eq!(session.take_sounds(), [SimSound::Smuggling]);
         assert_eq!(police(&mut session).goal, Goal::Attack(ShipRef::Player));
         assert_eq!(
-            session.scan_latches,
+            session.ship.latches.scan_latches,
             Latches {
                 junk: true,
                 outfits: false
@@ -1826,7 +1838,7 @@ mod tests {
         in_flight(&mut session, &catalog);
         session.tick_traffic(&catalog, &LookedOver, &mut NeverFires);
         session.pilot.cargo.insert(Good::Junk(BIO_WEAPONS), 1);
-        let at = session.player.position;
+        let at = session.ship.player.position;
         let ace = session
             .traffic
             .npcs_mut()
@@ -1888,7 +1900,7 @@ mod tests {
     /// facing `heading`, and the interceptor done inspecting.
     fn bound_east(session: &mut Session, heading: f32) {
         session.plot_course(SystemId(131)).expect("a route");
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(0.0, -5000.0),
             velocity: Vec2::ZERO,
             heading,
@@ -1927,7 +1939,7 @@ mod tests {
         assert_eq!(session.take_messages(), [illegal_junk(500)]);
         assert_eq!(session.take_sounds(), [SimSound::Smuggling]);
         assert_eq!(session.pilot().cash(), 700);
-        assert!(!session.scan_latches.junk);
+        assert!(!session.ship.latches.scan_latches.junk);
         assert_eq!(police(session).goal, Goal::Attack(ShipRef::Player));
     }
 
@@ -1937,7 +1949,7 @@ mod tests {
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.take_sounds(), []);
         assert_eq!(session.pilot().cash(), 1200);
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert_ne!(police(session).goal, Goal::Attack(ShipRef::Player));
     }
 
@@ -2076,7 +2088,7 @@ mod tests {
         let _ = session.take_sounds();
         step_to(&mut session, &catalog, 2 * LAST_LEAD_IN_TICK);
         assert!(session.warp_holds_scans(), "past the lead-in");
-        session.condition = crate::combat::hull::Condition::Disabled;
+        session.ship.condition = crate::combat::hull::Condition::Disabled;
         assert!(session.in_warp_lead_in(), "never past it");
         assert!(!session.warp_holds_scans());
         session.tick(crate::flight::Controls::default());

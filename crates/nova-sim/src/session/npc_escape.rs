@@ -279,7 +279,7 @@ impl Session {
         let (shield, velocity) = match ship {
             ShipRef::Player => (
                 &mut self.pilot.reserves.shield.now,
-                &mut self.player.velocity,
+                &mut self.ship.player.velocity,
             ),
             ShipRef::Npc(id) => {
                 let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
@@ -716,13 +716,13 @@ mod tests {
                 far.state.position = Vec2::new(5000.0, 5000.0);
                 session.traffic.add_npc(far);
             }
-            session.player.velocity = Vec2::new(2.0, -4.0);
+            session.ship.player.velocity = Vec2::new(2.0, -4.0);
             let mut chance = Rolls::launching(0, 7);
             session.tick_combat(Rules::default(), &mut chance);
             assert_eq!(chance.rolls(), 1, "{cut:?}");
             assert_eq!(vipers(&session), [], "{cut:?}: no room");
             assert_eq!(session.pilot.reserves.shield.now, shield, "{cut:?}");
-            assert_eq!(session.player.velocity, velocity, "{cut:?}");
+            assert_eq!(session.ship.player.velocity, velocity, "{cut:?}");
             let carrier = session.npc(id).expect("dying");
             assert_eq!(carrier.rounds, LauncherRounds::default(), "{cut:?}");
         }

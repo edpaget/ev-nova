@@ -58,7 +58,7 @@ impl Session {
     /// The Red Alert's check on `frame`, which runs on both of double
     /// time's passes (see the module docs).
     pub(super) fn red_alert_check(&mut self, frame: i16) {
-        if self.condition != Condition::Destroyed && alert_check_due(frame) {
+        if self.ship.condition != Condition::Destroyed && alert_check_due(frame) {
             let blinks = self.setup.sound_quiet
                 || self.setup.rules.source_for(RuleKey::AlertBlink) != RuleSource::Engine;
             if self
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn a_dying_player_out_of_the_pod_hears_the_red_alert() {
         let mut session = threatened(&catalog());
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 500,
             starting: false,
         };
@@ -397,9 +397,9 @@ mod tests {
     #[test]
     fn a_destroyed_player_is_not_checked() {
         let mut session = threatened(&catalog());
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         assert_eq!(alerts_over(&mut session, 60), 0);
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         assert_eq!(
             alerts_over(&mut session, 60),
             1,
@@ -411,7 +411,7 @@ mod tests {
     fn a_destroyed_player_still_sees_the_blink_run_out() {
         let mut session = threatened(&catalog());
         assert_eq!(alerts_over(&mut session, 60), 1);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         let shown = icons(&mut session, 200);
         let expected: Vec<_> = (1..201).map(pattern).collect();
         assert_eq!(shown, expected);

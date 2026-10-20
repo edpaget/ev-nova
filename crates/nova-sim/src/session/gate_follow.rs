@@ -156,9 +156,9 @@ impl Session {
             .collect();
         let position = match self.setup.gate_arrival {
             GateArrivalRule::Engine => exit,
-            GateArrivalRule::LikeJump => self.player.position,
+            GateArrivalRule::LikeJump => self.ship.player.position,
         };
-        let heading = self.player.heading;
+        let heading = self.ship.player.heading;
         for npc in self.traffic.npcs_mut() {
             if !npc
                 .mission
@@ -298,11 +298,11 @@ pub(super) mod tests {
         kind: GateKind,
         chance: &mut dyn Chance,
     ) {
-        session.player.position = match kind {
+        session.ship.player.position = match kind {
             GateKind::Hypergate => HYPERGATE_AT,
             GateKind::Wormhole => WORMHOLE_AT,
         };
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         session.dock_approach();
@@ -338,8 +338,8 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty(), "none come");
         jump_to(&mut session, &catalog, 130);
         ticks(&mut session, &catalog, 300);
-        session.player.position = Vec2::new(30.0, -40.0);
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::new(30.0, -40.0);
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
@@ -442,11 +442,11 @@ pub(super) mod tests {
         kind: GateKind,
         chance: &mut dyn Chance,
     ) {
-        session.player.position = match kind {
+        session.ship.player.position = match kind {
             GateKind::Hypergate => HYPERGATE_AT,
             GateKind::Wormhole => WORMHOLE_AT,
         };
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         session.dock_approach();

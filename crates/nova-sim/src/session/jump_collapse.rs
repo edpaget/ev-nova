@@ -130,9 +130,9 @@ impl Session {
             warp::warp_factor(flags),
             self.warp_sound(),
         );
-        self.player.velocity = collapsed_velocity(
-            self.player.velocity,
-            self.player.heading,
+        self.ship.player.velocity = collapsed_velocity(
+            self.ship.player.velocity,
+            self.ship.player.heading,
             speed,
             self.top_speed(),
         );
@@ -223,7 +223,7 @@ mod tests {
     /// Disables the player as a fight does, then ticks.
     fn disable_and_tick(session: &mut Session) {
         session.tick_combat(DISABLING, &mut NeverFires);
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         session.tick(Controls::default());
     }
 
@@ -354,7 +354,7 @@ mod tests {
     fn a_dying_player_collapses_too() {
         let mut session = braking(9);
         let before = *session.player();
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 10,
             starting: false,
         };

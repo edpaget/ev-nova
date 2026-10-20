@@ -296,7 +296,7 @@ mod tests {
     /// shows the player's heading and velocity.
     fn turned(catalog: &FakePilotCatalog) -> Session {
         let mut session = accepted(catalog);
-        session.player.heading = 90.0;
+        session.ship.player.heading = 90.0;
         session
     }
 
@@ -307,7 +307,7 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = turned(&catalog);
         take_off(&mut session, &catalog);
-        let player = session.player;
+        let player = session.ship.player;
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
         for npc in mission_escorts(&session) {
             let place = npc.formation().expect("in formation");
@@ -348,9 +348,9 @@ mod tests {
         jump_to(&mut session, &catalog, 131);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
         // Held still, as the jump arrives at the escorts' own top speed.
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         let off_slot = |session: &Session| {
-            let player = session.player;
+            let player = session.ship.player;
             mission_escorts(session)
                 .iter()
                 .map(|npc| {
@@ -588,7 +588,7 @@ mod tests {
             .iter()
             .map(|npc| npc.hull.sprite_size)
             .collect();
-        let spacing = escort::spacing(session.hull.sprite_size, &widths);
+        let spacing = escort::spacing(session.ship.fit.hull.sprite_size, &widths);
         assert_eq!(duty.formation.spacing, spacing);
         for npc in mission_escorts(&session) {
             assert_eq!(npc.formation().map(|place| place.spacing), Some(spacing));
@@ -614,7 +614,7 @@ mod tests {
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        session.player.position = crate::geometry::Vec2::new(5000.0, 0.0);
+        session.ship.player.position = crate::geometry::Vec2::new(5000.0, 0.0);
         let led: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         assert_eq!(led.len(), 3, "the hired escort and both mission escorts");
         for &id in &led {
@@ -764,7 +764,11 @@ mod tests {
         let mut session = laden(1, RuleSource::Engine);
         convicted(&mut session);
         break_up(&mut session);
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x350e6, @0xcff6");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x350e6, @0xcff6"
+        );
     }
 
     #[test]
@@ -1195,8 +1199,8 @@ mod tests {
         jump_to(&mut session, &catalog, 131);
         assert!(session.take_pay_notes().is_empty());
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "none defected");
-        session.player.position = session.sites[0].position;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.position = session.sites[0].position;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(&mut session).expect("lands");
         take_off(&mut session, &catalog);
         assert!(session.take_pay_notes().is_empty());
@@ -1289,7 +1293,7 @@ mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let escort = mission_escorts(&session)[0].id;
-        let player = session.player.position;
+        let player = session.ship.player.position;
         let mut hunter = crate::testkit::npc(0, crate::stats::ShipStats::default());
         hunter.state.position = player + crate::geometry::Vec2::new(0.0, 400.0);
         hunter.goal = Goal::Attack(crate::combat::ShipRef::Npc(escort));
@@ -1336,7 +1340,7 @@ mod tests {
         }
         assert_eq!(session.select_target(TargetPick::Nearest), None);
         assert_eq!(session.select_target(TargetPick::NearestThreat), None);
-        let player = session.player.position;
+        let player = session.ship.player.position;
         let npcs = session.traffic.npcs_mut();
         npcs[0].state.position = player + crate::geometry::Vec2::new(5.0, 0.0);
         npcs[1].state.position = player + crate::geometry::Vec2::new(500.0, 0.0);

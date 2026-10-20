@@ -145,7 +145,7 @@ impl Session {
             outfit: record.id,
             item_class: record.item_class,
             mass: record.mass,
-            unit_mass: unit_mass(record, self.fields.mass, &self.setup.rules),
+            unit_mass: unit_mass(record, self.ship.fit.fields.mass, &self.setup.rules),
             owned: self.pilot.owned(record.id),
             max: clamp_i16(self.raised_max_of(record)),
         }
@@ -155,7 +155,7 @@ impl Session {
     /// standard equipment left out.
     pub(crate) fn free_mass(&self) -> i64 {
         outfitter::free_mass(
-            self.fields,
+            self.ship.fit.fields,
             &self.standard(),
             &self.pilot.outfits,
             &self.statics.outfits,
@@ -247,7 +247,7 @@ impl Session {
         }
         if self.setup.outfit_rules().remove_refund == RuleSource::Bible {
             let price = self.statics.outfit_record(outfit).map_or(0, |record| {
-                unit_price(record, self.fields.mass, &self.setup.rules)
+                unit_price(record, self.ship.fit.fields.mass, &self.setup.rules)
             });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
@@ -734,7 +734,7 @@ mod tests {
             let mut session = scripted(&catalog).with_rules(rules);
             run(&mut session, "G310");
             assert_eq!(session.pilot().owned(OutfitId(310)), 1);
-            session.fields.mass = 0;
+            session.ship.fit.fields.mass = 0;
             let cash = session.pilot().cash();
             run(&mut session, "D310");
             assert_eq!(session.pilot().owned(OutfitId(310)), 0);

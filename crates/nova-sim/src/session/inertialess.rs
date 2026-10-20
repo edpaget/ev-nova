@@ -55,8 +55,8 @@ impl Session {
     /// never in an NPC's close formation.
     pub(crate) fn player_inertialess(&self) -> bool {
         is_inertialess(
-            self.stats.inertialess_hull,
-            self.stats.dampener,
+            self.ship.fit.stats.inertialess_hull,
+            self.ship.fit.stats.dampener,
             Flyer::Player,
             false,
             self.setup.flight_rules().inertial_dampener,
@@ -68,7 +68,7 @@ impl Session {
     /// inertial ship's is left as it was last set.
     #[must_use]
     pub fn player_speed(&self) -> f32 {
-        self.player_speed
+        self.ship.player_speed
     }
 
     /// One tick of the player's inertialess ship out of a jump under
@@ -79,13 +79,14 @@ impl Session {
         let caps = self.player_caps();
         let disabled = self.player_fate().row().drag;
         if disabled {
-            drag(&mut self.player);
-            self.player_speed = self.player_speed.min(caps.max_vel) * PLAYER_DISABLED_DECAY;
+            drag(&mut self.ship.player);
+            self.ship.player_speed =
+                self.ship.player_speed.min(caps.max_vel) * PLAYER_DISABLED_DECAY;
         }
         let flight = self.setup.flight_rules();
         inertialess_player_step(
-            &mut self.player,
-            &mut self.player_speed,
+            &mut self.ship.player,
+            &mut self.ship.player_speed,
             &handling,
             controls,
             aim,
@@ -96,7 +97,7 @@ impl Session {
             Follow::Disabled
         } else {
             Follow::Speed {
-                speed: self.player_speed,
+                speed: self.ship.player_speed,
                 max_speed: handling.max_speed,
             }
         };
@@ -109,15 +110,21 @@ impl Session {
     /// ([`step_glow`]).
     pub(super) fn ramp_inertialess(&mut self, thrust: bool, follow: Follow) {
         self.sound_thrust(thrust);
-        let burning = self.afterburner_on;
+        let burning = self.ship.afterburner_on;
         let banking = self.banking_glow();
-        self.engine_glow = step_glow(self.engine_glow, thrust, banking, Some(follow), burning);
+        self.ship.engine_glow = step_glow(
+            self.ship.engine_glow,
+            thrust,
+            banking,
+            Some(follow),
+            burning,
+        );
     }
 
     /// Sets the player's speed as it arrives moving at its velocity: its
     /// length (see the module docs).
     pub(super) fn arrive_at_speed(&mut self) {
-        self.player_speed = self.player.velocity.length();
+        self.ship.player_speed = self.ship.player.velocity.length();
     }
 }
 
@@ -163,9 +170,9 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.settle_box();
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.player.heading = heading;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = heading;
         session
     }
 
@@ -191,15 +198,15 @@ mod tests {
         }
         let top = session.top_speed();
         assert!((session.player_speed() - top).abs() < 1e-4, "at full speed");
-        assert!(near(session.player.velocity, facing(90.0) * top));
+        assert!(near(session.ship.player.velocity, facing(90.0) * top));
         for _ in 0..30 {
             session.tick(held(false, Turn::Left, false));
         }
-        assert_eq!(session.player.heading, 0.0);
+        assert_eq!(session.ship.player.heading, 0.0);
         for _ in 0..30 {
             session.tick(Controls::default());
         }
-        (session.player.velocity, session.player_speed())
+        (session.ship.player.velocity, session.player_speed())
     }
 
     #[test]
@@ -221,15 +228,18 @@ mod tests {
         let top = by_hull.top_speed();
         assert!(near(velocity, facing(0.0) * top), "{velocity:?}");
         assert!((speed - top).abs() < 1e-4);
-        let at = by_hull.player.position;
+        let at = by_hull.ship.player.position;
         by_hull.tick(Controls::default());
         assert!(
-            near(by_hull.player.position - at, facing(0.0) * top),
+            near(by_hull.ship.player.position - at, facing(0.0) * top),
             "no drift"
         );
         assert_eq!(thrust_turn_and_coast(&mut by_outfit), (velocity, speed));
         by_outfit.tick(Controls::default());
-        assert_eq!(by_outfit.player, by_hull.player, "the same flight");
+        assert_eq!(
+            by_outfit.ship.player, by_hull.ship.player,
+            "the same flight"
+        );
     }
 
     #[test]
@@ -237,7 +247,7 @@ mod tests {
         // An inertialess dogfighter matches it (`_LowLevelAIHandler`
         // @0x860a6 reads the target's +0x48).
         let mut session = flying(&hull(), 90.0);
-        session.player_speed = 2.5;
+        session.ship.player_speed = 2.5;
         assert_eq!(session.player_side().speed, 2.5);
     }
 
@@ -250,40 +260,47 @@ mod tests {
         for _ in 0..30 {
             session.tick(held(false, Turn::Left, false));
         }
-        assert!(session.player.velocity.x > 5.0, "{:?}", session.player);
+        assert!(
+            session.ship.player.velocity.x > 5.0,
+            "{:?}",
+            session.ship.player
+        );
     }
 
     #[test]
     fn reverse_brakes_the_speed_by_a_ticks_acceleration_to_none_and_gives_no_aim() {
         let mut session = flying(&hull(), 90.0);
-        session.player_speed = 1.0;
-        session.player.velocity = Vec2::new(1.0, 0.0);
-        session.aim = 45;
+        session.ship.player_speed = 1.0;
+        session.ship.player.velocity = Vec2::new(1.0, 0.0);
+        session.ship.aim = 45;
         let accel = session.flying_handling().accel;
         session.tick(held(false, Turn::None, true));
         assert!((session.player_speed() - (1.0 - accel)).abs() < 1e-6);
-        assert_eq!(session.player.heading, 90.0, "reverse turns nothing");
-        assert_eq!(session.aim, 45, "and writes no aim");
+        assert_eq!(session.ship.player.heading, 90.0, "reverse turns nothing");
+        assert_eq!(session.ship.aim, 45, "and writes no aim");
         session.tick(held(false, Turn::Right, true));
-        assert_eq!(session.player.heading, 93.0, "the turn keys still turn");
+        assert_eq!(
+            session.ship.player.heading, 93.0,
+            "the turn keys still turn"
+        );
         for _ in 0..20 {
             session.tick(held(false, Turn::None, true));
         }
         assert_eq!(session.player_speed(), 0.0, "floored at none");
-        assert_eq!(session.player.velocity, Vec2::ZERO);
+        assert_eq!(session.ship.player.velocity, Vec2::ZERO);
     }
 
     #[test]
     fn a_disabled_inertialess_players_speed_falls_by_0_985_a_tick_and_its_glow_by_two() {
         let mut session = flying(&hull(), 90.0);
-        session.player_speed = 4.0;
-        session.player.velocity = Vec2::new(4.0, 0.0);
-        session.engine_glow = 10;
-        session.condition = Condition::Disabled;
+        session.ship.player_speed = 4.0;
+        session.ship.player.velocity = Vec2::new(4.0, 0.0);
+        session.ship.engine_glow = 10;
+        session.ship.condition = Condition::Disabled;
         session.tick(held(true, Turn::Left, true));
         assert!((session.player_speed() - 4.0 * 0.985).abs() < 1e-5);
         assert_eq!(session.engine_glow(), 8, "coasting and disabled");
-        assert_eq!(session.player.heading, 90.0, "no keys");
+        assert_eq!(session.ship.player.heading, 90.0, "no keys");
         session.tick(Controls::default());
         assert!((session.player_speed() - 4.0 * 0.985 * 0.985).abs() < 1e-5);
         assert_eq!(session.engine_glow(), 6);
@@ -292,9 +309,9 @@ mod tests {
     #[test]
     fn coasting_at_full_speed_holds_the_glow_and_thrusting_there_settles_it_at_23() {
         let mut session = flying(&hull(), 0.0);
-        session.player_speed = session.top_speed();
-        session.player.velocity = facing(0.0) * session.top_speed();
-        session.engine_glow = 15;
+        session.ship.player_speed = session.top_speed();
+        session.ship.player.velocity = facing(0.0) * session.top_speed();
+        session.ship.engine_glow = 15;
         for _ in 0..10 {
             session.tick(Controls::default());
         }
@@ -309,9 +326,9 @@ mod tests {
     fn coasting_at_half_speed_from_cruise_the_glow_falls_to_12() {
         let mut session = flying(&hull(), 0.0);
         let half = session.top_speed() / 2.0;
-        session.player_speed = half;
-        session.player.velocity = facing(0.0) * half;
-        session.engine_glow = 24;
+        session.ship.player_speed = half;
+        session.ship.player.velocity = facing(0.0) * half;
+        session.ship.engine_glow = 24;
         for _ in 0..30 {
             session.tick(Controls::default());
         }
@@ -326,20 +343,20 @@ mod tests {
             Vec2::new(0.0, -6.0),
             0.0,
         );
-        session.player_speed = 6.0;
-        session.aim = 7;
+        session.ship.player_speed = 6.0;
+        session.ship.aim = 7;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let accel = session.flying_handling().accel;
         session.tick(Controls::default());
         assert!((session.player_speed() - (6.0 - accel)).abs() < 1e-5);
-        assert_eq!(session.player.heading, 0.0, "the brake does not turn");
-        assert_eq!(session.aim, 7, "nor aim");
+        assert_eq!(session.ship.player.heading, 0.0, "the brake does not turn");
+        assert_eq!(session.ship.aim, 7, "nor aim");
         let mut braking = 1;
-        while !slow_enough(session.player.velocity) {
+        while !slow_enough(session.ship.player.velocity) {
             session.tick(Controls::default());
-            assert_eq!(session.player.heading, 0.0);
+            assert_eq!(session.ship.player.heading, 0.0);
             braking += 1;
-            assert!(braking < 100, "{:?}", session.player);
+            assert!(braking < 100, "{:?}", session.ship.player);
         }
         assert!(session.player_speed() > 0.0, "slow enough before it stops");
         for _ in 0..200 {
@@ -350,9 +367,9 @@ mod tests {
         }
         assert_eq!(session.jumping(), Some(SystemId(131)));
         assert!(
-            (87.0..=90.0).contains(&session.player.heading),
+            (87.0..=90.0).contains(&session.ship.player.heading),
             "turned east: {:?}",
-            session.player
+            session.ship.player
         );
     }
 
@@ -369,21 +386,25 @@ mod tests {
             Vec2::new(0.0, -6.0),
             0.0,
         );
-        session.player_speed = 6.0;
+        session.ship.player_speed = 6.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let max_speed = session.flying_handling().max_speed;
         for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
-            session.engine_glow = base;
+            session.ship.engine_glow = base;
             session.tick(Controls::default());
-            assert!(!slow_enough(session.player.velocity), "still braking");
+            assert!(!slow_enough(session.ship.player.velocity), "still braking");
             let follow = Follow::Speed {
                 speed: session.player_speed(),
                 max_speed,
             };
             let raises = crate::glow::JumpRaises::default();
             let jumped = |follow| crate::glow::ramp_jump_glow(base, raises, follow, false, false);
-            assert_eq!(session.engine_glow, jumped(Some(follow)), "from {base}");
-            assert_eq!(session.engine_glow, glow, "from {base}");
+            assert_eq!(
+                session.ship.engine_glow,
+                jumped(Some(follow)),
+                "from {base}"
+            );
+            assert_eq!(session.ship.engine_glow, glow, "from {base}");
             assert_ne!(glow, jumped(None), "from {base}: it follows");
         }
     }
@@ -393,14 +414,14 @@ mod tests {
         let catalog = hull();
         let mut session = flying(&catalog, 0.0);
         assert_eq!(session.player_speed(), 0.0, "a new pilot");
-        session.player_speed = 3.0;
+        session.ship.player_speed = 3.0;
         session.dock(crate::catalog::StellarId(128));
         assert_eq!(session.player_speed(), 0.0, "landed");
         let mut session = flying(&catalog, 0.0)
             .with_rules(Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible));
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(
-            session.player.velocity,
+            session.ship.player.velocity,
             Vec2::ZERO,
             "the other reading's at-rest arrival"
         );
@@ -424,8 +445,8 @@ mod tests {
             session.player_speed()
         );
         assert!(near(
-            session.player.velocity,
-            facing(session.player.heading) * half
+            session.ship.player.velocity,
+            facing(session.ship.player.heading) * half
         ));
     }
 }

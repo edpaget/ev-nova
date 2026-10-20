@@ -138,7 +138,7 @@ impl Session {
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
-                    let player = (self.setup.shown(&self.hull)
+                    let player = (self.setup.shown(&self.ship.fit.hull)
                         && self.is_displayed(ShipRef::Player, Slot::Player))
                     .then(|| (ShipRef::Player, self.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
@@ -163,7 +163,7 @@ impl Session {
     #[must_use]
     pub fn is_hidden(&self, ship: ShipRef) -> bool {
         let hull = match ship {
-            ShipRef::Player => Some(self.hull),
+            ShipRef::Player => Some(self.ship.fit.hull),
             ShipRef::Npc(id) => self.npc(id).map(|npc| npc.hull),
         };
         hull.is_some_and(|hull| !self.setup.shown(&hull))
@@ -185,7 +185,7 @@ impl Session {
     #[must_use]
     pub fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
         let (slot, own, hull) = match ship {
-            ShipRef::Player => (Slot::Player, self.pilot.ship, self.hull),
+            ShipRef::Player => (Slot::Player, self.pilot.ship, self.ship.fit.hull),
             ShipRef::Npc(id) => {
                 let npc = self.npc(id)?;
                 (slot_of(npc), npc.ship, npc.hull)
@@ -318,7 +318,7 @@ impl Session {
             .map(|npc| (ShipRef::Npc(npc.id), slot_of(npc)));
         let player = self
             .setup
-            .shown(&self.hull)
+            .shown(&self.ship.fit.hull)
             .then_some((ShipRef::Player, Slot::Player));
         player.into_iter().chain(npcs).collect()
     }
@@ -568,7 +568,7 @@ mod tests {
             .iter()
             .map(|&id| session.npc(id).expect("here").hull.sprite_size)
             .collect();
-        let spacing = crate::escort::spacing(session.hull.sprite_size, &widths);
+        let spacing = crate::escort::spacing(session.ship.fit.hull.sprite_size, &widths);
         for id in [m[0], b, m[1]] {
             let place = session.npc(id).and_then(Npc::formation).expect("a slot");
             assert_eq!((place.ships, place.spacing), (4, spacing));
@@ -738,7 +738,7 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: crate::geometry::Vec2::new(0.0, 1200.0),
             velocity: crate::geometry::Vec2::ZERO,
             heading: 90.0,
@@ -883,7 +883,7 @@ mod tests {
         let (session, led, traffic) = with_traffic();
         let mut session = in_npc_order(session);
         crate::fixture::disable(&mut session, traffic);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let mut expected = vec![Some(traffic), None];
         expected.extend(led.iter().copied().map(Some));
         assert_eq!(drawn(&session), expected);
@@ -1004,11 +1004,11 @@ mod tests {
         combat_tick(&mut session);
         session.pilot.reserves.shield.now = 0.0;
         session.pilot.reserves.armor.now = 1.0;
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         combat_tick(&mut session);
         assert_eq!(drawn(&session)[0], None);
         session.pilot.reserves.armor.now = session.pilot.reserves.armor.max;
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         // Only its display step moves its slot's layer (@0x2bd24).
         combat_tick(&mut session);
         let order = drawn(&session);
@@ -1188,9 +1188,9 @@ mod tests {
     #[test]
     fn a_player_flying_a_cost_minus_one_type_is_hidden_and_keeps_its_place() {
         let (mut session, _, _) = flying(1);
-        session.hull.hidden = true;
+        session.ship.fit.hull.hidden = true;
         assert!(session.is_hidden(ShipRef::Player));
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         combat_tick(&mut session);
         assert!(!drawn(&session).contains(&None));
         assert_eq!(
@@ -1297,7 +1297,7 @@ mod tests {
         combat_tick(&mut session);
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);
         session.pilot.ship = HIDDEN;
-        session.hull.hidden = true;
+        session.ship.fit.hull.hidden = true;
         combat_tick(&mut session);
         assert_eq!(session.framed_by(ShipRef::Player), Some(flown));
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);

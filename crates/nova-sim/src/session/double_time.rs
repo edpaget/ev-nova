@@ -159,18 +159,18 @@ impl Session {
     /// run, and latches the switch at once (see the module docs). Off
     /// until it says otherwise.
     pub fn set_double_time_key(&mut self, on: bool) {
-        self.double_time_key = on;
+        self.ship.warp.double_time_key = on;
         self.latch_double_time();
     }
 
     /// Sets double time by the switch (see the module docs).
     pub(super) fn latch_double_time(&mut self) {
         #[allow(clippy::cast_possible_truncation)]
-        let facing = self.player.heading as i16;
-        let off = i32::from(angular_difference(facing, self.aim)).abs();
-        self.double_time = switch(
-            self.double_time_key,
-            [false, true].map(|double| self.warp_ups.playing(double)),
+        let facing = self.ship.player.heading as i16;
+        let off = i32::from(angular_difference(facing, self.ship.aim)).abs();
+        self.ship.warp.double_time = switch(
+            self.ship.warp.double_time_key,
+            [false, true].map(|double| self.ship.warp.warp_ups.playing(double)),
             off <= ALIGNED,
         );
     }
@@ -178,7 +178,7 @@ impl Session {
     /// Whether double time is on.
     #[must_use]
     pub fn double_time(&self) -> bool {
-        self.double_time
+        self.ship.warp.double_time
     }
 
     /// Runs double time's second pass under the player's `controls`, the
@@ -218,7 +218,7 @@ impl Session {
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
-        if self.rescue_due {
+        if self.ship.fate.rescue_due {
             return;
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
@@ -311,7 +311,7 @@ mod tests {
             }
             assert_eq!(session.warp_clock(), Some(15));
             let before = *session.player();
-            session.condition = crate::combat::hull::Condition::Disabled;
+            session.ship.condition = crate::combat::hull::Condition::Disabled;
             session.tick(Controls::default());
             assert_eq!(session.preparing_jump(), None, "collapsed");
             let expected = if double_time {
@@ -372,7 +372,7 @@ mod tests {
             again(&mut session, Controls::default());
         }
         let mut advance = session.clone();
-        advance.condition = crate::combat::hull::Condition::Disabled;
+        advance.ship.condition = crate::combat::hull::Condition::Disabled;
         advance.tick(Controls::default());
         assert_eq!(advance.preparing_jump(), None, "collapsed");
         assert_eq!(
@@ -380,7 +380,7 @@ mod tests {
             crate::cargo_box::accel(18, at_8) * crate::flight::DISABLED_DRAG
         );
         session.tick(Controls::default());
-        session.condition = crate::combat::hull::Condition::Disabled;
+        session.ship.condition = crate::combat::hull::Condition::Disabled;
         again(&mut session, Controls::default());
         assert_eq!(session.preparing_jump(), None, "collapsed");
         assert_eq!(
@@ -454,7 +454,7 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: OUT,
             velocity: Vec2::ZERO,
             heading: 0.0,
@@ -527,8 +527,8 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.take_sounds(), [warp_up(&session, false)]);
         given_up_by_a_move(&mut session, &catalog);
-        assert_eq!(session.aim, 0, "no tick has aimed it");
-        session.player.heading = 90.0;
+        assert_eq!(session.ship.aim, 0, "no tick has aimed it");
+        session.ship.player.heading = 90.0;
         session.set_double_time_key(true);
         assert!(session.double_time());
         session.begin_jump().expect("jumps");
@@ -543,7 +543,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
         frame(&mut session);
-        session.condition = crate::combat::hull::Condition::Disabled;
+        session.ship.condition = crate::combat::hull::Condition::Disabled;
         frame(&mut session);
         assert_eq!(session.preparing_jump(), None, "collapsed");
         assert!(
@@ -551,7 +551,7 @@ mod tests {
                 .take_sounds()
                 .contains(&SimSound::Halt(&crate::sound::WARP_UP_HALTS))
         );
-        session.condition = crate::combat::hull::Condition::Intact;
+        session.ship.condition = crate::combat::hull::Condition::Intact;
         given_up_by_a_move(&mut session, &catalog);
         session.begin_jump().expect("jumps");
         assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
@@ -563,18 +563,18 @@ mod tests {
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
         session.set_double_time_key(true);
         session.begin_jump().expect("jumps");
-        assert!(session.warp_ups.playing(true));
+        assert!(session.ship.warp.warp_ups.playing(true));
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.ship.warp.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]
     fn landing_ends_the_warp_up() {
         let catalog = with_warp_up_x2();
         let mut session = session(&catalog);
-        session.warp_ups.start(true, 120);
+        session.ship.warp.warp_ups.start(true, 120);
         land_now(&mut session).expect("lands");
-        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.ship.warp.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]
@@ -658,17 +658,17 @@ mod tests {
         assert_eq!(session.take_sounds(), [warp_up(&session, false)]);
         session.tick(Controls::default());
         let aim = bearing_aim(&session);
-        assert_eq!(session.aim, aim, "the jump's bearing");
+        assert_eq!(session.ship.aim, aim, "the jump's bearing");
         assert!((i32::from(aim) - 90).abs() <= 1, "{aim}");
         session.set_double_time_key(true);
         assert!(!session.double_time(), "aligned while 128 plays");
-        session.player.heading = f32::from(aim) + 10.9;
+        session.ship.player.heading = f32::from(aim) + 10.9;
         session.set_double_time_key(true);
         assert!(!session.double_time(), "10 degrees off, whole");
-        session.player.heading = f32::from(aim) + 11.0;
+        session.ship.player.heading = f32::from(aim) + 11.0;
         session.set_double_time_key(true);
         assert!(session.double_time(), "11 degrees off");
-        session.player.heading = f32::from(aim);
+        session.ship.player.heading = f32::from(aim);
         session.set_double_time_key(true);
         assert!(!session.double_time());
         // 128 lasts 350 Mac ticks, pitched by w 1.3 to 455: 228 frames
@@ -680,8 +680,8 @@ mod tests {
         // Given up before the warp end's fallback halts 128, facing the
         // aim the jump left.
         given_up_by_a_move(&mut session, &catalog);
-        session.player.heading = f32::from(aim);
-        assert_eq!(session.aim, aim, "kept");
+        session.ship.player.heading = f32::from(aim);
+        assert_eq!(session.ship.aim, aim, "kept");
         for _ in BEFORE_THE_FALLBACK..227 {
             session.tick(Controls::default());
         }
@@ -699,27 +699,31 @@ mod tests {
         session.tick(Controls::default());
         assert_eq!(session.warp_clock(), None, "braking");
         assert_eq!(
-            session.aim,
+            session.ship.aim,
             crate::trig::intercept_angle(velocity * 100.0, Vec2::ZERO),
             "@0x6b761"
         );
-        assert_eq!(session.aim, 180, "racing north: south");
+        assert_eq!(session.ship.aim, 180, "racing north: south");
         while session.warp_clock().is_none() {
             session.tick(Controls::default());
         }
         session.tick(Controls::default());
-        assert_eq!(session.aim, bearing_aim(&session), "@0x6b0cf");
+        assert_eq!(session.ship.aim, bearing_aim(&session), "@0x6b0cf");
         while session.jumping().is_none() {
             session.tick(Controls::default());
         }
         session.tick(Controls::default());
-        assert_eq!(session.aim, bearing_aim(&session), "on through the warp");
+        assert_eq!(
+            session.ship.aim,
+            bearing_aim(&session),
+            "on through the warp"
+        );
         session
             .arrive(&catalog(), &mut NeverFires)
             .expect("arrives");
-        let kept = session.aim;
+        let kept = session.ship.aim;
         session.tick(Controls::default());
-        assert_eq!(session.aim, kept, "kept after the jump");
+        assert_eq!(session.ship.aim, kept, "kept after the jump");
     }
 
     #[test]
@@ -732,26 +736,26 @@ mod tests {
             afterburner: false,
         };
         let mut session = session(&catalog());
-        session.player.velocity = Vec2::new(3.0, 1.0);
+        session.ship.player.velocity = Vec2::new(3.0, 1.0);
         session.tick(REVERSE);
         let toward = crate::trig::intercept_angle(Vec2::ZERO, Vec2::new(300.0, 100.0));
         assert_eq!(
-            session.aim,
+            session.ship.aim,
             (toward + 180) % 360,
             "@0x6c88e, turn keys or not"
         );
         assert_eq!(toward, 108);
         // Slower than 0.05 on both axes, it is left alone (@0x6c7d8-0x6c822).
-        session.player.velocity = Vec2::new(0.049, -0.049);
+        session.ship.player.velocity = Vec2::new(0.049, -0.049);
         session.tick(REVERSE);
-        assert_eq!(session.aim, 288);
-        session.player.velocity = Vec2::new(0.0, -0.05);
+        assert_eq!(session.ship.aim, 288);
+        session.ship.player.velocity = Vec2::new(0.0, -0.05);
         session.tick(REVERSE);
-        assert_eq!(session.aim, 180);
+        assert_eq!(session.ship.aim, 180);
         // Not without the key.
-        session.player.velocity = Vec2::new(0.0, 3.0);
+        session.ship.player.velocity = Vec2::new(0.0, 3.0);
         session.tick(Controls::default());
-        assert_eq!(session.aim, 180);
+        assert_eq!(session.ship.aim, 180);
     }
 
     #[test]

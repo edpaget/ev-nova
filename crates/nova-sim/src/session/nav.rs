@@ -586,7 +586,7 @@ impl Session {
         }
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_stellar(self.player.position, &self.sites),
+            StellarPick::Nearest => nearest_stellar(self.ship.player.position, &self.sites),
         }?;
         let selected = self.nav == NavMode::Stellar(Some(picked));
         self.out.sounds.push(SimSound::NavSelected);
@@ -888,7 +888,7 @@ mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.select_next_system();
         fly_out(&mut session);
-        session.player.heading = 90.0;
+        session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         let mut session = quiet(session);
         for stage in ["pre-jump", "in hyperspace"] {

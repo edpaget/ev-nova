@@ -109,8 +109,8 @@ fn the_player_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c
         // The first tick's box of none holds the ship at rest.
         session.tick(Controls::default());
         let c = session.top_speed();
-        session.player.velocity = Vec2::new(c, 0.0);
-        session.player.heading = 0.0;
+        session.ship.player.velocity = Vec2::new(c, 0.0);
+        session.ship.player.heading = 0.0;
         for _ in 0..200 {
             session.tick(Controls {
                 thrust: true,

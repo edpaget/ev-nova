@@ -82,7 +82,7 @@ impl Session {
         if !strikes.iter().any(|strike| strike.ship == ShipRef::Player) {
             return;
         }
-        let now = killed.unwrap_or(self.condition);
+        let now = killed.unwrap_or(self.ship.condition);
         if was == Condition::Intact && now != Condition::Intact {
             self.out.sounds.push(SimSound::ShipDowned);
             self.say(SimMessage::ShipDisabled);
@@ -181,7 +181,7 @@ mod tests {
     fn under_fire(catalog: &FakePilotCatalog, armor: f32, condition: Condition) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         session.pilot.reserves.armor.now = armor;
-        session.condition = condition;
+        session.ship.condition = condition;
         let _ = session.take_sounds();
         let _ = session.take_messages();
         session
@@ -255,7 +255,7 @@ mod tests {
             hit(&mut session, &catalog, 10.0),
             (vec![SimSound::ShipDowned], vec![SimMessage::ShipDisabled])
         );
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
         let catalog = shooting(vec![], 1);
         let mut session = under_fire(&catalog, 9.6, Condition::Disabled);
         assert_eq!(hit(&mut session, &catalog, 10.0), (vec![], vec![]));
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
             hit(&mut session, &catalog, 10.0),
             (vec![SimSound::ShipDowned], vec![SimMessage::ShipDestroyed])
         );
-        assert!(matches!(session.condition, Condition::Dying { .. }));
+        assert!(matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(
             tick(&mut session, &catalog, 10.0),
             (vec![], vec![]),
@@ -285,7 +285,7 @@ mod tests {
             (vec![SimSound::Klaxon], vec![]),
             "still: the klaxon alone (@0x6f1e4)"
         );
-        assert!(matches!(session.condition, Condition::Dying { .. }));
+        assert!(matches!(session.ship.condition, Condition::Dying { .. }));
     }
 
     #[test]
@@ -299,7 +299,7 @@ mod tests {
                 vec![SimMessage::ShipDisabled, SimMessage::ShipDestroyed]
             )
         );
-        assert!(matches!(session.condition, Condition::Dying { .. }));
+        assert!(matches!(session.ship.condition, Condition::Dying { .. }));
     }
 
     #[test]
@@ -319,9 +319,9 @@ mod tests {
             hit(&mut session, &catalog, 10.0),
             (vec![SimSound::ShipDowned], vec![SimMessage::ShipDestroyed])
         );
-        assert_eq!(session.condition, unset);
+        assert_eq!(session.ship.condition, unset);
         assert_eq!(tick(&mut session, &catalog, 10.0), (vec![halt], vec![]));
-        assert_eq!(session.condition, Condition::Destroyed);
+        assert_eq!(session.ship.condition, Condition::Destroyed);
         catalog.weapons[0].mass_dmg = 20;
         let mut session = under_fire(&catalog, 10.6, Condition::Intact);
         assert_eq!(
@@ -332,7 +332,7 @@ mod tests {
             )
         );
         assert_eq!(tick(&mut session, &catalog, 10.0), (vec![halt], vec![]));
-        assert_eq!(session.condition, Condition::Destroyed);
+        assert_eq!(session.ship.condition, Condition::Destroyed);
     }
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(armor(&session), 9.0, "9.6");
         let mut session = under_fire(&catalog, 15.6, Condition::Intact);
         assert_eq!(hit(&mut session, &catalog, 10.0), (vec![], vec![]));
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
         assert!((armor(&session) - 14.6).abs() < 1e-4, "hit, not disabled");
         let mut session = under_fire(&catalog, 9.6, Condition::Disabled);
         hit(&mut session, &catalog, 10.0);
@@ -384,9 +384,12 @@ mod tests {
         );
         assert_eq!(armor(&session), 0.0);
         assert!(
-            matches!(session.condition, Condition::Dying { starting: true, .. }),
+            matches!(
+                session.ship.condition,
+                Condition::Dying { starting: true, .. }
+            ),
             "{:?}",
-            session.condition
+            session.ship.condition
         );
         assert!(session.take_combat_events().iter().any(|event| matches!(
             event,
@@ -435,7 +438,7 @@ mod tests {
         session.pilot.reserves.armor.now = 4.6;
         session.tick_combat(rules, &mut NeverFires);
         assert_ne!(session.npcs()[0].reserves.armor.now, full, "hit then");
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         assert_eq!(
             (session.take_sounds(), session.take_messages()),
             (vec![], vec![])
@@ -456,10 +459,10 @@ mod tests {
         hold(&mut session, 0, 140, false);
         session.pilot.reserves.armor.now = 7.6;
         session.tick_combat(DISABLING, &mut NeverFires);
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         session.pilot.reserves.armor.now = 0.0;
         session.tick_combat(DISABLING, &mut NeverFires);
-        assert!(matches!(session.condition, Condition::Dying { .. }));
+        assert!(matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(
             (session.take_sounds(), session.take_messages()),
             (vec![], vec![])
@@ -498,7 +501,7 @@ mod tests {
                 }
             }
             assert_ne!(session.npcs()[0].condition, Condition::Intact, "{armor}");
-            assert_eq!(session.condition, Condition::Intact);
+            assert_eq!(session.ship.condition, Condition::Intact);
             assert_eq!(heard, (vec![], vec![]), "{armor}");
             if armor > 1.0 {
                 assert!((session.npcs()[0].reserves.armor.now - 9.6).abs() < 1e-4);

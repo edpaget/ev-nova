@@ -122,9 +122,12 @@ fn the_reused_slot_exits_reading_is_set_by_the_rulebook_and_outlives_a_new_traff
 fn fired_once(catalog: &FakePilotCatalog, reading: RuleSource) -> Session {
     let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
     let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-    session.player.heading = 0.0;
+    session.ship.player.heading = 0.0;
     fire(&mut session);
-    assert_eq!(session.armament.exit_cursors().next(ExitKind::Gun), 1);
+    assert_eq!(
+        session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
+        1
+    );
     session
 }
 
@@ -134,7 +137,7 @@ fn fire(session: &mut Session) -> usize {
     session.hold_trigger(FIRE);
     session.tick_combat(Rules::default(), &mut NeverFires);
     session.hold_trigger(Trigger::default());
-    newest_exit(session, ShipRef::Player, session.player.position)
+    newest_exit(session, ShipRef::Player, session.ship.player.position)
 }
 
 #[test]
@@ -144,7 +147,7 @@ fn a_refit_keeps_the_players_exit_cursors_by_either_reading() {
         let mut session = fired_once(&catalog, reading);
         session.refit(true, ReservePolicy::Hold);
         assert_eq!(
-            session.armament.exit_cursors().next(ExitKind::Gun),
+            session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
             1,
             "{reading:?}"
         );
@@ -156,9 +159,9 @@ fn a_refit_keeps_the_players_exit_cursors_by_either_reading() {
 fn a_refit_keeps_the_players_fold_set() {
     let catalog = four_guns();
     let mut session = Session::start(&catalog).expect("starts");
-    session.armament = session.armament.clone().with_fold_set(2);
+    session.ship.fit.armament = session.ship.fit.armament.clone().with_fold_set(2);
     session.refit(true, ReservePolicy::Hold);
-    assert_eq!(session.armament.fold_set(), 2);
+    assert_eq!(session.ship.fit.armament.fold_set(), 2);
 }
 
 #[test]
@@ -179,7 +182,7 @@ fn a_change_of_ship_keeps_the_players_exit_cursors_by_the_engine_and_resets_them
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(
-            session.armament.exit_cursors().next(ExitKind::Gun),
+            session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
             exit,
             "{reading:?}"
         );
@@ -193,7 +196,7 @@ fn a_change_of_ship_puts_the_players_fold_set_back_to_0_by_either_reading() {
     for reading in [RuleSource::Engine, RuleSource::Bible] {
         let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
         let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
-        session.armament = session.armament.clone().with_fold_set(2);
+        session.ship.fit.armament = session.ship.fit.armament.clone().with_fold_set(2);
         let record = session
             .statics
             .ship_record(ShipId(129))
@@ -205,7 +208,7 @@ fn a_change_of_ship_puts_the_players_fold_set_back_to_0_by_either_reading() {
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
-        assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
+        assert_eq!(session.ship.fit.armament.fold_set(), 0, "{reading:?}");
     }
 }
 

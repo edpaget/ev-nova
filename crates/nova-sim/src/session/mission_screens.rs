@@ -1593,8 +1593,8 @@ mod tests {
             .iter()
             .find(|site| site.id == StellarId(stellar))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(session), Ok(StellarId(stellar)));
         settle(session, catalog);
     }
@@ -2829,7 +2829,7 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         settle(&mut session, &catalog);
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert_eq!(
@@ -3320,18 +3320,18 @@ mod tests {
             (
                 "breaking up, -0x2ca and +0x3c (@0x70439, @0x7044b)",
                 |session| {
-                    session.condition = Condition::Dying {
+                    session.ship.condition = Condition::Dying {
                         ticks_left: 3,
                         starting: false,
                     };
                 },
             ),
             ("exploded, the dead branch (@0x6870d)", |session| {
-                session.condition = Condition::Destroyed;
-                session.player_exploded_this_tick = true;
+                session.ship.condition = Condition::Destroyed;
+                session.ship.fate.player_exploded_this_tick = true;
             }),
             ("holding after the explosion", |session| {
-                session.condition = Condition::Destroyed;
+                session.ship.condition = Condition::Destroyed;
             }),
             (
                 "the take-off grace, _frameCounter < 0 (@0x7045e)",
@@ -3359,11 +3359,11 @@ mod tests {
     #[test]
     fn a_disabled_ship_takes_the_mission_info_key() {
         let mut session = with_missions(true, false);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let info = session.mission_info();
         assert_eq!(session.press_mission_info(), MissionInfoPress::Opens(info));
         let mut none = with_missions(false, false);
-        none.condition = Condition::Disabled;
+        none.ship.condition = Condition::Disabled;
         assert_eq!(
             none.press_mission_info(),
             MissionInfoPress::NoActiveMissions

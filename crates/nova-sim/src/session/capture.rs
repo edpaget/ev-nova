@@ -143,7 +143,7 @@ impl Session {
             .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
             .sum();
         CaptureFuel {
-            old: self.stats.fuel as i64,
+            old: self.ship.fit.stats.fuel as i64,
             captured: (i64::from(record.fields.fuel) + more).clamp(0, FUEL_CAPACITY_MOST),
         }
     }
@@ -177,12 +177,12 @@ impl Session {
     /// docs).
     pub(super) fn old_ship_escort(&self) -> Escort {
         let stock = ShipStats::for_npc(
-            self.fields,
-            &outfit_mods(&self.defaults, &self.statics.outfits),
+            self.ship.fit.fields,
+            &outfit_mods(&self.ship.fit.defaults, &self.statics.outfits),
             self.setup.npc_items(),
         );
         let mut reserves = stock.full();
-        reserves.fuel.now = f32::from(self.fields.fuel.max(0));
+        reserves.fuel.now = f32::from(self.ship.fit.fields.fuel.max(0));
         Escort {
             ship: self.pilot.ship,
             reserves,
@@ -437,15 +437,15 @@ mod tests {
     fn the_flight_tick_and_an_energy_take_cache_the_capacity_and_a_reset_clears_it() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        assert!(!session.fuel_cap_cached);
+        assert!(!session.ship.fuel_cap_cached);
         session.tick(crate::flight::Controls::default());
-        assert!(session.fuel_cap_cached, "the flight tick");
+        assert!(session.ship.fuel_cap_cached, "the flight tick");
         session.reset_precalced();
-        assert!(!session.fuel_cap_cached, "a reset");
+        assert!(!session.ship.fuel_cap_cached, "a reset");
         let mut session = aboard(&catalog);
         session.reset_precalced();
         take(&mut session, Take::Energy, &[]);
-        assert!(session.fuel_cap_cached, "an energy take");
+        assert!(session.ship.fuel_cap_cached, "an energy take");
     }
 
     /// [`boardable`] with a fuel tank (`oütf` 330, 50 more fuel) and the
@@ -484,7 +484,7 @@ mod tests {
                     take(&mut session, Take::Capture, &[43, 1]).0,
                     Taken::Captured
                 );
-                session.fuel_cap_cached = cached;
+                session.ship.fuel_cap_cached = cached;
                 let mut chance = Draws::of(&[7]);
                 assert_eq!(
                     session.assign(Assignment::MyShip, &mut chance),
@@ -504,9 +504,9 @@ mod tests {
             .push(crate::testkit::outfit(330, &[(MORE_FUEL, 50)]));
         let mut session = crate::session::tests::ammo_session(&catalog);
         session.pilot.outfits.insert(OutfitId(330), 1);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         take(&mut session, Take::Ammo, &[]);
-        assert!(!session.fuel_cap_cached);
+        assert!(!session.ship.fuel_cap_cached);
         assert_eq!(
             take(&mut session, Take::Capture, &[99, 43, 1]).0,
             Taken::Captured
@@ -523,21 +523,28 @@ mod tests {
         // The ammunition button resets (@0x93cc9) before it looks for
         // rounds (@0x93cb8 refuses).
         let mut session = aboard(&catalog);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         crate::session::precalced::tests::convicted(&mut session);
         assert_eq!(take(&mut session, Take::Ammo, &[]).0, Taken::Missed);
-        assert!(!session.fuel_cap_cached, "the ammunition reset");
-        assert_eq!(session.scan_latches, Latches::ARMED, "the ammunition reset");
+        assert!(!session.ship.fuel_cap_cached, "the ammunition reset");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "the ammunition reset"
+        );
         // The energy refusal (@0x94231) only beeps.
         let mut session = aboard(&catalog);
         take(&mut session, Take::Energy, &[]);
         take(&mut session, Take::Miss, &[99]);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         crate::session::precalced::tests::convicted(&mut session);
-        let latches = session.scan_latches;
+        let latches = session.ship.latches.scan_latches;
         assert_eq!(take(&mut session, Take::Energy, &[]).0, Taken::Missed);
-        assert!(session.fuel_cap_cached, "no energy reset");
-        assert_eq!(session.scan_latches, latches, "no energy reset");
+        assert!(session.ship.fuel_cap_cached, "no energy reset");
+        assert_eq!(
+            session.ship.latches.scan_latches, latches,
+            "no energy reset"
+        );
     }
 
     // Use As My Ship.
@@ -633,9 +640,9 @@ mod tests {
             let session = alongside(&catalog).with_rules(
                 crate::rulebook::Rulebook::default().with_override(RuleKey::NpcDefaultItems, items),
             );
-            let armor = f32::from(session.fields.armor) + more;
-            let fuel = f32::from(session.fields.fuel) + more;
-            assert_eq!(session.fields.fuel, 300);
+            let armor = f32::from(session.ship.fit.fields.armor) + more;
+            let fuel = f32::from(session.ship.fit.fields.fuel) + more;
+            assert_eq!(session.ship.fit.fields.fuel, 300);
             let record = session.old_ship_escort();
             assert_eq!(
                 (record.reserves.armor.max, record.reserves.fuel.max),
@@ -686,8 +693,8 @@ mod tests {
             .push(crate::testkit::outfit(330, &[(MORE_FUEL, 50)]));
         catalog.defaults = vec![(ShipId(128), vec![(OutfitId(330), 1)])];
         let mut session = alongside(&catalog);
-        session.player.velocity = Vec2::new(0.25, -0.125);
-        session.player.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(0.25, -0.125);
+        session.ship.player.heading = 90.0;
         session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.25, -0.125);
         session.traffic.npcs_mut()[0].state.heading = 90.0;
         board_by(&mut session, &NovaLaw::default()).expect("boards");
@@ -696,7 +703,7 @@ mod tests {
             Taken::Captured
         );
         session.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
-        let left = session.player;
+        let left = session.ship.player;
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
@@ -718,7 +725,7 @@ mod tests {
             let old = session.npc(id).expect("in the system");
             let duty = old.escort.expect("an escort");
             crate::escort::slot_position(
-                &session.player,
+                &session.ship.player,
                 duty.formation.slot,
                 duty.formation.ships,
                 duty.formation.spacing,

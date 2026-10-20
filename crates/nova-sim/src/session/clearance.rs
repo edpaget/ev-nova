@@ -141,7 +141,7 @@ impl Session {
                     let blessing = self.blessing();
                     let clears =
                         approach_clears(site, self.standing(site, &blessing), request.permission);
-                    let offset = self.player.position - site.position;
+                    let offset = self.ship.player.position - site.position;
                     let done = approach(&mut request, site, offset, clears);
                     let kind = DockKind::of_site(site);
                     self.dock = (!done.expired).then_some(request);
@@ -379,13 +379,13 @@ mod tests {
             Vec2::new(2000.0, -250.0),
             Vec2::new(2000.0 + 250.0, 10.0),
         ] {
-            session.player.position = at;
+            session.ship.player.position = at;
             tick(&mut session);
             assert_eq!(session.take_messages(), [], "{at:?}");
             assert_eq!(session.take_sounds(), [], "{at:?}");
             assert_eq!(session.dock_request(), request(129, 0), "{at:?}");
         }
-        session.player.position = Vec2::new(2000.0 - 249.9, 249.9);
+        session.ship.player.position = Vec2::new(2000.0 - 249.9, 249.9);
         tick(&mut session);
         assert_eq!(session.take_messages(), [cleared_at(129, DockKind::Planet)]);
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
@@ -415,7 +415,7 @@ mod tests {
         // tick between: too far.
         let mut session = on_129(self::session());
         session.land().expect("requests");
-        session.player.position = Vec2::new(2000.0, 0.0);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
         assert_eq!(
             session.land(),
             Err(LandingRefusal::TooFar {
@@ -517,7 +517,7 @@ mod tests {
     fn a_disabled_players_approach_still_greets() {
         let mut session = session();
         session.land().expect("requests");
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         tick(&mut session);
         assert_eq!(session.take_messages(), [cleared_at(128, DockKind::Planet)]);
     }
@@ -720,7 +720,7 @@ mod tests {
         let mut session = quiet(Session::start(catalog).expect("starts"));
         session.land().expect("requests 128");
         session.dock = request(128, permission);
-        session.player.position = Vec2::new(2000.0, 0.0);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
         session.deselect();
         session.land()
     }

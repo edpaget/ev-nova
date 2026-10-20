@@ -50,7 +50,7 @@ impl Session {
     /// (see the module docs).
     #[must_use]
     pub fn afterburner_on(&self) -> bool {
-        self.afterburner_on
+        self.ship.afterburner_on
     }
 
     /// Which pushes on the player this tick are clamped to 1.8 times its
@@ -61,7 +61,7 @@ impl Session {
     pub(super) fn afterburner_knockback(&self) -> KnockbackCaps {
         self.setup
             .gravity_afterburner()
-            .knockback(self.afterburner_on, self.gravity_sources_present())
+            .knockback(self.ship.afterburner_on, self.gravity_sources_present())
     }
 
     /// The afterburner's engage test for this tick under `controls`
@@ -70,10 +70,10 @@ impl Session {
     /// Its press counts as a flight key whatever the outcome, which the
     /// view's cursor reads (*0x3b5550, @0x6cb03).
     pub(super) fn engage_afterburner(&mut self, controls: Controls) {
-        self.afterburner_on = engages(
+        self.ship.afterburner_on = engages(
             controls.afterburner,
-            self.condition == Condition::Intact,
-            self.stats.afterburner,
+            self.ship.condition == Condition::Intact,
+            self.ship.fit.stats.afterburner,
             self.jump.is_some(),
             self.pilot.reserves.fuel.now,
         );
@@ -91,13 +91,13 @@ impl Session {
             thrust_top: if self
                 .setup
                 .gravity_afterburner()
-                .thrust_widens(self.afterburner_on, self.gravity_sources_present())
+                .thrust_widens(self.ship.afterburner_on, self.gravity_sources_present())
             {
                 afterburner_top(top)
             } else {
                 top
             },
-            max_vel: self.player_max_vel.get(),
+            max_vel: self.ship.player_max_vel.get(),
         }
     }
 
@@ -112,22 +112,26 @@ impl Session {
     pub(super) fn burn_afterburner(&mut self) {
         let handling = self.flying_handling();
         let (top, accel) = (handling.max_speed, handling.accel);
-        if !self.afterburner_on {
-            self.player_max_vel.bleed(top, accel);
+        if !self.ship.afterburner_on {
+            self.ship.player_max_vel.bleed(top, accel);
             return;
         }
         let gravity = self
             .setup
             .gravity_afterburner()
             .box_gravity(self.gravity_sources_present());
-        self.player_max_vel.burn(top, gravity);
+        self.ship.player_max_vel.burn(top, gravity);
         if self.player_inertialess() {
-            self.player_speed = push_speed(self.player_speed, accel, top);
+            self.ship.player_speed = push_speed(self.ship.player_speed, accel, top);
         } else {
-            self.player.velocity =
-                push_velocity(self.player.velocity, self.player.heading, accel, top);
+            self.ship.player.velocity = push_velocity(
+                self.ship.player.velocity,
+                self.ship.player.heading,
+                accel,
+                top,
+            );
         }
-        let usage = self.stats.afterburner.unwrap_or_default();
+        let usage = self.ship.fit.stats.afterburner.unwrap_or_default();
         let fuel = &mut self.pilot.reserves.fuel;
         fuel.now = drain(fuel.now, usage);
     }
@@ -135,7 +139,7 @@ impl Session {
     /// for a test that flies a new session's first tick as any other.
     #[cfg(test)]
     pub(crate) fn settle_box(&mut self) {
-        self.player_max_vel.bleed(self.top_speed(), 0.0);
+        self.ship.player_max_vel.bleed(self.top_speed(), 0.0);
     }
 }
 
@@ -190,9 +194,9 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.tick(Controls::default());
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.player.heading = heading;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = heading;
         session
     }
 
@@ -217,9 +221,9 @@ mod tests {
     /// How far the ship moves in one tick under `controls`, from the
     /// centre, where the position keeps its precision.
     fn moved(session: &mut Session, controls: Controls) -> Vec2 {
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         session.tick(controls);
-        session.player.position
+        session.ship.player.position
     }
 
     /// `ticks` ticks under `controls`.
@@ -261,7 +265,7 @@ mod tests {
         };
         for condition in [Condition::Disabled, dying] {
             let mut downed = flying(&burner(), 90.0);
-            downed.condition = condition;
+            downed.ship.condition = condition;
             downed.tick(held(true, true));
             assert!(!downed.afterburner_on(), "{condition:?}");
         }
@@ -284,7 +288,7 @@ mod tests {
         let mut session = flying(&burner(), 90.0);
         session.tick(held(false, true));
         assert!(session.afterburner_on());
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.tick(held(false, true));
         assert!(!session.afterburner_on());
     }
@@ -315,17 +319,17 @@ mod tests {
     fn thrust_and_afterburner_reach_1_8_times_top_speed_on_an_axis_a_tick_behind_the_box() {
         let mut session = flying(&burner(), 90.0);
         let top = session.top_speed();
-        session.player.velocity = Vec2::new(top, 0.0);
+        session.ship.player.velocity = Vec2::new(top, 0.0);
         session.tick(held(true, true));
         assert!(
             near(
-                session.player.velocity.x,
+                session.ship.player.velocity.x,
                 top + session.flying_handling().accel * 2.75
             ),
             "clamped to the old box, then pushed: {:?}",
-            session.player
+            session.ship.player
         );
-        let first = session.player.position.x;
+        let first = session.ship.player.position.x;
         assert!(near(first, top), "moved at the old box: {first}");
         run(&mut session, held(true, true), 100);
         let burnt = afterburner_top(top);
@@ -335,9 +339,9 @@ mod tests {
         // Pushed past it after the move, it is damped for the next tick,
         // whose thrust takes it back to the box.
         assert!(
-            near(session.player.velocity.x, burnt * 0.99),
+            near(session.ship.player.velocity.x, burnt * 0.99),
             "{:?}",
-            session.player
+            session.ship.player
         );
         assert!(near(moved(&mut session, held(true, true)).x, burnt));
     }
@@ -367,12 +371,12 @@ mod tests {
         let push = session.flying_handling().accel * 2.75;
         session.tick(held(false, true));
         assert!(
-            near(session.player.velocity.x, push),
+            near(session.ship.player.velocity.x, push),
             "{:?}",
-            session.player
+            session.ship.player
         );
         session.tick(held(false, true));
-        assert!(near(session.player.velocity.x, 2.0 * push));
+        assert!(near(session.ship.player.velocity.x, 2.0 * push));
         run(&mut session, held(false, true), 100);
         let burnt = afterburner_top(session.top_speed());
         // It meets the box, is damped, and climbs back to it: a tick at the
@@ -393,12 +397,12 @@ mod tests {
         run(&mut session, held(true, true), 100);
         let top = session.top_speed();
         let bleed = session.flying_handling().accel * 0.4;
-        let mut box_ = session.player_max_vel.get();
+        let mut box_ = session.ship.player_max_vel.get();
         assert!(near(box_, afterburner_top(top)));
         let mut ticks = 0;
         let mut held_to_it = 0;
-        while session.player_max_vel.get() > top {
-            let was = session.player.velocity.x;
+        while session.ship.player_max_vel.get() > top {
+            let was = session.ship.player.velocity.x;
             let step = moved(&mut session, held(true, false));
             ticks += 1;
             assert!(
@@ -406,7 +410,7 @@ mod tests {
                 "held to the last box: {step:?}"
             );
             held_to_it += usize::from(was > box_);
-            let now = session.player_max_vel.get();
+            let now = session.ship.player_max_vel.get();
             assert!(now == top || near(box_ - now, bleed), "{box_} to {now}");
             box_ = now;
             assert!(ticks < 200);
@@ -422,11 +426,11 @@ mod tests {
     fn the_box_bleeds_with_no_afterburner_carried_and_in_the_pre_jump() {
         let mut session = flying(&catalog(), 90.0);
         let top = session.top_speed();
-        session.player_max_vel = crate::afterburner::MaxVel::START;
-        session.player_max_vel.burn(top, false);
+        session.ship.player_max_vel = crate::afterburner::MaxVel::START;
+        session.ship.player_max_vel.burn(top, false);
         session.tick(Controls::default());
         assert!(near(
-            session.player_max_vel.get(),
+            session.ship.player_max_vel.get(),
             afterburner_top(top) - session.flying_handling().accel * 0.4
         ));
         let mut jumping = super::super::tests::bound_for_131(
@@ -435,17 +439,17 @@ mod tests {
             Vec2::ZERO,
             0.0,
         );
-        jumping.player_max_vel.burn(top, false);
+        jumping.ship.player_max_vel.burn(top, false);
         assert_eq!(jumping.begin_jump(), Ok(SystemId(131)));
         jumping.tick(Controls::default());
-        assert!(jumping.player_max_vel.get() < afterburner_top(top));
+        assert!(jumping.ship.player_max_vel.get() < afterburner_top(top));
     }
 
     /// Widens `session`'s box to 1.8 times its top speed, as an afterburn
     /// leaves it: the box's width.
     fn widened(session: &mut Session) -> f32 {
-        session.player_max_vel.burn(session.top_speed(), false);
-        let box_ = session.player_max_vel.get();
+        session.ship.player_max_vel.burn(session.top_speed(), false);
+        let box_ = session.ship.player_max_vel.get();
         assert!(near(box_, afterburner_top(session.top_speed())));
         box_
     }
@@ -465,9 +469,9 @@ mod tests {
         );
         let bleed = session.flying_handling().accel * 0.4;
         assert!(
-            near(session.player_max_vel.get(), box_ - bleed),
+            near(session.ship.player_max_vel.get(), box_ - bleed),
             "{box_} to {}",
-            session.player_max_vel.get()
+            session.ship.player_max_vel.get()
         );
     }
 
@@ -475,9 +479,9 @@ mod tests {
     fn a_destroyed_players_tick_leaves_the_box_alone() {
         let mut session = flying(&burner(), 90.0);
         let box_ = widened(&mut session);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.tick(Controls::default());
-        assert_eq!(session.player_max_vel.get(), box_);
+        assert_eq!(session.ship.player_max_vel.get(), box_);
     }
 
     #[test]
@@ -487,7 +491,7 @@ mod tests {
         session.pod = Some(100);
         session.tick(Controls::default());
         assert_eq!(session.pod, Some(99), "the pod flew");
-        assert_eq!(session.player_max_vel.get(), box_);
+        assert_eq!(session.ship.player_max_vel.get(), box_);
     }
 
     #[test]
@@ -500,12 +504,12 @@ mod tests {
         );
         run(&mut session, held(true, true), 100);
         let top = session.top_speed();
-        let box_ = session.player_max_vel.get();
+        let box_ = session.ship.player_max_vel.get();
         assert!(near(box_, afterburner_top(top)), "{box_}");
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         session.tick(Controls::default());
         assert!(session.preparing_jump().is_some(), "in the pre-jump");
-        let speed = session.player.velocity.length();
+        let speed = session.ship.player.velocity.length();
         assert!(speed > top + 1.0, "held to the box: {speed}");
         assert!(speed <= box_ + 1e-4, "{speed}");
     }
@@ -517,9 +521,9 @@ mod tests {
         let top = session.top_speed();
         let speed = box_ - 0.5;
         assert!(speed > top + 1.0);
-        session.player_speed = speed;
-        session.player.velocity = Vec2::new(speed, 0.0);
-        session.condition = Condition::Disabled;
+        session.ship.player_speed = speed;
+        session.ship.player.velocity = Vec2::new(speed, 0.0);
+        session.ship.condition = Condition::Disabled;
         session.tick(Controls::default());
         assert!(
             near(
@@ -534,14 +538,17 @@ mod tests {
     #[test]
     fn a_new_sessions_box_of_none_holds_the_first_tick_at_rest() {
         let mut session = Session::start(&burner()).expect("starts");
-        session.player.velocity = Vec2::new(3.0, 0.0);
-        let at = session.player.position;
+        session.ship.player.velocity = Vec2::new(3.0, 0.0);
+        let at = session.ship.player.position;
         session.tick(held(true, false));
-        assert_eq!(session.player.velocity, Vec2::ZERO);
-        assert_eq!(session.player.position, at);
-        assert_eq!(session.player_max_vel.get(), session.top_speed());
+        assert_eq!(session.ship.player.velocity, Vec2::ZERO);
+        assert_eq!(session.ship.player.position, at);
+        assert_eq!(session.ship.player_max_vel.get(), session.top_speed());
         session.tick(held(true, false));
-        assert!(session.player.velocity != Vec2::ZERO, "moves on the second");
+        assert!(
+            session.ship.player.velocity != Vec2::ZERO,
+            "moves on the second"
+        );
     }
 
     #[test]
@@ -583,12 +590,12 @@ mod tests {
         let catalog = armed();
         let hit = |burning: bool| {
             let mut session = knocking(&catalog, (None, 100.0), (Some(knocker()), 100.0));
-            session.player.velocity = Vec2::new(20.0, 0.0);
-            session.afterburner_on = burning;
+            session.ship.player.velocity = Vec2::new(20.0, 0.0);
+            session.ship.afterburner_on = burning;
             fight_until(&mut session, |session| {
                 session.reserves().shield.now < 1000.0
             });
-            (session.top_speed(), session.player.velocity)
+            (session.top_speed(), session.ship.player.velocity)
         };
         let (top, plain) = hit(false);
         assert!(top < 20.0 && afterburner_top(top) > 20.0, "{top}");
@@ -612,15 +619,15 @@ mod tests {
             session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
             session.pilot.reserves.armor = crate::reserves::Gauge::full(300.0);
             let top = session.top_speed();
-            session.player.velocity = Vec2::new(afterburner_top(top) - 0.5, 0.0);
-            session.afterburner_on = burning;
+            session.ship.player.velocity = Vec2::new(afterburner_top(top) - 0.5, 0.0);
+            session.ship.afterburner_on = burning;
             let npc = &mut session.traffic.npcs_mut()[0];
             on_its_last_tick(&mut npc.reserves, &mut npc.condition);
             session.tick_combat(
                 crate::combat::Rules::default(),
                 &mut crate::chance::NeverFires,
             );
-            (top, session.player.velocity)
+            (top, session.ship.player.velocity)
         };
         let (top, plain) = shoved(false);
         assert!(near(plain.x, top), "clamped: {plain:?}");
@@ -653,7 +660,7 @@ mod tests {
         let top = |rules: Rulebook| {
             let mut session = flying(&burner(), 90.0).with_rules(rules);
             gravity_listed(&mut session);
-            session.afterburner_on = true;
+            session.ship.afterburner_on = true;
             (session.top_speed(), session.player_caps().thrust_top)
         };
         let (plain, original) = top(Rulebook::default());
@@ -668,9 +675,9 @@ mod tests {
             let mut session = flying(&burner(), 90.0).with_rules(rules);
             gravity_listed(&mut session);
             session.settle_box();
-            session.afterburner_on = true;
+            session.ship.afterburner_on = true;
             session.burn_afterburner();
-            (session.top_speed(), session.player_max_vel.get())
+            (session.top_speed(), session.ship.player_max_vel.get())
         };
         let (top, original) = box_after(Rulebook::default());
         assert!(near(original, afterburner_top(top)), "{original}");
@@ -695,12 +702,12 @@ mod tests {
         if gravity {
             gravity_listed(&mut session);
         }
-        session.player.velocity = Vec2::new(20.0, 0.0);
-        session.afterburner_on = burning;
+        session.ship.player.velocity = Vec2::new(20.0, 0.0);
+        session.ship.afterburner_on = burning;
         fight_until(&mut session, |session| {
             session.reserves().shield.now < 1000.0
         });
-        (session.top_speed(), session.player.velocity)
+        (session.top_speed(), session.ship.player.velocity)
     }
 
     #[test]
@@ -759,7 +766,7 @@ mod tests {
         assert!(
             near(moved(&mut session, held(false, true)).x, burnt),
             "{:?}",
-            session.player
+            session.ship.player
         );
     }
 
@@ -781,13 +788,13 @@ mod tests {
     #[test]
     fn coasting_on_the_afterburner_the_glow_climbs_1_a_tick_to_32() {
         let mut session = flying(&burner(), 90.0);
-        session.engine_glow = i16::from(GLOW_CRUISE);
+        session.ship.engine_glow = i16::from(GLOW_CRUISE);
         session.tick(held(false, true));
-        assert_eq!(session.engine_glow, 25);
+        assert_eq!(session.ship.engine_glow, 25);
         for _ in 0..20 {
             session.tick(held(false, true));
         }
-        assert_eq!(session.engine_glow, GLOW_AFTERBURNER);
+        assert_eq!(session.ship.engine_glow, GLOW_AFTERBURNER);
     }
 
     #[test]
@@ -795,16 +802,16 @@ mod tests {
         let mut session = flying(&burner(), 90.0);
         for k in 1..=12 {
             session.tick(held(true, true));
-            assert_eq!(session.engine_glow, 2 * k, "{k}");
+            assert_eq!(session.ship.engine_glow, 2 * k, "{k}");
         }
         session.tick(held(true, true));
-        assert_eq!(session.engine_glow, 25);
+        assert_eq!(session.ship.engine_glow, 25);
         for _ in 0..7 {
             session.tick(held(true, true));
         }
-        assert_eq!(session.engine_glow, GLOW_AFTERBURNER);
+        assert_eq!(session.ship.engine_glow, GLOW_AFTERBURNER);
         session.tick(held(true, true));
-        assert_eq!(session.engine_glow, GLOW_AFTERBURNER);
+        assert_eq!(session.ship.engine_glow, GLOW_AFTERBURNER);
     }
 
     /// The inertialess player's glow base after one tick under
@@ -814,9 +821,9 @@ mod tests {
         let mut session = flying(&inertialess(), 90.0);
         run(&mut session, controls, 200);
         assert!(session.player_speed() > session.top_speed());
-        session.engine_glow = base;
+        session.ship.engine_glow = base;
         session.tick(controls);
-        session.engine_glow
+        session.ship.engine_glow
     }
 
     #[test]
@@ -832,12 +839,12 @@ mod tests {
     #[test]
     fn released_at_32_the_glow_falls_1_a_tick_to_cruise_under_thrust() {
         let mut session = flying(&burner(), 90.0);
-        session.engine_glow = GLOW_AFTERBURNER;
+        session.ship.engine_glow = GLOW_AFTERBURNER;
         for k in 1..=8 {
             session.tick(held(true, false));
-            assert_eq!(session.engine_glow, GLOW_AFTERBURNER - k);
+            assert_eq!(session.ship.engine_glow, GLOW_AFTERBURNER - k);
         }
         session.tick(held(true, false));
-        assert_eq!(session.engine_glow, i16::from(GLOW_CRUISE));
+        assert_eq!(session.ship.engine_glow, i16::from(GLOW_CRUISE));
     }
 }

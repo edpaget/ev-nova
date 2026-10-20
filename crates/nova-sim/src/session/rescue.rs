@@ -186,7 +186,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
-        if !std::mem::take(&mut self.rescue_due) {
+        if !std::mem::take(&mut self.ship.fate.rescue_due) {
             return false;
         }
         let save_due = self.out.save_due;
@@ -217,7 +217,7 @@ impl Session {
         self.reset_records_for_rescue();
         self.out.save_due = save_due;
         self.strict_play_save(catalog);
-        self.rescue_desc_due = true;
+        self.ship.fate.rescue_desc_due = true;
         true
     }
 
@@ -245,7 +245,7 @@ impl Session {
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
     pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        std::mem::take(&mut self.rescue_desc_due).then_some(RESCUE_DESC)
+        std::mem::take(&mut self.ship.fate.rescue_desc_due).then_some(RESCUE_DESC)
     }
 
     /// Ends every active mission as `_AbortMission(slot, 1)` does, in slot
@@ -272,16 +272,16 @@ impl Session {
         self.board_class(&record, &BTreeMap::new());
         // The lights' intensity and count, not their timer (@0x1d534-0x1d539;
         // see `nova_sim::combat::ship_lights`).
-        let lights = &mut self.ship_display.frames.lights;
+        let lights = &mut self.ship.ship_display.frames.lights;
         *lights = crate::combat::ship_lights::ShipLights {
             timer: lights.timer,
             ..crate::combat::ship_lights::ShipLights::default()
         };
-        self.condition = Condition::Intact;
+        self.ship.condition = Condition::Intact;
         self.pod = None;
-        self.pod_zeroed = false;
+        self.ship.fate.pod_zeroed = false;
         self.target = None;
-        self.self_destruct.reset();
+        self.ship.fate.self_destruct.reset();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
@@ -289,7 +289,7 @@ impl Session {
         self.set_nav(crate::navigation::NavMode::Off);
         self.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
-        self.secondary = None;
+        self.ship.secondary = None;
         self.pilot.jumped_from = None;
         self.pilot.course.clear();
         self.pilot.cargo.clear();
@@ -305,7 +305,7 @@ impl Session {
     /// The rescue's reserves: fuel and shield full, the armour as
     /// [`RuleKey::RescueArmor`] reads (see the module docs).
     fn fill_reserves_for_rescue(&mut self) {
-        let stats = self.stats;
+        let stats = self.ship.fit.stats;
         let armor = match self.setup.rules.source_for(RuleKey::RescueArmor) {
             RuleSource::Engine => stats.shield,
             RuleSource::Bible => stats.armor,
@@ -673,7 +673,7 @@ mod tests {
         let mut session = explored(catalog, &[131]);
         session.pilot.ship = ESCAPE_POD_SHIP;
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session
     }
 
@@ -716,32 +716,36 @@ mod tests {
     fn the_rescue_puts_a_zeroed_pod_word_back_to_flying() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.pod_zeroed = true;
+        session.ship.fate.pod_zeroed = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
     }
 
     #[test]
     fn the_rescue_idles_the_self_destruct() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.self_destruct.step(true, false);
-        assert_eq!(session.self_destruct.count(), Some(149));
+        session.ship.fate.self_destruct.step(true, false);
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(149));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        assert_eq!(session.self_destruct.count(), None, "_ResetPlayer @0x1d764");
+        assert_eq!(
+            session.ship.fate.self_destruct.count(),
+            None,
+            "_ResetPlayer @0x1d764"
+        );
     }
 
     #[test]
     fn the_rescue_zeroes_the_players_lights_but_keeps_their_timer() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.ship_display.frames.lights = crate::combat::ship_lights::ShipLights {
+        session.ship.ship_display.frames.lights = crate::combat::ship_lights::ShipLights {
             intensity: 32.0,
             count: 2,
             timer: 7.0,
         };
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        let lights = session.ship_display.frames.lights;
+        let lights = session.ship.ship_display.frames.lights;
         assert_eq!(
             (lights.intensity, lights.count, lights.timer),
             (0.0, 0, 7.0),
@@ -875,7 +879,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         let mut session = explored(&catalog, &[]);
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.system(), RESCUE_FALLBACK);
     }
@@ -908,8 +912,8 @@ mod tests {
         let hulk = session
             .traffic
             .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
-        session.player.velocity = Vec2::new(3.0, 4.0);
-        session.player.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(3.0, 4.0);
+        session.ship.player.heading = 90.0;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.landed(), None);
         assert_eq!(session.pilot().stellar, None);
@@ -993,10 +997,10 @@ mod tests {
         let catalog = rescuing();
         let mut session = explored(&catalog, &[]);
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session.pilot.course = vec![SystemId(131), SystemId(132)];
         session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
-        session.secondary = Some(WeaponId(128));
+        session.ship.secondary = Some(WeaponId(128));
         session.pilot.jumped_from = Some(SystemId(133));
         session.red_alert.check(true, false, true);
         session.red_alert.step(0);
@@ -1006,8 +1010,8 @@ mod tests {
         session.target = Some(NpcId(5));
         session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
-        session.blessing_ranks.clear();
-        session.scan_latches = Latches {
+        session.ship.latches.blessing_ranks.clear();
+        session.ship.latches.scan_latches = Latches {
             junk: false,
             outfits: false,
         };
@@ -1017,15 +1021,18 @@ mod tests {
         assert!(session.pilot.has_explored(RESCUE_FALLBACK), "explored");
         assert_eq!(session.pilot.course(), []);
         assert_eq!(session.pilot.paint, None);
-        assert_eq!(session.secondary, None);
+        assert_eq!(session.ship.secondary, None);
         assert_eq!(session.pilot.jumped_from, None);
         assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
         assert_eq!(session.recent_rank, None);
         assert_eq!(session.queued.sound, None);
         assert_eq!(session.target, None);
         assert_eq!(session.nav, crate::navigation::NavMode::Off, "_ResetPlayer");
-        assert_eq!(session.blessing_ranks, session.pilot.ranks, "taken again");
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.blessing_ranks, session.pilot.ranks,
+            "taken again"
+        );
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
     }
 
     #[test]
@@ -1034,7 +1041,7 @@ mod tests {
         let mut session = explored(&catalog, &[]);
         let died_in = session.system();
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session.pilot.reinforcement_days =
             std::collections::BTreeMap::from([(died_in, 2), (SystemId(999), 3)]);
         session.reinforcements.timers.insert(died_in, 12);
@@ -1143,7 +1150,7 @@ mod tests {
         let catalog = rescuing();
         let mut session = strict(explored(&catalog, &[]));
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.system(), RESCUE_FALLBACK);
         assert!(session.take_save_due());

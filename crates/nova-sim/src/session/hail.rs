@@ -240,7 +240,7 @@ impl Session {
     /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
     fn player_hails(&self) -> Result<(), HailRefusal> {
         let flying = !matches!(
-            self.condition,
+            self.ship.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
         if self.landed.is_some() || self.jump.is_some() || !flying {
@@ -347,7 +347,7 @@ impl Session {
 
     /// The hail of `npc` in conversation `talk`, as the options see it.
     pub(super) fn hail_of<'a>(&'a self, npc: &'a Npc, talk: &Conversation) -> Hail<'a> {
-        let need = assist::need(self.condition, self.pilot.reserves.fuel);
+        let need = assist::need(self.ship.condition, self.pilot.reserves.fuel);
         let around = self.world();
         let around = around.around(self.npcs());
         let quote = Self::quote_of(npc)
@@ -917,12 +917,12 @@ mod tests {
             warp: None,
         });
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying {
+        dying.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
         let mut destroyed = Box::new(targeting(&catalog));
-        destroyed.condition = Condition::Destroyed;
+        destroyed.ship.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, braking, dying, destroyed] {
             let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
             assert_eq!(hailed, Err(HailRefusal::NoTarget));
@@ -935,7 +935,7 @@ mod tests {
     fn a_disabled_player_can_still_hail() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_ok());
     }
 
@@ -1209,7 +1209,7 @@ mod tests {
             warp: 0,
         });
         let mut dying = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        dying.condition = Condition::Dying {
+        dying.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
@@ -2288,7 +2288,7 @@ mod tests {
         assert!(session.talk.is_none(), "populated afresh");
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
-        session.player.position = Vec2::new(30.0, -40.0);
+        session.ship.player.position = Vec2::new(30.0, -40.0);
         land_now(&mut session).expect("lands");
         assert!(session.talk.is_none(), "landed");
     }
@@ -2537,7 +2537,11 @@ mod tests {
         for source in RuleSource::ALL {
             let session = released(&catalog, source);
             assert_eq!(session.pilot().escorts(), [], "{source:?}");
-            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x96864");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{source:?}: @0x96864"
+            );
             assert_eq!(
                 session.pilot().held(Good::Commodity(0)),
                 15,
@@ -2553,14 +2557,14 @@ mod tests {
         let mut catalog = hailable();
         catalog.ship_records[0].inherent_ai = 4;
         let session = released(&catalog, RuleSource::Engine);
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert_eq!(
             session.pilot().held(Good::Commodity(0)),
             0,
             "its 20 over the player's 20: everything"
         );
         let session = released(&catalog, RuleSource::Bible);
-        assert_ne!(session.scan_latches, Latches::ARMED, "no call");
+        assert_ne!(session.ship.latches.scan_latches, Latches::ARMED, "no call");
         assert_eq!(session.pilot().held(Good::Commodity(0)), 30);
     }
 

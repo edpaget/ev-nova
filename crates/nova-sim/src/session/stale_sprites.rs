@@ -68,7 +68,10 @@ impl Session {
             .iter()
             .map(|site| {
                 let frame = self.drawn_frame_size(site).unwrap_or((0, 0));
-                (site.id, offset(site.position, self.player.position, frame))
+                (
+                    site.id,
+                    offset(site.position, self.ship.player.position, frame),
+                )
             })
             .collect();
         for (stellar, top_left) in placed {
@@ -129,7 +132,7 @@ impl Session {
             Vec2::new(frame.0 as f32, frame.1 as f32),
         );
         Some(DeadlyDisc {
-            at: self.player.position + corner + size * 0.5,
+            at: self.ship.player.position + corner + size * 0.5,
             radius: sprite_radius(frame),
         })
     }
@@ -175,8 +178,8 @@ mod tests {
     /// graphic type 0's frame 100 x 100.
     fn among(catalog: &FakePilotCatalog, listed: &[LandingSite], rules: Rulebook) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.listed = listed.to_vec();
         session.sites = Vec::new();
         session.statics_mut().fallback_frame = Some((100, 100));
@@ -230,7 +233,7 @@ mod tests {
         let ghost_on = |player: Vec2, npc: Vec2| {
             let mut session = among(&catalog, &[hidden], Rulebook::default());
             shown_then(&mut session, &[hidden], &[]);
-            session.player.position = player;
+            session.ship.player.position = player;
             session.traffic.npcs_mut()[0].state.position = npc;
             fight(&mut session);
             session.npcs().len()
@@ -352,7 +355,11 @@ mod tests {
             let mut session = among(&catalog, &[hidden], rules);
             shown_then(&mut session, &[hidden], &[]);
             fight(&mut session);
-            assert!(session.player.velocity.x > 0.09, "{:?}", session.player);
+            assert!(
+                session.ship.player.velocity.x > 0.09,
+                "{:?}",
+                session.ship.player
+            );
         }
     }
 
@@ -366,7 +373,7 @@ mod tests {
         assert_eq!(pool.sprite_of(site.id, false), SlotSprite::Own);
         // A frame with the player moved places it again.
         let player = Vec2::new(30.0, -7.0);
-        session.player.position = player;
+        session.ship.player.position = player;
         session.see_stellars();
         let mut pool = session.stellar_sprite_pool().clone();
         pool.rebuild([]);

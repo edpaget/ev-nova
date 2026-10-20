@@ -263,9 +263,9 @@ impl Session {
             quiet_inherent: self.statics.govts.flag2(inherent, QUIET),
             line_free: self.comm_line.free_for_calls(),
             liked: likes_player(npc, &around, self.mission_hail(npc)),
-            threatens: threatens_player(npc, &around, self.condition == Condition::Intact),
+            threatens: threatens_player(npc, &around, self.ship.condition == Condition::Intact),
             player_dying: matches!(
-                self.condition,
+                self.ship.condition,
                 Condition::Dying { .. } | Condition::Destroyed
             ),
             cloaked: npc.cloak.is_cloaked(),
@@ -475,7 +475,7 @@ mod tests {
         let mut ship = npc(0, session.stats());
         ship.govt = govt;
         ship.ship = class;
-        ship.state.position = session.player.position;
+        ship.state.position = session.ship.player.position;
         session.traffic.add_npc(ship)
     }
 
@@ -620,14 +620,14 @@ mod tests {
             "cloaked",
         );
         silent(
-            &|session, _| session.condition = Condition::Destroyed,
+            &|session, _| session.ship.condition = Condition::Destroyed,
             Some(TRADERS),
             CALLER,
             "the player destroyed",
         );
         silent(
             &|session, _| {
-                session.condition = Condition::Dying {
+                session.ship.condition = Condition::Dying {
                     ticks_left: 10,
                     starting: false,
                 };
@@ -1002,7 +1002,7 @@ mod tests {
         let catalog = calling_catalog();
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: crate::geometry::Vec2::new(0.0, -5000.0),
             velocity: crate::geometry::Vec2::ZERO,
             heading: 90.0,
@@ -1258,8 +1258,16 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
         session.reset_precalced();
-        let _ = session.sabotage.tick(false, &mut Draws::of(&[0]));
-        session.sabotage.set_counter(crate::sabotage::FUSE);
+        let _ = session
+            .ship
+            .latches
+            .sabotage
+            .tick(false, &mut Draws::of(&[0]));
+        session
+            .ship
+            .latches
+            .sabotage
+            .set_counter(crate::sabotage::FUSE);
     }
 
     /// The bomb's line.
@@ -1304,7 +1312,7 @@ mod tests {
             .pilot
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::ESCAPE_FIGHTERS), 2);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.hold_eject(true);
         let (messages, sounds, _) = stepped(&mut session, &catalog, &calls, &[0; 8]);
         assert_eq!(
@@ -1331,7 +1339,7 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(437), 1);
         session.pilot.reserves.armor.now = 3.0;
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(
             messages,
@@ -1360,7 +1368,7 @@ mod tests {
             let mut ship = npc(0, session.stats());
             ship.govt = Some(TRADERS);
             ship.ship = class;
-            ship.state.position = session.player.position;
+            ship.state.position = session.ship.player.position;
             session.traffic.add_npc_at(ship, at)
         };
         let high = flee(5, CALLER, &mut session);

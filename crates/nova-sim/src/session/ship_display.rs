@@ -162,14 +162,14 @@ impl Session {
     pub(super) fn turn_way(&self, controls: crate::flight::Controls, aim: Option<i16>) -> Turn {
         let rate = self.flying_handling().turn_rate;
         let rule = self.setup.flight_rules().player_turn;
-        crate::player_turn::turn(self.player.heading, rate, aim, controls.turn, rule).1
+        crate::player_turn::turn(self.ship.player.heading, rate, aim, controls.turn, rule).1
     }
 
     /// One frame of the player's bank out of a jump, turning `way`,
     /// auto-turning when `auto` (see the module docs).
     pub(super) fn bank_player(&mut self, way: Turn, auto: bool) {
-        let spec = self.hull.frames;
-        bank(&mut self.ship_display.frames, &spec, way, auto);
+        let spec = self.ship.fit.hull.frames;
+        bank(&mut self.ship.ship_display.frames, &spec, way, auto);
     }
 
     /// One frame of the player's bank through a jump, its auto-turn turning
@@ -177,43 +177,43 @@ impl Session {
     /// module docs).
     pub(super) fn bank_through_jump(&mut self, way: Turn) {
         self.bank_player(way, true);
-        if self.hull.frames.has(BANKS) && self.warp_stage() > JUMP_LEVEL_STAGE {
-            self.ship_display.frames.bank = 0.0;
+        if self.ship.fit.hull.frames.has(BANKS) && self.warp_stage() > JUMP_LEVEL_STAGE {
+            self.ship.ship_display.frames.bank = 0.0;
         }
     }
 
     /// Whether the banking glow raises the player's glow this frame: a
     /// banked ship of 0x0002 (@0x6cece-0x6cef1).
     pub(super) fn banking_glow(&self) -> bool {
-        self.ship_display.frames.flag != 0 && self.hull.frames.has(FOLDS)
+        self.ship.ship_display.frames.flag != 0 && self.ship.fit.hull.frames.has(FOLDS)
     }
 
     /// `_ResetPlayer`'s fold: set 0, folding up.
     pub(super) fn reset_fold(&mut self) {
-        *self.armament.fold_mut() = Fold {
+        *self.ship.fit.armament.fold_mut() = Fold {
             set: 0,
             dir: 1,
-            ..self.armament.fold()
+            ..self.ship.fit.armament.fold()
         };
     }
 
     /// A load's or a change of ship's fold: the last set, no direction,
     /// the timer 0.
     pub(super) fn last_set_fold(&mut self) {
-        let last = self.hull.frames.last_set();
-        *self.armament.fold_mut() = self.armament.fold().at(last);
-        self.ship_display.frames.bank = 0.0;
+        let last = self.ship.fit.hull.frames.last_set();
+        *self.ship.fit.armament.fold_mut() = self.ship.fit.armament.fold().at(last);
+        self.ship.ship_display.frames.bank = 0.0;
     }
 
     /// The take-off's fold (see the module docs).
     pub(super) fn take_off_fold(&mut self) {
-        let spec = self.hull.frames;
+        let spec = self.ship.fit.hull.frames;
         self.land_fold(spec.has(FOLDS) && spec.has(UNFOLDS_TO_FIRE));
     }
 
     /// The arrival's fold (see the module docs).
     pub(super) fn arrival_fold(&mut self) {
-        let unfolds = self.hull.frames.has(UNFOLDS_TO_FIRE);
+        let unfolds = self.ship.fit.hull.frames.has(UNFOLDS_TO_FIRE);
         self.land_fold(unfolds);
     }
 
@@ -225,14 +225,14 @@ impl Session {
             return;
         }
         self.reset_fold();
-        self.ship_display.frames.bank = 0.0;
+        self.ship.ship_display.frames.bank = 0.0;
     }
 
     /// The warp stage's unfold (@0x6b59c-0x6b5cb): a ship of 0x0002, not
     /// 0x0080, above set 0 unfolds.
     pub(super) fn jump_unfold(&mut self) {
-        let spec = self.hull.frames;
-        let fold = self.armament.fold_mut();
+        let spec = self.ship.fit.hull.frames;
+        let fold = self.ship.fit.armament.fold_mut();
         if spec.has(FOLDS) && !spec.has(UNFOLDS_TO_FIRE) && fold.set > 0 {
             fold.dir = -1;
         }
@@ -245,7 +245,7 @@ impl Session {
             return 0;
         }
         match self.setup.rules.source_for(RuleKey::LoadedEscortFoldSet) {
-            RuleSource::Engine => self.hull.frames.last_set(),
+            RuleSource::Engine => self.ship.fit.hull.frames.last_set(),
             RuleSource::Bible => escort.last_set(),
         }
     }
@@ -255,25 +255,28 @@ impl Session {
     /// `chance`.
     pub(super) fn display_ships(&mut self, chance: &mut (impl Chance + ?Sized)) {
         let rules = self.setup.display_rules();
-        let spec = self.hull.frames;
+        let spec = self.ship.fit.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut self.pilot.outfits,
             sources: &self.statics.ammo_outfits,
         };
         let moment = Moment {
-            disabled: self.condition.disabled(),
+            disabled: self.ship.condition.disabled(),
             key_aboard: self
+                .ship
+                .fit
                 .armament
-                .key_ship_aboard(self.hull.key_carried, &rounds),
+                .key_ship_aboard(self.ship.fit.hull.key_carried, &rounds),
             rules,
         };
-        let fold = self.armament.fold_mut();
-        let frames = &mut self.ship_display.frames;
+        let fold = self.ship.fit.armament.fold_mut();
+        let frames = &mut self.ship.ship_display.frames;
         let mut drawn = frames.step(&spec, fold, moment);
         drawn.lights = frames.light(&spec, &moment, |sides| chance.roll(sides));
-        self.ship_display.drawn = drawn;
+        self.ship.ship_display.drawn = drawn;
         let capacity = self.ion_capacity();
-        self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
+        self.ship.ship_display.ion_tint =
+            ion_tint::display(&mut self.ship.ion, capacity, &mut *chance);
         let govts = &self.statics.govts;
         self.traffic
             .display_ships(|govt| govts.derelict(govt), rules, chance);
@@ -288,15 +291,16 @@ impl Session {
     /// chance is to hand.
     pub(super) fn prepare_player_lights(&mut self) {
         use crate::blink::BlinkChance;
-        let spec = self.hull.frames;
+        let spec = self.ship.fit.hull.frames;
         let moment = Moment {
-            disabled: self.condition.disabled(),
+            disabled: self.ship.condition.disabled(),
             key_aboard: false,
             rules: self.setup.display_rules(),
         };
         let rolls = crate::blink::HashedRolls::new(0);
-        let frames = &mut self.ship_display.frames;
-        self.ship_display.drawn.lights = frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
+        let frames = &mut self.ship.ship_display.frames;
+        self.ship.ship_display.drawn.lights =
+            frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
     }
 
     /// Tells the traffic the first class, ID 128, which a spawn of most
@@ -315,14 +319,14 @@ impl Session {
     /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
     #[must_use]
     pub fn player_drawn(&self) -> Drawn {
-        self.ship_display.drawn
+        self.ship.ship_display.drawn
     }
 
     /// The player's ion tint as its last display left it, if it glows
     /// (see `nova_sim::combat::ion_tint`).
     #[must_use]
     pub fn player_ion_tint(&self) -> Option<IonTint> {
-        self.ship_display.ion_tint
+        self.ship.ship_display.ion_tint
     }
 
     /// How a murk-colorized ionized ship's tint takes its colour
@@ -545,9 +549,12 @@ mod tests {
         assert_eq!(sets, [0, 0, 0, 0, 0, 0, 2, 2], "past 6: set 2");
         step(&mut session, Controls::default());
         assert_eq!(session.player_drawn().set, 0, "let go: no flag");
-        assert_eq!(session.ship_display.frames.bank, 6.0, "levelling 2 a frame");
+        assert_eq!(
+            session.ship.ship_display.frames.bank, 6.0,
+            "levelling 2 a frame"
+        );
         let plain = catalog_session(0, 3);
-        assert_eq!(plain.ship_display.frames, ShipFrames::default());
+        assert_eq!(plain.ship.ship_display.frames, ShipFrames::default());
     }
 
     fn catalog_session(flags: u16, sets: i16) -> Session {
@@ -582,14 +589,14 @@ mod tests {
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         for _ in 0..400 {
             let stage = session.warp_stage();
-            session.ship_display.frames.bank = 14.0;
+            session.ship.ship_display.frames.bank = 14.0;
             session.tick(Controls::default());
             if session.warp_stage() > JUMP_LEVEL_STAGE {
-                assert_eq!(session.ship_display.frames.bank, 0.0, "past 30");
+                assert_eq!(session.ship.ship_display.frames.bank, 0.0, "past 30");
                 return;
             }
             assert!(
-                session.ship_display.frames.bank > 10.0,
+                session.ship.ship_display.frames.bank > 10.0,
                 "{stage}: a frame or two off"
             );
         }
@@ -600,11 +607,11 @@ mod tests {
     fn a_new_pilot_folds_up_from_set_0_and_a_load_starts_folded() {
         let catalog = displaying(FOLDS, 6);
         let session = Session::start(&catalog).expect("starts");
-        let fold = session.armament.fold();
+        let fold = session.ship.fit.armament.fold();
         assert_eq!((fold.set, fold.dir), (0, 1), "_ResetPlayer's");
         let pilot = session.pilot.clone();
         let loaded = Session::fly(&catalog, pilot).expect("loads");
-        let fold = loaded.armament.fold();
+        let fold = loaded.ship.fit.armament.fold();
         assert_eq!((fold.set, fold.dir), (5, 0), "_LoadPilotData's");
     }
 
@@ -613,8 +620,8 @@ mod tests {
         let mut catalog = displaying(0, 1);
         catalog.ship_records.push(ship(129, FAST));
         let mut session = Session::start(&catalog).expect("starts");
-        session.armament.fold_mut().dir = -1;
-        session.ship_display.frames.bank = 3.0;
+        session.ship.fit.armament.fold_mut().dir = -1;
+        session.ship.ship_display.frames.bank = 3.0;
         let record = session
             .statics
             .ship_record(ShipId(129))
@@ -625,9 +632,9 @@ mod tests {
             reserves: ReservePolicy::Hold,
         };
         session.become_class(&record, change, |_| {});
-        let fold = session.armament.fold();
+        let fold = session.ship.fit.armament.fold();
         assert_eq!((fold.set, fold.dir), (5, 0));
-        assert_eq!(session.ship_display.frames.bank, 0.0, "its timer");
+        assert_eq!(session.ship.ship_display.frames.bank, 0.0, "its timer");
     }
 
     #[test]
@@ -636,24 +643,24 @@ mod tests {
             let catalog = displaying(flags, 6);
             let mut session = Session::start(&catalog).expect("starts");
             land_now(&mut session).expect("lands");
-            session.armament.fold_mut().set = 3;
+            session.ship.fit.armament.fold_mut().set = 3;
             session.take_off(&catalog, &mut NeverFires);
-            let fold = session.armament.fold();
+            let fold = session.ship.fit.armament.fold();
             let expected = if folded { (5, 0) } else { (0, 1) };
             assert_eq!((fold.set, fold.dir), expected, "{flags:#x} took off");
-            session.armament.fold_mut().set = 3;
+            session.ship.fit.armament.fold_mut().set = 3;
             session.arrival_fold();
-            let fold = session.armament.fold();
+            let fold = session.ship.fit.armament.fold();
             assert_eq!((fold.set, fold.dir), expected, "{flags:#x} arrived");
         }
         // The arrival tests 0x0080 alone.
         let catalog = displaying(0x0080, 6);
         let mut session = Session::start(&catalog).expect("starts");
         session.arrival_fold();
-        assert_eq!(session.armament.fold().set, 5);
+        assert_eq!(session.ship.fit.armament.fold().set, 5);
         session.take_off_fold();
         assert_eq!(
-            session.armament.fold().set,
+            session.ship.fit.armament.fold().set,
             0,
             "the take-off asks 0x0002 too"
         );
@@ -664,8 +671,8 @@ mod tests {
         for (flags, dir) in [(FOLDS, -1), (0x00C2, 0)] {
             let catalog = displaying(flags, 6);
             let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 180.0);
-            session.armament.fold_mut().set = 5;
-            session.armament.fold_mut().dir = 0;
+            session.ship.fit.armament.fold_mut().set = 5;
+            session.ship.fit.armament.fold_mut().dir = 0;
             assert_eq!(session.begin_jump(), Ok(SystemId(131)));
             for _ in 0..200 {
                 session.tick(Controls::default());
@@ -673,13 +680,13 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(session.armament.fold().dir, dir, "{flags:#x}");
+            assert_eq!(session.ship.fit.armament.fold().dir, dir, "{flags:#x}");
         }
         // Unfolded already, nothing turns.
         let mut session = Session::start(&displaying(FOLDS, 6)).expect("starts");
-        *session.armament.fold_mut() = crate::combat::armament::Fold::default();
+        *session.ship.fit.armament.fold_mut() = crate::combat::armament::Fold::default();
         session.jump_unfold();
-        assert_eq!(session.armament.fold().dir, 0);
+        assert_eq!(session.ship.fit.armament.fold().dir, 0);
     }
 
     #[test]
@@ -706,16 +713,16 @@ mod tests {
     fn the_players_clock_moves_on_the_advance_pass_alone() {
         let catalog = displaying(0, 1);
         let mut session = Session::start(&catalog).expect("starts");
-        session.armament.stamp_fire();
+        session.ship.fit.armament.stamp_fire();
         session.tick(Controls::default());
-        assert_eq!(session.armament.fold().since_fire, 2);
+        assert_eq!(session.ship.fit.armament.fold().since_fire, 2);
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.armament.fold().since_fire, 2, "not again");
+        assert_eq!(session.ship.fit.armament.fold().since_fire, 2, "not again");
     }
 
     #[test]
@@ -797,7 +804,7 @@ mod tests {
     /// when `disabled`.
     fn player_lights(session: &mut Session, n: usize, disabled: bool) -> Vec<Option<u8>> {
         if !disabled {
-            session.condition = crate::combat::hull::Condition::Intact;
+            session.ship.condition = crate::combat::hull::Condition::Intact;
         }
         let rules = if disabled {
             crate::session::tests::DISABLING
@@ -837,7 +844,7 @@ mod tests {
     #[test]
     fn a_flown_sessions_player_lights_step_once_before_the_first_frame() {
         let session = Session::start(&lit(0)).expect("starts");
-        let lights = session.ship_display.frames.lights;
+        let lights = session.ship.ship_display.frames.lights;
         assert_eq!((lights.intensity, lights.count), (0.75, 0), "one step");
         assert_eq!(session.player_drawn().lights, None, "0.75: not drawn");
         let mut steady = lit(0);
@@ -855,16 +862,16 @@ mod tests {
         let catalog = lit(0);
         let mut session = Session::start(&catalog).expect("starts");
         player_lights(&mut session, 20, false);
-        let lights = session.ship_display.frames.lights;
+        let lights = session.ship.ship_display.frames.lights;
         assert_ne!(lights, crate::combat::ship_lights::ShipLights::default());
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(session.ship_display.frames.lights, lights, "a landing");
+        assert_eq!(session.ship.ship_display.frames.lights, lights, "a landing");
         assert_eq!(
             crate::testkit::jump(&mut session, &catalog, 131),
             Some(SystemId(131))
         );
-        assert_eq!(session.ship_display.frames.lights, lights, "a jump");
+        assert_eq!(session.ship.ship_display.frames.lights, lights, "a jump");
     }
 
     #[test]
@@ -894,7 +901,7 @@ mod tests {
                 Rulebook::default().with_override(RuleKey::SpawnAnimRollsFirstClass, reading);
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
             let first = session.traffic.first_class();
-            assert_eq!(first.spec, session.hull.frames, "the player's 128");
+            assert_eq!(first.spec, session.ship.fit.hull.frames, "the player's 128");
             assert_eq!(first.reading, reading);
             let stellar = session.sites[0].id;
             session
@@ -903,7 +910,7 @@ mod tests {
             let first = session.traffic.first_class();
             assert_eq!(
                 (first.spec, first.reading),
-                (session.hull.frames, reading),
+                (session.ship.fit.hull.frames, reading),
                 "re-applied to a new traffic"
             );
         }

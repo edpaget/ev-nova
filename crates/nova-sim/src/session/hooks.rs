@@ -161,11 +161,11 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         // `_ResetPlayer(1)` (@0x18dd4, @0x1d427-0x1d441).
-        self.player.position = Vec2::new(50.0, 50.0);
-        self.player.velocity = Vec2::ZERO;
-        self.player.heading = 0.0;
-        self.player_speed = 0.0;
-        self.touchdown = self.player.position;
+        self.ship.player.position = Vec2::new(50.0, 50.0);
+        self.ship.player.velocity = Vec2::ZERO;
+        self.ship.player.heading = 0.0;
+        self.ship.player_speed = 0.0;
+        self.touchdown = self.ship.player.position;
         // A new pilot starts the first-flight tutorial (`_DoNewPilot`
         // @0x19254; see the `tutorial` module).
         self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;
@@ -207,7 +207,7 @@ impl Session {
         // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
         // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
         // pilot is what it saves.
-        self.pilot.stellar = nearest_stellar(self.player.position, &self.sites)
+        self.pilot.stellar = nearest_stellar(self.ship.player.position, &self.sites)
             .or_else(|| self.listed.first().map(|site| site.id));
         // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
@@ -1277,8 +1277,8 @@ mod tests {
     fn begin_puts_the_new_pilots_ship_at_50_50_at_rest_facing_up() {
         let catalog = starting_with("");
         let mut session = new_pilot(&catalog);
-        session.player.heading = 90.0;
-        session.player.velocity = Vec2::new(3.0, 4.0);
+        session.ship.player.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(3.0, 4.0);
         session.begin(&catalog, &mut Scripted::default());
         let player = session.player();
         assert_eq!(player.position, Vec2::new(50.0, 50.0));

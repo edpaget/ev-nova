@@ -387,9 +387,9 @@ impl Session {
         self.pilot.outfits = change.outfits;
         before_class(self);
         self.pilot.ship = ship.id;
-        self.fields = ship.fields;
-        self.defaults = pilot::tally(ship.defaults.iter().copied());
-        self.stock = armament::fitted(
+        self.ship.fit.fields = ship.fields;
+        self.ship.fit.defaults = pilot::tally(ship.defaults.iter().copied());
+        self.ship.fit.stock = armament::fitted(
             &self
                 .statics
                 .arsenal
@@ -400,7 +400,7 @@ impl Session {
         // so the turn of exits goes on, as the refit carried it; by the
         // other reading a new ship starts each `ExitType` at exit 0.
         if self.setup.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
-            *self.armament.exit_cursors_mut() = ExitCursors::default();
+            *self.ship.fit.armament.exit_cursors_mut() = ExitCursors::default();
         }
         // The fold does not carry: the original's ship change rewrites it
         // as the new hull's `BaseSets` − 1 with no direction and its timer
@@ -494,7 +494,7 @@ impl Session {
     fn bump_armor(&mut self) {
         let rule = Rc::clone(&self.setup.disable_rule.0);
         let armor = &mut self.pilot.reserves.armor;
-        while armor.now < armor.max && rule.disabled(*armor, &self.hull) {
+        while armor.now < armor.max && rule.disabled(*armor, &self.ship.fit.hull) {
             armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
         }
     }
@@ -836,9 +836,9 @@ mod tests {
             seen = Some((
                 s.ship(),
                 s.pilot.outfits.clone(),
-                s.fields,
-                s.defaults.clone(),
-                s.stock.clone(),
+                s.ship.fit.fields,
+                s.ship.fit.defaults.clone(),
+                s.ship.fit.stock.clone(),
                 s.stats(),
                 s.out.save_due,
             ));
@@ -848,9 +848,9 @@ mod tests {
             Some((
                 ShipId(128),
                 outfits,
-                before.fields,
-                before.defaults.clone(),
-                before.stock.clone(),
+                before.ship.fit.fields,
+                before.ship.fit.defaults.clone(),
+                before.ship.fit.stock.clone(),
                 before.stats(),
                 false,
             )),
@@ -870,15 +870,22 @@ mod tests {
         session.become_class(&record(&session, 129), change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(session.pilot.outfits, outfits);
-        assert_eq!(session.fields, BIG);
-        assert_eq!(session.defaults, owned(&[(SHIELD, 1), (LIMITED, 2)]));
-        assert_eq!(session.stock, owned(&[(OutfitId(405), 1)]));
+        assert_eq!(session.ship.fit.fields, BIG);
+        assert_eq!(
+            session.ship.fit.defaults,
+            owned(&[(SHIELD, 1), (LIMITED, 2)])
+        );
+        assert_eq!(session.ship.fit.stock, owned(&[(OutfitId(405), 1)]));
         assert_eq!(
             session.stats(),
             ShipStats::new(BIG, &outfit_mods(&outfits, &session.statics.outfits))
         );
         assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
-        assert_eq!(session.armament.mounts().len(), 1, "405 mounts weapon 200");
+        assert_eq!(
+            session.ship.fit.armament.mounts().len(),
+            1,
+            "405 mounts weapon 200"
+        );
         assert!(session.take_save_due());
     }
 
@@ -954,8 +961,11 @@ mod tests {
         let kept = session.pilot.outfits.clone();
         run(&mut session, "C129");
         assert_eq!(session.ship(), ShipId(129));
-        assert_eq!(session.fields, BIG);
-        assert_eq!(session.defaults, owned(&[(SHIELD, 1), (LIMITED, 2)]));
+        assert_eq!(session.ship.fit.fields, BIG);
+        assert_eq!(
+            session.ship.fit.defaults,
+            owned(&[(SHIELD, 1), (LIMITED, 2)])
+        );
         assert_eq!(session.pilot.outfits, kept, "every outfit, no default");
         assert_eq!(
             session.stats(),
@@ -968,14 +978,14 @@ mod tests {
         );
         assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
         assert_eq!(
-            session.armament,
+            session.ship.fit.armament,
             session
                 .statics
                 .arsenal
                 .player(&kept, &session.statics.outfits)
         );
         assert!(
-            session.armament.mounts().is_empty(),
+            session.ship.fit.armament.mounts().is_empty(),
             "no stock weapon: no outfit holds the new class's"
         );
         assert!(session.take_save_due());
@@ -1000,8 +1010,16 @@ mod tests {
             let mut session = session(&catalog);
             run(&mut session, op);
             assert_eq!(session.pilot.owned(held), added, "{op}");
-            assert_eq!(session.stock, owned(&[(held, 1)]), "{op}: its standard");
-            assert_eq!(session.armament.mounts().len(), usize::from(added), "{op}");
+            assert_eq!(
+                session.ship.fit.stock,
+                owned(&[(held, 1)]),
+                "{op}: its standard"
+            );
+            assert_eq!(
+                session.ship.fit.armament.mounts().len(),
+                usize::from(added),
+                "{op}"
+            );
         }
     }
 
@@ -1103,13 +1121,15 @@ mod tests {
         assert_eq!(session.ship(), ShipId(132));
         assert_eq!(session.pilot.outfits, before);
         assert_eq!(
-            session.armament,
+            session.ship.fit.armament,
             session
                 .statics
                 .arsenal
                 .player(&before, &session.statics.outfits)
         );
         let mounted: Vec<(WeaponId, u32)> = session
+            .ship
+            .fit
             .armament
             .mounts()
             .iter()
@@ -1135,7 +1155,7 @@ mod tests {
         assert_eq!(own(BAY), 1);
         assert_eq!(own(FIGHTERS), 0, "by the engine the fighters are lost");
         assert_eq!(
-            session.armament,
+            session.ship.fit.armament,
             session
                 .statics
                 .arsenal
@@ -1495,7 +1515,7 @@ mod tests {
             wage: None,
             person: None,
         });
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: Vec2::new(5.0, -3.0),
             velocity: Vec2::new(0.25, 0.0),
             heading: 180.0,
@@ -1928,12 +1948,18 @@ mod tests {
             let reloaded = Session::fly(&catalog, pilot).expect("flies");
             assert_eq!(reloaded.ship(), ShipId(129), "{op}");
             assert_eq!(reloaded.pilot.outfits, session.pilot.outfits, "{op}");
-            assert_eq!(reloaded.defaults, session.defaults, "{op}");
+            assert_eq!(
+                reloaded.ship.fit.defaults, session.ship.fit.defaults,
+                "{op}"
+            );
             assert_eq!(reloaded.stats(), session.stats(), "{op}");
             assert_eq!(reloaded.reserves(), session.reserves(), "{op}");
             assert_eq!(reloaded.pilot.cargo, session.pilot.cargo, "{op}");
             assert_eq!(reloaded.pilot().ship_name(), Some("Kestrel"), "{op}");
-            assert_eq!(reloaded.armament, session.armament, "{op}");
+            assert_eq!(
+                reloaded.ship.fit.armament, session.ship.fit.armament,
+                "{op}"
+            );
         }
     }
 

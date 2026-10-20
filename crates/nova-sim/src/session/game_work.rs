@@ -143,7 +143,7 @@ impl PassStart {
         Self {
             npcs: session.npcs_before(),
             player_dying: matches!(
-                session.condition,
+                session.ship.condition,
                 Condition::Dying { .. } | Condition::Destroyed
             ),
         }
@@ -201,13 +201,13 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         // `_HandlePlayer` (@0x43e19), up to its move.
-        self.gate = None;
+        self.ship.warp.gate = None;
         let frame = self.pass_head();
         let pass = GamePass::Advance {
-            double_time: self.double_time,
+            double_time: self.ship.warp.double_time,
         };
         self.before_move(frame, pass);
-        self.player_exploded_this_tick = false;
+        self.ship.fate.player_exploded_this_tick = false;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
@@ -423,18 +423,18 @@ impl Session {
             leader: None,
             fleet_escort: false,
             booty: None,
-            state: self.player,
-            hull: self.hull,
-            shield_regen: self.stats.shield_regen,
+            state: self.ship.player,
+            hull: self.ship.fit.hull,
+            shield_regen: self.ship.fit.stats.shield_regen,
             armor_regen,
             trigger: if self.pod.is_some() {
                 Trigger::default()
             } else {
-                super::player_trigger(self.trigger, self.jump.is_some())
+                super::player_trigger(self.ship.trigger, self.jump.is_some())
             },
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
-            condition: &mut self.condition,
+            condition: &mut self.ship.condition,
             held_disabled: false,
             cloaked: false,
             attacking: None,
@@ -449,10 +449,15 @@ impl Session {
             jumping: self.jump.is_some(),
             afterburner: knockback.shots,
             afterburner_beam: knockback.beams,
-            tractor: &mut self.tractor,
-            ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
-            ion: &mut self.ion,
-            armament: &mut self.armament,
+            tractor: &mut self.ship.tractor,
+            ion_capacity: self
+                .ship
+                .fit
+                .stats
+                .ion
+                .capacity(crate::flight::Flyer::Player),
+            ion: &mut self.ship.ion,
+            armament: &mut self.ship.fit.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
             docked: false,
@@ -530,7 +535,7 @@ impl Session {
         phase: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
     ) {
         let was = self.npcs_before();
-        let player_was = self.condition;
+        let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, phase);
         self.settle_landed(&was, (player_was, None), rules, chance);
     }
@@ -546,7 +551,7 @@ impl Session {
     pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         let hazards = self.stellar_hazards();
         let was = self.npcs_before();
-        let player_was = self.condition;
+        let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.hazards(fighters, &hazards);
             combat.close_tick(fighters, arena, chance);
@@ -842,7 +847,7 @@ mod tests {
         // (@0x6d4b0-0x6d4eb).
         let catalog = armed();
         let mut session = warmed(&catalog);
-        session.player.velocity = Vec2::new(3.0, 0.0);
+        session.ship.player.velocity = Vec2::new(3.0, 0.0);
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
@@ -873,7 +878,7 @@ mod tests {
         };
         let mut session = warmed(&catalog);
         // The player's class, of no mass in the fixture, given one.
-        session.hull.mass = 40.0;
+        session.ship.fit.hull.mass = 40.0;
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
@@ -971,7 +976,7 @@ mod tests {
         // beams fired this pass: 0.5 short, up to full, less 5.
         let catalog = beam_armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.stats.shield_regen = 1.0;
+        session.ship.fit.stats.shield_regen = 1.0;
         let full = session.reserves().shield.max;
         session.pilot.reserves.shield.now = full - 0.5;
         let npc = &mut session.traffic.npcs_mut()[0];

@@ -234,7 +234,7 @@ impl Behaviour for Dogfighting {
 fn dogfight_heading(pick: WeaponId, carries: bool) -> Option<i16> {
     let catalog = armed();
     let mut session = facing_an_npc(&catalog, 180);
-    session.player.velocity = Vec2::new(4.0, 0.0);
+    session.ship.player.velocity = Vec2::new(4.0, 0.0);
     let npc = &mut session.traffic.npcs_mut()[0];
     if !carries {
         npc.armament = crate::combat::armament::Armament::default();

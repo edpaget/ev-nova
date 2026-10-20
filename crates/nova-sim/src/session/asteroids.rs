@@ -103,7 +103,7 @@ impl Session {
             RuleSource::Engine => Ring::Original,
             RuleSource::Bible => Ring::Outside,
         };
-        let player = self.player.position;
+        let player = self.ship.player.position;
         self.asteroids.spawn(
             Origin::Edge(ring),
             self.field_spec(),
@@ -144,7 +144,7 @@ impl Session {
     pub(super) fn place_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.asteroids.clear();
         self.asteroid_kill = None;
-        let player = self.player.position;
+        let player = self.ship.player.position;
         self.asteroids.place_field(
             self.field_spec(),
             &self.statics.asteroid_types,
@@ -465,7 +465,7 @@ mod tests {
         let mut session = flying(&catalog);
         pass(&mut session, &mut NeverFires);
         let first = *session.asteroids().next().expect("spawned");
-        session.player.position = session.player.position + Vec2::new(1000.0, 0.0);
+        session.ship.player.position = session.ship.player.position + Vec2::new(1000.0, 0.0);
         pass(&mut session, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 0, "culled, none spawned");
         pass(&mut session, &mut NeverFires);
@@ -606,7 +606,7 @@ mod tests {
         let before: Vec<Asteroid> = session.asteroids().copied().collect();
         session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let after: Vec<Asteroid> = session.asteroids().copied().collect();
         assert_eq!(after, before);

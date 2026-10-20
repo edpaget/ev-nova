@@ -58,13 +58,15 @@ impl Session {
     /// NPC `helper`, of ship type `ship`, has repaired the player (see the
     /// module docs).
     pub(super) fn repaired_by(&mut self, helper: NpcId, ship: ShipId) {
-        self.player_boarded = false;
-        if self.condition == Condition::Disabled {
+        self.ship.fate.player_boarded = false;
+        if self.ship.condition == Condition::Disabled {
             let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
             let armor = &mut self.pilot.reserves.armor;
-            repair(armor, &self.hull, |armor, hull| rule.disabled(armor, hull));
-            if !rule.disabled(*armor, &self.hull) {
-                self.condition = Condition::Intact;
+            repair(armor, &self.ship.fit.hull, |armor, hull| {
+                rule.disabled(armor, hull)
+            });
+            if !rule.disabled(*armor, &self.ship.fit.hull) {
+                self.ship.condition = Condition::Intact;
             }
         }
         self.say_help_done(helper, ship, Help::Repair, SimSound::RepairsComplete);
@@ -165,8 +167,8 @@ mod tests {
     fn downed(catalog: &FakePilotCatalog, rule: Rc<dyn DisableRule>) -> (Session, NpcId) {
         let mut session = facing_an_npc(catalog, 180).with_disable_rule(rule);
         session.pilot.ship_name = Some("Kestrel".to_owned());
-        session.condition = Condition::Disabled;
-        session.player_boarded = true;
+        session.ship.condition = Condition::Disabled;
+        session.ship.fate.player_boarded = true;
         session.pilot.reserves.armor = Gauge {
             now: 10.0,
             max: 45.0,
@@ -346,7 +348,7 @@ mod tests {
         let catalog = catalog();
         let rule = Rc::new(Below20::default());
         let (mut session, helper) = downed(&catalog, rule.clone());
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         answer(&mut session, helper);
         assert_eq!(session.reserves().armor.now, 10.0);
         assert!(rule.asked.borrow().is_empty());
@@ -359,7 +361,7 @@ mod tests {
     fn a_ship_repairing_the_player_through_the_session_repairs_it_once_and_drifts() {
         let catalog = catalog();
         let (mut session, helper) = downed(&catalog, Rc::new(Below20::default()));
-        session.player_boarded = false;
+        session.ship.fate.player_boarded = false;
         let npc = session.npc_mut(helper).expect("here");
         npc.goal = Goal::Assist(Help::Repair);
         npc.target = Some(ShipRef::Player);

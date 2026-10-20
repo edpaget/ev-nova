@@ -290,7 +290,7 @@ impl Session {
         Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.armament,
+            armament: &self.ship.fit.armament,
         }
     }
 

@@ -468,6 +468,7 @@ mod player_downed;
 mod player_info;
 mod player_led;
 mod player_repair;
+mod player_ship;
 mod plunder_loop;
 mod precalced;
 mod radar;
@@ -535,10 +536,10 @@ use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::outbox::Outbox;
 use self::outfits::{carries, launches};
+use self::player_ship::PlayerShip;
 use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::statics::Statics;
-use crate::afterburner::MaxVel;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -583,7 +584,7 @@ use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
-use crate::handling::{Handling, ShipFields};
+use crate::handling::Handling;
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hold_jump, hops_per_jump, jump_zone,
@@ -823,16 +824,8 @@ pub struct Session {
     /// What the session fills and the view takes with the `take_*`
     /// methods (see the `outbox` module).
     out: Outbox,
-    /// The ship's fields, read when the session starts.
-    fields: ShipFields,
-    /// The ship's default items, read when the session starts.
-    defaults: BTreeMap<OutfitId, u16>,
-    /// The ship's stock weapons and their ammunition, as outfits
-    /// ([`Arsenal::stock_outfits`]), read when the session starts.
-    stock: BTreeMap<OutfitId, u16>,
-    /// How the ship performs, with the outfits it carries.
-    stats: ShipStats,
-    player: ShipState,
+    /// The player's ship (see the `player_ship` module).
+    ship: PlayerShip,
     /// The stellars shown: those of `listed` that `shown` holds, and the
     /// one docked at, derived whenever [`Session::set_player_system`] says
     /// and at the flight rebuild points (see the `entry` module).
@@ -868,38 +861,6 @@ pub struct Session {
     galaxy: OverlaidGalaxy,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
-    /// Which warp-up sound is still playing, `snd ` 128 or 129, for the
-    /// warp start's still-playing skip and the double-time switch (see
-    /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
-    warp_ups: warp::WarpUps,
-    /// Whether the warp-out, `snd ` 130, is still playing, for a jump's
-    /// natural end (see [`warp::WarpOut`]); not saved, as the original's
-    /// sounds are not.
-    warp_out: warp::WarpOut,
-    /// The player's warp stage: its +0x50, the warp end's flags and the
-    /// screen's white (see the `warp_stage` module).
-    warp: warp_stage::PlayerWarp,
-    /// The hypergate or wormhole the land key has just been pressed over,
-    /// cleared: its entry awaits until the next tick.
-    gate: Option<StellarId>,
-    /// Whether the ship is thrusting, as the last sounds told it.
-    thrusting: bool,
-    /// The engine glow's base level (see [`glow`](crate::glow)), an
-    /// `i16` as the original's, which an inertialess ship's dips to -1.
-    engine_glow: i16,
-    /// The player's drawn state: its bank, display timers and sets (see
-    /// the `ship_display` module). Unsaved.
-    ship_display: ship_display::PlayerDisplay,
-    /// The player's speed along its heading, the original's +0x48, which
-    /// an inertialess ship flies by (see the `inertialess` module).
-    player_speed: f32,
-    /// Whether the player's afterburner is on this tick, `_abOn` (see the
-    /// `afterburner` module). Unsaved.
-    afterburner_on: bool,
-    /// The box the player's velocity is clamped to, `_playerMaxVel`, as
-    /// the last tick left it (see the `afterburner` module). Unsaved, and
-    /// none in a new session, as the original's static data is.
-    player_max_vel: MaxVel,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     comm_line: CommLine,
@@ -920,28 +881,6 @@ pub struct Session {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
-    /// The player's ship type's hull.
-    hull: HullSpec,
-    /// The player's weapons.
-    armament: Armament,
-    /// How the player's ship is holding up.
-    condition: Condition,
-    /// The player's repair inhibit, `_playerRepairInhibit`: armed as it is
-    /// newly disabled, it holds back its armour's regeneration and its
-    /// self-repair (see the `player_repair` module).
-    repair_inhibit: crate::self_repair::RepairInhibit,
-    /// Whether the player's ship was destroyed on the latest
-    /// [`Session::tick_combat`], the tick the fight raised its
-    /// `CombatEvent::Destroyed`; read by [`Session::player_fate`]. It stays
-    /// set until the next `tick_combat`, so every interpolated view frame
-    /// drawn after that tick sees [`PlayerFate::Exploded`]: the original hides
-    /// on its own frame boundary, so this crosses no boundary the player
-    /// can see.
-    player_exploded_this_tick: bool,
-    /// The player's tractor lock ([`Session::tractor`]).
-    tractor: Option<TractorLock>,
-    /// The player's ionization ([`Session::ion`]).
-    ion: Ion,
     /// The heading each ship in the fight was drawn at after the last
     /// [`Session::tick_combat`]: its heading as that tick ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -963,30 +902,6 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
-    /// Whether +0xc908 is 0 outside the pod, as a beam of `ExitType` 5
-    /// can leave it (see the `stray_words` module): a later such beam
-    /// steps it to 1 without a draw. Cleared wherever the original writes
-    /// -1 or 350: the eject, the rescue, a take-off or a gate's exit
-    /// (`_ResetPlayer` from `_HandlePlayerDockRequest` @0x6709b). Never
-    /// saved, as `_OpenPilotFile` writes -1 (@0x766b5).
-    pod_zeroed: bool,
-    /// Whether the pod countdown has run out and the rescue is due (see
-    /// the `rescue` module); never saved.
-    rescue_due: bool,
-    /// Whether the rescue's dësc is still to show (see the `rescue`
-    /// module); never saved.
-    rescue_desc_due: bool,
-    /// Whether the player holds the eject chord, Command and the eject
-    /// key together (see the `eject` module); never saved.
-    eject_held: bool,
-    /// The self-destruct countdown, `_destructCount` (see the
-    /// `self_destruct` module); never saved.
-    self_destruct: crate::self_destruct::SelfDestruct,
-    /// Whether the player holds the self-destruct chord, Command and `-`
-    /// together (see the `self_destruct` module); never saved.
-    self_destruct_held: bool,
-    /// The fire command the player holds.
-    trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
     combat: Combat,
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
@@ -1009,22 +924,11 @@ pub struct Session {
     /// What the view shows of space about the player's ship (see the
     /// `cloaks` module).
     play_area: crate::cloak::Area,
-    /// The secondary weapon the player has selected, if any: none to
-    /// start with, set by the select key alone, and let go as the module
-    /// docs say. By the engine it may name a weapon the ship no longer
-    /// carries ([`RuleKey::StaleSecondary`]).
-    secondary: Option<WeaponId>,
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
     strikes: Vec<Strike>,
     /// The boarding under way, if any.
     aboard: Option<Aboard>,
-    /// Whether the player's fuel capacity is cached, as `_ShipFuelCapacity`
-    /// caches it (`*0x3b508c`, @0x2f55-0x2feb) at the flight tick's fuel
-    /// regeneration and an Energy take, until a reset invalidates it
-    /// (@0xc397): which capacity Use As My Ship draws its fuel below (see
-    /// the `capture` module). Never saved.
-    fuel_cap_cached: bool,
     /// The hail under way, if any.
     talk: Option<hail::Talk>,
     /// Each escort of the fleet's NPC in the system, lined up with the
@@ -1096,16 +1000,6 @@ pub struct Session {
     /// `_DoPlayGameWork` sees, as `_PlayGame` adds 1 after it (@0x45f36),
     /// which the fight's interfered shots circle by ([`Field::frame`]).
     pass_frame: i16,
-    /// Whether double time is on, as the switch last said (see the
-    /// `double_time` module); not saved, as the original's `_doubleTime`
-    /// is a global, not a pilot field.
-    double_time: bool,
-    /// Whether the double-time key is on, as its caller last said.
-    double_time_key: bool,
-    /// The player's desired heading, in whole degrees, the original's
-    /// +0x68, which the double-time switch reads (see the `double_time`
-    /// module); not saved, as a pilot's start zeroes it (@0x1c315).
-    aim: i16,
     /// The dock request the land key made, if any: the original's
     /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
     /// not saved, as a flight start sets both to −1.
@@ -1133,9 +1027,6 @@ pub struct Session {
     target_fly_in: crate::brackets::FlyIn,
     /// The hail quotes' clock.
     quote_clock: persons::QuoteClock,
-    /// Whether a pirate has docked with the player's disabled ship (its
-    /// slot's +0xb9; see the `pirate_plunder` module): never saved.
-    player_boarded: bool,
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
@@ -1189,31 +1080,6 @@ pub struct Session {
     /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
     /// saved, as `_priceFluxMult` lives in memory only.
     port_ranks: ranks::PortRanks,
-    /// The active ranks as the last reset took them, which the blessing
-    /// table is built from (see the `ranks` and `precalced` modules).
-    /// Never saved, as the original's table lives in memory only.
-    blessing_ranks: BTreeSet<RankId>,
-    /// Whether the resets leave the cargo past the holds untrimmed: set
-    /// through an outfit sale by the other reading of
-    /// [`RuleKey::OutfitSaleCargo`] (see the `precalced` module). Never
-    /// saved.
-    sale_keeps_cargo: bool,
-    /// `_ScanPlayer`'s contraband latches, armed at each reset
-    /// ([`Session::reset_precalced`], the session's stand-in for
-    /// `_ResetPlayerPrecalcedValues`), and cleared by a conviction (see
-    /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
-    /// original's are globals.
-    scan_latches: crate::scan::Latches,
-    /// The sabotage clock, `_sabotageCounter` with the cached
-    /// `_playerSabotaged`, refreshed at each reset
-    /// ([`Session::reset_precalced`]; see the `sabotage` module). Never
-    /// saved, as the original's are globals.
-    sabotage: crate::sabotage::SabotageClock,
-    /// The `jünk` latches the tribbles and perishables step reads, set
-    /// only at each reset ([`Session::reset_precalced`]; see
-    /// [`market::JunkLatches`]). Both clear until the first. Never saved,
-    /// as the original's are globals.
-    junk_latches: market::JunkLatches,
     /// The systems known (+0x1ec): what the galaxy map draws besides the
     /// explored ones, and what the escape search needs (see the
     /// [`exploration`](crate::exploration) module's "Known" and the
@@ -1526,12 +1392,6 @@ impl Session {
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
         };
         let mut session = Self {
-            fields,
-            defaults,
-            stock,
-            // Refitted below, from the outfits the pilot owns.
-            stats: ShipStats::default(),
-            player,
             sites: Vec::new(),
             listed: Vec::new(),
             shown: system,
@@ -1543,36 +1403,11 @@ impl Session {
             gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
-            warp_ups: warp::WarpUps::default(),
-            warp_out: warp::WarpOut::default(),
-            warp: warp_stage::PlayerWarp::default(),
-            gate: None,
-            thrusting: false,
-            engine_glow: 0,
-            ship_display: ship_display::PlayerDisplay::default(),
-            player_speed: 0.0,
-            afterburner_on: false,
-            player_max_vel: MaxVel::START,
             traffic: Traffic::new(),
             traffic_due: true,
-            // Refitted below, from the ship and the outfits the pilot owns.
-            hull: HullSpec::default(),
-            armament: Armament::default(),
-            condition: Condition::Intact,
-            repair_inhibit: crate::self_repair::RepairInhibit::OFF,
-            player_exploded_this_tick: false,
-            tractor: None,
-            ion: Ion::default(),
             drawn: BTreeMap::new(),
             player_end: None,
             pod: None,
-            pod_zeroed: false,
-            rescue_due: false,
-            rescue_desc_due: false,
-            eject_held: false,
-            self_destruct: crate::self_destruct::SelfDestruct::default(),
-            self_destruct_held: false,
-            trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
             asteroids: crate::asteroid::Asteroids::default(),
@@ -1584,10 +1419,8 @@ impl Session {
             asteroid_field_due: true,
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
-            secondary: None,
             strikes: Vec::new(),
             aboard: None,
-            fuel_cap_cached: false,
             talk: None,
             fleet: Vec::new(),
             restock_persons: false,
@@ -1602,9 +1435,6 @@ impl Session {
             ship_redraws: BTreeSet::new(),
             frame: 0,
             pass_frame: 0,
-            double_time: false,
-            double_time_key: false,
-            aim: 0,
             dock: None,
             land_key: false,
             takeoff_grace: 0,
@@ -1618,7 +1448,6 @@ impl Session {
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,
             iff_marked: BTreeSet::new(),
-            player_boarded: false,
             queued: script_effects::Queued::default(),
             next_sites: None,
             hold_position: false,
@@ -1633,14 +1462,6 @@ impl Session {
             stellar_sprites: StellarSpritePool::default(),
             recent_rank: None,
             port_ranks: ranks::PortRanks::default(),
-            blessing_ranks: BTreeSet::new(),
-            sale_keeps_cargo: false,
-            scan_latches: crate::scan::Latches {
-                junk: false,
-                outfits: false,
-            },
-            sabotage: crate::sabotage::SabotageClock::default(),
-            junk_latches: market::JunkLatches::default(),
             known: BTreeSet::new(),
             galaxy_stale: false,
             offers: Offers::default(),
@@ -1664,6 +1485,7 @@ impl Session {
             statics: Rc::new(statics),
             setup: Setup::default(),
             out: Outbox::default(),
+            ship: PlayerShip::new(player, fields, defaults, stock),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -1721,7 +1543,7 @@ impl Session {
     /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
     /// off keeps the heading.
     pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
-        self.player.heading = f32::from(chance.roll(360));
+        self.ship.player.heading = f32::from(chance.roll(360));
     }
 
     /// Resumes a pilot opened from a save, after [`Session::fly`], on
@@ -1877,13 +1699,13 @@ impl Session {
     /// weapons and their ammunition, whose mass `FreeMass` leaves out
     /// (`_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d).
     fn standard(&self) -> BTreeMap<OutfitId, u16> {
-        pilot::merged(&self.defaults, &self.stock)
+        pilot::merged(&self.ship.fit.defaults, &self.ship.fit.stock)
     }
 
     /// The ship's stats with the outfits the pilot owns.
     fn current_stats(&self) -> ShipStats {
         ShipStats::for_player(
-            self.fields,
+            self.ship.fit.fields,
             &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         )
     }
@@ -1908,16 +1730,16 @@ impl Session {
     /// carries (see the module docs).
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
-        self.hull = self.statics.arsenal.hull(self.pilot.ship);
+        self.ship.fit.hull = self.statics.arsenal.hull(self.pilot.ship);
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
         // set (+0xc8fc): the new armament carries the old's (a change of
         // class resets the fold set after, in `become_class`).
-        self.armament = self
+        self.ship.fit.armament = self
             .statics
             .arsenal
             .player(&self.pilot.outfits, &self.statics.outfits)
-            .with_exit_cursors(*self.armament.exit_cursors())
-            .with_fold_set(self.armament.fold_set());
+            .with_exit_cursors(*self.ship.fit.armament.exit_cursors())
+            .with_fold_set(self.ship.fit.armament.fold_set());
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max, hold) in [
@@ -1927,11 +1749,11 @@ impl Session {
         ] {
             refit(gauge, max, gain, hold);
         }
-        self.stats = stats;
+        self.ship.fit.stats = stats;
         if self.setup.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
-            && !carries(&self.pilot, &self.statics.outfits, self.secondary)
+            && !carries(&self.pilot, &self.statics.outfits, self.ship.secondary)
         {
-            self.secondary = None;
+            self.ship.secondary = None;
         }
     }
 
@@ -1978,7 +1800,7 @@ impl Session {
     /// [`Session::game_work`] runs the player's fire before its move, as
     /// `_HandlePlayer` does.
     pub fn tick(&mut self, controls: Controls) {
-        self.gate = None;
+        self.ship.warp.gate = None;
         if self.landed.is_some() {
             return;
         }
@@ -1987,7 +1809,7 @@ impl Session {
             frame,
             controls,
             GamePass::Advance {
-                double_time: self.double_time,
+                double_time: self.ship.warp.double_time,
             },
         );
     }
@@ -2000,11 +1822,11 @@ impl Session {
         // The warp-ups and the warp-out play in real time, a frame's worth
         // on each advance pass, and the switch and the natural end read
         // them.
-        self.warp_ups.step();
-        self.warp_out.step();
+        self.ship.warp.warp_ups.step();
+        self.ship.warp.warp_out.step();
         // The last shot's clock is `TickCount`, real time (see the
         // `ship_display` module).
-        self.armament.tick_fire_clock();
+        self.ship.fit.armament.tick_fire_clock();
         self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
@@ -2038,7 +1860,7 @@ impl Session {
         self.hold_player(pass);
         self.gamma_tick();
         self.let_go_of_lost_target();
-        if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
+        if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
                 &self.statics.goods,
@@ -2046,7 +1868,7 @@ impl Session {
                 capacity,
                 self.pilot.missions.tons_aboard(),
                 self.setup.rules.source_for(RuleKey::JunkFlags),
-                self.junk_latches,
+                self.ship.latches.junk_latches,
             );
         }
         self.red_alert_check(frame);
@@ -2099,7 +1921,7 @@ impl Session {
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
         self.engage_afterburner(controls);
-        let controls = match self.condition {
+        let controls = match self.ship.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
                 self.collapse_jump(again);
@@ -2110,7 +1932,7 @@ impl Session {
             }
             Condition::Destroyed => {
                 self.stop_thrust();
-                self.player.velocity = Vec2::ZERO;
+                self.ship.player.velocity = Vec2::ZERO;
                 self.dead_tick();
                 return;
             }
@@ -2125,11 +1947,18 @@ impl Session {
                     self.thrust(controls.thrust);
                     let handling = self.flying_handling();
                     if self.player_fate().row().drag {
-                        crate::flight::drag(&mut self.player);
+                        crate::flight::drag(&mut self.ship.player);
                     }
                     let flight = self.setup.flight_rules();
                     let caps = self.player_caps();
-                    player_step(&mut self.player, &handling, controls, aim, caps, flight);
+                    player_step(
+                        &mut self.ship.player,
+                        &handling,
+                        controls,
+                        aim,
+                        caps,
+                        flight,
+                    );
                 }
                 self.ionize_tick();
                 self.burn_afterburner();
@@ -2151,15 +1980,21 @@ impl Session {
                 // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
                 // uncapped add (see the `refuel_dock` module) lasts only
                 // the frame.
-                regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+                regenerate(
+                    &mut self.pilot.reserves.fuel,
+                    self.ship.fit.stats.fuel_regen,
+                );
                 return;
             }
         }
-        regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+        regenerate(
+            &mut self.pilot.reserves.fuel,
+            self.ship.fit.stats.fuel_regen,
+        );
         // `_HandlePlayer` reads `_ShipFuelCapacity` right after the
         // regeneration (@0x6d9cd), which caches it (see the `capture`
         // module).
-        self.fuel_cap_cached = true;
+        self.ship.fuel_cap_cached = true;
     }
 
     /// Aims the player at the map bearing of `to`, the jump's next system,
@@ -2168,7 +2003,7 @@ impl Session {
     /// left alone when either is off the map.
     fn aim_at_jump(&mut self, to: SystemId) {
         if let Some(aim) = self.jump_aim(to) {
-            self.aim = aim;
+            self.ship.aim = aim;
         }
     }
 
@@ -2212,7 +2047,7 @@ impl Session {
     /// stepping on it.
     #[must_use]
     pub fn hold_expired(&self) -> bool {
-        self.condition == Condition::Destroyed && self.player_end.is_some_and(Ending::expired)
+        self.ship.condition == Condition::Destroyed && self.player_end.is_some_and(Ending::expired)
     }
 
     /// Whether the hold ran out since this was last asked: the seam at the
@@ -2228,7 +2063,7 @@ impl Session {
     /// (0x465eb) and `_FadeScreenOut` (0x465f7). Nothing happens at any
     /// other stage.
     pub fn begin_fade(&mut self) {
-        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Expired) {
+        if self.ship.condition == Condition::Destroyed && self.player_end == Some(Ending::Expired) {
             self.player_end = Some(Ending::Fading);
         }
     }
@@ -2237,7 +2072,7 @@ impl Session {
     /// (0x4664a, `_EnterGameFromMainScreen` 0x1a471). Nothing happens at
     /// any other stage.
     pub fn end_play(&mut self) {
-        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Fading) {
+        if self.ship.condition == Condition::Destroyed && self.player_end == Some(Ending::Fading) {
             self.player_end = Some(Ending::GameOver);
         }
     }
@@ -2268,13 +2103,19 @@ impl Session {
     fn thrust(&mut self, thrust: bool) {
         self.sound_thrust(thrust);
         let banking = self.banking_glow();
-        self.engine_glow = step_glow(self.engine_glow, thrust, banking, None, self.afterburner_on);
+        self.ship.engine_glow = step_glow(
+            self.ship.engine_glow,
+            thrust,
+            banking,
+            None,
+            self.ship.afterburner_on,
+        );
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says.
     fn sound_thrust(&mut self, thrust: bool) {
-        if thrust != self.thrusting {
-            self.thrusting = thrust;
+        if thrust != self.ship.thrusting {
+            self.ship.thrusting = thrust;
             self.out.sounds.push(if thrust {
                 SimSound::ThrustStarted
             } else {
@@ -2339,7 +2180,7 @@ impl Session {
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.armament,
+            armament: &self.ship.fit.armament,
         };
         let world = World {
             govts: &self.statics.govts,
@@ -2567,7 +2408,7 @@ impl Session {
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.armament,
+            armament: &self.ship.fit.armament,
         };
         let targeted = self.combat.targeted_damage();
         let type_widths = self.gate_type_widths();
@@ -2703,18 +2544,18 @@ impl Session {
     fn player_side(&self) -> PlayerSide {
         let record = self.statics.ship_record(self.pilot.ship);
         PlayerSide {
-            state: self.player,
-            condition: self.condition,
+            state: self.ship.player,
+            condition: self.ship.condition,
             reserves: self.pilot.reserves,
             // Its class's `Crew`, which a pirate's plunder tests read
             // (`_AIFindShipToPlunder` @0x7fe04, `_PirateWarshipAI` @0x8c667).
             hull: HullSpec {
                 crew: record.map_or(0, |record| record.crew),
-                ..self.hull
+                ..self.ship.fit.hull
             },
             // Its `_ShipTurnRate` and `_ShipAccelRate`, slowed by its ion
             // charge (see the `ionization` module).
-            handling: self.ionized(self.stats.handling),
+            handling: self.ionized(self.ship.fit.stats.handling),
             rating: self.pilot.combat_rating,
             yardstick: self.statics.arsenal.strength(ShipId(128)),
             untargetable: record
@@ -2726,14 +2567,14 @@ impl Session {
             class: record.map_or(EscortClass::Freighter, |record| {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             }),
-            boarded: self.player_boarded,
-            speed: self.player_speed,
+            boarded: self.ship.fate.player_boarded,
+            speed: self.ship.player_speed,
         }
     }
 
     /// Holds `trigger`, the player's fire command, until another is held.
     pub fn hold_trigger(&mut self, trigger: Trigger) {
-        self.trigger = trigger;
+        self.ship.trigger = trigger;
     }
 
     /// Holds the player's fire keys: the `primary` trigger, and the
@@ -2741,7 +2582,7 @@ impl Session {
     pub fn hold_fire(&mut self, primary: bool, secondary: bool) {
         self.hold_trigger(Trigger {
             primary,
-            secondary: self.secondary.filter(|_| secondary),
+            secondary: self.ship.secondary.filter(|_| secondary),
             ..Trigger::default()
         });
     }
@@ -2750,16 +2591,19 @@ impl Session {
     /// [`next_secondary`]), skipping one hidden while the pilot owns none
     /// of its rounds.
     fn next_secondary(&self, current: Option<WeaponId>, backwards: bool) -> Option<WeaponId> {
-        next_secondary(self.armament.mounts(), current, backwards, |ammo| {
-            outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo)
-        })
+        next_secondary(
+            self.ship.fit.armament.mounts(),
+            current,
+            backwards,
+            |ammo| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo),
+        )
     }
 
     /// Selects the next secondary weapon, or the one before it when
     /// `backwards`, in the order they were mounted, wrapping (see
     /// [`next_secondary`]).
     pub fn select_secondary(&mut self, backwards: bool) {
-        self.secondary = self.next_secondary(self.secondary, backwards);
+        self.ship.secondary = self.next_secondary(self.ship.secondary, backwards);
     }
 
     /// The secondary weapon selected, if any: none when the session
@@ -2771,7 +2615,7 @@ impl Session {
     /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
     #[must_use]
     pub fn secondary(&self) -> Option<WeaponId> {
-        self.secondary
+        self.ship.secondary
     }
 
     /// The count the status bar's secondary weapon line shows after the
@@ -2782,7 +2626,11 @@ impl Session {
     /// session has no record of the weapon.
     #[must_use]
     pub fn secondary_line_count(&self) -> Option<u32> {
-        let counted = self.statics.arsenal.weapon(self.secondary?)?.line_count?;
+        let counted = self
+            .statics
+            .arsenal
+            .weapon(self.ship.secondary?)?
+            .line_count?;
         Some(outfit_rounds(
             &self.pilot.outfits,
             &self.statics.ammo_outfits,
@@ -2854,7 +2702,7 @@ impl Session {
     /// ([`Fighter::drawn_heading`]), as every ship fires before the
     /// original draws it again.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        self.player_exploded_this_tick = false;
+        self.ship.fate.player_exploded_this_tick = false;
         if self.landed.is_some() {
             // The fight stands still, but the work queued on the line
             // settles (see `settle_line_queue`), and the pass's asteroid
@@ -2866,7 +2714,7 @@ impl Session {
         }
         self.before_fight(rules, &mut &mut *chance);
         let pass = GamePass::Advance {
-            double_time: self.double_time,
+            double_time: self.ship.warp.double_time,
         };
         self.fight(pass, rules, &mut *chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
@@ -2935,7 +2783,7 @@ impl Session {
     /// Notes the heading each ship is drawn at as the fight's tick ends,
     /// which its next tick's shots leave from ([`Fighter::drawn_heading`]).
     fn note_drawn(&mut self) {
-        self.drawn = std::iter::once((ShipRef::Player, self.player.heading))
+        self.drawn = std::iter::once((ShipRef::Player, self.ship.player.heading))
             .chain(
                 self.traffic
                     .npcs()
@@ -2994,7 +2842,7 @@ impl Session {
             threatens_player: false,
             class_speed: self.statics.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
-            drawn_heading: drawn(ShipRef::Player, self.player.heading),
+            drawn_heading: drawn(ShipRef::Player, self.ship.player.heading),
             jamming: self.player_jamming(),
             sprite: sprite(ShipRef::Player),
             resists: self.player_hazard_resistance(),
@@ -3026,7 +2874,7 @@ impl Session {
     fn take_shoves(&mut self) {
         for Shove { ship, velocity } in self.combat.take_shoves() {
             match ship {
-                ShipRef::Player => self.player.velocity = velocity,
+                ShipRef::Player => self.ship.player.velocity = velocity,
                 ShipRef::Npc(id) => {
                     let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
                     if let Some(npc) = npc {
@@ -3251,7 +3099,7 @@ impl Session {
         if self.landed.is_none() {
             let scanner = self.scanner();
             let npcs = self.traffic.npcs();
-            let from = self.player.position;
+            let from = self.ship.player.position;
             let closest = |npc: &Npc| match pick {
                 TargetPick::NearestThreat => npc.threatens_player_among(npcs),
                 _ => true,
@@ -3299,20 +3147,20 @@ impl Session {
     /// The player's ship type's hull: how it breaks up and dies.
     #[must_use]
     pub fn hull(&self) -> HullSpec {
-        self.hull
+        self.ship.fit.hull
     }
 
     /// How the player's ship is holding up.
     #[must_use]
     pub fn player_condition(&self) -> Condition {
-        self.condition
+        self.ship.condition
     }
 
     /// Sets the player's condition directly, for
     /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_condition(&mut self, to: Condition) {
-        self.condition = to;
+        self.ship.condition = to;
     }
 
     /// Where the player's ship is in its lifecycle: its condition, whether
@@ -3321,8 +3169,8 @@ impl Session {
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
         PlayerFate::of(
-            self.condition,
-            self.player_exploded_this_tick,
+            self.ship.condition,
+            self.ship.fate.player_exploded_this_tick,
             self.player_end,
             self.pod,
         )
@@ -3390,7 +3238,7 @@ impl Session {
             .filter_map(|&ship| self.statics.ship_record(ship))
             .map(|record| self.statics.arsenal.of_class(record.id))
             .collect();
-        armaments.push(self.armament.clone());
+        armaments.push(self.ship.fit.armament.clone());
         let launched: Vec<ShipId> = armaments
             .iter()
             .flat_map(Armament::mounts)
@@ -3427,9 +3275,9 @@ impl Session {
     /// glow out, even as it fades after the thrust, as the ship lands or
     /// jumps.
     fn stop_thrust(&mut self) {
-        self.engine_glow = 0;
-        if self.thrusting {
-            self.thrusting = false;
+        self.ship.engine_glow = 0;
+        if self.ship.thrusting {
+            self.ship.thrusting = false;
             self.out.sounds.push(SimSound::ThrustStopped);
         }
     }
@@ -3508,7 +3356,7 @@ impl Session {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
         }
-        if self.condition != Condition::Intact {
+        if self.ship.condition != Condition::Intact {
             return Err(JumpRefusal::Disabled);
         }
         if let Some(Jump::PreJump { to, .. }) = self.jump {
@@ -3538,10 +3386,14 @@ impl Session {
             return Err(JumpRefusal::Landed);
         }
         check_jump(
-            &self.player,
+            &self.ship.player,
             self.pilot.reserves.fuel.now,
             self.jump_selection(),
-            jump_zone(&self.sites, self.stats.jump_distance, self.setup.jump_zone),
+            jump_zone(
+                &self.sites,
+                self.ship.fit.stats.jump_distance,
+                self.setup.jump_zone,
+            ),
         )
     }
 
@@ -3577,10 +3429,10 @@ impl Session {
     fn stage_jump(&mut self, to: SystemId, bearing: Option<i16>, warp: Option<u32>) {
         let handling = self.flying_handling();
         let stage = pre_jump::stage(
-            &self.player,
+            &self.ship.player,
             &handling,
             bearing,
-            !self.stats.fast_jump,
+            !self.ship.fit.stats.fast_jump,
             self.setup.flight_rules().player_turn,
             self.player_inertialess(),
         );
@@ -3608,13 +3460,15 @@ impl Session {
     /// length ([`warp::pitched_length`]); a warp-up played clears
     /// `_warpSoundDone` (@0x6b695).
     fn sound_warp_up(&mut self) {
-        let double_time = self.double_time;
-        if self.warp_ups.playing(double_time) {
+        let double_time = self.ship.warp.double_time;
+        if self.ship.warp.warp_ups.playing(double_time) {
             return;
         }
         let rate = warp::warp_up_rate(self.player_warp_factor());
         let duration = self.statics.warp_sounds[usize::from(double_time)];
-        self.warp_ups
+        self.ship
+            .warp
+            .warp_ups
             .start(double_time, warp::pitched_length(duration, rate));
         self.clear_warp_sound_done();
         self.out.sounds.push(if double_time {
@@ -3627,8 +3481,8 @@ impl Session {
     /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
     /// warp-ups and the warp-out among them over for the session too.
     pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
-        self.warp_ups.halt(sounds);
-        self.warp_out.halt(sounds);
+        self.ship.warp.warp_ups.halt(sounds);
+        self.ship.warp.warp_out.halt(sounds);
         self.out.sounds.push(SimSound::Halt(sounds));
     }
 
@@ -3645,7 +3499,7 @@ impl Session {
     /// double time, else 128's, as `_WarpSoundDuration` gives it
     /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
     fn warp_sound(&self) -> u32 {
-        warp::warp_sound_duration(self.statics.warp_sounds, self.double_time)
+        warp::warp_sound_duration(self.statics.warp_sounds, self.ship.warp.double_time)
     }
 
     /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
@@ -3662,7 +3516,7 @@ impl Session {
             self.warp_clock().map(warp::mac_ticks),
             warp::warp_factor(flags),
             self.warp_sound(),
-            self.condition != Condition::Intact,
+            self.ship.condition != Condition::Intact,
         )
     }
 
@@ -3785,7 +3639,8 @@ impl Session {
         self.arrival_fold();
         // The natural end, the warp-ups finished (`_warpSoundDone`
         // @0x6bb5e-0x6bba4), read before the halt ends them.
-        let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
+        let natural_end =
+            !self.ship.warp.warp_ups.playing(false) && !self.ship.warp.warp_ups.playing(true);
         // The warp's end halts the warp-ups, 128 then 129, each if it is
         // playing (`_HandlePlayer` @0x6c69d-0x6c6d2), before the warp-out
         // plays (@0x6c706); on the natural end they have already finished
@@ -3822,7 +3677,7 @@ impl Session {
             .is_some_and(|&hop| hop == first || self.galaxy.same_place(hop) == Some(first))
         {
             hops = 1;
-            for _ in 1..hops_per_jump(self.stats.multi_jump, self.setup.multi_jump) {
+            for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
                 let next = self.pilot.course.get(hops);
                 let Some(next) = next.and_then(|&hop| self.galaxy.same_place(hop)) else {
                     break;
@@ -3899,8 +3754,8 @@ impl Session {
     /// ([`Session::pass_days`]), the events rolled on `chance`, then pays
     /// the hired escorts their wages for them, once.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.pass_days(self.stats.jump_days, chance);
-        self.pay_escorts(self.stats.jump_days);
+        self.pass_days(self.ship.fit.stats.jump_days, chance);
+        self.pay_escorts(self.ship.fit.stats.jump_days);
     }
 
     /// The sounds emitted since they were last taken, in order; taking
@@ -3965,7 +3820,7 @@ impl Session {
     /// The fuel the ship gains each tick in flight.
     #[must_use]
     pub fn fuel_regen_per_tick(&self) -> f32 {
-        self.stats.fuel_regen
+        self.ship.fit.stats.fuel_regen
     }
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
@@ -4042,7 +3897,7 @@ impl Session {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
-        let disabled = match self.condition {
+        let disabled = match self.ship.condition {
             Condition::Intact => false,
             Condition::Disabled => true,
             Condition::Dying { .. } | Condition::Destroyed => {
@@ -4054,7 +3909,7 @@ impl Session {
         let press = land_or_select(
             self.nav_target(),
             self.dock,
-            &self.player,
+            &self.ship.player,
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
@@ -4073,7 +3928,7 @@ impl Session {
         let outcome = self.apply_press(press)?;
         if let LandOutcome::Landed(stellar) = outcome {
             if let Some(kind) = self.gate_kind(stellar) {
-                self.gate = Some(stellar);
+                self.ship.warp.gate = Some(stellar);
                 return Ok(LandPress::AtGate { stellar, kind });
             }
             self.dock(stellar);
@@ -4092,7 +3947,9 @@ impl Session {
     /// The pending entry, if it is through a gate of `kind`; it ends here
     /// whatever it is.
     fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
-        self.gate
+        self.ship
+            .warp
+            .gate
             .take()
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
     }
@@ -4130,6 +3987,8 @@ impl Session {
         catalog: &impl PilotCatalog,
     ) -> Result<Vec<SystemId>, GateRefusal> {
         let here = self
+            .ship
+            .warp
             .gate
             .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
             .ok_or(GateRefusal::NotAtGate)?;
@@ -4147,7 +4006,7 @@ impl Session {
                 self.galaxy.map(),
             ))
         } else {
-            self.gate = None;
+            self.ship.warp.gate = None;
             self.set_nav(NavMode::Off);
             Err(GateRefusal::NoLinks)
         }
@@ -4162,6 +4021,8 @@ impl Session {
     #[must_use]
     pub fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
         let Some(here) = self
+            .ship
+            .warp
             .gate
             .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
         else {
@@ -4304,7 +4165,7 @@ impl Session {
                 let placed = arrival(
                     map(self.pilot.system),
                     map(system),
-                    self.stats.jump_distance,
+                    self.ship.fit.stats.jump_distance,
                 );
                 self.pass_jump_days(chance);
                 placed
@@ -4316,7 +4177,7 @@ impl Session {
         // writes -1 to +0xc908 (see the `stray_words` module).
         self.arm_strength_timer(chance);
         self.reset_precalced();
-        self.pod_zeroed = false;
+        self.ship.fate.pod_zeroed = false;
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -4344,21 +4205,21 @@ impl Session {
     /// price multipliers as the spaceport opens (see the `ranks` module),
     /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
-        self.touchdown = self.player.position;
+        self.touchdown = self.ship.player.position;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
-            self.player.position = site.position;
+            self.ship.player.position = site.position;
         }
-        self.player.velocity = Vec2::ZERO;
+        self.ship.player.velocity = Vec2::ZERO;
         // `_PlayerLandOnStellar` @0x63409.
-        self.player_speed = 0.0;
+        self.ship.player_speed = 0.0;
         self.landed = Some(stellar);
         self.clear_tractor();
         self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
-        self.warp_ups.clear();
-        self.warp_out.clear();
+        self.ship.warp.warp_ups.clear();
+        self.ship.warp.warp_out.clear();
         self.pilot.stellar = Some(stellar);
         // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
         self.drop_leave();
@@ -4517,7 +4378,7 @@ impl Session {
             self.out.emit(SessionEvent::SystemChanged);
         }
         if std::mem::take(&mut self.hold_position) {
-            self.player.position = self.touchdown;
+            self.ship.player.position = self.touchdown;
         }
         // At level 2, with its place's head, by the engine
         // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
@@ -4536,7 +4397,7 @@ impl Session {
         self.restart_every_aux(&mut &mut *chance);
         // The dock request's tail clears the player's ionization, charge
         // and colour, before the strength timer (@0x67008, @0x67020).
-        self.ion = Ion::default();
+        self.ship.ion = Ion::default();
         // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
         self.take_off_fold();
         self.arm_strength_timer(chance);
@@ -4545,7 +4406,7 @@ impl Session {
         // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
         // module).
         self.reset_precalced();
-        self.pod_zeroed = false;
+        self.ship.fate.pod_zeroed = false;
         self.populate(catalog, chance);
         self.out.sounds.push(SimSound::TookOff);
         self.out.save_due = true;
@@ -4710,7 +4571,7 @@ impl Session {
     /// `_TotalCargo(player)` from `_ShipTotalHolds()`). The escorts' holds
     /// add nothing.
     fn free_cargo(&self) -> i64 {
-        i64::from(self.stats.capacity) - self.pilot.total_cargo()
+        i64::from(self.ship.fit.stats.capacity) - self.pilot.total_cargo()
     }
 
     /// The outfitter of the stellar the ship is docked at, if it has
@@ -4739,7 +4600,7 @@ impl Session {
             records: &self.statics.outfits,
             crons: &self.statics.crons,
             ranks: &self.statics.ranks,
-            fields: self.fields,
+            fields: self.ship.fit.fields,
             standard: &self.standard(),
             site,
             fighter_room: &self.fighter_room(),
@@ -5125,20 +4986,20 @@ impl Session {
                 }
             }
             Direction::Sell => {
-                self.sale_keeps_cargo = self.setup.sell_keeps_cargo();
+                self.ship.latches.sale_keeps_cargo = self.setup.sell_keeps_cargo();
                 // The sale lets go of the secondary selected, before
                 // `OnSell` runs, as `SecondarySale` reads (see [`launches`]
                 // and [`carries`]).
                 let let_go = match self.setup.rules.source_for(RuleKey::SecondarySale) {
                     RuleSource::Engine => {
-                        self.pilot.owned(record.id) == 0 && launches(&record, self.secondary)
+                        self.pilot.owned(record.id) == 0 && launches(&record, self.ship.secondary)
                     }
                     RuleSource::Bible => {
-                        !carries(&self.pilot, &self.statics.outfits, self.secondary)
+                        !carries(&self.pilot, &self.statics.outfits, self.ship.secondary)
                     }
                 };
                 if let_go {
-                    self.secondary = None;
+                    self.ship.secondary = None;
                 }
                 self.run_script(&record.on_sell, chance);
             }
@@ -5151,7 +5012,7 @@ impl Session {
         if order.direction == Direction::Sell {
             self.reset_precalced();
         }
-        self.sale_keeps_cargo = false;
+        self.ship.latches.sale_keeps_cargo = false;
         Ok(())
     }
 
@@ -5232,7 +5093,7 @@ impl Session {
             crons: &self.statics.crons,
             ranks: &self.statics.ranks,
             arsenal: &self.statics.arsenal,
-            fields: self.fields,
+            fields: self.ship.fit.fields,
             site,
             mults: self.price_mults(),
             rules: self.setup.rules,
@@ -5324,7 +5185,7 @@ impl Session {
         };
         self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
         let paint_last = self.setup.hook_rules().purchase_paint_order == RuleSource::Engine;
-        let old_mass = self.fields.mass;
+        let old_mass = self.ship.fit.fields.mass;
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
         let fits = self.statics.arsenal.stock_fits(ship, &self.statics.outfits);
@@ -5360,7 +5221,7 @@ impl Session {
         // No secondary is selected on the new ship (`_DoShipyardDialog`
         // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
         // the fill (@0x5f051).
-        self.secondary = None;
+        self.ship.secondary = None;
         if paint_last {
             // A new ship is unpainted (`_DoShipyardDialog` @0x5f022), once
             // its `OnPurchase` has run (@0x5f00d); the save is due already.
@@ -5369,7 +5230,7 @@ impl Session {
         // Filled once `OnPurchase` has run and the paint is cleared, to the
         // class and outfits it leaves (`_DoShipyardDialog`
         // @0x5f051-0x5f07b); the save is due already.
-        self.pilot.reserves = shipyard::filled(&self.stats, &self.setup.rules);
+        self.pilot.reserves = shipyard::filled(&self.ship.fit.stats, &self.setup.rules);
         self.stay.ship_bought = true;
         Ok(report)
     }
@@ -5396,7 +5257,7 @@ impl Session {
     /// free space against it.
     #[must_use]
     pub fn capacity(&self) -> u32 {
-        market::fleet_holds(self.stats.capacity, self.escort_holds())
+        market::fleet_holds(self.ship.fit.stats.capacity, self.escort_holds())
     }
 
     /// What the fleet's cargo space needs of each escort whose ship class
@@ -5411,7 +5272,7 @@ impl Session {
     /// How the ship performs, with the outfits it carries.
     #[must_use]
     pub fn stats(&self) -> ShipStats {
-        self.stats
+        self.ship.fit.stats
     }
 
     /// Whether the pilot should be saved: it has landed, taken off,
@@ -5431,7 +5292,7 @@ impl Session {
     /// beginning a jump stop it, as they stop the thrust sound.
     #[must_use]
     pub fn thrusting(&self) -> bool {
-        self.thrusting
+        self.ship.thrusting
     }
 
     /// The engine glow's base level, as [`glow`](crate::glow) says: each
@@ -5443,13 +5304,13 @@ impl Session {
     /// ([`drawn_base`](crate::glow::drawn_base)).
     #[must_use]
     pub fn engine_glow(&self) -> u8 {
-        crate::glow::drawn_base(self.engine_glow)
+        crate::glow::drawn_base(self.ship.engine_glow)
     }
 
     /// The player's ship as it flies.
     #[must_use]
     pub fn player(&self) -> &ShipState {
-        &self.player
+        &self.ship.player
     }
 
     /// The player's tractor lock, if a tractor beam holds its ship or it
@@ -5461,7 +5322,7 @@ impl Session {
     /// `tractor_hold` module).
     #[must_use]
     pub fn tractor(&self) -> Option<TractorLock> {
-        self.tractor
+        self.ship.tractor
     }
 
     /// The player's ionization (see [`ion`](crate::combat::ion)): none at
@@ -5471,7 +5332,7 @@ impl Session {
     /// kept through a jump and an eject.
     #[must_use]
     pub fn ion(&self) -> Ion {
-        self.ion
+        self.ship.ion
     }
 
     /// The pilot flying.
@@ -5504,7 +5365,7 @@ impl Session {
     /// [`Session::top_speed`].
     #[must_use]
     pub fn handling(&self) -> Handling {
-        self.stats.handling
+        self.ship.fit.stats.handling
     }
 
     /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
@@ -5513,7 +5374,7 @@ impl Session {
     /// [`top_speed`]).
     #[must_use]
     pub fn top_speed(&self) -> f32 {
-        self.stats.handling.max_speed * self.led_speed()
+        self.ship.fit.stats.handling.max_speed * self.led_speed()
     }
 
     /// The factor on the top speed of the player and of every ship it
@@ -5530,7 +5391,11 @@ impl Session {
     fn flying_handling(&self) -> Handling {
         Handling {
             max_speed: self.top_speed(),
-            ..self.ionized(self.setup.flight_rules().handling(self.stats.handling))
+            ..self.ionized(
+                self.setup
+                    .flight_rules()
+                    .handling(self.ship.fit.stats.handling),
+            )
         }
     }
 
@@ -5649,14 +5514,14 @@ impl Session {
         }
         let target = self.target().map(|npc| self.statics.board_target(npc));
         let crewless = self.setup.rules.source_for(RuleKey::CrewlessMissionShip);
-        check_board(&self.player, self.condition, target, crewless)?;
+        check_board(&self.ship.player, self.ship.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
         if let Some(boarding) = self.board_mission_ship(&npc) {
             let boarding = boarding?;
-            self.player.velocity = npc.state.velocity;
+            self.ship.player.velocity = npc.state.velocity;
             return Ok(boarding);
         }
-        self.player.velocity = npc.state.velocity;
+        self.ship.player.velocity = npc.state.velocity;
         if npc.mission.is_none() {
             self.convict_of(law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
@@ -5798,6 +5663,8 @@ impl Session {
         let record = self.statics.ship_record(npc.ship);
         let fields = record.map(|record| record.fields).unwrap_or_default();
         let carried: Vec<crate::combat::weapon::WeaponSpec> = self
+            .ship
+            .fit
             .armament
             .mounts()
             .iter()
@@ -5840,7 +5707,7 @@ impl Session {
     fn capture_crew(&self, npc: &Npc) -> CaptureCrew {
         CaptureCrew {
             crew: i32::from(self.statics.crew(self.pilot.ship)),
-            strength: self.hull.strength as i32,
+            strength: self.ship.fit.hull.strength as i32,
             // The escorts `_SetPlunderValues` counts (@0x92653-0x926c9; see
             // the `capture` module).
             escorts: self
@@ -5925,7 +5792,8 @@ impl Session {
                 // The ship's own space, less `_TotalCargo` with the
                 // mission cargo aboard, not the fleet's: plunder into
                 // pooled holds waits for rdm task `boarding-follow-up`.
-                let room = (i64::from(self.stats.capacity) - self.pilot.total_cargo()).max(0);
+                let room =
+                    (i64::from(self.ship.fit.stats.capacity) - self.pilot.total_cargo()).max(0);
                 let stored = tons.min(u32::try_from(room).unwrap_or(u32::MAX));
                 if stored > 0 {
                     *self.pilot.cargo.entry(good).or_default() += stored;
@@ -5958,7 +5826,7 @@ impl Session {
                 let offered = std::mem::take(&mut plunder.fuel);
                 // The take reads `_ShipFuelCapacity` (@0x940a5, @0x94100),
                 // which caches it (see the `capture` module).
-                self.fuel_cap_cached = true;
+                self.ship.fuel_cap_cached = true;
                 let fuel = &mut self.pilot.reserves.fuel;
                 let room = (fuel.max - fuel.now).max(0.0).trunc();
                 let stored = (offered as f32).min(room);
@@ -6022,7 +5890,7 @@ impl Session {
         while count < rounds
             && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
             && outfitter::free_mass(
-                self.fields,
+                self.ship.fit.fields,
                 &self.standard(),
                 &self.pilot.outfits,
                 &self.statics.outfits,
@@ -6245,7 +6113,7 @@ impl Session {
         };
         let hooks_first = self.setup.hook_rules().capture_hook_order == RuleSource::Engine;
         // Where the player was, which the old ship takes (@0x411bd-0x411ea).
-        let left = self.player;
+        let left = self.ship.player;
         let old = self.old_ship_escort();
         // The commodities go to the old ship, and the player takes the
         // captured ship's below, as `capture_cargo` reads: before the
@@ -6300,10 +6168,10 @@ impl Session {
         self.take_captured_commodities(&npc.cargo);
         // The captured ship's place (@0x416e3-0x41722), and no nav
         // selection, ship target or secondary (@0x4172e-0x4173e).
-        self.player = npc.state;
+        self.ship.player = npc.state;
         self.deselect();
         self.target = None;
-        self.secondary = None;
+        self.ship.secondary = None;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
                 other.leader = None;
@@ -6344,7 +6212,7 @@ impl Session {
         fuel: CaptureFuel,
         chance: &mut dyn Chance,
     ) {
-        let drawn = fuel.draw(self.fuel_cap_cached, chance);
+        let drawn = fuel.draw(self.ship.fuel_cap_cached, chance);
         let reserves = &mut self.pilot.reserves;
         reserves.shield.now = 0.0;
         reserves.armor.now =
@@ -7790,11 +7658,11 @@ pub(super) mod tests {
         );
         session.plot_course(SystemId(131)).expect("a route");
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "centre");
-        session.player.position = Vec2::new(0.0, 999.9);
+        session.ship.player.position = Vec2::new(0.0, 999.9);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
+        session.ship.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
-        session.player.position = Vec2::new(0.0, 500.0);
+        session.ship.player.position = Vec2::new(0.0, 500.0);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "back in");
     }
 
@@ -7820,7 +7688,7 @@ pub(super) mod tests {
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.jump_readiness(), JumpReadiness::Underway);
         begin_jump_now(&mut session).expect("jumps");
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         assert_eq!(session.jump_readiness(), JumpReadiness::Underway, "jumping");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -7834,9 +7702,9 @@ pub(super) mod tests {
         let raised = owning(catalog(), HYPERSPACE_DISTANCE, 250, 1);
         let mut session = Session::start(&raised).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        session.player.position = Vec2::new(0.0, 1100.0);
+        session.ship.player.position = Vec2::new(0.0, 1100.0);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.player.position = Vec2::new(0.0, 1250.0);
+        session.ship.player.position = Vec2::new(0.0, 1250.0);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
     }
 
@@ -7864,7 +7732,7 @@ pub(super) mod tests {
             .expect("starts")
             .with_jump_zone(rule);
         session.plot_course(SystemId(131)).expect("a route");
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         session
     }
 
@@ -7894,7 +7762,7 @@ pub(super) mod tests {
                 session.begin_jump(),
                 Err(JumpRefusal::TooClose { distance: 0.0 })
             );
-            session.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
+            session.ship.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
             assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
         }
     }
@@ -7944,7 +7812,7 @@ pub(super) mod tests {
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))
             );
-            session.player.position = Vec2::ZERO;
+            session.ship.player.position = Vec2::ZERO;
             assert_eq!(session.jump_readiness(), empty, "131 under {rule:?}");
             fly_out(&mut session);
             begin_jump_now(&mut session).expect("jumps");
@@ -7953,7 +7821,7 @@ pub(super) mod tests {
                 Some(SystemId(132))
             );
             session.plot_course(SystemId(131)).expect("a route back");
-            session.player.position = Vec2::ZERO;
+            session.ship.player.position = Vec2::ZERO;
             assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "132");
         }
     }
@@ -7976,7 +7844,7 @@ pub(super) mod tests {
             );
         }
         assert_eq!(session.system(), SystemId(130), "not there yet");
-        assert!(!session.thrusting);
+        assert!(!session.ship.thrusting);
     }
 
     #[test]
@@ -8162,7 +8030,7 @@ pub(super) mod tests {
         let mut session = Session::start(catalog).expect("starts");
         session.settle_box();
         session.plot_course(SystemId(131)).expect("a route");
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position,
             velocity,
             heading,
@@ -8264,7 +8132,7 @@ pub(super) mod tests {
         assert_eq!(session.warp_clock(), Some(3));
         // Knocked back past the jump speed, as the restamp reads it
         // (@0x6b6a2-0x6b6b1).
-        session.player.velocity = Vec2::new(0.0, 5.0);
+        session.ship.player.velocity = Vec2::new(0.0, 5.0);
         session.tick(Controls::default());
         assert_eq!(session.warp_clock(), None, "braking again");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
@@ -8287,7 +8155,7 @@ pub(super) mod tests {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
         session.begin_jump().expect("jumps");
         assert_eq!(session.warp_clock(), Some(0));
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.tick(Controls::default());
         assert_eq!(session.preparing_jump(), None, "given up");
         assert_eq!(session.warp_clock(), None);
@@ -8515,7 +8383,7 @@ pub(super) mod tests {
     #[test]
     fn landing_is_refused_during_the_pre_jump_stage() {
         let mut session = bound_for_131(&catalog(), Vec2::new(30.0, -40.0), Vec2::ZERO, 0.0);
-        session.stats.jump_distance = 0.0;
+        session.ship.fit.stats.jump_distance = 0.0;
         session.begin_jump().expect("jumps from over planet 128");
         session.take_sounds();
         let turning = session.clone();
@@ -9518,11 +9386,11 @@ pub(super) mod tests {
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
         session.begin_jump().expect("jumps");
         for &double_time in double_times {
-            session.warp_ups.start(double_time, 100_000);
+            session.ship.warp.warp_ups.start(double_time, 100_000);
         }
         session.take_sounds();
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.ship.warp.warp_ups, crate::warp::WarpUps::default());
         session.take_sounds()
     }
 
@@ -9592,7 +9460,7 @@ pub(super) mod tests {
     /// facing west, from the J to the arrival, the J's own left out.
     fn jumping_back_to_130(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<SimSound> {
         session.plot_course(SystemId(130)).expect("a route");
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: OUT,
             velocity: Vec2::ZERO,
             heading: 270.0,
@@ -9625,7 +9493,7 @@ pub(super) mod tests {
         let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
         let (mut session, first) = jumping_to_131(&catalog);
         assert_eq!(first, HALT_THEN_ARRIVED, "130 was not playing");
-        assert!(session.warp_out.playing());
+        assert!(session.ship.warp.warp_out.playing());
         assert_eq!(
             jumping_back_to_130(&mut session, &catalog),
             HALT_ONLY,
@@ -9644,7 +9512,10 @@ pub(super) mod tests {
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert!(!session.warp_out.playing(), "not restarted by the skip");
+        assert!(
+            !session.ship.warp.warp_out.playing(),
+            "not restarted by the skip"
+        );
     }
 
     #[test]
@@ -9654,14 +9525,17 @@ pub(super) mod tests {
         for _ in 0..29 {
             session.tick(Controls::default());
         }
-        assert!(session.warp_out.playing(), "2 Mac ticks left");
+        assert!(session.ship.warp.warp_out.playing(), "2 Mac ticks left");
         session.tick(Controls::default());
-        assert!(!session.warp_out.playing(), "over after 30 engine ticks");
+        assert!(
+            !session.ship.warp.warp_out.playing(),
+            "over after 30 engine ticks"
+        );
         assert_eq!(
             jumping_back_to_130(&mut session, &catalog),
             HALT_THEN_ARRIVED
         );
-        assert!(session.warp_out.playing(), "started again");
+        assert!(session.ship.warp.warp_out.playing(), "started again");
     }
 
     #[test]
@@ -9674,7 +9548,7 @@ pub(super) mod tests {
         for _ in 0..20 {
             session.tick(Controls::default());
         }
-        assert!(session.warp_out.playing());
+        assert!(session.ship.warp.warp_out.playing());
         assert_eq!(
             jumping_back_to_130(&mut session, &catalog),
             HALT_THEN_ARRIVED
@@ -9682,7 +9556,10 @@ pub(super) mod tests {
         for _ in 0..20 {
             session.tick(Controls::default());
         }
-        assert!(session.warp_out.playing(), "restarted: 20 Mac ticks left");
+        assert!(
+            session.ship.warp.warp_out.playing(),
+            "restarted: 20 Mac ticks left"
+        );
     }
 
     #[test]
@@ -9690,7 +9567,7 @@ pub(super) mod tests {
         // `_PlayerEnterHypergate` plays 130 unasked (@0x63e57).
         let catalog = warping(gated(), Some(SILENT), Some(WARP_OUT_60));
         let mut session = at_gate(&catalog);
-        session.warp_out.start(2);
+        session.ship.warp.warp_out.start(2);
         session.take_sounds();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
@@ -9699,7 +9576,10 @@ pub(super) mod tests {
         for _ in 0..20 {
             session.tick(Controls::default());
         }
-        assert!(session.warp_out.playing(), "restarted by the exit");
+        assert!(
+            session.ship.warp.warp_out.playing(),
+            "restarted by the exit"
+        );
         assert_eq!(jumping_back_to_130(&mut session, &catalog), HALT_ONLY);
     }
 
@@ -9709,7 +9589,7 @@ pub(super) mod tests {
         let catalog = warping(catalog(), Some(SILENT), None);
         let (mut session, first) = jumping_to_131(&catalog);
         assert_eq!(first, HALT_THEN_ARRIVED);
-        assert!(!session.warp_out.playing());
+        assert!(!session.ship.warp.warp_out.playing());
         assert_eq!(
             jumping_back_to_130(&mut session, &catalog),
             HALT_THEN_ARRIVED
@@ -9720,11 +9600,11 @@ pub(super) mod tests {
     fn landing_ends_the_warp_out() {
         let catalog = warping(catalog(), Some(SILENT), Some(WARP_OUT_60));
         let (mut session, _) = jumping_to_131(&catalog);
-        assert!(session.warp_out.playing());
+        assert!(session.ship.warp.warp_out.playing());
         // At rest over 131's planet 140.
-        session.player = ShipState::default();
+        session.ship.player = ShipState::default();
         land_now(&mut session).expect("lands");
-        assert!(!session.warp_out.playing());
+        assert!(!session.ship.warp.warp_out.playing());
     }
 
     #[test]
@@ -9734,7 +9614,7 @@ pub(super) mod tests {
         session
             .land_at(&catalog, SystemId(130), StellarId(128))
             .expect("relocates");
-        assert!(!session.warp_out.playing());
+        assert!(!session.ship.warp.warp_out.playing());
     }
 
     #[test]
@@ -10961,7 +10841,7 @@ pub(super) mod tests {
     #[test]
     fn a_destroyed_players_ticks_do_not_step_but_the_counter_moves_on() {
         let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 2)]);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.frame = 0;
         assert_eq!(steps_in(&mut session, 1), Vec::<u32>::new());
         assert_eq!(furballs_and_fruit(&session), (2, 2));
@@ -11288,7 +11168,7 @@ pub(super) mod tests {
             .expect("starts")
             .with_rules(at_rest_arrival());
         session.plot_course(SystemId(131)).expect("a route");
-        session.player.position = Vec2::new(0.0, 600.0);
+        session.ship.player.position = Vec2::new(0.0, 600.0);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&booster, &mut NeverFires),
@@ -11303,7 +11183,7 @@ pub(super) mod tests {
         let catalog = catalog();
         let mut plain = Session::start(&catalog).expect("starts");
         plain.plot_course(SystemId(131)).expect("a route");
-        plain.player.position = Vec2::new(0.0, 600.0);
+        plain.ship.player.position = Vec2::new(0.0, 600.0);
         assert_eq!(
             plain.begin_jump(),
             Err(JumpRefusal::TooClose { distance: 600.0 })
@@ -11332,7 +11212,7 @@ pub(super) mod tests {
             .expect("starts")
             .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
-        session.player.position = Vec2::new(0.0, 1300.0);
+        session.ship.player.position = Vec2::new(0.0, 1300.0);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&raised, &mut NeverFires),
@@ -15020,6 +14900,8 @@ pub(super) mod tests {
     /// Each weapon `session` mounts, with how many.
     fn mounted(session: &Session) -> Vec<(i16, u32)> {
         session
+            .ship
+            .fit
             .armament
             .mounts()
             .iter()
@@ -15032,7 +14914,7 @@ pub(super) mod tests {
         let catalog = stock_weapons(shipbuying());
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(mounted(&session), [(150, 2)]);
-        assert_eq!(session.stock, BTreeMap::from([(GUN, 2)]));
+        assert_eq!(session.ship.fit.stock, BTreeMap::from([(GUN, 2)]));
     }
 
     #[test]
@@ -15059,7 +14941,7 @@ pub(super) mod tests {
             [(TANK, 1), (GUN, 1), (LAUNCHER, 1), (ROCKETS, 20)]
         );
         assert_eq!(
-            session.stock,
+            session.ship.fit.stock,
             BTreeMap::from([(GUN, 1), (LAUNCHER, 1), (ROCKETS, 20)])
         );
         assert_eq!(session.secondary(), None);
@@ -17125,11 +17007,11 @@ pub(super) mod tests {
         });
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.player.heading = 0.0;
-        let centre = session.player.position;
+        session.ship.player.heading = 0.0;
+        let centre = session.ship.player.position;
         let mut starts = Vec::new();
         for heading in [0.0, 90.0, 90.0] {
-            session.player.heading = heading;
+            session.ship.player.heading = heading;
             session.tick_combat(Rules::default(), &mut NeverFires);
             let shot = session.shots().last().expect("a shot");
             starts.push(shot.position - shot.velocity - centre);
@@ -17205,14 +17087,14 @@ pub(super) mod tests {
         let catalog = armed_with_exits();
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.player.heading = 0.0;
+        session.ship.player.heading = 0.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.landed = Some(StellarId(128));
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.landed = None;
-        session.player.heading = 90.0;
+        session.ship.player.heading = 90.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
-        let start = newest_start(&session, ShipRef::Player, session.player.position);
+        let start = newest_start(&session, ShipRef::Player, session.ship.player.position);
         assert!(
             (start - Vec2::new(10.0, 5.0)).length() < 1e-3,
             "on this tick's frame: {start:?}"
@@ -17242,10 +17124,10 @@ pub(super) mod tests {
             });
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
             session.hold_trigger(FIRE);
-            session.player.heading = 0.0;
+            session.ship.player.heading = 0.0;
             session.tick_combat(Rules::default(), &mut NeverFires);
             let shot = session.shots().last().expect("a shot");
-            (shot.position - shot.velocity - session.player.position).y
+            (shot.position - shot.velocity - session.ship.player.position).y
         };
         assert!(
             (behind(Rulebook::default()) - 10.0).abs() < 1e-3,
@@ -19251,11 +19133,11 @@ pub(super) mod tests {
     /// regenerating nothing.
     pub(super) fn beside_a_heavy_npc(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.hull.mass = 200.0;
-        session.stats.shield_regen = 0.0;
-        session.stats.armor_regen = 0.0;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.fit.hull.mass = 200.0;
+        session.ship.fit.stats.shield_regen = 0.0;
+        session.ship.fit.stats.armor_regen = 0.0;
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.state.position = Vec2::new(0.0, -40.0);
         npc.hull.mass = 200.0;
@@ -19293,7 +19175,7 @@ pub(super) mod tests {
         let catalog = shockwave_catalog();
         let mut session = beside_a_heavy_npc(&catalog);
         session.traffic.npcs_mut()[0].reserves = Reserves::full(100.0, 300.0, 100.0);
-        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.ship.condition);
         let player = session.pilot.reserves;
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.player_condition(), Condition::Destroyed);
@@ -19320,7 +19202,7 @@ pub(super) mod tests {
         for (drift, after) in [(-2.0, -5.75), (-6.0, -6.0)] {
             let mut session = beside_a_heavy_npc(&catalog);
             session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, drift);
-            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.ship.condition);
             session.tick_combat(Rules::default(), &mut NeverFires);
             let velocity = session.npcs()[0].state.velocity;
             assert!(
@@ -19401,13 +19283,13 @@ pub(super) mod tests {
         (npc, npc_mass): (Option<WeaponRecord>, f32),
     ) -> Session {
         let mut session = facing_an_npc(catalog, 180);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.hull.mass = player_mass;
-        session.stats.handling.max_speed = 10.0;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.fit.hull.mass = player_mass;
+        session.ship.fit.stats.handling.max_speed = 10.0;
         session.pilot.reserves.shield = crate::reserves::Gauge::full(1000.0);
         if let Some(weapon) = player {
-            session.armament = crate::combat::armament::Armament::new([(
+            session.ship.fit.armament = crate::combat::armament::Armament::new([(
                 crate::combat::weapon::WeaponSpec::new(&weapon),
                 1,
             )]);
@@ -19597,7 +19479,7 @@ pub(super) mod tests {
     fn an_ionized_player_takes_off_with_no_ionization() {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
-        session.ion = IONIZED;
+        session.ship.ion = IONIZED;
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.ion(), Ion::default());
     }
@@ -19607,7 +19489,7 @@ pub(super) mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         session.take_off(&catalog, &mut NeverFires);
-        session.ion = IONIZED;
+        session.ship.ion = IONIZED;
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -19632,7 +19514,7 @@ pub(super) mod tests {
             let npc = &mut session.traffic.npcs_mut()[0];
             bare(&mut npc.reserves, armor, 300.0);
             npc.condition = before;
-            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.ship.condition);
             let rating = session.pilot.combat_rating;
             let witness = Witness::default();
             let rules = Rules {
@@ -19661,7 +19543,7 @@ pub(super) mod tests {
             13_350.0,
             40_000.0,
         );
-        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.ship.condition);
         session.tick_combat(Rules::default(), &mut NeverFires);
         let npc = &session.npcs()[0];
         assert_eq!(npc.reserves.armor.now, 13_333.0, "floored, still disabled");
@@ -20020,7 +19902,7 @@ pub(super) mod tests {
     fn a_breaking_up_player_slows_by_0_995_a_tick() {
         let catalog = armed();
         let mut session = disabled_moving_player(&catalog);
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 10,
             starting: false,
         };
@@ -20087,7 +19969,7 @@ pub(super) mod tests {
     /// save taken.
     fn disabled(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let _ = session.take_sounds();
         session.take_save_due();
         session
@@ -20129,7 +20011,7 @@ pub(super) mod tests {
         assert_eq!(session.nav_target(), Some(StellarId(129)), "kept");
         let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
         let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.select_stellar(StellarPick::Slot(0));
         assert_eq!(
             session.land(),
@@ -20149,7 +20031,7 @@ pub(super) mod tests {
             station: false,
         });
         assert_eq!(session.land(), refusal, "@0x66977");
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         assert_eq!(session.land(), refusal, "the same refusal");
     }
 
@@ -20161,7 +20043,7 @@ pub(super) mod tests {
         };
         let mut session = disabled(&empty);
         assert_eq!(session.land(), Err(LandingRefusal::NoStellars), "@0x6a94c");
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         assert_eq!(
             session.land(),
             Err(LandingRefusal::NoStellars),
@@ -20185,7 +20067,7 @@ pub(super) mod tests {
     fn l_on_an_unlandable_target_beeps() {
         for condition in [Condition::Intact, Condition::Disabled] {
             let mut session = Session::start(&unlandable()).expect("starts");
-            session.condition = condition;
+            session.ship.condition = condition;
             session.select_stellar(StellarPick::Slot(0));
             let _ = session.take_sounds();
             assert!(matches!(
@@ -20204,7 +20086,7 @@ pub(super) mod tests {
     fn l_with_no_target_and_nothing_landable_is_silent() {
         for condition in [Condition::Intact, Condition::Disabled] {
             let mut session = Session::start(&unlandable()).expect("starts");
-            session.condition = condition;
+            session.ship.condition = condition;
             let _ = session.take_sounds();
             assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
             assert_eq!(
@@ -20223,7 +20105,7 @@ pub(super) mod tests {
         }
         for condition in [Condition::Intact, Condition::Disabled] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.condition = condition;
+            session.ship.condition = condition;
             let _ = session.take_sounds();
             assert!(matches!(
                 session.land(),
@@ -20265,7 +20147,7 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.land().expect("requests");
         session.tick(Controls::default());
-        session.player.velocity.x = 5.0;
+        session.ship.player.velocity.x = 5.0;
         let _ = session.take_sounds();
         assert!(matches!(
             session.land(),
@@ -20293,7 +20175,7 @@ pub(super) mod tests {
         assert_eq!(session.land(), Err(LandingRefusal::Disabled));
         assert_eq!(session.take_sounds(), [], "0x67eef");
         let mut session = Session::start(&catalog()).expect("starts");
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 10,
             starting: false,
         };
@@ -20340,7 +20222,7 @@ pub(super) mod tests {
             "@0x6a94c"
         );
         assert_eq!(session.nav_target(), None, "nothing selected");
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         assert_eq!(
             session.land(),
             Err(LandingRefusal::NothingLandable),
@@ -20366,7 +20248,7 @@ pub(super) mod tests {
     #[test]
     fn a_breaking_up_players_l_selects_nothing() {
         let mut session = disabled(&catalog());
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 9,
             starting: false,
         };
@@ -20517,7 +20399,7 @@ pub(super) mod tests {
     fn every_dead_tick_lets_go_of_the_players_target_and_nav_target() {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         for ticks_left in [5, 1, 0] {
             session.player_end = Some(Ending::Holding { ticks_left });
             session.target = Some(NpcId(0));
@@ -20541,7 +20423,7 @@ pub(super) mod tests {
     fn a_destroyed_player_with_no_ending_recorded_starts_the_hold() {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.tick(Controls::default());
         assert_eq!(
             session.player_fate(),
@@ -20581,7 +20463,7 @@ pub(super) mod tests {
     fn expired_hold() -> Session {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.player_end = Some(Ending::Holding { ticks_left: 0 });
         session.tick(Controls::default());
         assert!(session.hold_expired());
@@ -20595,7 +20477,7 @@ pub(super) mod tests {
         flying.begin_fade();
         assert_eq!(flying.player_fate(), PlayerFate::Flying);
         let mut holding = facing_an_npc(&catalog, 180);
-        holding.condition = Condition::Destroyed;
+        holding.ship.condition = Condition::Destroyed;
         holding.player_end = Some(Ending::Holding { ticks_left: 3 });
         holding.begin_fade();
         assert_eq!(holding.player_fate(), PlayerFate::Holding { ticks_left: 3 });
@@ -20631,17 +20513,17 @@ pub(super) mod tests {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
         assert!(session.may_save(), "flying");
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert!(session.may_save(), "disabled");
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 9,
             starting: false,
         };
         assert!(!session.may_save(), "breaking up");
-        session.condition = Condition::Destroyed;
-        session.player_exploded_this_tick = true;
+        session.ship.condition = Condition::Destroyed;
+        session.ship.fate.player_exploded_this_tick = true;
         assert!(!session.may_save(), "exploded");
-        session.player_exploded_this_tick = false;
+        session.ship.fate.player_exploded_this_tick = false;
         for ending in [
             Ending::Holding { ticks_left: 9 },
             Ending::Expired,
@@ -20731,8 +20613,8 @@ pub(super) mod tests {
                     (ShipId(144), false),
                     (ESCAPE_POD_SHIP, true),
                 ] {
-                    session.condition = condition;
-                    session.player_exploded_this_tick = exploded;
+                    session.ship.condition = condition;
+                    session.ship.fate.player_exploded_this_tick = exploded;
                     session.player_end = ending;
                     session.pilot.strict_play = strict;
                     session.pilot.ship = ship;
@@ -20796,11 +20678,11 @@ pub(super) mod tests {
     fn the_players_explosion_ends_a_warp_up_playing() {
         let catalog = deadly_in(2);
         let mut session = facing_an_npc(&catalog, 180);
-        session.warp_ups.start(true, 100_000);
-        session.warp_ups.start(false, 100_000);
+        session.ship.warp.warp_ups.start(true, 100_000);
+        session.ship.warp.warp_ups.start(false, 100_000);
         from_the_breakup(&mut session, &catalog, 9);
-        assert_eq!(session.condition, Condition::Destroyed);
-        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.ship.condition, Condition::Destroyed);
+        assert_eq!(session.ship.warp.warp_ups, crate::warp::WarpUps::default());
     }
 
     #[test]
@@ -20808,10 +20690,10 @@ pub(super) mod tests {
         // 130 halted @0x2d8d0-0x2d8ea.
         let catalog = deadly_in(2);
         let mut session = facing_an_npc(&catalog, 180);
-        session.warp_out.start(100_000);
+        session.ship.warp.warp_out.start(100_000);
         from_the_breakup(&mut session, &catalog, 9);
-        assert_eq!(session.condition, Condition::Destroyed);
-        assert!(!session.warp_out.playing());
+        assert_eq!(session.ship.condition, Condition::Destroyed);
+        assert!(!session.ship.warp.warp_out.playing());
     }
 
     #[test]
@@ -21203,7 +21085,7 @@ pub(super) mod tests {
         // The NPC fires straight down, passing 20 pixels from the player's
         // centre: beyond the old ship's hit radius (9.9), within the new
         // one's (39.6).
-        session.player.position = Vec2::new(20.0, 0.0);
+        session.ship.player.position = Vec2::new(20.0, 0.0);
         let mut events = Vec::new();
         for _ in 0..20 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
@@ -21278,7 +21160,7 @@ pub(super) mod tests {
         let mut session = two_npcs(&catalog);
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(1)));
         assert_eq!(target_id(&session), Some(NpcId(1)));
-        session.player.position = Vec2::new(90.0, -90.0);
+        session.ship.player.position = Vec2::new(90.0, -90.0);
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
     }
 
@@ -22649,7 +22531,11 @@ pub(super) mod tests {
                     .any(|shot| shot.weapon.id == WeaponId(134)),
                 "a missile at it"
             );
-            session.sabotage.set_counter(crate::sabotage::FUSE);
+            session
+                .ship
+                .latches
+                .sabotage
+                .set_counter(crate::sabotage::FUSE);
             session.jump = Some(Jump::PreJump {
                 to: SystemId(129),
                 bearing: None,
@@ -23904,7 +23790,7 @@ pub(super) mod tests {
             Err(BoardRefusal::CantBoard)
         );
         let mut session = alongside(&catalog);
-        session.player.velocity = Vec2::new(0.0, 0.6);
+        session.ship.player.velocity = Vec2::new(0.0, 0.6);
         assert_eq!(board_by(&mut session, &witness), Err(BoardRefusal::TooFast));
         assert_eq!(session.player().velocity, Vec2::new(0.0, 0.6));
         assert_eq!(*witness.seen.borrow(), [], "no crime");
@@ -24525,7 +24411,10 @@ pub(super) mod tests {
             "four trims: @0x93cc9, then @0x93dcb for each of the three rounds"
         );
         assert!(session.boarding().is_some(), "the dialog still open");
-        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
     }
 
     #[test]
@@ -25116,7 +25005,11 @@ pub(super) mod tests {
                 session.pilot().missions().get(0).map(|m| m.cargo_tons),
                 Some(3)
             );
-            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{source:?}"
+            );
         }
     }
 
@@ -25248,7 +25141,7 @@ pub(super) mod tests {
             BTreeMap::from([(Good::Commodity(2), 13), (JUNK, 20)]),
             "50 x 20/73, the jünk kept"
         );
-        assert_eq!(full.scan_latches, Latches::ARMED);
+        assert_eq!(full.ship.latches.scan_latches, Latches::ARMED);
     }
 
     #[test]
@@ -25390,7 +25283,7 @@ pub(super) mod tests {
             "its default item, then its stock weapons and rounds"
         );
         assert_eq!(
-            session.stock,
+            session.ship.fit.stock,
             BTreeMap::from([(OutfitId(250), 2), (OutfitId(252), 1), (OutfitId(403), 6)])
         );
     }
@@ -25463,6 +25356,8 @@ pub(super) mod tests {
         let mut session = alongside(&bay);
         assert!(
             session
+                .ship
+                .fit
                 .armament
                 .mounts()
                 .iter()
@@ -25935,7 +25830,10 @@ pub(super) mod tests {
             7,
             "trimmed twice, as the dialog opens: @0x931d9 and @0x93226"
         );
-        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
     }
 
     #[test]
@@ -26429,7 +26327,7 @@ pub(super) mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.select_next_system();
         fly_out(&mut session);
-        session.player.heading = 90.0;
+        session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         for stage in ["pre-jump", "in hyperspace"] {
             for pick in [StellarPick::Slot(1), StellarPick::Nearest] {
@@ -26579,7 +26477,7 @@ pub(super) mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.select_next_system();
         fly_out(&mut session);
-        session.player.heading = 90.0;
+        session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         assert_eq!(session.preparing_jump(), Some(SystemId(134)));
         assert_eq!(session.select_next_system(), None, "pre-jump");
@@ -26821,13 +26719,13 @@ pub(super) mod tests {
         // touches `_warpUpSnd` or `_warpSoundDone`.
         let catalog = gated();
         let mut session = at_gate(&catalog);
-        session.warp_ups.start(false, 100_000);
+        session.ship.warp.warp_ups.start(false, 100_000);
         session.take_sounds();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
             .expect("enters");
         assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
-        assert!(session.warp_ups.playing(false));
+        assert!(session.ship.warp.warp_ups.playing(false));
     }
 
     #[test]
@@ -27010,13 +26908,13 @@ pub(super) mod tests {
         // touches `_warpUpSnd` or `_warpSoundDone`.
         let catalog = wormholes();
         let mut session = at_wormhole(&catalog);
-        session.warp_ups.start(false, 100_000);
+        session.ship.warp.warp_ups.start(false, 100_000);
         session.take_sounds();
         session
             .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
             .expect("enters");
         assert_eq!(session.take_sounds(), [SimSound::Arrived], "no halt");
-        assert!(session.warp_ups.playing(false));
+        assert!(session.ship.warp.warp_ups.playing(false));
     }
 
     /// Holds `P300` in `session`, by the engine's `script_sound` reading.
@@ -27213,8 +27111,8 @@ pub(super) mod tests {
     fn a_gate_entered_mid_thrust_stops_the_thrust() {
         let catalog = gated();
         let mut session = at_gate(&catalog);
-        session.thrusting = true;
-        session.engine_glow = 10;
+        session.ship.thrusting = true;
+        session.ship.engine_glow = 10;
         session.take_sounds();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)

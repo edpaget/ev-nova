@@ -34,9 +34,9 @@ impl Session {
         // Precision lost only past 2^53 tons.
         #[allow(clippy::cast_precision_loss)]
         let total = total as f64;
-        let player = self.player;
+        let player = self.ship.player;
         self.boxes
-            .drop_behind(&player, self.hull.sprite_size, total, chance);
+            .drop_behind(&player, self.ship.fit.hull.sprite_size, total, chance);
         let fleet_holds = self.capacity();
         let droppers: Vec<_> = self
             .pilot
@@ -117,11 +117,11 @@ impl Session {
         if !self.boxes.any_scoopable() {
             return;
         }
-        if !disabled(self.condition) {
+        if !disabled(self.ship.condition) {
             while self.player_scoops() {
                 let Some(taken) = self.boxes.take_touching(
-                    self.player.position,
-                    self.hull.hit_radius,
+                    self.ship.player.position,
+                    self.ship.fit.hull.hit_radius,
                     &self.statics.box_frames,
                 ) else {
                     break;
@@ -418,7 +418,7 @@ mod tests {
         let catalog = boxed();
         let mut session = flying(&catalog, 5);
         session.jettison_cargo(true, &mut NeverFires);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.tick(Controls::default());
         assert_eq!(session.cargo_boxes()[0].life, 179.0);
     }
@@ -541,7 +541,7 @@ mod tests {
         let mut catalog = scoopable();
         catalog.box_frames[1] = Some((40, 40));
         let mut session = scooper(&catalog, 0);
-        let reach = session.hull.hit_radius;
+        let reach = session.ship.fit.hull.hit_radius;
         let at = session.player().position;
         let near = at + Vec2::new(reach + 15.0, 0.0);
         let far = at + Vec2::new(-(reach + 25.0), 0.0);
@@ -583,7 +583,7 @@ mod tests {
     fn a_disabled_player_takes_no_box() {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_no_scoop(session);
     }
 
@@ -591,7 +591,7 @@ mod tests {
     fn the_scoop_takes_no_jettisoned_box() {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
-        let on_ship = session.player;
+        let on_ship = session.ship.player;
         session.boxes.spawn(&on_ship, Some(0.0), &mut NeverFires);
         assert_eq!(session.cargo_boxes()[0].position, on_ship.position);
         session.tick(Controls::default());
@@ -665,14 +665,18 @@ mod tests {
         for contents in [Some(2), Some(6)] {
             let catalog = scoopable();
             let mut session = scooper(&catalog, 0);
-            session.scan_latches = Latches {
+            session.ship.latches.scan_latches = Latches {
                 junk: false,
                 outfits: false,
             };
             drop_on_ship(&mut session, contents);
             session.tick(Controls::default());
             assert!(session.cargo_boxes().is_empty(), "{contents:?}");
-            assert_eq!(session.scan_latches, Latches::ARMED, "{contents:?}");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{contents:?}"
+            );
         }
     }
 
@@ -684,10 +688,10 @@ mod tests {
             junk: false,
             outfits: false,
         };
-        session.scan_latches = unarmed;
+        session.ship.latches.scan_latches = unarmed;
         drop_on_ship(&mut session, Some(2));
         session.tick(Controls::default());
-        assert_eq!(session.scan_latches, unarmed);
+        assert_eq!(session.ship.latches.scan_latches, unarmed);
     }
 
     #[test]

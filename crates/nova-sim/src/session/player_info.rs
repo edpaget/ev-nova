@@ -82,7 +82,7 @@ impl Session {
     pub fn press_player_info(&mut self) -> bool {
         if self.jump.is_some()
             || self.in_takeoff_grace()
-            || matches!(self.condition, Condition::Dying { .. })
+            || matches!(self.ship.condition, Condition::Dying { .. })
         {
             self.out.sounds.push(SimSound::Refused);
             return false;
@@ -101,7 +101,7 @@ impl Session {
     /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
     /// the session does not hold.
     pub fn open_player_info(&mut self, catalog: &impl PilotCatalog) -> Option<PlayerInfo> {
-        if self.jump.is_some() || matches!(self.condition, Condition::Dying { .. }) {
+        if self.jump.is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }
         self.reset_precalced();
@@ -120,7 +120,7 @@ impl Session {
         let cargo = self.held_cargo(&cargo_names);
         let reserves = self.reserves();
         let totals = HandlingTotals::new(
-            self.fields,
+            self.ship.fit.fields,
             &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         );
         let records = &self.statics.outfits[..];
@@ -176,9 +176,9 @@ impl Session {
             accel: player_info::accel_shown(&totals, self.ionization()),
             max_speed: player_info::speed_shown(&totals),
             credits: self.pilot.cash,
-            shield: player_info::reserve_shown(reserves.shield.now, self.stats.shield),
-            armor: player_info::reserve_shown(reserves.armor.now, self.stats.armor),
-            energy: player_info::energy_shown(reserves.fuel.now, self.stats.fuel as i64),
+            shield: player_info::reserve_shown(reserves.shield.now, self.ship.fit.stats.shield),
+            armor: player_info::reserve_shown(reserves.armor.now, self.ship.fit.stats.armor),
+            energy: player_info::energy_shown(reserves.fuel.now, self.ship.fit.stats.fuel as i64),
             income: player_info::income_line(day),
             fleet: cargo.fleet,
             cargo: player_info::has_any_cargo(&cargo)
@@ -236,7 +236,7 @@ impl Session {
                 .map(|(_, name, count)| (name, count))
                 .collect(),
             cargo_names,
-            fleet: holds > i64::from(self.stats.capacity),
+            fleet: holds > i64::from(self.ship.fit.stats.capacity),
             free: holds - self.pilot.total_cargo(),
             mission_room: self.mission_cargo_space(),
         }
@@ -250,7 +250,7 @@ impl Session {
             self.statics
                 .ship_record(self.pilot.ship)
                 .map_or(0, |record| record.cost),
-            self.fields.mass,
+            self.ship.fit.fields.mass,
             &self.pilot.outfits,
             &self.statics.outfits,
             self.setup.rules.source_for(RuleKey::TradeInOutfits),
@@ -649,7 +649,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let plain = session.player_info(&catalog);
         assert_eq!((plain.accel, plain.turn_rate), (450, 90));
-        session.ion.charge = 200.0;
+        session.ship.ion.charge = 200.0;
         let info = session.player_info(&catalog);
         assert_eq!((info.accel, info.turn_rate), (225, 45));
         assert_eq!(info.max_speed, plain.max_speed);
@@ -980,7 +980,10 @@ mod tests {
         let trimmed = overloaded(&mut session);
         convicted(&mut session);
         let shown = session.open_player_info(&catalog).expect("opens");
-        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
         assert_eq!(
             session
                 .pilot()
@@ -1005,7 +1008,10 @@ mod tests {
         let before = session.clone();
         let _ = session.player_info(&catalog);
         assert_eq!(session.pilot(), before.pilot());
-        assert_ne!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_ne!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
     }
 
     #[test]
@@ -1028,7 +1034,7 @@ mod tests {
             });
         };
         let dying = |session: &mut Session| {
-            session.condition = Condition::Dying {
+            session.ship.condition = Condition::Dying {
                 ticks_left: 3,
                 starting: false,
             };
@@ -1048,10 +1054,14 @@ mod tests {
             refuse(&mut session);
             assert_eq!(session.open_player_info(&catalog), None, "{why}");
             assert_eq!(session.pilot(), &untouched, "{why}");
-            assert_ne!(session.scan_latches, crate::scan::Latches::ARMED, "{why}");
+            assert_ne!(
+                session.ship.latches.scan_latches,
+                crate::scan::Latches::ARMED,
+                "{why}"
+            );
         }
         let mut disabled = Session::start(&catalog).expect("starts");
-        disabled.condition = Condition::Disabled;
+        disabled.ship.condition = Condition::Disabled;
         assert!(disabled.open_player_info(&catalog).is_some(), "disabled");
     }
 
@@ -1077,7 +1087,7 @@ mod tests {
                 });
             }),
             ("breaking up (@0x7031d)", |session| {
-                session.condition = Condition::Dying {
+                session.ship.condition = Condition::Dying {
                     ticks_left: 3,
                     starting: false,
                 };
@@ -1100,7 +1110,7 @@ mod tests {
         let catalog = catalog();
         for condition in [Condition::Intact, Condition::Disabled] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.condition = condition;
+            session.ship.condition = condition;
             let _ = session.take_sounds();
             assert!(session.press_player_info(), "{condition:?}");
             assert_eq!(session.take_sounds(), [], "{condition:?}");

@@ -70,9 +70,9 @@ impl Session {
     /// its hull, its inertialess flight or its `ModType` 41 outfit.
     fn player_resists_gravity(&self) -> bool {
         resists_gravity(
-            self.hull.stellar_immune,
+            self.ship.fit.hull.stellar_immune,
             self.player_inertialess(),
-            self.stats.gravity_resistance,
+            self.ship.fit.stats.gravity_resistance,
             Flyer::Player,
         )
     }
@@ -93,7 +93,7 @@ impl Session {
     /// whether it keeps close formation reads.
     pub(super) fn leader_state(&self, npc: &Npc) -> Option<ShipState> {
         match npc.leader_ref()? {
-            ShipRef::Player => Some(self.player),
+            ShipRef::Player => Some(self.ship.player),
             ShipRef::Npc(id) => self.npc(id).map(|leader| leader.state),
         }
     }
@@ -118,8 +118,8 @@ impl Session {
         HazardResistance {
             gravity: self.player_resists_gravity(),
             deadly: resists_deadly(
-                self.hull.stellar_immune,
-                self.stats.deadly_resistance,
+                self.ship.fit.hull.stellar_immune,
+                self.ship.fit.stats.deadly_resistance,
                 Flyer::Player,
             ),
         }
@@ -180,8 +180,8 @@ mod tests {
         shown: usize,
     ) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.listed = listed.to_vec();
         session.sites = listed[..shown].to_vec();
         session
@@ -255,9 +255,9 @@ mod tests {
             let player = pull(Vec2::ZERO, stellar, 40, 1.0);
             assert!(player.x > 0.09, "toward it: {player:?}");
             assert!(
-                near(session.player.velocity, player),
+                near(session.ship.player.velocity, player),
                 "{:?}",
-                session.player
+                session.ship.player
             );
             let at = npc(&session).state.position;
             assert!(near(
@@ -281,9 +281,9 @@ mod tests {
                 + pull(Vec2::ZERO, Vec2::new(-1000.0, 0.0), 30, 1.0);
             assert!(expected.x < 0.0, "the west wins: {expected:?}");
             assert!(
-                near(session.player.velocity, expected),
+                near(session.ship.player.velocity, expected),
                 "{:?}",
-                session.player
+                session.ship.player
             );
         }
     }
@@ -319,7 +319,7 @@ mod tests {
                 resist(&mut session);
                 fight(&mut session);
                 assert_eq!(npc(&session).state.velocity, Vec2::ZERO);
-                assert!(session.player.velocity.x > 0.09, "the player still is");
+                assert!(session.ship.player.velocity.x > 0.09, "the player still is");
             }
             let mut outfitted = among(rules, &catalog, &[east()], 1);
             npc_mut(&mut outfitted).stats.gravity_resistance = true;
@@ -337,9 +337,9 @@ mod tests {
                 .push(outfit(197, &[(GRAVITY_RESISTANCE, 0)]));
             catalog.defaults = vec![(ShipId(128), vec![(OutfitId(197), 1)])];
             let mut session = among(rules, &catalog, &[east()], 1);
-            assert!(session.stats.gravity_resistance);
+            assert!(session.ship.fit.stats.gravity_resistance);
             fight(&mut session);
-            assert_eq!(session.player.velocity, Vec2::ZERO);
+            assert_eq!(session.ship.player.velocity, Vec2::ZERO);
             assert!(npc(&session).state.velocity.x > 0.09, "the NPC still is");
         }
     }
@@ -352,13 +352,13 @@ mod tests {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
             // Away from the centre, so a leader at the centre would not do.
-            session.player.position = Vec2::new(1500.0, 1500.0);
+            session.ship.player.position = Vec2::new(1500.0, 1500.0);
             let formation = FormationSlot {
                 slot: 0,
                 ships: 1,
                 spacing: 30.0,
             };
-            let slot = formation.position(&session.player);
+            let slot = formation.position(&session.ship.player);
             let escort = npc_mut(&mut session);
             escort.escort = Some(EscortDuty {
                 formation,
@@ -381,13 +381,13 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut immune = among(rules, &catalog, &[east()], 1);
-            immune.hull.stellar_immune = true;
+            immune.ship.fit.hull.stellar_immune = true;
             fight(&mut immune);
-            assert_eq!(immune.player.velocity, Vec2::ZERO);
+            assert_eq!(immune.ship.player.velocity, Vec2::ZERO);
             let mut inertialess = among(rules, &catalog, &[east()], 1);
-            inertialess.stats.inertialess_hull = true;
+            inertialess.ship.fit.stats.inertialess_hull = true;
             fight(&mut inertialess);
-            assert_eq!(inertialess.player.velocity, Vec2::ZERO);
+            assert_eq!(inertialess.ship.player.velocity, Vec2::ZERO);
         }
     }
 
@@ -396,9 +396,9 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
-            session.condition = Condition::Destroyed;
+            session.ship.condition = Condition::Destroyed;
             fight(&mut session);
-            assert_eq!(session.player.velocity, Vec2::ZERO);
+            assert_eq!(session.ship.player.velocity, Vec2::ZERO);
         }
     }
 
@@ -409,20 +409,29 @@ mod tests {
             let mut session = among(rules, &catalog, &[east()], 1);
             session.settle_box();
             fight(&mut session);
-            let once = session.player.velocity;
+            let once = session.ship.player.velocity;
             session.tick_again(
                 Controls::default(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
             );
-            let again = pull(session.player.position, Vec2::new(2000.0, 0.0), 40, 1.0);
-            assert!(
-                near(session.player.velocity, once + again),
-                "{:?}",
-                session.player
+            let again = pull(
+                session.ship.player.position,
+                Vec2::new(2000.0, 0.0),
+                40,
+                1.0,
             );
-            assert!(session.player.velocity.x > 0.19, "{:?}", session.player);
+            assert!(
+                near(session.ship.player.velocity, once + again),
+                "{:?}",
+                session.ship.player
+            );
+            assert!(
+                session.ship.player.velocity.x > 0.19,
+                "{:?}",
+                session.ship.player
+            );
         }
     }
 

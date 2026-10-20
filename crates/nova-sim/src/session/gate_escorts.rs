@@ -76,7 +76,7 @@ impl Session {
             }
             return;
         }
-        let heading = self.player.heading;
+        let heading = self.ship.player.heading;
         for id in led {
             let wait = chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST;
             if let Some(npc) = self.npc_mut(id) {
@@ -146,8 +146,8 @@ mod tests {
         let formation = npc.formation().expect("a slot");
         npc.state
             == ShipState {
-                position: formation.position(&session.player),
-                ..session.player
+                position: formation.position(&session.ship.player),
+                ..session.ship.player
             }
     }
 
@@ -165,7 +165,7 @@ mod tests {
                 let expected = ShipState {
                     position: exit_of(kind),
                     velocity: Vec2::ZERO,
-                    heading: session.player.heading,
+                    heading: session.ship.player.heading,
                 };
                 assert_eq!(npc.state, expected, "{kind:?}");
                 assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34 }, "{kind:?}");
@@ -234,7 +234,7 @@ mod tests {
         let mut session = flying(&catalog, Rulebook::default());
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
-        let heading = session.player.heading;
+        let heading = session.ship.player.heading;
         let exit = exit_of(GateKind::Wormhole);
         ticks(&mut session, &catalog, 33);
         for &id in &ids {

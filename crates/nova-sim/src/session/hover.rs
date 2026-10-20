@@ -24,7 +24,7 @@ impl Session {
             self.npcs(),
             self.scanner(),
             self.target.is_some()
-                && matches!(self.condition, Condition::Intact | Condition::Disabled),
+                && matches!(self.ship.condition, Condition::Intact | Condition::Disabled),
             at,
             drawn,
         )
@@ -207,14 +207,14 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let far = Vec2::new(-5000.0, 0.0);
         session.target = Some(NpcId(99));
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
         assert_eq!(session.hover(far, &AllAt(far)), None, "dying");
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         assert_eq!(session.hover(far, &AllAt(far)), None, "destroyed");
     }
 
