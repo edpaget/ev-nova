@@ -47,7 +47,7 @@
 //! player (@0x4b80-0x4b8f): ours, a ship that
 //! [escorts the player](Npc::escorts_player) (a hired or captured escort,
 //! the player's own fighter, a mission escort), or one whose leader does
-//! (an escort's fighter, which `Session::join_carrier` leads by the
+//! (an escort's fighter, which `Space::join_carrier` leads by the
 //! escort and gives no escort duty).
 //!
 //! Left out: the escort test's defender case (@0x4b52-0x4b7c), a ship

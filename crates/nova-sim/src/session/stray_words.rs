@@ -75,10 +75,10 @@ impl Session {
     /// pods left, skipped if it is gone, or the player's pod countdown
     /// (see the module docs).
     pub(super) fn step_stray_words(&mut self, chance: &mut dyn Chance) {
-        for (ship, word) in self.combat.take_stray_steps() {
+        for (ship, word) in self.space.combat.take_stray_steps() {
             match (ship, word) {
                 (ShipRef::Npc(id), StrayWord::Pods) => {
-                    if let Some(npc) = self.npc_mut(id) {
+                    if let Some(npc) = self.space.npc_mut(id) {
                         npc.pods_left = step_word(npc.pods_left, chance);
                     }
                 }
@@ -94,11 +94,11 @@ impl Session {
     fn step_pod_word(&mut self, chance: &mut dyn Chance) {
         let held = PodWord {
             pod: self.pod,
-            zeroed: self.pod_zeroed,
+            zeroed: self.ship.fate.pod_zeroed,
         };
         let stepped = PodWord::of(step_word(held.word(), chance));
         self.pod = stepped.pod;
-        self.pod_zeroed = stepped.zeroed;
+        self.ship.fate.pod_zeroed = stepped.zeroed;
     }
 }
 
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(session.pod, Some(1), "-1 drawn to 0, then on to 1");
         assert!(matches!(session.player_fate(), PlayerFate::Ejected { .. }));
         session.tick(crate::flight::Controls::default());
-        assert!(session.rescue_due, "the pod flew its last tick");
+        assert!(session.ship.fate.rescue_due, "the pod flew its last tick");
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert!(session.take_rescue_desc().is_some(), "the rescue ran");
     }
@@ -205,10 +205,13 @@ mod tests {
         let catalog = beamed();
         let mut session = session(&catalog, RuleSource::Engine);
         fire(&mut session, &mut Ranged::of(&[(4, 3)]));
-        assert_eq!((session.pod, session.pod_zeroed), (None, true));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, true));
         assert_eq!(session.player_fate(), PlayerFate::Flying);
         fire(&mut session, &mut Ranged::of(&[]));
-        assert_eq!((session.pod, session.pod_zeroed), (Some(1), false));
+        assert_eq!(
+            (session.pod, session.ship.fate.pod_zeroed),
+            (Some(1), false)
+        );
     }
 
     #[test]
@@ -217,10 +220,10 @@ mod tests {
         // (@0x6709b), so the next stray beam draws again.
         let catalog = armed();
         let mut session = Session::start(&catalog).expect("starts");
-        session.pod_zeroed = true;
+        session.ship.fate.pod_zeroed = true;
         assert!(crate::testkit::land_now(&mut session).is_ok());
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
         let mut chance = Ranged::of(&[(4, 1)]);
         session.step_pod_word(&mut chance);
         assert_eq!(chance.asked, [4], "-1 is drawn");
@@ -233,7 +236,7 @@ mod tests {
         // (@0x6709b).
         let catalog = crate::session::tests::gated();
         let mut session = crate::session::tests::at_gate(&catalog);
-        session.pod_zeroed = true;
+        session.ship.fate.pod_zeroed = true;
         session
             .enter_hypergate(
                 Some(crate::catalog::SystemId(131)),
@@ -241,7 +244,7 @@ mod tests {
                 &mut crate::testkit::Scripted::default(),
             )
             .expect("enters");
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
     }
 
     #[test]
@@ -253,7 +256,11 @@ mod tests {
         session.step_pod_word(&mut chance);
         assert_eq!(session.pod, Some(3));
         session.step_pod_word(&mut chance);
-        assert_eq!((session.pod, session.pod_zeroed), (None, true), "3 to 0");
+        assert_eq!(
+            (session.pod, session.ship.fate.pod_zeroed),
+            (None, true),
+            "3 to 0"
+        );
     }
 
     #[test]
@@ -261,7 +268,7 @@ mod tests {
         let catalog = beamed();
         let mut session = session(&catalog, RuleSource::Bible);
         fire(&mut session, &mut Ranged::of(&[(4, 0)]));
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
         assert_eq!(session.player_fate(), PlayerFate::Flying);
     }
 
@@ -278,13 +285,13 @@ mod tests {
         ] {
             let mut session = session(&catalog, reading);
             let id = session.npcs()[0].id;
-            if let Some(npc) = session.npc_mut(id) {
+            if let Some(npc) = session.space.npc_mut(id) {
                 npc.pods_left = held;
             }
             session.tick_traffic(&catalog, &super::super::tests::Firing, &mut NeverFires);
             session.tick_combat(Rules::default(), &mut Ranged::of(&[(4, draw)]));
             assert_eq!(
-                session.npc(id).map(|npc| npc.pods_left),
+                session.space.npc(id).map(|npc| npc.pods_left),
                 Some(stepped),
                 "{reading:?}: {held}"
             );

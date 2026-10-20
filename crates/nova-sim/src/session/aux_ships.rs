@@ -54,9 +54,10 @@
 //! [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
 //! [`AuxShips::give_back`]: crate::mission::aux_ships::AuxShips::give_back
 
+use crate::pilot::Pilot;
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{MissionRun, Session, Statics};
 use crate::catalog::TrafficCatalog;
 use crate::chance::Chance;
 use crate::mission::Stop;
@@ -94,18 +95,23 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let coming = active.aux.coming(&record.aux);
-        let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
+        let holder = |stop: Option<Stop>| {
+            stop.and_then(|stop| {
+                self.chart
+                    .holder_of(&self.pilot, &self.statics, stop.stellar)
+            })
+        };
         let holders = (holder(active.destination), holder(active.return_to));
-        let map = self.galaxy.map();
+        let map = self.chart.galaxy.map();
         if coming <= 0
             || !aux_system_allows(
                 record.aux.syst,
                 self.pilot.system,
                 holders,
                 map,
-                &self.govts,
+                &self.statics.govts,
             )
         {
             return;
@@ -113,13 +119,13 @@ impl Session {
         let Some(dude) = aux_dude(&record.aux) else {
             return;
         };
-        let items = self.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        let items = self.setup.npc_items();
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         let spawn = AuxSpawn {
@@ -127,12 +133,16 @@ impl Session {
             dude,
             count: coming,
         };
-        let ships =
-            spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.appear_gate(), chance);
-        let came = self.traffic.bring_in_within(
+        let ships = spawn::arriving_aux_ships(
+            self.space.traffic.table(),
+            &spawn,
+            self.appear_gate(),
+            chance,
+        );
+        let came = self.space.traffic.bring_in_within(
             ships,
-            self.spawn_reserve(SPAWN_RESERVE),
-            &self.govts,
+            self.setup.spawn_reserve(SPAWN_RESERVE),
+            &self.statics.govts,
             &mut *chance,
         );
         if let Some(active) = self.pilot.missions.get_mut(slot) {
@@ -165,23 +175,14 @@ impl Session {
     ///
     /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
     pub(super) fn restart_aux(&mut self, slot: u8, chance: &mut dyn Chance) {
-        let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let record = self.lifecycle_record(active.mission);
-        if let Some(active) = self.pilot.missions.get_mut(slot) {
-            active.aux.restart(&record.aux, record.flags, chance);
-        }
+        restart_aux(&mut self.pilot, &self.statics, slot, chance);
     }
 
     /// The take-off's restart of every active mission's auxiliary ships,
     /// in slot order ([`Session::restart_aux`]), drawing on `chance`; the
     /// launch's too ([`Session::open_at_launch`]).
     pub(super) fn restart_every_aux(&mut self, chance: &mut dyn Chance) {
-        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
-        for slot in slots {
-            self.restart_aux(slot, chance);
-        }
+        restart_every_aux(&mut self.pilot, &self.statics, chance);
     }
 
     /// Open Pilot's restart of every active mission's auxiliary ships, in
@@ -198,7 +199,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active
                     .aux
@@ -226,8 +227,8 @@ impl Session {
     ///
     /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
     pub fn open_at_launch(&mut self, chance: &mut dyn Chance) {
-        self.restart_every_aux(chance);
-        self.explore_here();
+        self.run
+            .open_at_launch(&mut self.pilot, &self.statics, chance);
     }
 
     /// The player's exit from a hypergate or wormhole, after the
@@ -236,13 +237,13 @@ impl Session {
     /// loses its ships until the next restart, its countdown 0x7fff
     /// (@0x6729b-0x672ac). Nothing under the other reading.
     pub(super) fn lose_aux_at_gate(&mut self, slot: u8) {
-        if self.rules.source_for(RuleKey::AuxGate) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::AuxGate) != RuleSource::Engine {
             return;
         }
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        if self.lifecycle_record(active.mission).aux.syst != ANY_SYSTEM {
+        if self.statics.lifecycle_record(active.mission).aux.syst != ANY_SYSTEM {
             return;
         }
         if let Some(active) = self.pilot.missions.get_mut(slot) {
@@ -266,7 +267,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.aux.give_back(&record.aux);
             }
@@ -285,6 +286,56 @@ impl Session {
         if how == Entrance::Gate {
             self.lose_aux_at_gate(slot);
         }
+    }
+}
+
+impl MissionRun {
+    /// The setup of a pilot opened at launch, once the load has run (its
+    /// sweep with it), drawing on `chance`, as `_OpenLastPilotFile` and
+    /// `_DoMainScreen`'s once-a-launch setup do:
+    ///
+    /// - every active mission's auxiliary ships restarted, in slot order,
+    ///   in the unguarded form the take-off uses ([`AuxShips::restart`],
+    ///   @0x765d4-0x76637): unlike [`Session::restart_aux_from_main_screen`]
+    ///   it redraws the countdown and zeroes those arrived even with none
+    ///   left to come;
+    /// - the player's system explored (`_ExploreNebulaeFromSystem(current)`
+    ///   @0x1affe), raising `Explored` for it to settle.
+    ///
+    /// No save is due. Open Pilot runs neither, nor does a return from
+    /// play. The original sweeps after the load and this runs after the
+    /// session's own sweep; both settle before the main menu's first
+    /// frame.
+    ///
+    /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+    fn open_at_launch(&mut self, pilot: &mut Pilot, statics: &Statics, chance: &mut dyn Chance) {
+        restart_every_aux(pilot, statics, chance);
+        self.explore_here(pilot);
+    }
+}
+
+/// The restart of the auxiliary ships of the mission in `slot`, if
+/// any, by the enter-system hook or the take-off
+/// ([`AuxShips::restart`]), drawing on `chance`.
+///
+/// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+fn restart_aux(pilot: &mut Pilot, statics: &Statics, slot: u8, chance: &mut dyn Chance) {
+    let Some(active) = pilot.missions.get(slot) else {
+        return;
+    };
+    let record = statics.lifecycle_record(active.mission);
+    if let Some(active) = pilot.missions.get_mut(slot) {
+        active.aux.restart(&record.aux, record.flags, chance);
+    }
+}
+
+/// The take-off's restart of every active mission's auxiliary ships,
+/// in slot order ([`Session::restart_aux`]), drawing on `chance`; the
+/// launch's too ([`Session::open_at_launch`]).
+fn restart_every_aux(pilot: &mut Pilot, statics: &Statics, chance: &mut dyn Chance) {
+    let slots: Vec<u8> = pilot.missions.iter().map(|(slot, _)| slot).collect();
+    for slot in slots {
+        restart_aux(pilot, statics, slot, chance);
     }
 }
 
@@ -345,7 +396,7 @@ mod tests {
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
     fn destroy(session: &mut Session, index: usize) {
-        session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
 
@@ -579,7 +630,7 @@ mod tests {
         assert_eq!(
             session
                 .galaxy()
-                .holder(session.listers(StellarId(128)), SystemId(130)),
+                .holder(session.statics.listers(StellarId(128)), SystemId(130)),
             Some(SystemId(130)),
             "rescued"
         );
@@ -732,7 +783,7 @@ mod tests {
         session.give_back_aux_ships(&BTreeSet::new());
         assert_eq!(aux_of(&session).left, 3, "capped at the count");
         // A ship gone already (jumped out, landed) gives nothing.
-        session.traffic.remove(ids[1]);
+        session.space.traffic.remove(ids[1]);
         let aux = aux_of(&session);
         set_aux(&mut session, AuxShips { left: 0, ..aux });
         session.give_back_aux_ships(&BTreeSet::new());
@@ -878,8 +929,8 @@ mod tests {
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
         land_and_take_off(&mut session, &catalog);
-        let escort = session.fleet[0].expect("placed");
-        assert_eq!(session.npc(escort).expect("in").aux, Some(0));
+        let escort = session.space.escorts.fleet[0].expect("placed");
+        assert_eq!(session.space.npc(escort).expect("in").aux, Some(0));
     }
 
     /// Each escort keeps its own mark: one with none (as a hired escort,
@@ -890,13 +941,15 @@ mod tests {
         let mut session = accepted(&catalog);
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
-        session.npc_mut(ids[0]).expect("in").aux = None;
+        session.space.npc_mut(ids[0]).expect("in").aux = None;
         session.fleet_up(ids[1], None);
         land_and_take_off(&mut session, &catalog);
         let marks: Vec<Option<u8>> = session
+            .space
+            .escorts
             .fleet
             .iter()
-            .map(|id| session.npc(id.expect("placed")).expect("in").aux)
+            .map(|id| session.space.npc(id.expect("placed")).expect("in").aux)
             .collect();
         assert_eq!(marks, vec![None, Some(0)]);
         assert_eq!(aux_of(&session).left, 1, "only the third given back");
@@ -911,7 +964,7 @@ mod tests {
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
         land_and_take_off(&mut session, &catalog);
-        let escort = session.fleet[0].expect("placed");
+        let escort = session.space.escorts.fleet[0].expect("placed");
         session.release(escort);
         land_and_take_off(&mut session, &catalog);
         assert_eq!(aux_of(&session).left, 3, "the released one given back");
@@ -965,10 +1018,10 @@ mod tests {
         let _ = three_in(&mut session, &catalog);
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
-        assert_eq!(session.traffic.berths_taken(), 3, "held");
+        assert_eq!(session.space.traffic.berths_taken(), 3, "held");
         session.populate(&catalog, &mut NeverFires);
         assert_eq!(
-            session.traffic.berths_taken(),
+            session.space.traffic.berths_taken(),
             session.npcs().len(),
             "dropped"
         );
@@ -1199,7 +1252,7 @@ mod tests {
                 left: 1,
             },
         );
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how,
         });
@@ -1291,7 +1344,7 @@ mod tests {
     fn the_hook_draws_each_slots_special_timer_then_its_aux_countdown_in_slot_order() {
         let (catalog, mut session) = two_slots();
         take_off(&mut session, &catalog);
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how: Entrance::Jump,
         });
@@ -1432,7 +1485,7 @@ mod tests {
         let catalog = gated_aux(2, -1);
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how: Entrance::Gate,
         });

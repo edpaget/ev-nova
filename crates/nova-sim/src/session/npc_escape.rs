@@ -43,7 +43,7 @@
 //!    [`RuleKey::EscapeShipCut`] says: a shield above 1.0 rolled below its
 //!    own (`Rand(trunc(shield))`), and half the velocity
 //!    (@0x3550a-0x35553). Once its carrier is no longer intact, the
-//!    fighter flies on its own (`Session::orphan_fighters`).
+//!    fighter flies on its own (`Space::orphan_fighters`).
 //!
 //! The view hears `snd ` 372 for each pod from where the NPC is
 //! ([`ESCAPE_POD_SOUND`](crate::sound::ESCAPE_POD_SOUND)), as a fight
@@ -76,7 +76,7 @@
 //!
 //! [`PodEjected`]: crate::combat::CombatEvent::PodEjected
 
-use super::{NpcBefore, Session};
+use super::{NpcBefore, Session, Space, Statics};
 use crate::chance::Chance;
 use crate::combat::armament::{Rounds, inaccuracy};
 use crate::combat::hull::Condition;
@@ -151,6 +151,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let ids: Vec<(Condition, AtStep)> = self
+            .space
             .traffic
             .npcs()
             .iter()
@@ -171,61 +172,29 @@ impl Session {
     /// `chance`. Nothing happens for an NPC no longer in the system.
     pub(super) fn npc_escape(&mut self, was: Condition, at_step: AtStep, chance: &mut dyn Chance) {
         let id = at_step.id;
-        if self.npc(id).is_none() {
+        if self.space.npc(id).is_none() {
             return;
         }
         let frame = self.field().frame;
         let (pods, escape) = timers(was, at_step.dying);
         if let Some(timer) = pods {
-            self.eject_pods(id, timer, frame);
+            self.space.eject_pods(&self.statics, id, timer, frame);
         }
         if let Some(timer) = escape {
             self.escape_roll(id, timer, chance);
         }
     }
 
-    /// NPC `id`'s person's pod and crew pod, its death timer at `timer`,
-    /// on `frame`.
-    fn eject_pods(&mut self, id: NpcId, timer: i32, frame: i32) {
-        let Some(npc) = self.npc(id) else {
-            return;
-        };
-        let death_delay = npc.hull.signed_death_delay;
-        let govt_flags = npc
-            .govt
-            .map(|govt| self.govts.get(govt).map_or(0, |record| record.flags));
-        let person = npc
-            .person
-            .is_some_and(|person| person_pod_due(timer, death_delay, person.flags, govt_flags));
-        let crew = crew_pod_due(
-            timer,
-            death_delay,
-            i32::from(npc.hull.pod_count),
-            i32::from(npc.pods_left),
-            frame,
-        );
-        let (at, velocity) = (npc.state.position, npc.state.velocity);
-        if person {
-            self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
-        }
-        if crew {
-            if let Some(npc) = self.npc_mut(id) {
-                npc.pods_left -= 1;
-            }
-            self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
-        }
-    }
-
     /// NPC `id`'s escape-ship roll, its death timer at `timer`, drawing on
     /// `chance`.
     fn escape_roll(&mut self, id: NpcId, timer: i32, chance: &mut dyn Chance) {
-        let Some(npc) = self.npc(id) else {
+        let Some(npc) = self.space.npc(id) else {
             return;
         };
         let bay = escape_ship_bay(
-            self.arsenal.weapons(),
+            self.statics.arsenal.weapons(),
             |weapon| npc.rounds.held(weapon),
-            &self.ships,
+            &self.statics.ships,
         );
         if !escape_roll_due(true, bay.is_some(), timer, npc.hull.signed_death_delay) {
             return;
@@ -245,16 +214,17 @@ impl Session {
                 })
             });
         let launched = sortie.map(|sortie| self.launch_fighter(&sortie, &mut *chance));
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.armament = crate::combat::armament::Armament::default();
             npc.rounds = crate::combat::armament::LauncherRounds::default();
         }
         let Some(launched) = launched else {
             return;
         };
-        let cut = match self.rules.source_for(RuleKey::EscapeShipCut) {
+        let cut = match self.setup.rules.source_for(RuleKey::EscapeShipCut) {
             RuleSource::Engine => match launched {
                 Some(_) => self
+                    .space
                     .traffic
                     .npcs()
                     .iter()
@@ -276,10 +246,16 @@ impl Session {
         let (shield, velocity) = match ship {
             ShipRef::Player => (
                 &mut self.pilot.reserves.shield.now,
-                &mut self.player.velocity,
+                &mut self.ship.player.velocity,
             ),
             ShipRef::Npc(id) => {
-                let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+                let Some(npc) = self
+                    .space
+                    .traffic
+                    .npcs_mut()
+                    .iter_mut()
+                    .find(|npc| npc.id == id)
+                else {
                     return;
                 };
                 let Npc {
@@ -292,6 +268,40 @@ impl Session {
             *shield = chance.below(*shield as u32) as f32;
         }
         *velocity = *velocity * ESCAPE_CUT_VELOCITY;
+    }
+}
+
+impl Space {
+    /// NPC `id`'s person's pod and crew pod, its death timer at `timer`,
+    /// on `frame`.
+    fn eject_pods(&mut self, statics: &Statics, id: NpcId, timer: i32, frame: i32) {
+        let Some(npc) = self.npc(id) else {
+            return;
+        };
+        let death_delay = npc.hull.signed_death_delay;
+        let govt_flags = npc
+            .govt
+            .map(|govt| statics.govts.get(govt).map_or(0, |record| record.flags));
+        let person = npc
+            .person
+            .is_some_and(|person| person_pod_due(timer, death_delay, person.flags, govt_flags));
+        let crew = crew_pod_due(
+            timer,
+            death_delay,
+            i32::from(npc.hull.pod_count),
+            i32::from(npc.pods_left),
+            frame,
+        );
+        let (at, velocity) = (npc.state.position, npc.state.velocity);
+        if person {
+            self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
+        }
+        if crew {
+            if let Some(npc) = self.npc_mut(id) {
+                npc.pods_left -= 1;
+            }
+            self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
+        }
     }
 }
 
@@ -454,10 +464,10 @@ mod tests {
     ) -> Vec<i16> {
         let mut ticks = Vec::new();
         for tick in 0..400_i16 {
-            if session.npc(id).is_none() {
+            if session.space.npc(id).is_none() {
                 return ticks;
             }
-            session.pass_frame = tick + frame_offset;
+            session.space.pass_frame = tick + frame_offset;
             session.tick_combat(Rules::default(), &mut *chance);
             for event in session.take_combat_events() {
                 if let CombatEvent::PodEjected { ship, at, velocity } = event {
@@ -478,7 +488,7 @@ mod tests {
         // ship explodes on tick 98, at 2.
         let catalog = escaping(0);
         let mut session = flying(&catalog, RuleSource::Engine);
-        let id = session.traffic.add_npc(doomed(100, 10));
+        let id = session.space.traffic.add_npc(doomed(100, 10));
         let ticks = pod_ticks(&mut session, id, 2, &mut Rolls::default());
         assert_eq!(
             ticks,
@@ -492,9 +502,9 @@ mod tests {
         // PodCount 2: an interval of max(10, trunc(50 x 0.4)) = 20.
         let catalog = escaping(0);
         let mut session = flying(&catalog, RuleSource::Engine);
-        let id = session.traffic.add_npc(doomed(100, 2));
-        let left = |session: &Session| session.npc(id).map(|npc| npc.pods_left);
-        session.pass_frame = 0;
+        let id = session.space.traffic.add_npc(doomed(100, 2));
+        let left = |session: &Session| session.space.npc(id).map(|npc| npc.pods_left);
+        session.space.pass_frame = 0;
         session.tick_combat(Rules::default(), &mut Rolls::default());
         assert_eq!(left(&session), Some(2), "the breakup tick ejects none");
         let ticks = pod_ticks(&mut session, id, 1, &mut Rolls::default());
@@ -509,8 +519,8 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let mut doomed = carrying(doomed(0, 10), 1);
         doomed.person = Some(person(0x0002));
-        let id = session.traffic.add_npc(doomed);
-        session.pass_frame = 0;
+        let id = session.space.traffic.add_npc(doomed);
+        session.space.pass_frame = 0;
         let mut chance = Rolls::launching(0, 0);
         session.tick_combat(Rules::default(), &mut chance);
         let events = session.take_combat_events();
@@ -542,7 +552,7 @@ mod tests {
             let mut doomed = doomed(death_delay, pods);
             doomed.person = Some(person(flags));
             doomed.govt = govt;
-            let id = session.traffic.add_npc(doomed);
+            let id = session.space.traffic.add_npc(doomed);
             pod_ticks(&mut session, id, 7, &mut Rolls::default())
         };
         assert_eq!(ticks_of(100, 0, 0x0002, None), [50], "at timer 50 only");
@@ -569,7 +579,7 @@ mod tests {
         doomed.reserves.shield.now = 40.0;
         doomed.target = Some(ShipRef::Player);
         doomed.state.heading = 90.0;
-        let id = session.traffic.add_npc_at(doomed, berth);
+        let id = session.space.traffic.add_npc_at(doomed, berth);
         (session, id)
     }
 
@@ -586,9 +596,9 @@ mod tests {
     /// Fights `session` to `id`'s end on `chance`.
     fn to_the_end(session: &mut Session, id: NpcId, chance: &mut Rolls) {
         for tick in 0..200 {
-            session.pass_frame = tick;
+            session.space.pass_frame = tick;
             session.tick_combat(Rules::default(), &mut *chance);
-            if session.npc(id).is_none() {
+            if session.space.npc(id).is_none() {
                 return;
             }
         }
@@ -612,7 +622,7 @@ mod tests {
         assert_eq!(fighter.state.velocity, pushed * 0.5, "half its launch");
         assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(50)");
         assert!(chance.asked.contains(&50));
-        let carrier = session.npc(id).expect("dying");
+        let carrier = session.space.npc(id).expect("dying");
         assert_eq!(carrier.reserves.shield.now, 40.0, "untouched");
         assert_eq!(carrier.state.velocity, Vec2::new(2.0, 4.0));
         assert_eq!(
@@ -639,7 +649,7 @@ mod tests {
         let pushed = crate::bay::launch_velocity(Vec2::new(2.0, 4.0), 90.0, 4.0, 6.0);
         assert_eq!(fighter.state.velocity, pushed * 0.5);
         assert_eq!(fighter.reserves.shield.now, 7.0);
-        let held = session.npc(id).expect("dying");
+        let held = session.space.npc(id).expect("dying");
         assert_eq!(held.reserves.shield.now, 40.0);
         // The carrier at berth 1: the fighter takes berth 2, the carrier the
         // cut.
@@ -650,7 +660,7 @@ mod tests {
         assert_eq!(fighter.berth, 2);
         assert_eq!(fighter.state.velocity, pushed, "uncut");
         assert_eq!(fighter.reserves.shield.now, 50.0);
-        let held = session.npc(id).expect("dying");
+        let held = session.space.npc(id).expect("dying");
         assert_eq!(held.reserves.shield.now, 7.0, "Rand(40)");
         assert!(chance.asked.contains(&40));
         assert_eq!(held.state.velocity, Vec2::new(1.0, 2.0));
@@ -663,10 +673,16 @@ mod tests {
         let catalog = escaping(0);
         for (shield, cut) in [(1.0, 1.0), (1.5, 0.0), (0.5, 0.5)] {
             let (mut session, id) = carrier(&catalog, RuleSource::Engine, 1);
-            session.npc_mut(id).expect("there").reserves.shield.now = shield;
+            session
+                .space
+                .npc_mut(id)
+                .expect("there")
+                .reserves
+                .shield
+                .now = shield;
             let mut chance = Rolls::launching(0, 7);
             session.tick_combat(Rules::default(), &mut chance);
-            let held = session.npc(id).expect("dying");
+            let held = session.space.npc(id).expect("dying");
             assert_eq!(held.reserves.shield.now, cut, "{shield}");
             assert_eq!(held.state.velocity, Vec2::new(1.0, 2.0), "{shield}");
         }
@@ -705,22 +721,23 @@ mod tests {
         ] {
             let (mut session, id) = carrier(&catalog, cut, 1);
             while session
+                .space
                 .traffic
-                .free_berth(session.spawn_reserve(SPAWN_RESERVE))
+                .free_berth(session.setup.spawn_reserve(SPAWN_RESERVE))
                 .is_some()
             {
                 let mut far = npc(0, ShipStats::default());
                 far.state.position = Vec2::new(5000.0, 5000.0);
-                session.traffic.add_npc(far);
+                session.space.traffic.add_npc(far);
             }
-            session.player.velocity = Vec2::new(2.0, -4.0);
+            session.ship.player.velocity = Vec2::new(2.0, -4.0);
             let mut chance = Rolls::launching(0, 7);
             session.tick_combat(Rules::default(), &mut chance);
             assert_eq!(chance.rolls(), 1, "{cut:?}");
             assert_eq!(vipers(&session), [], "{cut:?}: no room");
             assert_eq!(session.pilot.reserves.shield.now, shield, "{cut:?}");
-            assert_eq!(session.player.velocity, velocity, "{cut:?}");
-            let carrier = session.npc(id).expect("dying");
+            assert_eq!(session.ship.player.velocity, velocity, "{cut:?}");
+            let carrier = session.space.npc(id).expect("dying");
             assert_eq!(carrier.rounds, LauncherRounds::default(), "{cut:?}");
         }
     }
@@ -790,16 +807,16 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let mut carrier = carrying(doomed(100, 0), 2);
         carrier.reserves.armor.max = 0.0;
-        let id = session.traffic.add_npc(carrier);
+        let id = session.space.traffic.add_npc(carrier);
         let mut chance = Rolls::launching(0, 0);
         for tick in 0..5 {
-            session.pass_frame = tick;
+            session.space.pass_frame = tick;
             session.tick_combat(Rules::default(), &mut chance);
         }
         assert_eq!(chance.rolls(), 0, "never read dying");
         assert!(vipers(&session).is_empty(), "nothing launched");
         assert_eq!(
-            session.npc(id).map(|npc| npc.condition),
+            session.space.npc(id).map(|npc| npc.condition),
             Some(Condition::Intact),
             "it never breaks up"
         );
@@ -835,7 +852,7 @@ mod tests {
     fn carrier_ahead(armed: FakePilotCatalog) -> (FakePilotCatalog, Session) {
         let catalog = escaping_from(armed, 0);
         let mut session = crate::session::tests::facing_an_npc(&catalog, 180);
-        let carrier = &mut session.traffic.npcs_mut()[0];
+        let carrier = &mut session.space.traffic.npcs_mut()[0];
         carrier.rounds = LauncherRounds::from([(BAY, 2)]);
         carrier.hull.death_delay = 100;
         carrier.hull.signed_death_delay = 100;
@@ -915,7 +932,7 @@ mod tests {
     ) -> (FakePilotCatalog, Session, NpcId) {
         let catalog = escaping_from(crate::session::tests::armed(), 0);
         let mut session = crate::session::tests::facing_an_npc(&catalog, 180);
-        let carrier = &mut session.traffic.npcs_mut()[0];
+        let carrier = &mut session.space.traffic.npcs_mut()[0];
         carrier.berth = berth;
         carrier.rounds = LauncherRounds::from([(BAY, 2)]);
         carrier.hull.death_delay = death_delay;
@@ -955,7 +972,7 @@ mod tests {
         launch_pass(&mut session, &catalog);
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 2);
-        let from = session.npc(carrier).expect("dying").state.position;
+        let from = session.space.npc(carrier).expect("dying").state.position;
         assert_eq!(fighter.state.position, from + fighter.state.velocity);
         assert_eq!(fighter.state.heading, 90.0, "unsteered");
         assert!(
@@ -972,7 +989,7 @@ mod tests {
         launch_pass(&mut session, &catalog);
         let fighter = vipers(&session)[0].clone();
         assert_eq!(fighter.berth, 1);
-        let from = session.npc(carrier).expect("dying").state.position;
+        let from = session.space.npc(carrier).expect("dying").state.position;
         assert_eq!(fighter.state.position, from, "not moved");
         assert!(!session.draw_order().contains(&ShipRef::Npc(fighter.id)));
         let controls = crate::flight::Controls::default();
@@ -990,7 +1007,7 @@ mod tests {
         let (catalog, mut session, carrier) = dying_carrier(1, 0, Condition::Intact);
         session.take_combat_events();
         launch_pass(&mut session, &catalog);
-        assert!(session.npc(carrier).is_none(), "exploded");
+        assert!(session.space.npc(carrier).is_none(), "exploded");
         let fighter = vipers(&session)[0].id;
         let struck = session.take_combat_events().into_iter().any(|event| {
             matches!(
@@ -1012,7 +1029,7 @@ mod tests {
             starting: false,
         };
         let (catalog, mut session, carrier) = dying_carrier(1, 100, starting);
-        let npc = session.npc_mut(carrier).expect("there");
+        let npc = session.space.npc_mut(carrier).expect("there");
         npc.hull.pod_count = 2;
         npc.pods_left = 2;
         session.take_combat_events();
@@ -1023,7 +1040,7 @@ mod tests {
             matches!(event, CombatEvent::PodEjected { ship, .. } if ship == ShipRef::Npc(carrier))
         });
         assert!(ejected);
-        assert_eq!(session.npc(carrier).map(|npc| npc.pods_left), Some(1));
+        assert_eq!(session.space.npc(carrier).map(|npc| npc.pods_left), Some(1));
     }
 
     /// The test-support `fixture::place`, which only other crates' tests
@@ -1035,9 +1052,9 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         let mut moving = npc(0, ShipStats::default());
         moving.state.velocity = Vec2::new(3.0, 1.0);
-        let id = session.traffic.add_npc(moving);
+        let id = session.space.traffic.add_npc(moving);
         crate::fixture::place(&mut session, id, Vec2::new(40.0, -80.0));
-        let placed = session.npc(id).expect("there").state;
+        let placed = session.space.npc(id).expect("there").state;
         assert_eq!(
             (placed.position, placed.velocity),
             (Vec2::new(40.0, -80.0), Vec2::ZERO)

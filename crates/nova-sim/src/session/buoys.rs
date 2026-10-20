@@ -13,19 +13,26 @@
 //! `PlaySound`; [`SimSound::Arrived`](crate::SimSound::Arrived) sounds as
 //! for any jump's arrival.
 
-use super::Session;
+use super::{Chart, Session, Setup};
 use crate::buoy::{buoy_text, patch_id};
 use crate::catalog::{PilotCatalog, StringPatch, SystemId};
 use crate::message::SimMessage;
 use crate::rulebook::{RuleKey, RuleSource};
 
-impl Session {
+impl Session {}
+
+impl Chart {
     /// What a hyperspace arrival in `system` raises, its buoy's strings
     /// read from `catalog`: [`SimMessage::Buoy`] when its `Message` is
     /// not −1 and names a string `catalog` holds, or names none and
     /// [`RuleKey::MissingBuoyString`] reads the engine (an empty line);
     /// [`SimMessage::Arrived`] otherwise.
-    pub(super) fn arrival_message<S>(&self, system: SystemId, catalog: &S) -> SimMessage
+    pub(super) fn arrival_message<S>(
+        &self,
+        setup: &Setup,
+        system: SystemId,
+        catalog: &S,
+    ) -> SimMessage
     where
         S: PilotCatalog + ?Sized,
     {
@@ -35,7 +42,7 @@ impl Session {
         let patch = patch_id(index).map_or(StringPatch::Absent, |id| catalog.string_patch(id));
         match buoy_text(index, patch, &catalog.buoy_strings()) {
             Some(text) => SimMessage::Buoy(text),
-            None => match self.rules.source_for(RuleKey::MissingBuoyString) {
+            None => match setup.rules.source_for(RuleKey::MissingBuoyString) {
                 RuleSource::Engine => SimMessage::Buoy(String::new()),
                 RuleSource::Bible => SimMessage::Arrived(system),
             },

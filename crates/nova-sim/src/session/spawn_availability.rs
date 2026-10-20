@@ -135,7 +135,7 @@ impl Session {
     /// `_PropagateMissionBitEffects` caches the shïp, përs and flët tests
     /// (@0x997c3-0x9987a).
     pub(crate) fn propagate_spawn_availability(&mut self) {
-        self.refreshed = RefreshedFacts::of(&self.facts());
+        self.run.refreshed = RefreshedFacts::of(&self.ship.facts(&self.pilot, &self.statics));
     }
 
     /// Every test the galaxy refresh caches: the missions' `AvailBits`
@@ -150,8 +150,8 @@ impl Session {
     /// reads ([`appear_pilot`]), as a [`Gate`].
     pub(crate) fn appear_gate(&self) -> Gate<'_> {
         Gate {
-            control_bits: &*self.control_bits.0,
-            pilot: appear_pilot(&self.rules, &self.refreshed, self),
+            control_bits: &*self.setup.control_bits.0,
+            pilot: appear_pilot(&self.setup.rules, &self.run.refreshed, self),
         }
     }
 }
@@ -177,7 +177,7 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.set_control_bit(bit(12), true);
         let start = session.pilot().system();
-        let snapshot = RefreshedFacts::of(&session.facts());
+        let snapshot = RefreshedFacts::of(&session.ship.facts(&session.pilot, &session.statics));
         let check = |facts: &dyn PilotFacts| {
             assert!(facts.bit(bit(12)));
             assert!(!facts.bit(bit(13)));
@@ -189,7 +189,7 @@ mod tests {
             assert!(facts.explored(start));
             assert!(!facts.explored(SystemId(start.0 + 1)));
         };
-        check(&session.facts());
+        check(&session.ship.facts(&session.pilot, &session.statics));
         check(&snapshot);
         // A later change to the pilot leaves the snapshot as it was.
         session.set_control_bit(bit(12), false);
@@ -197,7 +197,12 @@ mod tests {
         session.pilot.outfits.remove(&OutfitId(300));
         session.pilot.explore(SystemId(start.0 + 1));
         check(&snapshot);
-        assert!(!session.facts().bit(bit(12)));
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .bit(bit(12))
+        );
     }
 
     #[test]
@@ -205,14 +210,17 @@ mod tests {
         let catalog = catalog();
         let mut session =
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
-        assert_eq!(session.refreshed, RefreshedFacts::of(&session.facts()));
+        assert_eq!(
+            session.run.refreshed,
+            RefreshedFacts::of(&session.ship.facts(&session.pilot, &session.statics))
+        );
         session.set_control_bit(bit(7), true);
-        assert!(!session.refreshed.bit(bit(7)), "not yet");
+        assert!(!session.run.refreshed.bit(bit(7)), "not yet");
         session.propagate_spawn_availability();
-        assert!(session.refreshed.bit(bit(7)));
+        assert!(session.run.refreshed.bit(bit(7)));
         session.set_control_bit(bit(7), false);
         session.propagate_cached_tests();
-        assert!(!session.refreshed.bit(bit(7)));
+        assert!(!session.run.refreshed.bit(bit(7)));
     }
 
     #[test]
@@ -341,7 +349,7 @@ mod tests {
     fn empty_the_system(session: &mut Session) {
         let here: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
         for id in here {
-            session.traffic.remove(id);
+            session.space.traffic.remove(id);
         }
     }
 

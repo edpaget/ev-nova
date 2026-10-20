@@ -9,7 +9,7 @@
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
 //!   cleared at the head of each combat tick the player isn't disabled
-//!   ([`Session::unboard_unless_disabled`]), as `_HandlePlayer` clears it
+//!   ([`PlayerShip::unboard_unless_disabled`]), as `_HandlePlayer` clears it
 //!   each frame before the ships think (@0x68b02), and kept only in
 //!   flight: a ship slot field, it is never saved. The frame's traffic
 //!   tick reads the flag the last frame left, as it runs before the
@@ -42,7 +42,7 @@
 //! tick after the player is repaired, which the player never sees. The pirate's credits
 //! (+0xa0) are read by no one, so the credits it gains are not kept.
 
-use super::Session;
+use super::{Outbox, PlayerShip, Session, Space};
 #[cfg(doc)]
 use crate::ai::plunder_contents;
 use crate::ai::plunder_contents::{
@@ -68,29 +68,28 @@ impl Session {
     /// (see the module docs).
     pub(super) fn answer_pirate(&mut self, event: PirateEvent, chance: &mut dyn Chance) {
         match event {
-            PirateEvent::PlayerDockedWith { .. } => self.player_boarded = true,
+            PirateEvent::PlayerDockedWith { .. } => self.ship.fate.player_boarded = true,
             PirateEvent::PlunderPlayer { pirate } => self.plundered_by(pirate, chance),
             PirateEvent::PlayerRepaired { helper, ship } => self.repaired_by(helper, ship),
-            PirateEvent::NpcRepaired { ship, .. } => self.npc_repaired(ship),
+            PirateEvent::NpcRepaired { ship, .. } => {
+                self.space
+                    .npc_repaired(&self.pilot, &self.statics, &self.setup, ship);
+            }
             PirateEvent::Plundered { line, taken, .. } => {
                 if let Some(line) = line {
-                    self.say_stolen_cargo(line.tons, line.credits);
+                    self.space
+                        .say_stolen_cargo(&mut self.out, line.tons, line.credits);
                 }
                 if let Some(Taken::Escort | Taken::Fighter) = taken {
-                    self.sounds.push(SimSound::ShipStolen);
-                    self.say(SimMessage::ShipStolen {
-                        fighter: taken == Some(Taken::Fighter),
-                    });
+                    self.out.sounds.push(SimSound::ShipStolen);
+                    self.space.say(
+                        &mut self.out,
+                        SimMessage::ShipStolen {
+                            fighter: taken == Some(Taken::Fighter),
+                        },
+                    );
                 }
             }
-        }
-    }
-
-    /// `_HandlePlayer` clears the boarded flag on each frame the player
-    /// isn't disabled (@0x68b02), before the frame's ships think.
-    pub(super) fn unboard_unless_disabled(&mut self) {
-        if self.condition != Condition::Disabled {
-            self.player_boarded = false;
         }
     }
 
@@ -98,14 +97,20 @@ impl Session {
     /// is disabled (see the module docs).
     #[must_use]
     pub fn player_boarded(&self) -> bool {
-        self.player_boarded
+        self.ship.player_boarded()
     }
 
     /// The player plundered by NPC `pirate`, drawing on `chance` (see the
     /// module docs): nothing when the pirate has gone.
     fn plundered_by(&mut self, pirate: NpcId, chance: &mut dyn Chance) {
-        let reading = self.rules.source_for(RuleKey::PlunderMarines);
-        let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == pirate) else {
+        let reading = self.setup.rules.source_for(RuleKey::PlunderMarines);
+        let Some(npc) = self
+            .space
+            .traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == pirate)
+        else {
             return;
         };
         let attacker = Side {
@@ -115,10 +120,11 @@ impl Session {
         let (mut hold, pirate_holds) = (npc.cargo, npc.holds);
         let defender = Side {
             strength: self
+                .statics
                 .ship_record(self.pilot.ship)
                 .map_or(0, |record| i32::from(record.strength)),
             marines: Marines::owned(
-                outfit_mods(&self.pilot.outfits, &self.outfits)
+                outfit_mods(&self.pilot.outfits, &self.statics.outfits)
                     .into_iter()
                     .map(|outfit| (outfit.mod_type, outfit.mod_val, outfit.count)),
             ),
@@ -132,7 +138,7 @@ impl Session {
         });
         let tons = steal(
             &mut words,
-            self.stats.capacity,
+            self.ship.fit.stats.capacity,
             &mut hold,
             pirate_holds,
             chance,
@@ -147,13 +153,14 @@ impl Session {
                 self.pilot.cargo.insert(good, tons);
             }
         }
-        if let Some(npc) = self.npc_mut(pirate) {
+        if let Some(npc) = self.space.npc_mut(pirate) {
             npc.cargo = hold;
         }
         let credits = credits_taken(self.pilot.cash, odds);
         self.pilot.cash -= credits;
         if let Some(line) = cargo_line(Victim::Player, tons, credits) {
-            self.say_stolen_cargo(line.tons, line.credits);
+            self.space
+                .say_stolen_cargo(&mut self.out, line.tons, line.credits);
         }
         let plundered: Vec<u8> = self
             .pilot
@@ -161,7 +168,7 @@ impl Session {
             .iter()
             .filter(|(_, active)| active.failed.is_none())
             .filter(|(_, active)| {
-                self.lifecycle_record(active.mission).flags & FAILS_IF_PLUNDERED != 0
+                self.statics.lifecycle_record(active.mission).flags & FAILS_IF_PLUNDERED != 0
             })
             .map(|(slot, _)| slot)
             .collect();
@@ -169,11 +176,30 @@ impl Session {
             self.mission_failure_at(slot, FailedBy::Marked, chance);
         }
     }
+}
 
+impl PlayerShip {
+    /// `_HandlePlayer` clears the boarded flag on each frame the player
+    /// isn't disabled (@0x68b02), before the frame's ships think.
+    pub(super) fn unboard_unless_disabled(&mut self) {
+        if self.condition != Condition::Disabled {
+            self.fate.player_boarded = false;
+        }
+    }
+
+    /// Whether a pirate has docked with the player's ship (+0xb9), while it
+    /// is disabled (see the module docs).
+    #[must_use]
+    fn player_boarded(&self) -> bool {
+        self.fate.player_boarded
+    }
+}
+
+impl Space {
     /// The cargo line of a plunder of `tons` and `credits`, with its beep.
-    fn say_stolen_cargo(&mut self, tons: u32, credits: i64) {
-        self.sounds.push(SimSound::CargoStolen);
-        self.say(SimMessage::CargoStolen { tons, credits });
+    fn say_stolen_cargo(&mut self, out: &mut Outbox, tons: u32, credits: i64) {
+        out.sounds.push(SimSound::CargoStolen);
+        self.say(out, SimMessage::CargoStolen { tons, credits });
     }
 }
 
@@ -218,14 +244,14 @@ mod tests {
     fn plundering(catalog: &FakePilotCatalog, holds: u16) -> (Session, NpcId) {
         let mut session = facing_an_npc(catalog, 180);
         let pirate = session.npcs()[0].id;
-        let npc = session.npc_mut(pirate).expect("here");
+        let npc = session.space.npc_mut(pirate).expect("here");
         npc.holds = holds;
         npc.cargo = crate::traffic::npc::NpcHold::default();
         npc.marines = ClassMarines {
             strength: 1,
             ..ClassMarines::default()
         };
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.pilot.cargo.clear();
         session.pilot.cargo.insert(Good::Commodity(1), 30);
         session.pilot.cargo.insert(Good::Commodity(3), 5);
@@ -245,6 +271,7 @@ mod tests {
     /// `drawn`.
     fn answer(session: &mut Session, pirate: NpcId, drawn: u32) {
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlunderPlayer { pirate });
         settle(session, &mut Draws::of(&[drawn; 16]));
@@ -262,7 +289,7 @@ mod tests {
             "20 of 35 taken"
         );
         assert_eq!(left(Good::Junk(JunkId(128))), 10, "no jünk");
-        let hold = session.npc(pirate).expect("here").cargo;
+        let hold = session.space.npc(pirate).expect("here").cargo;
         assert_eq!(hold.tons(1) + hold.tons(3), 20);
     }
 
@@ -270,13 +297,13 @@ mod tests {
     fn a_plundered_player_loses_no_more_than_its_ships_holds() {
         let catalog = catalog_of(vec![]);
         let (mut session, pirate) = plundering(&catalog, 500);
-        let capacity = session.stats.capacity;
+        let capacity = session.ship.fit.stats.capacity;
         session
             .pilot
             .cargo
             .insert(Good::Commodity(1), capacity + 40);
         answer(&mut session, pirate, 0);
-        let hold = session.npc(pirate).expect("here").cargo;
+        let hold = session.space.npc(pirate).expect("here").cargo;
         assert_eq!(hold.tons(1) + hold.tons(3), capacity, "_ShipTotalHolds");
     }
 
@@ -410,6 +437,7 @@ mod tests {
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(!session.player_boarded());
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlayerDockedWith { pirate });
         settle(&mut session, &mut Draws::of(&[]));
@@ -417,7 +445,7 @@ mod tests {
         assert!(session.player_side().boarded);
         session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
         assert!(session.player_boarded(), "still disabled");
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
         assert!(!session.player_boarded(), "@0x68b02");
         assert!(!session.player_side().boarded);
@@ -446,7 +474,7 @@ mod tests {
             plundered(None, Some(Taken::Silently)),
             plundered(None, None),
         ] {
-            session.traffic.queue_pirate_event(event);
+            session.space.traffic.queue_pirate_event(event);
         }
         settle(&mut session, &mut Draws::of(&[]));
         assert_eq!(
@@ -475,9 +503,9 @@ mod tests {
         let catalog = catalog_of(vec![plunderable(140, 0x8000)]);
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(session.pilot.missions.put(0, carrying(140, 0)));
-        session.player_boarded = true;
-        session.hull.crew = 1;
-        let npc = session.npc_mut(pirate).expect("here");
+        session.ship.fate.player_boarded = true;
+        session.ship.fit.hull.crew = 1;
+        let npc = session.space.npc_mut(pirate).expect("here");
         npc.goal = crate::ai::Goal::Attack(ShipRef::Player);
         npc.target = Some(ShipRef::Player);
         npc.docking = Some(Docking {
@@ -493,7 +521,7 @@ mod tests {
         assert_eq!(session.pilot.cash, 10_000, "held for the combat tick");
         session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
         assert_eq!(
-            session.npc(pirate).map(|npc| npc.goal),
+            session.space.npc(pirate).map(|npc| npc.goal),
             Some(crate::ai::Goal::Drift)
         );
         assert!(session.pilot.cash < 10_000);

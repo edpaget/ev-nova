@@ -6,7 +6,7 @@
 //! comes in [`ARRIVAL_RADIUS`](crate::jump_arrival::ARRIVAL_RADIUS) from
 //! the centre on the departure's side, along the bearing from the system
 //! it left to the first hop (@0x6bc1b-0x6bccd) — the one the warp stage
-//! turned it to ([`Session::jump_aim`]), so for a multi-jump the first
+//! turned it to ([`Chart::jump_aim`](super::Chart::jump_aim)), so for a multi-jump the first
 //! hop's side, not the last leg's, as the block runs once before the hop
 //! loop (@0x6bdb4-0x6bdfc). It keeps the heading the warp left. An
 //! inertial ship moves at its top speed ([`Session::top_speed`]) along its
@@ -46,21 +46,23 @@ impl Session {
         from: SystemId,
         at: SystemId,
     ) -> ShipPlacement {
-        let map = |id| self.galaxy.position(id).unwrap_or_default();
-        match self.rules.source_for(RuleKey::JumpArrival) {
+        let map = |id| self.chart.galaxy.position(id).unwrap_or_default();
+        match self.setup.rules.source_for(RuleKey::JumpArrival) {
             RuleSource::Engine => {
                 let (ship, speed) = top_speed_arrival(
                     map(departure),
                     map(first),
-                    self.player.heading,
+                    self.ship.player.heading,
                     self.top_speed(),
-                    self.player_inertialess(),
+                    self.ship.player_inertialess(&self.setup),
                 );
                 ShipPlacement::ArriveAtSpeed { ship, speed }
             }
-            RuleSource::Bible => {
-                ShipPlacement::Arrive(arrival(map(from), map(at), self.stats.jump_distance))
-            }
+            RuleSource::Bible => ShipPlacement::Arrive(arrival(
+                map(from),
+                map(at),
+                self.ship.fit.stats.jump_distance,
+            )),
         }
     }
 }
@@ -139,7 +141,7 @@ mod tests {
     fn the_arrival_keeps_the_heading_the_warp_left() {
         let catalog = catalog();
         let mut session = jumping(&catalog, Rulebook::default());
-        session.player.heading = 200.5;
+        session.ship.player.heading = 200.5;
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let player = *session.player();
         assert_eq!(player.heading, 200.5);

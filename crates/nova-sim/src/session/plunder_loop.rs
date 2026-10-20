@@ -34,36 +34,38 @@
 //! not a frame. Abort, a self-destruct, a failed capture and a capture
 //! close the dialog first and count nothing.
 
-use super::{Aboard, Session};
+use super::{Aboard, Outbox, Session, Space};
 use crate::board::Taken;
 use crate::sound::SimSound;
 
 impl Session {
-    /// A press that leaves the plunder dialog open, the boarding going
-    /// on as `aboard`: the loop's pass ends with `_HandleComm`
-    /// (@0x949a1), counting the message line down one tick (see the
-    /// module docs). Gives `taken`.
-    pub(super) fn keep_plunder_open(&mut self, aboard: Aboard, taken: Taken) -> Taken {
-        self.aboard = Some(aboard);
-        self.count_down_comm_line();
-        taken
-    }
-
     /// Lets the boarding under way go, as the plunder dialog's close does
     /// (the session resets, @0x94a0b), but silently and taking nothing:
     /// the flight's way out when it has no dialog to show it in. A capture
     /// awaiting its assignment is let go too.
     pub fn let_go_of_boarding(&mut self) {
-        if self.aboard.is_some() {
+        if self.space.escorts.aboard.is_some() {
             self.close_plunder();
         }
+    }
+}
+
+impl Space {
+    /// A press that leaves the plunder dialog open, the boarding going
+    /// on as `aboard`: the loop's pass ends with `_HandleComm`
+    /// (@0x949a1), counting the message line down one tick (see the
+    /// module docs). Gives `taken`.
+    pub(super) fn keep_plunder_open(&mut self, aboard: Aboard, taken: Taken) -> Taken {
+        self.escorts.aboard = Some(aboard);
+        self.count_down_comm_line();
+        taken
     }
 
     /// A take whose value is not on board: the refusal's beep
     /// ([`SimSound::Refused`], @0x93ad2, @0x93cb8, @0x93d2f, @0x94256),
     /// nothing taken, and the dialog open.
-    pub(super) fn refuse_take(&mut self, aboard: Aboard) -> Taken {
-        self.sounds.push(SimSound::Refused);
+    pub(super) fn refuse_take(&mut self, out: &mut Outbox, aboard: Aboard) -> Taken {
+        out.sounds.push(SimSound::Refused);
         self.keep_plunder_open(aboard, Taken::Missed)
     }
 }
@@ -258,12 +260,13 @@ mod tests {
         let mut session = captured(&catalog);
         session.take_sounds();
         while session
+            .space
             .traffic
-            .free_berth(session.spawn_reserve(crate::traffic::CAPTURE_RESERVE))
+            .free_berth(session.setup.spawn_reserve(crate::traffic::CAPTURE_RESERVE))
             .is_some()
         {
-            let filler = session.traffic.npcs()[1].clone();
-            session.traffic.add_npc(filler);
+            let filler = session.space.traffic.npcs()[1].clone();
+            session.space.traffic.add_npc(filler);
         }
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
@@ -280,9 +283,13 @@ mod tests {
         crate::session::precalced::tests::convicted(&mut session);
         session.let_go_of_boarding();
         assert_eq!(session.boarding(), None);
-        assert_eq!(session.aboard, None);
+        assert_eq!(session.space.escorts.aboard, None);
         assert_eq!(sounds(&mut session), []);
-        assert_eq!(session.scan_latches, Latches::ARMED, "the close's reset");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "the close's reset"
+        );
         let mut captured = captured(&catalog);
         captured.let_go_of_boarding();
         assert_eq!(
@@ -368,7 +375,7 @@ mod tests {
     #[test]
     fn a_capture_at_no_odds_fails_and_closes() {
         let mut session = quiet(&boardable());
-        if let Some(aboard) = &mut session.aboard {
+        if let Some(aboard) = &mut session.space.escorts.aboard {
             aboard.plunder.odds = 0;
         }
         assert_eq!(

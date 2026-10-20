@@ -31,7 +31,7 @@ impl Session {
         let stale = self
             .formation_slots()
             .into_iter()
-            .any(|(id, slot)| self.npc(id).and_then(Npc::formation) != Some(slot));
+            .any(|(id, slot)| self.space.npc(id).and_then(Npc::formation) != Some(slot));
         if stale {
             self.reform();
         }
@@ -128,7 +128,7 @@ mod tests {
             .find(|npc| npc.berth == berth)
             .map(|npc| npc.id)
             .expect("an escort there");
-        let npc = session.npc_mut(id).expect("in the system");
+        let npc = session.space.npc_mut(id).expect("in the system");
         npc.hull.swarms = true;
         npc.goal = Goal::Attack(QUARRY);
         npc.target = Some(QUARRY);
@@ -172,7 +172,7 @@ mod tests {
         attacking(&mut session, 2, Some(1));
         session.reform_on_swarm_change();
         let id = escorts(&session)[1].id;
-        if let Some(npc) = session.npc_mut(id) {
+        if let Some(npc) = session.space.npc_mut(id) {
             npc.goal = Goal::Formation { guard: None };
         }
         session.reform_on_swarm_change();
@@ -216,7 +216,7 @@ mod tests {
             .map(|npc| npc.id)
             .collect::<Vec<_>>()
         {
-            if let Some(npc) = session.npc_mut(id) {
+            if let Some(npc) = session.space.npc_mut(id) {
                 npc.hull.swarms = true;
             }
         }

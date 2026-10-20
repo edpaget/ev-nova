@@ -149,15 +149,16 @@
 //! `_keyPressedThisFrame` (@0x6f2d3) and the status-redraw flags
 //! (@0x6f433-0x6f442) have no counterpart.
 
-use super::Session;
 use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::combat::ion::Ion;
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, ShipId, ShipRecord};
@@ -186,7 +187,7 @@ impl Session {
     /// session takes it only while the player's fate takes
     /// [`PlayerCommand::Eject`].
     pub fn hold_eject(&mut self, held: bool) {
-        self.eject_held = held;
+        self.ship.hold_eject(held);
     }
 
     /// The eject check (@0x6f22c), in the player's display step after
@@ -206,15 +207,17 @@ impl Session {
     /// again this pass.
     pub(super) fn eject_check(&mut self, chance: &mut dyn Chance) {
         let condition = self
+            .ship
             .condition
             .breaking_up(self.pilot.reserves.armor)
-            .unwrap_or(self.condition);
+            .unwrap_or(self.ship.condition);
         let (hulk, timer) = match condition {
             Condition::Dying { ticks_left, .. } => (condition, Some(ticks_left)),
             Condition::Disabled => (Condition::Disabled, None),
             Condition::Intact | Condition::Destroyed => return,
         };
-        let auto = timer.is_some_and(|timer| auto_eject_armed(timer, self.hull.death_delay));
+        let auto =
+            timer.is_some_and(|timer| auto_eject_armed(timer, self.ship.fit.hull.death_delay));
         // The pass's move has collapsed any pre-jump of a player disabled
         // or dying, so the collapse's clock is never read here.
         self.try_eject(auto, hulk, chance);
@@ -224,8 +227,9 @@ impl Session {
     /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
     /// aboard.
     fn escape_ship(&self) -> Option<ShipId> {
-        let rounds = |weapon| outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, weapon);
-        escape_ship_type(self.arsenal.weapons(), rounds, &self.ships)
+        let rounds =
+            |weapon| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, weapon);
+        escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)
     }
 
     /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
@@ -233,15 +237,16 @@ impl Session {
     /// or ship, a free ship slot and a record of the class it flies.
     /// Whether it ejected.
     fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
-        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.outfits))
-            || (self.eject_held && self.takes(PlayerCommand::Eject));
+        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.statics.outfits))
+            || (self.ship.fate.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
-            || !(has_escape_pod(&self.pilot.outfits, &self.outfits) || self.escape_ship().is_some())
+            || !(has_escape_pod(&self.pilot.outfits, &self.statics.outfits)
+                || self.escape_ship().is_some())
             || self.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM
         {
             return false;
         }
-        let Some(old) = self.ship_record(self.pilot.ship).cloned() else {
+        let Some(old) = self.statics.ship_record(self.pilot.ship).cloned() else {
             return false;
         };
         self.eject(&old, hulk, chance);
@@ -252,33 +257,40 @@ impl Session {
     /// `hulk` (see the module docs), a pre-jump still on collapsing first.
     fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
         self.collapse_jump(false);
-        let save_due = self.save_due;
-        let hulk = self.hulk(old, hulk, chance);
-        let hulk = self.traffic.add_npc(hulk);
-        if let Some(slot) = self.npc(hulk).map(slot_of) {
-            self.slot_sprites.frames.clone_frames(slot, old.id);
+        let save_due = self.out.save_due;
+        let hulk = self
+            .ship
+            .hulk(&self.pilot, &self.statics, &self.setup, old, hulk, chance);
+        let hulk = self.space.traffic.add_npc(hulk);
+        if let Some(slot) = self.space.npc(hulk).map(slot_of) {
+            self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
-        self.target = None;
-        self.deselect();
-        self.secondary = None;
+        self.chart.target = None;
+        self.chart.deselect();
+        self.ship.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
         let escape = self.escape_ship();
-        let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
+        let record = self
+            .statics
+            .ship_record(escape.unwrap_or(ESCAPE_POD_SHIP))
+            .cloned();
         // -1 or 350, either way not the 0 a stray beam leaves (see the
         // `stray_words` module).
-        self.pod_zeroed = false;
+        self.ship.fate.pod_zeroed = false;
         if let Some(ship) = escape {
             self.pod = None;
-            self.say(SimMessage::EscapingIn { ship });
+            self.space
+                .say(&mut self.out, SimMessage::EscapingIn { ship });
         } else {
             self.pod = Some(POD_TICKS);
-            self.drop_the_player();
+            self.space.drop_the_player();
         }
         self.walk_the_threats(hulk, escape.is_none());
         if let Some(record) = &record {
             let defaults = crate::pilot::tally(record.defaults.iter().copied());
             self.board_class(record, &defaults);
-            self.slot_sprites
+            self.space
+                .slot_sprites
                 .frames
                 .clone_frames(Slot::Player, record.id);
             self.reset_precalced();
@@ -294,20 +306,20 @@ impl Session {
                 reserves.armor.now = f32::from(fields.armor);
             }
         }
-        if self.rules.source_for(RuleKey::EjectVelocity) == RuleSource::Engine {
-            let velocity = &mut self.player.velocity;
+        if self.setup.rules.source_for(RuleKey::EjectVelocity) == RuleSource::Engine {
+            let velocity = &mut self.ship.player.velocity;
             velocity.x = velocity.y;
         }
         // Truncated to whole degrees (`cvttss2si` @0x6f7a0).
         #[allow(clippy::cast_possible_truncation)]
-        let heading = self.player.heading as i32;
-        self.player.velocity =
-            self.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
-        self.condition = Condition::Intact;
-        self.stop_thrust();
-        self.sounds.push(SimSound::Ejected);
-        self.halt_sounds(&WARP_UP_HALTS);
-        self.save_due = save_due;
+        let heading = self.ship.player.heading as i32;
+        self.ship.player.velocity =
+            self.ship.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
+        self.ship.condition = Condition::Intact;
+        self.ship.stop_thrust(&mut self.out);
+        self.out.sounds.push(SimSound::Ejected);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
+        self.out.save_due = save_due;
     }
 
     /// The escape pod's flight, a tick of it (`_HandlePlayer`
@@ -326,25 +338,121 @@ impl Session {
         let Some(left) = self.pod else {
             return;
         };
-        let handling = self.flying_handling();
+        let handling = self
+            .ship
+            .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         // Whole degrees (`cvttss2si` @0x68d84).
-        let heading = self.player.heading.trunc();
-        let state = &mut self.player;
+        let heading = self.ship.player.heading.trunc();
+        let state = &mut self.ship.player;
         state.velocity =
             launch_velocity(state.velocity, heading, handling.accel, handling.max_speed);
         state.position = state.position + state.velocity;
         let left = left.saturating_sub(1);
         self.pod = Some(left);
         if left == 0 {
-            self.rescue_due = true;
+            self.ship.fate.rescue_due = true;
         }
+    }
+
+    /// The threat walk (see the module docs): each threat to the player
+    /// that targets it targets the `hulk` instead; in the `pod`, every
+    /// other ship the player leads is released.
+    fn walk_the_threats(&mut self, hulk: NpcId, pod: bool) {
+        let to = ShipRef::Npc(hulk);
+        for index in 0..self.space.traffic.npcs().len() {
+            let npcs = self.space.traffic.npcs();
+            let npc = &npcs[index];
+            if npc.threatens_player_among(npcs) {
+                let npc = &mut self.space.traffic.npcs_mut()[index];
+                if npc.target == Some(ShipRef::Player) {
+                    npc.target = Some(to);
+                }
+                npc.goal = retargeted(npc.goal, to);
+            } else if pod && npc.escorts_player() {
+                let id = npc.id;
+                self.release_for_the_pod(id);
+            }
+        }
+        if pod {
+            self.space.drop_unplaced_escorts(&mut self.pilot);
+        }
+    }
+
+    /// NPC `id`, a ship the player leads, is released as the pod releases
+    /// it (+0x9a = -1): out of the fleet or the formation, with no
+    /// carrier, deciding afresh.
+    fn release_for_the_pod(&mut self, id: NpcId) {
+        self.unfleet(id);
+        let inherent = self
+            .space
+            .npc(id)
+            .and_then(|npc| self.statics.ship_record(npc.ship))
+            .map(|record| AiType::from_raw(record.inherent_ai));
+        if let Some(npc) = self.space.npc_mut(id) {
+            if let Some(mark) = &mut npc.mission
+                && mark.formation.take().is_some()
+                && let Some(ai_type) = inherent
+            {
+                npc.ai_type = ai_type;
+            }
+            npc.carrier = None;
+            npc.goal = Goal::Idle;
+        }
+        self.reform();
+    }
+
+    /// The player's ship becomes class `record`, keeping only its
+    /// persistent outfits, with `defaults` added and the class's stock
+    /// weapons and ammunition fitted (see the module docs), holding its
+    /// reserves to the new most until the caller sets them. The eject
+    /// passes the class's defaults; the rescue, which adds none, passes
+    /// none.
+    pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
+        let mut outfits = carried_outfits(
+            &self.pilot.outfits,
+            OutfitCarry::Persistent {
+                mask: OutfitFlags::PERSISTENT,
+            },
+            defaults,
+            None,
+            None,
+            &self.statics.outfits,
+        );
+        let fits = self
+            .statics
+            .arsenal
+            .stock_fits(record.id, &self.statics.outfits);
+        fit_stock(&mut outfits, &fits, &self.statics.outfits);
+        let change = ClassChange {
+            outfits,
+            reserves: super::ReservePolicy::Hold,
+        };
+        self.become_class(record, change, |_| {});
+    }
+}
+
+impl PlayerShip {
+    /// Holds the eject chord, Command and the eject key down together, or
+    /// lets it go: what the next fight tick's eject check reads. The
+    /// session takes it only while the player's fate takes
+    /// [`PlayerCommand::Eject`].
+    fn hold_eject(&mut self, held: bool) {
+        self.fate.eject_held = held;
     }
 
     /// The hulk the player leaves in `condition`, a ship of class `old`
     /// (see the module docs), of no government, its skill rolled on
     /// `chance` as its spawn rolls it.
-    fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
-        let kind = self.ship_kind(old);
+    fn hulk(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        old: &ShipRecord,
+        condition: Condition,
+        chance: &mut dyn Chance,
+    ) -> Npc {
+        let kind = setup.ship_kind(statics, old);
         // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
         // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
         // anim set and timer after (@0x6f3a3, @0x6f3bb; see
@@ -352,8 +460,8 @@ impl Session {
         // A spawn of no origin rolls none (`AnimRoll::None`).
         let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
         let mut reserves = kind.stats.full();
-        reserves.shield = self.pilot.reserves.shield;
-        reserves.armor = self.pilot.reserves.armor;
+        reserves.shield = pilot.reserves.shield;
+        reserves.armor = pilot.reserves.armor;
         let mut hulk = Npc {
             id: NpcId::default(),
             berth: 0,
@@ -429,7 +537,9 @@ impl Session {
         hulk.independent();
         hulk
     }
+}
 
+impl Space {
     /// Every NPC that targets, fights or inspects the player lets it go
     /// and decides again, as the pod's loop clears each +0x70 of 0
     /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
@@ -451,90 +561,18 @@ impl Session {
         }
     }
 
-    /// The threat walk (see the module docs): each threat to the player
-    /// that targets it targets the `hulk` instead; in the `pod`, every
-    /// other ship the player leads is released.
-    fn walk_the_threats(&mut self, hulk: NpcId, pod: bool) {
-        let to = ShipRef::Npc(hulk);
-        for index in 0..self.traffic.npcs().len() {
-            let npcs = self.traffic.npcs();
-            let npc = &npcs[index];
-            if npc.threatens_player_among(npcs) {
-                let npc = &mut self.traffic.npcs_mut()[index];
-                if npc.target == Some(ShipRef::Player) {
-                    npc.target = Some(to);
-                }
-                npc.goal = retargeted(npc.goal, to);
-            } else if pod && npc.escorts_player() {
-                let id = npc.id;
-                self.release_for_the_pod(id);
-            }
-        }
-        if pod {
-            self.drop_unplaced_escorts();
-        }
-    }
-
     /// Every escort of the pilot's with no NPC in the system leaves the
     /// fleet (see the module docs).
-    fn drop_unplaced_escorts(&mut self) {
-        let escorts = std::mem::take(&mut self.pilot.escorts);
-        let fleet = std::mem::take(&mut self.fleet);
+    fn drop_unplaced_escorts(&mut self, pilot: &mut Pilot) {
+        let escorts = std::mem::take(&mut pilot.escorts);
+        let fleet = std::mem::take(&mut self.escorts.fleet);
         let placed = fleet.into_iter().chain(std::iter::repeat(None));
         for (escort, placed) in escorts.into_iter().zip(placed) {
             if placed.is_some() {
-                self.pilot.escorts.push(escort);
-                self.fleet.push(placed);
+                pilot.escorts.push(escort);
+                self.escorts.fleet.push(placed);
             }
         }
-    }
-
-    /// NPC `id`, a ship the player leads, is released as the pod releases
-    /// it (+0x9a = -1): out of the fleet or the formation, with no
-    /// carrier, deciding afresh.
-    fn release_for_the_pod(&mut self, id: NpcId) {
-        self.unfleet(id);
-        let inherent = self
-            .npc(id)
-            .and_then(|npc| self.ship_record(npc.ship))
-            .map(|record| AiType::from_raw(record.inherent_ai));
-        if let Some(npc) = self.npc_mut(id) {
-            if let Some(mark) = &mut npc.mission
-                && mark.formation.take().is_some()
-                && let Some(ai_type) = inherent
-            {
-                npc.ai_type = ai_type;
-            }
-            npc.carrier = None;
-            npc.goal = Goal::Idle;
-        }
-        self.reform();
-    }
-
-    /// The player's ship becomes class `record`, keeping only its
-    /// persistent outfits, with `defaults` added and the class's stock
-    /// weapons and ammunition fitted (see the module docs), holding its
-    /// reserves to the new most until the caller sets them. The eject
-    /// passes the class's defaults; the rescue, which adds none, passes
-    /// none.
-    pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
-        let mut outfits = carried_outfits(
-            &self.pilot.outfits,
-            OutfitCarry::Persistent {
-                mask: OutfitFlags::PERSISTENT,
-            },
-            defaults,
-            None,
-            None,
-            &self.outfits,
-        );
-        let fits = self.arsenal.stock_fits(record.id, &self.outfits);
-        fit_stock(&mut outfits, &fits, &self.outfits);
-        let change = ClassChange {
-            outfits,
-            reserves: super::ReservePolicy::Hold,
-        };
-        self.become_class(record, change, |_| {});
     }
 }
 
@@ -678,7 +716,10 @@ mod tests {
         for _ in 0..200 {
             let sounds = tick(session, catalog, chord);
             if session.pilot.ship != ShipId(128)
-                || !matches!(session.condition, Condition::Intact | Condition::Disabled)
+                || !matches!(
+                    session.ship.condition,
+                    Condition::Intact | Condition::Disabled
+                )
             {
                 return sounds;
             }
@@ -699,7 +740,7 @@ mod tests {
     ) -> (Vec<SimSound>, Vec<SimSound>) {
         let breakup = to_the_breakup(session, catalog, chord);
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: 0,
                 starting: true
@@ -755,7 +796,7 @@ mod tests {
         while session.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM {
             let mut far = npc(0, ShipStats::default());
             far.state.position = Vec2::new(5000.0, 5000.0);
-            last = Some(session.traffic.add_npc(far));
+            last = Some(session.space.traffic.add_npc(far));
         }
         last.expect("room to fill")
     }
@@ -769,7 +810,7 @@ mod tests {
             colour: 0x00ff_0000,
             ..Ion::default()
         };
-        session.ion = ionized;
+        session.ship.ion = ionized;
         to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
@@ -854,14 +895,14 @@ mod tests {
         // Into the pod: 350 (@0x6f669).
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.pod_zeroed = true;
+        session.ship.fate.pod_zeroed = true;
         to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
-        assert!(!session.pod_zeroed);
+        assert!(!session.ship.fate.pod_zeroed);
         // Into an escape ship: -1 (@0x6f563).
         let catalog = escaping();
-        let (session, _) = escaped(&catalog, &[], |session| session.pod_zeroed = true);
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        let (session, _) = escaped(&catalog, &[], |session| session.ship.fate.pod_zeroed = true);
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
     }
 
     #[test]
@@ -914,11 +955,11 @@ mod tests {
                     matches!(event, CombatEvent::PodEjected { ship, .. } if *ship == ShipRef::Npc(left))
                 })
                 .count();
-            if session.npc(left).is_none() {
+            if session.space.npc(left).is_none() {
                 break;
             }
         }
-        assert!(session.npc(left).is_none(), "the hulk explodes");
+        assert!(session.space.npc(left).is_none(), "the hulk explodes");
         assert!((1..=3).contains(&pods), "{pods} of its 3 pods");
     }
 
@@ -930,11 +971,16 @@ mod tests {
             let catalog = ejecting(100);
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
             let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
-            session.armament.exit_cursors_mut().step(ExitKind::Gun);
+            session
+                .ship
+                .fit
+                .armament
+                .exit_cursors_mut()
+                .step(ExitKind::Gun);
             to_the_first_check(&mut session, &catalog, false);
             assert!(in_the_pod(&session));
             assert_eq!(
-                session.armament.exit_cursors().next(ExitKind::Gun),
+                session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
                 gun,
                 "{reading:?}"
             );
@@ -948,10 +994,10 @@ mod tests {
             let catalog = ejecting(100);
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
             let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
-            session.armament = session.armament.clone().with_fold_set(2);
+            session.ship.fit.armament = session.ship.fit.armament.clone().with_fold_set(2);
             to_the_first_check(&mut session, &catalog, false);
             assert!(in_the_pod(&session));
-            assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
+            assert_eq!(session.ship.fit.armament.fold_set(), 0, "{reading:?}");
         }
     }
 
@@ -960,7 +1006,7 @@ mod tests {
         let catalog = ejecting(2);
         let mut session = flying(&catalog, &[AUTO]);
         let mut sounds = to_the_breakup(&mut session, &catalog, true);
-        while session.condition != Condition::Destroyed {
+        while session.ship.condition != Condition::Destroyed {
             sounds.extend(tick(&mut session, &catalog, true));
         }
         assert!(!sounds.contains(&SimSound::Ejected), "{sounds:?}");
@@ -981,7 +1027,7 @@ mod tests {
             tick(&mut session, &catalog, false);
         }
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: 20,
                 starting: false
@@ -1002,7 +1048,7 @@ mod tests {
         assert_eq!(breakup, DOWNED, "the downed lines' beeps");
         assert_eq!(check, EJECTED, "the next tick's eject check, and no klaxon");
         assert!(in_the_pod(&session));
-        assert!(!matches!(session.condition, Condition::Dying { .. }));
+        assert!(!matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(
             session.player_fate(),
             PlayerFate::Ejected {
@@ -1056,14 +1102,14 @@ mod tests {
         assert!(!sounds.contains(&SimSound::Ejected), "no slot");
         let three = u32::try_from(death_delay).expect("positive") * 3;
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: three,
                 starting: true
             },
             "the breakup runs"
         );
-        session.traffic.remove(extra);
+        session.space.traffic.remove(extra);
         let mut last = three;
         loop {
             let (sounds, _) = fight(&mut session, false);
@@ -1075,8 +1121,8 @@ mod tests {
                 );
                 break;
             }
-            let Condition::Dying { ticks_left, .. } = session.condition else {
-                panic!("still dying: {:?}", session.condition);
+            let Condition::Dying { ticks_left, .. } = session.ship.condition else {
+                panic!("still dying: {:?}", session.ship.condition);
             };
             assert!(ticks_left > threshold, "{death_delay}: {ticks_left}");
             last = ticks_left;
@@ -1105,13 +1151,13 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
         to_the_breakup(&mut session, &catalog, false);
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
         let (sounds, events) = fight(&mut session, true);
         assert!(in_the_pod(&session));
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
         assert!(hulk_destroyed(&events), "{events:?}");
         assert_eq!(sounds, [vec![SimSound::Klaxon], EJECTED.to_vec()].concat());
     }
@@ -1120,12 +1166,12 @@ mod tests {
     fn a_disabled_player_ejects_on_the_chord_only_and_command_or_the_key_alone_does_nothing() {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         for _ in 0..50 {
             session.hold_eject(false);
             session.tick_combat(DISABLING, &mut NeverFires);
         }
-        assert_eq!(session.condition, Condition::Disabled, "no auto-eject");
+        assert_eq!(session.ship.condition, Condition::Disabled, "no auto-eject");
         assert_eq!(session.pilot.ship, ShipId(128));
         session.take_sounds();
         session.hold_eject(true);
@@ -1148,7 +1194,7 @@ mod tests {
         assert!(!sounds.contains(&SimSound::Ejected));
         assert_eq!(session.pilot.ship, ShipId(128));
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: 20,
                 starting: false
@@ -1161,20 +1207,21 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, KEPT, DROPPED]);
         let target = session.npcs()[0].id;
-        session.target = Some(target);
-        session.nav = crate::navigation::NavMode::Stellar(Some(crate::catalog::StellarId(128)));
-        session.secondary = Some(WeaponId(128));
+        session.chart.target = Some(target);
+        session.chart.nav =
+            crate::navigation::NavMode::Stellar(Some(crate::catalog::StellarId(128)));
+        session.ship.secondary = Some(WeaponId(128));
         let state = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
             velocity: Vec2::new(3.0, 4.0),
             heading: 90.0,
         };
-        session.player = state;
+        session.ship.player = state;
         session.pilot.reserves.shield.now = 5.0;
         session.pilot.reserves.armor.now = 7.0;
         let fuel = session.pilot.reserves.fuel.now;
         let (shield, armor) = (session.pilot.reserves.shield, session.pilot.reserves.armor);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let (sounds, _) = fight(&mut session, true);
         assert_eq!(sounds, EJECTED);
         let hulk = hulk(&session).clone();
@@ -1189,18 +1236,18 @@ mod tests {
             "OnRetire"
         );
         assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
-        assert_eq!(session.player.position, state.position);
-        assert_eq!(session.player.heading, 90.0);
+        assert_eq!(session.ship.player.position, state.position);
+        assert_eq!(session.ship.player.heading, 90.0);
         let push = session.top_speed();
         assert!(
-            (session.player.velocity - Vec2::new(4.0 + push, 4.0)).length() < 1e-4,
+            (session.ship.player.velocity - Vec2::new(4.0 + push, 4.0)).length() < 1e-4,
             "x takes y, then a push east: {:?}",
-            session.player.velocity
+            session.ship.player.velocity
         );
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert_eq!(session.nav_target(), None);
-        assert_eq!(session.secondary, None);
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.secondary, None);
+        assert_eq!(session.ship.condition, Condition::Intact);
         assert_eq!(session.pilot.reserves.fuel.now, fuel, "fuel untouched");
         let owned: Vec<(i16, u16)> = session
             .pilot
@@ -1214,6 +1261,8 @@ mod tests {
             "the stock blaster, the persistent outfit and the pod's items"
         );
         let mounted: Vec<(WeaponId, u32)> = session
+            .ship
+            .fit
             .armament
             .mounts()
             .iter()
@@ -1237,12 +1286,12 @@ mod tests {
             }
             let mut session = flying(&catalog, &[POD]);
             let at = Vec2::new(10.0, 20.0);
-            session.player = crate::flight::ShipState {
+            session.ship.player = crate::flight::ShipState {
                 position: at,
                 velocity: Vec2::new(3.0, 4.0),
                 heading: 90.0,
             };
-            session.condition = Condition::Disabled;
+            session.ship.condition = Condition::Disabled;
             assert_eq!(fight(&mut session, true).0, EJECTED);
             let immobile = hulk(&session).immobile;
             for _ in 0..3 {
@@ -1273,20 +1322,20 @@ mod tests {
         }
         let mut session = flying(&catalog, &[POD]);
         let heading = 90.0;
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(10.0, 20.0),
             velocity: crate::flight::facing(heading) * 4.0,
             heading,
         };
-        session.player_speed = 4.0;
-        session.condition = Condition::Disabled;
+        session.ship.player_speed = 4.0;
+        session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
         assert_eq!(fight(&mut session, true).0, EJECTED);
         let id = hulk(&session).id;
         assert_eq!(hulk(&session).speed, 4.0, "the player's speed");
         for _ in 0..3 {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
-            let hulk = session.npc(id).expect("still here");
+            let hulk = session.space.npc(id).expect("still here");
             assert_eq!(hulk.condition, Condition::Disabled, "a derelict");
             let along = crate::flight::facing(hulk.state.heading) * hulk.speed;
             assert!(hulk.speed > 3.9, "slowed only by the drag: {}", hulk.speed);
@@ -1317,8 +1366,8 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.warp_sounds[0] = 9;
-        session.jump = Some(BRAKING);
+        session.statics_mut().warp_sounds[0] = 9;
+        session.mode = crate::session::Mode::Jumping(BRAKING);
         session.take_messages();
         let (breakup, check) = to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
@@ -1340,7 +1389,7 @@ mod tests {
                 SimMessage::JumpCollapsed
             ]
         );
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.jump(), None);
         // C is the old class's (2.08, `Flags` 0x0004), not the pod's.
         let speed = crate::warp::lead_in_speed(2, crate::warp::warp_factor(0x0004), 9);
         assert_ne!(
@@ -1348,7 +1397,7 @@ mod tests {
             crate::warp::lead_in_speed(2, crate::warp::warp_factor(0), 9)
         );
         assert!(speed > 0.0, "{speed}");
-        let heading = session.player.heading;
+        let heading = session.ship.player.heading;
         let collapsed = collapsed_velocity(Vec2::ZERO, heading, speed, session.top_speed());
         assert_eq!(
             hulk(&session).state.velocity,
@@ -1361,8 +1410,8 @@ mod tests {
         // An escape ship's notice follows the collapse's.
         let catalog = escaping();
         let (mut session, sounds) = escaped(&catalog, &[], |session| {
-            session.warp_sounds[0] = 9;
-            session.jump = Some(BRAKING);
+            session.statics_mut().warp_sounds[0] = 9;
+            session.mode = crate::session::Mode::Jumping(BRAKING);
         });
         assert_eq!(
             session.take_messages(),
@@ -1402,10 +1451,10 @@ mod tests {
         assert!(crate::warp::lead_in_speed(2, w, 9) > 0.0);
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.set_double_time_key(true);
-        session.warp_sounds = [9, 9];
-        session.jump = Some(BRAKING);
+        session.statics_mut().warp_sounds = [9, 9];
+        session.mode = crate::session::Mode::Jumping(BRAKING);
         session.pilot.reserves.armor.now = 0.0;
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 0,
             starting: true,
         };
@@ -1416,7 +1465,7 @@ mod tests {
             &mut NeverFires,
         );
         assert!(in_the_pod(&session));
-        assert_eq!(session.jump, None, "collapsed");
+        assert_eq!(session.mode.jump(), None, "collapsed");
         assert_eq!(hulk(&session).state.velocity, Vec2::ZERO, "no speed");
     }
 
@@ -1429,7 +1478,7 @@ mod tests {
         let exploded = (0..20).any(|_| hulk_destroyed(&fight(&mut session, false).1));
         assert!(exploded, "the dying player's hulk explodes");
         let mut session = flying(&catalog, &[POD]);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
         fight(&mut session, true);
         assert!(in_the_pod(&session));
@@ -1438,13 +1487,13 @@ mod tests {
             let (_, events) = fight(&mut session, false);
             assert!(!hulk_destroyed(&events));
         }
-        let derelict = session.npc(id).expect("still here");
+        let derelict = session.space.npc(id).expect("still here");
         assert_eq!(derelict.condition, Condition::Disabled);
     }
 
     /// An NPC of `goal`, targeting `target`.
     fn aimed(session: &mut Session, goal: Goal, target: Option<ShipRef>) -> NpcId {
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             goal,
             target,
             ..npc(0, ShipStats::default())
@@ -1453,7 +1502,7 @@ mod tests {
 
     /// An escort hired into the fleet, as placed.
     fn escort(session: &mut Session) -> NpcId {
-        let id = session.traffic.add_npc(Npc {
+        let id = session.space.traffic.add_npc(Npc {
             escort: Some(EscortDuty {
                 formation: FormationSlot::default(),
                 order: None,
@@ -1462,7 +1511,7 @@ mod tests {
             ..npc(0, ShipStats::default())
         });
         session.pilot.escorts.push(hired());
-        session.fleet.push(Some(id));
+        session.space.escorts.fleet.push(Some(id));
         id
     }
 
@@ -1487,24 +1536,24 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             Some(ShipRef::Player),
         );
-        session.npc_mut(attacker).expect("here").provoked = 5.0;
+        session.space.npc_mut(attacker).expect("here").provoked = 5.0;
         let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
         let fleeing = aimed(
             &mut session,
             Goal::Flee(ShipRef::Player),
             Some(ShipRef::Player),
         );
-        session.npc_mut(fleeing).expect("here").provoked = 4.0;
+        session.space.npc_mut(fleeing).expect("here").provoked = 4.0;
         let inspector = aimed(&mut session, Goal::Inspect(ShipRef::Player), None);
-        session.npc_mut(inspector).expect("here").provoked = 3.0;
+        session.space.npc_mut(inspector).expect("here").provoked = 3.0;
         let hired = escort(&mut session);
         let raider = aimed(
             &mut session,
             Goal::Attack(ShipRef::Npc(hired)),
             Some(ShipRef::Npc(hired)),
         );
-        session.npc_mut(raider).expect("here").provoked = 2.0;
-        let mission = session.traffic.add_npc(Npc {
+        session.space.npc_mut(raider).expect("here").provoked = 2.0;
+        let mission = session.space.traffic.add_npc(Npc {
             mission: Some(MissionMark {
                 slot: 0,
                 behav: ShipBehav::EscortPlayer,
@@ -1515,9 +1564,9 @@ mod tests {
         });
         // A pilot's escort not placed in the system.
         session.pilot.escorts.push(super::tests::hired());
-        session.fleet.push(None);
+        session.space.escorts.fleet.push(None);
         let fuel = session.pilot.reserves.fuel.now;
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         fight(&mut session, true);
         assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
         assert_eq!(
@@ -1532,7 +1581,7 @@ mod tests {
             (f32::from(POD_SHIELD), f32::from(POD_ARMOR), fuel),
             "full, with no outfit bonus, fuel untouched"
         );
-        let npc = |id| session.npc(id).expect("here").clone();
+        let npc = |id| session.space.npc(id).expect("here").clone();
         assert_eq!(
             (
                 npc(attacker).target,
@@ -1566,7 +1615,7 @@ mod tests {
         assert!(!npc(hired).escorts_player());
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
-        assert_eq!(session.fleet, []);
+        assert_eq!(session.space.escorts.fleet, []);
     }
 
     #[test]
@@ -1574,7 +1623,7 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
         session.take_save_due();
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         fight(&mut session, true);
         assert!(in_the_pod(&session));
         assert!(!session.take_save_due());
@@ -1599,7 +1648,7 @@ mod tests {
     ) -> (Session, Vec<SimSound>) {
         let mut session = flying(catalog, &[]);
         session.pilot.outfits.insert(OutfitId(FIGHTERS), 2);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         prepare(&mut session);
         session.take_sounds();
         session.take_messages();
@@ -1639,9 +1688,9 @@ mod tests {
         let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
         session.reset_precalced();
         fight(&mut session, false);
-        session.sabotage.set_counter(FUSE);
+        session.ship.latches.sabotage.set_counter(FUSE);
         let (sounds, _) = fight(&mut session, false);
-        assert!(in_the_pod(&session), "{:?}", session.condition);
+        assert!(in_the_pod(&session), "{:?}", session.ship.condition);
         assert_eq!(
             sounds,
             [
@@ -1677,19 +1726,27 @@ mod tests {
             // the old class's `OnRetire` resets as it ends (@0x99dea), the
             // outfit still owned, which zeroes the count.
             if kept {
-                assert_eq!(session.sabotage.flag(), Sabotage::Kill);
-                assert_eq!(session.sabotage.counter(), 0.0, "zeroed, reseeding");
-            } else {
-                assert_eq!(session.sabotage.flag(), Sabotage::None, "@0x6f8bb");
+                assert_eq!(session.ship.latches.sabotage.flag(), Sabotage::Kill);
                 assert_eq!(
-                    session.sabotage.counter(),
+                    session.ship.latches.sabotage.counter(),
+                    0.0,
+                    "zeroed, reseeding"
+                );
+            } else {
+                assert_eq!(
+                    session.ship.latches.sabotage.flag(),
+                    Sabotage::None,
+                    "@0x6f8bb"
+                );
+                assert_eq!(
+                    session.ship.latches.sabotage.counter(),
                     0.0,
                     "left as `OnRetire`'s reset left it"
                 );
             }
             session.tick_combat(Rules::default(), &mut Draws::of(&[7]));
             let counter = if kept { 8.0 } else { 0.0 };
-            assert_eq!(session.sabotage.counter(), counter, "{id}");
+            assert_eq!(session.ship.latches.sabotage.counter(), counter, "{id}");
         }
     }
 
@@ -1732,7 +1789,7 @@ mod tests {
         });
         let (attacker, sniper, fleeing, hired, pirate) = ids.expect("set up");
         let hulk = ShipRef::Npc(hulk(&session).id);
-        let npc = |id| session.npc(id).expect("here");
+        let npc = |id| session.space.npc(id).expect("here");
         assert_eq!(
             (npc(attacker).target, npc(attacker).goal),
             (Some(hulk), Goal::Attack(hulk))
@@ -1756,8 +1813,11 @@ mod tests {
             ),
             "goal 0xd kept, +0x70 the hulk"
         );
-        assert!(session.npc(hired).expect("here").escorts_player(), "kept");
-        assert_eq!(session.fleet, [Some(hired)]);
+        assert!(
+            session.space.npc(hired).expect("here").escorts_player(),
+            "kept"
+        );
+        assert_eq!(session.space.escorts.fleet, [Some(hired)]);
     }
 
     #[test]
@@ -1776,15 +1836,15 @@ mod tests {
             let rules = crate::rulebook::Rulebook::default()
                 .with_override(crate::rulebook::RuleKey::EjectVelocity, source);
             let mut session = flying(&catalog, &[POD]).with_rules(rules);
-            session.player.velocity = Vec2::new(3.0, 4.0);
-            session.player.heading = 90.0;
-            session.condition = Condition::Disabled;
+            session.ship.player.velocity = Vec2::new(3.0, 4.0);
+            session.ship.player.heading = 90.0;
+            session.ship.condition = Condition::Disabled;
             fight(&mut session, true);
             let push = session.top_speed();
             assert!(
-                (session.player.velocity - Vec2::new(x + push, 4.0)).length() < 1e-4,
+                (session.ship.player.velocity - Vec2::new(x + push, 4.0)).length() < 1e-4,
                 "{source:?}: {:?}",
-                session.player.velocity
+                session.ship.player.velocity
             );
         }
     }
@@ -1793,13 +1853,13 @@ mod tests {
     /// `heading` at rest.
     fn in_a_pod(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = flying(catalog, &[POD]);
-        session.player.heading = heading;
-        session.player.velocity = Vec2::ZERO;
-        session.condition = Condition::Disabled;
+        session.ship.player.heading = heading;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
         fight(&mut session, true);
         assert!(in_the_pod(&session));
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         session.take_sounds();
         session.take_combat_events();
         session
@@ -1809,7 +1869,10 @@ mod tests {
     fn the_pod_thrusts_along_its_heading_and_ignores_controls_and_fire() {
         let catalog = ejecting(100);
         let mut session = in_a_pod(&catalog, 90.0);
-        let handling = session.flying_handling();
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
         assert!(handling.accel > 0.0 && handling.max_speed > handling.accel);
         let controls = crate::flight::Controls {
             thrust: false,
@@ -1817,15 +1880,18 @@ mod tests {
             reverse: true,
             ..crate::flight::Controls::default()
         };
-        let at = session.player.position;
+        let at = session.ship.player.position;
         session.tick(controls);
-        assert_eq!(session.player.heading, 90.0, "no turning");
+        assert_eq!(session.ship.player.heading, 90.0, "no turning");
         assert!(
-            (session.player.velocity - Vec2::new(handling.accel, 0.0)).length() < 1e-6,
+            (session.ship.player.velocity - Vec2::new(handling.accel, 0.0)).length() < 1e-6,
             "{:?}",
-            session.player.velocity
+            session.ship.player.velocity
         );
-        assert_eq!(session.player.position, at + session.player.velocity);
+        assert_eq!(
+            session.ship.player.position,
+            at + session.ship.player.velocity
+        );
         let mut events = Vec::new();
         for _ in 0..60 {
             session.hold_fire(true, true);
@@ -1833,7 +1899,7 @@ mod tests {
             session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
         }
-        let speed = session.player.velocity;
+        let speed = session.ship.player.velocity;
         assert!(
             (speed.x - handling.max_speed).abs() <= handling.accel && speed.y.abs() < 1e-3,
             "thrusting up to its top speed: {speed:?}"
@@ -1848,7 +1914,7 @@ mod tests {
             )
         });
         assert!(!fired, "the pod fires nothing");
-        assert_eq!(session.engine_glow, 0, "no glow");
+        assert_eq!(session.ship.engine_glow, 0, "no glow");
         assert!(
             !session.take_sounds().contains(&SimSound::ThrustStarted),
             "no thrust sound"
@@ -1862,11 +1928,11 @@ mod tests {
         for tick in 1..POD_TICKS {
             session.tick(crate::flight::Controls::default());
             assert_eq!(session.pod, Some(POD_TICKS - tick));
-            assert!(!session.rescue_due, "tick {tick}");
+            assert!(!session.ship.fate.rescue_due, "tick {tick}");
         }
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.pod, Some(0));
-        assert!(session.rescue_due);
+        assert!(session.ship.fate.rescue_due);
         assert_eq!(session.player_fate(), PlayerFate::Ejected { ticks_left: 0 });
     }
 
@@ -1876,10 +1942,10 @@ mod tests {
         let mut session = in_a_pod(&catalog, 0.0);
         session.pilot.reserves.armor.now = 0.0;
         for _ in 0..POD_TICKS {
-            assert!(!session.rescue_due);
+            assert!(!session.ship.fate.rescue_due);
             session.tick(crate::flight::Controls::default());
             let (_, events) = fight(&mut session, false);
-            assert_eq!(session.condition, Condition::Intact, "no breakup");
+            assert_eq!(session.ship.condition, Condition::Intact, "no breakup");
             assert!(!events.iter().any(|event| matches!(
                 event,
                 CombatEvent::BreakingUp {
@@ -1903,7 +1969,7 @@ mod tests {
         for (ticks_left, klaxon) in [(3, true), (2, false)] {
             let mut session = flying(&catalog, &[POD]);
             to_the_breakup(&mut session, &catalog, false);
-            session.condition = Condition::Dying {
+            session.ship.condition = Condition::Dying {
                 ticks_left,
                 starting: false,
             };
@@ -1939,7 +2005,7 @@ mod tests {
     /// pod aboard; `prepare` runs first.
     fn podded(catalog: &FakePilotCatalog, prepare: impl FnOnce(&mut Session)) -> Session {
         let mut session = flying(catalog, &[POD]);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         prepare(&mut session);
         session.hold_eject(true);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -1970,7 +2036,7 @@ mod tests {
         catalog.ship_records.push(ship(OLD, FAST));
         let session = podded(&catalog, |session| {
             session.pilot.ship = ShipId(OLD);
-            session.hull = session.arsenal.hull(ShipId(OLD));
+            session.ship.fit.hull = session.statics.arsenal.hull(ShipId(OLD));
         });
         let hulk = hulk(&session);
         assert_eq!(hulk.ship, ShipId(OLD));
@@ -2028,13 +2094,16 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
         let mut passes = 0;
-        while matches!(session.condition, Condition::Intact | Condition::Disabled) {
+        while matches!(
+            session.ship.condition,
+            Condition::Intact | Condition::Disabled
+        ) {
             work(&mut session, &catalog, false);
             passes += 1;
             assert!(passes < 200, "the player's armour never went");
         }
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: 0,
                 starting: true
@@ -2063,7 +2132,7 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
         session.pilot.reserves.armor.now = 0.0;
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 10,
             starting: false,
         };
@@ -2093,9 +2162,9 @@ mod tests {
         let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
         session.reset_precalced();
         work(&mut session, &catalog, false);
-        session.sabotage.set_counter(FUSE);
+        session.ship.latches.sabotage.set_counter(FUSE);
         let sounds = work(&mut session, &catalog, false);
-        assert!(in_the_pod(&session), "{:?}", session.condition);
+        assert!(in_the_pod(&session), "{:?}", session.ship.condition);
         assert_eq!(
             sounds,
             [
@@ -2125,10 +2194,10 @@ mod tests {
         let mut session = flying(&catalog, &[KILLER]);
         session.reset_precalced();
         work(&mut session, &catalog, false);
-        session.sabotage.set_counter(FUSE);
+        session.ship.latches.sabotage.set_counter(FUSE);
         work(&mut session, &catalog, false);
         assert_eq!(
-            session.condition,
+            session.ship.condition,
             Condition::Dying {
                 ticks_left: 300,
                 starting: true
@@ -2147,6 +2216,6 @@ mod tests {
         session.hold_eject(true);
         session.eject_check(&mut NeverFires);
         assert!(!in_the_pod(&session));
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
     }
 }

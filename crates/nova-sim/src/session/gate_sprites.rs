@@ -12,7 +12,7 @@
 //! a gate still shown keeps its sprite, a gate newly shown starts closed,
 //! and one no longer shown is let go.
 
-use super::Session;
+use super::{Chart, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
@@ -26,10 +26,11 @@ impl Session {
     /// that is not a hypergate, or one not shown.
     #[must_use]
     pub fn gate_frame(&self, gate: StellarId) -> Option<u16> {
-        let site = self.gate_site(gate)?;
+        let site = self.chart.gate_site(gate)?;
         let anim = GateAnimation::of(site);
         Some(
-            self.gate_sprites
+            self.space
+                .gate_sprites
                 .get(&gate)
                 .map_or(0, |sprite| sprite.shown(&anim, site.destroyed)),
         )
@@ -39,31 +40,26 @@ impl Session {
     /// ([`GateSprite::is_open`](crate::gate_sprite::GateSprite::is_open)).
     #[must_use]
     pub fn gate_open(&self, gate: StellarId) -> bool {
-        self.gate_site(gate).is_some_and(|site| {
-            self.gate_sprites
+        self.chart.gate_site(gate).is_some_and(|site| {
+            self.space
+                .gate_sprites
                 .get(&gate)
                 .is_some_and(|sprite| sprite.is_open(&GateAnimation::of(site)))
         })
     }
 
-    /// Hypergate `gate`, when it is shown.
-    fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
-        self.sites
-            .iter()
-            .find(|site| site.id == gate && is_hypergate(site))
-    }
-
     /// Keeps a sprite for each hypergate shown, and only for those.
     pub(super) fn keep_gate_sprites(&mut self) {
         let gates: Vec<StellarId> = self
+            .chart
             .sites
             .iter()
             .filter(|site| is_hypergate(site))
             .map(|site| site.id)
             .collect();
-        self.gate_sprites.retain(|id, _| gates.contains(id));
+        self.space.gate_sprites.retain(|id, _| gates.contains(id));
         for gate in gates {
-            self.gate_sprites.entry(gate).or_default();
+            self.space.gate_sprites.entry(gate).or_default();
         }
     }
 
@@ -76,25 +72,38 @@ impl Session {
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
-        let dock = self.dock;
-        for site in self.sites.iter().filter(|site| is_hypergate(site)) {
-            let width = self.slot_sprite_width(site);
+        let dock = self.port.dock;
+        for site in self.chart.sites.iter().filter(|site| is_hypergate(site)) {
+            let width = self
+                .space
+                .slot_sprite_width(&self.statics, &self.setup, site);
             let anim = GateAnimation::of(site);
-            if let Some(sprite) = self.gate_sprites.get_mut(&site.id) {
+            if let Some(sprite) = self.space.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
-                let held = held_open(site, reach, dock, self.traffic.npcs());
+                let held = held_open(site, reach, dock, self.space.traffic.npcs());
                 sprite.step(&anim, site.destroyed, held, chance);
             }
         }
     }
+}
 
+impl Space {
     /// The width `_GetSpriteXSize` gives `site`'s sprite slot: its drawn
     /// frame's, or [`NO_SPRITE_WIDTH`] when the slot shows none
     /// (@0x26d4-0x2701).
-    fn slot_sprite_width(&self, site: &LandingSite) -> u32 {
-        self.drawn_frame_size(site)
+    fn slot_sprite_width(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> u32 {
+        self.drawn_frame_size(statics, setup, site)
             .filter(|_| self.rebuilt.shows_frame(site.id))
             .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
+    }
+}
+
+impl Chart {
+    /// Hypergate `gate`, when it is shown.
+    fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
+        self.sites
+            .iter()
+            .find(|site| site.id == gate && is_hypergate(site))
     }
 }
 
@@ -158,7 +167,7 @@ mod tests {
     /// ticks.
     fn emerging(session: &mut Session, wait: u32) {
         let fields = crate::stats::ShipStats::new(FAST, &[]);
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             state: ShipState {
                 position: GATE_AT,
                 velocity: Vec2::ZERO,
@@ -173,7 +182,7 @@ mod tests {
     /// Adds a ship of `fields` at (`x`, 0), at rest facing the gate,
     /// bound to enter hypergate 300.
     fn heading_in(session: &mut Session, fields: crate::handling::ShipFields, x: f32) {
-        session.traffic.add_npc(Npc {
+        session.space.traffic.add_npc(Npc {
             state: ShipState {
                 position: Vec2::new(x, 0.0),
                 velocity: Vec2::ZERO,
@@ -190,7 +199,7 @@ mod tests {
         let catalog = gated();
         for permission in [REQUESTED_NEAR, CLEARED] {
             let mut session = flying(&catalog);
-            session.dock = Some(DockRequest {
+            session.port.dock = Some(DockRequest {
                 stellar: StellarId(300),
                 permission,
             });
@@ -201,7 +210,7 @@ mod tests {
             }
             assert_eq!(frames.first(), Some(&1), "{permission:#x}: {frames:?}");
             assert!(session.gate_open(StellarId(300)), "{permission:#x}");
-            session.dock = None;
+            session.port.dock = None;
             for _ in 0..30 {
                 tick(&mut session, &catalog);
             }
@@ -215,7 +224,7 @@ mod tests {
         let catalog = gated();
         for (stellar, permission) in [(300, 0), (128, CLEARED)] {
             let mut session = flying(&catalog);
-            session.dock = Some(DockRequest {
+            session.port.dock = Some(DockRequest {
                 stellar: StellarId(stellar),
                 permission,
             });
@@ -270,8 +279,12 @@ mod tests {
             let mut session = flying(&catalog);
             heading_in(&mut session, still, GATE_AT.x + 210.0);
             if open_first {
-                let site = *session.gate_site(StellarId(300)).expect("a gate");
-                let sprite = session.gate_sprites.get_mut(&StellarId(300)).expect("kept");
+                let site = *session.chart.gate_site(StellarId(300)).expect("a gate");
+                let sprite = session
+                    .space
+                    .gate_sprites
+                    .get_mut(&StellarId(300))
+                    .expect("kept");
                 for _ in 0..3 {
                     sprite.step(&GateAnimation::of(&site), false, true, &mut NeverFires);
                 }
@@ -299,11 +312,11 @@ mod tests {
             let mut session = flying(&catalog);
             if empty_slot {
                 // A rebuild point that could read no frame for the gate.
-                let mut unreadable = session.sites.clone();
+                let mut unreadable = session.chart.sites.clone();
                 for site in &mut unreadable {
                     site.frame_size = None;
                 }
-                session.rebuilt.rebuild(&unreadable, |_| false, false);
+                session.space.rebuilt.rebuild(&unreadable, |_| false, false);
             }
             heading_in(&mut session, still, GATE_AT.x + out);
             tick(&mut session, &catalog);
@@ -372,16 +385,16 @@ mod tests {
         // 12: the release tick shows frame 2 where held it would show 3.
         emerging(&mut session, 12);
         let gate = StellarId(300);
-        let site = *session.gate_site(gate).expect("a gate");
+        let site = *session.chart.gate_site(gate).expect("a gate");
         let stepped = |mut sprite: crate::gate_sprite::GateSprite, held: bool| {
             sprite.step(&GateAnimation::of(&site), false, held, &mut NeverFires);
             sprite
         };
         let mut released = false;
         for tick in 0..40 {
-            let before = session.gate_sprites[&gate];
+            let before = session.space.gate_sprites[&gate];
             self::tick(&mut session, &catalog);
-            let after = session.gate_sprites[&gate];
+            let after = session.space.gate_sprites[&gate];
             match session.npcs()[0].mode {
                 // Waiting, or its wait just run out: goal still 0x15.
                 Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {
@@ -435,14 +448,14 @@ mod tests {
         tick(&mut session, &catalog);
         session.keep_gate_sprites();
         assert_eq!(session.gate_frame(StellarId(300)), Some(1), "kept");
-        let shown = session.sites.clone();
-        session.sites.retain(|site| site.id != StellarId(300));
+        let shown = session.chart.sites.clone();
+        session.chart.sites.retain(|site| site.id != StellarId(300));
         session.keep_gate_sprites();
-        assert!(session.gate_sprites.is_empty(), "let go");
-        session.sites = shown;
+        assert!(session.space.gate_sprites.is_empty(), "let go");
+        session.chart.sites = shown;
         session.keep_gate_sprites();
         assert_eq!(
-            session.gate_sprites.get(&StellarId(300)),
+            session.space.gate_sprites.get(&StellarId(300)),
             Some(&crate::gate_sprite::GateSprite::new()),
             "shown again, closed"
         );
@@ -453,7 +466,12 @@ mod tests {
         let catalog = gated();
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(
-            session.gate_sprites.keys().copied().collect::<Vec<_>>(),
+            session
+                .space
+                .gate_sprites
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
             [StellarId(300)]
         );
     }

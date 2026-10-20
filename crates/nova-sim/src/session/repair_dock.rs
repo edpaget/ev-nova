@@ -23,7 +23,7 @@
 //!
 //! A ship whose target is a disabled NPC (a hit's retarget at a ship
 //! since disabled) repairs that ship instead, which the traffic queues as
-//! [`PirateEvent::NpcRepaired`] ([`Session::npc_repaired`]): the NPC is
+//! [`PirateEvent::NpcRepaired`] ([`Space::npc_repaired`]): the NPC is
 //! unboarded (@0x86d92), and while disabled its armour rises
 //! [`REPAIR_STEP`] at a time by the same rule, a mission's rescue ship
 //! that `_IsDisabled` holds disabled at any armour rising to its most
@@ -39,7 +39,7 @@
 //! crossed. The `_statusRedraw` writes are left out, as the status
 //! display reads the live state.
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::catalog::ShipId;
 #[cfg(any(doc, test))]
 use crate::combat::hull::DisableRule;
@@ -47,6 +47,7 @@ use crate::combat::hull::{Condition, HullSpec};
 #[cfg(doc)]
 use crate::hail::CommNote;
 use crate::hail::Help;
+use crate::pilot::Pilot;
 use crate::reserves::Gauge;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
@@ -58,24 +59,42 @@ impl Session {
     /// NPC `helper`, of ship type `ship`, has repaired the player (see the
     /// module docs).
     pub(super) fn repaired_by(&mut self, helper: NpcId, ship: ShipId) {
-        self.player_boarded = false;
-        if self.condition == Condition::Disabled {
-            let rule = std::rc::Rc::clone(&self.disable_rule.0);
+        self.ship.fate.player_boarded = false;
+        if self.ship.condition == Condition::Disabled {
+            let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
             let armor = &mut self.pilot.reserves.armor;
-            repair(armor, &self.hull, |armor, hull| rule.disabled(armor, hull));
-            if !rule.disabled(*armor, &self.hull) {
-                self.condition = Condition::Intact;
+            repair(armor, &self.ship.fit.hull, |armor, hull| {
+                rule.disabled(armor, hull)
+            });
+            if !rule.disabled(*armor, &self.ship.fit.hull) {
+                self.ship.condition = Condition::Intact;
             }
         }
-        self.say_help_done(helper, ship, Help::Repair, SimSound::RepairsComplete);
+        self.space.say_help_done(
+            &self.pilot,
+            &self.statics,
+            &mut self.out,
+            helper,
+            ship,
+            Help::Repair,
+            SimSound::RepairsComplete,
+        );
     }
+}
 
+impl Space {
     /// NPC `ship` has been repaired by a ship docked with it (see the
     /// module docs): unboarded, then, while disabled, its armour raised
     /// as the player's is, `_IsDisabled` holding a mission's rescue ship
     /// disabled at any armour; silently.
-    pub(super) fn npc_repaired(&mut self, ship: NpcId) {
-        let rule = std::rc::Rc::clone(&self.disable_rule.0);
+    pub(super) fn npc_repaired(
+        &mut self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        ship: NpcId,
+    ) {
+        let rule = std::rc::Rc::clone(&setup.disable_rule.0);
         let Some(npc) = self.npc_mut(ship) else {
             return;
         };
@@ -85,7 +104,7 @@ impl Session {
         }
         let held = self
             .npc(ship)
-            .is_some_and(|npc| self.mission_ship_held(npc));
+            .is_some_and(|npc| super::mission_ships::mission_ship_held(pilot, statics, npc));
         let Some(npc) = self.npc_mut(ship) else {
             return;
         };
@@ -165,8 +184,8 @@ mod tests {
     fn downed(catalog: &FakePilotCatalog, rule: Rc<dyn DisableRule>) -> (Session, NpcId) {
         let mut session = facing_an_npc(catalog, 180).with_disable_rule(rule);
         session.pilot.ship_name = Some("Kestrel".to_owned());
-        session.condition = Condition::Disabled;
-        session.player_boarded = true;
+        session.ship.condition = Condition::Disabled;
+        session.ship.fate.player_boarded = true;
         session.pilot.reserves.armor = Gauge {
             now: 10.0,
             max: 45.0,
@@ -178,8 +197,9 @@ mod tests {
 
     /// `session` answering a repair by `helper`.
     fn answer(session: &mut Session, helper: NpcId) {
-        let ship = session.npc(helper).expect("here").ship;
+        let ship = session.space.npc(helper).expect("here").ship;
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::PlayerRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -213,10 +233,10 @@ mod tests {
         );
         assert_eq!(session.take_sounds(), [SimSound::RepairsComplete]);
         for tick in 1..240 {
-            session.count_down_comm_line();
+            session.space.count_down_comm_line();
             assert!(!session.comm_line().free_for_calls(), "{tick}");
         }
-        session.count_down_comm_line();
+        session.space.count_down_comm_line();
         assert!(session.comm_line().free_for_calls(), "240 ticks");
     }
 
@@ -228,15 +248,16 @@ mod tests {
 
     /// [`npc_repaired`], the second NPC in `condition`.
     fn npc_repaired_in(session: &mut Session, helper: NpcId, condition: Condition) -> NpcId {
-        let mut downed = session.npc(helper).expect("here").clone();
+        let mut downed = session.space.npc(helper).expect("here").clone();
         downed.condition = condition;
         downed.boarded = true;
         downed.reserves.armor = Gauge {
             now: 10.0,
             max: 45.0,
         };
-        let ship = session.traffic.add_npc(downed);
+        let ship = session.space.traffic.add_npc(downed);
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -249,7 +270,7 @@ mod tests {
         let rule = Rc::new(Below20::default());
         let (mut session, helper) = downed(&catalog, rule.clone());
         let ship = npc_repaired(&mut session, helper);
-        let repaired = session.npc(ship).expect("here");
+        let repaired = session.space.npc(ship).expect("here");
         assert_eq!(repaired.reserves.armor.now, 20.0);
         assert_eq!(repaired.condition, Condition::Intact);
         assert!(!repaired.boarded, "@0x86d92");
@@ -264,7 +285,7 @@ mod tests {
         let catalog = catalog();
         let (mut session, helper) = downed(&catalog, Rc::new(Always));
         let ship = npc_repaired(&mut session, helper);
-        let repaired = session.npc(ship).expect("here");
+        let repaired = session.space.npc(ship).expect("here");
         assert_eq!(repaired.reserves.armor.now, 45.0);
         assert_eq!(repaired.condition, Condition::Disabled);
         assert!(!repaired.boarded);
@@ -276,7 +297,7 @@ mod tests {
         let rule = Rc::new(Below20::default());
         let (mut session, helper) = downed(&catalog, rule.clone());
         let ship = npc_repaired_in(&mut session, helper, Condition::Intact);
-        let repaired = session.npc(ship).expect("here");
+        let repaired = session.space.npc(ship).expect("here");
         assert!(!repaired.boarded, "@0x86d92, before the test");
         assert_eq!(repaired.reserves.armor.now, 10.0, "nothing raised");
         assert_eq!(repaired.condition, Condition::Intact);
@@ -288,9 +309,10 @@ mod tests {
         let catalog = catalog();
         let (mut session, helper) = downed(&catalog, Rc::new(Below20::default()));
         let gone = NpcId(u32::MAX);
-        assert!(session.npc(gone).is_none());
+        assert!(session.space.npc(gone).is_none());
         let npcs = session.npcs().to_vec();
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship: gone });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
@@ -306,7 +328,7 @@ mod tests {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
         let [helper, ship] = [0, 1].map(|index| session.npcs()[index].id);
-        let npc = session.npc_mut(ship).expect("here");
+        let npc = session.space.npc_mut(ship).expect("here");
         // Boarded, it is not held; the repair unboards it before the test.
         npc.boarded = true;
         npc.reserves.armor.now = 1.0;
@@ -317,14 +339,15 @@ mod tests {
             max: most,
         };
         assert!(
-            !session.disable_rule.0.disabled(full, &hull),
+            !session.setup.disable_rule.0.disabled(full, &hull),
             "the rule alone would let it fly at its most"
         );
         session
+            .space
             .traffic
             .queue_pirate_event(PirateEvent::NpcRepaired { helper, ship });
         session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
-        let repaired = session.npc(ship).expect("here");
+        let repaired = session.space.npc(ship).expect("here");
         assert_eq!(repaired.reserves.armor.now, most, "to its most");
         assert_eq!(repaired.condition, Condition::Disabled, "held");
         assert!(!repaired.boarded);
@@ -346,7 +369,7 @@ mod tests {
         let catalog = catalog();
         let rule = Rc::new(Below20::default());
         let (mut session, helper) = downed(&catalog, rule.clone());
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         answer(&mut session, helper);
         assert_eq!(session.reserves().armor.now, 10.0);
         assert!(rule.asked.borrow().is_empty());
@@ -359,8 +382,8 @@ mod tests {
     fn a_ship_repairing_the_player_through_the_session_repairs_it_once_and_drifts() {
         let catalog = catalog();
         let (mut session, helper) = downed(&catalog, Rc::new(Below20::default()));
-        session.player_boarded = false;
-        let npc = session.npc_mut(helper).expect("here");
+        session.ship.fate.player_boarded = false;
+        let npc = session.space.npc_mut(helper).expect("here");
         npc.goal = Goal::Assist(Help::Repair);
         npc.target = Some(ShipRef::Player);
         npc.state.position = Vec2::new(2.0, 0.0);
@@ -385,12 +408,15 @@ mod tests {
         assert_eq!(session.player_condition(), Condition::Intact);
         assert!(!session.player_boarded());
         assert!(session.take_sounds().contains(&SimSound::RepairsComplete));
-        assert_eq!(session.npc(helper).map(|npc| npc.goal), Some(Goal::Drift));
+        assert_eq!(
+            session.space.npc(helper).map(|npc| npc.goal),
+            Some(Goal::Drift)
+        );
         for _ in 0..50 {
             assert!(tick(&mut session).is_empty(), "repaired once");
         }
         assert_eq!(
-            session.npc(helper).map(|npc| npc.goal),
+            session.space.npc(helper).map(|npc| npc.goal),
             Some(Goal::Drift),
             "a wimpy trader keeps its drift"
         );

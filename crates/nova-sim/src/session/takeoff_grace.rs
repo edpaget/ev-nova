@@ -48,7 +48,7 @@
 //! state the session doesn't hold, as [`Session::open_player_info`]
 //! records for its dialog.
 
-use super::Session;
+use super::{Port, Session};
 use crate::market;
 use crate::player_fate::PlayerCommand;
 
@@ -62,10 +62,12 @@ impl Session {
     /// frame with it: the dock request's tail (@0x67673-0x67678), run as
     /// the ship takes off or comes out of a gate.
     pub(super) fn start_takeoff_grace(&mut self) {
-        self.frame = market::AFTER_TAKE_OFF_FRAME;
-        self.takeoff_grace = TAKEOFF_GRACE_TICKS;
+        self.space.frame = market::AFTER_TAKE_OFF_FRAME;
+        self.port.takeoff_grace = TAKEOFF_GRACE_TICKS;
     }
+}
 
+impl Port {
     /// Counts the take-off grace down a flight tick.
     pub(super) fn takeoff_grace_tick(&mut self) {
         self.takeoff_grace = self.takeoff_grace.saturating_sub(1);
@@ -234,13 +236,13 @@ mod tests {
         let catalog = gated();
         let mut session = at_gate(&catalog);
         for _ in 0..2 {
-            session.frame = market::next_frame(session.frame);
+            session.space.frame = market::next_frame(session.space.frame);
         }
         session.open_hypergate(&catalog).expect("opens");
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
             .expect("enters");
-        assert_eq!(session.frame, market::AFTER_TAKE_OFF_FRAME);
-        assert_eq!(taken_off().frame, market::AFTER_TAKE_OFF_FRAME);
+        assert_eq!(session.space.frame, market::AFTER_TAKE_OFF_FRAME);
+        assert_eq!(taken_off().space.frame, market::AFTER_TAKE_OFF_FRAME);
     }
 }

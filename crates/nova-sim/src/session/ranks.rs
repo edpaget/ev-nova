@@ -68,7 +68,7 @@
 //! clock (see [`sabotage`](crate::sabotage)), so every site reaches it
 //! too. So a `K` or
 //! `L` blesses, or stops blessing, as its set
-//! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
+//! expression ends, and a crime's rank loss (`MissionRun::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
 //! reset. By the other reading the table is built
 //! from the active ranks as they are when it is asked.
@@ -85,10 +85,12 @@
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
+use super::{Chart, MissionRun, PlayerShip, Setup, Statics};
+use crate::pilot::Pilot;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use crate::catalog::{GovtId, RankId};
+use crate::catalog::{GovtId, RankId, StellarId};
 use crate::legal::Crime;
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
@@ -109,20 +111,13 @@ pub(super) struct PortRanks {
 }
 
 impl Session {
-    /// The docked stellar's government now: none in flight or at an
-    /// independent stellar.
-    fn docked_govt(&self) -> Option<GovtId> {
-        let landed = self.landed?;
-        self.sites.iter().find(|site| site.id == landed)?.govt
-    }
-
     /// Takes what the price multipliers read as the spaceport opens
     /// (`_DoPortDialog` @0x5f970-0x5fa04): the active ranks and the docked
     /// stellar's government.
     pub(super) fn open_port_prices(&mut self) {
-        self.port_ranks = PortRanks {
+        self.port.port_ranks = PortRanks {
             active: self.pilot.ranks.clone(),
-            govt: self.docked_govt(),
+            govt: self.chart.docked_govt(self.mode.landed()),
         };
     }
 
@@ -134,12 +129,21 @@ impl Session {
     /// government now.
     #[must_use]
     pub fn price_mults(&self) -> PriceMults {
-        let reach = self.rules.source_for(RuleKey::RankGovtReach);
-        let (active, govt) = match self.rules.source_for(RuleKey::RankPriceTiming) {
-            RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
-            RuleSource::Bible => (&self.pilot.ranks, self.docked_govt()),
+        let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
+        let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
+            RuleSource::Engine => (&self.port.port_ranks.active, self.port.port_ranks.govt),
+            RuleSource::Bible => (
+                &self.pilot.ranks,
+                self.chart.docked_govt(self.mode.landed()),
+            ),
         };
-        rank::price_mults(&self.ranks, active, govt, &self.govts, reach)
+        rank::price_mults(
+            &self.statics.ranks,
+            active,
+            govt,
+            &self.statics.govts,
+            reach,
+        )
     }
 
     /// The ranks' factor the outfitter's buy price takes, as the
@@ -147,7 +151,7 @@ impl Session {
     /// as the original's outfitter never reads `_priceFluxMult`; by the
     /// other reading, `[1]`, as the shipyard's ship price takes it.
     pub(super) fn outfit_price_mult(&self) -> f32 {
-        match self.rules.source_for(RuleKey::RankPriceScope) {
+        match self.setup.rules.source_for(RuleKey::RankPriceScope) {
             RuleSource::Engine => 1.0,
             RuleSource::Bible => self.price_mults().second,
         }
@@ -160,76 +164,7 @@ impl Session {
     /// now.
     #[must_use]
     pub fn blessing(&self) -> Blessing {
-        let reach = self.rules.source_for(RuleKey::RankGovtReach);
-        let active = match self.rules.source_for(RuleKey::BlessingRefresh) {
-            RuleSource::Engine => &self.blessing_ranks,
-            RuleSource::Bible => &self.pilot.ranks,
-        };
-        rank::blessing(&self.ranks, active, &self.govts, reach)
-    }
-
-    /// The pilot's ranks and the recent rank, as `K` and `L` change them.
-    fn held_ranks(&mut self) -> Held<'_> {
-        Held {
-            active: &mut self.pilot.ranks,
-            recent: &mut self.recent_rank,
-        }
-    }
-
-    /// `K`: activates rank `rank` (see [`rank::activate`]), unaffiliated
-    /// ranks grouped by the session's `rank_unaffiliated_group` rule.
-    pub(super) fn activate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.ranks);
-        rank::activate(&records, self.held_ranks(), rank, unaffiliated);
-    }
-
-    /// `L`: deactivates rank `rank` (see [`rank::deactivate`]),
-    /// unaffiliated ranks grouped by the session's
-    /// `rank_unaffiliated_group` rule.
-    pub(super) fn deactivate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.ranks);
-        rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
-    }
-
-    /// `_SlapWithPenalty`'s rank pass (see [`rank::lose_to_crime`]) for
-    /// `crime` the player commits against a ship of `victim`, reaching
-    /// the ranks by the session's `rank_crime_reach` rule and sweeping
-    /// them by its `rank_unaffiliated_group` rule. The callers skip a
-    /// mission's special ship, as the original passes its mark
-    /// (@0x9c10). No save is due, as a conviction makes none in flight,
-    /// and no sound plays.
-    pub(super) fn lose_ranks_to(&mut self, crime: Crime, victim: Option<GovtId>) {
-        let reach = self.rules.source_for(RuleKey::RankCrimeReach);
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        rank::lose_to_crime(
-            &self.ranks,
-            Held {
-                active: &mut self.pilot.ranks,
-                recent: &mut self.recent_rank,
-            },
-            crime,
-            victim,
-            &self.govts,
-            reach,
-            unaffiliated,
-        );
-    }
-
-    /// What the rank tags read: the pilot's active ranks, the recent
-    /// rank, and `STR#` 2002 #341 from the session's string lists as the
-    /// fallback, [`NO_RANK`] when the lists lack it (none are wired by
-    /// default).
-    pub(super) fn rank_names(&self) -> RankNames<'_> {
-        RankNames {
-            records: &self.ranks,
-            active: &self.pilot.ranks,
-            recent: self.recent_rank,
-            fallback: self
-                .nth_string(MISC_STRINGS, NO_RANK_STRING)
-                .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
-        }
+        self.ship.blessing(&self.pilot, &self.statics, &self.setup)
     }
 
     /// The pilot info's ranks line and the salaries' share of the daily
@@ -241,15 +176,16 @@ impl Session {
     #[must_use]
     pub fn pilot_info_ranks(&self) -> PilotInfoRanks {
         let and = self
+            .setup
             .nth_string(MISC_STRINGS, AND_STRING)
             .unwrap_or_default();
         rank::pilot_info(
-            &self.ranks,
+            &self.statics.ranks,
             &self.pilot.ranks,
             self.pilot.cash,
-            self.rules.source_for(RuleKey::SalaryCap),
+            self.setup.rules.source_for(RuleKey::SalaryCap),
             &and,
-            crate::player_info::special_groups(&self.outfits, &self.pilot.outfits).len(),
+            crate::player_info::special_groups(&self.statics.outfits, &self.pilot.outfits).len(),
         )
     }
 
@@ -257,11 +193,132 @@ impl Session {
     /// [`rank::pay_salaries`]), capped by the session's `salary_cap`
     /// rule. A change to the cash makes a save due.
     pub(super) fn ranks_day(&mut self) {
-        let cap = self.rules.source_for(RuleKey::SalaryCap);
+        let cap = self.setup.rules.source_for(RuleKey::SalaryCap);
         let before = self.pilot.cash;
-        rank::pay_salaries(&self.ranks, &self.pilot.ranks, &mut self.pilot.cash, cap);
+        rank::pay_salaries(
+            &self.statics.ranks,
+            &self.pilot.ranks,
+            &mut self.pilot.cash,
+            cap,
+        );
         if self.pilot.cash != before {
-            self.save_due = true;
+            self.out.save_due = true;
+        }
+    }
+}
+
+impl PlayerShip {
+    /// The ranks' blessing table (see [`rank::blessing`]), the ranks
+    /// reaching governments as the session's `rank_govt_reach` rule reads.
+    /// By the engine's reading of `blessing_refresh` it is built from the
+    /// ranks the last reset took; by the other, from the active ranks
+    /// now.
+    #[must_use]
+    pub(super) fn blessing(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Blessing {
+        let reach = setup.rules.source_for(RuleKey::RankGovtReach);
+        let active = match setup.rules.source_for(RuleKey::BlessingRefresh) {
+            RuleSource::Engine => &self.latches.blessing_ranks,
+            RuleSource::Bible => &pilot.ranks,
+        };
+        rank::blessing(&statics.ranks, active, &statics.govts, reach)
+    }
+}
+
+impl Chart {
+    /// The docked stellar's government now: none in flight or at an
+    /// independent stellar.
+    fn docked_govt(&self, landed: Option<StellarId>) -> Option<GovtId> {
+        let landed = landed?;
+        self.sites.iter().find(|site| site.id == landed)?.govt
+    }
+}
+
+impl MissionRun {
+    /// The pilot's ranks and the recent rank, as `K` and `L` change them.
+    fn held_ranks<'a>(&'a mut self, pilot: &'a mut Pilot) -> Held<'a> {
+        Held {
+            active: &mut pilot.ranks,
+            recent: &mut self.recent_rank,
+        }
+    }
+
+    /// `K`: activates rank `rank` (see [`rank::activate`]), unaffiliated
+    /// ranks grouped by the session's `rank_unaffiliated_group` rule.
+    pub(super) fn activate_rank(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        rank: RankId,
+    ) {
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let records = std::rc::Rc::clone(&statics.ranks);
+        rank::activate(&records, self.held_ranks(pilot), rank, unaffiliated);
+    }
+
+    /// `L`: deactivates rank `rank` (see [`rank::deactivate`]),
+    /// unaffiliated ranks grouped by the session's
+    /// `rank_unaffiliated_group` rule.
+    pub(super) fn deactivate_rank(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        rank: RankId,
+    ) {
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let records = std::rc::Rc::clone(&statics.ranks);
+        rank::deactivate(&records, self.held_ranks(pilot), rank, unaffiliated);
+    }
+
+    /// `_SlapWithPenalty`'s rank pass (see [`rank::lose_to_crime`]) for
+    /// `crime` the player commits against a ship of `victim`, reaching
+    /// the ranks by the session's `rank_crime_reach` rule and sweeping
+    /// them by its `rank_unaffiliated_group` rule. The callers skip a
+    /// mission's special ship, as the original passes its mark
+    /// (@0x9c10). No save is due, as a conviction makes none in flight,
+    /// and no sound plays.
+    pub(super) fn lose_ranks_to(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        crime: Crime,
+        victim: Option<GovtId>,
+    ) {
+        let reach = setup.rules.source_for(RuleKey::RankCrimeReach);
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        rank::lose_to_crime(
+            &statics.ranks,
+            Held {
+                active: &mut pilot.ranks,
+                recent: &mut self.recent_rank,
+            },
+            crime,
+            victim,
+            &statics.govts,
+            reach,
+            unaffiliated,
+        );
+    }
+
+    /// What the rank tags read: the pilot's active ranks, the recent
+    /// rank, and `STR#` 2002 #341 from the session's string lists as the
+    /// fallback, [`NO_RANK`] when the lists lack it (none are wired by
+    /// default).
+    pub(super) fn rank_names<'a>(
+        &self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        setup: &Setup,
+    ) -> RankNames<'a> {
+        RankNames {
+            records: &statics.ranks,
+            active: &pilot.ranks,
+            recent: self.recent_rank,
+            fallback: setup
+                .nth_string(MISC_STRINGS, NO_RANK_STRING)
+                .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
         }
     }
 }
@@ -322,7 +379,7 @@ pub(super) mod tests {
         session.run_ops(
             &set("K200 L200 K201"),
             &mut Scripted::default(),
-            &mut |session, _| seen.push((active(session), session.recent_rank)),
+            &mut |session, _| seen.push((active(session), session.run.recent_rank)),
         );
         assert_eq!(
             seen,
@@ -424,11 +481,20 @@ pub(super) mod tests {
             contribute: 0x0100_0000_0004,
             ..rank(200)
         }]);
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0
+        );
         session.run_set(&set("K200"), &mut Scripted::default());
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0x0100_0000_0004);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0x0100_0000_0004
+        );
         session.run_set(&set("L200"), &mut Scripted::default());
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0
+        );
     }
 
     #[test]
@@ -671,9 +737,9 @@ pub(super) mod tests {
             .take_off(catalog, &mut NeverFires)
             .expect("takes off");
         let _ = session.settle_script(catalog, &mut NeverFires);
-        let site = session.sites[0];
-        session.player.position = site.position;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        let site = session.chart.sites[0];
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session).expect("lands again");
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
@@ -760,7 +826,7 @@ pub(super) mod tests {
         let pilot = save::decode(&save::encode(&pilot)).expect("loads");
         let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
         assert_eq!(
-            session.port_ranks,
+            session.port.port_ranks,
             super::PortRanks::default(),
             "no spaceport opens on resuming"
         );
@@ -907,8 +973,8 @@ pub(super) mod tests {
             let mut session = landed_holding(&catalog, rules, &[200]);
             assert_eq!(prices(&mut session), ONE_RANK, "{timing:?}");
             // Government 130 is no ally of the rank's government 128.
-            session.sites[0].govt = Some(crate::catalog::GovtId(130));
-            session.listed[0].govt = Some(crate::catalog::GovtId(130));
+            session.chart.sites[0].govt = Some(crate::catalog::GovtId(130));
+            session.chart.listed[0].govt = Some(crate::catalog::GovtId(130));
             assert_eq!(prices(&mut session), while_landed, "{timing:?}");
             land_again(&mut session, &catalog);
             assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");
@@ -1017,7 +1083,13 @@ pub(super) mod tests {
             let mut session = Session::fly(&catalog, pilot)
                 .expect("flies")
                 .with_rules(reading(RuleKey::BlessingRefresh, source));
-            session.lose_ranks_to(crate::legal::Crime::Board, Some(GovtId(140)));
+            session.run.lose_ranks_to(
+                &mut session.pilot,
+                &session.statics,
+                &session.setup,
+                crate::legal::Crime::Board,
+                Some(GovtId(140)),
+            );
             assert_eq!(active(&session), [] as [i16; 0], "{source:?}");
             assert_eq!(blessed(&session), after_crime, "{source:?}");
             session.jettison_cargo(false, &mut NeverFires);
@@ -1201,7 +1273,7 @@ pub(super) mod tests {
                 assert_eq!(take(session, Take::Capture, &[43, 0]).0, Taken::Tripped);
             }),
             ("a capture straight into the fleet", |session| {
-                for record in &mut session.ships {
+                for record in &mut session.statics_mut().ships {
                     if record.id == ShipId(128) {
                         record.crew = 0;
                     }
@@ -1306,7 +1378,7 @@ pub(super) mod tests {
             let rules = reading(RuleKey::BlessingLanding, source);
             for (ranks, greets) in [(&[][..], false), (&[200][..], true)] {
                 let mut session = holding(&catalog, rules, ranks);
-                session.dock = Some(crate::clearance::DockRequest {
+                session.port.dock = Some(crate::clearance::DockRequest {
                     stellar: crate::catalog::StellarId(128),
                     permission: crate::clearance::REQUESTED_NEAR,
                 });
@@ -1394,10 +1466,10 @@ pub(super) mod tests {
         }];
         let mut session = holding(&catalog, Rulebook::default(), &[]);
         let at = |session: &mut Session, stellar: usize| {
-            let site = session.sites[stellar];
-            session.player.position = site.position;
-            session.player.velocity = crate::geometry::Vec2::ZERO;
-            session.nav = crate::navigation::NavMode::Off;
+            let site = session.chart.sites[stellar];
+            session.ship.player.position = site.position;
+            session.ship.player.velocity = crate::geometry::Vec2::ZERO;
+            session.chart.nav = crate::navigation::NavMode::Off;
         };
         at(&mut session, 1);
         land_now(&mut session).expect("lands at 129");

@@ -5,7 +5,7 @@
 //! becomes of a person captured. All addresses are in `EV Nova.app`'s
 //! `EV Nova` (i386).
 //!
-//! **The escorts counted** ([`Session::led_escorts`]). The original counts
+//! **The escorts counted** ([`Space::led_escorts`]). The original counts
 //! the ships in system slots 1-63 that are active, led by the player
 //! (+0x9a == 0), of AI type 6 and of no mission mark (+0xc8d2 == -1):
 //! a launched fighter is AI type 5 (`_LaunchFighter` @0x3d771) and a
@@ -61,13 +61,13 @@
 //! alive, keeps its grudge and can appear again; by the other it is gone,
 //! as Use As My Ship has it.
 
-use super::Session;
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{ShipId, ShipRecord, outfit_mods};
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::market::Good;
-use crate::pilot::Escort;
+use crate::pilot::{Escort, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::stats::MORE_FUEL;
 use crate::stats::ShipStats;
@@ -105,47 +105,13 @@ impl CaptureFuel {
 }
 
 impl Session {
-    /// The ship class of each escort of the fleet the original counts as
-    /// led by the player (see the module docs): not a fighter out, and
-    /// with its NPC in the system and unmarked, or not placed yet since
-    /// the fleet last entered a system.
-    pub(super) fn led_escorts(&self) -> Vec<ShipId> {
-        self.pilot
-            .escorts
-            .iter()
-            .enumerate()
-            .filter(|(_, escort)| !escort.carried)
-            .filter_map(|(index, escort)| match self.fleet.get(index) {
-                None => Some(escort.ship),
-                Some(placed) => placed
-                    .and_then(|id| self.npc(id))
-                    .filter(|npc| npc.mission.is_none())
-                    .map(|npc| npc.ship),
-            })
-            .collect()
-    }
-
     /// Whether the fleet has room for one more escort, as
     /// `_CanHireEscorts` (@0x5795-0x57e4) counts it: fewer than
-    /// [`MAX_ESCORTS`] led by the player ([`Session::led_escorts`]). A
+    /// [`MAX_ESCORTS`] led by the player ([`Space::led_escorts`]). A
     /// capture, a hire in the bar and a person's join by hail all read it.
     #[must_use]
     pub fn can_hire_escorts(&self) -> bool {
-        self.led_escorts().len() < MAX_ESCORTS
-    }
-
-    /// The capacities "Use As My Ship" taking a ship of `record` can draw
-    /// its fuel below, read before the swap (see the module docs).
-    pub(super) fn capture_fuel(&self, record: &ShipRecord) -> CaptureFuel {
-        let more: i64 = outfit_mods(&self.pilot.outfits, &self.outfits)
-            .into_iter()
-            .filter(|outfit| outfit.mod_type == MORE_FUEL)
-            .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
-            .sum();
-        CaptureFuel {
-            old: self.stats.fuel as i64,
-            captured: (i64::from(record.fields.fuel) + more).clamp(0, FUEL_CAPACITY_MOST),
-        }
+        self.space.can_hire_escorts(&self.pilot)
     }
 
     /// The player's old ship, escort `index`, comes into the system after
@@ -162,35 +128,11 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let id = self.place_escort(index, chance)?;
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.state = at;
             npc.cargo = hold;
         }
         Some(id)
-    }
-
-    /// The record of the player's old ship as it joins the fleet on "Use
-    /// As My Ship": of the player's class, stock and full as an NPC's
-    /// stats are ([`ShipStats::for_npc`], by the engine its class's
-    /// alone), but for its fuel, its class's bare `Fuel`, as an NPC's
-    /// capacity is (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module
-    /// docs).
-    pub(super) fn old_ship_escort(&self) -> Escort {
-        let stock = ShipStats::for_npc(
-            self.fields,
-            &outfit_mods(&self.defaults, &self.outfits),
-            self.npc_items(),
-        );
-        let mut reserves = stock.full();
-        reserves.fuel.now = f32::from(self.fields.fuel.max(0));
-        Escort {
-            ship: self.pilot.ship,
-            reserves,
-            order: None,
-            carried: false,
-            wage: None,
-            person: None,
-        }
     }
 
     /// The player's commodities 0-5 leave for the old ship's hold on "Use
@@ -199,7 +141,7 @@ impl Session {
     /// hold they make, empty by the other reading.
     pub(super) fn commodities_for_old_ship(&mut self) -> NpcHold {
         let mut hold = NpcHold::default();
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
             self.pilot.cargo.retain(|good, tons| match good {
                 Good::Commodity(commodity) if usize::from(*commodity) < NPC_COMMODITIES => {
                     hold.add(*commodity, *tons);
@@ -215,17 +157,100 @@ impl Session {
     /// of its own, by the engine reading of [`RuleKey::CaptureCargo`]
     /// (@0x41760-0x41779); by the other the captured hold is lost.
     pub(super) fn take_captured_commodities(&mut self, hold: &NpcHold) {
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
             for (good, tons) in hold.held() {
                 self.pilot.cargo.insert(good, tons);
             }
         }
     }
+}
 
+impl Setup {
     /// Whether a person captured as an escort is gone for good, as
     /// [`RuleKey::CapturedPerson`] reads: by the engine it lives on.
     pub(super) fn escort_capture_loses_person(&self) -> bool {
         self.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
+    /// The capacities "Use As My Ship" taking a ship of `record` can draw
+    /// its fuel below, read before the swap (see the module docs).
+    pub(super) fn capture_fuel(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        record: &ShipRecord,
+    ) -> CaptureFuel {
+        let more: i64 = outfit_mods(&pilot.outfits, &statics.outfits)
+            .into_iter()
+            .filter(|outfit| outfit.mod_type == MORE_FUEL)
+            .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
+            .sum();
+        CaptureFuel {
+            old: self.fit.stats.fuel as i64,
+            captured: (i64::from(record.fields.fuel) + more).clamp(0, FUEL_CAPACITY_MOST),
+        }
+    }
+
+    /// The record of the player's old ship as it joins the fleet on "Use
+    /// As My Ship": of the player's class, stock and full as an NPC's
+    /// stats are ([`ShipStats::for_npc`], by the engine its class's
+    /// alone), but for its fuel, its class's bare `Fuel`, as an NPC's
+    /// capacity is (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module
+    /// docs).
+    pub(super) fn old_ship_escort(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> Escort {
+        let stock = ShipStats::for_npc(
+            self.fit.fields,
+            &outfit_mods(&self.fit.defaults, &statics.outfits),
+            setup.npc_items(),
+        );
+        let mut reserves = stock.full();
+        reserves.fuel.now = f32::from(self.fit.fields.fuel.max(0));
+        Escort {
+            ship: pilot.ship,
+            reserves,
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }
+    }
+}
+
+impl Space {
+    /// The ship class of each escort of the fleet the original counts as
+    /// led by the player (see the module docs): not a fighter out, and
+    /// with its NPC in the system and unmarked, or not placed yet since
+    /// the fleet last entered a system.
+    pub(super) fn led_escorts(&self, pilot: &Pilot) -> Vec<ShipId> {
+        pilot
+            .escorts
+            .iter()
+            .enumerate()
+            .filter(|(_, escort)| !escort.carried)
+            .filter_map(|(index, escort)| match self.escorts.fleet.get(index) {
+                None => Some(escort.ship),
+                Some(placed) => placed
+                    .and_then(|id| self.npc(id))
+                    .filter(|npc| npc.mission.is_none())
+                    .map(|npc| npc.ship),
+            })
+            .collect()
+    }
+
+    /// Whether the fleet has room for one more escort, as
+    /// `_CanHireEscorts` (@0x5795-0x57e4) counts it: fewer than
+    /// [`MAX_ESCORTS`] led by the player ([`Space::led_escorts`]). A
+    /// capture, a hire in the bar and a person's join by hail all read it.
+    #[must_use]
+    fn can_hire_escorts(&self, pilot: &Pilot) -> bool {
+        self.led_escorts(pilot).len() < MAX_ESCORTS
     }
 }
 
@@ -257,7 +282,7 @@ mod tests {
     /// `unplaced` names its index.
     fn with_fleet(session: &mut Session, escorts: Vec<Escort>, unplaced: &[usize]) {
         session.pilot.escorts = escorts;
-        session.fleet = (0..session.pilot.escorts.len())
+        session.space.escorts.fleet = (0..session.pilot.escorts.len())
             .map(|index| {
                 if unplaced.contains(&index) {
                     None
@@ -296,7 +321,7 @@ mod tests {
         let mut session = alongside(&catalog);
         session.pilot.escorts = vec![escort(130, false), escort(130, true), escort(131, false)];
         assert_eq!(
-            session.led_escorts(),
+            session.space.led_escorts(&session.pilot),
             [ShipId(130), ShipId(131)],
             "not placed yet, the fighter out left out"
         );
@@ -305,21 +330,33 @@ mod tests {
             vec![escort(130, false), escort(130, true), escort(131, false)],
             &[],
         );
-        assert_eq!(session.led_escorts(), [ShipId(130), ShipId(131)], "placed");
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [ShipId(130), ShipId(131)],
+            "placed"
+        );
         with_fleet(
             &mut session,
             vec![escort(130, false), escort(131, false)],
             &[0],
         );
-        assert_eq!(session.led_escorts(), [ShipId(131)], "no NPC in the system");
-        let id = session.fleet[1].expect("placed");
-        session.npc_mut(id).expect("there").mission = Some(MissionMark {
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [ShipId(131)],
+            "no NPC in the system"
+        );
+        let id = session.space.escorts.fleet[1].expect("placed");
+        session.space.npc_mut(id).expect("there").mission = Some(MissionMark {
             slot: 0,
             behav: crate::traffic::ShipBehav::Own,
             formation: None,
             order: None,
         });
-        assert_eq!(session.led_escorts(), [], "a mission's mark");
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [],
+            "a mission's mark"
+        );
     }
 
     #[test]
@@ -415,34 +452,51 @@ mod tests {
         let mut session = alongside(&catalog);
         session.pilot.outfits.insert(OutfitId(330), 2);
         let record = session
+            .statics
             .ship_record(ShipId(129))
             .cloned()
             .expect("the trader");
         assert_eq!(
-            session.capture_fuel(&record).captured,
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &record)
+                .captured,
             i64::from(record.fields.fuel) + 200
         );
         session.pilot.outfits.insert(OutfitId(330), 400);
-        assert_eq!(session.capture_fuel(&record).captured, FUEL_CAPACITY_MOST);
+        assert_eq!(
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &record)
+                .captured,
+            FUEL_CAPACITY_MOST
+        );
         let mut empty = record.clone();
         empty.fields.fuel = -500;
         session.pilot.outfits.insert(OutfitId(330), 2);
-        assert_eq!(session.capture_fuel(&empty).captured, 0, "held at none");
+        assert_eq!(
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &empty)
+                .captured,
+            0,
+            "held at none"
+        );
     }
 
     #[test]
     fn the_flight_tick_and_an_energy_take_cache_the_capacity_and_a_reset_clears_it() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        assert!(!session.fuel_cap_cached);
+        assert!(!session.ship.fuel_cap_cached);
         session.tick(crate::flight::Controls::default());
-        assert!(session.fuel_cap_cached, "the flight tick");
+        assert!(session.ship.fuel_cap_cached, "the flight tick");
         session.reset_precalced();
-        assert!(!session.fuel_cap_cached, "a reset");
+        assert!(!session.ship.fuel_cap_cached, "a reset");
         let mut session = aboard(&catalog);
         session.reset_precalced();
         take(&mut session, Take::Energy, &[]);
-        assert!(session.fuel_cap_cached, "an energy take");
+        assert!(session.ship.fuel_cap_cached, "an energy take");
     }
 
     /// [`boardable`] with a fuel tank (`oütf` 330, 50 more fuel) and the
@@ -475,13 +529,19 @@ mod tests {
                 let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, order);
                 let mut session = alongside(&catalog).with_rules(rules);
                 session.pilot.outfits.insert(OutfitId(330), 1);
-                session.refit(true, session.script_reserves());
+                session.ship.refit(
+                    &mut session.pilot,
+                    &session.statics,
+                    &session.setup,
+                    true,
+                    session.setup.script_reserves(),
+                );
                 board_by(&mut session, &NovaLaw::default()).expect("boards");
                 assert_eq!(
                     take(&mut session, Take::Capture, &[43, 1]).0,
                     Taken::Captured
                 );
-                session.fuel_cap_cached = cached;
+                session.ship.fuel_cap_cached = cached;
                 let mut chance = Draws::of(&[7]);
                 assert_eq!(
                     session.assign(Assignment::MyShip, &mut chance),
@@ -501,9 +561,9 @@ mod tests {
             .push(crate::testkit::outfit(330, &[(MORE_FUEL, 50)]));
         let mut session = crate::session::tests::ammo_session(&catalog);
         session.pilot.outfits.insert(OutfitId(330), 1);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         take(&mut session, Take::Ammo, &[]);
-        assert!(!session.fuel_cap_cached);
+        assert!(!session.ship.fuel_cap_cached);
         assert_eq!(
             take(&mut session, Take::Capture, &[99, 43, 1]).0,
             Taken::Captured
@@ -520,21 +580,28 @@ mod tests {
         // The ammunition button resets (@0x93cc9) before it looks for
         // rounds (@0x93cb8 refuses).
         let mut session = aboard(&catalog);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         crate::session::precalced::tests::convicted(&mut session);
         assert_eq!(take(&mut session, Take::Ammo, &[]).0, Taken::Missed);
-        assert!(!session.fuel_cap_cached, "the ammunition reset");
-        assert_eq!(session.scan_latches, Latches::ARMED, "the ammunition reset");
+        assert!(!session.ship.fuel_cap_cached, "the ammunition reset");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "the ammunition reset"
+        );
         // The energy refusal (@0x94231) only beeps.
         let mut session = aboard(&catalog);
         take(&mut session, Take::Energy, &[]);
         take(&mut session, Take::Miss, &[99]);
-        session.fuel_cap_cached = true;
+        session.ship.fuel_cap_cached = true;
         crate::session::precalced::tests::convicted(&mut session);
-        let latches = session.scan_latches;
+        let latches = session.ship.latches.scan_latches;
         assert_eq!(take(&mut session, Take::Energy, &[]).0, Taken::Missed);
-        assert!(session.fuel_cap_cached, "no energy reset");
-        assert_eq!(session.scan_latches, latches, "no energy reset");
+        assert!(session.ship.fuel_cap_cached, "no energy reset");
+        assert_eq!(
+            session.ship.latches.scan_latches, latches,
+            "no energy reset"
+        );
     }
 
     // Use As My Ship.
@@ -558,7 +625,7 @@ mod tests {
             .pilot
             .missions
             .put(0, crate::testkit::carrying(140, 2));
-        session.traffic.npcs_mut()[0].cargo =
+        session.space.traffic.npcs_mut()[0].cargo =
             NpcHold::of(Some((crate::market::Good::Commodity(2), 7)));
         session
     }
@@ -582,8 +649,8 @@ mod tests {
             session.pilot().missions().get(0).map(|m| m.cargo_tons),
             Some(2)
         );
-        let old = session.fleet[0]
-            .and_then(|id| session.npc(id))
+        let old = session.space.escorts.fleet[0]
+            .and_then(|id| session.space.npc(id))
             .expect("placed");
         assert_eq!(
             old.cargo.held().collect::<Vec<_>>(),
@@ -605,8 +672,8 @@ mod tests {
             [(Good::Commodity(0), 4), (Good::Commodity(3), 6), (JUNK, 5)],
             "the other reading keeps them, and the captured hold is lost"
         );
-        let old = session.fleet[0]
-            .and_then(|id| session.npc(id))
+        let old = session.space.escorts.fleet[0]
+            .and_then(|id| session.space.npc(id))
             .expect("placed");
         assert_eq!(old.cargo, NpcHold::default());
     }
@@ -630,10 +697,13 @@ mod tests {
             let session = alongside(&catalog).with_rules(
                 crate::rulebook::Rulebook::default().with_override(RuleKey::NpcDefaultItems, items),
             );
-            let armor = f32::from(session.fields.armor) + more;
-            let fuel = f32::from(session.fields.fuel) + more;
-            assert_eq!(session.fields.fuel, 300);
-            let record = session.old_ship_escort();
+            let armor = f32::from(session.ship.fit.fields.armor) + more;
+            let fuel = f32::from(session.ship.fit.fields.fuel) + more;
+            assert_eq!(session.ship.fit.fields.fuel, 300);
+            let record =
+                session
+                    .ship
+                    .old_ship_escort(&session.pilot, &session.statics, &session.setup);
             assert_eq!(
                 (record.reserves.armor.max, record.reserves.fuel.max),
                 (armor, fuel),
@@ -664,8 +734,8 @@ mod tests {
             Some(Assigned::MyShip)
         );
         assert_eq!(chance.times_asked(75), 1);
-        let id = session.fleet[0].expect("placed");
-        let old = session.npc(id).expect("in the system");
+        let id = session.space.escorts.fleet[0].expect("placed");
+        let old = session.space.npc(id).expect("in the system");
         assert_eq!(
             (old.skill, old.skill_mult),
             ((f64::from(74 - 37 + 100) * 0.01) as f32, 1.0)
@@ -683,23 +753,23 @@ mod tests {
             .push(crate::testkit::outfit(330, &[(MORE_FUEL, 50)]));
         catalog.defaults = vec![(ShipId(128), vec![(OutfitId(330), 1)])];
         let mut session = alongside(&catalog);
-        session.player.velocity = Vec2::new(0.25, -0.125);
-        session.player.heading = 90.0;
-        session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.25, -0.125);
-        session.traffic.npcs_mut()[0].state.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(0.25, -0.125);
+        session.ship.player.heading = 90.0;
+        session.space.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.25, -0.125);
+        session.space.traffic.npcs_mut()[0].state.heading = 90.0;
         board_by(&mut session, &NovaLaw::default()).expect("boards");
         assert_eq!(
             take(&mut session, Take::Capture, &[43, 1]).0,
             Taken::Captured
         );
-        session.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
-        let left = session.player;
+        session.space.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
+        let left = session.ship.player;
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
         );
-        let id = session.fleet[0].expect("placed");
-        let old = session.npc(id).expect("in the system");
+        let id = session.space.escorts.fleet[0].expect("placed");
+        let old = session.space.npc(id).expect("in the system");
         assert_eq!(old.state, left, "the player's place, velocity and heading");
         assert_eq!(
             (old.reserves.fuel.now, old.reserves.fuel.max),
@@ -712,17 +782,17 @@ mod tests {
             "its record lined up"
         );
         let slot = |session: &Session| {
-            let old = session.npc(id).expect("in the system");
+            let old = session.space.npc(id).expect("in the system");
             let duty = old.escort.expect("an escort");
             crate::escort::slot_position(
-                &session.player,
+                &session.ship.player,
                 duty.formation.slot,
                 duty.formation.ships,
                 duty.formation.spacing,
             )
         };
         let gap = |session: &Session| {
-            (session.npc(id).expect("there").state.position - slot(session)).length()
+            (session.space.npc(id).expect("there").state.position - slot(session)).length()
         };
         let before = gap(&session);
         assert!(before > 50.0, "not on its slot: {before}");
@@ -749,9 +819,9 @@ mod tests {
             (NavMode::Off, NavMode::Off),
         ] {
             let mut session = crate::session::tests::captured(&catalog);
-            session.set_nav(nav);
+            session.chart.set_nav(nav);
             session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
-            assert_eq!(session.nav, after, "the mode kept (@0x4172e)");
+            assert_eq!(session.chart.nav, after, "the mode kept (@0x4172e)");
             assert_eq!(session.target(), None, "@0x41736");
         }
     }

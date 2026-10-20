@@ -62,12 +62,13 @@
 //! before the player's steering, as the original does; the separate parts
 //! run it after [`Session::tick`]'s steering in the same step.
 
-use super::Session;
+use super::{PlayerShip, Session, Statics};
 use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
+use crate::pilot::Pilot;
 use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
 use crate::sound::{SimSound, WARP_UP_HALTS};
 
@@ -77,12 +78,7 @@ impl Session {
     /// ([`death_descs`](crate::sabotage::death_descs)).
     #[must_use]
     pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        crate::sabotage::death_descs(self.sabotage.flag(), &self.pilot.outfits, &self.outfits)
-    }
-
-    /// The sabotage clock's part of the refresh (see the module docs).
-    pub(super) fn refresh_sabotage(&mut self) {
-        self.sabotage.refresh(&self.pilot.outfits, &self.outfits);
+        self.ship.sabotage_death_descs(&self.pilot, &self.statics)
     }
 
     /// A tick of the sabotage clock, and what goes off with it, drawing on
@@ -92,13 +88,13 @@ impl Session {
             return;
         }
         let dying = matches!(
-            self.condition,
+            self.ship.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        let Some(flag) = self.sabotage.tick(dying, chance) else {
+        let Some(flag) = self.ship.latches.sabotage.tick(dying, chance) else {
             return;
         };
-        self.sounds.push(SimSound::OnboardExplosion);
+        self.out.sounds.push(SimSound::OnboardExplosion);
         match flag {
             Sabotage::Kill => self.sabotage_kill(),
             Sabotage::Bomb => self.sabotage_bombs(rules.disable, chance),
@@ -110,17 +106,22 @@ impl Session {
     /// module docs' **Bomb outfits**), `rule` saying when the player is
     /// disabled, each bomb's damage drawn on `chance`.
     fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
-        for bomb in bombs(&self.pilot.outfits, &self.outfits) {
-            self.say(SimMessage::BombExploded {
-                outfit: bomb.outfit,
-                one: bomb.one,
-            });
+        for bomb in bombs(&self.pilot.outfits, &self.statics.outfits) {
+            self.space.say(
+                &mut self.out,
+                SimMessage::BombExploded {
+                    outfit: bomb.outfit,
+                    one: bomb.one,
+                },
+            );
             if let Some(explosion) = bomb.explosion {
-                self.combat.explode(self.player.position, explosion);
+                self.space
+                    .combat
+                    .explode(self.ship.player.position, explosion);
             }
             self.pilot.outfits.remove(&bomb.outfit);
             let armor = self.pilot.reserves.armor;
-            let was_disabled = rule.disabled(armor, &self.hull);
+            let was_disabled = rule.disabled(armor, &self.ship.fit.hull);
             let hit = Hit {
                 mass: bomb_damage(armor.max, chance),
                 energy: 0.0,
@@ -131,7 +132,7 @@ impl Session {
             take(
                 &mut self.pilot.reserves,
                 hit,
-                &self.hull,
+                &self.ship.fit.hull,
                 rule,
                 was_disabled,
             );
@@ -145,15 +146,39 @@ impl Session {
         let reserves = &mut self.pilot.reserves;
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;
-        self.jump = None;
-        let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
-        self.halt_sounds(&WARP_UP_HALTS);
+        self.mode.end_jump();
+        let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
-        self.say(if outfit.is_none() && self.leet {
-            SimMessage::BombSetUp
-        } else {
-            SimMessage::Sabotaged { outfit }
-        });
+        self.space.say(
+            &mut self.out,
+            if outfit.is_none() && self.setup.leet {
+                SimMessage::BombSetUp
+            } else {
+                SimMessage::Sabotaged { outfit }
+            },
+        );
+    }
+}
+
+impl PlayerShip {
+    /// The `dësc` IDs the player sees as it dies, from the outfits it
+    /// owns, gated on the flag the last refresh cached
+    /// ([`death_descs`](crate::sabotage::death_descs)).
+    #[must_use]
+    fn sabotage_death_descs(&self, pilot: &Pilot, statics: &Statics) -> Vec<i16> {
+        crate::sabotage::death_descs(
+            self.latches.sabotage.flag(),
+            &pilot.outfits,
+            &statics.outfits,
+        )
+    }
+
+    /// The sabotage clock's part of the refresh (see the module docs).
+    pub(super) fn refresh_sabotage(&mut self, pilot: &Pilot, statics: &Statics) {
+        self.latches
+            .sabotage
+            .refresh(&pilot.outfits, &statics.outfits);
     }
 }
 
@@ -234,13 +259,17 @@ mod tests {
     fn a_flown_pilot_with_a_kill_outfit_counts_from_its_seed() {
         let catalog = sabotaged();
         let mut session = flown(&catalog, &[(KILL, 1)]);
-        assert_eq!(session.sabotage.flag(), Sabotage::Kill, "@0x19ffb");
+        assert_eq!(
+            session.ship.latches.sabotage.flag(),
+            Sabotage::Kill,
+            "@0x19ffb"
+        );
         let mut draws = Draws::of(&[37]);
         session.tick_combat(Rules::default(), &mut draws);
         assert_eq!(draws.asked.first(), Some(&100));
-        assert_eq!(session.sabotage.counter(), 38.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 38.0);
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 39.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 39.0);
     }
 
     #[test]
@@ -249,12 +278,12 @@ mod tests {
         let mut session = flown(&catalog, &[]);
         session.pilot.outfits.insert(OutfitId(BOMB), 1);
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.flag(), Sabotage::None);
-        assert_eq!(session.sabotage.counter(), 0.0);
+        assert_eq!(session.ship.latches.sabotage.flag(), Sabotage::None);
+        assert_eq!(session.ship.latches.sabotage.counter(), 0.0);
         session.reset_precalced();
         fight(&mut session, &[5]);
-        assert_eq!(session.sabotage.flag(), Sabotage::Bomb);
-        assert_eq!(session.sabotage.counter(), 6.0);
+        assert_eq!(session.ship.latches.sabotage.flag(), Sabotage::Bomb);
+        assert_eq!(session.ship.latches.sabotage.counter(), 6.0);
     }
 
     #[test]
@@ -263,11 +292,11 @@ mod tests {
         let mut session = flown(&catalog, &[(KILL, 1)]);
         fight(&mut session, &[50]);
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 52.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 52.0);
         session.jettison_cargo(false, &mut Draws::of(&[]));
-        assert_eq!(session.sabotage.counter(), 0.0, "@0x3e3b5");
+        assert_eq!(session.ship.latches.sabotage.counter(), 0.0, "@0x3e3b5");
         fight(&mut session, &[10]);
-        assert_eq!(session.sabotage.counter(), 11.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 11.0);
     }
 
     #[test]
@@ -280,10 +309,14 @@ mod tests {
             .expect("takes off");
         fight(&mut session, &[10]);
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 12.0, "the take-off's reset");
+        assert_eq!(
+            session.ship.latches.sabotage.counter(),
+            12.0,
+            "the take-off's reset"
+        );
         let _ = session.settle_script(&catalog, &mut Draws::of(&[]));
         assert_eq!(
-            session.sabotage.counter(),
+            session.ship.latches.sabotage.counter(),
             12.0,
             "no script ran, so no reset (see the `precalced` module)"
         );
@@ -296,10 +329,10 @@ mod tests {
         fight(&mut session, &[50]);
         session.pod = Some(100);
         let sounds = fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 51.0);
-        session.sabotage.set_counter(300.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 51.0);
+        session.ship.latches.sabotage.set_counter(300.0);
         let sounds = [sounds, fight(&mut session, &[])].concat();
-        assert_eq!(session.sabotage.counter(), 300.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), 300.0);
         assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
     }
 
@@ -308,9 +341,13 @@ mod tests {
         let catalog = sabotaged();
         let mut session = flown(&catalog, &[(KILL, 1)]);
         fight(&mut session, &[50]);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         fight(&mut session, &[]);
-        assert_eq!(session.sabotage.counter(), 52.0, "disabled counts");
+        assert_eq!(
+            session.ship.latches.sabotage.counter(),
+            52.0,
+            "disabled counts"
+        );
         for condition in [
             Condition::Dying {
                 ticks_left: 50,
@@ -318,9 +355,13 @@ mod tests {
             },
             Condition::Destroyed,
         ] {
-            session.condition = condition;
+            session.ship.condition = condition;
             fight(&mut session, &[]);
-            assert_eq!(session.sabotage.counter(), 52.0, "{condition:?}");
+            assert_eq!(
+                session.ship.latches.sabotage.counter(),
+                52.0,
+                "{condition:?}"
+            );
         }
     }
 
@@ -330,7 +371,7 @@ mod tests {
             let catalog = sabotaged();
             let mut session = flown(&catalog, &[(id, 1)]);
             fight(&mut session, &[0]);
-            session.sabotage.set_counter(299.0);
+            session.ship.latches.sabotage.set_counter(299.0);
             let sounds = fight(&mut session, &[]);
             assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
             let sounds = fight(&mut session, &[]);
@@ -343,7 +384,7 @@ mod tests {
     fn lit(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
         let mut session = flown(catalog, outfits);
         fight(&mut session, &[0]);
-        session.sabotage.set_counter(FUSE);
+        session.ship.latches.sabotage.set_counter(FUSE);
         session.take_messages();
         session.take_combat_events();
         session
@@ -355,9 +396,12 @@ mod tests {
         let mut session = lit(&catalog, &[(KILL, 1)]);
         let sounds = fight(&mut session, &[]);
         assert!(
-            matches!(session.condition, Condition::Dying { starting: true, .. }),
+            matches!(
+                session.ship.condition,
+                Condition::Dying { starting: true, .. }
+            ),
             "{:?}",
-            session.condition
+            session.ship.condition
         );
         let reserves = session.pilot.reserves;
         assert_eq!((reserves.shield.now, reserves.armor.now), (-1.0, -1.0));
@@ -379,11 +423,11 @@ mod tests {
         fly_out(&mut session);
         session.begin_jump().expect("jumps");
         assert!(matches!(
-            session.jump,
+            session.mode.jump(),
             Some(super::super::Jump::PreJump { .. })
         ));
         fight(&mut session, &[]);
-        assert_eq!(session.jump, None);
+        assert_eq!(session.mode.jump(), None);
     }
 
     #[test]
@@ -394,12 +438,12 @@ mod tests {
         let mut session = lit(&catalog, &[(KILL, 1)]);
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        session.player.velocity = crate::geometry::Vec2::ZERO;
-        session.player.heading = 90.0;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.heading = 90.0;
         session.begin_jump().expect("jumps");
         assert!(session.jumping().is_some(), "its warp is under way");
         fight(&mut session, &[]);
-        assert_eq!(session.jump, None, "+0x50 = -1.0 (@0x693a6)");
+        assert_eq!(session.mode.jump(), None, "+0x50 = -1.0 (@0x693a6)");
     }
 
     #[test]
@@ -454,14 +498,14 @@ mod tests {
             record.lc_name.clear();
         }
         let mut session = lit(&catalog, &[(KILL, 1)]);
-        session.leet = true;
+        session.setup.leet = true;
         fight(&mut session, &[]);
         let messages = session.take_messages();
         assert_eq!(messages, [SimMessage::BombSetUp]);
         assert_eq!(messages[0].ticks(), 360);
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
-        session.leet = true;
+        session.setup.leet = true;
         fight(&mut session, &[]);
         assert!(
             matches!(
@@ -478,8 +522,8 @@ mod tests {
         let mut session = lit(&catalog, &[(KILL, 1)]);
         fight(&mut session, &[]);
         assert_eq!(session.pilot.outfits.get(&OutfitId(KILL)), Some(&1));
-        assert_eq!(session.sabotage.flag(), Sabotage::Kill);
-        assert_eq!(session.sabotage.counter(), 301.0);
+        assert_eq!(session.ship.latches.sabotage.flag(), Sabotage::Kill);
+        assert_eq!(session.ship.latches.sabotage.counter(), 301.0);
     }
 
     #[test]
@@ -488,7 +532,7 @@ mod tests {
         let mut session = lit(&catalog, &[(KILL, 1)]);
         fight(&mut session, &[]);
         let mut ticks = 0;
-        while session.condition != Condition::Destroyed {
+        while session.ship.condition != Condition::Destroyed {
             let sounds = fight(&mut session, &[]);
             assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
             ticks += 1;
@@ -546,7 +590,7 @@ mod tests {
                 .outfits
                 .push(outfit(263, &[(SABOTAGE_BOMB, mod_val)]));
             let mut session = lit(&catalog, &[(263, 1)]);
-            session.player.position = Vec2::new(40.0, -25.0);
+            session.ship.player.position = Vec2::new(40.0, -25.0);
             fight(&mut session, &[]);
             let exploded: Vec<_> = session
                 .take_combat_events()
@@ -564,7 +608,7 @@ mod tests {
             let expected: Vec<_> = boom
                 .map(|boom| {
                     (
-                        session.player.position,
+                        session.ship.player.position,
                         Explosion {
                             boom: BoomId(boom),
                             extra: false,
@@ -586,7 +630,7 @@ mod tests {
         let mut session = lit(catalog, &[(BOMB, 1)]);
         session.pilot.reserves.armor.now = armor;
         let mut draws = if disabled {
-            session.condition = Condition::Disabled;
+            session.ship.condition = Condition::Disabled;
             Draws::of(&[1, draw])
         } else {
             Draws::of(&[draw])
@@ -679,19 +723,29 @@ mod tests {
         let mut session = lit(&catalog, &[(BOMB, 1)]);
         session.pilot.ranks.insert(RankId(200));
         assert!(!blessed(&session));
-        session.scan_latches = crate::scan::Latches {
+        session.ship.latches.scan_latches = crate::scan::Latches {
             junk: false,
             outfits: false,
         };
         let sounds = fight(&mut session, &[]);
         assert_eq!(sounds.first(), Some(&SimSound::OnboardExplosion));
-        assert_eq!(session.sabotage.flag(), Sabotage::None, "@0x69a05");
-        assert!(session.sabotage.counter() > FUSE, "left as it was");
+        assert_eq!(
+            session.ship.latches.sabotage.flag(),
+            Sabotage::None,
+            "@0x69a05"
+        );
+        assert!(
+            session.ship.latches.sabotage.counter() > FUSE,
+            "left as it was"
+        );
         assert!(blessed(&session), "re-taken");
-        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
         let sounds = fight(&mut session, &[]);
         assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
-        assert_eq!(session.sabotage.counter(), 0.0, "@0x69a0c");
+        assert_eq!(session.ship.latches.sabotage.counter(), 0.0, "@0x69a0c");
     }
 
     #[test]

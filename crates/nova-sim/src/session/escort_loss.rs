@@ -48,7 +48,7 @@ fn escorted(catalog: &FakePilotCatalog) -> Session {
     let mut bystander = session.npcs()[0].clone();
     bystander.state.position.x += 3000.0;
     bystander.goal = Goal::Idle;
-    session.traffic.add_npc(bystander);
+    session.space.traffic.add_npc(bystander);
     let ship = session.npcs()[0].ship;
     let reserves = session.npcs()[0].reserves;
     session.enlist(
@@ -62,7 +62,7 @@ fn escorted(catalog: &FakePilotCatalog) -> Session {
             person: None,
         },
     );
-    let npc = session.npc_mut(NpcId(0)).expect("there");
+    let npc = session.space.npc_mut(NpcId(0)).expect("there");
     npc.reserves.shield.now = 0.0;
     npc.reserves.armor.now = (npc.reserves.armor.max * 0.34).ceil();
     session
@@ -80,8 +80,9 @@ fn shot_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) {
         &mut NeverFires,
     );
     session.hold_trigger(crate::combat::armament::Trigger::default());
-    let at = session.npc(NpcId(0)).expect("there").state.position;
+    let at = session.space.npc(NpcId(0)).expect("there").state.position;
     let shot = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()
@@ -106,7 +107,7 @@ fn an_escort_disabled_in_the_collision_passes_is_unled_for_the_rest_of_the_frame
         Rules::default(),
         &mut NeverFires,
     );
-    let escort = session.npc(NpcId(0)).expect("still here");
+    let escort = session.space.npc(NpcId(0)).expect("still here");
     assert_ne!(escort.condition, crate::combat::hull::Condition::Intact);
     let led = watching.led.take();
     assert!(!led.is_empty(), "the bystander decided");
@@ -150,14 +151,14 @@ fn mission_escorted(catalog: &FakePilotCatalog) -> Session {
     let mut bystander = session.npcs()[0].clone();
     bystander.state.position.x += 3000.0;
     bystander.goal = Goal::Idle;
-    session.traffic.add_npc(bystander);
+    session.space.traffic.add_npc(bystander);
     assert!(
         session
             .pilot
             .missions
             .put(0, crate::testkit::carrying(140, 0))
     );
-    let npc = session.npc_mut(NpcId(0)).expect("there");
+    let npc = session.space.npc_mut(NpcId(0)).expect("there");
     npc.mission = Some(MissionMark {
         slot: 0,
         behav: ShipBehav::EscortPlayer,
@@ -176,6 +177,7 @@ fn fire_until_two_shots(session: &mut Session, catalog: &FakePilotCatalog) {
     session.hold_trigger(FIRE);
     let players = |session: &Session| {
         session
+            .space
             .combat
             .shots()
             .iter()
@@ -205,8 +207,9 @@ fn fire_until_two_shots(session: &mut Session, catalog: &FakePilotCatalog) {
 /// passes through a ship the player leads. Gives the second shot's id.
 fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) -> ShotId {
     fire_until_two_shots(session, catalog);
-    let at = session.npc(NpcId(0)).expect("there").state.position;
+    let at = session.space.npc(NpcId(0)).expect("there").state.position;
     let mut shots = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()
@@ -232,11 +235,16 @@ fn passes_through(session: &mut Session, catalog: &FakePilotCatalog, id: ShotId)
         &mut NeverFires,
     );
     assert_ne!(
-        session.npc(NpcId(0)).expect("still here").condition,
+        session.space.npc(NpcId(0)).expect("still here").condition,
         crate::combat::hull::Condition::Intact,
         "the first shot disabled it"
     );
-    session.combat.shots().iter().any(|shot| shot.id == id)
+    session
+        .space
+        .combat
+        .shots()
+        .iter()
+        .any(|shot| shot.id == id)
 }
 
 #[test]
@@ -285,19 +293,20 @@ fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
     use crate::combat::sides::Ties;
     let catalog = armed();
     let mut session = escorted(&catalog);
-    let victim = session.npc_mut(NpcId(1)).expect("there");
+    let victim = session.space.npc_mut(NpcId(1)).expect("there");
     victim.reserves.shield.now = 0.0;
     victim.reserves.armor.now = 1.0;
     fire_until_two_shots(&mut session, &catalog);
     assert_eq!(session.pilot.combat_rating, 0);
-    let escort_at = session.npc(NpcId(0)).expect("there").state.position;
-    let victim_at = session.npc(NpcId(1)).expect("there").state.position;
+    let escort_at = session.space.npc(NpcId(0)).expect("there").state.position;
+    let victim_at = session.space.npc(NpcId(1)).expect("there").state.position;
     let (kill_layer, loss_layer) = if kill_first {
         (ShotLayer::Shots, ShotLayer::Homing)
     } else {
         (ShotLayer::Homing, ShotLayer::Shots)
     };
     let mut shots = session
+        .space
         .combat
         .shots_mut()
         .iter_mut()
@@ -329,12 +338,13 @@ fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
         &mut NeverFires,
     );
     assert_ne!(
-        session.npc(NpcId(0)).expect("still here").condition,
+        session.space.npc(NpcId(0)).expect("still here").condition,
         crate::combat::hull::Condition::Intact,
         "the escort was disabled"
     );
     assert!(
         session
+            .space
             .npc(NpcId(1))
             .is_none_or(|npc| npc.condition != crate::combat::hull::Condition::Intact),
         "the victim was killed"

@@ -49,7 +49,7 @@ use std::collections::BTreeSet;
 
 use super::game_work::PassStart;
 use super::npc_escape::{AtStep, escape_may_run};
-use super::{Session, TrafficMarks};
+use super::{Session, Space, TrafficMarks};
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
 use crate::traffic::npc::NpcId;
@@ -111,10 +111,10 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        self.traffic.ease_stray();
+        self.space.traffic.ease_stray();
         let again_marks = matches!(motion, Motion::Again)
-            .then(|| self.mission_marks())
-            .filter(|_| !self.traffic_due);
+            .then(|| self.space.mission_marks())
+            .filter(|_| !self.space.traffic_due);
         let mut fly = match &motion {
             Motion::Fly(_) => Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Advance)),
             Motion::Again if again_marks.is_some() => {
@@ -124,12 +124,12 @@ impl Session {
         };
         let mut shown = vec![ShipRef::Player];
         let mut after = None;
-        while let Some((berth, id)) = self.next_in_loop(after) {
+        while let Some((berth, id)) = self.space.next_in_loop(after) {
             after = Some(berth);
             if let Some(fly) = fly.as_mut() {
                 self.fly_in_loop(fly, id, chance);
             }
-            let Some(npc) = self.npc(id) else {
+            let Some(npc) = self.space.npc(id) else {
                 continue;
             };
             let at_step = AtStep::of(npc);
@@ -155,7 +155,7 @@ impl Session {
             });
         }
         if let Some(fly) = fly {
-            self.traffic.end_fly(fly);
+            self.space.traffic.end_fly(fly);
         }
         match motion {
             Motion::Fly(marks) => {
@@ -174,21 +174,8 @@ impl Session {
             }
         }
         self.lay_out_displayed();
-        self.traffic.step_fades();
-        self.traffic.after_firing(&self.arsenal);
-    }
-
-    /// The NPC in the lowest berth above `after` (any, with none), and
-    /// its berth, read afresh from the traffic: so the loop reaches a
-    /// fighter launched into a berth above the one it is at, and passes
-    /// one launched below.
-    fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
-        self.traffic
-            .npcs()
-            .iter()
-            .map(|npc| (npc.berth, npc.id))
-            .filter(|&(berth, _)| after.is_none_or(|after| berth > after))
-            .min()
+        self.space.traffic.step_fades();
+        self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
@@ -212,6 +199,21 @@ impl Session {
     /// keeping their place, in the world it flies in.
     fn begin_fly(&mut self, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
         self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half))
+    }
+}
+
+impl Space {
+    /// The NPC in the lowest berth above `after` (any, with none), and
+    /// its berth, read afresh from the traffic: so the loop reaches a
+    /// fighter launched into a berth above the one it is at, and passes
+    /// one launched below.
+    fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
+        self.traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.berth, npc.id))
+            .filter(|&(berth, _)| after.is_none_or(|after| berth > after))
+            .min()
     }
 }
 
@@ -268,7 +270,7 @@ mod tests {
     /// `catalog`'s session in flight, its traffic set up and emptied.
     fn empty(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         session
     }
 
@@ -279,7 +281,7 @@ mod tests {
         ship.hull.mass = 40.0;
         ship.state.position = at;
         ship.state.velocity = velocity;
-        session.traffic.add_npc_at(ship, berth)
+        session.space.traffic.add_npc_at(ship, berth)
     }
 
     /// A ship of mass 200 at berth `berth` at `at`, at rest, breaking up
@@ -295,11 +297,11 @@ mod tests {
             starting: false,
         };
         ship.state.position = at;
-        session.traffic.add_npc_at(ship, berth)
+        session.space.traffic.add_npc_at(ship, berth)
     }
 
     fn state(session: &Session, id: NpcId) -> crate::flight::ShipState {
-        session.npc(id).expect("there").state
+        session.space.npc(id).expect("there").state
     }
 
     const WRECKED: Vec2 = Vec2::new(600.0, 0.0);
@@ -320,7 +322,7 @@ mod tests {
             } else {
                 pass(&mut session, &catalog, &Keep);
             }
-            assert!(session.npc(gone).is_none(), "{second_pass}: exploded");
+            assert!(session.space.npc(gone).is_none(), "{second_pass}: exploded");
             let after = state(&session, pushed);
             assert!(after.velocity.x > 0.0, "{second_pass}: {after:?}");
             assert_eq!(after.position, at + after.velocity, "{second_pass}");
@@ -418,7 +420,7 @@ mod tests {
             } else {
                 Vec2::ZERO
             };
-            let shooter = &mut session.traffic.npcs_mut()[0];
+            let shooter = &mut session.space.traffic.npcs_mut()[0];
             shooter.berth = shooter_berth;
             shooter.state.position = WRECKED;
             shooter.state.velocity = velocity;
@@ -448,9 +450,9 @@ mod tests {
         // its display, and a later slot's shockwave reaches it no more.
         let catalog = armed();
         let mut session = empty(&catalog);
-        let site = session.sites[0];
+        let site = session.chart.sites[0];
         let lander = place(&mut session, 1, site.position, Vec2::ZERO);
-        session.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
+        session.space.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
         wreck(&mut session, 2, site.position + Vec2::new(20.0, 0.0));
         session.take_combat_events();
         pass(&mut session, &catalog, &Keep);

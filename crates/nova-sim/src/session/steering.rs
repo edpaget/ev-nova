@@ -46,11 +46,12 @@
 //! An inertialess ship's reverse (@0x6c770-0x6c7d3) aims at nothing: it
 //! brakes the ship's speed instead (see the `inertialess` module).
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::StellarId;
 use crate::flight::{Controls, Face};
 use crate::geometry::Vec2;
 use crate::navigation::NavMode;
+use crate::pilot::Pilot;
 use crate::player_turn::reverse_aim;
 use crate::trig::intercept_angle;
 use crate::{Condition, RuleKey, RuleSource};
@@ -65,15 +66,15 @@ impl Session {
     /// neither aims, or when the player is disabled, whose ship doesn't
     /// turn.
     pub(super) fn steer(&mut self, controls: Controls) -> Option<i16> {
-        let disabled = self.condition != Condition::Intact;
+        let disabled = self.ship.condition != Condition::Intact;
         let mut aim = self.face_aim(controls.face);
         // An inertialess ship's reverse brakes instead, with no aim (see
         // the `inertialess` module).
-        if controls.reverse && !disabled && !self.player_inertialess() {
-            aim = reverse_aim(self.player.velocity).or(aim);
+        if controls.reverse && !disabled && !self.ship.player_inertialess(&self.setup) {
+            aim = reverse_aim(self.ship.player.velocity).or(aim);
         }
         if let Some(aim) = aim {
-            self.aim = aim;
+            self.ship.aim = aim;
         }
         aim.filter(|_| !disabled)
     }
@@ -84,8 +85,10 @@ impl Session {
         if face == Face::Off {
             return None;
         }
-        let from = self.player.position;
-        let stellar = self.face_stellar();
+        let from = self.ship.player.position;
+        let stellar = self
+            .chart
+            .face_stellar(&self.pilot, &self.statics, &self.setup);
         let target = self.target().map(|npc| npc.state.position);
         let at = match (target, stellar) {
             (Some(_), Some(stellar)) if face == Face::Stellar => stellar,
@@ -94,29 +97,31 @@ impl Session {
         };
         Some(intercept_angle(from, at))
     }
+}
 
+impl Chart {
     /// The position of stellar record [+0x6c], the nav selection read as
     /// a stellar's index whatever the mode: the stellar selected in mode
     /// 2; in mode 3, by [`RuleKey::FaceNavSlot`]'s engine reading, the
     /// stellar whose index is the selected system's link slot, and by its
     /// other reading none; none with no selection (see the module docs
     /// for where the position is read).
-    fn face_stellar(&self) -> Option<Vec2> {
+    fn face_stellar(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Option<Vec2> {
         let id = match self.nav {
             NavMode::Off | NavMode::Stellar(None) | NavMode::Hyperspace(None) => return None,
             NavMode::Stellar(Some(id)) => id,
             NavMode::Hyperspace(Some(selected)) => {
-                if self.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
+                if setup.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
                     return None;
                 }
-                let slot = i16::try_from(self.selected_slot(selected)?).ok()?;
+                let slot = i16::try_from(self.selected_slot(pilot, selected)?).ok()?;
                 StellarId(FIRST_STELLAR + slot)
             }
         };
         let here = self.sites.iter().find(|site| site.id == id);
         Some(here.map_or_else(
             || {
-                let (x, y) = self.stellar_marks.place(id).unwrap_or_default();
+                let (x, y) = statics.stellar_marks.place(id).unwrap_or_default();
                 Vec2::new(f32::from(x), f32::from(y))
             },
             |site| site.position,
@@ -167,10 +172,10 @@ mod tests {
     /// A session of [`pegasus`] at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.settle_box();
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.player.heading = heading;
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = heading;
         session
     }
 
@@ -201,8 +206,8 @@ mod tests {
     fn target_at(session: &mut Session, at: Vec2) {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.state.position = at;
-        let id = session.traffic.add_npc(npc);
-        session.target = Some(id);
+        let id = session.space.traffic.add_npc(npc);
+        session.chart.target = Some(id);
     }
 
     #[test]
@@ -211,10 +216,10 @@ mod tests {
         let mut session = flying(&catalog, 90.0);
         assert_eq!(session.handling().turn_rate, 2.5);
         session.tick(keys(Turn::Right));
-        assert_eq!(session.player.heading, 92.0);
+        assert_eq!(session.ship.player.heading, 92.0);
         session.tick(keys(Turn::Left));
         session.tick(keys(Turn::Left));
-        assert_eq!(session.player.heading, 88.0);
+        assert_eq!(session.ship.player.heading, 88.0);
     }
 
     #[test]
@@ -223,7 +228,7 @@ mod tests {
         let mut session = flying(&catalog, 90.0)
             .with_rules(Rulebook::default().with_override(RuleKey::PlayerTurn, RuleSource::Bible));
         session.tick(keys(Turn::Right));
-        assert_eq!(session.player.heading, 92.5);
+        assert_eq!(session.ship.player.heading, 92.5);
     }
 
     #[test]
@@ -231,22 +236,25 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         // Moving east: behind is 270, the short way anticlockwise.
-        session.player.velocity = Vec2::new(0.06, 0.0);
+        session.ship.player.velocity = Vec2::new(0.06, 0.0);
         let held = reverse(Turn::Right);
         session.tick(held);
-        assert_eq!(session.player.heading, 358.0, "left, the keys held off");
-        assert_eq!(session.aim, 270);
+        assert_eq!(
+            session.ship.player.heading, 358.0,
+            "left, the keys held off"
+        );
+        assert_eq!(session.ship.aim, 270);
         for _ in 0..60 {
             session.tick(held);
         }
-        let stopped = session.player.heading;
+        let stopped = session.ship.player.heading;
         assert!(
             (270.0..=272.0).contains(&stopped),
             "within a turn: {stopped}"
         );
         session.tick(held);
         assert_eq!(
-            session.player.heading, stopped,
+            session.ship.player.heading, stopped,
             "no snap, and no right turn"
         );
     }
@@ -255,13 +263,13 @@ mod tests {
     fn reverse_stops_aiming_once_each_axis_is_under_0_05_and_the_turn_keys_work() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
-        session.aim = 45;
-        session.player.velocity = Vec2::new(0.049, -0.049);
+        session.ship.aim = 45;
+        session.ship.player.velocity = Vec2::new(0.049, -0.049);
         session.tick(reverse(Turn::Right));
-        assert_eq!(session.player.heading, 2.0, "the turn key");
-        assert_eq!(session.aim, 45, "no aim");
+        assert_eq!(session.ship.player.heading, 2.0, "the turn key");
+        assert_eq!(session.ship.aim, 45, "no aim");
         session.tick(reverse(Turn::None));
-        assert_eq!(session.player.heading, 2.0);
+        assert_eq!(session.ship.player.heading, 2.0);
     }
 
     #[test]
@@ -270,12 +278,15 @@ mod tests {
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
         session.tick(face(Face::Target, Turn::Left));
-        assert_eq!(session.aim, 90);
-        assert_eq!(session.player.heading, 2.0, "toward it, the keys held off");
+        assert_eq!(session.ship.aim, 90);
+        assert_eq!(
+            session.ship.player.heading, 2.0,
+            "toward it, the keys held off"
+        );
         for _ in 0..60 {
             session.tick(face(Face::Target, Turn::None));
         }
-        assert!((88.0..=90.0).contains(&session.player.heading));
+        assert!((88.0..=90.0).contains(&session.ship.player.heading));
     }
 
     #[test]
@@ -283,30 +294,34 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
-        session.set_nav(NavMode::Stellar(Some(StellarId(128))));
+        session
+            .chart
+            .set_nav(NavMode::Stellar(Some(StellarId(128))));
         session.tick(face(Face::Stellar, Turn::None));
         assert_eq!(
-            session.aim,
+            session.ship.aim,
             intercept_angle(Vec2::ZERO, Vec2::new(30.0, -40.0))
         );
         session.tick(face(Face::Target, Turn::None));
-        assert_eq!(session.aim, 90, "without Option, the target");
-        session.set_nav(NavMode::Stellar(None));
+        assert_eq!(session.ship.aim, 90, "without Option, the target");
+        session.chart.set_nav(NavMode::Stellar(None));
         session.tick(face(Face::Stellar, Turn::None));
-        assert_eq!(session.aim, 90, "with Option but nothing selected");
+        assert_eq!(session.ship.aim, 90, "with Option but nothing selected");
     }
 
     #[test]
     fn with_no_ship_target_the_face_key_faces_the_stellar_selected() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
-        session.set_nav(NavMode::Stellar(Some(StellarId(128))));
+        session
+            .chart
+            .set_nav(NavMode::Stellar(Some(StellarId(128))));
         for face_key in [Face::Target, Face::Stellar] {
-            session.aim = 0;
+            session.ship.aim = 0;
             session.tick(face(face_key, Turn::None));
             assert_eq!(
-                session.aim,
-                intercept_angle(session.player.position, Vec2::new(30.0, -40.0))
+                session.ship.aim,
+                intercept_angle(session.ship.player.position, Vec2::new(30.0, -40.0))
             );
         }
     }
@@ -315,10 +330,10 @@ mod tests {
     fn with_nothing_to_face_the_face_key_aims_nowhere_and_the_turn_keys_work() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
-        session.aim = 123;
+        session.ship.aim = 123;
         session.tick(face(Face::Target, Turn::Right));
-        assert_eq!(session.aim, 123, "kept");
-        assert_eq!(session.player.heading, 2.0);
+        assert_eq!(session.ship.aim, 123, "kept");
+        assert_eq!(session.ship.player.heading, 2.0);
     }
 
     #[test]
@@ -327,16 +342,20 @@ mod tests {
         let mut session = flying(&catalog, 0.0);
         // 132 is 130's second link, slot 1: stellar 129, 131's, at
         // (2000, 0), as if it stood in this system.
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::None));
-        assert_eq!(session.aim, 90);
-        assert_eq!(session.player.heading, 2.0);
+        assert_eq!(session.ship.aim, 90);
+        assert_eq!(session.ship.player.heading, 2.0);
         // 131, slot 0: stellar 128, this system's.
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(
-            session.aim,
-            intercept_angle(session.player.position, Vec2::new(30.0, -40.0))
+            session.ship.aim,
+            intercept_angle(session.ship.player.position, Vec2::new(30.0, -40.0))
         );
     }
 
@@ -345,14 +364,16 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0)
             .with_rules(Rulebook::default().with_override(RuleKey::FaceNavSlot, RuleSource::Bible));
-        session.aim = 7;
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session.ship.aim = 7;
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::Right));
-        assert_eq!(session.aim, 7);
-        assert_eq!(session.player.heading, 2.0, "the turn key");
+        assert_eq!(session.ship.aim, 7);
+        assert_eq!(session.ship.player.heading, 2.0, "the turn key");
         target_at(&mut session, Vec2::new(-500.0, 0.0));
         session.tick(face(Face::Stellar, Turn::None));
-        assert_eq!(session.aim, 270, "the ship target, Option or not");
+        assert_eq!(session.ship.aim, 270, "the ship target, Option or not");
     }
 
     #[test]
@@ -361,10 +382,12 @@ mod tests {
         catalog.marks.clear();
         catalog.unloaded.push(StellarId(129));
         let mut session = flying(&catalog, 0.0);
-        session.player.position = Vec2::new(100.0, 0.0);
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session.ship.player.position = Vec2::new(100.0, 0.0);
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::None));
-        assert_eq!(session.aim, 270, "toward the centre");
+        assert_eq!(session.ship.aim, 270, "toward the centre");
     }
 
     #[test]
@@ -372,15 +395,15 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
-        session.player.velocity = Vec2::new(0.0, 3.0);
+        session.ship.player.velocity = Vec2::new(0.0, 3.0);
         let both = Controls {
             reverse: true,
             face: Face::Target,
             ..Controls::default()
         };
         session.tick(both);
-        assert_eq!(session.aim, 0, "against the motion, not at the target");
-        assert_eq!(session.player.heading, 0.0, "already facing it");
+        assert_eq!(session.ship.aim, 0, "against the motion, not at the target");
+        assert_eq!(session.ship.player.heading, 0.0, "already facing it");
     }
 
     #[test]
@@ -388,17 +411,17 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
-        session.aim = 45;
-        session.player.velocity = Vec2::new(0.049, -0.049);
+        session.ship.aim = 45;
+        session.ship.player.velocity = Vec2::new(0.049, -0.049);
         session.tick(Controls {
             reverse: true,
             face: Face::Target,
             turn: Turn::Left,
             ..Controls::default()
         });
-        assert_eq!(session.aim, 90, "the target's bearing, not cleared");
+        assert_eq!(session.ship.aim, 90, "the target's bearing, not cleared");
         assert_eq!(
-            session.player.heading, 2.0,
+            session.ship.player.heading, 2.0,
             "toward the target, the keys held off"
         );
     }
@@ -407,16 +430,18 @@ mod tests {
     fn in_a_jump_the_face_key_and_reverse_are_ignored() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
-        session.player.position = Vec2::new(0.0, 5000.0);
+        session.ship.player.position = Vec2::new(0.0, 5000.0);
         target_at(&mut session, Vec2::new(-500.0, 5000.0));
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.begin_jump().expect("jumps");
         session.tick(face(Face::Target, Turn::None));
-        assert_eq!(session.aim, 90, "the jump's bearing, not the target");
-        assert_eq!(session.player.heading, 2.0, "turning to it");
+        assert_eq!(session.ship.aim, 90, "the jump's bearing, not the target");
+        assert_eq!(session.ship.player.heading, 2.0, "turning to it");
         session.tick(reverse(Turn::Left));
-        assert_eq!(session.aim, 90);
-        assert_eq!(session.player.heading, 4.0);
+        assert_eq!(session.ship.aim, 90);
+        assert_eq!(session.ship.player.heading, 4.0);
     }
 
     #[test]
@@ -428,8 +453,10 @@ mod tests {
         let mut session = flying(&catalog, 90.0).with_rules(
             Rulebook::default().with_override(RuleKey::ColocatedResolution, RuleSource::Bible),
         );
-        session.player.position = Vec2::new(0.0, 5000.0);
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session.ship.player.position = Vec2::new(0.0, 5000.0);
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.preparing_jump(),
@@ -438,16 +465,20 @@ mod tests {
         );
         let mut ticks = 0;
         while session.jumping().is_none() {
-            let before = session.player.heading;
+            let before = session.ship.player.heading;
             session.tick(Controls::default());
             ticks += 1;
-            assert!(ticks < 100, "never jumped: {:?}", session.player);
+            assert!(ticks < 100, "never jumped: {:?}", session.ship.player);
             if session.preparing_jump().is_some() {
-                assert_eq!(session.aim, 0);
-                assert_eq!(session.player.heading, before - 2.0, "2° a tick toward 0");
+                assert_eq!(session.ship.aim, 0);
+                assert_eq!(
+                    session.ship.player.heading,
+                    before - 2.0,
+                    "2° a tick toward 0"
+                );
             }
         }
-        let heading = session.player.heading;
+        let heading = session.ship.player.heading;
         assert!(
             crate::player_turn::settled(
                 heading,
@@ -465,13 +496,13 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.tick(face(Face::Target, Turn::None));
-        assert_eq!(session.aim, 90);
-        assert_eq!(session.player.heading, 0.0);
-        session.player.velocity = Vec2::new(0.0, 3.0);
-        session.aim = 45;
+        assert_eq!(session.ship.aim, 90);
+        assert_eq!(session.ship.player.heading, 0.0);
+        session.ship.player.velocity = Vec2::new(0.0, 3.0);
+        session.ship.aim = 45;
         session.tick(reverse(Turn::None));
-        assert_eq!(session.aim, 45, "reverse is not read while disabled");
+        assert_eq!(session.ship.aim, 45, "reverse is not read while disabled");
     }
 }

@@ -25,11 +25,12 @@
 //! [`galaxy_map::draw_map`]: crate::galaxy_map::draw_map
 //! [`OverlaidGalaxy::same_place`]: crate::story::OverlaidGalaxy::same_place
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::SystemId;
 use crate::exploration;
 use crate::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use crate::map_borders::{BorderSource, BorderSources};
+use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
 
 impl Session {
@@ -38,6 +39,17 @@ impl Session {
     /// governments.
     #[must_use]
     pub fn map_border_sources(&self) -> BorderSources {
+        self.chart
+            .map_border_sources(&self.pilot, &self.statics, &self.setup)
+    }
+}
+
+impl Chart {
+    /// What the galaxy map's borders add now (see the module docs): the
+    /// coarse pass's sources, one a place, the fine pass's walk, and the
+    /// governments.
+    #[must_use]
+    fn map_border_sources(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> BorderSources {
         let galaxy = &self.galaxy;
         let places = galaxy.map().places();
         let mut coarse = Vec::new();
@@ -45,7 +57,7 @@ impl Session {
         for system in galaxy.catalog_systems() {
             let Some(source) = galaxy
                 .same_place(system)
-                .and_then(|stand_in| self.border_source(stand_in))
+                .and_then(|stand_in| self.border_source(pilot, statics, setup, stand_in))
             else {
                 continue;
             };
@@ -57,24 +69,30 @@ impl Session {
         BorderSources {
             coarse,
             walk,
-            govts: self.govts.clone(),
+            govts: statics.govts.clone(),
         }
     }
 
     /// `system`'s source, a visible system standing for a place, when it
     /// passes `_AddSystemInfluenceToMap`'s flag tests (@0x115b2-0x1160e).
-    fn border_source(&self, system: SystemId) -> Option<BorderSource> {
+    fn border_source(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        system: SystemId,
+    ) -> Option<BorderSource> {
         let galaxy = &self.galaxy;
-        if !self.known.contains(&system) || !self.pilot.has_explored(system) {
+        if !self.known.contains(&system) || !pilot.has_explored(system) {
             return None;
         }
         let govt = galaxy.govt(system)?;
-        if self.govts.flag2(Some(govt), NO_INFLUENCE) {
+        if statics.govts.flag2(Some(govt), NO_INFLUENCE) {
             return None;
         }
         let inhabited = exploration::inhabited(
             galaxy.map().stellars(system),
-            self.rules.source_for(RuleKey::MapExplore),
+            setup.rules.source_for(RuleKey::MapExplore),
         );
         let position = galaxy.position(system)?;
         // A system's map position is a whole `i16` in its `sÿst`.
@@ -84,7 +102,7 @@ impl Session {
             system,
             pos,
             govt,
-            small: self.govts.flag2(Some(govt), SMALL_INFLUENCE),
+            small: statics.govts.flag2(Some(govt), SMALL_INFLUENCE),
         })
     }
 }
@@ -167,7 +185,7 @@ mod tests {
         for id in 130..=138 {
             session.pilot.explore(SystemId(id));
         }
-        session.known = (130..=138).map(SystemId).collect();
+        session.chart.known = (130..=138).map(SystemId).collect();
         session
     }
 
@@ -237,7 +255,7 @@ mod tests {
     fn an_unknown_system_adds_none() {
         let catalog = bordered();
         let mut session = everything_seen(&catalog, Rulebook::default());
-        session.known.remove(&SystemId(131));
+        session.chart.known.remove(&SystemId(131));
         let sources = session.map_border_sources();
         assert_eq!(coarse(&sources), [130, 135, 138]);
         assert!(walked(&sources).iter().all(|&(_, by)| by != 131));
@@ -257,10 +275,10 @@ mod tests {
         // same. 138 unknown adds neither.
         let catalog = bordered();
         let mut session = everything_seen(&catalog, Rulebook::default());
-        session.known.remove(&SystemId(137));
+        session.chart.known.remove(&SystemId(137));
         session.pilot.explored.remove(&SystemId(137));
         assert_eq!(coarse(&session.map_border_sources()), [130, 131, 135, 138]);
-        session.known.remove(&SystemId(138));
+        session.chart.known.remove(&SystemId(138));
         let sources = session.map_border_sources();
         assert_eq!(coarse(&sources), [130, 131, 135]);
         assert_eq!(walked(&sources), [(130, 130), (131, 131), (135, 135)]);

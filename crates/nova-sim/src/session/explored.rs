@@ -4,7 +4,7 @@
 //! level each writer gives ([`ExploredLevel`]; the original's `sÿst`
 //! +0x90). Every writer only raises a level, never lowers it.
 //!
-//! **Raises that include the head** ([`Session::explore_place`]): each
+//! **Raises that include the head** ([`Chart::explore_place`]): each
 //! raises the system and, by the engine, its place's head.
 //!
 //! - Level 1: a jump's arrival, the head then the system
@@ -28,9 +28,9 @@
 //! level directly and explore no nebula (see the `nebulae` module).
 //!
 //! **A raise that does not include the head.** `X` raises only its system,
-//! to level 1 (`_EvalSetExp` @0x15c71-0x15ca1; `Session::explore_system`).
+//! to level 1 (`_EvalSetExp` @0x15c71-0x15ca1; `Chart::explore_system`).
 //!
-//! **Rebuild points** ([`Session::share_explored`]):
+//! **Rebuild points** ([`Chart::share_explored`]):
 //! `_HandleStellarSystemVisibility` raises every system, hidden or not,
 //! to its head's level whenever its head is another system
 //! (@0x32b13-0x32b8f, @0x32b5a-0x32b6b). The session shares first thing at
@@ -40,7 +40,7 @@
 //! default reading, as `Session::fly` runs before `Session::with_rules`
 //! (task load-reads-rules-before-fly).
 //!
-//! **A new pilot** ([`Session::explore_start_neighbours`]): `_DoNewPilot`
+//! **A new pilot** ([`Chart::explore_start_neighbours`]): `_DoNewPilot`
 //! clears every level, then, for each of the start system's Con slots
 //! naming a visible system, sets the head of that system's place to level
 //! 1 (@0x18f97-0x19003, @0x18fe6), and last the start system's head
@@ -57,10 +57,10 @@
 //! **Known** ([`Session::is_known`]; see the
 //! [`exploration`](crate::exploration) module's "Known"). Each rebuild
 //! point works the known set out afresh right after its share
-//! (`Session::rework_known`, @0x32b7b, @0x32b91-0x32c10), so a new
+//! (`Chart::rework_known`, @0x32b7b, @0x32b91-0x32c10), so a new
 //! pilot, a loaded one and a fresh session are known from before their
 //! first frame, as each ends in a rebuild. A map grant adds its pass,
-//! with no clear, after its walk (`Session::add_known`, @0xdb06-0xdbd4).
+//! with no clear, after its walk (`Chart::add_known`, @0xdb06-0xdbd4).
 //! The take-off's `_AutoSetExploration` runs the same pass
 //! (@0x634c8), but needs none of its own here: the dock request's rebuild
 //! point ends the take-off (@0x674c7; `Session::lift_off`) and works the
@@ -75,69 +75,23 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{Chart, Session, Setup};
 use crate::catalog::SystemId;
 use crate::exploration::{explored_with, known_from, shared_by_place, start_neighbours};
-use crate::pilot::ExploredLevel;
+use crate::pilot::{ExploredLevel, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
-    /// How the session shares exploration by place
-    /// ([`RuleKey::ExploredByPlace`]).
-    fn explored_by_place(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::ExploredByPlace)
-    }
-
-    /// Raises `system` and, by the engine, its place's head to `level`
-    /// when lower (see the module docs). Raises no event.
-    pub(super) fn explore_place(&mut self, system: SystemId, level: ExploredLevel) {
-        let source = self.explored_by_place();
-        for explored in explored_with(system, self.galaxy.map().places(), source) {
-            self.pilot.raise_explored(explored, level);
-        }
-    }
-
-    /// A rebuild point's share (see the module docs): by the engine,
-    /// every system at an explored head's place is raised to the head's
-    /// level. Raises no event.
-    pub(super) fn share_explored(&mut self) {
-        let source = self.explored_by_place();
-        let places = self.galaxy.map().places();
-        let explored = shared_by_place(&self.pilot.explored, places, source);
-        let charted = shared_by_place(&self.pilot.charted, places, source);
-        for system in explored {
-            self.pilot.explore(system);
-        }
-        for system in charted {
-            self.pilot.chart(system);
-        }
-    }
-
     /// Whether `system` is known (+0x1ec; see the module docs' "Known").
     #[must_use]
     pub fn is_known(&self, system: SystemId) -> bool {
-        self.known.contains(&system)
+        self.chart.is_known(system)
     }
 
     /// The systems known, by ascending ID.
     #[must_use]
     pub fn known(&self) -> &BTreeSet<SystemId> {
-        &self.known
-    }
-
-    /// A rebuild point's known pass (see the module docs' "Known"): every
-    /// flag cleared (`_HandleStellarSystemVisibility` @0x32b7b), then each
-    /// visible, explored system and its links by place marked
-    /// (@0x32b91-0x32c10).
-    pub(super) fn rework_known(&mut self) {
-        self.known = known_from(&self.galaxy, &self.pilot.explored);
-    }
-
-    /// A map grant's known pass, after its walk, with no clear
-    /// (`_AutoSetExploration` @0xdb06-0xdbd4).
-    pub(super) fn add_known(&mut self) {
-        let known = known_from(&self.galaxy, &self.pilot.explored);
-        self.known.extend(known);
+        self.chart.known()
     }
 
     /// Marks `systems` known, as the hypergate map marks each system it
@@ -145,23 +99,99 @@ impl Session {
     /// gate's offers as its map opens (see the
     /// [`galaxy_map`](crate::galaxy_map) module).
     pub fn mark_known(&mut self, systems: impl IntoIterator<Item = SystemId>) {
+        self.chart.mark_known(systems);
+    }
+}
+
+impl Setup {
+    /// How the session shares exploration by place
+    /// ([`RuleKey::ExploredByPlace`]).
+    fn explored_by_place(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::ExploredByPlace)
+    }
+}
+
+impl Chart {
+    /// Raises `system` and, by the engine, its place's head to `level`
+    /// when lower (see the module docs). Raises no event.
+    pub(super) fn explore_place(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        system: SystemId,
+        level: ExploredLevel,
+    ) {
+        let source = setup.explored_by_place();
+        for explored in explored_with(system, self.galaxy.map().places(), source) {
+            pilot.raise_explored(explored, level);
+        }
+    }
+
+    /// A rebuild point's share (see the module docs): by the engine,
+    /// every system at an explored head's place is raised to the head's
+    /// level. Raises no event.
+    pub(super) fn share_explored(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let source = setup.explored_by_place();
+        let places = self.galaxy.map().places();
+        let explored = shared_by_place(&pilot.explored, places, source);
+        let charted = shared_by_place(&pilot.charted, places, source);
+        for system in explored {
+            pilot.explore(system);
+        }
+        for system in charted {
+            pilot.chart(system);
+        }
+    }
+
+    /// Whether `system` is known (+0x1ec; see the module docs' "Known").
+    #[must_use]
+    pub(super) fn is_known(&self, system: SystemId) -> bool {
+        self.known.contains(&system)
+    }
+
+    /// The systems known, by ascending ID.
+    #[must_use]
+    fn known(&self) -> &BTreeSet<SystemId> {
+        &self.known
+    }
+
+    /// A rebuild point's known pass (see the module docs' "Known"): every
+    /// flag cleared (`_HandleStellarSystemVisibility` @0x32b7b), then each
+    /// visible, explored system and its links by place marked
+    /// (@0x32b91-0x32c10).
+    pub(super) fn rework_known(&mut self, pilot: &Pilot) {
+        self.known = known_from(&self.galaxy, &pilot.explored);
+    }
+
+    /// A map grant's known pass, after its walk, with no clear
+    /// (`_AutoSetExploration` @0xdb06-0xdbd4).
+    pub(super) fn add_known(&mut self, pilot: &Pilot) {
+        let known = known_from(&self.galaxy, &pilot.explored);
+        self.known.extend(known);
+    }
+
+    /// Marks `systems` known, as the hypergate map marks each system it
+    /// arrows (`_DrawMap` @0xf457-0xf45f): the flight view marks the
+    /// gate's offers as its map opens (see the
+    /// [`galaxy_map`](crate::galaxy_map) module).
+    fn mark_known(&mut self, systems: impl IntoIterator<Item = SystemId>) {
         self.known.extend(systems);
     }
 
     /// A new pilot's neighbours (see the module docs): each of the start
     /// system's Con slots naming a visible system explores, by the
     /// engine, that system's head, and by the other reading the system.
-    pub(super) fn explore_start_neighbours(&mut self) {
-        let source = self.explored_by_place();
+    pub(super) fn explore_start_neighbours(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let source = setup.explored_by_place();
         let galaxy = &self.galaxy;
         let neighbours = start_neighbours(
-            galaxy.con_slots(self.pilot.system),
+            galaxy.con_slots(pilot.system),
             |system| galaxy.exists(system) && galaxy.visible(system),
             galaxy.map().places(),
             source,
         );
         for system in neighbours {
-            self.pilot.explore(system);
+            pilot.explore(system);
         }
     }
 }
@@ -330,7 +360,12 @@ mod tests {
         let mut session = flown(&catalog, RuleSource::Engine);
         assert!(!explored(&session, 127));
         let before: Vec<SystemId> = session.pilot().explored().collect();
-        session.explore_place(SystemId(127), ExploredLevel::Explored);
+        session.chart.explore_place(
+            &mut session.pilot,
+            &session.setup,
+            SystemId(127),
+            ExploredLevel::Explored,
+        );
         let after: Vec<SystemId> = session.pilot().explored().collect();
         assert_eq!(after.len(), before.len() + 1);
         assert!(explored(&session, 127));
@@ -342,7 +377,12 @@ mod tests {
         let catalog = shadowed(catalog());
         let mut session = flown(&catalog, RuleSource::Engine);
         let before: Vec<SystemId> = session.pilot().explored().collect();
-        session.explore_place(SystemId(133), ExploredLevel::Explored);
+        session.chart.explore_place(
+            &mut session.pilot,
+            &session.setup,
+            SystemId(133),
+            ExploredLevel::Explored,
+        );
         let after: Vec<SystemId> = session.pilot().explored().collect();
         assert_eq!(after.len(), before.len() + 1);
         assert!(explored(&session, 133));
@@ -355,7 +395,9 @@ mod tests {
             let mut session = flown(&catalog, source);
             session.pilot.explore(SystemId(127));
             assert!(!explored(&session, 131));
-            session.share_explored();
+            session
+                .chart
+                .share_explored(&mut session.pilot, &session.setup);
             assert_eq!(
                 explored(&session, 131),
                 source == RuleSource::Engine,
@@ -382,7 +424,9 @@ mod tests {
             // 127 charted: its member 131 is charted.
             let mut session = flown(&catalog, source);
             session.pilot.chart(SystemId(127));
-            session.share_explored();
+            session
+                .chart
+                .share_explored(&mut session.pilot, &session.setup);
             assert_eq!(
                 level(&session, 131),
                 shared(ExploredLevel::Charted),
@@ -391,7 +435,9 @@ mod tests {
             // 127 at level 1: 131 is explored, not charted.
             let mut session = flown(&catalog, source);
             session.pilot.explore(SystemId(127));
-            session.share_explored();
+            session
+                .chart
+                .share_explored(&mut session.pilot, &session.setup);
             assert_eq!(
                 level(&session, 131),
                 shared(ExploredLevel::Explored),
@@ -402,7 +448,9 @@ mod tests {
             let mut session = flown(&catalog, source);
             session.pilot.explore(SystemId(129));
             session.pilot.chart(SystemId(130));
-            session.share_explored();
+            session
+                .chart
+                .share_explored(&mut session.pilot, &session.setup);
             assert_eq!(level(&session, 130), ExploredLevel::Charted, "{source:?}");
             assert_eq!(level(&session, 129), ExploredLevel::Explored, "{source:?}");
         }
@@ -419,7 +467,9 @@ mod tests {
             let mut session = Session::fly(&catalog, pilot)
                 .expect("flies")
                 .with_rules(rules(source));
-            session.explore_start_neighbours();
+            session
+                .chart
+                .explore_start_neighbours(&mut session.pilot, &session.setup);
             let explored: Vec<SystemId> = session.pilot().explored().collect();
             let expected: &[i16] = match source {
                 RuleSource::Engine => &[127, 130, 133],

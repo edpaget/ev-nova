@@ -4,10 +4,11 @@
 //! stepped each flight tick, and cleared on every system change and
 //! landing. They are never saved.
 
-use super::Session;
+use super::{PlayerShip, Session, Space, Statics};
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
 use crate::market::Good;
+use crate::pilot::Pilot;
 use crate::scoop::{Haul, Scooper, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop};
 use crate::ship_layer::disabled;
 
@@ -15,7 +16,7 @@ impl Session {
     /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
     #[must_use]
     pub fn cargo_boxes(&self) -> &[CargoBox] {
-        self.boxes.boxes()
+        self.space.cargo_boxes()
     }
 
     /// Drops the boxes of a jettison of `total` tons, `goods` of them
@@ -34,18 +35,22 @@ impl Session {
         // Precision lost only past 2^53 tons.
         #[allow(clippy::cast_precision_loss)]
         let total = total as f64;
-        let player = self.player;
-        self.boxes
-            .drop_behind(&player, self.hull.sprite_size, total, chance);
+        let player = self.ship.player;
+        self.space
+            .boxes
+            .drop_behind(&player, self.ship.fit.hull.sprite_size, total, chance);
         let fleet_holds = self.capacity();
         let droppers: Vec<_> = self
             .pilot
             .escorts
             .iter()
-            .zip(&self.fleet)
+            .zip(&self.space.escorts.fleet)
             .filter_map(|(escort, &placed)| {
-                let holds = self.holds_of(escort).filter(|holds| holds.adds_holds())?;
-                let npc = self.npc(placed?)?;
+                let holds = self
+                    .statics
+                    .holds_of(escort)
+                    .filter(|holds| holds.adds_holds())?;
+                let npc = self.space.npc(placed?)?;
                 Some((
                     npc.state,
                     npc.hull.sprite_size,
@@ -54,7 +59,7 @@ impl Session {
             })
             .collect();
         for (state, width, share) in droppers {
-            self.boxes.drop_behind(&state, width, share, chance);
+            self.space.boxes.drop_behind(&state, width, share, chance);
         }
     }
 
@@ -72,11 +77,7 @@ impl Session {
     /// for, until the next reset. The engine reads the hold as it is.
     #[must_use]
     pub fn player_scoops(&self) -> bool {
-        crate::scoop::player_scoops(
-            has_asteroid_scoop(&self.pilot.outfits, &self.outfits),
-            self.capacity(),
-            self.pilot.total_cargo(),
-        )
+        self.ship.player_scoops(&self.pilot, &self.statics)
     }
 
     /// Scoops up the asteroid boxes the ships touch, as `_DoPlayGameWork`
@@ -111,15 +112,15 @@ impl Session {
     /// message, and the HUD's cargo area is drawn afresh each frame, so
     /// the status redraw flag (@0x37199) needs no counterpart.
     pub(super) fn scoop_boxes(&mut self) {
-        if !self.boxes.any_scoopable() {
+        if !self.space.boxes.any_scoopable() {
             return;
         }
-        if !disabled(self.condition) {
+        if !disabled(self.ship.condition) {
             while self.player_scoops() {
-                let Some(taken) = self.boxes.take_touching(
-                    self.player.position,
-                    self.hull.hit_radius,
-                    &self.box_frames,
+                let Some(taken) = self.space.boxes.take_touching(
+                    self.ship.player.position,
+                    self.ship.fit.hull.hit_radius,
+                    &self.statics.box_frames,
                 ) else {
                     break;
                 };
@@ -135,8 +136,8 @@ impl Session {
                 self.reset_precalced();
             }
         }
-        let (boxes, frames) = (&mut self.boxes, &self.box_frames);
-        for npc in self.traffic.npcs_mut() {
+        let (boxes, frames) = (&mut self.space.boxes, &self.statics.box_frames);
+        for npc in self.space.traffic.npcs_mut() {
             if npc.is_scooping() && npc_in_ship_layer(npc) {
                 npc_scoop(
                     boxes,
@@ -147,6 +148,37 @@ impl Session {
                 );
             }
         }
+    }
+}
+
+impl PlayerShip {
+    /// The player's scoop flag (ship +0xc3, see
+    /// [`scoop::player_scoops`](crate::scoop::player_scoops)): it owns an
+    /// asteroid scoop and the fleet's holds ([`Session::capacity`]) are
+    /// past the cargo it holds ([`Pilot::total_cargo`](crate::pilot::Pilot::total_cargo)).
+    ///
+    /// Read live. The original keeps the flag from the last
+    /// `_ResetPlayerPrecalcedValues` (14 callers, the scoop itself among
+    /// them), and the only time that shows is a jünk step in flight
+    /// (`market::step_junk` in `fly_player`), which can fill or free the
+    /// hold with no reset: the original then still scoops one box into a
+    /// hold the step just filled, or passes over one it just freed room
+    /// for, until the next reset. The engine reads the hold as it is.
+    #[must_use]
+    fn player_scoops(&self, pilot: &Pilot, statics: &Statics) -> bool {
+        crate::scoop::player_scoops(
+            has_asteroid_scoop(&pilot.outfits, &statics.outfits),
+            self.capacity(pilot, statics),
+            pilot.total_cargo(),
+        )
+    }
+}
+
+impl Space {
+    /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
+    #[must_use]
+    fn cargo_boxes(&self) -> &[CargoBox] {
+        self.boxes.boxes()
     }
 
     /// Steps the cargo boxes one tick (see
@@ -330,11 +362,13 @@ mod tests {
             "the player's 20 and the freighter's 30"
         );
         let freighter = session
+            .space
+            .escorts
             .fleet
             .get(1)
             .copied()
             .flatten()
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("the freighter flies")
             .state;
         session.jettison_cargo(true, &mut NeverFires);
@@ -360,11 +394,13 @@ mod tests {
         // 30 tons of an abortable mission's cargo go with the 20 of food.
         session.pilot.missions.fill(carrying(140, 30));
         let freighter = session
+            .space
+            .escorts
             .fleet
             .get(1)
             .copied()
             .flatten()
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("the freighter flies")
             .state;
         session.jettison_cargo(true, &mut NeverFires);
@@ -388,7 +424,7 @@ mod tests {
         let catalog = boxed();
         let mut session = escorted(&catalog, 50);
         session.pilot.escorts.truncate(1);
-        session.fleet.truncate(1);
+        session.space.escorts.fleet.truncate(1);
         session.jettison_cargo(true, &mut NeverFires);
         assert_eq!(session.cargo_boxes().len(), 10);
     }
@@ -415,7 +451,7 @@ mod tests {
         let catalog = boxed();
         let mut session = flying(&catalog, 5);
         session.jettison_cargo(true, &mut NeverFires);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         session.tick(Controls::default());
         assert_eq!(session.cargo_boxes()[0].life, 179.0);
     }
@@ -497,6 +533,7 @@ mod tests {
     fn drop_on_ship(session: &mut Session, contents: Option<i16>) {
         let at = session.player().position;
         session
+            .space
             .boxes
             .spawn_scoopable(at, contents, 1, &mut NeverFires);
     }
@@ -538,14 +575,16 @@ mod tests {
         let mut catalog = scoopable();
         catalog.box_frames[1] = Some((40, 40));
         let mut session = scooper(&catalog, 0);
-        let reach = session.hull.hit_radius;
+        let reach = session.ship.fit.hull.hit_radius;
         let at = session.player().position;
         let near = at + Vec2::new(reach + 15.0, 0.0);
         let far = at + Vec2::new(-(reach + 25.0), 0.0);
         session
+            .space
             .boxes
             .spawn_scoopable(near, Some(2), 1, &mut NeverFires);
         session
+            .space
             .boxes
             .spawn_scoopable(far, Some(3), 1, &mut NeverFires);
         session.tick(Controls::default());
@@ -580,7 +619,7 @@ mod tests {
     fn a_disabled_player_takes_no_box() {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_no_scoop(session);
     }
 
@@ -588,8 +627,11 @@ mod tests {
     fn the_scoop_takes_no_jettisoned_box() {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
-        let on_ship = session.player;
-        session.boxes.spawn(&on_ship, Some(0.0), &mut NeverFires);
+        let on_ship = session.ship.player;
+        session
+            .space
+            .boxes
+            .spawn(&on_ship, Some(0.0), &mut NeverFires);
         assert_eq!(session.cargo_boxes()[0].position, on_ship.position);
         session.tick(Controls::default());
         assert_eq!(held(&session), []);
@@ -662,14 +704,18 @@ mod tests {
         for contents in [Some(2), Some(6)] {
             let catalog = scoopable();
             let mut session = scooper(&catalog, 0);
-            session.scan_latches = Latches {
+            session.ship.latches.scan_latches = Latches {
                 junk: false,
                 outfits: false,
             };
             drop_on_ship(&mut session, contents);
             session.tick(Controls::default());
             assert!(session.cargo_boxes().is_empty(), "{contents:?}");
-            assert_eq!(session.scan_latches, Latches::ARMED, "{contents:?}");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{contents:?}"
+            );
         }
     }
 
@@ -681,10 +727,10 @@ mod tests {
             junk: false,
             outfits: false,
         };
-        session.scan_latches = unarmed;
+        session.ship.latches.scan_latches = unarmed;
         drop_on_ship(&mut session, Some(2));
         session.tick(Controls::default());
-        assert_eq!(session.scan_latches, unarmed);
+        assert_eq!(session.ship.latches.scan_latches, unarmed);
     }
 
     #[test]
@@ -692,7 +738,7 @@ mod tests {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
         let at = Vec2::new(300.0, 0.0);
-        let id = session.traffic.add_npc(Npc {
+        let id = session.space.traffic.add_npc(Npc {
             state: ShipState {
                 position: at,
                 velocity: Vec2::ZERO,
@@ -701,10 +747,14 @@ mod tests {
             ..npc(1, ShipStats::default())
         });
         session
+            .space
             .boxes
             .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.cargo_boxes().len(), 1);
-        assert_eq!(session.npc(id).expect("here").cargo, NpcHold::default());
+        assert_eq!(
+            session.space.npc(id).expect("here").cargo,
+            NpcHold::default()
+        );
     }
 }

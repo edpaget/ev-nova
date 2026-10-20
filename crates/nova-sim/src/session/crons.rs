@@ -22,10 +22,12 @@
 //!
 //! **Contribute.** Every reader of the `Contribute` bits the player
 //! holds sums them through one function, [`wares::contributed`]: the
-//! mission offers, the bar's hires ([`Session::contributed`]), the
+//! mission offers, the bar's hires ([`PlayerShip::contributed`]), the
 //! outfitter and the shipyard. It reads the ship flown, the outfits
 //! owned, the crons running and the active ranks.
 
+use super::{PlayerShip, Statics};
+use crate::pilot::Pilot;
 use std::rc::Rc;
 
 use crate::catalog::{CronId, CronRecord};
@@ -57,7 +59,7 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
             Some(state) => crons.insert(cron, state),
             None => crons.remove(&cron),
         };
-        self.session.save_due = true;
+        self.session.out.save_due = true;
     }
 
     fn eligible(&mut self, record: &CronRecord) -> bool {
@@ -75,12 +77,17 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
 
     fn holds(&mut self, record: &CronRecord) -> bool {
         let session = &*self.session;
-        cron::holds(record, session.contributed(), session.gate())
+        cron::holds(
+            record,
+            session.ship.contributed(&session.pilot, &session.statics),
+            session.gate(),
+        )
     }
 
     /// Reports it, once a session.
     fn capped(&mut self, cron: CronId, hook: CronHook) {
         self.session
+            .out
             .reports
             .report(SimDiagnostic::CronRunsCapped { cron, hook });
     }
@@ -90,8 +97,8 @@ impl Session {
     /// The daily step's second participant: one pass over the crons (see
     /// [`cron`](crate::cron)), drawing on `chance`.
     pub(super) fn crons_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let crons = Rc::clone(&self.crons);
-        let rules = self.rules;
+        let crons = Rc::clone(&self.statics.crons);
+        let rules = self.setup.rules;
         cron::pass(
             &crons,
             &rules,
@@ -113,7 +120,7 @@ impl Session {
     /// [`Checks::all_refusals`]: crate::rules::Checks::all_refusals
     #[must_use]
     pub fn cron_refusals(&self, cron: CronId) -> Option<Vec<(&'static str, Verdict<CronRefusal>)>> {
-        let record = self.crons.iter().find(|record| record.id == cron)?;
+        let record = self.statics.crons.iter().find(|record| record.id == cron)?;
         let facts = self.cron_facts(record);
         Some(
             cron::eligibility()
@@ -130,22 +137,24 @@ impl Session {
         CronFacts {
             record,
             today: self.pilot.date,
-            contributed: self.contributed(),
+            contributed: self.ship.contributed(&self.pilot, &self.statics),
             gate: self.gate(),
-            rules: &self.rules,
+            rules: &self.setup.rules,
         }
     }
+}
 
+impl PlayerShip {
     /// The `Contribute` bits the player holds, as they stand
     /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]).
-    pub(super) fn contributed(&self) -> u64 {
+    pub(super) fn contributed(&self, pilot: &Pilot, statics: &Statics) -> u64 {
         let by = Contributors {
-            ship: self.fields.contribute,
-            outfits: &self.outfits,
-            crons: &self.crons,
-            ranks: &self.ranks,
+            ship: self.fit.fields.contribute,
+            outfits: &statics.outfits,
+            crons: &statics.crons,
+            ranks: &statics.ranks,
         };
-        wares::contributed(&by, &self.pilot)
+        wares::contributed(&by, pilot)
     }
 }
 
@@ -282,7 +291,10 @@ mod tests {
         let catalog = contributing();
         let mut session = landed(&catalog);
         assert!(requires(&session));
-        assert_eq!(session.contributed() & 0x4, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0
+        );
         session.pilot.crons.insert(
             CronId(128),
             CronState {
@@ -291,7 +303,10 @@ mod tests {
             },
         );
         assert!(!requires(&session));
-        assert_eq!(session.contributed() & 0x4, 0x4);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0x4
+        );
         session.pilot.crons.insert(
             CronId(128),
             CronState {
@@ -452,9 +467,16 @@ mod tests {
         held.contribute = 0x4;
         let catalog = timing(vec![held]);
         let mut session = quiet(&catalog);
-        assert_eq!(session.contributed() & 0x4, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0
+        );
         session.let_days_pass(1, &mut NeverFires);
-        assert_eq!(session.contributed() & 0x4, 0x4, "running");
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0x4,
+            "running"
+        );
         session.let_days_pass(1, &mut NeverFires);
         assert_eq!(
             session.pilot().crons().get(&CronId(128)),
@@ -463,10 +485,17 @@ mod tests {
                 holdoff: 2
             })
         );
-        assert_eq!(session.contributed() & 0x4, 0, "in its post-holdoff");
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0,
+            "in its post-holdoff"
+        );
         session.let_days_pass(2, &mut NeverFires);
         assert!(session.pilot().crons().is_empty());
-        assert_eq!(session.contributed() & 0x4, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x4,
+            0
+        );
     }
 
     #[test]

@@ -61,7 +61,10 @@ mod tests {
     /// Sets the player's record in its system to `record`.
     fn on_record(session: &mut Session, record: i16) {
         session.pilot.set_system_record(SystemId(130), record);
-        assert_eq!(session.system_record(), record);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            record
+        );
     }
 
     /// Adds a police warship far off, idle: a Good Samaritan.
@@ -71,17 +74,17 @@ mod tests {
         police.ai_type = AiType::Warship;
         police.state.position.x += 3000.0;
         police.goal = Goal::Idle;
-        session.traffic.add_npc(police)
+        session.space.traffic.add_npc(police)
     }
 
     /// Fires one shot at NPC 0, the player's target, then lets the target
     /// go and ticks the fight until the shot lands; then the NPCs answer.
     fn shot_after_letting_go(session: &mut Session) {
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.hold_trigger(Trigger::default());
-        session.target = None;
+        session.chart.target = None;
         for _ in 0..60 {
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 break;
@@ -130,9 +133,9 @@ mod tests {
         lead.ai_type = ai_type;
         lead.goal = Goal::Idle;
         lead.state.position.x += 3000.0;
-        let lead = session.traffic.add_npc(lead);
-        session.traffic.npcs_mut()[0].leader = Some(lead);
-        session.target = Some(NpcId(0));
+        let lead = session.space.traffic.add_npc(lead);
+        session.space.traffic.npcs_mut()[0].leader = Some(lead);
+        session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -224,19 +227,19 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let seen = session.player_side();
         assert_eq!((seen.target, seen.class), (None, EscortClass::Freighter));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         assert_eq!(session.player_side().target, Some(ShipRef::Npc(NpcId(0))));
         let class = |session: &mut Session, escort_type: i16, inherent_ai: i16, mass: i16| {
             let mut record = ship(session.pilot.ship.0, ShipFields { mass, ..FAST });
             record.escort_type = escort_type;
             record.inherent_ai = inherent_ai;
-            session.ships = vec![record];
+            session.statics_mut().ships = vec![record];
             session.player_side().class
         };
         assert_eq!(class(&mut session, 0, 1, 500), EscortClass::Fighter);
         assert_eq!(class(&mut session, -1, 3, 49), EscortClass::Fighter);
         assert_eq!(class(&mut session, 2, 3, 49), EscortClass::Warship);
-        session.ships = vec![ship(129, FAST)];
+        session.statics_mut().ships = vec![ship(129, FAST)];
         assert_eq!(session.player_side().class, EscortClass::Freighter);
         assert_eq!(session.pilot.ship, ShipId(128));
     }
@@ -248,10 +251,10 @@ mod tests {
         for crew in [-1, 0, 7] {
             let mut record = ship(session.pilot.ship.0, FAST);
             record.crew = crew;
-            session.ships = vec![record];
+            session.statics_mut().ships = vec![record];
             assert_eq!(session.player_side().hull.crew, crew);
         }
-        session.ships = vec![ship(129, FAST)];
+        session.statics_mut().ships = vec![ship(129, FAST)];
         assert_eq!(session.player_side().hull.crew, 0, "no record of its own");
     }
 }

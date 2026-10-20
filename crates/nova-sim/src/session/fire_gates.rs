@@ -44,7 +44,7 @@ const PICKED: Trigger = Trigger {
 fn waiting(mode: Mode) -> (crate::testkit::FakePilotCatalog, Session) {
     let catalog = armed();
     let mut session = facing_an_npc(&catalog, 180);
-    let npc = &mut session.traffic.npcs_mut()[0];
+    let npc = &mut session.space.traffic.npcs_mut()[0];
     npc.mode = mode;
     npc.trigger = PICKED;
     npc.pick = Some(WeaponId(128));
@@ -148,9 +148,13 @@ fn reused_slot(reading: RuleSource) -> (crate::testkit::FakePilotCatalog, Sessio
     assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "kept");
     let mut next = session.npcs()[0].clone();
     next.pick = None;
-    session.traffic.remove(NpcId(0));
-    let id = session.traffic.add_npc(next);
-    assert_eq!(session.npc(id).map(|npc| npc.berth), Some(1), "its slot");
+    session.space.traffic.remove(NpcId(0));
+    let id = session.space.traffic.add_npc(next);
+    assert_eq!(
+        session.space.npc(id).map(|npc| npc.berth),
+        Some(1),
+        "its slot"
+    );
     (catalog, session)
 }
 
@@ -178,13 +182,17 @@ fn the_reused_slot_reading_outlives_a_new_traffic() {
     for reading in [RuleSource::Engine, RuleSource::Bible] {
         let rules = Rulebook::default().with_override(RuleKey::ReusedSlotPick, reading);
         let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
-        assert_eq!(session.traffic.reused_slot_pick(), reading);
-        let stellar = session.sites[0].id;
+        assert_eq!(session.space.traffic.reused_slot_pick(), reading);
+        let stellar = session.chart.sites[0].id;
         session
             .land_at(&catalog, session.pilot.system, stellar)
             .expect("relocates");
         assert_eq!(session.npcs(), [], "a new traffic");
-        assert_eq!(session.traffic.reused_slot_pick(), reading, "re-applied");
+        assert_eq!(
+            session.space.traffic.reused_slot_pick(),
+            reading,
+            "re-applied"
+        );
     }
 }
 
@@ -194,12 +202,12 @@ fn a_captured_ships_slot_keeps_no_pick() {
     let (_, mut session) = reused_slot(RuleSource::Engine);
     let id = session.npcs()[0].id;
     session.fleet_up(id, None);
-    assert_eq!(session.npc(id).map(|npc| npc.pick), Some(None));
-    let mut next = session.npc(id).expect("joined").clone();
-    session.traffic.remove(id);
+    assert_eq!(session.space.npc(id).map(|npc| npc.pick), Some(None));
+    let mut next = session.space.npc(id).expect("joined").clone();
+    session.space.traffic.remove(id);
     next.pick = None;
-    let again = session.traffic.add_npc(next);
-    assert_eq!(session.npc(again).map(|npc| npc.pick), Some(None));
+    let again = session.space.traffic.add_npc(next);
+    assert_eq!(session.space.npc(again).map(|npc| npc.pick), Some(None));
 }
 
 #[test]
@@ -234,8 +242,8 @@ impl Behaviour for Dogfighting {
 fn dogfight_heading(pick: WeaponId, carries: bool) -> Option<i16> {
     let catalog = armed();
     let mut session = facing_an_npc(&catalog, 180);
-    session.player.velocity = Vec2::new(4.0, 0.0);
-    let npc = &mut session.traffic.npcs_mut()[0];
+    session.ship.player.velocity = Vec2::new(4.0, 0.0);
+    let npc = &mut session.space.traffic.npcs_mut()[0];
     if !carries {
         npc.armament = crate::combat::armament::Armament::default();
     }

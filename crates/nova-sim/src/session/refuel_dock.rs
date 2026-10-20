@@ -7,7 +7,7 @@
 //! which the session hands the traffic in its [`World`](crate::traffic::World).
 //!
 //! - **The fuel** lands in the pilot's tank after the traffic's tick
-//!   ([`Session::take_refuel`]), before the frame is drawn, where the
+//!   ([`Space::take_refuel`]), before the frame is drawn, where the
 //!   original adds it inside the refueller's think: no boundary is
 //!   crossed. By the original's reading it has no cap, so a frame may show
 //!   a tank past its most; the next tick's flight step clamps it back
@@ -20,13 +20,16 @@
 //!   think after the fuel passed 100, and said as the line's work settles
 //!   (see the `comm_calls` module).
 
-use super::Session;
+use super::{Session, Space};
+use crate::pilot::Pilot;
 
-impl Session {
+impl Session {}
+
+impl Space {
     /// The fuel the ships refuelling the player gave it this tick lands in
     /// its tank (see the module docs).
-    pub(super) fn take_refuel(&mut self) {
-        self.pilot.reserves.fuel.now += self.traffic.take_fuel_given();
+    pub(super) fn take_refuel(&mut self, pilot: &mut Pilot) {
+        pilot.reserves.fuel.now += self.traffic.take_fuel_given();
     }
 }
 
@@ -74,7 +77,7 @@ mod tests {
         session.pilot.ship_name = Some("Kestrel".to_owned());
         session.pilot.reserves.fuel = Gauge { now: fuel, max };
         let _ = session.take_sounds();
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.goal = Goal::Assist(Help::Refuel);
         npc.target = Some(ShipRef::Player);
         npc.hull.class_turn = 3.0;
@@ -105,11 +108,11 @@ mod tests {
         assert!(traffic_tick(&mut session, &catalog).is_empty());
         assert_eq!(session.reserves().fuel.now, 41.0);
         let (mut far, helper) = refuelled(&catalog, 40.0, 300.0);
-        far.npc_mut(helper).expect("here").state.position = Vec2::new(0.0, -106.0);
+        far.space.npc_mut(helper).expect("here").state.position = Vec2::new(0.0, -106.0);
         traffic_tick(&mut far, &catalog);
         assert_eq!(far.reserves().fuel.now, 40.0, "beyond its box");
         let (mut moving, helper) = refuelled(&catalog, 40.0, 300.0);
-        moving.npc_mut(helper).expect("here").state.velocity = Vec2::new(0.0, 0.36);
+        moving.space.npc_mut(helper).expect("here").state.velocity = Vec2::new(0.0, 0.36);
         traffic_tick(&mut moving, &catalog);
         assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
     }
@@ -135,7 +138,7 @@ mod tests {
         );
         assert_eq!(session.take_sounds(), [SimSound::EnergyTransferComplete]);
         assert_eq!(session.reserves().fuel.now, 101.0);
-        let done = session.npc(helper).expect("here");
+        let done = session.space.npc(helper).expect("here");
         assert_eq!(done.goal, Goal::Idle, "it decides again");
         assert_eq!(done.target, None);
         assert!(!done.travel_set, "+0x6c -1, @0x8f6ce");
@@ -154,7 +157,7 @@ mod tests {
             assert_eq!(session.reserves().fuel.now, 101.0, "tick {tick}");
         }
         assert_eq!(
-            session.npc(helper).map(|npc| npc.goal),
+            session.space.npc(helper).map(|npc| npc.goal),
             Some(Goal::Assist(Help::Refuel))
         );
         session.tick(Controls::default());
@@ -171,7 +174,10 @@ mod tests {
         assert_eq!(session.reserves().fuel.now, 100.0, "to the tank");
         assert_eq!(frame(&mut session, &catalog).len(), 1, "full: done");
         assert_eq!(session.reserves().fuel.now, 100.0);
-        assert_eq!(session.npc(helper).map(|npc| npc.goal), Some(Goal::Idle));
+        assert_eq!(
+            session.space.npc(helper).map(|npc| npc.goal),
+            Some(Goal::Idle)
+        );
     }
 
     #[test]
@@ -183,10 +189,10 @@ mod tests {
             .try_into()
             .expect("one note");
         for tick in 1..note.ticks() {
-            session.count_down_comm_line();
+            session.space.count_down_comm_line();
             assert!(!session.comm_line().free_for_calls(), "{tick} counted");
         }
-        session.count_down_comm_line();
+        session.space.count_down_comm_line();
         assert!(session.comm_line().free_for_calls(), "the note counted");
     }
 
@@ -202,11 +208,11 @@ mod tests {
     fn nothing_is_given_while_landed_or_by_a_ship_not_intact_or_coasting() {
         let catalog = catalog();
         let (mut landed, _) = refuelled(&catalog, 40.0, 300.0);
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let (mut disabled, helper) = refuelled(&catalog, 40.0, 300.0);
-        disabled.npc_mut(helper).expect("here").condition = Condition::Disabled;
+        disabled.space.npc_mut(helper).expect("here").condition = Condition::Disabled;
         let (mut coasting, helper) = refuelled(&catalog, 40.0, 300.0);
-        coasting.npc_mut(helper).expect("here").mode = Mode::Coasting { ticks_left: 3 };
+        coasting.space.npc_mut(helper).expect("here").mode = Mode::Coasting { ticks_left: 3 };
         // One at a time: three sessions make too large an array.
         let given_nothing = |name: &str, mut session: Session| {
             traffic_tick(&mut session, &catalog);
@@ -221,7 +227,7 @@ mod tests {
     fn a_refuel_goes_on_through_the_warp_lead_in() {
         let catalog = catalog();
         let (mut session, _) = refuelled(&catalog, 40.0, 300.0);
-        session.jump = Some(Jump::Hyperspace {
+        session.mode = crate::session::Mode::Jumping(Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });

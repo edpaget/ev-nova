@@ -5,7 +5,7 @@
 //!
 //! **The line.** The session keeps the one count every reader asks:
 //!
-//! - Each message it raises sets it as it is raised ([`Session::say`],
+//! - Each message it raises sets it as it is raised ([`Space::say`],
 //!   [`SimMessage::ticks`]); so do the hail quotes (420, see the
 //!   `persons` module) and the assisting ships' comm notes
 //!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The flight
@@ -102,7 +102,7 @@
 //! still said after the fight: rdm:phase/combat-ai-fidelity/phase-28-left-out-of-phase-22.
 //! A ship that left the system in the frame calls nothing.
 
-use super::Session;
+use super::{Outbox, Session, Setup, Space, Statics};
 use crate::ai::CommCall;
 use crate::ai::call_for_help::{DistressFacts, calls_for_help, threatens_player};
 use crate::chance::Chance;
@@ -112,6 +112,7 @@ use crate::hail::{Help, QUIET, likes_player};
 use crate::legal::LegalCode;
 use crate::message::SimMessage;
 use crate::mission::hail_finds;
+use crate::pilot::Pilot;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
 use crate::traffic::on_line::OnLine;
@@ -135,30 +136,23 @@ pub const SCAN_HAIL_FIRST: usize = 381;
 pub const SCAN_HAIL_COUNT: u32 = 3;
 
 impl Session {
-    /// Raises `message` on the message line, setting the line's count to
-    /// its ticks as `_DisplayComm` does (@0x9024b).
-    pub(super) fn say(&mut self, message: SimMessage) {
-        self.comm_line.show(message.ticks());
-        self.messages.push(message);
-    }
-
     /// The flight shows a line of its own for `ticks`: one the view
     /// raises and words itself, or composes from the session's (see the
     /// module docs). A line the session raised is not shown again here.
     pub fn comm_shown(&mut self, ticks: u16) {
-        self.comm_line.show(ticks);
+        self.space.comm_shown(ticks);
     }
 
     /// Return (`ackComm`) clears the message line: for a tick, while a
     /// line shows (`_HandlePlayer` @0x6dd22-0x6dd65).
     pub fn comm_acknowledged(&mut self) {
-        self.comm_line.acknowledge();
+        self.space.comm_acknowledged();
     }
 
     /// The message line's countdown, as the calls read it.
     #[must_use]
     pub fn comm_line(&self) -> CommLine {
-        self.comm_line
+        self.space.comm_line()
     }
 
     /// The flight counts the message line down a tick of a pass it
@@ -167,18 +161,7 @@ impl Session {
     /// shows ([`Session::comm_shown`]) after the session's own pass (see
     /// the session's `plunder_loop` module).
     pub fn comm_ticked(&mut self) {
-        self.count_down_comm_line();
-    }
-
-    /// The frame's countdown of the message line (see the module docs).
-    pub(super) fn count_down_comm_line(&mut self) {
-        self.comm_line.tick();
-    }
-
-    /// A landing sets the line's count to 0 (`_HandlePlayerDockRequest`
-    /// @0x66d7f).
-    pub(super) fn reset_comm_line(&mut self) {
-        self.comm_line.reset();
+        self.space.comm_ticked();
     }
 
     /// Answers NPC `id`'s `call`, made by a think that read the `odds`
@@ -192,7 +175,14 @@ impl Session {
     ) {
         match call {
             CommCall::Distress => self.call_for_help(id, chance),
-            CommCall::PreScan => self.hail_before_scan(id, chance),
+            CommCall::PreScan => self.space.hail_before_scan(
+                &self.pilot,
+                &self.statics,
+                &self.setup,
+                &mut self.out,
+                id,
+                chance,
+            ),
             CommCall::Reinforcements => self.call_for_reinforcements(id, false, Some(odds)),
         }
     }
@@ -227,10 +217,10 @@ impl Session {
     /// the arrival would cut off is dropped with the system's traffic, as
     /// the original's would be held.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return;
         }
-        for work in self.traffic.take_on_line() {
+        for work in self.space.traffic.take_on_line() {
             match work {
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
                 OnLine::Call(id, call, odds) => self.answer_call(id, call, odds, chance),
@@ -238,11 +228,19 @@ impl Session {
                 OnLine::RefuelDone(id, ship) => {
                     // `_beepSnd[1]` (@0x8f585-0x8f5b0), with the line.
                     let sound = SimSound::EnergyTransferComplete;
-                    self.say_help_done(id, ship, Help::Refuel, sound);
+                    self.space.say_help_done(
+                        &self.pilot,
+                        &self.statics,
+                        &mut self.out,
+                        id,
+                        ship,
+                        Help::Refuel,
+                        sound,
+                    );
                 }
             }
         }
-        if std::mem::take(&mut self.reinforcements_held) {
+        if std::mem::take(&mut self.space.reinforcements_held) {
             self.tick_reinforcements(chance);
         }
     }
@@ -254,17 +252,18 @@ impl Session {
         let around = world.around(self.npcs());
         let npc = around.npc(id)?;
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
         Some(DistressFacts {
             person: npc.person.is_some(),
-            quiet: self.govts.flag2(npc.govt, QUIET),
-            quiet_inherent: self.govts.flag2(inherent, QUIET),
-            line_free: self.comm_line.free_for_calls(),
+            quiet: self.statics.govts.flag2(npc.govt, QUIET),
+            quiet_inherent: self.statics.govts.flag2(inherent, QUIET),
+            line_free: self.space.comm_line.free_for_calls(),
             liked: likes_player(npc, &around, self.mission_hail(npc)),
-            threatens: threatens_player(npc, &around, self.condition == Condition::Intact),
+            threatens: threatens_player(npc, &around, self.ship.condition == Condition::Intact),
             player_dying: matches!(
-                self.condition,
+                self.ship.condition,
                 Condition::Dying { .. } | Condition::Destroyed
             ),
             cloaked: npc.cloak.is_cloaked(),
@@ -285,37 +284,97 @@ impl Session {
         let name = self.npc_name(npc).unwrap_or_default().to_owned();
         let pick = chance.below(DISTRESS_LINE_COUNT) as usize;
         let line = self
+            .setup
             .nth_string(DISTRESS_LINES, 1 + pick)
             .unwrap_or_default();
-        self.sounds.push(SimSound::CallForHelp);
-        self.say(SimMessage::CallForHelp(format!("{name}:  {line}")));
+        self.out.sounds.push(SimSound::CallForHelp);
+        self.space.say(
+            &mut self.out,
+            SimMessage::CallForHelp(format!("{name}:  {line}")),
+        );
+    }
+}
+
+impl Space {
+    /// Raises `message` on the message line, setting the line's count to
+    /// its ticks as `_DisplayComm` does (@0x9024b).
+    pub(super) fn say(&mut self, out: &mut Outbox, message: SimMessage) {
+        self.comm_line.show(message.ticks());
+        out.messages.push(message);
+    }
+
+    /// The flight shows a line of its own for `ticks`: one the view
+    /// raises and words itself, or composes from the session's (see the
+    /// module docs). A line the session raised is not shown again here.
+    fn comm_shown(&mut self, ticks: u16) {
+        self.comm_line.show(ticks);
+    }
+
+    /// Return (`ackComm`) clears the message line: for a tick, while a
+    /// line shows (`_HandlePlayer` @0x6dd22-0x6dd65).
+    fn comm_acknowledged(&mut self) {
+        self.comm_line.acknowledge();
+    }
+
+    /// The message line's countdown, as the calls read it.
+    #[must_use]
+    fn comm_line(&self) -> CommLine {
+        self.comm_line
+    }
+
+    /// The flight counts the message line down a tick of a pass it
+    /// shows a line in: the plunder dialog's loop, whose `_HandleComm`
+    /// (@0x949a1) comes after a take's line, which the flight words and
+    /// shows ([`Session::comm_shown`]) after the session's own pass (see
+    /// the session's `plunder_loop` module).
+    fn comm_ticked(&mut self) {
+        self.count_down_comm_line();
+    }
+
+    /// The frame's countdown of the message line (see the module docs).
+    pub(super) fn count_down_comm_line(&mut self) {
+        self.comm_line.tick();
+    }
+
+    /// A landing sets the line's count to 0 (`_HandlePlayerDockRequest`
+    /// @0x66d7f).
+    pub(super) fn reset_comm_line(&mut self) {
+        self.comm_line.reset();
     }
 
     /// Interceptor `id`'s pre-scan hail, when it has a government, the
     /// player carries mission cargo that government scans for, and the
     /// line is idle.
-    fn hail_before_scan(&mut self, id: NpcId, chance: &mut (impl Chance + ?Sized)) {
+    fn hail_before_scan(
+        &mut self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+        id: NpcId,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let Some(npc) = self.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
-        let Some(govt) = npc.govt.and_then(|govt| self.govts.get(govt)) else {
+        let Some(govt) = npc.govt.and_then(|govt| statics.govts.get(govt)) else {
             return;
         };
-        let found = hail_finds(govt, &self.pilot.missions, |mission| {
-            self.lifecycle_record(mission)
+        let found = hail_finds(govt, &pilot.missions, |mission| {
+            statics.lifecycle_record(mission)
         });
         if !found || !self.comm_line.idle() {
             return;
         }
-        let class = self.ship_name(npc.ship).unwrap_or_default();
-        let ship_name = self.pilot.ship_name().unwrap_or_default();
+        let class = statics.ship_name(npc.ship).unwrap_or_default();
+        let ship_name = pilot.ship_name().unwrap_or_default();
         let pick = chance.below(SCAN_HAIL_COUNT) as usize;
-        let words = self
+        let words = setup
             .nth_string(SCAN_HAIL_LINES, SCAN_HAIL_FIRST + pick)
             .unwrap_or_default();
         let text = format!("{class}:  {ship_name}, {words}.");
-        self.sounds.push(SimSound::ScanHail);
-        self.say(SimMessage::ScanHail(text));
+        out.sounds.push(SimSound::ScanHail);
+        self.say(out, SimMessage::ScanHail(text));
     }
 }
 
@@ -461,7 +520,7 @@ mod tests {
             .with_strings(Rc::new(Lines));
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
         let _ = (session.take_messages(), session.take_sounds());
-        session.comm_line = CommLine::default();
+        session.space.comm_line = CommLine::default();
         session
     }
 
@@ -472,8 +531,8 @@ mod tests {
         let mut ship = npc(0, session.stats());
         ship.govt = govt;
         ship.ship = class;
-        ship.state.position = session.player.position;
-        session.traffic.add_npc(ship)
+        ship.state.position = session.ship.player.position;
+        session.space.traffic.add_npc(ship)
     }
 
     /// A trader of `govt` and `class` fleeing a pirate, calling for help;
@@ -558,7 +617,10 @@ mod tests {
         let catalog = calling_catalog();
         let mut session = flying(&catalog);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
-        session.say(SimMessage::FleetArrivalQuote("Hail".to_owned()));
+        session.space.say(
+            &mut session.out,
+            SimMessage::FleetArrivalQuote("Hail".to_owned()),
+        );
         let _ = session.take_messages();
         assert_eq!(ticked(&mut session, &catalog, &calls, &[0]).0, []);
     }
@@ -585,7 +647,7 @@ mod tests {
         );
         silent(
             &|session, trader| {
-                session.npc_mut(trader).expect("there").person =
+                session.space.npc_mut(trader).expect("there").person =
                     Some(crate::traffic::npc::NpcPerson {
                         id: crate::catalog::PersonId(600),
                         flags: 0,
@@ -607,7 +669,7 @@ mod tests {
         );
         silent(
             &|session, trader| {
-                session.npc_mut(trader).expect("there").cloak = crate::cloak::Cloak {
+                session.space.npc_mut(trader).expect("there").cloak = crate::cloak::Cloak {
                     fade: crate::cloak::FADE_FULL,
                     direction: 0,
                 };
@@ -617,14 +679,14 @@ mod tests {
             "cloaked",
         );
         silent(
-            &|session, _| session.condition = Condition::Destroyed,
+            &|session, _| session.ship.condition = Condition::Destroyed,
             Some(TRADERS),
             CALLER,
             "the player destroyed",
         );
         silent(
             &|session, _| {
-                session.condition = Condition::Dying {
+                session.ship.condition = Condition::Dying {
                     ticks_left: 10,
                     starting: false,
                 };
@@ -636,7 +698,7 @@ mod tests {
         silent(
             &|session, trader| {
                 session.pilot.missions.put(0, named("Rover"));
-                session.npc_mut(trader).expect("there").mission = Some(MissionMark {
+                session.space.npc_mut(trader).expect("there").mission = Some(MissionMark {
                     slot: 0,
                     behav: ShipBehav::AttackPlayer,
                     formation: None,
@@ -667,7 +729,7 @@ mod tests {
             let mut session = flying(&catalog);
             session.pilot.missions.put(0, named(name));
             let (trader, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
-            session.npc_mut(trader).expect("there").mission = Some(MissionMark {
+            session.space.npc_mut(trader).expect("there").mission = Some(MissionMark {
                 slot: 0,
                 behav: ShipBehav::EscortPlayer,
                 formation: None,
@@ -696,9 +758,9 @@ mod tests {
             session.pilot.missions.put(0, cargo);
         }
         let police = add(&mut session, govt, CALLER);
-        session.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
+        session.space.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
         if counted {
-            session.count_down_comm_line();
+            session.space.count_down_comm_line();
         }
         let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
         ticked(&mut session, &catalog, &calling([(police, picks)]), draws)
@@ -789,7 +851,9 @@ mod tests {
     fn a_message_the_session_raises_sets_the_line_to_its_ticks() {
         let catalog = calling_catalog();
         let mut session = flying(&catalog);
-        session.say(SimMessage::ScanHail(String::new()));
+        session
+            .space
+            .say(&mut session.out, SimMessage::ScanHail(String::new()));
         for _ in 0..399 {
             session.tick_quotes(&catalog, &mut NeverFires);
         }
@@ -819,7 +883,7 @@ mod tests {
         session.pilot.missions.put(0, carrying(140, 4));
         let calls = calling(&mut session);
         let scanner = add(&mut session, Some(TRADERS), CALLER);
-        let npc = session.npc_mut(scanner).expect("there");
+        let npc = session.space.npc_mut(scanner).expect("there");
         npc.ai_type = AiType::Interceptor;
         npc.goal = Goal::Inspect(ShipRef::Player);
         let mut chance = crate::testkit::Ranged::of(&[(100, 0)]);
@@ -870,8 +934,8 @@ mod tests {
         for source in [RuleSource::Engine, RuleSource::Bible] {
             let (messages, sounds) = scanned_while(source, |session| {
                 let police = add(session, Some(TRADERS), CALLER);
-                session.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
-                session.count_down_comm_line();
+                session.space.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
+                session.space.count_down_comm_line();
                 let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
                 calling([(police, picks)])
             });
@@ -897,7 +961,7 @@ mod tests {
     /// the player; it gives the inspection up on its next think.
     fn scanner(session: &mut Session) -> NpcId {
         let police = add(session, Some(POLICE), CALLER);
-        let npc = session.npc_mut(police).expect("there");
+        let npc = session.space.npc_mut(police).expect("there");
         npc.ai_type = AiType::Interceptor;
         npc.goal = Goal::Inspect(ShipRef::Player);
         police
@@ -966,8 +1030,8 @@ mod tests {
         session.pilot.missions.put(0, carrying(140, 4));
         scanner(&mut session);
         let hailer = add(&mut session, Some(TRADERS), CALLER);
-        session.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
-        session.count_down_comm_line();
+        session.space.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.space.count_down_comm_line();
         assert!(session.comm_line().idle());
         let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
         let calls = calling([(hailer, picks)]);
@@ -999,7 +1063,7 @@ mod tests {
         let catalog = calling_catalog();
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: crate::geometry::Vec2::new(0.0, -5000.0),
             velocity: crate::geometry::Vec2::ZERO,
             heading: 90.0,
@@ -1090,8 +1154,8 @@ mod tests {
         let mut calls = Calling::default();
         plunderer(&mut session, &mut calls);
         let hailer = add(&mut session, Some(TRADERS), CALLER);
-        session.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
-        session.count_down_comm_line();
+        session.space.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.space.count_down_comm_line();
         assert!(session.comm_line().idle());
         calls.0.insert(
             hailer,
@@ -1137,7 +1201,10 @@ mod tests {
         let pirate = add(&mut session, None, ShipId(128));
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session.traffic.queue_pirate_event(escort_stolen(pirate));
+            session
+                .space
+                .traffic
+                .queue_pirate_event(escort_stolen(pirate));
         });
         assert_eq!(messages, [SimMessage::ShipStolen { fighter: false }]);
         assert_eq!(sounds, [SimSound::ShipStolen]);
@@ -1150,7 +1217,10 @@ mod tests {
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let pirate = add(&mut session, None, ShipId(128));
         let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session.traffic.queue_pirate_event(escort_stolen(pirate));
+            session
+                .space
+                .traffic
+                .queue_pirate_event(escort_stolen(pirate));
         });
         assert_eq!(
             messages,
@@ -1167,7 +1237,7 @@ mod tests {
     /// above a jump's fuel, so the refuel is done on its first tick.
     fn refueller(session: &mut Session) -> NpcId {
         let helper = add(session, Some(TRADERS), ShipId(128));
-        let npc = session.npc_mut(helper).expect("there");
+        let npc = session.space.npc_mut(helper).expect("there");
         npc.goal = Goal::Assist(crate::hail::Help::Refuel);
         npc.target = Some(ShipRef::Player);
         session.pilot.reserves.fuel.now = 150.0;
@@ -1214,7 +1284,7 @@ mod tests {
         };
         let (messages, notes, sounds) =
             stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.traffic.queue_pirate_event(repaired);
+                session.space.traffic.queue_pirate_event(repaired);
             });
         assert_eq!(messages, [], "no call for help");
         assert_eq!(notes.len(), 1);
@@ -1233,7 +1303,7 @@ mod tests {
         };
         let (messages, notes, sounds) =
             stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.traffic.queue_pirate_event(repaired);
+                session.space.traffic.queue_pirate_event(repaired);
             });
         assert_eq!(messages, help("Ship 129:  Help 1"));
         assert_eq!(notes.len(), 1);
@@ -1255,8 +1325,16 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
         session.reset_precalced();
-        let _ = session.sabotage.tick(false, &mut Draws::of(&[0]));
-        session.sabotage.set_counter(crate::sabotage::FUSE);
+        let _ = session
+            .ship
+            .latches
+            .sabotage
+            .tick(false, &mut Draws::of(&[0]));
+        session
+            .ship
+            .latches
+            .sabotage
+            .set_counter(crate::sabotage::FUSE);
     }
 
     /// The bomb's line.
@@ -1301,7 +1379,7 @@ mod tests {
             .pilot
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::ESCAPE_FIGHTERS), 2);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         session.hold_eject(true);
         let (messages, sounds, _) = stepped(&mut session, &catalog, &calls, &[0; 8]);
         assert_eq!(
@@ -1328,7 +1406,7 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(437), 1);
         session.pilot.reserves.armor.now = 3.0;
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(
             messages,
@@ -1357,8 +1435,8 @@ mod tests {
             let mut ship = npc(0, session.stats());
             ship.govt = Some(TRADERS);
             ship.ship = class;
-            ship.state.position = session.player.position;
-            session.traffic.add_npc_at(ship, at)
+            ship.state.position = session.ship.player.position;
+            session.space.traffic.add_npc_at(ship, at)
         };
         let high = flee(5, CALLER, &mut session);
         let low = flee(2, ShipId(128), &mut session);

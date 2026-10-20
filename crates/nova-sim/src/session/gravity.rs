@@ -32,7 +32,7 @@
 //! The pull is a shove the session sets after the tick, with the hits'.
 //! None of this plays a sound.
 
-use super::Session;
+use super::{Chart, PlayerShip, Session, Setup};
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -50,37 +50,7 @@ impl Session {
     /// `Gravity` not none (@0x39c20-0x39c27). None in the stock data.
     #[must_use]
     pub fn gravity_sources_present(&self) -> bool {
-        self.listed.iter().any(|site| site.gravity != 0)
-    }
-
-    /// Which of the afterburner's widenings a gravity source keeps plain,
-    /// by [`RuleKey::GravityAfterburner`].
-    pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
-        GravityAfterburner::from(self.rules.source_for(RuleKey::GravityAfterburner))
-    }
-
-    /// `_HandleGravity`'s sources (see the module docs): each listed
-    /// stellar of `Gravity` not none, in slot order.
-    fn gravity_sources(&self) -> Vec<GravitySource> {
-        self.listed
-            .iter()
-            .filter(|site| site.gravity != 0)
-            .map(|site| GravitySource {
-                at: site.position,
-                gravity: site.gravity,
-            })
-            .collect()
-    }
-
-    /// Whether gravity leaves the player alone (`_ShipResistsGravity`):
-    /// its hull, its inertialess flight or its `ModType` 41 outfit.
-    fn player_resists_gravity(&self) -> bool {
-        resists_gravity(
-            self.hull.stellar_immune,
-            self.player_inertialess(),
-            self.stats.gravity_resistance,
-            Flyer::Player,
-        )
+        self.chart.gravity_sources_present()
     }
 
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
@@ -89,7 +59,7 @@ impl Session {
         let leader = self.leader_state(npc);
         resists_gravity(
             npc.hull.stellar_immune,
-            npc.flies_inertialess(leader.as_ref(), self.flight_rules().inertial_dampener),
+            npc.flies_inertialess(leader.as_ref(), self.setup.flight_rules().inertial_dampener),
             npc.stats.gravity_resistance,
             Flyer::Npc,
         )
@@ -99,8 +69,8 @@ impl Session {
     /// whether it keeps close formation reads.
     pub(super) fn leader_state(&self, npc: &Npc) -> Option<ShipState> {
         match npc.leader_ref()? {
-            ShipRef::Player => Some(self.player),
-            ShipRef::Npc(id) => self.npc(id).map(|leader| leader.state),
+            ShipRef::Player => Some(self.ship.player),
+            ShipRef::Npc(id) => self.space.npc(id).map(|leader| leader.state),
         }
     }
 
@@ -112,22 +82,8 @@ impl Session {
     /// `_DoPlayGameWork` calls them (@0x44509, @0x4450e).
     pub(super) fn stellar_hazards(&self) -> StellarHazards {
         StellarHazards {
-            gravity: self.gravity_sources(),
+            gravity: self.chart.gravity_sources(),
             deadly: self.deadly_discs(),
-        }
-    }
-
-    /// Which stellar hazards the player resists: gravity by
-    /// `_ShipResistsGravity`, a deadly stellar by
-    /// `_ShipResistsDeadlyStellars` ([`resists_deadly`]).
-    pub(super) fn player_hazard_resistance(&self) -> HazardResistance {
-        HazardResistance {
-            gravity: self.player_resists_gravity(),
-            deadly: resists_deadly(
-                self.hull.stellar_immune,
-                self.stats.deadly_resistance,
-                Flyer::Player,
-            ),
         }
     }
 
@@ -141,6 +97,65 @@ impl Session {
                 Flyer::Npc,
             ),
         }
+    }
+}
+
+impl Setup {
+    /// Which of the afterburner's widenings a gravity source keeps plain,
+    /// by [`RuleKey::GravityAfterburner`].
+    pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
+        GravityAfterburner::from(self.rules.source_for(RuleKey::GravityAfterburner))
+    }
+}
+
+impl PlayerShip {
+    /// Whether gravity leaves the player alone (`_ShipResistsGravity`):
+    /// its hull, its inertialess flight or its `ModType` 41 outfit.
+    fn player_resists_gravity(&self, setup: &Setup) -> bool {
+        resists_gravity(
+            self.fit.hull.stellar_immune,
+            self.player_inertialess(setup),
+            self.fit.stats.gravity_resistance,
+            Flyer::Player,
+        )
+    }
+
+    /// Which stellar hazards the player resists: gravity by
+    /// `_ShipResistsGravity`, a deadly stellar by
+    /// `_ShipResistsDeadlyStellars` ([`resists_deadly`]).
+    pub(super) fn player_hazard_resistance(&self, setup: &Setup) -> HazardResistance {
+        HazardResistance {
+            gravity: self.player_resists_gravity(setup),
+            deadly: resists_deadly(
+                self.fit.hull.stellar_immune,
+                self.fit.stats.deadly_resistance,
+                Flyer::Player,
+            ),
+        }
+    }
+}
+
+impl Chart {
+    /// Whether any gravity source is in the player's system,
+    /// `_gravitySourcesPresent` (*0x3b5568) as `_HandleGravity` leaves it:
+    /// any stellar the system lists, shown or not, destroyed or not, of
+    /// `Gravity` not none (@0x39c20-0x39c27). None in the stock data.
+    #[must_use]
+    fn gravity_sources_present(&self) -> bool {
+        self.listed.iter().any(|site| site.gravity != 0)
+    }
+
+    /// `_HandleGravity`'s sources (see the module docs): each listed
+    /// stellar of `Gravity` not none, in slot order.
+    fn gravity_sources(&self) -> Vec<GravitySource> {
+        self.listed
+            .iter()
+            .filter(|site| site.gravity != 0)
+            .map(|site| GravitySource {
+                at: site.position,
+                gravity: site.gravity,
+            })
+            .collect()
     }
 }
 
@@ -178,10 +193,10 @@ mod tests {
         shown: usize,
     ) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.listed = listed.to_vec();
-        session.sites = listed[..shown].to_vec();
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.listed = listed.to_vec();
+        session.chart.sites = listed[..shown].to_vec();
         session
     }
 
@@ -206,11 +221,11 @@ mod tests {
     }
 
     fn npc(session: &Session) -> &Npc {
-        &session.traffic.npcs()[0]
+        &session.space.traffic.npcs()[0]
     }
 
     fn npc_mut(session: &mut Session) -> &mut Npc {
-        &mut session.traffic.npcs_mut()[0]
+        &mut session.space.traffic.npcs_mut()[0]
     }
 
     fn near(a: Vec2, b: Vec2) -> bool {
@@ -253,9 +268,9 @@ mod tests {
             let player = pull(Vec2::ZERO, stellar, 40, 1.0);
             assert!(player.x > 0.09, "toward it: {player:?}");
             assert!(
-                near(session.player.velocity, player),
+                near(session.ship.player.velocity, player),
                 "{:?}",
-                session.player
+                session.ship.player
             );
             let at = npc(&session).state.position;
             assert!(near(
@@ -279,9 +294,9 @@ mod tests {
                 + pull(Vec2::ZERO, Vec2::new(-1000.0, 0.0), 30, 1.0);
             assert!(expected.x < 0.0, "the west wins: {expected:?}");
             assert!(
-                near(session.player.velocity, expected),
+                near(session.ship.player.velocity, expected),
                 "{:?}",
-                session.player
+                session.ship.player
             );
         }
     }
@@ -317,7 +332,7 @@ mod tests {
                 resist(&mut session);
                 fight(&mut session);
                 assert_eq!(npc(&session).state.velocity, Vec2::ZERO);
-                assert!(session.player.velocity.x > 0.09, "the player still is");
+                assert!(session.ship.player.velocity.x > 0.09, "the player still is");
             }
             let mut outfitted = among(rules, &catalog, &[east()], 1);
             npc_mut(&mut outfitted).stats.gravity_resistance = true;
@@ -335,9 +350,9 @@ mod tests {
                 .push(outfit(197, &[(GRAVITY_RESISTANCE, 0)]));
             catalog.defaults = vec![(ShipId(128), vec![(OutfitId(197), 1)])];
             let mut session = among(rules, &catalog, &[east()], 1);
-            assert!(session.stats.gravity_resistance);
+            assert!(session.ship.fit.stats.gravity_resistance);
             fight(&mut session);
-            assert_eq!(session.player.velocity, Vec2::ZERO);
+            assert_eq!(session.ship.player.velocity, Vec2::ZERO);
             assert!(npc(&session).state.velocity.x > 0.09, "the NPC still is");
         }
     }
@@ -350,13 +365,13 @@ mod tests {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
             // Away from the centre, so a leader at the centre would not do.
-            session.player.position = Vec2::new(1500.0, 1500.0);
+            session.ship.player.position = Vec2::new(1500.0, 1500.0);
             let formation = FormationSlot {
                 slot: 0,
                 ships: 1,
                 spacing: 30.0,
             };
-            let slot = formation.position(&session.player);
+            let slot = formation.position(&session.ship.player);
             let escort = npc_mut(&mut session);
             escort.escort = Some(EscortDuty {
                 formation,
@@ -379,13 +394,13 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut immune = among(rules, &catalog, &[east()], 1);
-            immune.hull.stellar_immune = true;
+            immune.ship.fit.hull.stellar_immune = true;
             fight(&mut immune);
-            assert_eq!(immune.player.velocity, Vec2::ZERO);
+            assert_eq!(immune.ship.player.velocity, Vec2::ZERO);
             let mut inertialess = among(rules, &catalog, &[east()], 1);
-            inertialess.stats.inertialess_hull = true;
+            inertialess.ship.fit.stats.inertialess_hull = true;
             fight(&mut inertialess);
-            assert_eq!(inertialess.player.velocity, Vec2::ZERO);
+            assert_eq!(inertialess.ship.player.velocity, Vec2::ZERO);
         }
     }
 
@@ -394,9 +409,9 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
-            session.condition = Condition::Destroyed;
+            session.ship.condition = Condition::Destroyed;
             fight(&mut session);
-            assert_eq!(session.player.velocity, Vec2::ZERO);
+            assert_eq!(session.ship.player.velocity, Vec2::ZERO);
         }
     }
 
@@ -405,22 +420,31 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
-            session.settle_box();
+            session.ship.settle_box(&session.pilot, &session.setup);
             fight(&mut session);
-            let once = session.player.velocity;
+            let once = session.ship.player.velocity;
             session.tick_again(
                 Controls::default(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
             );
-            let again = pull(session.player.position, Vec2::new(2000.0, 0.0), 40, 1.0);
-            assert!(
-                near(session.player.velocity, once + again),
-                "{:?}",
-                session.player
+            let again = pull(
+                session.ship.player.position,
+                Vec2::new(2000.0, 0.0),
+                40,
+                1.0,
             );
-            assert!(session.player.velocity.x > 0.19, "{:?}", session.player);
+            assert!(
+                near(session.ship.player.velocity, once + again),
+                "{:?}",
+                session.ship.player
+            );
+            assert!(
+                session.ship.player.velocity.x > 0.19,
+                "{:?}",
+                session.ship.player
+            );
         }
     }
 

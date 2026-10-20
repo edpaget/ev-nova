@@ -70,7 +70,7 @@
 //! is cleared as it is disabled or starts to break up. None of them plays
 //! a sound.
 
-use super::Session;
+use super::{PlayerShip, Session, Setup, Space};
 use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::HullSpec;
@@ -82,7 +82,7 @@ impl Session {
     /// The ships the player leads, in ship-table order (see the module
     /// docs).
     pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
-        self.traffic.player_led()
+        self.space.player_led()
     }
 
     /// The ships in the order they are drawn, bottom first: the disabled,
@@ -100,7 +100,7 @@ impl Session {
     /// beam disabled it after (`_HandleBeams` @0x4453d). A ship its slot
     /// has not yet displayed is left out by either reading, as its slot's
     /// sprites are hidden until then, unless [`RuleKey::UndisplayedShips`]
-    /// reads otherwise (`Session::is_displayed`; see the
+    /// reads otherwise (`Space::is_displayed`; see the
     /// `slot_visibility` module).
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {
@@ -116,11 +116,11 @@ impl Session {
     #[must_use]
     pub fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
         let (order, layers): (Vec<ShipRef>, Vec<(ShipRef, ShipLayer)>) =
-            match self.rules.source_for(RuleKey::ShipOverlap) {
+            match self.setup.rules.source_for(RuleKey::ShipOverlap) {
                 RuleSource::Engine => {
-                    let entries = &self.slot_sprites.layers;
+                    let entries = &self.space.slot_sprites.layers;
                     let mut ships = self.shown_slots();
-                    ships.retain(|&(ship, slot)| self.is_displayed(ship, slot));
+                    ships.retain(|&(ship, slot)| self.space.is_displayed(&self.setup, ship, slot));
                     let order = entries.in_entry_order(ships.iter().copied());
                     let layers = ships
                         .into_iter()
@@ -131,16 +131,21 @@ impl Session {
                     let npcs = self
                         .npcs()
                         .iter()
-                        .filter(|npc| self.shown(&npc.hull))
-                        .filter(|npc| self.is_displayed(ShipRef::Npc(npc.id), slot_of(npc)))
+                        .filter(|npc| self.setup.shown(&npc.hull))
+                        .filter(|npc| {
+                            self.space
+                                .is_displayed(&self.setup, ShipRef::Npc(npc.id), slot_of(npc))
+                        })
                         .map(|npc| {
                             let layer =
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
-                    let player = (self.shown(&self.hull)
-                        && self.is_displayed(ShipRef::Player, Slot::Player))
-                    .then(|| (ShipRef::Player, self.player_layer()));
+                    let player = (self.setup.shown(&self.ship.fit.hull)
+                        && self
+                            .space
+                            .is_displayed(&self.setup, ShipRef::Player, Slot::Player))
+                    .then(|| (ShipRef::Player, self.ship.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
                     (in_draw_order(layers.iter().copied()), layers)
                 }
@@ -163,10 +168,10 @@ impl Session {
     #[must_use]
     pub fn is_hidden(&self, ship: ShipRef) -> bool {
         let hull = match ship {
-            ShipRef::Player => Some(self.hull),
-            ShipRef::Npc(id) => self.npc(id).map(|npc| npc.hull),
+            ShipRef::Player => Some(self.ship.fit.hull),
+            ShipRef::Npc(id) => self.space.npc(id).map(|npc| npc.hull),
         };
-        hull.is_some_and(|hull| !self.shown(&hull))
+        hull.is_some_and(|hull| !self.setup.shown(&hull))
     }
 
     /// The ship type whose frames `ship`'s slot sprite holds, the sheet
@@ -185,17 +190,17 @@ impl Session {
     #[must_use]
     pub fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
         let (slot, own, hull) = match ship {
-            ShipRef::Player => (Slot::Player, self.pilot.ship, self.hull),
+            ShipRef::Player => (Slot::Player, self.pilot.ship, self.ship.fit.hull),
             ShipRef::Npc(id) => {
-                let npc = self.npc(id)?;
+                let npc = self.space.npc(id)?;
                 (slot_of(npc), npc.ship, npc.hull)
             }
         };
-        let hidden = !self.shown(&hull)
-            && self.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
-        let stale = hidden || !self.is_laid_out(ship, slot);
+        let hidden = !self.setup.shown(&hull)
+            && self.setup.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
+        let stale = hidden || !self.space.is_laid_out(&self.setup, ship, slot);
         Some(if stale {
-            self.slot_sprites.frames.of(slot)
+            self.space.slot_sprites.frames.of(slot)
         } else {
             own
         })
@@ -216,12 +221,6 @@ impl Session {
         player.into_iter().chain(npcs)
     }
 
-    /// Whether a ship of `hull` is drawn and laid out (see
-    /// [`Session::is_hidden`]).
-    fn shown(&self, hull: &HullSpec) -> bool {
-        !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
-    }
-
     /// Each ship slot's draw layer and when it entered it, as the last
     /// flight tick laid them out ([`Session::draw_order`]), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
@@ -229,7 +228,7 @@ impl Session {
     /// ([`Session::with_slot_sprites`]).
     #[must_use]
     pub fn slot_sprites(&self) -> &SlotSprites {
-        &self.slot_sprites
+        self.space.slot_sprites()
     }
 
     /// The session, its ship slots' layers and cloned frames, and its shot
@@ -242,8 +241,8 @@ impl Session {
     /// (see [`ship_layer`](crate::ship_layer)).
     #[must_use]
     pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
-        self.combat.set_shot_slots(slot_sprites.shots.clone());
-        self.slot_sprites = slot_sprites;
+        self.space.combat.set_shot_slots(slot_sprites.shots.clone());
+        self.space.slot_sprites = slot_sprites;
         self
     }
 
@@ -262,9 +261,9 @@ impl Session {
     /// the player in the layer its display just gave it and each NPC in
     /// the one its last display gave it, and the frame is drawn so. Each
     /// display is noted ([`Session::note_display`]): a ship shown is
-    /// displayed from then on ([`Session::is_displayed`]).
+    /// displayed from then on ([`Space::is_displayed`]).
     pub(super) fn lay_out_displayed(&mut self) {
-        for displayed in self.combat.take_displays() {
+        for displayed in self.space.combat.take_displays() {
             let hidden = self.is_hidden(displayed.ship);
             self.note_display(displayed.ship, displayed.slot, !hidden);
             if hidden {
@@ -272,10 +271,10 @@ impl Session {
             }
             let led = match displayed.ship {
                 ShipRef::Player => false,
-                ShipRef::Npc(id) => self.npc(id).is_some_and(Npc::escorts_player),
+                ShipRef::Npc(id) => self.space.npc(id).is_some_and(Npc::escorts_player),
             };
             let layer = ShipLayer::of(displayed.disabled, led);
-            self.slot_sprites.layers.put(displayed.slot, layer);
+            self.space.slot_sprites.layers.put(displayed.slot, layer);
         }
     }
 
@@ -287,23 +286,23 @@ impl Session {
     /// as `_HandleShipDisplay` does before its layer block (@0x2b824); a
     /// hidden ship's slot keeps the ones it had, and so, by
     /// [`RuleKey::UndisplayedShips`]' engine reading, does the slot of a
-    /// ship it has not displayed (`Session::is_displayed`). Run at the
+    /// ship it has not displayed (`Space::is_displayed`). Run at the
     /// end of each flight tick ([`Session::fight_tail`]). Recording the
     /// clones at the end of the tick rather than at each ship's display
     /// never crosses a frame boundary. The layers are put at each display
     /// step ([`Session::lay_out_displayed`]).
     pub(super) fn lay_out_ships(&mut self) {
-        self.slot_sprites.shots = self.combat.shot_slots();
+        self.space.slot_sprites.shots = self.space.combat.shot_slots();
         for (ship, slot) in self.shown_slots() {
-            if !self.is_displayed(ship, slot) {
+            if !self.space.is_displayed(&self.setup, ship, slot) {
                 continue;
             }
             let ship = match ship {
                 ShipRef::Player => Some(self.pilot.ship),
-                ShipRef::Npc(id) => self.npc(id).map(|npc| npc.ship),
+                ShipRef::Npc(id) => self.space.npc(id).map(|npc| npc.ship),
             };
             if let Some(ship) = ship {
-                self.slot_sprites.frames.clone_frames(slot, ship);
+                self.space.slot_sprites.frames.clone_frames(slot, ship);
             }
         }
     }
@@ -316,21 +315,50 @@ impl Session {
         let mut npcs: Vec<&Npc> = self
             .npcs()
             .iter()
-            .filter(|npc| self.shown(&npc.hull))
+            .filter(|npc| self.setup.shown(&npc.hull))
             .collect();
         npcs.sort_by_key(|npc| npc.berth);
         let npcs = npcs
             .into_iter()
             .map(|npc| (ShipRef::Npc(npc.id), slot_of(npc)));
         let player = self
-            .shown(&self.hull)
+            .setup
+            .shown(&self.ship.fit.hull)
             .then_some((ShipRef::Player, Slot::Player));
         player.into_iter().chain(npcs).collect()
     }
+}
 
+impl Setup {
+    /// Whether a ship of `hull` is drawn and laid out (see
+    /// [`Session::is_hidden`]).
+    fn shown(&self, hull: &HullSpec) -> bool {
+        !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
     /// The layer the player stands in: never led.
     fn player_layer(&self) -> ShipLayer {
         ShipLayer::of(disabled(self.player_condition()), false)
+    }
+}
+
+impl Space {
+    /// The ships the player leads, in ship-table order (see the module
+    /// docs).
+    pub(super) fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
+        self.traffic.player_led()
+    }
+
+    /// Each ship slot's draw layer and when it entered it, as the last
+    /// flight tick laid them out ([`Session::draw_order`]), and the frames
+    /// it last cloned ([`Session::framed_by`]): the history to hand a
+    /// session loaded later in the same run
+    /// ([`Session::with_slot_sprites`]).
+    #[must_use]
+    fn slot_sprites(&self) -> &SlotSprites {
+        &self.slot_sprites
     }
 }
 
@@ -394,7 +422,7 @@ mod tests {
             .filter(|npc| npc.mission.is_some())
             .map(|npc| npc.id)
             .collect();
-        let hired = session.fleet[0].expect("placed");
+        let hired = session.space.escorts.fleet[0].expect("placed");
         (session, marked, hired)
     }
 
@@ -407,7 +435,7 @@ mod tests {
         n: usize,
     ) -> (f32, std::collections::BTreeMap<NpcId, f32>) {
         let behind = session.player().position - crate::geometry::Vec2::new(0.0, 5000.0);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.state.position = behind;
             npc.state.velocity = crate::geometry::Vec2::ZERO;
         }
@@ -445,9 +473,9 @@ mod tests {
                 .filter(|npc| npc.mission.is_some())
                 .map(|npc| npc.id)
                 .collect();
-            let hired = session.fleet[0].expect("placed");
-            let class = session.npc(hired).expect("there").clone();
-            let unled = session.traffic.add_npc(Npc {
+            let hired = session.space.escorts.fleet[0].expect("placed");
+            let class = session.space.npc(hired).expect("there").clone();
+            let unled = session.space.traffic.add_npc(Npc {
                 escort: None,
                 ..class
             });
@@ -460,7 +488,7 @@ mod tests {
                 "{strict_play}: the player at {player}"
             );
             for id in [hired, mission[0], mission[1]] {
-                let own = session.npc(id).expect("there").stats.handling;
+                let own = session.space.npc(id).expect("there").stats.handling;
                 // Within half a tick's thrust of it, where the autopilot
                 // coasts, or past it by under a push, which the per-axis
                 // cap lets through.
@@ -472,7 +500,7 @@ mod tests {
                     npcs[&id]
                 );
             }
-            let own = session.npc(unled).expect("there").stats.handling;
+            let own = session.space.npc(unled).expect("there").stats.handling;
             // Its autopilot coasts once within half a tick's thrust of the
             // speed it wants.
             let top = own.max_speed;
@@ -488,6 +516,7 @@ mod tests {
     /// NPC `id`'s formation slot, if it has one.
     fn slot(session: &Session, id: NpcId) -> Option<u8> {
         session
+            .space
             .npc(id)
             .and_then(Npc::formation)
             .map(|place| place.slot)
@@ -495,7 +524,7 @@ mod tests {
 
     /// NPC `id`'s berth.
     fn berth(session: &Session, id: NpcId) -> u32 {
-        session.npc(id).expect("in the system").berth
+        session.space.npc(id).expect("in the system").berth
     }
 
     #[test]
@@ -523,8 +552,8 @@ mod tests {
         session.pilot.escorts.extend([hired(), hired()]);
         take_off(&mut session, &catalog);
         let (a, b) = (
-            session.fleet[0].expect("placed"),
-            session.fleet[1].expect("placed"),
+            session.space.escorts.fleet[0].expect("placed"),
+            session.space.escorts.fleet[1].expect("placed"),
         );
         let mission = |session: &Session| -> Vec<NpcId> {
             session
@@ -552,7 +581,7 @@ mod tests {
         // mission escorts, set up again, fill the first free slots around it.
         session.dismiss(a);
         jump_to(&mut session, &catalog, 131);
-        let b = session.fleet[0].expect("placed");
+        let b = session.space.escorts.fleet[0].expect("placed");
         let m = mission(&session);
         assert_eq!(m.len(), 2);
         assert_eq!(berths(&session, &[m[0], b, m[1]]), [1, 2, 3]);
@@ -563,11 +592,15 @@ mod tests {
         );
         let widths: Vec<Option<f32>> = [m[0], b, m[1]]
             .iter()
-            .map(|&id| session.npc(id).expect("here").hull.sprite_size)
+            .map(|&id| session.space.npc(id).expect("here").hull.sprite_size)
             .collect();
-        let spacing = crate::escort::spacing(session.hull.sprite_size, &widths);
+        let spacing = crate::escort::spacing(session.ship.fit.hull.sprite_size, &widths);
         for id in [m[0], b, m[1]] {
-            let place = session.npc(id).and_then(Npc::formation).expect("a slot");
+            let place = session
+                .space
+                .npc(id)
+                .and_then(Npc::formation)
+                .expect("a slot");
             assert_eq!((place.ships, place.spacing), (4, spacing));
         }
     }
@@ -581,7 +614,14 @@ mod tests {
         let mut session = accepted(&catalog);
         session.pilot.escorts.extend([hired(), hired(), hired()]);
         take_off(&mut session, &catalog);
-        let placed: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let placed: Vec<NpcId> = session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         let [a, b, c] = [placed[0], placed[1], placed[2]];
         assert_eq!([a, b, c].map(|id| berth(&session, id)), [1, 2, 3]);
 
@@ -591,7 +631,14 @@ mod tests {
         session.dismiss(b);
         session.pilot.escorts.push(hired());
         jump_to(&mut session, &catalog, 131);
-        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let fleet: Vec<NpcId> = session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         let (a, c, d) = (fleet[0], fleet[1], fleet[2]);
         let mission: Vec<NpcId> = session
             .npcs()
@@ -627,8 +674,8 @@ mod tests {
         session.pilot.cash = 1_000_000;
         let ship = || crate::testkit::npc(0, crate::stats::ShipStats::default());
         let crowd = [
-            session.traffic.add_npc(ship()),
-            session.traffic.add_npc(ship()),
+            session.space.traffic.add_npc(ship()),
+            session.space.traffic.add_npc(ship()),
         ];
         assert_eq!(crowd.map(|id| berth(&session, id)), [1, 2]);
         session
@@ -636,10 +683,10 @@ mod tests {
             .expect("hired");
         // `_SpawnEscort` puts it in the table at once, at the first free
         // slot among the landed system's ships (@0x3fe8f).
-        let hired = session.fleet[0].expect("placed while landed");
+        let hired = session.space.escorts.fleet[0].expect("placed while landed");
         assert_eq!(berth(&session, hired), 3);
         take_off(&mut session, &catalog);
-        let hired = session.fleet[0].expect("placed again");
+        let hired = session.space.escorts.fleet[0].expect("placed again");
         let mission: Vec<NpcId> = session
             .npcs()
             .iter()
@@ -668,7 +715,10 @@ mod tests {
         let (mut session, mission, hired) = flying(1);
         session.release(hired);
         assert_eq!(led(&session), mission);
-        assert!(session.npc(hired).is_some(), "still here as it leaves");
+        assert!(
+            session.space.npc(hired).is_some(),
+            "still here as it leaves"
+        );
     }
 
     #[test]
@@ -678,7 +728,7 @@ mod tests {
         take_off(&mut session, &catalog);
         let mission = led(&session);
         assert_eq!(mission.len(), 2);
-        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
         ticks(&mut session, &catalog, 5);
         assert_eq!(led(&session), mission);
     }
@@ -700,12 +750,12 @@ mod tests {
     /// in NPC order and the traffic ship.
     fn with_traffic() -> (Session, Vec<NpcId>, NpcId) {
         let (mut session, _, hired) = flying(1);
-        let class = session.npc(hired).expect("there").clone();
-        let traffic = session.traffic.add_npc(Npc {
+        let class = session.space.npc(hired).expect("there").clone();
+        let traffic = session.space.traffic.add_npc(Npc {
             escort: None,
             ..class
         });
-        session.traffic.npcs_mut().rotate_right(1);
+        session.space.traffic.npcs_mut().rotate_right(1);
         // Every slot displayed, as a system entry displays them
         // (`_PrepareAllSprites` @0x3a75a).
         session.prepare_all_sprites();
@@ -725,8 +775,8 @@ mod tests {
     fn the_ships_the_player_leads_warp_out_with_it_on_its_clock() {
         let catalog = ships_catalog(ships(1));
         let (mut session, led, traffic) = with_traffic();
-        let class = session.npc(led[0]).expect("there").clone();
-        let fighter = session.traffic.add_npc(Npc {
+        let class = session.space.npc(led[0]).expect("there").clone();
+        let fighter = session.space.traffic.add_npc(Npc {
             escort: None,
             mission: None,
             leader: Some(led[0]),
@@ -735,7 +785,7 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: crate::geometry::Vec2::new(0.0, 1200.0),
             velocity: crate::geometry::Vec2::ZERO,
             heading: 90.0,
@@ -743,24 +793,25 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert!(session.jumping().is_some(), "facing the bearing at rest");
         let aim = session
-            .jump_aim(crate::catalog::SystemId(131))
+            .chart
+            .jump_aim(&session.pilot, crate::catalog::SystemId(131))
             .expect("on the map");
         assert_eq!(aim, 90, "east, as the player faces");
         for &id in &led {
-            let npc = session.npc_mut(id).expect("there");
+            let npc = session.space.npc_mut(id).expect("there");
             npc.state.velocity = crate::geometry::Vec2::ZERO;
             npc.state.heading = f32::from(aim);
         }
-        let traffic_was = session.npc(traffic).expect("there").state;
-        let state = |session: &Session, id: NpcId| session.npc(id).expect("there").state;
-        let duration = session.warp_sound();
+        let traffic_was = session.space.npc(traffic).expect("there").state;
+        let state = |session: &Session, id: NpcId| session.space.npc(id).expect("there").state;
+        let duration = session.ship.warp_sound(&session.statics);
         let factor = session.player_warp_factor();
         let mut moved_off = None;
         for tick in 1..200 {
             assert!(
-                led.iter().all(|&id| session.npc(id).is_some()),
+                led.iter().all(|&id| session.space.npc(id).is_some()),
                 "tick {tick}: {:?}",
-                session.traffic.departed()
+                session.space.traffic.departed()
             );
             let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
             session.tick(crate::flight::Controls::default());
@@ -774,7 +825,7 @@ mod tests {
                 false,
             );
             for (&id, was) in led.iter().zip(&before) {
-                let npc = session.npc(id).expect("there");
+                let npc = session.space.npc(id).expect("there");
                 assert_eq!(
                     npc.warp.goal,
                     Some(WarpGoal::Follow(ShipRef::Player)),
@@ -813,7 +864,7 @@ mod tests {
             "{first}"
         );
         assert_eq!(
-            session.npc(fighter).expect("there").warp.goal,
+            session.space.npc(fighter).expect("there").warp.goal,
             None,
             "a fighter an escort leads is not the player's to take along"
         );
@@ -880,7 +931,7 @@ mod tests {
         let (session, led, traffic) = with_traffic();
         let mut session = in_npc_order(session);
         crate::fixture::disable(&mut session, traffic);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let mut expected = vec![Some(traffic), None];
         expected.extend(led.iter().copied().map(Some));
         assert_eq!(drawn(&session), expected);
@@ -896,7 +947,7 @@ mod tests {
     /// hired escort, the two mission escorts and the traffic ship.
     fn laid_out() -> (Session, NpcId, [NpcId; 2], NpcId) {
         let (mut session, led, traffic) = with_traffic();
-        let hired = session.fleet[0].expect("placed");
+        let hired = session.space.escorts.fleet[0].expect("placed");
         let mission: Vec<NpcId> = led.iter().copied().filter(|&id| id != hired).collect();
         assert_eq!(berth(&session, hired), 1);
         assert_eq!(
@@ -913,7 +964,7 @@ mod tests {
 
     /// Makes NPC `id` whole again, its armour and shield full.
     fn repair(session: &mut Session, id: NpcId) {
-        let npc = session.npc_mut(id).expect("here");
+        let npc = session.space.npc_mut(id).expect("here");
         npc.reserves.armor.now = npc.reserves.armor.max;
         npc.reserves.shield.now = npc.reserves.shield.max;
         npc.condition = Condition::Intact;
@@ -1001,11 +1052,11 @@ mod tests {
         combat_tick(&mut session);
         session.pilot.reserves.shield.now = 0.0;
         session.pilot.reserves.armor.now = 1.0;
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         combat_tick(&mut session);
         assert_eq!(drawn(&session)[0], None);
         session.pilot.reserves.armor.now = session.pilot.reserves.armor.max;
-        session.condition = Condition::Intact;
+        session.ship.condition = Condition::Intact;
         // Only its display step moves its slot's layer (@0x2bd24).
         combat_tick(&mut session);
         let order = drawn(&session);
@@ -1020,16 +1071,16 @@ mod tests {
         let (mut session, hired, [m0, m1], traffic) = laid_out();
         session.release(hired);
         combat_tick(&mut session);
-        let class = session.npc(traffic).expect("there").clone();
+        let class = session.space.npc(traffic).expect("there").clone();
         // Berth 1's ship last stood over the player: the next ship there
         // takes that place.
-        session.traffic.remove(hired);
-        let first = session.traffic.add_npc(class.clone());
+        session.space.traffic.remove(hired);
+        let first = session.space.traffic.add_npc(class.clone());
         assert_eq!(berth(&session, first), 1);
         // Berth 2's ship last stood in the escorts' layer: the next ship
         // there enters the top layer on top.
-        session.traffic.remove(m0);
-        let second = session.traffic.add_npc(class);
+        session.space.traffic.remove(m0);
+        let second = session.space.traffic.add_npc(class);
         assert_eq!(berth(&session, second), 2);
         // Each takes its place at its first display step (@0x2bd24).
         combat_tick(&mut session);
@@ -1046,12 +1097,12 @@ mod tests {
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
         combat_tick(&mut session);
-        let hired = session.fleet[0].expect("placed");
+        let hired = session.space.escorts.fleet[0].expect("placed");
         session.release(hired);
         combat_tick(&mut session);
-        let class = session.npc(hired).expect("there").clone();
+        let class = session.space.npc(hired).expect("there").clone();
         jump_to(&mut session, &catalog, 131);
-        let stranger = session.traffic.add_npc_at(
+        let stranger = session.space.traffic.add_npc_at(
             Npc {
                 escort: None,
                 ..class
@@ -1098,7 +1149,7 @@ mod tests {
                 .find(|npc| npc.berth == 1)
                 .expect("a ship at berth 1")
                 .id;
-            assert!(!session.npc(first).expect("there").escorts_player());
+            assert!(!session.space.npc(first).expect("there").escorts_player());
             combat_tick(&mut session);
             (session, first)
         };
@@ -1152,6 +1203,7 @@ mod tests {
         // displayed it in the escorts' layer (`_PrepareAllSprites`
         // @0x3a75a).
         session
+            .space
             .slot_sprites
             .layers
             .put(Slot::Berth(berth), ShipLayer::Disabled);
@@ -1185,9 +1237,9 @@ mod tests {
     #[test]
     fn a_player_flying_a_cost_minus_one_type_is_hidden_and_keeps_its_place() {
         let (mut session, _, _) = flying(1);
-        session.hull.hidden = true;
+        session.ship.fit.hull.hidden = true;
         assert!(session.is_hidden(ShipRef::Player));
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         combat_tick(&mut session);
         assert!(!drawn(&session).contains(&None));
         assert_eq!(
@@ -1217,11 +1269,11 @@ mod tests {
         let class = session.npcs()[0].clone();
         if let Some(there) = session.npcs().iter().find(|npc| npc.berth == berth) {
             let there = there.id;
-            session.traffic.remove(there);
+            session.space.traffic.remove(there);
         }
         let mut hull = class.hull;
         hull.hidden = true;
-        session.traffic.add_npc_at(
+        session.space.traffic.add_npc_at(
             Npc {
                 ship,
                 hull,
@@ -1246,7 +1298,7 @@ mod tests {
         assert!(session.is_hidden(ShipRef::Npc(hidden)));
         assert_eq!(session.framed_by(ShipRef::Npc(hidden)), Some(ShipId(200)));
         let shown = ShipId(210);
-        session.npc_mut(mission[0]).expect("there").ship = shown;
+        session.space.npc_mut(mission[0]).expect("there").ship = shown;
         assert_eq!(session.framed_by(ShipRef::Npc(mission[0])), Some(shown));
         assert_eq!(session.framed_by(ShipRef::Player), Some(session.ship()));
         assert_eq!(session.framed_by(ShipRef::Npc(hired)), None, "gone");
@@ -1294,7 +1346,7 @@ mod tests {
         combat_tick(&mut session);
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);
         session.pilot.ship = HIDDEN;
-        session.hull.hidden = true;
+        session.ship.fit.hull.hidden = true;
         combat_tick(&mut session);
         assert_eq!(session.framed_by(ShipRef::Player), Some(flown));
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);

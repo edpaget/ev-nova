@@ -49,7 +49,7 @@
 //! (*0x3b5550, set @0x6fe0d, @0x701d5) and the status redraw flag
 //! (*0x3b506c +3, @0x70278).
 
-use super::Session;
+use super::{PlayerShip, Session};
 use crate::combat::hull::Condition;
 use crate::message::{SelfDestructLine, SimMessage};
 use crate::rulebook::{RuleKey, RuleSource};
@@ -63,18 +63,20 @@ impl Session {
     /// it only while the player's fate takes
     /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
     pub fn hold_self_destruct(&mut self, held: bool) {
-        self.self_destruct_held = held;
+        self.ship.hold_self_destruct(held);
     }
 
     /// One step of the countdown, the player `dying_at_head` as the pass's
     /// work before the fight began (see the module docs).
     pub(super) fn self_destruct_tick(&mut self, dying_at_head: bool) {
-        if self.pod.is_some() || self.condition == Condition::Destroyed {
+        if self.pod.is_some() || self.ship.condition == Condition::Destroyed {
             return;
         }
         let Some(beat) = self
+            .ship
+            .fate
             .self_destruct
-            .step(self.self_destruct_held, dying_at_head)
+            .step(self.ship.fate.self_destruct_held, dying_at_head)
         else {
             return;
         };
@@ -82,7 +84,8 @@ impl Session {
             Beat::Started => (SimSound::SelfDestructStarted, SelfDestructLine::Initiated),
             Beat::Count { seconds } => {
                 let singular = seconds == 1
-                    && self.rules.source_for(RuleKey::SelfDestructSecond) == RuleSource::Bible;
+                    && self.setup.rules.source_for(RuleKey::SelfDestructSecond)
+                        == RuleSource::Bible;
                 (
                     SimSound::SelfDestructCountdown,
                     SelfDestructLine::In { seconds, singular },
@@ -91,8 +94,9 @@ impl Session {
             Beat::Cancelled => (SimSound::SelfDestructCancelled, SelfDestructLine::Cancelled),
             Beat::Destruct => (SimSound::SelfDestructed, SelfDestructLine::NiceDay),
         };
-        self.sounds.push(sound);
-        self.say(SimMessage::SelfDestruct(line));
+        self.out.sounds.push(sound);
+        self.space
+            .say(&mut self.out, SimMessage::SelfDestruct(line));
         if beat == Beat::Destruct {
             self.destruct_player();
         }
@@ -105,13 +109,23 @@ impl Session {
         let reserves = &mut self.pilot.reserves;
         reserves.shield.now = 0.0;
         reserves.armor.now = -1.0;
-        self.target = None;
-        let player = self.player;
-        for npc in self.traffic.npcs_mut() {
+        self.chart.target = None;
+        let player = self.ship.player;
+        for npc in self.space.traffic.npcs_mut() {
             if docked_with_player(npc, &player) {
                 npc.reserves.armor.now = -1.0;
             }
         }
+    }
+}
+
+impl PlayerShip {
+    /// Holds the self-destruct chord, Command and `-` down together, or
+    /// lets it go: what the next pass's countdown reads. The session takes
+    /// it only while the player's fate takes
+    /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
+    fn hold_self_destruct(&mut self, held: bool) {
+        self.fate.self_destruct_held = held;
     }
 }
 
@@ -173,7 +187,7 @@ mod tests {
         let (sounds, messages) = tick(&mut session, true);
         assert!(has(&sounds, SimSound::SelfDestructStarted), "{sounds:?}");
         assert_eq!(messages, [line(SelfDestructLine::Initiated)]);
-        assert_eq!(session.self_destruct.count(), Some(149));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(149));
     }
 
     #[test]
@@ -213,7 +227,7 @@ mod tests {
     fn tick_149_beeps_151_says_have_a_nice_day_and_destroys_the_player() {
         let catalog = armed();
         let mut session = flying(&catalog);
-        session.target = Some(NpcId(1));
+        session.chart.target = Some(NpcId(1));
         hold(&mut session, 148);
         assert_eq!(session.player_condition(), Condition::Intact);
         let (sounds, messages) = tick(&mut session, true);
@@ -221,12 +235,12 @@ mod tests {
         assert_eq!(messages, [line(SelfDestructLine::NiceDay)]);
         assert_eq!(session.pilot.reserves.shield.now, 0.0);
         assert!(session.pilot.reserves.armor.now <= -1.0);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
         assert!(matches!(
             session.player_condition(),
             Condition::Dying { .. } | Condition::Destroyed
         ));
-        assert_eq!(session.self_destruct.count(), None);
+        assert_eq!(session.ship.fate.self_destruct.count(), None);
     }
 
     #[test]
@@ -235,9 +249,9 @@ mod tests {
         let mut session = flying(&catalog);
         let at = session.player().position;
         let velocity = session.player().velocity;
-        let docked = session.traffic.npcs()[0].id;
+        let docked = session.space.traffic.npcs()[0].id;
         {
-            let pirate = &mut session.traffic.npcs_mut()[0];
+            let pirate = &mut session.space.traffic.npcs_mut()[0];
             pirate.state.position = at + Vec2::new(10.0, -10.0);
             pirate.state.velocity = velocity;
             pirate.docking = Some(Docking {
@@ -245,9 +259,9 @@ mod tests {
                 sub: DockSub::Dock,
             });
         }
-        let mut beside = session.traffic.npcs()[0].clone();
+        let mut beside = session.space.traffic.npcs()[0].clone();
         beside.docking = None;
-        let beside = session.traffic.add_npc(beside);
+        let beside = session.space.traffic.add_npc(beside);
         let shield = |session: &Session, id| {
             let npc = session.npcs().iter().find(|npc| npc.id == id);
             npc.expect("there").reserves.shield.now
@@ -275,7 +289,7 @@ mod tests {
         let (sounds, messages) = tick(&mut session, false);
         assert!(has(&sounds, SimSound::SelfDestructCancelled), "{sounds:?}");
         assert_eq!(messages, [line(SelfDestructLine::Cancelled)]);
-        assert_eq!(session.self_destruct.count(), None);
+        assert_eq!(session.ship.fate.self_destruct.count(), None);
         assert_eq!(tick(&mut session, false), (vec![], vec![]));
     }
 
@@ -283,7 +297,7 @@ mod tests {
     fn a_dying_players_hold_is_silent() {
         let catalog = armed();
         let mut session = flying(&catalog);
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 1000,
             starting: false,
         };
@@ -291,17 +305,17 @@ mod tests {
         assert!(!has(&sounds, SimSound::SelfDestructStarted), "{sounds:?}");
         assert!(!has(&sounds, SimSound::Refused), "{sounds:?}");
         assert_eq!(messages, []);
-        assert_eq!(session.self_destruct.count(), None);
+        assert_eq!(session.ship.fate.self_destruct.count(), None);
     }
 
     #[test]
     fn a_countdown_started_while_disabled_runs_through_the_breakup_to_its_end() {
         let catalog = armed();
         let mut session = flying(&catalog);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         hold(&mut session, 10);
-        assert_eq!(session.self_destruct.count(), Some(140));
-        session.condition = Condition::Dying {
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(140));
+        session.ship.condition = Condition::Dying {
             ticks_left: 1000,
             starting: false,
         };
@@ -318,7 +332,7 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(tick(&mut session, false), (vec![], vec![]));
         }
-        assert_eq!(session.self_destruct.count(), Some(140));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(140));
     }
 
     #[test]
@@ -326,11 +340,11 @@ mod tests {
         let catalog = armed();
         let mut session = flying(&catalog);
         hold(&mut session, 10);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         let (sounds, messages) = tick(&mut session, false);
         assert!(!has(&sounds, SimSound::SelfDestructCancelled), "{sounds:?}");
         assert_eq!(messages, []);
-        assert_eq!(session.self_destruct.count(), Some(140));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(140));
     }
 
     #[test]
@@ -341,7 +355,7 @@ mod tests {
         let (sounds, messages) = tick(&mut session, true);
         assert!(!has(&sounds, SimSound::SelfDestructStarted), "{sounds:?}");
         assert_eq!(messages, []);
-        assert_eq!(session.self_destruct, SelfDestruct::default());
+        assert_eq!(session.ship.fate.self_destruct, SelfDestruct::default());
     }
 
     #[test]
@@ -349,14 +363,14 @@ mod tests {
         let catalog = armed();
         let mut session = flying(&catalog);
         hold(&mut session, 1);
-        assert_eq!(session.self_destruct.count(), Some(149));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(149));
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.self_destruct.count(), Some(148));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(148));
         hold(&mut session, 1);
         session.tick_again(
             Controls::default(),
@@ -364,6 +378,6 @@ mod tests {
             Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.self_destruct.count(), Some(146));
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(146));
     }
 }

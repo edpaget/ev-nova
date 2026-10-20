@@ -24,7 +24,7 @@
 //! fly-in: the next tick settles it, and with no target there are no
 //! brackets.
 
-use super::Session;
+use super::{Chart, Session};
 use crate::brackets::{self, NavBrackets, TargetBrackets};
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -38,17 +38,7 @@ impl Session {
     /// `Session::iff_dominated` models.
     #[must_use]
     pub fn nav_brackets(&self) -> Option<NavBrackets> {
-        let stellar = self.nav_target()?;
-        let dominated = self
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .is_some_and(Self::iff_dominated);
-        Some(NavBrackets {
-            stellar,
-            expand: self.nav_fly_in.expand(),
-            dominated,
-        })
+        self.chart.nav_brackets()
     }
 
     /// The brackets round the ship target, if there is one, in the frames
@@ -57,10 +47,10 @@ impl Session {
     #[must_use]
     pub fn target_brackets(&self) -> Option<TargetBrackets> {
         let npc = self.target()?;
-        let leader = npc.leader.and_then(|id| self.npc(id));
+        let leader = npc.leader.and_then(|id| self.space.npc(id));
         Some(TargetBrackets {
             npc: npc.id,
-            expand: self.target_fly_in.expand(),
+            expand: self.chart.target_fly_in.expand(),
             standing: brackets::standing(npc, leader, self.npcs()),
         })
     }
@@ -72,6 +62,48 @@ impl Session {
         self.npc_in_play_area(npc, brackets::sprite_in_area)
     }
 
+    /// After a pick that had `before` as the target: when the target
+    /// changed to a ship, starts its fly-in if its sprite is on screen,
+    /// else settles it (@0x6a5ac-0x6a5e4, @0x6aa95-0x6aab6). A pick that
+    /// leaves the target as it was writes nothing.
+    pub(super) fn retargeted(&mut self, before: Option<NpcId>) {
+        if self.chart.target == before {
+            return;
+        }
+        let Some(on_screen) = self.target().map(|npc| self.sprite_on_screen(npc)) else {
+            return;
+        };
+        if on_screen {
+            self.chart.target_fly_in.start();
+        } else {
+            self.chart.target_fly_in.settle();
+        }
+    }
+}
+
+impl Chart {
+    /// The brackets round the nav target, if there is one.
+    ///
+    /// They show while [`Session::nav_target`] is set: nav mode 2 with a
+    /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
+    /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
+    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
+    /// `Session::iff_dominated` models.
+    #[must_use]
+    fn nav_brackets(&self) -> Option<NavBrackets> {
+        let stellar = self.nav_target()?;
+        let dominated = self
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .is_some_and(Session::iff_dominated);
+        Some(NavBrackets {
+            stellar,
+            expand: self.nav_fly_in.expand(),
+            dominated,
+        })
+    }
+
     /// The brackets' part of a flight tick (see the module docs).
     pub(super) fn brackets_tick(&mut self) {
         if self.nav_target().is_some() {
@@ -81,24 +113,6 @@ impl Session {
         }
         if self.target.is_some() {
             self.target_fly_in.step();
-        } else {
-            self.target_fly_in.settle();
-        }
-    }
-
-    /// After a pick that had `before` as the target: when the target
-    /// changed to a ship, starts its fly-in if its sprite is on screen,
-    /// else settles it (@0x6a5ac-0x6a5e4, @0x6aa95-0x6aab6). A pick that
-    /// leaves the target as it was writes nothing.
-    pub(super) fn retargeted(&mut self, before: Option<NpcId>) {
-        if self.target == before {
-            return;
-        }
-        let Some(on_screen) = self.target().map(|npc| self.sprite_on_screen(npc)) else {
-            return;
-        };
-        if on_screen {
-            self.target_fly_in.start();
         } else {
             self.target_fly_in.settle();
         }
@@ -223,7 +237,7 @@ mod tests {
     #[test]
     fn a_disabled_players_land_key_selecting_a_stellar_flies_it_in() {
         let mut session = session(&three_stellars());
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_eq!(session.land(), Err(LandingRefusal::Disabled));
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(nav_expand(&session), 196.0, "@0x6a8fb-0x6a932");
@@ -238,7 +252,7 @@ mod tests {
         assert!(session.nav_off());
         assert_eq!(session.nav_brackets(), None);
         session.tick(Controls::default());
-        assert_eq!(session.nav_fly_in, FlyIn::default(), "settled");
+        assert_eq!(session.chart.nav_fly_in, FlyIn::default(), "settled");
         session.select_stellar(StellarPick::Slot(0));
         assert_eq!(nav_over(&mut session, 5), FLIGHT);
         assert!(session.select_next_system().is_some());
@@ -286,11 +300,11 @@ mod tests {
         ship.state.position = at;
         ship.hull.sprite_size = Some(40.0);
         ship.hull.sprite_height = Some(20.0);
-        session.traffic.add_npc(ship)
+        session.space.traffic.add_npc(ship)
     }
 
     fn attack(session: &mut Session, id: NpcId) {
-        session.npc_mut(id).expect("there").goal = Goal::Attack(ShipRef::Player);
+        session.space.npc_mut(id).expect("there").goal = Goal::Attack(ShipRef::Player);
     }
 
     #[test]
@@ -319,13 +333,13 @@ mod tests {
         // Its left edge, 100 + 20, just touches the area's right edge.
         let edge = ship_at(&mut session, Vec2::new(120.0, 0.0));
         session.select_target(TargetPick::Next);
-        assert_eq!(session.target, Some(near));
+        assert_eq!(session.chart.target, Some(near));
         session.select_target(TargetPick::Next);
-        assert_eq!(session.target, Some(edge));
+        assert_eq!(session.chart.target, Some(edge));
         assert_eq!(target_expand(&session), 0.0, "off screen");
         assert_eq!(target_over(&mut session, 1), [0.0]);
-        session.npc_mut(edge).expect("there").state.position = Vec2::new(119.0, 0.0);
-        session.target = Some(near);
+        session.space.npc_mut(edge).expect("there").state.position = Vec2::new(119.0, 0.0);
+        session.chart.target = Some(near);
         assert_eq!(session.select_target(TargetPick::Next), Some(edge));
         assert_eq!(target_expand(&session), 196.0, "a pixel in");
     }
@@ -335,7 +349,7 @@ mod tests {
         let mut session = session(&three_stellars());
         session.set_play_area(Area::centred(Vec2::ZERO, 200.0, 200.0));
         let ship = ship_at(&mut session, Vec2::new(1000.0, 0.0));
-        session.player.position = Vec2::new(950.0, 0.0);
+        session.ship.player.position = Vec2::new(950.0, 0.0);
         assert_eq!(session.select_target(TargetPick::Next), Some(ship));
         assert_eq!(target_expand(&session), 196.0);
     }
@@ -363,10 +377,10 @@ mod tests {
         let near = ship_at(&mut session, Vec2::new(50.0, 0.0));
         let far = ship_at(&mut session, Vec2::new(5000.0, 0.0));
         session.select_target(TargetPick::Next);
-        assert_eq!(session.target, Some(near));
+        assert_eq!(session.chart.target, Some(near));
         assert_eq!(target_expand(&session), 196.0);
         session.select_target(TargetPick::Next);
-        assert_eq!(session.target, Some(far));
+        assert_eq!(session.chart.target, Some(far));
         assert_eq!(target_expand(&session), 0.0);
     }
 
@@ -376,18 +390,18 @@ mod tests {
         let ship = ship_at(&mut session, Vec2::new(50.0, 0.0));
         session.select_target(TargetPick::Next);
         target_over(&mut session, 1);
-        session.traffic.remove(ship);
-        session.target = None;
+        session.space.traffic.remove(ship);
+        session.chart.target = None;
         assert_eq!(session.target_brackets(), None);
         session.tick(Controls::default());
-        assert_eq!(session.target_fly_in, FlyIn::default());
+        assert_eq!(session.chart.target_fly_in, FlyIn::default());
     }
 
     #[test]
     fn a_landed_tick_moves_no_brackets() {
         let mut session = session(&three_stellars());
         session.select_stellar(StellarPick::Slot(0));
-        session.landed = Some(StellarId(131));
+        session.mode = crate::session::Mode::Landed(StellarId(131));
         session.tick(Controls::default());
         assert_eq!(nav_expand(&session), 196.0);
     }
@@ -397,17 +411,17 @@ mod tests {
         let mut session = session(&three_stellars());
         let escort = ship_at(&mut session, Vec2::new(50.0, 0.0));
         let fighter = ship_at(&mut session, Vec2::new(60.0, 0.0));
-        session.npc_mut(fighter).expect("there").leader = Some(escort);
-        session.target = Some(fighter);
+        session.space.npc_mut(fighter).expect("there").leader = Some(escort);
+        session.chart.target = Some(fighter);
         let standing = |session: &Session| session.target_brackets().expect("bracketed").standing;
         assert_eq!(standing(&session), Standing::Neutral);
-        session.npc_mut(escort).expect("there").escort = Some(EscortDuty {
+        session.space.npc_mut(escort).expect("there").escort = Some(EscortDuty {
             formation: FormationSlot::default(),
             order: None,
         });
         assert_eq!(standing(&session), Standing::Escort);
         assert_eq!(session.target_brackets().expect("bracketed").npc, fighter);
-        session.traffic.remove(escort);
+        session.space.traffic.remove(escort);
         attack(&mut session, fighter);
         assert_eq!(standing(&session), Standing::Hostile, "its leader gone");
     }

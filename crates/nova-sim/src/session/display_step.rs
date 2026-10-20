@@ -51,24 +51,24 @@ impl Session {
         dying_at_head: bool,
         chance: &mut dyn Chance,
     ) {
-        self.condition.count_down();
+        self.ship.condition.count_down();
         if matches!(
-            self.condition,
+            self.ship.condition,
             Condition::Dying {
                 ticks_left: 2..,
                 starting: false,
             }
         ) {
-            self.sounds.push(SimSound::Klaxon);
+            self.out.sounds.push(SimSound::Klaxon);
         }
         self.eject_check(chance);
         self.self_destruct_tick(dying_at_head);
-        let was_destroyed = self.condition == Condition::Destroyed;
+        let was_destroyed = self.ship.condition == Condition::Destroyed;
         self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
             Combat::display_player(combat, fighters, arena);
         });
         self.lay_out_displayed();
-        if !was_destroyed && self.condition == Condition::Destroyed {
+        if !was_destroyed && self.ship.condition == Condition::Destroyed {
             self.settle_player_explosion();
         }
     }
@@ -80,11 +80,12 @@ impl Session {
         // Set only, never cleared here: double time's second pass keeps
         // an explosion the advance pass saw (see
         // `player_exploded_this_tick`).
-        self.player_exploded_this_tick = true;
+        self.ship.fate.player_exploded_this_tick = true;
         self.player_end = Some(Ending::Holding {
             ticks_left: HOLD_TICKS,
         });
-        self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        self.ship
+            .halt_sounds(&mut self.out, &crate::sound::PLAYER_EXPLOSION_HALTS);
     }
 }
 

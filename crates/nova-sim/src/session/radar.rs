@@ -2,10 +2,11 @@
 //! player's radar outfits, each ship's and stellar's IFF colour code, and
 //! the interference in the player's system.
 
-use super::Session;
+use super::{Chart, Session, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::iff::{self, RadarGear, ShipIff, Standing, StellarIff};
 use crate::market;
+use crate::pilot::Pilot;
 use crate::rank::Blessed;
 use crate::traffic::npc::Npc;
 
@@ -20,7 +21,7 @@ impl Session {
     /// read, so the two match.
     #[must_use]
     pub fn radar_gear(&self) -> RadarGear {
-        RadarGear::of(&self.pilot.outfits, &self.outfits)
+        radar_gear(&self.pilot, &self.statics)
     }
 
     /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
@@ -29,7 +30,7 @@ impl Session {
     /// player.
     #[must_use]
     pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
-        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
+        self.space.ship_iff(npc)
     }
 
     /// What IFF shows `stellar` as, one of the stellars shown, as its
@@ -53,17 +54,21 @@ impl Session {
     ///   snapshot makes at the same refresh.
     #[must_use]
     pub fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
-        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         let standing = Standing {
             dominated: Self::iff_dominated(site),
             blessed: self.blessing().blesses(site.govt, Blessed::Landing),
         };
-        Some(iff::stellar_iff(site, self.landing_record(site), standing))
+        Some(iff::stellar_iff(
+            site,
+            self.chart.landing_record(&self.pilot, &self.setup, site),
+            standing,
+        ))
     }
 
     /// Whether `site` is dominated, the +0x46 byte `_ColorCodeStellar`
     /// and the nav brackets read: only the always-dominated bit
-    /// ([`DOMINATED`](market::DOMINATED)), as [`Session::markup`] reads
+    /// ([`DOMINATED`](market::DOMINATED)), as [`Chart::markup`] reads
     /// it. Domination by tribute (`_DoPlanetCommDialog` @0x978fa, cleared
     /// @0x9740f) has no state yet: rdm:task/planet-domination feeds it in
     /// here.
@@ -83,9 +88,43 @@ impl Session {
     /// 0..=100.
     #[must_use]
     pub fn interference(&self) -> u8 {
-        let system = self.galaxy.map().interference(self.pilot.system);
-        iff::interference(system, self.radar_gear().anti_interference)
+        self.chart.interference(&self.pilot, &self.statics)
     }
+}
+
+impl Space {
+    /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
+    /// [`leader`](Npc::leader) if that is still in the system: green too
+    /// for a fighter of the player's escort, whose parent's parent is the
+    /// player.
+    #[must_use]
+    fn ship_iff(&self, npc: &Npc) -> ShipIff {
+        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
+    }
+}
+
+impl Chart {
+    /// The interference in the player's system ([`iff::interference`]):
+    /// its `sÿst` `Interference` less the player's anti-interference,
+    /// 0..=100.
+    #[must_use]
+    fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
+        let system = self.galaxy.map().interference(pilot.system);
+        iff::interference(system, radar_gear(pilot, statics).anti_interference)
+    }
+}
+
+/// What the player's outfits give the radar: IFF, a density scanner
+/// and anti-interference ([`RadarGear::of`]).
+///
+/// It is read afresh at every call. The original caches it lazily,
+/// and every change to the outfits (the outfitter included, through
+/// `_SystemInfoToShipStats` @0x5c305 / @0x5cffb) resets the cache
+/// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
+/// read, so the two match.
+#[must_use]
+fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
+    RadarGear::of(&pilot.outfits, &statics.outfits)
 }
 
 #[cfg(test)]
@@ -197,11 +236,11 @@ mod tests {
         }
     }
 
-    /// A fighter `carrier` launched, as `Session::join_carrier` builds
+    /// A fighter `carrier` launched, as `Space::join_carrier` builds
     /// it: led by the carrier (one with no lead of its own), with no
     /// escort duty and no mission.
     fn fighter_of(session: &mut Session, carrier: Npc) -> Npc {
-        let carrier = session.traffic.add_npc(carrier);
+        let carrier = session.space.traffic.add_npc(carrier);
         Npc {
             leader: Some(carrier),
             carrier: Some(crate::bay::Carrier {
@@ -243,8 +282,8 @@ mod tests {
         // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590), read over
         // the system's ships.
         let mut session = session(&radar_catalog());
-        let escort = session.traffic.add_npc(hired(1));
-        let stranger = session.traffic.add_npc(npc(2, ShipStats::default()));
+        let escort = session.space.traffic.add_npc(hired(1));
+        let stranger = session.space.traffic.add_npc(npc(2, ShipStats::default()));
         let hunting = |target| Npc {
             goal: crate::ai::Goal::Attack(crate::ShipRef::Npc(target)),
             ..npc(3, ShipStats::default())
@@ -334,13 +373,13 @@ mod tests {
     fn a_destroyed_stellar_is_unlandable() {
         let mut session = session(&radar_catalog());
         session.pilot.set_system_record(SystemId(130), 50);
-        session.sites[0].destroyed = true;
+        session.chart.sites[0].destroyed = true;
         assert_eq!(
             session.stellar_iff(StellarId(128)),
             Some(StellarIff::Unlandable)
         );
-        session.sites[0].destroyed = false;
-        session.sites[0].flags |= StellarFlags::UNINHABITED;
+        session.chart.sites[0].destroyed = false;
+        session.chart.sites[0].flags |= StellarFlags::UNINHABITED;
         assert_eq!(
             session.stellar_iff(StellarId(128)),
             Some(StellarIff::Unlandable)

@@ -44,7 +44,7 @@
 //! News has no participant in the daily step and no trigger point of its
 //! own.
 
-use super::Session;
+use super::{Chart, Port, Session, Statics};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::market;
@@ -61,21 +61,22 @@ impl Session {
     /// `_DoBarDialog` does (@0x48efe-0x48f11), for the bar's map to put
     /// back ([`Session::restore_bar_nav`]).
     pub fn open_bar(&mut self, chance: &mut dyn Chance) -> bool {
-        let Some(site) = self.bar_site() else {
+        let Some(site) = self.chart.bar_site(self.mode.landed()) else {
             return false;
         };
-        self.bar_nav = Some(self.nav);
+        self.chart.bar_nav = Some(self.chart.nav);
         let commercial = self
+            .setup
             .pick_string(COMMERCIALS, chance)
-            .or_else(|| self.nth_string(MISC_STRINGS, TOP_NEWS))
+            .or_else(|| self.setup.nth_string(MISC_STRINGS, TOP_NEWS))
             .unwrap_or_default();
         let mut story = self.disaster_story(site.id, chance);
         let found = candidates().of(&NewsFacts {
-            crons: &self.crons,
+            crons: &self.statics.crons,
             states: &self.pilot.crons,
             stellar_govt: site.govt,
-            govts: &self.govts,
-            rules: &self.rules,
+            govts: &self.statics.govts,
+            rules: &self.setup.rules,
         });
         let pool = if found.government.is_empty() {
             found.independent
@@ -84,15 +85,16 @@ impl Session {
         };
         if !pool.is_empty() {
             let (_, list) = pool[pick(pool.len(), chance)];
-            story = self.random_string(list, chance).unwrap_or_default();
+            story = self.setup.random_string(list, chance).unwrap_or_default();
         }
         if story.is_empty() {
             story = self
+                .setup
                 .pick_string(GENERIC_NEWS, chance)
-                .or_else(|| self.nth_string(MISC_STRINGS, NO_NEWS))
+                .or_else(|| self.setup.nth_string(MISC_STRINGS, NO_NEWS))
                 .unwrap_or_default();
         }
-        self.bar_news = Some(News { commercial, story });
+        self.port.bar_news = Some(News { commercial, story });
         true
     }
 
@@ -100,15 +102,14 @@ impl Session {
     /// unless the ship is docked at a stellar with a bar.
     #[must_use]
     pub fn news_picture(&self) -> Option<i16> {
-        let site = self.bar_site()?;
-        Some(news_picture(site.govt.and_then(|id| self.govts.get(id))))
+        self.chart.news_picture(&self.statics, self.mode.landed())
     }
 
     /// The news of the bar visit under way, as it was drawn: `None`
     /// before the bar opens, and after the ship's docking changes.
     #[must_use]
     pub fn news(&self) -> Option<&News> {
-        self.bar_news.as_ref()
+        self.port.news()
     }
 
     /// The `öops` story at `docked`, the story the cron news replaces
@@ -119,9 +120,9 @@ impl Session {
     fn disaster_story(&self, docked: StellarId, chance: &mut dyn Chance) -> String {
         let pool = oops_pool().of(&OopsFacts {
             events: &self.pilot.events,
-            disasters: &self.goods.disasters,
+            disasters: &self.statics.goods.disasters,
             docked,
-            rules: &self.rules,
+            rules: &self.setup.rules,
         });
         if pool.is_empty() {
             return String::new();
@@ -129,12 +130,35 @@ impl Session {
         let id = pool[pick(pool.len(), chance)];
         let (Some(&active), Some(record)) = (
             self.pilot.events.get(&id),
-            self.goods.disasters.iter().find(|record| record.id == id),
+            self.statics
+                .goods
+                .disasters
+                .iter()
+                .find(|record| record.id == id),
         ) else {
             return String::new();
         };
-        let words = StoryWords::read(&*self.strings.0);
+        let words = StoryWords::read(&*self.setup.strings.0);
         oops_story(record, market::place(active, record), &words, self).unwrap_or_default()
+    }
+}
+
+impl Chart {
+    /// The `PICT` the news is drawn over (see the module docs): `None`
+    /// unless the ship is docked at a stellar with a bar.
+    #[must_use]
+    fn news_picture(&self, statics: &Statics, landed: Option<StellarId>) -> Option<i16> {
+        let site = self.bar_site(landed)?;
+        Some(news_picture(site.govt.and_then(|id| statics.govts.get(id))))
+    }
+}
+
+impl Port {
+    /// The news of the bar visit under way, as it was drawn: `None`
+    /// before the bar opens, and after the ship's docking changes.
+    #[must_use]
+    fn news(&self) -> Option<&News> {
+        self.bar_news.as_ref()
     }
 }
 
@@ -710,7 +734,7 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.news_picture(), None, "not landed");
         let mut session = landed(&catalog, lists());
-        session.landed = Some(StellarId(140));
+        session.mode = crate::session::Mode::Landed(StellarId(140));
         assert_eq!(session.news_picture(), None, "no bar");
     }
 
@@ -751,18 +775,18 @@ mod tests {
         let mut session = landed(&catalog, lists());
         assert!(session.open_bar(&mut NeverFires));
         session.take_off(&NoTraffic, &mut NeverFires);
-        assert_eq!(session.bar_nav, None, "took off");
+        assert_eq!(session.chart.bar_nav, None, "took off");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert!(session.open_bar(&mut NeverFires));
         session
             .land_at(&catalog, SystemId(130), StellarId(128))
             .expect("lands");
-        assert_eq!(session.bar_nav, None, "landed again");
+        assert_eq!(session.chart.bar_nav, None, "landed again");
         assert!(session.open_bar(&mut NeverFires));
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        assert_eq!(session.bar_nav, None, "moved");
+        assert_eq!(session.chart.bar_nav, None, "moved");
     }
 
     #[test]

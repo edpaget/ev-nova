@@ -22,7 +22,7 @@
 //!
 //! By the other reading the exit leaves the slots as a jump does.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::{StellarId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::flight::ShipState;
@@ -42,15 +42,6 @@ const EMERGE_LEAST: u32 = 100;
 const EMERGE_PROVOCATION: f32 = -1.0;
 
 impl Session {
-    /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
-    /// what an entry `how` does to ships in `system`: a gate's exit, the
-    /// ships following the player.
-    pub(super) fn gate_decides(&self, how: Entrance, system: ShipSystem) -> bool {
-        how == Entrance::Gate
-            && system == ShipSystem::FollowsPlayer
-            && self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
-    }
-
     /// The player's exit from a gate of `kind`, before the system is
     /// entered: under the engine's reading of [`RuleKey::GateFollow`],
     /// each active slot, in order, gets the appear timer and arrived count
@@ -63,7 +54,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
@@ -71,7 +62,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let govt = record
                 .ships
                 .dude
@@ -81,7 +72,7 @@ impl Session {
                 system: active.ships.system,
                 behav: ShipBehav::from_code(record.ships.behav),
                 left: active.ships.left,
-                flags2: govt.map(|govt| self.govts.get(govt).map_or(0, |govt| govt.flags2)),
+                flags2: govt.map(|govt| self.statics.govts.get(govt).map_or(0, |govt| govt.flags2)),
             };
             let Some(timer) = through_gate(kind, &facts, chance) else {
                 continue;
@@ -114,12 +105,13 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
             self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
         }
-        let last = self.last_npc();
+        let last = self.space.last_npc();
         self.step_traffic(|traffic, world| traffic.enter_more_ships(world, chance));
-        self.announce_fleets(chance);
+        self.space
+            .announce_fleets(&self.setup, &mut self.out, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
     }
 
@@ -145,7 +137,7 @@ impl Session {
         exit: Vec2,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
         let followers: Vec<u8> = self
@@ -154,7 +146,7 @@ impl Session {
             .iter()
             .filter(|(_, active)| {
                 let ships = &active.ships;
-                let behav = self.lifecycle_record(active.mission).ships.behav;
+                let behav = self.statics.lifecycle_record(active.mission).ships.behav;
                 // The original also asks for ships left (@0x67383): a slot
                 // with none has no ship here to move.
                 ships.system == ShipSystem::FollowsPlayer
@@ -163,12 +155,12 @@ impl Session {
             })
             .map(|(slot, _)| slot)
             .collect();
-        let position = match self.gate_arrival {
+        let position = match self.setup.gate_arrival {
             GateArrivalRule::Engine => exit,
-            GateArrivalRule::LikeJump => self.player.position,
+            GateArrivalRule::LikeJump => self.ship.player.position,
         };
-        let heading = self.player.heading;
-        for npc in self.traffic.npcs_mut() {
+        let heading = self.ship.player.heading;
+        for npc in self.space.traffic.npcs_mut() {
             if !npc
                 .mission
                 .is_some_and(|mark| followers.contains(&mark.slot))
@@ -184,6 +176,17 @@ impl Session {
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
             npc.emerge_from_gate(gate, wait);
         }
+    }
+}
+
+impl Setup {
+    /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
+    /// what an entry `how` does to ships in `system`: a gate's exit, the
+    /// ships following the player.
+    pub(super) fn gate_decides(&self, how: Entrance, system: ShipSystem) -> bool {
+        how == Entrance::Gate
+            && system == ShipSystem::FollowsPlayer
+            && self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
     }
 }
 
@@ -296,12 +299,12 @@ pub(super) mod tests {
         kind: GateKind,
         chance: &mut dyn Chance,
     ) {
-        session.player.position = match kind {
+        session.ship.player.position = match kind {
             GateKind::Hypergate => HYPERGATE_AT,
             GateKind::Wormhole => WORMHOLE_AT,
         };
-        session.player.velocity = Vec2::ZERO;
-        session.nav = crate::navigation::NavMode::Off;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         session.dock_approach();
         assert!(matches!(session.land(), Ok(LandPress::AtGate { kind: at, .. }) if at == kind));
@@ -336,8 +339,8 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty(), "none come");
         jump_to(&mut session, &catalog, 130);
         ticks(&mut session, &catalog, 300);
-        session.player.position = Vec2::new(30.0, -40.0);
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::new(30.0, -40.0);
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
@@ -440,12 +443,12 @@ pub(super) mod tests {
         kind: GateKind,
         chance: &mut dyn Chance,
     ) {
-        session.player.position = match kind {
+        session.ship.player.position = match kind {
             GateKind::Hypergate => HYPERGATE_AT,
             GateKind::Wormhole => WORMHOLE_AT,
         };
-        session.player.velocity = Vec2::ZERO;
-        session.nav = crate::navigation::NavMode::Off;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         session.dock_approach();
         session.land().expect("at the gate");
@@ -491,7 +494,7 @@ pub(super) mod tests {
             let catalog = gated(following(0, 0), flags2);
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.drop_raised();
+            session.run.drop_raised();
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             let ships = specials(&session);
             assert_eq!(ships.len(), 2, "{kind:?}: ships left, none set up besides");
@@ -555,7 +558,7 @@ pub(super) mod tests {
             primary: true,
             ..Trigger::default()
         };
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.trigger = firing;
             npc.target = Some(ShipRef::Player);
         }
@@ -581,7 +584,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.provoked = 7.0;
         }
         session.emerge_followers(

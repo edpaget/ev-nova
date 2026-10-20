@@ -157,12 +157,13 @@
 //! counter garbles a name past 255 characters, reachable only by a `*`
 //! in a long name; it is not reproduced, and the name has no limit.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{ReservePolicy, Session, SessionEvent};
+use super::{Outbox, PlayerShip, ReservePolicy, Session, SessionEvent, Setup};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -327,19 +328,13 @@ impl CommCatalog for NoStrings {
 }
 
 impl Session {
-    /// The rules the ship-change set operators follow, projected from
-    /// the session's rule set ([`Session::with_rules`]).
-    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
-        ShipChangeRules::from_rulebook(&self.rules)
-    }
-
     /// This session with `rule` saying when the player's ship is
     /// disabled after a change of ship (see the module docs):
     /// [`NovaDisable`] by default. The fight's own rule is given each
     /// tick ([`Session::tick_combat`]).
     #[must_use]
     pub fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
-        self.disable_rule = Shared(rule);
+        self.setup.disable_rule = Shared(rule);
         self
     }
 
@@ -347,7 +342,7 @@ impl Session {
     /// change of ship.
     #[must_use]
     pub fn disable_rule(&self) -> &dyn DisableRule {
-        &*self.disable_rule.0
+        self.setup.disable_rule()
     }
 
     /// This session with `T` reading its names from `strings`' string
@@ -358,15 +353,15 @@ impl Session {
     /// see [`text_tags`](crate::text_tags)).
     #[must_use]
     pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
-        self.leet = strings.leet_mode();
-        self.strings = Strings(Rc::new(PatchedStrings::new(strings)));
+        self.setup.leet = strings.leet_mode();
+        self.setup.strings = Strings(Rc::new(PatchedStrings::new(strings)));
         self
     }
 
     /// The string lists `T` reads its names from.
     #[must_use]
     pub fn strings(&self) -> &dyn CommCatalog {
-        &*self.strings.0
+        self.setup.strings()
     }
 
     /// The disable rule a session starts with.
@@ -393,23 +388,34 @@ impl Session {
         self.pilot.outfits = change.outfits;
         before_class(self);
         self.pilot.ship = ship.id;
-        self.fields = ship.fields;
-        self.defaults = pilot::tally(ship.defaults.iter().copied());
-        self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
-        self.refit(false, change.reserves);
+        self.ship.fit.fields = ship.fields;
+        self.ship.fit.defaults = pilot::tally(ship.defaults.iter().copied());
+        self.ship.fit.stock = armament::fitted(
+            &self
+                .statics
+                .arsenal
+                .stock_fits(ship.id, &self.statics.outfits),
+        );
+        self.ship.refit(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            false,
+            change.reserves,
+        );
         // The original's ship change writes no exit cursor (+0xc8fe-+0xc905),
         // so the turn of exits goes on, as the refit carried it; by the
         // other reading a new ship starts each `ExitType` at exit 0.
-        if self.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
-            *self.armament.exit_cursors_mut() = ExitCursors::default();
+        if self.setup.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
+            *self.ship.fit.armament.exit_cursors_mut() = ExitCursors::default();
         }
         // The fold does not carry: the original's ship change rewrites it
         // as the new hull's `BaseSets` − 1 with no direction and its timer
         // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
         // by either reading (see the `ship_display` module).
-        self.last_set_fold();
-        self.save_due = true;
-        self.emit(SessionEvent::ShipChanged);
+        self.ship.last_set_fold();
+        self.out.save_due = true;
+        self.out.emit(SessionEvent::ShipChanged);
     }
 
     /// Changes the player's ship to class `ship`, its outfits carried as
@@ -417,28 +423,34 @@ impl Session {
     /// docs); nothing changes when the session has no record of the
     /// class.
     pub(super) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
-        let Some(record) = self.ship_record(ship).cloned() else {
+        let Some(record) = self.statics.ship_record(ship).cloned() else {
             return;
         };
-        let rules = self.ship_change_rules();
+        let rules = self.setup.ship_change_rules();
         let defaults = pilot::tally(record.defaults.iter().copied());
         // `E` and `H` add the stock weapons and their `AmmoLoad` to the
         // weapon and rounds arrays and fold them into the outfits after
         // the default items (step 5).
-        let stock = (self.arsenal).stock_added(record.id, rules.bay_ammo, rules.negative_stock);
+        let stock =
+            (self.statics.arsenal).stock_added(record.id, rules.bay_ammo, rules.negative_stock);
         let fold = Fold {
             stock: &stock,
             default_weapons: rules.default_weapons,
         };
         let folds = (carry != OutfitCarry::Keep).then_some(&fold);
-        let max_ammo = |weapon| self.arsenal.weapon(weapon).map_or(0, |spec| spec.max_ammo);
+        let max_ammo = |weapon| {
+            self.statics
+                .arsenal
+                .weapon(weapon)
+                .map_or(0, |spec| spec.max_ammo)
+        };
         let limits = Limits {
             hardpoints: Hardpoints {
                 guns: record.max_gun,
                 turrets: record.max_tur,
             },
             max_ammo: &max_ammo,
-            raised_max: self.rules.source_for(RuleKey::RaisedMax),
+            raised_max: self.setup.rules.source_for(RuleKey::RaisedMax),
         };
         let held = clamp.then_some(&limits);
         let change = ClassChange {
@@ -448,19 +460,19 @@ impl Session {
                 &defaults,
                 folds,
                 held,
-                &self.outfits,
+                &self.statics.outfits,
             ),
             reserves: ReservePolicy::reading(rules.reserves),
         };
         self.become_class(&record, change, |_| {});
-        self.bump_armor();
+        self.ship.bump_armor(&mut self.pilot, &self.setup);
         // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
-        if self.landed.is_some() {
-            self.interface_loads.push(InterfaceLoad {
+        if self.mode.landed().is_some() {
+            self.out.interface_loads.push(InterfaceLoad {
                 government: self.interface_government(),
                 nav: self.nav_mode(),
                 reserves: self.reserves(),
-                texts: self.texts_queued,
+                texts: self.out.texts_queued,
             });
         }
     }
@@ -479,29 +491,57 @@ impl Session {
     /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
     /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
-        std::mem::take(&mut self.interface_loads)
-    }
-
-    /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
-    /// its most, while the session's disable rule has its ship disabled,
-    /// as the original's loop does (@0x15677-0x156c5). It ends at the
-    /// most, so a rule that never lets the ship fly still ends.
-    fn bump_armor(&mut self) {
-        let rule = Rc::clone(&self.disable_rule.0);
-        let armor = &mut self.pilot.reserves.armor;
-        while armor.now < armor.max && rule.disabled(*armor, &self.hull) {
-            armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
-        }
+        self.out.take_interface_loads()
     }
 
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
     /// the module docs).
     pub(super) fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
-        let Some(pick) = self.pick_string(list, chance) else {
+        let Some(pick) = self.setup.pick_string(list, chance) else {
             return;
         };
         let previous = self.pilot.ship_name.as_deref().unwrap_or_default();
         self.pilot.ship_name = Some(pick.replace('*', previous));
+    }
+}
+
+impl Outbox {
+    /// The `C`, `E` and `H` run while docked since the last run of docked
+    /// scripts began, in order, each as the status bar's
+    /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
+    /// taking them empties the list. Each of these begins a run, clearing
+    /// what the one before left untaken: an outfit order
+    /// ([`Session::outfit_order`]), a ship purchase
+    /// ([`Session::buy_ship`]), a mission accept, refusal or abort
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`],
+    /// [`Session::abort_mission`]), an offer asked for at a venue
+    /// ([`Session::next_offer`]), a settling ([`Session::settle_script`],
+    /// a landing's mission checks among what it settles) and a jettison
+    /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
+    /// or a purchase that is refused before it begins clears nothing.
+    fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
+        std::mem::take(&mut self.interface_loads)
+    }
+}
+
+impl Setup {
+    /// The rules the ship-change set operators follow, projected from
+    /// the session's rule set ([`Session::with_rules`]).
+    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
+        ShipChangeRules::from_rulebook(&self.rules)
+    }
+
+    /// The rule that says when the player's ship is disabled after a
+    /// change of ship.
+    #[must_use]
+    fn disable_rule(&self) -> &dyn DisableRule {
+        &*self.disable_rule.0
+    }
+
+    /// The string lists `T` reads its names from.
+    #[must_use]
+    pub(super) fn strings(&self) -> &dyn CommCatalog {
+        &*self.strings.0
     }
 
     /// One of `STR#` `list`'s strings, from the session's string lists,
@@ -535,6 +575,20 @@ impl Session {
     pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         self.random_string(list, chance)
             .filter(|pick| !pick.is_empty())
+    }
+}
+
+impl PlayerShip {
+    /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
+    /// its most, while the session's disable rule has its ship disabled,
+    /// as the original's loop does (@0x15677-0x156c5). It ends at the
+    /// most, so a rule that never lets the ship fly still ends.
+    fn bump_armor(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let rule = Rc::clone(&setup.disable_rule.0);
+        let armor = &mut pilot.reserves.armor;
+        while armor.now < armor.max && rule.disabled(*armor, &self.fit.hull) {
+            armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
+        }
     }
 }
 
@@ -769,7 +823,11 @@ mod tests {
 
     /// `session`'s record of ship `id`.
     fn record(session: &Session, id: i16) -> ShipRecord {
-        session.ship_record(ShipId(id)).cloned().expect("a record")
+        session
+            .statics
+            .ship_record(ShipId(id))
+            .cloned()
+            .expect("a record")
     }
 
     #[test]
@@ -787,11 +845,11 @@ mod tests {
             seen = Some((
                 s.ship(),
                 s.pilot.outfits.clone(),
-                s.fields,
-                s.defaults.clone(),
-                s.stock.clone(),
+                s.ship.fit.fields,
+                s.ship.fit.defaults.clone(),
+                s.ship.fit.stock.clone(),
                 s.stats(),
-                s.save_due,
+                s.out.save_due,
             ));
         });
         assert_eq!(
@@ -799,9 +857,9 @@ mod tests {
             Some((
                 ShipId(128),
                 outfits,
-                before.fields,
-                before.defaults.clone(),
-                before.stock.clone(),
+                before.ship.fit.fields,
+                before.ship.fit.defaults.clone(),
+                before.ship.fit.stock.clone(),
                 before.stats(),
                 false,
             )),
@@ -821,15 +879,22 @@ mod tests {
         session.become_class(&record(&session, 129), change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(session.pilot.outfits, outfits);
-        assert_eq!(session.fields, BIG);
-        assert_eq!(session.defaults, owned(&[(SHIELD, 1), (LIMITED, 2)]));
-        assert_eq!(session.stock, owned(&[(OutfitId(405), 1)]));
+        assert_eq!(session.ship.fit.fields, BIG);
+        assert_eq!(
+            session.ship.fit.defaults,
+            owned(&[(SHIELD, 1), (LIMITED, 2)])
+        );
+        assert_eq!(session.ship.fit.stock, owned(&[(OutfitId(405), 1)]));
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&outfits, &session.outfits))
+            ShipStats::new(BIG, &outfit_mods(&outfits, &session.statics.outfits))
         );
-        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
-        assert_eq!(session.armament.mounts().len(), 1, "405 mounts weapon 200");
+        assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
+        assert_eq!(
+            session.ship.fit.armament.mounts().len(),
+            1,
+            "405 mounts weapon 200"
+        );
         assert!(session.take_save_due());
     }
 
@@ -905,25 +970,31 @@ mod tests {
         let kept = session.pilot.outfits.clone();
         run(&mut session, "C129");
         assert_eq!(session.ship(), ShipId(129));
-        assert_eq!(session.fields, BIG);
-        assert_eq!(session.defaults, owned(&[(SHIELD, 1), (LIMITED, 2)]));
+        assert_eq!(session.ship.fit.fields, BIG);
+        assert_eq!(
+            session.ship.fit.defaults,
+            owned(&[(SHIELD, 1), (LIMITED, 2)])
+        );
         assert_eq!(session.pilot.outfits, kept, "every outfit, no default");
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&kept, &session.outfits))
+            ShipStats::new(BIG, &outfit_mods(&kept, &session.statics.outfits))
         );
         assert_eq!(
             session.stats().shield,
             400.0,
             "the class's and the outfits'"
         );
-        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
         assert_eq!(
-            session.armament,
-            session.arsenal.player(&kept, &session.outfits)
+            session.ship.fit.armament,
+            session
+                .statics
+                .arsenal
+                .player(&kept, &session.statics.outfits)
         );
         assert!(
-            session.armament.mounts().is_empty(),
+            session.ship.fit.armament.mounts().is_empty(),
             "no stock weapon: no outfit holds the new class's"
         );
         assert!(session.take_save_due());
@@ -948,8 +1019,16 @@ mod tests {
             let mut session = session(&catalog);
             run(&mut session, op);
             assert_eq!(session.pilot.owned(held), added, "{op}");
-            assert_eq!(session.stock, owned(&[(held, 1)]), "{op}: its standard");
-            assert_eq!(session.armament.mounts().len(), usize::from(added), "{op}");
+            assert_eq!(
+                session.ship.fit.stock,
+                owned(&[(held, 1)]),
+                "{op}: its standard"
+            );
+            assert_eq!(
+                session.ship.fit.armament.mounts().len(),
+                usize::from(added),
+                "{op}"
+            );
         }
     }
 
@@ -1038,7 +1117,13 @@ mod tests {
             (KEPT_LAUNCHER, 1),
             (ROCKETS, 5),
         ]);
-        session.refit(false, ReservePolicy::Hold);
+        session.ship.refit(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+            false,
+            ReservePolicy::Hold,
+        );
         session
     }
 
@@ -1051,10 +1136,15 @@ mod tests {
         assert_eq!(session.ship(), ShipId(132));
         assert_eq!(session.pilot.outfits, before);
         assert_eq!(
-            session.armament,
-            session.arsenal.player(&before, &session.outfits)
+            session.ship.fit.armament,
+            session
+                .statics
+                .arsenal
+                .player(&before, &session.statics.outfits)
         );
         let mounted: Vec<(WeaponId, u32)> = session
+            .ship
+            .fit
             .armament
             .mounts()
             .iter()
@@ -1080,10 +1170,11 @@ mod tests {
         assert_eq!(own(BAY), 1);
         assert_eq!(own(FIGHTERS), 0, "by the engine the fighters are lost");
         assert_eq!(
-            session.armament,
+            session.ship.fit.armament,
             session
+                .statics
                 .arsenal
-                .player(&session.pilot.outfits, &session.outfits)
+                .player(&session.pilot.outfits, &session.statics.outfits)
         );
     }
 
@@ -1439,7 +1530,7 @@ mod tests {
             wage: None,
             person: None,
         });
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: Vec2::new(5.0, -3.0),
             velocity: Vec2::new(0.25, 0.0),
             heading: 180.0,
@@ -1609,7 +1700,10 @@ mod tests {
         );
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&session.pilot.outfits, &session.outfits))
+            ShipStats::new(
+                BIG,
+                &outfit_mods(&session.pilot.outfits, &session.statics.outfits)
+            )
         );
         let mut session = self::session(&catalog);
         session.pilot.outfits.insert(LIMITED, 5);
@@ -1869,12 +1963,18 @@ mod tests {
             let reloaded = Session::fly(&catalog, pilot).expect("flies");
             assert_eq!(reloaded.ship(), ShipId(129), "{op}");
             assert_eq!(reloaded.pilot.outfits, session.pilot.outfits, "{op}");
-            assert_eq!(reloaded.defaults, session.defaults, "{op}");
+            assert_eq!(
+                reloaded.ship.fit.defaults, session.ship.fit.defaults,
+                "{op}"
+            );
             assert_eq!(reloaded.stats(), session.stats(), "{op}");
             assert_eq!(reloaded.reserves(), session.reserves(), "{op}");
             assert_eq!(reloaded.pilot.cargo, session.pilot.cargo, "{op}");
             assert_eq!(reloaded.pilot().ship_name(), Some("Kestrel"), "{op}");
-            assert_eq!(reloaded.armament, session.armament, "{op}");
+            assert_eq!(
+                reloaded.ship.fit.armament, session.ship.fit.armament,
+                "{op}"
+            );
         }
     }
 
