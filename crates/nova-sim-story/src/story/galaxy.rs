@@ -70,8 +70,8 @@
 //! - unloading the master sprites no longer needed (@0x32d74-0x32e4e):
 //!   nothing observable, not modelled;
 //! - the sprite slots and their fallback frames (@0x32e54-0x33331): the
-//!   story module's `rebuild`. The slots' ascending-ID order is left to
-//!   the fidelity work.
+//!   story module's `rebuild`. The flight draws the stellars in slot
+//!   (ascending ID) order, in `nova_view`'s `draw_stellars`.
 //!
 //! The function plays no sound.
 

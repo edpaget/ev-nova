@@ -11,7 +11,10 @@
 //!   (@0x33205-0x33214). The stellar's sprite pointer, spöb +0, is set to
 //!   its slot (@0x32fc8) and the slot's owner to the stellar (@0x32fda).
 //!   Any slot left with no frames, unowned ones included, gets graphic
-//!   type 0's frame 0 (@0x33237-0x33315).
+//!   type 0's frame 0 (@0x33237-0x33315). A slot is added to the sprite
+//!   layer when first created (`_SWAddSprite` @0x33032), at its tail
+//!   (@0xac624), and `_SWAnimateSpriteWorld` draws each layer from its
+//!   head (@0xb9727), so the higher stellar ID is drawn on top.
 //! - **No clear.** Nothing else writes spöb +0: not the loaders, a new
 //!   pilot or a pilot loaded. So a stellar once shown keeps pointing at the
 //!   slot it last took for the rest of the process, across hides, jumps
