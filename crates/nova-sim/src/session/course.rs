@@ -43,7 +43,8 @@ impl Chart {
     /// each hidden hop rewritten to the system at its place and the
     /// course cut at the first with none. Raises no event.
     pub(super) fn rewrite_course(&mut self, pilot: &mut Pilot, setup: &Setup) {
-        pilot.course = course::rewritten(
+        (pilot.course_start, pilot.course) = course::rewritten(
+            pilot.course_start,
             &pilot.course,
             self.galaxy.map().places(),
             setup.route_rewrite(),
@@ -59,7 +60,8 @@ impl Chart {
         hops: usize,
         arrived: SystemId,
     ) {
-        pilot.course = course::after_arrival(
+        (pilot.course_start, pilot.course) = course::after_arrival(
+            pilot.course_start,
             &pilot.course,
             hops,
             arrived,
