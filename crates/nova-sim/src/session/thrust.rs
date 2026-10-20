@@ -79,13 +79,13 @@ fn an_npc_gains_its_accel_over_the_divisor_a_tick_from_rest() {
         // 100 below the player, facing down, away from the centre.
         let mut session = with_an_npc_at(&catalog, 750, 850, 180).with_rules(under(divisor));
         let id = session.npcs()[0].id;
-        let npc = session.npc_mut(id).expect("there");
+        let npc = session.space.npc_mut(id).expect("there");
         npc.goal = Goal::JumpOut;
         let total = accel_total(npc.stats.handling.accel);
         assert!(total > 0.0);
         assert_eq!(npc.state.heading, 180.0);
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-        let npc = session.npc(id).expect("there");
+        let npc = session.space.npc(id).expect("there");
         let speed = npc.state.velocity.length();
         assert!(
             close(speed, total / by),
@@ -135,12 +135,12 @@ fn an_npc_coasting_past_its_top_speed_keeps_it_by_default_and_is_rescaled_under_
     for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
         let mut session = with_an_npc_at(&catalog, 750, 850, 180).with_rules(rules);
         let id = session.npcs()[0].id;
-        let npc = session.npc_mut(id).expect("there");
+        let npc = session.space.npc_mut(id).expect("there");
         npc.goal = Goal::Hold;
         let c = npc.top_speed(1.0);
         npc.state.velocity = Vec2::new(-2.0 * c, 3.0 * c);
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-        let velocity = session.npc(id).expect("there").state.velocity;
+        let velocity = session.space.npc(id).expect("there").state.velocity;
         if circled {
             assert!((velocity.length() - c).abs() < 1e-4, "{velocity:?} at {c}");
         } else {
@@ -208,7 +208,7 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         for _ in 0..3 {
             session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         }
-        let state = session.npc(id).expect("there").state;
+        let state = session.space.npc(id).expect("there").state;
         (immobile, at, state)
     };
     let (immobile, at, state) = shoved(immobile_class());

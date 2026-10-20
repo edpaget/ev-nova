@@ -77,7 +77,8 @@ impl Session {
         } else {
             Condition::Intact
         };
-        self.say(SimMessage::PropulsionRepaired);
+        self.space
+            .say(&mut self.out, SimMessage::PropulsionRepaired);
         self.out.sounds.push(SimSound::PropulsionRepaired);
     }
 }

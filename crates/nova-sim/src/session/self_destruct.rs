@@ -95,7 +95,8 @@ impl Session {
             Beat::Destruct => (SimSound::SelfDestructed, SelfDestructLine::NiceDay),
         };
         self.out.sounds.push(sound);
-        self.say(SimMessage::SelfDestruct(line));
+        self.space
+            .say(&mut self.out, SimMessage::SelfDestruct(line));
         if beat == Beat::Destruct {
             self.destruct_player();
         }

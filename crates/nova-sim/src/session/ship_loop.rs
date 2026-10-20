@@ -49,7 +49,7 @@ use std::collections::BTreeSet;
 
 use super::game_work::PassStart;
 use super::npc_escape::{AtStep, escape_may_run};
-use super::{Session, TrafficMarks};
+use super::{Session, Space, TrafficMarks};
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
 use crate::traffic::npc::NpcId;
@@ -113,7 +113,7 @@ impl Session {
     ) {
         self.space.traffic.ease_stray();
         let again_marks = matches!(motion, Motion::Again)
-            .then(|| self.mission_marks())
+            .then(|| self.space.mission_marks())
             .filter(|_| !self.space.traffic_due);
         let mut fly = match &motion {
             Motion::Fly(_) => Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Advance)),
@@ -124,12 +124,12 @@ impl Session {
         };
         let mut shown = vec![ShipRef::Player];
         let mut after = None;
-        while let Some((berth, id)) = self.next_in_loop(after) {
+        while let Some((berth, id)) = self.space.next_in_loop(after) {
             after = Some(berth);
             if let Some(fly) = fly.as_mut() {
                 self.fly_in_loop(fly, id, chance);
             }
-            let Some(npc) = self.npc(id) else {
+            let Some(npc) = self.space.npc(id) else {
                 continue;
             };
             let at_step = AtStep::of(npc);
@@ -178,20 +178,6 @@ impl Session {
         self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
-    /// The NPC in the lowest berth above `after` (any, with none), and
-    /// its berth, read afresh from the traffic: so the loop reaches a
-    /// fighter launched into a berth above the one it is at, and passes
-    /// one launched below.
-    fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
-        self.space
-            .traffic
-            .npcs()
-            .iter()
-            .map(|npc| (npc.berth, npc.id))
-            .filter(|&(berth, _)| after.is_none_or(|after| berth > after))
-            .min()
-    }
-
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
     /// flight, a fighter its flight docks going aboard at once
     /// ([`Session::dock_fighter`]); or, for one launched since the half
@@ -213,6 +199,21 @@ impl Session {
     /// keeping their place, in the world it flies in.
     fn begin_fly(&mut self, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
         self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half))
+    }
+}
+
+impl Space {
+    /// The NPC in the lowest berth above `after` (any, with none), and
+    /// its berth, read afresh from the traffic: so the loop reaches a
+    /// fighter launched into a berth above the one it is at, and passes
+    /// one launched below.
+    fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
+        self.traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.berth, npc.id))
+            .filter(|&(berth, _)| after.is_none_or(|after| berth > after))
+            .min()
     }
 }
 
@@ -300,7 +301,7 @@ mod tests {
     }
 
     fn state(session: &Session, id: NpcId) -> crate::flight::ShipState {
-        session.npc(id).expect("there").state
+        session.space.npc(id).expect("there").state
     }
 
     const WRECKED: Vec2 = Vec2::new(600.0, 0.0);
@@ -321,7 +322,7 @@ mod tests {
             } else {
                 pass(&mut session, &catalog, &Keep);
             }
-            assert!(session.npc(gone).is_none(), "{second_pass}: exploded");
+            assert!(session.space.npc(gone).is_none(), "{second_pass}: exploded");
             let after = state(&session, pushed);
             assert!(after.velocity.x > 0.0, "{second_pass}: {after:?}");
             assert_eq!(after.position, at + after.velocity, "{second_pass}");

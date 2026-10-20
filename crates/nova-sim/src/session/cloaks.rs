@@ -26,7 +26,7 @@
 //!   unless the player can target cloaked ships
 //!   (`_ShipCanTargetCloakedShips` @0x2466; `_HandlePlayer`
 //!   @0x68652-0x686f9).
-//! - **Hits** ([`Session::cloak_hits`], `_DamageShip`): each strike on an
+//! - **Hits** ([`Space::cloak_hits`], `_DamageShip`): each strike on an
 //!   NPC may cloak it (`Flags2` 0x4000, by a ship it is not attacking) and
 //!   uncloak it (a cloak that decloaks when hit), in that order. A
 //!   blast's or a death shockwave's strike does neither, being no direct
@@ -39,7 +39,7 @@
 //!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
 //!   not.
 
-use super::{PlayerShip, Session, Statics};
+use super::{PlayerShip, Session, Space, Statics};
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
@@ -120,54 +120,20 @@ impl Session {
     /// Says what the view shows of space, about the player's ship: the
     /// play area, as world units from the player (x right, y down).
     pub fn set_play_area(&mut self, area: Area) {
-        self.space.play_area = area;
+        self.space.set_play_area(area);
     }
 
     /// The play area the view shows about the player, or
     /// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) until it says.
     #[must_use]
     pub fn play_area(&self) -> Area {
-        self.space.play_area
+        self.space.play_area()
     }
 
     /// Whether a watched `npc` is observed now: seen, and, when it can
     /// cloak, on screen (`_MissionObjectivesCheck` @0x9ea5c-0x9eb15).
     pub(super) fn observes(&self, npc: &Npc) -> bool {
         self.sees(npc) && (!npc.can_cloak() || self.on_screen(npc))
-    }
-
-    /// Each of `strikes` on an NPC, as its cloak takes it (see the module
-    /// docs). A hit that meets cloak-when-hit's conditions first starts
-    /// the burst weapons of the ship's class on their burst reload
-    /// ([`Armament::force_burst_reload`](crate::combat::armament::Armament::force_burst_reload)),
-    /// cloaked already or not, as `_DamageShip` calls
-    /// `_AIForceBurstReload` (@0x3bbd5) before `_DoShipCloak` (@0x3bbdd).
-    pub(super) fn cloak_hits(&mut self, strikes: &[Strike]) {
-        for strike in strikes.iter().filter(|strike| strike.direct) {
-            let ShipRef::Npc(id) = strike.ship else {
-                continue;
-            };
-            let arsenal = &self.statics.arsenal;
-            let Some(npc) = self
-                .space
-                .traffic
-                .npcs_mut()
-                .iter_mut()
-                .find(|npc| npc.id == id)
-            else {
-                continue;
-            };
-            let can_cloak = npc.can_cloak();
-            // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
-            // hit only for a ship source (@0x3bb9f), as if it were
-            // attacking; nor does an unanswered one, whose reaction block
-            // is skipped.
-            let holds =
-                !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds) {
-                npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
-            }
-        }
     }
 }
 
@@ -223,6 +189,49 @@ impl PlayerShip {
     }
 }
 
+impl Space {
+    /// Says what the view shows of space, about the player's ship: the
+    /// play area, as world units from the player (x right, y down).
+    fn set_play_area(&mut self, area: Area) {
+        self.play_area = area;
+    }
+
+    /// The play area the view shows about the player, or
+    /// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) until it says.
+    #[must_use]
+    fn play_area(&self) -> Area {
+        self.play_area
+    }
+
+    /// Each of `strikes` on an NPC, as its cloak takes it (see the module
+    /// docs). A hit that meets cloak-when-hit's conditions first starts
+    /// the burst weapons of the ship's class on their burst reload
+    /// ([`Armament::force_burst_reload`](crate::combat::armament::Armament::force_burst_reload)),
+    /// cloaked already or not, as `_DamageShip` calls
+    /// `_AIForceBurstReload` (@0x3bbd5) before `_DoShipCloak` (@0x3bbdd).
+    pub(super) fn cloak_hits(&mut self, statics: &Statics, strikes: &[Strike]) {
+        for strike in strikes.iter().filter(|strike| strike.direct) {
+            let ShipRef::Npc(id) = strike.ship else {
+                continue;
+            };
+            let arsenal = &statics.arsenal;
+            let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+                continue;
+            };
+            let can_cloak = npc.can_cloak();
+            // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
+            // hit only for a ship source (@0x3bb9f), as if it were
+            // attacking; nor does an unanswered one, whose reaction block
+            // is skipped.
+            let holds =
+                !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
+            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds) {
+                npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
+            }
+        }
+    }
+}
+
 /// What the player's cloak scanners give, from the outfits it owns.
 #[must_use]
 fn scanner(pilot: &Pilot, statics: &Statics) -> Scanner {
@@ -259,9 +268,9 @@ mod tests {
             flags2: CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.cloak_hits(&[unanswered]);
+        session.space.cloak_hits(&session.statics, &[unanswered]);
         assert_eq!(session.npcs()[0].cloak, Cloak::default());
-        session.cloak_hits(&[hit]);
+        session.space.cloak_hits(&session.statics, &[hit]);
         assert_eq!(session.npcs()[0].cloak.direction, 1, "answered");
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = CloakGear {
@@ -269,7 +278,7 @@ mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.cloak_hits(&[unanswered]);
+        session.space.cloak_hits(&session.statics, &[unanswered]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
@@ -320,7 +329,7 @@ mod tests {
                 .all(|mount| mount.reload == 0.0),
             "ready"
         );
-        session.cloak_hits(hits);
+        session.space.cloak_hits(&session.statics, hits);
         session.npcs()[0]
             .armament
             .mounts()
@@ -371,7 +380,7 @@ mod tests {
         };
         npc.cloak = CLOAKED;
         let hit: Strike = strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
-        session.cloak_hits(&[hit]);
+        session.space.cloak_hits(&session.statics, &[hit]);
         let npc = &session.npcs()[0];
         assert_eq!(npc.cloak, CLOAKED);
         assert_eq!(npc.armament.mounts()[0].reload, 40.0);

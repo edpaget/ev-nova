@@ -10,7 +10,7 @@
 //! ([`Session::see_stellars`]), as `_HandleStellarSprites` (@0x444d2)
 //! moves the owned slots each pass. A slot is placed at its stellar's
 //! place less half the frame it is drawn with
-//! ([`Session::drawn_frame_size`]). The pool outlives the session: the
+//! ([`Space::drawn_frame_size`]). The pool outlives the session: the
 //! app hands it to the next pilot's session in the same run
 //! ([`Session::stellar_sprite_pool`],
 //! [`Session::carry_stellar_sprite_pool`]), as the original never clears
@@ -22,7 +22,7 @@
 //! @0x39d1d), shown or not:
 //!
 //! - **shown:** its own, the frame it is drawn with
-//!   ([`Session::drawn_frame_size`]): its `DeadType` sheet while
+//!   ([`Space::drawn_frame_size`]): its `DeadType` sheet while
 //!   destroyed, graphic type 0's while destroyed and dead since the last
 //!   rebuild point with no `DeadType` sheet, its `Type` sheet otherwise;
 //! - **hidden, its last slot owned by a stellar shown now:** that
@@ -43,7 +43,7 @@
 //! the original compares masks: see rdm
 //! phase/ship-handling-fidelity-followups/phase-1-deadly-stellars-pixel-masks.
 
-use super::{PlayerShip, Session, Statics};
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::catalog::LandingSite;
 use crate::combat::stellar_hazards::DeadlyDisc;
 use crate::deadly_stellar::{is_deadly, sprite_radius};
@@ -68,7 +68,10 @@ impl Session {
             .sites
             .iter()
             .map(|site| {
-                let frame = self.drawn_frame_size(site).unwrap_or((0, 0));
+                let frame = self
+                    .space
+                    .drawn_frame_size(&self.statics, &self.setup, site)
+                    .unwrap_or((0, 0));
                 (
                     site.id,
                     offset(site.position, self.ship.player.position, frame),
@@ -96,10 +99,10 @@ impl Session {
                     None => SlotSprite::None,
                 };
                 match sprite {
-                    SlotSprite::Own => self.drawn_disc(shown?),
+                    SlotSprite::Own => self.space.drawn_disc(&self.statics, &self.setup, shown?),
                     SlotSprite::Owner(owner) => {
                         let owner = self.sites.iter().find(|site| site.id == owner)?;
-                        self.drawn_disc(owner)
+                        self.space.drawn_disc(&self.statics, &self.setup, owner)
                     }
                     SlotSprite::Ghost { top_left } => self.ship.ghost_disc(&self.statics, top_left),
                     SlotSprite::None => None,
@@ -113,19 +116,11 @@ impl Session {
         self.sites.iter().find(|site| site.id == listed.id)
     }
 
-    /// The disc of `site`, shown, as it is drawn: none when nothing is.
-    fn drawn_disc(&self, site: &LandingSite) -> Option<DeadlyDisc> {
-        Some(DeadlyDisc {
-            at: site.position,
-            radius: sprite_radius(self.drawn_frame_size(site)?),
-        })
-    }
-
     /// The stellar sprite pool, to hand to the next pilot's session in the
     /// same run (see the module docs).
     #[must_use]
     pub fn stellar_sprite_pool(&self) -> &StellarSpritePool {
-        &self.space.stellar_sprites
+        self.space.stellar_sprite_pool()
     }
 
     /// Takes on `pool`, the last session's in the same run, and hands it
@@ -154,6 +149,28 @@ impl PlayerShip {
             at: self.player.position + corner + size * 0.5,
             radius: sprite_radius(frame),
         })
+    }
+}
+
+impl Space {
+    /// The disc of `site`, shown, as it is drawn: none when nothing is.
+    fn drawn_disc(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<DeadlyDisc> {
+        Some(DeadlyDisc {
+            at: site.position,
+            radius: sprite_radius(self.drawn_frame_size(statics, setup, site)?),
+        })
+    }
+
+    /// The stellar sprite pool, to hand to the next pilot's session in the
+    /// same run (see the module docs).
+    #[must_use]
+    fn stellar_sprite_pool(&self) -> &StellarSpritePool {
+        &self.stellar_sprites
     }
 }
 
@@ -380,7 +397,10 @@ mod tests {
         session.see_stellars();
         let mut pool = session.stellar_sprite_pool().clone();
         pool.rebuild([]);
-        let frame = session.drawn_frame_size(&site).expect("drawn");
+        let frame = session
+            .space
+            .drawn_frame_size(&session.statics, &session.setup, &site)
+            .expect("drawn");
         assert_eq!(
             pool.sprite_of(site.id, false),
             SlotSprite::Ghost {

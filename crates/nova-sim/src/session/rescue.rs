@@ -300,7 +300,7 @@ impl Session {
         self.recent_rank = None;
         // The system died in: its timer cancelled and its countdown
         // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
-        self.reset_reinforcements_here();
+        self.space.reset_reinforcements_here(&mut self.pilot);
         self.reset_precalced();
     }
 
@@ -797,7 +797,11 @@ mod tests {
         session.end_every_mission_for_rescue(&mut NeverFires);
         assert_eq!(session.pilot.missions.iter().count(), 0);
         assert!(session.control_bit(bit(22)), "OnAbort");
-        assert_eq!(session.npc(marked).expect("here").mission, None, "released");
+        assert_eq!(
+            session.space.npc(marked).expect("here").mission,
+            None,
+            "released"
+        );
         let mut session = due(&catalog);
         session
             .pilot
@@ -935,7 +939,7 @@ mod tests {
                 heading: 0.0,
             }
         );
-        assert!(session.npc(hulk).is_none(), "the old ships gone");
+        assert!(session.space.npc(hulk).is_none(), "the old ships gone");
         assert_eq!(session.npcs().len(), 2, "the new system's set up");
         assert!(
             session

@@ -3,7 +3,7 @@
 //! slots entered it (see `nova_sim_combat::combat::shot_slots`), and the
 //! rules that read the slots.
 
-use super::Session;
+use super::{Session, Space};
 use crate::combat::projectile::Shot;
 
 impl Session {
@@ -15,7 +15,20 @@ impl Session {
     /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
     #[must_use]
     pub fn shots_drawn(&self) -> Vec<&Shot> {
-        self.space.combat.shots_drawn()
+        self.space.shots_drawn()
+    }
+}
+
+impl Space {
+    /// The shots in flight in the order they are drawn, bottom first: by
+    /// layer, and within a layer by
+    /// [`RuleKey::ShotOverlap`](crate::rulebook::RuleKey::ShotOverlap), the
+    /// order their slots entered it by the engine, firing order by the
+    /// other reading
+    /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
+    #[must_use]
+    fn shots_drawn(&self) -> Vec<&Shot> {
+        self.combat.shots_drawn()
     }
 }
 
@@ -136,7 +149,7 @@ mod tests {
             next.trigger = Trigger::default();
             session.space.traffic.remove(next.id);
             let id = session.space.traffic.add_npc(next);
-            assert_eq!(session.npc(id).map(|npc| npc.berth), Some(berth));
+            assert_eq!(session.space.npc(id).map(|npc| npc.berth), Some(berth));
             for _ in 0..5 {
                 session.tick_combat(Rules::default(), &mut NeverFires);
             }

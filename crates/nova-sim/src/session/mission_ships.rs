@@ -172,8 +172,9 @@
 //! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
 //! it as their marks are cleared.
 
-use super::{Session, Statics};
+use super::{Session, Space, Statics};
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use crate::catalog::{DudeId, MissionId, MissionRecord, PilotCatalog, ShipId, TrafficCatalog};
@@ -399,7 +400,7 @@ impl Session {
                 self.check_ship_goals(slot, false, chance);
             }
             (SHIP_FATE, StoryEvent::ShipFate { ship, fate }) => {
-                let sighted = fate == Fate::Observed && self.marked_here(ship, slot);
+                let sighted = fate == Fate::Observed && self.space.marked_here(ship, slot);
                 self.check_ship_goals(slot, sighted, chance);
             }
             _ => {}
@@ -422,14 +423,6 @@ impl Session {
             active.ships.appear = appear;
             active.ships.arrived = 0;
         }
-    }
-
-    /// Whether the NPC `ship` is in the system, a special ship of the
-    /// mission in `slot`.
-    fn marked_here(&self, ship: NpcId, slot: u8) -> bool {
-        self.npcs()
-            .iter()
-            .any(|npc| npc.id == ship && npc.mission.is_some_and(|mark| mark.slot == slot))
     }
 
     /// Checks the goals of the mission in `slot` (`_MissionObjectivesCheck`
@@ -878,7 +871,7 @@ impl Session {
             self.gate(),
             chance,
         );
-        let last = self.last_npc();
+        let last = self.space.last_npc();
         let came = self.space.traffic.bring_in_within(
             ships,
             self.setup.spawn_reserve(SPAWN_RESERVE),
@@ -994,7 +987,7 @@ impl Session {
         if self.setup.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
             ship.held = false;
         }
-        let last = self.last_npc();
+        let last = self.space.last_npc();
         let came = self.space.traffic.bring_in_within(
             vec![ship],
             reserve,
@@ -1005,10 +998,10 @@ impl Session {
             return;
         }
         let targeted = self.target == Some(npc);
-        self.drop_quarry(npc);
+        self.space.drop_quarry(npc);
         self.space.traffic.remove(npc);
         // The ship brought in above is numbered last.
-        let swapped_in = self.last_npc();
+        let swapped_in = self.space.last_npc();
         if targeted {
             self.target = swapped_in;
             self.target_fly_in.settle();
@@ -1020,7 +1013,7 @@ impl Session {
         // always the target; this settling comes after, so a target the
         // player moved since is kept, and `<OSN>` names the swapped-in
         // ship all the same.
-        if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
+        if let Some(npc) = swapped_in.and_then(|id| self.space.npc(id)) {
             self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
         if self.setup.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
@@ -1154,7 +1147,7 @@ impl Session {
                         AssistLine::Boarded => MissionBoardLine::Boarded,
                         AssistLine::Refuelled => MissionBoardLine::Refuelled { ship: npc.ship },
                     });
-                    self.hold_boarded(npc.id);
+                    self.space.hold_boarded(npc.id);
                 }
                 assist.is_some()
                     || plain_board_counts(
@@ -1183,19 +1176,7 @@ impl Session {
     /// rescue them, its goals not yet met and the ship not yet boarded.
     /// A ship with no mark, or of a free slot, is not held.
     pub(crate) fn mission_ship_held(&self, npc: &Npc) -> bool {
-        let Some(active) = npc
-            .mission
-            .and_then(|mark| self.pilot.missions.get(mark.slot))
-        else {
-            return false;
-        };
-        let goal = self
-            .statics
-            .mission_record(active.mission)
-            .map_or(ShipGoal::None, |record| {
-                ShipGoal::from_code(record.ships.goal)
-            });
-        held_disabled(goal, active.goals_met, npc.boarded)
+        mission_ship_held(&self.pilot, &self.statics, npc)
     }
 
     /// The special ships just brought into the system, each numbered
@@ -1257,16 +1238,6 @@ impl Session {
                 active.ships.left -= 1;
             }
         }
-    }
-
-    /// The marks of the special ships in the system, each with its NPC:
-    /// what [`Session::mission_ships_left`] reads once the traffic's tick
-    /// has taken those that left out.
-    pub(super) fn mission_marks(&self) -> Vec<(NpcId, MissionMark)> {
-        self.npcs()
-            .iter()
-            .filter_map(|npc| Some((npc.id, npc.mission?)))
-            .collect()
     }
 
     /// The special ships among those the traffic's last tick took out,
@@ -1398,7 +1369,7 @@ impl Session {
         };
         if fails {
             if record.flags & HIDDEN == 0 {
-                self.say(SimMessage::MissionShipLost);
+                self.space.say(&mut self.out, SimMessage::MissionShipLost);
                 self.out.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);
@@ -1442,7 +1413,7 @@ impl Session {
     }
 
     /// The special ships `ids` lose their marks
-    /// ([`Session::unmark_mission_ship`]), or, while the player is
+    /// ([`Space::unmark_mission_ship`]), or, while the player is
     /// docked, are taken out of the system; the formation re-forms when a
     /// mission escort left it.
     fn unmark_mission_ships(&mut self, ids: &[NpcId]) {
@@ -1451,23 +1422,12 @@ impl Session {
             if self.landed.is_some() {
                 self.space.traffic.remove(id);
             } else {
-                reform |= self.unmark_mission_ship(id);
+                reform |= self.space.unmark_mission_ship(&self.statics, id);
             }
         }
         if reform {
             self.reform();
         }
-    }
-
-    /// The mission ship `npc`'s name or subtitle, as `pick` takes it from
-    /// its slot's ships, while it is marked and that is not empty.
-    pub(super) fn mission_ship_text(
-        &self,
-        mark: Option<crate::traffic::npc::MissionMark>,
-        pick: impl Fn(&SpecialShips) -> &str,
-    ) -> Option<&str> {
-        let active = self.pilot.missions.get(mark?.slot)?;
-        Some(pick(&active.ships)).filter(|text| !text.is_empty())
     }
 }
 
@@ -1479,6 +1439,54 @@ impl Statics {
             .find(|record| record.id == ship)
             .map(|record| &record.appear_on)
     }
+}
+
+impl Space {
+    /// Whether the NPC `ship` is in the system, a special ship of the
+    /// mission in `slot`.
+    fn marked_here(&self, ship: NpcId, slot: u8) -> bool {
+        self.npcs()
+            .iter()
+            .any(|npc| npc.id == ship && npc.mission.is_some_and(|mark| mark.slot == slot))
+    }
+
+    /// The marks of the special ships in the system, each with its NPC:
+    /// what [`Session::mission_ships_left`] reads once the traffic's tick
+    /// has taken those that left out.
+    pub(super) fn mission_marks(&self) -> Vec<(NpcId, MissionMark)> {
+        self.npcs()
+            .iter()
+            .filter_map(|npc| Some((npc.id, npc.mission?)))
+            .collect()
+    }
+}
+
+/// Whether `npc` is held disabled whatever its armour, as
+/// `_IsDisabled` reads it (@0x2d24-0x2d69; see [`held_disabled`]): a
+/// special ship of the mission in its slot whose `ShipGoal` is to
+/// rescue them, its goals not yet met and the ship not yet boarded.
+/// A ship with no mark, or of a free slot, is not held.
+pub(super) fn mission_ship_held(pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
+    let Some(active) = npc.mission.and_then(|mark| pilot.missions.get(mark.slot)) else {
+        return false;
+    };
+    let goal = statics
+        .mission_record(active.mission)
+        .map_or(ShipGoal::None, |record| {
+            ShipGoal::from_code(record.ships.goal)
+        });
+    held_disabled(goal, active.goals_met, npc.boarded)
+}
+
+/// The mission ship `npc`'s name or subtitle, as `pick` takes it from
+/// its slot's ships, while it is marked and that is not empty.
+pub(super) fn mission_ship_text(
+    pilot: &Pilot,
+    mark: Option<crate::traffic::npc::MissionMark>,
+    pick: impl Fn(&SpecialShips) -> &str,
+) -> Option<&str> {
+    let active = pilot.missions.get(mark?.slot)?;
+    Some(pick(&active.ships)).filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]
@@ -2530,7 +2538,7 @@ pub(super) mod tests {
             }];
             session.listed = session.sites.clone();
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
-            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");
             let ships = ships_of(&session);
             assert_eq!(
@@ -2567,7 +2575,7 @@ pub(super) mod tests {
             }
             session.story_raised();
             disabled_then_killed(&mut session, id, &Gunner::Player);
-            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(ships_of(&session).disabled, 1, "{reading:?}");
             assert!(
                 session
@@ -2700,7 +2708,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
-        session.lose_captured(id, true);
+        session.space.lose_captured(&mut session.pilot, id, true);
         assert_eq!(
             marked(&session),
             [0, 0],

@@ -2,7 +2,7 @@
 //! player's radar outfits, each ship's and stellar's IFF colour code, and
 //! the interference in the player's system.
 
-use super::Session;
+use super::{Session, Space};
 use crate::catalog::{LandingSite, StellarId};
 use crate::iff::{self, RadarGear, ShipIff, Standing, StellarIff};
 use crate::market;
@@ -29,7 +29,7 @@ impl Session {
     /// player.
     #[must_use]
     pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
-        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
+        self.space.ship_iff(npc)
     }
 
     /// What IFF shows `stellar` as, one of the stellars shown, as its
@@ -85,6 +85,17 @@ impl Session {
     pub fn interference(&self) -> u8 {
         let system = self.galaxy.map().interference(self.pilot.system);
         iff::interference(system, self.radar_gear().anti_interference)
+    }
+}
+
+impl Space {
+    /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
+    /// [`leader`](Npc::leader) if that is still in the system: green too
+    /// for a fighter of the player's escort, whose parent's parent is the
+    /// player.
+    #[must_use]
+    fn ship_iff(&self, npc: &Npc) -> ShipIff {
+        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
     }
 }
 
@@ -197,7 +208,7 @@ mod tests {
         }
     }
 
-    /// A fighter `carrier` launched, as `Session::join_carrier` builds
+    /// A fighter `carrier` launched, as `Space::join_carrier` builds
     /// it: led by the carrier (one with no lead of its own), with no
     /// escort duty and no mission.
     fn fighter_of(session: &mut Session, carrier: Npc) -> Npc {

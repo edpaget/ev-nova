@@ -34,7 +34,7 @@
 //! # Here
 //!
 //! The session keeps which ship each slot last displayed and showed
-//! ([`Session::is_displayed`]): each display step records it
+//! ([`Space::is_displayed`]): each display step records it
 //! ([`Session::lay_out_displayed`]), and [`Session::prepare_all_sprites`]
 //! records every ship's at once. By [`RuleKey::UndisplayedShips`]' engine
 //! reading a ship its slot has not displayed is left out of
@@ -72,8 +72,8 @@
 //! The cloak fade step:
 //! rdm:phase/cloaking-fidelity/phase-7-escort-cloak-through-warp-prepare-and-capture.
 
-use super::Session;
 use super::player_led::slot_of;
+use super::{Session, Setup, Space};
 use crate::combat::ShipRef;
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -92,14 +92,6 @@ pub enum HoverPlace {
 }
 
 impl Session {
-    /// Whether `ship`, at `slot`, is displayed: its slot's last display
-    /// showed it, as [`RuleKey::UndisplayedShips`]' engine reading has it,
-    /// or always by the other reading (see the module docs).
-    pub(super) fn is_displayed(&self, ship: ShipRef, slot: Slot) -> bool {
-        self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
-            || self.space.slot_shown.get(&slot) == Some(&ship)
-    }
-
     /// Notes `slot`'s display of `ship`: shown, it is displayed from now;
     /// hidden ([`Session::is_hidden`]), the slot displays nothing. Either
     /// way the display lays the slot out at the ship's whole-pixel offset
@@ -114,6 +106,7 @@ impl Session {
         let offset = match ship {
             ShipRef::Player => Some(Vec2::ZERO),
             ShipRef::Npc(id) => self
+                .space
                 .npc(id)
                 .map(|npc| npc.state.position - self.ship.player.position),
         };
@@ -121,14 +114,6 @@ impl Session {
             self.space.slot_placed.insert(slot, ship);
             self.space.slot_sprites.places.place(slot, offset);
         }
-    }
-
-    /// Whether `ship`, at `slot`, was laid out by its slot's last display,
-    /// shown or hidden, as [`RuleKey::UndisplayedShips`]' engine reading
-    /// has it, or always by the other reading.
-    pub(super) fn is_laid_out(&self, ship: ShipRef, slot: Slot) -> bool {
-        self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
-            || self.space.slot_placed.get(&slot) == Some(&ship)
     }
 
     /// Where `ship`'s hover and click box is: `_HandleMouse` (@0x380e3-0x381ec)
@@ -145,21 +130,7 @@ impl Session {
     /// where it is, which is nowhere.
     #[must_use]
     pub fn hover_place(&self, ship: ShipRef) -> HoverPlace {
-        let slot = match ship {
-            ShipRef::Player => Slot::Player,
-            ShipRef::Npc(id) => match self.npc(id) {
-                Some(npc) => slot_of(npc),
-                None => return HoverPlace::Own,
-            },
-        };
-        if self.is_laid_out(ship, slot) {
-            return HoverPlace::Own;
-        }
-        self.space
-            .slot_sprites
-            .places
-            .of(slot)
-            .map_or(HoverPlace::Unplaced, HoverPlace::Stale)
+        self.space.hover_place(&self.setup, ship)
     }
 
     /// Takes NPC `id` out and puts a copy of it in its berth at `at`, at
@@ -171,12 +142,7 @@ impl Session {
         id: crate::traffic::npc::NpcId,
         at: Vec2,
     ) -> Option<crate::traffic::npc::NpcId> {
-        let mut copy = self.npc(id)?.clone();
-        self.space.traffic.remove(id);
-        copy.state.position = at;
-        copy.state.velocity = Vec2::ZERO;
-        let berth = copy.berth;
-        Some(self.space.traffic.add_npc_at(copy, berth))
+        self.space.refill_berth(id, at)
     }
 
     /// `_PrepareAllSprites`' ship part (@0x3a776-0x3a78e): every slot is
@@ -223,6 +189,71 @@ impl Session {
             }
         }
         self.lay_out_ships();
+    }
+}
+
+impl Space {
+    /// Whether `ship`, at `slot`, is displayed: its slot's last display
+    /// showed it, as [`RuleKey::UndisplayedShips`]' engine reading has it,
+    /// or always by the other reading (see the module docs).
+    pub(super) fn is_displayed(&self, setup: &Setup, ship: ShipRef, slot: Slot) -> bool {
+        setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
+            || self.slot_shown.get(&slot) == Some(&ship)
+    }
+
+    /// Whether `ship`, at `slot`, was laid out by its slot's last display,
+    /// shown or hidden, as [`RuleKey::UndisplayedShips`]' engine reading
+    /// has it, or always by the other reading.
+    pub(super) fn is_laid_out(&self, setup: &Setup, ship: ShipRef, slot: Slot) -> bool {
+        setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
+            || self.slot_placed.get(&slot) == Some(&ship)
+    }
+
+    /// Where `ship`'s hover and click box is: `_HandleMouse` (@0x380e3-0x381ec)
+    /// and the click block (`_HandlePlayer` @0x6a4ab-0x6a4f4) box a slot's
+    /// hull sprite rect (@0x38177), which only a display places (see the
+    /// module docs). A ship its slot's last display laid out, shown or
+    /// hidden, is boxed where it is ([`HoverPlace::Own`]). By
+    /// [`RuleKey::UndisplayedShips`]' engine reading, one its slot has not
+    /// displayed is boxed at the offset from the player its slot was last
+    /// laid out at ([`HoverPlace::Stale`]), in the frames its slot last
+    /// cloned ([`Session::framed_by`]), or has no box in a slot no display
+    /// has laid out this run ([`HoverPlace::Unplaced`]); by the other
+    /// reading every ship is boxed where it is. A ship not here is boxed
+    /// where it is, which is nowhere.
+    #[must_use]
+    fn hover_place(&self, setup: &Setup, ship: ShipRef) -> HoverPlace {
+        let slot = match ship {
+            ShipRef::Player => Slot::Player,
+            ShipRef::Npc(id) => match self.npc(id) {
+                Some(npc) => slot_of(npc),
+                None => return HoverPlace::Own,
+            },
+        };
+        if self.is_laid_out(setup, ship, slot) {
+            return HoverPlace::Own;
+        }
+        self.slot_sprites
+            .places
+            .of(slot)
+            .map_or(HoverPlace::Unplaced, HoverPlace::Stale)
+    }
+
+    /// Takes NPC `id` out and puts a copy of it in its berth at `at`, at
+    /// rest, for [`fixture::refill`](crate::fixture::refill): the copy's
+    /// id, or none for an NPC not in the system.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(super) fn refill_berth(
+        &mut self,
+        id: crate::traffic::npc::NpcId,
+        at: Vec2,
+    ) -> Option<crate::traffic::npc::NpcId> {
+        let mut copy = self.npc(id)?.clone();
+        self.traffic.remove(id);
+        copy.state.position = at;
+        copy.state.velocity = Vec2::ZERO;
+        let berth = copy.berth;
+        Some(self.traffic.add_npc_at(copy, berth))
     }
 }
 
@@ -403,7 +434,8 @@ mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
-        session.npc_mut(id).expect("there").condition = crate::combat::hull::Condition::Intact;
+        session.space.npc_mut(id).expect("there").condition =
+            crate::combat::hull::Condition::Intact;
         session
             .space
             .slot_sprites
@@ -443,12 +475,12 @@ mod tests {
         let (_, mut session) = flying(rules);
         let a = session.npcs()[0].clone();
         let at = session.player().position + crate::geometry::Vec2::new(100.7, -20.3);
-        session.npc_mut(a.id).expect("there").state.position = at;
+        session.space.npc_mut(a.id).expect("there").state.position = at;
         session.prepare_all_sprites();
         let far = session.player().position + crate::geometry::Vec2::new(500.0, 0.0);
         let b = crate::fixture::refill(&mut session, a.id, far).expect("refilled");
-        assert!(session.npc(a.id).is_none(), "A gone");
-        let copy = session.npc_mut(b).expect("there");
+        assert!(session.space.npc(a.id).is_none(), "A gone");
+        let copy = session.space.npc_mut(b).expect("there");
         assert_eq!((copy.berth, copy.state.position), (a.berth, far));
         copy.ship = crate::catalog::ShipId(a.ship.0 + 1);
         (session, a.ship, ShipRef::Npc(b))
@@ -504,7 +536,7 @@ mod tests {
         let ShipRef::Npc(id) = b else {
             unreachable!("an NPC")
         };
-        let slot = slot_of(session.npc(id).expect("there"));
+        let slot = slot_of(session.space.npc(id).expect("there"));
         assert_eq!(session.slot_sprites().frames.of(slot), a_type);
     }
 }

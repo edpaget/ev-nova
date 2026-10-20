@@ -150,7 +150,11 @@ fn reused_slot(reading: RuleSource) -> (crate::testkit::FakePilotCatalog, Sessio
     next.pick = None;
     session.space.traffic.remove(NpcId(0));
     let id = session.space.traffic.add_npc(next);
-    assert_eq!(session.npc(id).map(|npc| npc.berth), Some(1), "its slot");
+    assert_eq!(
+        session.space.npc(id).map(|npc| npc.berth),
+        Some(1),
+        "its slot"
+    );
     (catalog, session)
 }
 
@@ -198,12 +202,12 @@ fn a_captured_ships_slot_keeps_no_pick() {
     let (_, mut session) = reused_slot(RuleSource::Engine);
     let id = session.npcs()[0].id;
     session.fleet_up(id, None);
-    assert_eq!(session.npc(id).map(|npc| npc.pick), Some(None));
-    let mut next = session.npc(id).expect("joined").clone();
+    assert_eq!(session.space.npc(id).map(|npc| npc.pick), Some(None));
+    let mut next = session.space.npc(id).expect("joined").clone();
     session.space.traffic.remove(id);
     next.pick = None;
     let again = session.space.traffic.add_npc(next);
-    assert_eq!(session.npc(again).map(|npc| npc.pick), Some(None));
+    assert_eq!(session.space.npc(again).map(|npc| npc.pick), Some(None));
 }
 
 #[test]

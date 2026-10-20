@@ -75,7 +75,7 @@ mod tests {
         };
         let ships = [at(1), at(2)];
         for id in ships {
-            assert!(!session.npc(id).expect("there").escorts_player());
+            assert!(!session.space.npc(id).expect("there").escorts_player());
         }
         (session, ships)
     }
@@ -260,7 +260,7 @@ mod tests {
         work(&mut session, &catalog, &crate::ai::NovaAi::default());
         session.hold_trigger(crate::combat::armament::Trigger::default());
         assert_eq!(
-            session.npc(npc_id(a)).map(|npc| npc.condition),
+            session.space.npc(npc_id(a)).map(|npc| npc.condition),
             Some(Condition::Disabled)
         );
         assert_eq!(walked_in(&session, a), ShipLayer::Ships, "next pass's walk");
@@ -278,7 +278,7 @@ mod tests {
         session.hold_trigger(FIRE);
         work(&mut session, &catalog, &crate::ai::NovaAi::default());
         assert_eq!(
-            session.npc(npc_id(a)).map(|npc| npc.condition),
+            session.space.npc(npc_id(a)).map(|npc| npc.condition),
             Some(Condition::Disabled)
         );
         assert_eq!(drawn_in(&session, a), ShipLayer::Ships);

@@ -27,8 +27,9 @@
 //! government it fights as (class +0x9f4, [`ShipRecord::combat_govt`](crate::catalog::ShipRecord::combat_govt)),
 //! which the enemy-class roll and the player's friend strength read.
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::catalog::{GovtId, outfit_mods};
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// An owned outfit's `ModType` that marks governments as the IFF
@@ -39,30 +40,31 @@ pub const IFF_SCRAMBLER: i16 = 48;
 /// (@0xc6ce).
 pub const NO_CLASS: i16 = -1;
 
-impl Session {
+impl Session {}
+
+impl Space {
     /// The reset's IFF marks (@0xc69c-0xc6f1): set by each owned
     /// `ModType` 48 outfit, on top of those set before by the engine's
     /// reading of [`RuleKey::IffScrambler`], in place of them by the other.
-    pub(super) fn reset_iff_scramblers(&mut self) {
-        if self.setup.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
-            self.space.iff_marked.clear();
+    pub(super) fn reset_iff_scramblers(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+        if setup.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
+            self.iff_marked.clear();
         }
-        for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
+        for owned in outfit_mods(&pilot.outfits, &statics.outfits) {
             if owned.mod_type != IFF_SCRAMBLER || owned.mod_val == NO_CLASS {
                 continue;
             }
-            let classed: Vec<GovtId> = self
-                .statics
+            let classed: Vec<GovtId> = statics
                 .govts
                 .ids()
                 .filter(|&govt| {
-                    self.statics
+                    statics
                         .govts
                         .get(govt)
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })
                 .collect();
-            self.space.iff_marked.extend(classed);
+            self.iff_marked.extend(classed);
         }
     }
 }

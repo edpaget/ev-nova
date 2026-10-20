@@ -79,7 +79,7 @@ impl Session {
             || nearest_stellar_station(position, sites),
         );
         for hint in hints {
-            self.say(SimMessage::Tutorial(hint));
+            self.space.say(&mut self.out, SimMessage::Tutorial(hint));
             self.out.sounds.push(SimSound::TutorialHint);
         }
     }

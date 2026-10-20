@@ -83,7 +83,7 @@ impl Session {
     pub(super) fn leader_state(&self, npc: &Npc) -> Option<ShipState> {
         match npc.leader_ref()? {
             ShipRef::Player => Some(self.ship.player),
-            ShipRef::Npc(id) => self.npc(id).map(|leader| leader.state),
+            ShipRef::Npc(id) => self.space.npc(id).map(|leader| leader.state),
         }
     }
 

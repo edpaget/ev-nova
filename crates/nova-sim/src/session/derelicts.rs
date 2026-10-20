@@ -37,10 +37,10 @@
 //! ([`Fighter::held_disabled`](crate::combat::Fighter::held_disabled):
 //! the turret miss, regeneration, the can't-disable floor), self-repair,
 //! and the ship's stored [`Condition`], set to disabled as it comes in
-//! ([`Session::hold_derelicts`]), which the AI, the IFF colour, the draw
+//! ([`Space::hold_derelicts`]), which the AI, the IFF colour, the draw
 //! layer and the target panel read.
 
-use super::Session;
+use super::{Session, Space, Statics};
 use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
@@ -52,7 +52,9 @@ impl Session {
     pub(crate) fn held_disabled(&self, npc: &Npc) -> bool {
         self.statics.govts.derelict(npc.govt) || self.mission_ship_held(npc)
     }
+}
 
+impl Space {
     /// Stores each intact NPC of a Derelict government disabled, with no
     /// fate and no event: nothing ever sees it go from not disabled to
     /// disabled (`_DamageShip`'s -0x17a is set from the start).
@@ -61,9 +63,9 @@ impl Session {
     /// and as a pass's fight ends; a ship that arrives in the AI's step
     /// after the ships before it have thought is held before the frame
     /// is drawn, a lag no player sees.
-    pub(super) fn hold_derelicts(&mut self) {
-        let govts = &self.statics.govts;
-        for npc in self.space.traffic.npcs_mut() {
+    pub(super) fn hold_derelicts(&mut self, statics: &Statics) {
+        let govts = &statics.govts;
+        for npc in self.traffic.npcs_mut() {
             if npc.condition == Condition::Intact && govts.derelict(npc.govt) {
                 npc.condition = Condition::Disabled;
             }

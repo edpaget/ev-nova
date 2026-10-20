@@ -21,7 +21,7 @@
 //! inside the 60-frame check, and no frame is drawn between, so the lag
 //! is never seen.
 
-use super::Session;
+use super::{Session, Space};
 use crate::combat::hull::Condition;
 use crate::red_alert::{AlertIcon, alert_check_due};
 use crate::rulebook::{RuleKey, RuleSource};
@@ -37,8 +37,7 @@ impl Session {
     /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
     #[must_use]
     pub fn player_threatened(&self) -> bool {
-        let npcs = self.npcs();
-        npcs.iter().any(|n| n.threatens_player_among(npcs))
+        self.space.player_threatened()
     }
 
     /// The Red Alert icon frame shown, if any.
@@ -68,6 +67,21 @@ impl Session {
                 self.out.sounds.push(SimSound::RedAlert);
             }
         }
+    }
+}
+
+impl Space {
+    /// Whether any ship in the system threatens the player
+    /// (`_IsPlayerThreatened` @0x82442-0x82482): any NPC for which
+    /// [`Npc::threatens_player_among`] the system's NPCs holds, so a ship
+    /// attacking one the player leads counts (@0x7f572-0x7f590), nothing
+    /// else.
+    ///
+    /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
+    #[must_use]
+    fn player_threatened(&self) -> bool {
+        let npcs = self.npcs();
+        npcs.iter().any(|n| n.threatens_player_among(npcs))
     }
 }
 

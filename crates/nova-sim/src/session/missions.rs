@@ -1061,7 +1061,7 @@ impl Session {
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
         if record.flags & HIDDEN == 0 {
             self.out.sounds.push(crate::SimSound::Refused);
-            self.say(SimMessage::DeadlineMissed);
+            self.space.say(&mut self.out, SimMessage::DeadlineMissed);
         }
         self.quick_failure(slot, &record, chance);
     }

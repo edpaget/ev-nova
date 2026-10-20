@@ -8,8 +8,8 @@
 //! cargo, then the illegal `jünk` and outfits (see the
 //! [`scan`](crate::scan) module).
 
-use super::Session;
 use super::mission_screens::MissionTextKind;
+use super::{Session, Space};
 use crate::ai::Goal;
 use crate::catalog::{GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
 use crate::chance::{Chance, NeverFires};
@@ -185,11 +185,16 @@ impl Session {
             self.out.sounds.push(SimSound::CargoJettisoned);
         }
         if let Some(message) = decided.message {
-            self.say(match message {
-                JettisonMessage::MissionFailed => SimMessage::MissionFailed,
-                JettisonMessage::CargoJettisoned => SimMessage::CargoJettisoned,
-                JettisonMessage::NonMissionCargoJettisoned => SimMessage::NonMissionCargoJettisoned,
-            });
+            self.space.say(
+                &mut self.out,
+                match message {
+                    JettisonMessage::MissionFailed => SimMessage::MissionFailed,
+                    JettisonMessage::CargoJettisoned => SimMessage::CargoJettisoned,
+                    JettisonMessage::NonMissionCargoJettisoned => {
+                        SimMessage::NonMissionCargoJettisoned
+                    }
+                },
+            );
         }
     }
 
@@ -265,29 +270,32 @@ impl Session {
         };
         self.convict_of(law, Crime::Smuggle, Some(govt_id));
         self.lose_ranks_to(Crime::Smuggle, Some(govt_id));
-        self.set_on_player(id);
+        self.space.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
         self.take_scan_fine(fine);
         self.out.sounds.push(SimSound::Smuggling);
-        self.say(match found {
-            Contraband::Junk { id: junk, fine } => SimMessage::IllegalJunk {
-                scanner,
-                person,
-                junk,
-                fine,
+        self.space.say(
+            &mut self.out,
+            match found {
+                Contraband::Junk { id: junk, fine } => SimMessage::IllegalJunk {
+                    scanner,
+                    person,
+                    junk,
+                    fine,
+                },
+                Contraband::Outfit {
+                    id: outfit,
+                    one,
+                    fine,
+                } => SimMessage::IllegalOutfit {
+                    scanner,
+                    person,
+                    outfit,
+                    one,
+                    fine,
+                },
             },
-            Contraband::Outfit {
-                id: outfit,
-                one,
-                fine,
-            } => SimMessage::IllegalOutfit {
-                scanner,
-                person,
-                outfit,
-                one,
-                fine,
-            },
-        });
+        );
         self.ship.latches.scan_latches.clear(&found);
     }
 
@@ -316,10 +324,10 @@ impl Session {
                 let record = self.statics.lifecycle_record(mission);
                 if announce {
                     self.out.sounds.push(SimSound::ScanFailedMission);
-                    self.say(SimMessage::MissionScanned);
+                    self.space.say(&mut self.out, SimMessage::MissionScanned);
                 }
                 self.quick_failure(slot, &record, chance);
-                self.set_on_player(id);
+                self.space.set_on_player(id);
             }
             ScanOutcome::Fined { slot, credits } => {
                 let marked = self
@@ -332,31 +340,18 @@ impl Session {
                 let ship_name = self.pilot.missions.get(slot).and_then(|active| {
                     smuggling_ship_name(&active.ships.name, slot, marked, source)
                 });
-                self.set_on_player(id);
+                self.space.set_on_player(id);
                 self.take_scan_fine(credits);
                 self.out.sounds.push(SimSound::Smuggling);
-                self.say(SimMessage::Smuggling {
-                    scanner,
-                    ship_name,
-                    fine: credits,
-                });
+                self.space.say(
+                    &mut self.out,
+                    SimMessage::Smuggling {
+                        scanner,
+                        ship_name,
+                        fine: credits,
+                    },
+                );
             }
-        }
-    }
-
-    /// Sets NPC `id` attacking the player, as a scan's find does: target
-    /// the player, no stellar, AI state attack (+0x70, +0x6c, +0xc8c8, as
-    /// `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d sets them).
-    fn set_on_player(&mut self, id: NpcId) {
-        if let Some(npc) = self
-            .space
-            .traffic
-            .npcs_mut()
-            .iter_mut()
-            .find(|npc| npc.id == id)
-        {
-            npc.goal = Goal::Attack(ShipRef::Player);
-            npc.target = Some(ShipRef::Player);
         }
     }
 
@@ -400,6 +395,18 @@ impl Session {
                 );
                 false
             }
+        }
+    }
+}
+
+impl Space {
+    /// Sets NPC `id` attacking the player, as a scan's find does: target
+    /// the player, no stellar, AI state attack (+0x70, +0x6c, +0xc8c8, as
+    /// `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d sets them).
+    fn set_on_player(&mut self, id: NpcId) {
+        if let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) {
+            npc.goal = Goal::Attack(ShipRef::Player);
+            npc.target = Some(ShipRef::Player);
         }
     }
 }

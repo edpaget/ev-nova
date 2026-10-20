@@ -10,7 +10,7 @@
 //! the session's pass frame, so double time's second pass, which runs on
 //! the same counter, is a smoke frame exactly when the first is.
 
-use super::Session;
+use super::{Session, Space};
 
 impl Session {
     /// Whether the last advance pass ran on a smoke frame: its frame
@@ -19,7 +19,18 @@ impl Session {
     /// the module docs).
     #[must_use]
     pub fn smoke_frame(&self) -> bool {
-        self.space.pass_frame % 3 == 0
+        self.space.smoke_frame()
+    }
+}
+
+impl Space {
+    /// Whether the last advance pass ran on a smoke frame: its frame
+    /// counter a multiple of 3, by a remainder truncating toward zero, so
+    /// the negative counts after a take-off qualify by the same rule (see
+    /// the module docs).
+    #[must_use]
+    fn smoke_frame(&self) -> bool {
+        self.pass_frame % 3 == 0
     }
 }
 

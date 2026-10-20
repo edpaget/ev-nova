@@ -72,7 +72,7 @@
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
 
-use super::{Jump, PlayerShip, Session, Setup, Statics};
+use super::{Jump, PlayerShip, Session, Setup, Space, Statics};
 use crate::Chance;
 use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
@@ -188,18 +188,6 @@ impl Session {
         self.space
             .traffic
             .display_ships(|govt| govts.derelict(govt), rules, chance);
-    }
-
-    /// Tells the traffic the first class, ID 128, which a spawn of most
-    /// origins rolls its animation on
-    /// (`nova_sim::traffic::ship_display::FirstClass`).
-    pub(super) fn set_first_class(&mut self) {
-        let first = self
-            .statics
-            .arsenal
-            .hull(crate::catalog::ShipId(128))
-            .frames;
-        self.space.traffic.set_first_class(first);
     }
 
     /// The sets the player's ship was last drawn on: its hull's, and its
@@ -404,6 +392,16 @@ impl PlayerShip {
     #[must_use]
     fn player_ion_tint(&self) -> Option<IonTint> {
         self.ship_display.ion_tint
+    }
+}
+
+impl Space {
+    /// Tells the traffic the first class, ID 128, which a spawn of most
+    /// origins rolls its animation on
+    /// (`nova_sim::traffic::ship_display::FirstClass`).
+    pub(super) fn set_first_class(&mut self, statics: &Statics) {
+        let first = statics.arsenal.hull(crate::catalog::ShipId(128)).frames;
+        self.traffic.set_first_class(first);
     }
 }
 
@@ -785,10 +783,10 @@ mod tests {
             .push(crate::session::tests::trader_escort());
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
-        let escort = session.npc(id).expect("in the system");
+        let escort = session.space.npc(id).expect("in the system");
         assert_eq!(escort.armament.fold().set, 3, "the player's last set");
         assert_eq!(escort.display.glow, 0, "_RespawnEscort's");
-        let npc = session.npc_mut(id).expect("in the system");
+        let npc = session.space.npc_mut(id).expect("in the system");
         npc.armament.fold_mut().set = 1;
         npc.armament.fold_mut().dir = -1;
         npc.display.frames.anim_set = 2;
@@ -801,11 +799,11 @@ mod tests {
             count: 1,
             timer: 3.0,
         };
-        let npc = session.npc_mut(id).expect("in the system");
+        let npc = session.space.npc_mut(id).expect("in the system");
         npc.display.frames.lights = lights;
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
-        let escort = session.npc(id).expect("in the system");
+        let escort = session.space.npc(id).expect("in the system");
         let fold = escort.armament.fold();
         assert_eq!((fold.set, fold.dir), (1, -1), "kept");
         assert_eq!(escort.display.frames.anim_set, 2);
@@ -961,14 +959,14 @@ mod tests {
             .traffic
             .add_npc(crate::traffic::fixture::npc(0, stats));
         crate::fixture::disable(&mut session, id);
-        let npc = session.npc(id).expect("there");
+        let npc = session.space.npc(id).expect("there");
         assert_eq!(npc.condition, crate::combat::hull::Condition::Disabled);
         assert_eq!(
             (npc.reserves.shield.now, npc.reserves.armor.now),
             (0.0, 1.0)
         );
         crate::fixture::repair(&mut session, id);
-        let npc = session.npc(id).expect("there");
+        let npc = session.space.npc(id).expect("there");
         assert_eq!(npc.condition, crate::combat::hull::Condition::Intact);
         assert_eq!(
             (npc.reserves.shield.now, npc.reserves.armor.now),
@@ -1002,13 +1000,19 @@ mod tests {
             .push(crate::session::tests::trader_escort());
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
-        let owed = session.npc(id).expect("in the system").display.rolls.anim;
+        let owed = session
+            .space
+            .npc(id)
+            .expect("in the system")
+            .display
+            .rolls
+            .anim;
         assert_eq!(owed, AnimRoll::FirstClass, "`_SpawnEscort`'s");
         // Its first display spends it, on class 128's four sets.
         let mut first = Draws::of(&[]).keyed(4, 1);
         session.display_ships(&mut first);
         assert_eq!(first.times_asked(4), 1);
-        let npc = session.npc_mut(id).expect("in the system");
+        let npc = session.space.npc_mut(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::None, "spent");
         npc.display.frames.anim_set = 2;
         // Entering again, it keeps its set: no roll asked of class 128's
@@ -1018,7 +1022,16 @@ mod tests {
         let mut again = Draws::of(&[]).keyed(4, 3).keyed(6, 5);
         session.display_ships(&mut again);
         assert_eq!((again.times_asked(4), again.times_asked(6)), (0, 0));
-        assert_eq!(session.npc(id).expect("in the system").display.drawn.set, 2);
+        assert_eq!(
+            session
+                .space
+                .npc(id)
+                .expect("in the system")
+                .display
+                .drawn
+                .set,
+            2
+        );
     }
 
     #[test]
@@ -1033,7 +1046,7 @@ mod tests {
         session.populate(&catalog, &mut NeverFires);
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
-        let npc = session.npc(id).expect("in the system");
+        let npc = session.space.npc(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass, "carried");
     }
 

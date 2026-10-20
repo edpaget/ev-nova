@@ -59,11 +59,11 @@ impl Session {
     /// Rolls the afterburner of escort NPC `id` on `chance`, as
     /// `_SpawnEscort` and `_DoShipCapture` do (see the module docs).
     pub(super) fn roll_escort_afterburner(&mut self, id: NpcId, chance: &mut dyn Chance) {
-        let Some((hull, berth)) = self.npc(id).map(|npc| (npc.hull, npc.berth)) else {
+        let Some((hull, berth)) = self.space.npc(id).map(|npc| (npc.hull, npc.berth)) else {
             return;
         };
         let has = self.rolls_afterburner(&hull, berth, chance);
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.afterburner = has;
         }
     }
@@ -131,7 +131,7 @@ mod tests {
     /// The last escort of the fleet's NPC, if it is in the system.
     fn last_escort(session: &Session) -> Option<&crate::traffic::npc::Npc> {
         let id = session.space.escorts.fleet.last().copied().flatten()?;
-        session.npc(id)
+        session.space.npc(id)
     }
 
     /// Hires ship 129 rolling on `chance`: its NPC's afterburner.

@@ -21,8 +21,8 @@
 //!
 //! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
 //! The fight hands its tick the field's asteroids
-//! ([`Session::asteroid_targets`]), keeps what the shots leave of them,
-//! and destroys those they broke ([`Session::settle_asteroid_hits`]).
+//! ([`Space::asteroid_targets`]), keeps what the shots leave of them,
+//! and destroys those they broke ([`Space::settle_asteroid_hits`]).
 //!
 //! **The kill.** Every way into a system but the escape pod's rescue kills
 //! the field: a jump's arrival (@0x6c4fc), a hypergate (@0x63f47), a
@@ -51,7 +51,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Session, Setup};
+use super::{Session, Setup, Space, Statics};
 use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
@@ -78,7 +78,7 @@ impl Session {
     /// The asteroids in the field about the player, in slot order (see
     /// [`asteroid`](crate::asteroid)).
     pub fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
-        self.space.asteroids.iter()
+        self.space.asteroids()
     }
 
     /// Runs one game-work pass's asteroid work, drawing on `chance`: an
@@ -131,13 +131,6 @@ impl Session {
         }
     }
 
-    /// Kills the field, through the rest of the pass frame, as
-    /// `_killAsteroids` kills it (see the module docs).
-    pub(super) fn kill_asteroids(&mut self) {
-        self.space.asteroids.clear();
-        self.space.asteroid_kill = Some(self.space.pass_frame);
-    }
-
     /// Places the field of the player's system about the ship afresh,
     /// the field held emptied first, drawing on `chance`: a jump's
     /// arrival by the other reading of [`RuleKey::AsteroidEntryField`]
@@ -155,16 +148,47 @@ impl Session {
         );
     }
 
+    /// The player's system's field: none for one the catalog doesn't
+    /// list.
+    fn field_spec(&self) -> FieldSpec {
+        self.statics
+            .asteroid_fields
+            .get(&self.pilot.system)
+            .copied()
+            .unwrap_or(FieldSpec::NONE)
+    }
+}
+
+impl Setup {
+    /// Whether an arrival keeps the field `_CreateAsteroids` places, as
+    /// [`RuleKey::AsteroidEntryField`] reads.
+    pub(super) fn places_asteroids(&self) -> bool {
+        self.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
+    }
+}
+
+impl Space {
+    /// The asteroids in the field about the player, in slot order (see
+    /// [`asteroid`](crate::asteroid)).
+    fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
+        self.asteroids.iter()
+    }
+
+    /// Kills the field, through the rest of the pass frame, as
+    /// `_killAsteroids` kills it (see the module docs).
+    pub(super) fn kill_asteroids(&mut self) {
+        self.asteroids.clear();
+        self.asteroid_kill = Some(self.pass_frame);
+    }
+
     /// The asteroids shots may hit this tick, slot by slot, each with its
     /// type's radius and `Mass` (see
     /// [`asteroid_hit`](crate::combat::asteroid_hit)).
-    pub(super) fn asteroid_targets(&self) -> Vec<AsteroidTarget> {
-        self.space
-            .asteroids
+    pub(super) fn asteroid_targets(&self, statics: &Statics) -> Vec<AsteroidTarget> {
+        self.asteroids
             .indexed()
             .map(|(slot, asteroid)| {
-                let kind_type = self
-                    .statics
+                let kind_type = statics
                     .asteroid_types
                     .get(usize::from(asteroid.kind))
                     .copied()
@@ -198,56 +222,34 @@ impl Session {
     /// sees.
     pub(super) fn settle_asteroid_hits(
         &mut self,
+        statics: &Statics,
         targets: &[AsteroidTarget],
         chance: &mut (impl Chance + ?Sized),
     ) {
         for target in targets {
-            if let Some(asteroid) = self.space.asteroids.get_mut(target.slot) {
+            if let Some(asteroid) = self.asteroids.get_mut(target.slot) {
                 asteroid.strength = target.strength;
                 asteroid.velocity = target.velocity;
             }
         }
-        for slot in self.space.combat.take_broken_asteroids() {
-            let Some(remains) =
-                self.space
-                    .asteroids
-                    .destroy(slot, &self.statics.asteroid_types, chance)
+        for slot in self.combat.take_broken_asteroids() {
+            let Some(remains) = self
+                .asteroids
+                .destroy(slot, &statics.asteroid_types, chance)
             else {
                 continue;
             };
             for _ in 0..remains.boxes {
-                self.space.boxes.spawn_scoopable(
-                    remains.at,
-                    remains.contents,
-                    remains.graphic,
-                    chance,
-                );
+                self.boxes
+                    .spawn_scoopable(remains.at, remains.contents, remains.graphic, chance);
             }
             if let Some(particles) = remains.particles {
-                self.space.combat.particles(particles);
+                self.combat.particles(particles);
             }
             if let Some(explosion) = remains.explosion {
-                self.space.combat.explode(remains.at, explosion);
+                self.combat.explode(remains.at, explosion);
             }
         }
-    }
-
-    /// The player's system's field: none for one the catalog doesn't
-    /// list.
-    fn field_spec(&self) -> FieldSpec {
-        self.statics
-            .asteroid_fields
-            .get(&self.pilot.system)
-            .copied()
-            .unwrap_or(FieldSpec::NONE)
-    }
-}
-
-impl Setup {
-    /// Whether an arrival keeps the field `_CreateAsteroids` places, as
-    /// [`RuleKey::AsteroidEntryField`] reads.
-    pub(super) fn places_asteroids(&self) -> bool {
-        self.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
     }
 }
 
@@ -597,7 +599,7 @@ mod tests {
             for _ in 0..4 {
                 session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
             }
-            session.npc(id).expect("here").goal
+            session.space.npc(id).expect("here").goal
         };
         assert_eq!(think(&mut session), Goal::Wait, "state 6");
         grown(&mut session, 1);

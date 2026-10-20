@@ -130,7 +130,7 @@ impl Session {
                     player = Some(kill.was);
                 }
                 ShipRef::Npc(id) => {
-                    if let Some(npc) = self.npc_mut(id) {
+                    if let Some(npc) = self.space.npc_mut(id) {
                         npc.condition = kill.was;
                     }
                 }
@@ -164,7 +164,7 @@ impl Session {
                 ShipRef::Npc(id) => Some(id),
                 ShipRef::Player => None,
             })
-            .filter(|&id| self.npc(id).is_some())
+            .filter(|&id| self.space.npc(id).is_some())
             .collect();
         if killed.is_empty() {
             return;
@@ -173,7 +173,7 @@ impl Session {
             match rule {
                 DeadlyStellarKill::Vanishes => self.space.traffic.remove(id),
                 DeadlyStellarKill::Destroyed => {
-                    if let Some(npc) = self.npc_mut(id) {
+                    if let Some(npc) = self.space.npc_mut(id) {
                         npc.condition = Condition::Destroyed;
                     }
                 }
@@ -860,7 +860,7 @@ pub(super) mod tests {
     ) {
         let spec = crate::combat::weapon::WeaponSpec::new(&crate::session::tests::blaster());
         let weapon = spec.id;
-        let npc = session.npc_mut(target).expect("there");
+        let npc = session.space.npc_mut(target).expect("there");
         npc.reserves.shield.now = 0.0;
         // Just above the third of its armour that disables it.
         npc.reserves.armor.now = npc.reserves.armor.max / 3.0 + 3.0;
@@ -891,7 +891,7 @@ pub(super) mod tests {
         };
         let fire = |session: &mut Session| {
             if let Some(gun) = gun
-                && let Some(npc) = session.npc_mut(gun)
+                && let Some(npc) = session.space.npc_mut(gun)
             {
                 npc.trigger = crate::combat::armament::Trigger {
                     only: Some(weapon),
@@ -903,7 +903,7 @@ pub(super) mod tests {
             fire(session);
             let mut trial = session.clone();
             fight(&mut trial);
-            let now = trial.npc(target).map(|npc| npc.condition);
+            let now = trial.space.npc(target).map(|npc| npc.condition);
             if now != Some(Condition::Intact) {
                 assert_eq!(now, Some(Condition::Disabled), "the hit disables it");
                 assert!(
@@ -914,7 +914,7 @@ pub(super) mod tests {
                         .any(|strike| strike.ship == ShipRef::Npc(target)),
                     "by a strike"
                 );
-                let at = session.npc(target).expect("there").state.position;
+                let at = session.space.npc(target).expect("there").state.position;
                 session.sites = vec![LandingSite {
                     frame_size: Some((2, 2)),
                     ..deadly_at(160, at.x, at.y)

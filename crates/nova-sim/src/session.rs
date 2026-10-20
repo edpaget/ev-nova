@@ -380,8 +380,13 @@
 //!   double time); the coordinators that read other state too
 //!   (`become_class`, `reset_precalced`, the player's move and display
 //!   passes) stay on `Session`.
-//! - `space: space::Space` (`space` module; phase 5, to come): what is in
-//!   the system, the NPCs and the fleet among it.
+//! - `space: space::Space` (`space` module; phase 5, done): what is in
+//!   the system around the player (the traffic, the fight, cargo boxes,
+//!   asteroids, stellar damage and sprites, the comm line), with its part
+//!   `escorts` (the fleet, its class orders, the boarding and the hail
+//!   open); the coordinators that read other state too (`step_traffic`,
+//!   `tick_combat`, `ship_loop`, `populate`, `reform`, `world`,
+//!   `settle_line_queue`) stay on `Session`.
 //! - `chart: chart::Chart` (`chart` module; phase 6, to come): the system
 //!   shown, the galaxy overlay and the nav selection.
 //! - `port: port::Port` (`port` module; phase 7, to come): landing,
@@ -1362,7 +1367,9 @@ impl Session {
             false,
             ReservePolicy::Hold,
         );
-        session.restock_fleet();
+        session
+            .space
+            .restock_fleet(&mut session.pilot, &session.statics, &session.setup);
         // A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f),
         // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
         // its `OnStart` (@0x1925e).
@@ -1383,7 +1390,7 @@ impl Session {
         // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
         // `ship_display` module).
         session.ship.last_set_fold();
-        session.set_first_class();
+        session.space.set_first_class(&session.statics);
         // `_PrepareAllSprites`' display of the player's lights before the
         // first frame (see the `ship_display` module).
         session.ship.prepare_player_lights(&session.setup);
@@ -1709,7 +1716,7 @@ impl Session {
         self.tutorial_tick(frame);
         self.brackets_tick();
         self.scoop_boxes();
-        self.boxes_tick();
+        self.space.boxes_tick();
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
@@ -1985,7 +1992,7 @@ impl Session {
         let left = std::mem::take(&mut self.space.strikes);
         self.hold_left_grudges(&left);
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
-        let kept_escorts = self.fleet_kept();
+        let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
@@ -2008,8 +2015,8 @@ impl Session {
             // No tractor's step: the entry flies no ship.
             ..World::new(&self.sites)
         };
-        let last = self.last_npc();
-        let berths = self.fleet_berths();
+        let last = self.space.last_npc();
+        let berths = self.space.fleet_berths(&self.pilot);
         self.space.traffic.reserve(berths.iter().copied().collect());
         self.space
             .traffic
@@ -2023,7 +2030,7 @@ impl Session {
         if entering.is_none() {
             self.snap_mission_escorts();
         }
-        self.hold_derelicts();
+        self.space.hold_derelicts(&self.statics);
         self.space.strikes.clear();
         self.space.escorts.aboard = None;
         self.space.escorts.talk = None;
@@ -2113,7 +2120,8 @@ impl Session {
                 self.step_traffic(|traffic, world| {
                     traffic.tick_in(behaviour, world, &strikes, chance);
                 });
-                self.after_traffic_ai(chance);
+                self.space
+                    .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
                 self.dock_fighters();
                 self.after_traffic_motion(&marks, chance);
             }
@@ -2138,23 +2146,11 @@ impl Session {
         self.join_mission_escorts();
         let strikes = std::mem::take(&mut self.space.strikes);
         let marks = TrafficMarks {
-            last: self.last_npc(),
-            marks: self.mission_marks(),
+            last: self.space.last_npc(),
+            marks: self.space.mission_marks(),
         };
         self.reform_on_swarm_change();
         (strikes, marks)
-    }
-
-    /// The session's work after the traffic's AI, drawing on `chance`: the
-    /// fleets announced, and the fuel the NPCs refuelling the player gave
-    /// it landed (see the `refuel_dock` module). The comm calls, scans and
-    /// the rest of the frame's work on the line are queued, and settle
-    /// later ([`Session::settle_line_queue`]): in [`Session::game_work`]
-    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`), and in the
-    /// separate parts in [`Session::tick_combat`].
-    fn after_traffic_ai(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.announce_fleets(chance);
-        self.take_refuel();
     }
 
     /// The session's work after the traffic's motion, read against
@@ -2166,7 +2162,7 @@ impl Session {
     fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
         self.mission_ships_left(&marks.marks);
         self.resolve_person_offers(marks.last, &mut &mut *chance);
-        self.orphan_fighters();
+        self.space.orphan_fighters();
         self.observe_watched();
     }
 
@@ -2278,29 +2274,8 @@ impl Session {
         // strikes a caller leaves, and so before any frame is drawn,
         // dialog opened, landing or jump completed or pilot saved.
         let grudges = self.space.traffic.take_grudges();
-        self.hold_grudges(&grudges);
+        self.space.hold_grudges(&mut self.pilot, &grudges);
         stepped
-    }
-
-    /// Shows the arrival quote of each announced fleet the traffic brought
-    /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
-    /// of its `STR#` picked from the session's string lists
-    /// ([`random_string`](setup::Setup::random_string), `_GetRandomIndString`
-    /// @0x42642), its '#'s filled with digits
-    /// ([`fill_digits`](crate::traffic::quote::fill_digits)), both drawn on
-    /// `chance`. A missing or empty list gives an empty line, which is
-    /// shown and beeped for too, as the original's is. Both settle on the
-    /// tick the fleet comes, before the frame is drawn.
-    fn announce_fleets(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        for list in self.space.traffic.take_quotes() {
-            let line = self
-                .setup
-                .random_string(list, &mut &mut *chance)
-                .unwrap_or_default();
-            let text = crate::traffic::quote::fill_digits(&line, chance);
-            self.say(SimMessage::FleetArrivalQuote(text));
-            self.out.sounds.push(SimSound::FleetArrivalQuote);
-        }
     }
 
     /// What the traffic flies among in flight: the system's stellars, the
@@ -2706,10 +2681,11 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         self.weigh_strikes(&mut strikes, chance);
-        self.refill_invincible(&mut strikes);
+        self.space.refill_invincible(&mut strikes);
         self.punish(&strikes, was, law);
-        self.credit_kills(&strikes, &losses, was);
-        self.cloak_hits(&strikes);
+        self.space
+            .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
+        self.space.cloak_hits(&self.statics, &strikes);
         self.space.strikes.extend(strikes);
     }
 
@@ -2734,7 +2710,7 @@ impl Session {
                 fate: Fate::Destroyed,
             });
             self.count_lost_mission_ship(id, chance);
-            self.lose_destroyed(id);
+            self.space.lose_destroyed(&mut self.pilot, id);
         }
     }
 
@@ -2824,57 +2800,6 @@ impl Session {
             &self.statics.govts,
         );
         legal::convict(&mut self.pilot, &govt_changes, &system_changes);
-    }
-
-    /// Credits the player's combat rating for each NPC among `strikes`
-    /// that a hit started breaking up, when the kill counts (see
-    /// [`rating`](crate::rating)): the shooter is the player or a ship of
-    /// its fleet, its escorts and fighters, and the victim's government,
-    /// from `was`, is not derelict. As the original's `_DamageShip`
-    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
-    /// victim is taken out, and reads the shooter's leader as the hit
-    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
-    /// a kill it scored before the strike that lost it, among `losses`
-    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
-    /// before the escort block clears the leader, @0x3afdd), and not for
-    /// one after.
-    fn credit_kills(&mut self, strikes: &[Strike], losses: &[EscortLoss], was: &[NpcBefore]) {
-        for (index, strike) in strikes.iter().enumerate() {
-            let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
-                continue;
-            };
-            let Some(govt) = was
-                .iter()
-                .find(|before| before.id == id)
-                .map(|before| before.govt)
-            else {
-                continue;
-            };
-            let by_players_fleet = match strike.by {
-                None => false,
-                Some(ShipRef::Player) => true,
-                Some(ShipRef::Npc(by)) => {
-                    let lost_since = losses
-                        .iter()
-                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
-                    lost_since
-                        || self
-                            .space
-                            .traffic
-                            .npcs()
-                            .iter()
-                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
-                }
-            };
-            if !rating::counts(by_players_fleet, self.statics.govts.derelict(govt)) {
-                continue;
-            }
-            let Some(victim) = self.space.traffic.npcs().iter().find(|npc| npc.id == id) else {
-                continue;
-            };
-            let strength = i64::from(self.statics.arsenal.strength(victim.ship));
-            self.pilot.combat_rating = rating::credit(self.pilot.combat_rating, strength);
-        }
     }
 
     /// Picks the player's target as `pick` says (see
@@ -2993,40 +2918,38 @@ impl Session {
     /// The shots in flight.
     #[must_use]
     pub fn shots(&self) -> &[Shot] {
-        self.space.combat.shots()
+        self.space.shots()
     }
 
     /// The beams being fired.
     #[must_use]
     pub fn beams(&self) -> &[Beam] {
-        self.space.combat.beams()
+        self.space.beams()
     }
 
     /// What has happened in the fight since this was last taken, in order;
     /// taking it empties the list.
     pub fn take_combat_events(&mut self) -> Vec<CombatEvent> {
-        self.space.combat.take_events()
+        self.space.take_combat_events()
     }
 
     /// The diagnostics about game data the simulation does not handle yet,
     /// each made once a session, since they were last taken; taking them
     /// empties the list.
     pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
-        let mut diagnostics = self.space.combat.take_diagnostics();
-        diagnostics.extend(self.out.reports.take());
-        diagnostics
+        self.space.take_diagnostics(&mut self.out)
     }
 
     /// The NPCs in the system, in the order they appeared.
     #[must_use]
     pub fn npcs(&self) -> &[Npc] {
-        self.space.traffic.npcs()
+        self.space.npcs()
     }
 
     /// The NPCs that left on the last traffic tick, and how.
     #[must_use]
     pub fn departed(&self) -> &[(NpcId, Outcome)] {
-        self.space.traffic.departed()
+        self.space.departed()
     }
 
     /// The ship types the system's traffic can spawn and the escorts
@@ -3392,7 +3315,7 @@ impl Session {
         self.propagate_avail_bits();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
-        self.arm_strength_timer(chance);
+        self.space.arm_strength_timer(chance);
         // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
         self.red_alert.clear_icon();
         self.take_jump_cost(chance);
@@ -3467,13 +3390,6 @@ impl Session {
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
         Some(self.pilot.system)
-    }
-
-    /// Arms the escort-strength timer on `chance`, as a take-off, a gate
-    /// exit and a hyperspace arrival do (see
-    /// [`strength`]).
-    fn arm_strength_timer(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.space.traffic.arm_strength_timer(chance);
     }
 
     /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
@@ -3644,7 +3560,7 @@ impl Session {
             &self.ship.player,
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
-            |site| self.landing_reach(site),
+            |site| self.space.landing_reach(&self.setup, site),
         );
         if disabled {
             self.select_pressed(press.selected);
@@ -3802,7 +3718,8 @@ impl Session {
         let entered = exit.map(|(system, exit)| {
             self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
-            self.say(SimMessage::ExitedHypergate(system));
+            self.space
+                .say(&mut self.out, SimMessage::ExitedHypergate(system));
             system
         });
         self.set_nav(NavMode::Off);
@@ -3869,7 +3786,8 @@ impl Session {
         let (site, system) = (*exit.site, exit.system);
         self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
-        self.say(SimMessage::PassedWormhole(system));
+        self.space
+            .say(&mut self.out, SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
@@ -3907,7 +3825,7 @@ impl Session {
         // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
         // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
         // writes -1 to +0xc908 (see the `stray_words` module).
-        self.arm_strength_timer(chance);
+        self.space.arm_strength_timer(chance);
         self.reset_precalced();
         self.ship.fate.pod_zeroed = false;
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
@@ -3947,7 +3865,7 @@ impl Session {
         self.ship.player_speed = 0.0;
         self.landed = Some(stellar);
         self.ship.clear_tractor();
-        self.reset_comm_line();
+        self.space.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
         self.ship.warp.warp_ups.clear();
@@ -3960,8 +3878,8 @@ impl Session {
         self.space.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
         // `_killAsteroids` (@0x66f57).
-        self.clear_boxes();
-        self.kill_asteroids();
+        self.space.clear_boxes();
+        self.space.kill_asteroids();
         self.target = None;
         self.space.escorts.talk = None;
         self.leave_with_fighters(true);
@@ -4069,7 +3987,8 @@ impl Session {
     pub(super) fn greet(&mut self, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
         if self.tutorial.take_off() {
             let lead = chance.roll(5);
-            self.say(SimMessage::TookOff { stellar, lead });
+            self.space
+                .say(&mut self.out, SimMessage::TookOff { stellar, lead });
         }
     }
 
@@ -4119,7 +4038,8 @@ impl Session {
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
-        self.restock_fleet();
+        self.space
+            .restock_fleet(&mut self.pilot, &self.statics, &self.setup);
         // The escort-strength timer armed after every day of the stay
         // (@0x6706f), then the old computer ships deleted and the system
         // set up afresh before the first frame (`_DeleteAllComputerShips`
@@ -4132,7 +4052,7 @@ impl Session {
         self.ship.ion = Ion::default();
         // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
         self.ship.take_off_fold();
-        self.arm_strength_timer(chance);
+        self.space.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
         // setup (@0x6709b; see the `precalced` module), whose
         // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
@@ -5236,8 +5156,10 @@ impl Session {
             self.convict_of(law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
-        self.call_good_samaritans(&npc);
-        let linked = self.linked_ship(&npc, person_offers::OfferedBy::Boarding);
+        self.space.call_good_samaritans(&npc);
+        let linked = self
+            .space
+            .linked_ship(&npc, person_offers::OfferedBy::Boarding);
         let named = linked.is_some();
         self.reach_linked(linked);
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
@@ -5274,7 +5196,7 @@ impl Session {
     /// @0x65be8, @0x65e62; that boarding repair is the boarding
     /// follow-up's).
     fn mark_boarded(&mut self, id: NpcId) {
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.boarded = true;
             npc.former = None;
         }
@@ -5283,8 +5205,8 @@ impl Session {
             fate: Fate::Boarded,
         });
         // +0x6c -1 for each ship it drops (@0x89806).
-        self.clear_quarry_travel(id);
-        self.drop_quarry(id);
+        self.space.clear_quarry_travel(id);
+        self.space.drop_quarry(id);
     }
 
     /// What boarding `npc` grants as `rule` says, drawn on `chance`, added
@@ -5348,31 +5270,6 @@ impl Session {
         self.out.take_grant()
     }
 
-    /// Every NPC other than `id` that targets it, or fights it, lets it go
-    /// and decides again, its provocation gone.
-    fn drop_quarry(&mut self, id: NpcId) {
-        for other in self.space.traffic.npcs_mut() {
-            if holds_quarry(other, id) {
-                other.target = None;
-                other.goal = Goal::Idle;
-                other.provoked = 0.0;
-            }
-        }
-    }
-
-    /// Every NPC [`Session::drop_quarry`] would drop for `id` loses its
-    /// travel stellar (see `nova_sim_ai::ai::travel`), as the player's
-    /// boarding and capture write +0x6c -1 for each ship they drop
-    /// (`_AIShipBoardedByPlayer` @0x89806, `_AIShipCapturedByPlayer`
-    /// @0x896e5).
-    fn clear_quarry_travel(&mut self, id: NpcId) {
-        for other in self.space.traffic.npcs_mut() {
-            if holds_quarry(other, id) {
-                other.travel_set = false;
-            }
-        }
-    }
-
     /// What `npc` has on board to plunder: among the rest, the rounds on
     /// each of its launchers, each the player's to take as the ammunition
     /// outfit of lowest ID naming the launcher when a weapon the player
@@ -5430,7 +5327,8 @@ impl Session {
             // The escorts `_SetPlunderValues` counts (@0x92653-0x926c9; see
             // the `capture` module).
             escorts: self
-                .led_escorts()
+                .space
+                .led_escorts(&self.pilot)
                 .into_iter()
                 .map(|ship| EscortCrew {
                     crew: i32::from(self.statics.crew(ship)),
@@ -5458,11 +5356,7 @@ impl Session {
     /// assignment.
     #[must_use]
     pub fn boarding(&self) -> Option<PlunderView> {
-        self.space
-            .escorts
-            .aboard
-            .filter(|aboard| !aboard.captured)
-            .map(|aboard| aboard.view())
+        self.space.boarding()
     }
 
     /// Presses `take` in the plunder dialog, and gives what it did (see
@@ -5505,10 +5399,10 @@ impl Session {
             return Taken::Tripped;
         }
         let (taken, growth) = match take {
-            Take::Miss => return self.keep_plunder_open(aboard, Taken::Missed),
+            Take::Miss => return self.space.keep_plunder_open(aboard, Taken::Missed),
             Take::Cargo => {
                 let Some((good, tons)) = plunder.cargo.take() else {
-                    return self.refuse_take(aboard);
+                    return self.space.refuse_take(&mut self.out, aboard);
                 };
                 // The ship's own space, less `_TotalCargo` with the
                 // mission cargo aboard, not the fleet's: plunder into
@@ -5523,7 +5417,7 @@ impl Session {
             }
             Take::Credits => {
                 if plunder.credits <= 0 {
-                    return self.refuse_take(aboard);
+                    return self.space.refuse_take(&mut self.out, aboard);
                 }
                 let credits = std::mem::take(&mut plunder.credits);
                 self.pilot.cash = self.pilot.cash.saturating_add(credits);
@@ -5535,14 +5429,14 @@ impl Session {
                 // for rounds on board.
                 self.reset_precalced();
                 let Some((outfit, rounds)) = plunder.ammo.take() else {
-                    return self.refuse_take(aboard);
+                    return self.space.refuse_take(&mut self.out, aboard);
                 };
                 let count = self.take_ammo(outfit, rounds);
                 (Taken::Ammo { outfit, count }, AMMO_GROWTH)
             }
             Take::Energy => {
                 if plunder.fuel == 0 {
-                    return self.refuse_take(aboard);
+                    return self.space.refuse_take(&mut self.out, aboard);
                 }
                 let offered = std::mem::take(&mut plunder.fuel);
                 // The take reads `_ShipFuelCapacity` (@0x940a5, @0x94100),
@@ -5567,7 +5461,7 @@ impl Session {
         self.out.sounds.push(SimSound::PlunderBeep);
         plunder.threshold = (f64::from(plunder.threshold) * growth) as u32;
         plunder.armed = true;
-        self.keep_plunder_open(aboard, taken)
+        self.space.keep_plunder_open(aboard, taken)
     }
 
     /// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
@@ -5655,7 +5549,7 @@ impl Session {
         self.out.sounds.push(SimSound::PlunderBeep);
         if !self.can_hire_escorts() {
             self.out.sounds.push(SimSound::Refused);
-            return self.keep_plunder_open(aboard, Taken::FleetFull);
+            return self.space.keep_plunder_open(aboard, Taken::FleetFull);
         }
         if self.statics.crew(self.pilot.ship) > 0 {
             aboard.captured = true;
@@ -5700,8 +5594,12 @@ impl Session {
     /// and joins as a mission escort (`_DoPlunderDialog`
     /// @0x9459b-0x947cf; see the `captured_mission_ship` module).
     fn join_fleet(&mut self, id: NpcId) {
-        self.lose_captured(id, self.setup.escort_capture_loses_person());
-        self.clear_quarry_travel(id);
+        self.space.lose_captured(
+            &mut self.pilot,
+            id,
+            self.setup.escort_capture_loses_person(),
+        );
+        self.space.clear_quarry_travel(id);
         let Some(npc) = self
             .space
             .traffic
@@ -5720,6 +5618,7 @@ impl Session {
     /// itself, its reserves as they are (see [`Session::fleet_up`]).
     fn enlist_person(&mut self, id: NpcId) {
         let person = self
+            .space
             .npc(id)
             .and_then(|npc| npc.person)
             .map(|person| person.id);
@@ -5758,7 +5657,7 @@ impl Session {
         // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
         // so its slot's.
         self.space.traffic.clear_pick(id);
-        self.drop_quarry(id);
+        self.space.drop_quarry(id);
         for other in self.space.traffic.npcs_mut() {
             if other.leader == Some(id) {
                 other.leader = None;
@@ -5777,7 +5676,7 @@ impl Session {
     /// NPC `id` leaves the system: every other NPC after it lets it go,
     /// and so does the player.
     fn leave(&mut self, id: NpcId) {
-        self.drop_quarry(id);
+        self.space.drop_quarry(id);
         self.space.traffic.remove(id);
         self.let_go_of_gone_target();
     }
@@ -5921,7 +5820,7 @@ impl Session {
         }
         // Use As My Ship loses the person for good (@0x41180), whatever
         // `captured_person` says.
-        self.lose_captured(npc.id, true);
+        self.space.lose_captured(&mut self.pilot, npc.id, true);
         self.leave(npc.id);
         let placed = self.place_old_ship(old_slot, left, hold, chance);
         // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e).
@@ -6552,6 +6451,190 @@ impl PlayerShip {
         reserves.armor.now =
             f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
         reserves.fuel.now = drawn;
+    }
+}
+
+impl Space {
+    /// The session's work after the traffic's AI, drawing on `chance`: the
+    /// fleets announced, and the fuel the NPCs refuelling the player gave
+    /// it landed (see the `refuel_dock` module). The comm calls, scans and
+    /// the rest of the frame's work on the line are queued, and settle
+    /// later ([`Session::settle_line_queue`]): in [`Session::game_work`]
+    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`), and in the
+    /// separate parts in [`Session::tick_combat`].
+    fn after_traffic_ai(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.announce_fleets(setup, out, chance);
+        self.take_refuel(pilot);
+    }
+
+    /// Shows the arrival quote of each announced fleet the traffic brought
+    /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
+    /// of its `STR#` picked from the session's string lists
+    /// ([`random_string`](setup::Setup::random_string), `_GetRandomIndString`
+    /// @0x42642), its '#'s filled with digits
+    /// ([`fill_digits`](crate::traffic::quote::fill_digits)), both drawn on
+    /// `chance`. A missing or empty list gives an empty line, which is
+    /// shown and beeped for too, as the original's is. Both settle on the
+    /// tick the fleet comes, before the frame is drawn.
+    fn announce_fleets(
+        &mut self,
+        setup: &Setup,
+        out: &mut Outbox,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for list in self.traffic.take_quotes() {
+            let line = setup
+                .random_string(list, &mut &mut *chance)
+                .unwrap_or_default();
+            let text = crate::traffic::quote::fill_digits(&line, chance);
+            self.say(out, SimMessage::FleetArrivalQuote(text));
+            out.sounds.push(SimSound::FleetArrivalQuote);
+        }
+    }
+
+    /// Credits the player's combat rating for each NPC among `strikes`
+    /// that a hit started breaking up, when the kill counts (see
+    /// [`rating`](crate::rating)): the shooter is the player or a ship of
+    /// its fleet, its escorts and fighters, and the victim's government,
+    /// from `was`, is not derelict. As the original's `_DamageShip`
+    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
+    /// victim is taken out, and reads the shooter's leader as the hit
+    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
+    /// a kill it scored before the strike that lost it, among `losses`
+    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
+    /// before the escort block clears the leader, @0x3afdd), and not for
+    /// one after.
+    fn credit_kills(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        strikes: &[Strike],
+        losses: &[EscortLoss],
+        was: &[NpcBefore],
+    ) {
+        for (index, strike) in strikes.iter().enumerate() {
+            let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
+                continue;
+            };
+            let Some(govt) = was
+                .iter()
+                .find(|before| before.id == id)
+                .map(|before| before.govt)
+            else {
+                continue;
+            };
+            let by_players_fleet = match strike.by {
+                None => false,
+                Some(ShipRef::Player) => true,
+                Some(ShipRef::Npc(by)) => {
+                    let lost_since = losses
+                        .iter()
+                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
+                    lost_since
+                        || self
+                            .traffic
+                            .npcs()
+                            .iter()
+                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
+                }
+            };
+            if !rating::counts(by_players_fleet, statics.govts.derelict(govt)) {
+                continue;
+            }
+            let Some(victim) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
+                continue;
+            };
+            let strength = i64::from(statics.arsenal.strength(victim.ship));
+            pilot.combat_rating = rating::credit(pilot.combat_rating, strength);
+        }
+    }
+
+    /// The shots in flight.
+    #[must_use]
+    fn shots(&self) -> &[Shot] {
+        self.combat.shots()
+    }
+
+    /// The beams being fired.
+    #[must_use]
+    fn beams(&self) -> &[Beam] {
+        self.combat.beams()
+    }
+
+    /// What has happened in the fight since this was last taken, in order;
+    /// taking it empties the list.
+    fn take_combat_events(&mut self) -> Vec<CombatEvent> {
+        self.combat.take_events()
+    }
+
+    /// The diagnostics about game data the simulation does not handle yet,
+    /// each made once a session, since they were last taken; taking them
+    /// empties the list.
+    fn take_diagnostics(&mut self, out: &mut Outbox) -> Vec<SimDiagnostic> {
+        let mut diagnostics = self.combat.take_diagnostics();
+        diagnostics.extend(out.reports.take());
+        diagnostics
+    }
+
+    /// The NPCs in the system, in the order they appeared.
+    #[must_use]
+    pub(super) fn npcs(&self) -> &[Npc] {
+        self.traffic.npcs()
+    }
+
+    /// The NPCs that left on the last traffic tick, and how.
+    #[must_use]
+    fn departed(&self) -> &[(NpcId, Outcome)] {
+        self.traffic.departed()
+    }
+
+    /// Arms the escort-strength timer on `chance`, as a take-off, a gate
+    /// exit and a hyperspace arrival do (see
+    /// [`strength`]).
+    fn arm_strength_timer(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.traffic.arm_strength_timer(chance);
+    }
+
+    /// Every NPC other than `id` that targets it, or fights it, lets it go
+    /// and decides again, its provocation gone.
+    fn drop_quarry(&mut self, id: NpcId) {
+        for other in self.traffic.npcs_mut() {
+            if holds_quarry(other, id) {
+                other.target = None;
+                other.goal = Goal::Idle;
+                other.provoked = 0.0;
+            }
+        }
+    }
+
+    /// Every NPC [`Space::drop_quarry`] would drop for `id` loses its
+    /// travel stellar (see `nova_sim_ai::ai::travel`), as the player's
+    /// boarding and capture write +0x6c -1 for each ship they drop
+    /// (`_AIShipBoardedByPlayer` @0x89806, `_AIShipCapturedByPlayer`
+    /// @0x896e5).
+    fn clear_quarry_travel(&mut self, id: NpcId) {
+        for other in self.traffic.npcs_mut() {
+            if holds_quarry(other, id) {
+                other.travel_set = false;
+            }
+        }
+    }
+
+    /// What is on board the ship being boarded, while the plunder dialog
+    /// is open: none once the boarding is over, or a capture awaits its
+    /// assignment.
+    #[must_use]
+    fn boarding(&self) -> Option<PlunderView> {
+        self.escorts
+            .aboard
+            .filter(|aboard| !aboard.captured)
+            .map(|aboard| aboard.view())
     }
 }
 
@@ -8160,7 +8243,7 @@ pub(super) mod tests {
             } else {
                 session.mark_boarded(victim);
             }
-            let travel = |id| session.npc(id).expect("here").travel_set;
+            let travel = |id| session.space.npc(id).expect("here").travel_set;
             assert!(!travel(after), "dropped: capture {capture}");
             assert!(travel(apart), "left alone: capture {capture}");
         }
@@ -18571,9 +18654,21 @@ pub(super) mod tests {
             weight: 0.0,
             answered: true,
         };
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &[], &was);
+        session.space.credit_kills(
+            &mut session.pilot,
+            &session.statics,
+            &[broken_up_by(ShipRef::Npc(NpcId(1)))],
+            &[],
+            &was,
+        );
         let by_the_police = session.pilot().combat_rating();
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &[], &was);
+        session.space.credit_kills(
+            &mut session.pilot,
+            &session.statics,
+            &[broken_up_by(ShipRef::Npc(NpcId(0)))],
+            &[],
+            &was,
+        );
         (by_the_police, session.pilot().combat_rating())
     }
 
@@ -18614,7 +18709,9 @@ pub(super) mod tests {
             govt: Some(GovtId(140)),
             marked: false,
         }];
-        session.credit_kills(
+        session.space.credit_kills(
+            &mut session.pilot,
+            &session.statics,
             &[Strike {
                 ship: ShipRef::Npc(NpcId(0)),
                 by: Some(ShipRef::Npc(fighter)),
@@ -18664,7 +18761,13 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: false,
             };
-            session.credit_kills(&[own_blast], losses, &was);
+            session.space.credit_kills(
+                &mut session.pilot,
+                &session.statics,
+                &[own_blast],
+                losses,
+                &was,
+            );
             session.pilot().combat_rating()
         };
         let lost = EscortLoss {
@@ -18697,7 +18800,9 @@ pub(super) mod tests {
             weight: 0.0,
             answered: true,
         };
-        session.credit_kills(
+        session.space.credit_kills(
+            &mut session.pilot,
+            &session.statics,
             &[
                 strike(ShipRef::Npc(NpcId(0)), None),
                 strike(ShipRef::Npc(NpcId(0)), Some(Downed::Disabled)),
@@ -18708,7 +18813,9 @@ pub(super) mod tests {
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 0);
-        session.credit_kills(
+        session.space.credit_kills(
+            &mut session.pilot,
+            &session.statics,
             &[strike(ShipRef::Npc(NpcId(0)), Some(Downed::BreakingUp))],
             &[],
             &was,
@@ -19268,7 +19375,7 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.cloak_hits(&[by_none]);
+        session.space.cloak_hits(&session.statics, &[by_none]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19276,7 +19383,7 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.cloak_hits(&[by_none]);
+        session.space.cloak_hits(&session.statics, &[by_none]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
@@ -19305,7 +19412,9 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: true,
             };
-            session.credit_kills(&[by_none], &[], &was);
+            session
+                .space
+                .credit_kills(&mut session.pilot, &session.statics, &[by_none], &[], &was);
             session.punish(&[by_none], &was, &witness);
         }
         assert_eq!(session.pilot().combat_rating(), rating);
@@ -19333,7 +19442,7 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.cloak_hits(&[shockwave]);
+        session.space.cloak_hits(&session.statics, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19341,7 +19450,7 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.cloak_hits(&[shockwave]);
+        session.space.cloak_hits(&session.statics, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, CLOAKED);
     }
 
@@ -20667,7 +20776,12 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         until_exploded(&mut session, &catalog);
         session.take_combat_events();
-        session.npc_mut(NpcId(0)).expect("the NPC").state.velocity = Vec2::new(1.0, 0.0);
+        session
+            .space
+            .npc_mut(NpcId(0))
+            .expect("the NPC")
+            .state
+            .velocity = Vec2::new(1.0, 0.0);
         let before = session.npcs()[0].state.position;
         let mut fired = false;
         for _ in 0..40 {
@@ -21451,7 +21565,7 @@ pub(super) mod tests {
         }
         session.space.traffic.remove(NpcId(0));
         assert_eq!(session.space.traffic.add_npc(ship()), NpcId(3));
-        assert_eq!(session.npc(NpcId(3)).map(|npc| npc.berth), Some(1));
+        assert_eq!(session.space.npc(NpcId(3)).map(|npc| npc.berth), Some(1));
         let walk = |session: &mut Session, pick| -> Vec<Option<NpcId>> {
             session.target = None;
             (0..4).map(|_| session.select_target(pick)).collect()

@@ -80,7 +80,11 @@ fn reused_slot(reading: RuleSource) -> (FakePilotCatalog, Session) {
     *next.armament.exit_cursors_mut() = crate::combat::exits::ExitCursors::default();
     session.space.traffic.remove(NpcId(0));
     let id = session.space.traffic.add_npc(next);
-    assert_eq!(session.npc(id).map(|npc| npc.berth), Some(1), "its slot");
+    assert_eq!(
+        session.space.npc(id).map(|npc| npc.berth),
+        Some(1),
+        "its slot"
+    );
     (catalog, session)
 }
 

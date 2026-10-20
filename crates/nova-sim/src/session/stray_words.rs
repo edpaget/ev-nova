@@ -78,7 +78,7 @@ impl Session {
         for (ship, word) in self.space.combat.take_stray_steps() {
             match (ship, word) {
                 (ShipRef::Npc(id), StrayWord::Pods) => {
-                    if let Some(npc) = self.npc_mut(id) {
+                    if let Some(npc) = self.space.npc_mut(id) {
                         npc.pods_left = step_word(npc.pods_left, chance);
                     }
                 }
@@ -285,13 +285,13 @@ mod tests {
         ] {
             let mut session = session(&catalog, reading);
             let id = session.npcs()[0].id;
-            if let Some(npc) = session.npc_mut(id) {
+            if let Some(npc) = session.space.npc_mut(id) {
                 npc.pods_left = held;
             }
             session.tick_traffic(&catalog, &super::super::tests::Firing, &mut NeverFires);
             session.tick_combat(Rules::default(), &mut Ranged::of(&[(4, draw)]));
             assert_eq!(
-                session.npc(id).map(|npc| npc.pods_left),
+                session.space.npc(id).map(|npc| npc.pods_left),
                 Some(stepped),
                 "{reading:?}: {held}"
             );

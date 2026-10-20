@@ -337,7 +337,7 @@ impl Session {
         let since = self.warp_clock().unwrap_or(0);
         let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
         for id in led {
-            if let Some(npc) = self.npc_mut(id) {
+            if let Some(npc) = self.space.npc_mut(id) {
                 npc.follow_player_jump(stage, since);
             }
         }

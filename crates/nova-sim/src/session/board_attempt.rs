@@ -48,7 +48,7 @@
 //! @0x34a54-0x34a72, counted down @0x35026-0x35048). The pickup path sets
 //! no wait.
 
-use super::{Outbox, Session, Statics};
+use super::{Outbox, Session, Space, Statics};
 use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
@@ -59,48 +59,6 @@ use crate::traffic::npc::{Npc, NpcId};
 pub(super) const BOARDED_WAIT: u32 = 100;
 
 impl Session {
-    /// Calls the NPCs to `npc`'s help as for a hit by the player: an
-    /// intended strike of no damage answered on the next traffic tick
-    /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
-    /// with no aim to test), unless `npc` is a person with a
-    /// `LinkMission`, whose boarding never calls it (see the module docs).
-    /// It never passes `_DamageShip`, so the answer flag never weighs it:
-    /// it is answered as it is. Nor is it direct, so neither the ship
-    /// boarded nor its lead draws a hit's reaction from it: only the Good
-    /// Samaritans answer, as `_DoGoodSamaritan` (@0x82823) writes goal 4
-    /// and the target alone (@0x82b82-0x82b97).
-    ///
-    /// The original calls it (@0x65ed9) before the plunder dialog opens
-    /// (@0x65f27), and the engine answers it on the next traffic tick,
-    /// after the dialog: the dialog shows no ship's goal or target and the
-    /// pilot can't be saved in it, so the lag crosses no boundary the
-    /// player sees or keeps.
-    pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
-        if !calls_good_samaritan(npc) {
-            return;
-        }
-        self.space.strikes.push(Strike {
-            ship: ShipRef::Npc(npc.id),
-            by: Some(ShipRef::Player),
-            damage: 0.0,
-            downed: None,
-            direct: false,
-            intended: true,
-            lock: false,
-            nominal: Nominal::default(),
-            weight: 0.0,
-            answered: true,
-        });
-    }
-
-    /// Holds NPC `id`, boarded on a mission's assist path, on its course
-    /// for [`BOARDED_WAIT`] ticks (@0x65746, see the module docs).
-    pub(super) fn hold_boarded(&mut self, id: NpcId) {
-        if let Some(npc) = self.npc_mut(id) {
-            npc.wait_on_course(BOARDED_WAIT);
-        }
-    }
-
     /// The comm line a failed mission's ship said as the last board
     /// plundered it, on its pickup or assist path, once: taking it leaves
     /// none. Any other board leaves none here: a standing mission's ship
@@ -115,7 +73,7 @@ impl Session {
     /// NPC not in the system changes nothing.
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn put_player_over(&mut self, id: NpcId) {
-        if let Some(state) = self.npc(id).map(|npc| npc.state) {
+        if let Some(state) = self.space.npc(id).map(|npc| npc.state) {
             self.ship.player = state;
             self.target = Some(id);
         }
@@ -154,6 +112,50 @@ impl Statics {
             crew: self.crew(npc.ship),
             mission: npc.mission.is_some(),
             reach: npc.hull.board_reach,
+        }
+    }
+}
+
+impl Space {
+    /// Calls the NPCs to `npc`'s help as for a hit by the player: an
+    /// intended strike of no damage answered on the next traffic tick
+    /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
+    /// with no aim to test), unless `npc` is a person with a
+    /// `LinkMission`, whose boarding never calls it (see the module docs).
+    /// It never passes `_DamageShip`, so the answer flag never weighs it:
+    /// it is answered as it is. Nor is it direct, so neither the ship
+    /// boarded nor its lead draws a hit's reaction from it: only the Good
+    /// Samaritans answer, as `_DoGoodSamaritan` (@0x82823) writes goal 4
+    /// and the target alone (@0x82b82-0x82b97).
+    ///
+    /// The original calls it (@0x65ed9) before the plunder dialog opens
+    /// (@0x65f27), and the engine answers it on the next traffic tick,
+    /// after the dialog: the dialog shows no ship's goal or target and the
+    /// pilot can't be saved in it, so the lag crosses no boundary the
+    /// player sees or keeps.
+    pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
+        if !calls_good_samaritan(npc) {
+            return;
+        }
+        self.strikes.push(Strike {
+            ship: ShipRef::Npc(npc.id),
+            by: Some(ShipRef::Player),
+            damage: 0.0,
+            downed: None,
+            direct: false,
+            intended: true,
+            lock: false,
+            nominal: Nominal::default(),
+            weight: 0.0,
+            answered: true,
+        });
+    }
+
+    /// Holds NPC `id`, boarded on a mission's assist path, on its course
+    /// for [`BOARDED_WAIT`] ticks (@0x65746, see the module docs).
+    pub(super) fn hold_boarded(&mut self, id: NpcId) {
+        if let Some(npc) = self.npc_mut(id) {
+            npc.wait_on_course(BOARDED_WAIT);
         }
     }
 }

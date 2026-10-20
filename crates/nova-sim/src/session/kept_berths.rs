@@ -13,7 +13,7 @@
 //! start afresh with each traffic (rdm task
 //! carry-slot-picks-and-exits-across-app-life).
 
-use super::Session;
+use super::{Session, Space};
 use crate::traffic::kept_berths::KeptBerths;
 
 impl Session {
@@ -21,7 +21,7 @@ impl Session {
     /// later in the same run ([`Session::with_kept_berths`]).
     #[must_use]
     pub fn kept_berths(&self) -> KeptBerths {
-        self.space.traffic.kept_berths()
+        self.space.kept_berths()
     }
 
     /// The session, its traffic's berths starting from `kept`, what a
@@ -32,6 +32,15 @@ impl Session {
     pub fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
         self.space.traffic.keep_berths(kept);
         self
+    }
+}
+
+impl Space {
+    /// What its traffic's berths keep, to hand on to a session started
+    /// later in the same run ([`Session::with_kept_berths`]).
+    #[must_use]
+    fn kept_berths(&self) -> KeptBerths {
+        self.traffic.kept_berths()
     }
 }
 

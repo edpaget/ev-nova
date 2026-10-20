@@ -5,7 +5,7 @@
 //! becomes of a person captured. All addresses are in `EV Nova.app`'s
 //! `EV Nova` (i386).
 //!
-//! **The escorts counted** ([`Session::led_escorts`]). The original counts
+//! **The escorts counted** ([`Space::led_escorts`]). The original counts
 //! the ships in system slots 1-63 that are active, led by the player
 //! (+0x9a == 0), of AI type 6 and of no mission mark (+0xc8d2 == -1):
 //! a launched fighter is AI type 5 (`_LaunchFighter` @0x3d771) and a
@@ -61,7 +61,7 @@
 //! alive, keeps its grudge and can appear again; by the other it is gone,
 //! as Use As My Ship has it.
 
-use super::{PlayerShip, Session, Setup, Statics};
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{ShipId, ShipRecord, outfit_mods};
 use crate::chance::Chance;
@@ -105,35 +105,13 @@ impl CaptureFuel {
 }
 
 impl Session {
-    /// The ship class of each escort of the fleet the original counts as
-    /// led by the player (see the module docs): not a fighter out, and
-    /// with its NPC in the system and unmarked, or not placed yet since
-    /// the fleet last entered a system.
-    pub(super) fn led_escorts(&self) -> Vec<ShipId> {
-        self.pilot
-            .escorts
-            .iter()
-            .enumerate()
-            .filter(|(_, escort)| !escort.carried)
-            .filter_map(
-                |(index, escort)| match self.space.escorts.fleet.get(index) {
-                    None => Some(escort.ship),
-                    Some(placed) => placed
-                        .and_then(|id| self.npc(id))
-                        .filter(|npc| npc.mission.is_none())
-                        .map(|npc| npc.ship),
-                },
-            )
-            .collect()
-    }
-
     /// Whether the fleet has room for one more escort, as
     /// `_CanHireEscorts` (@0x5795-0x57e4) counts it: fewer than
-    /// [`MAX_ESCORTS`] led by the player ([`Session::led_escorts`]). A
+    /// [`MAX_ESCORTS`] led by the player ([`Space::led_escorts`]). A
     /// capture, a hire in the bar and a person's join by hail all read it.
     #[must_use]
     pub fn can_hire_escorts(&self) -> bool {
-        self.led_escorts().len() < MAX_ESCORTS
+        self.space.can_hire_escorts(&self.pilot)
     }
 
     /// The player's old ship, escort `index`, comes into the system after
@@ -150,7 +128,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let id = self.place_escort(index, chance)?;
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.state = at;
             npc.cargo = hold;
         }
@@ -245,6 +223,37 @@ impl PlayerShip {
     }
 }
 
+impl Space {
+    /// The ship class of each escort of the fleet the original counts as
+    /// led by the player (see the module docs): not a fighter out, and
+    /// with its NPC in the system and unmarked, or not placed yet since
+    /// the fleet last entered a system.
+    pub(super) fn led_escorts(&self, pilot: &Pilot) -> Vec<ShipId> {
+        pilot
+            .escorts
+            .iter()
+            .enumerate()
+            .filter(|(_, escort)| !escort.carried)
+            .filter_map(|(index, escort)| match self.escorts.fleet.get(index) {
+                None => Some(escort.ship),
+                Some(placed) => placed
+                    .and_then(|id| self.npc(id))
+                    .filter(|npc| npc.mission.is_none())
+                    .map(|npc| npc.ship),
+            })
+            .collect()
+    }
+
+    /// Whether the fleet has room for one more escort, as
+    /// `_CanHireEscorts` (@0x5795-0x57e4) counts it: fewer than
+    /// [`MAX_ESCORTS`] led by the player ([`Space::led_escorts`]). A
+    /// capture, a hire in the bar and a person's join by hail all read it.
+    #[must_use]
+    fn can_hire_escorts(&self, pilot: &Pilot) -> bool {
+        self.led_escorts(pilot).len() < MAX_ESCORTS
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -312,7 +321,7 @@ mod tests {
         let mut session = alongside(&catalog);
         session.pilot.escorts = vec![escort(130, false), escort(130, true), escort(131, false)];
         assert_eq!(
-            session.led_escorts(),
+            session.space.led_escorts(&session.pilot),
             [ShipId(130), ShipId(131)],
             "not placed yet, the fighter out left out"
         );
@@ -321,21 +330,33 @@ mod tests {
             vec![escort(130, false), escort(130, true), escort(131, false)],
             &[],
         );
-        assert_eq!(session.led_escorts(), [ShipId(130), ShipId(131)], "placed");
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [ShipId(130), ShipId(131)],
+            "placed"
+        );
         with_fleet(
             &mut session,
             vec![escort(130, false), escort(131, false)],
             &[0],
         );
-        assert_eq!(session.led_escorts(), [ShipId(131)], "no NPC in the system");
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [ShipId(131)],
+            "no NPC in the system"
+        );
         let id = session.space.escorts.fleet[1].expect("placed");
-        session.npc_mut(id).expect("there").mission = Some(MissionMark {
+        session.space.npc_mut(id).expect("there").mission = Some(MissionMark {
             slot: 0,
             behav: crate::traffic::ShipBehav::Own,
             formation: None,
             order: None,
         });
-        assert_eq!(session.led_escorts(), [], "a mission's mark");
+        assert_eq!(
+            session.space.led_escorts(&session.pilot),
+            [],
+            "a mission's mark"
+        );
     }
 
     #[test]
@@ -629,7 +650,7 @@ mod tests {
             Some(2)
         );
         let old = session.space.escorts.fleet[0]
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("placed");
         assert_eq!(
             old.cargo.held().collect::<Vec<_>>(),
@@ -652,7 +673,7 @@ mod tests {
             "the other reading keeps them, and the captured hold is lost"
         );
         let old = session.space.escorts.fleet[0]
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("placed");
         assert_eq!(old.cargo, NpcHold::default());
     }
@@ -714,7 +735,7 @@ mod tests {
         );
         assert_eq!(chance.times_asked(75), 1);
         let id = session.space.escorts.fleet[0].expect("placed");
-        let old = session.npc(id).expect("in the system");
+        let old = session.space.npc(id).expect("in the system");
         assert_eq!(
             (old.skill, old.skill_mult),
             ((f64::from(74 - 37 + 100) * 0.01) as f32, 1.0)
@@ -748,7 +769,7 @@ mod tests {
             Some(Assigned::MyShip)
         );
         let id = session.space.escorts.fleet[0].expect("placed");
-        let old = session.npc(id).expect("in the system");
+        let old = session.space.npc(id).expect("in the system");
         assert_eq!(old.state, left, "the player's place, velocity and heading");
         assert_eq!(
             (old.reserves.fuel.now, old.reserves.fuel.max),
@@ -761,7 +782,7 @@ mod tests {
             "its record lined up"
         );
         let slot = |session: &Session| {
-            let old = session.npc(id).expect("in the system");
+            let old = session.space.npc(id).expect("in the system");
             let duty = old.escort.expect("an escort");
             crate::escort::slot_position(
                 &session.ship.player,
@@ -771,7 +792,7 @@ mod tests {
             )
         };
         let gap = |session: &Session| {
-            (session.npc(id).expect("there").state.position - slot(session)).length()
+            (session.space.npc(id).expect("there").state.position - slot(session)).length()
         };
         let before = gap(&session);
         assert!(before > 50.0, "not on its slot: {before}");

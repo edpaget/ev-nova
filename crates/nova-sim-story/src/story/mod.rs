@@ -1614,7 +1614,7 @@
 //! - **The rule** is `navigation::stellar_under`, which now takes the
 //!   frame size drawn for each site from its caller; `None` still gives
 //!   the 64-pixel placeholder.
-//! - **The sheet drawn** is `Session::drawn_frame_size` (the session's
+//! - **The sheet drawn** is `Space::drawn_frame_size` (the session's
 //!   `stellars` module), the sim's copy of the view's
 //!   `SceneStellar::drawn` and `SystemScene::set_destroyed`: the
 //!   `DeadType` sheet's frame while destroyed, when there is one

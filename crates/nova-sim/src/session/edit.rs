@@ -728,7 +728,7 @@ mod tests {
     fn a_relocation_disarms_an_armed_escort_strength_timer() {
         let catalog = atlas();
         let mut session = landed(&catalog);
-        session.arm_strength_timer(&mut NeverFires);
+        session.space.arm_strength_timer(&mut NeverFires);
         assert!(
             session.space.traffic.strength_armed(),
             "armed before the move"

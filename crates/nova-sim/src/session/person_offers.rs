@@ -51,8 +51,8 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
 use super::hail::{HailTarget, make_leave};
+use super::{Session, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -149,12 +149,6 @@ impl Session {
         }
     }
 
-    /// The last NPC numbered in the system: every NPC the traffic brings
-    /// in after it is numbered above it.
-    pub(super) fn last_npc(&self) -> Option<NpcId> {
-        self.npcs().iter().map(|npc| npc.id).max()
-    }
-
     /// Resolves the `LinkMission` of each person NPC numbered above
     /// `last` (every one with none), in the order they came, drawing on
     /// `chance` (see the module docs): one whose mission the session has
@@ -244,7 +238,7 @@ impl Session {
         if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
             return Ok(Hailed::Stellar(stellar));
         }
-        let linked = self.linked_ship(self.answering()?, OfferedBy::Hail);
+        let linked = self.space.linked_ship(self.answering()?, OfferedBy::Hail);
         // The hail names a linked person's ship before it checks the
         // mission, and keeps it after the dialog (@0x621de, @0x625a4).
         self.reach_linked(linked);
@@ -280,30 +274,6 @@ impl Session {
                 by,
             },
         )
-    }
-
-    /// The ship `npc` is as `_offeringShipIndex` names it, and its
-    /// person's `LinkMission`, when its hail or boarding, as `by` says,
-    /// reaches its person's offer: one whose person has a `LinkMission` and
-    /// offers on its boarding with `Flags` 0x0200 and on its hail without
-    /// (`_HandlePlayerCommunication` @0x621a9-0x621de,
-    /// `_HandlePlayerBoardAttempt` @0x6584d-0x65882), whether or not the
-    /// mission is then available; none from the player's escort.
-    pub(super) fn linked_ship(
-        &self,
-        npc: &Npc,
-        by: OfferedBy,
-    ) -> Option<(OfferingShip, MissionId)> {
-        if npc.escort.is_some() {
-            return None;
-        }
-        let person = self.space.traffic.person(npc.person?.id)?;
-        let on_board = person.record.flags & MISSION_ON_BOARD != 0;
-        let mission = MissionId(person.record.link_mission?);
-        (on_board == (by == OfferedBy::Boarding)).then(|| {
-            let ship = OfferingShip { berth: npc.berth };
-            (ship, mission)
-        })
     }
 
     /// Names `linked`'s ship for `<OSN>` and checks its mission's
@@ -385,7 +355,7 @@ impl Session {
                     self.go(offering.person);
                 }
                 if flags & LEAVES_ON_ACCEPT != 0
-                    && let Some(npc) = self.npc_mut(offering.npc)
+                    && let Some(npc) = self.space.npc_mut(offering.npc)
                 {
                     make_leave(npc);
                 }
@@ -410,6 +380,38 @@ impl Session {
                 }
             }
         }
+    }
+}
+
+impl Space {
+    /// The last NPC numbered in the system: every NPC the traffic brings
+    /// in after it is numbered above it.
+    pub(super) fn last_npc(&self) -> Option<NpcId> {
+        self.npcs().iter().map(|npc| npc.id).max()
+    }
+
+    /// The ship `npc` is as `_offeringShipIndex` names it, and its
+    /// person's `LinkMission`, when its hail or boarding, as `by` says,
+    /// reaches its person's offer: one whose person has a `LinkMission` and
+    /// offers on its boarding with `Flags` 0x0200 and on its hail without
+    /// (`_HandlePlayerCommunication` @0x621a9-0x621de,
+    /// `_HandlePlayerBoardAttempt` @0x6584d-0x65882), whether or not the
+    /// mission is then available; none from the player's escort.
+    pub(super) fn linked_ship(
+        &self,
+        npc: &Npc,
+        by: OfferedBy,
+    ) -> Option<(OfferingShip, MissionId)> {
+        if npc.escort.is_some() {
+            return None;
+        }
+        let person = self.traffic.person(npc.person?.id)?;
+        let on_board = person.record.flags & MISSION_ON_BOARD != 0;
+        let mission = MissionId(person.record.link_mission?);
+        (on_board == (by == OfferedBy::Boarding)).then(|| {
+            let ship = OfferingShip { berth: npc.berth };
+            (ship, mission)
+        })
     }
 }
 
@@ -1355,7 +1357,9 @@ pub(super) mod tests {
     #[test]
     fn by_the_engine_a_captured_ships_slot_names_nobody() {
         let (_, mut session) = offered(0);
-        session.lose_captured(NpcId(0), true);
+        session
+            .space
+            .lose_captured(&mut session.pilot, NpcId(0), true);
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "[Error]",

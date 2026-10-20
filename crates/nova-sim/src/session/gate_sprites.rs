@@ -12,7 +12,7 @@
 //! a gate still shown keeps its sprite, a gate newly shown starts closed,
 //! and one no longer shown is let go.
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
@@ -80,7 +80,9 @@ impl Session {
         self.keep_gate_sprites();
         let dock = self.dock;
         for site in self.sites.iter().filter(|site| is_hypergate(site)) {
-            let width = self.slot_sprite_width(site);
+            let width = self
+                .space
+                .slot_sprite_width(&self.statics, &self.setup, site);
             let anim = GateAnimation::of(site);
             if let Some(sprite) = self.space.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
@@ -89,13 +91,15 @@ impl Session {
             }
         }
     }
+}
 
+impl Space {
     /// The width `_GetSpriteXSize` gives `site`'s sprite slot: its drawn
     /// frame's, or [`NO_SPRITE_WIDTH`] when the slot shows none
     /// (@0x26d4-0x2701).
-    fn slot_sprite_width(&self, site: &LandingSite) -> u32 {
-        self.drawn_frame_size(site)
-            .filter(|_| self.space.rebuilt.shows_frame(site.id))
+    fn slot_sprite_width(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> u32 {
+        self.drawn_frame_size(statics, setup, site)
+            .filter(|_| self.rebuilt.shows_frame(site.id))
             .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
     }
 }

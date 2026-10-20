@@ -267,7 +267,7 @@ mod tests {
         raider.hull.pd_target = true;
         let raider = session.space.traffic.add_npc_at(raider, 20);
         let carrier = carrier_at(&mut session, carrier_berth, raider);
-        let npc = session.npc_mut(raider).expect("there");
+        let npc = session.space.npc_mut(raider).expect("there");
         npc.goal = Goal::Attack(ShipRef::Npc(carrier));
         npc.target = Some(ShipRef::Npc(carrier));
         (session, carrier, raider)
@@ -526,7 +526,7 @@ mod tests {
         // slot 1's turn.
         let catalog = catalog();
         let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 1);
-        let npc = session.npc_mut(carrier).expect("there");
+        let npc = session.space.npc_mut(carrier).expect("there");
         npc.armament = Armament::new([(WeaponSpec::new(&WeaponRecord { reload: 0, ..bay() }), 1)]);
         npc.rounds = LauncherRounds::from([(BAY, 3)]);
         let script = Scripted {

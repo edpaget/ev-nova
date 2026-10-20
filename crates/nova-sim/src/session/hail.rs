@@ -79,7 +79,7 @@
 //!   `reinforcements` module).
 
 use super::missions::TextSource;
-use super::{Jump, Outbox, PlayerShip, Session};
+use super::{Jump, Outbox, PlayerShip, Session, Space, Statics};
 use crate::ai::Goal;
 use crate::catalog::{CommCatalog, MissionId, ShipId, StellarId};
 use crate::chance::Chance;
@@ -95,6 +95,7 @@ use crate::landing;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
+use crate::pilot::Pilot;
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
@@ -611,25 +612,6 @@ impl Session {
         self.call_for_reinforcements(id, true, None);
     }
 
-    /// NPC `from`, of ship type `ship`, says it has `done` its help
-    /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
-    /// message line for the note's ticks, with `sound`.
-    pub(super) fn say_help_done(&mut self, from: NpcId, ship: ShipId, done: Help, sound: SimSound) {
-        let note = CommNote {
-            from,
-            comm_name: self
-                .statics
-                .ship_record(ship)
-                .map(|record| record.comm_name.clone())
-                .unwrap_or_default(),
-            ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
-            done,
-        };
-        self.space.comm_line.show(note.ticks());
-        self.out.comm.push(note);
-        self.out.sounds.push(sound);
-    }
-
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
     pub fn take_comm(&mut self) -> Vec<CommNote> {
@@ -676,6 +658,36 @@ impl PlayerShip {
             return Err(HailRefusal::NoTarget);
         }
         Ok(())
+    }
+}
+
+impl Space {
+    /// NPC `from`, of ship type `ship`, says it has `done` its help
+    /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
+    /// message line for the note's ticks, with `sound`.
+    #[allow(clippy::too_many_arguments)] // what it reads outside Space, then its own four
+    pub(super) fn say_help_done(
+        &mut self,
+        pilot: &Pilot,
+        statics: &Statics,
+        out: &mut Outbox,
+        from: NpcId,
+        ship: ShipId,
+        done: Help,
+        sound: SimSound,
+    ) {
+        let note = CommNote {
+            from,
+            comm_name: statics
+                .ship_record(ship)
+                .map(|record| record.comm_name.clone())
+                .unwrap_or_default(),
+            ship_name: pilot.ship_name().unwrap_or_default().to_owned(),
+            done,
+        };
+        self.comm_line.show(note.ticks());
+        out.comm.push(note);
+        out.sounds.push(sound);
     }
 }
 
@@ -2477,7 +2489,7 @@ mod tests {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         session.pilot.escorts[0].carried = true;
-        if let Some(npc) = session.npc_mut(NpcId(0)) {
+        if let Some(npc) = session.space.npc_mut(NpcId(0)) {
             npc.carrier = Some(crate::bay::Carrier {
                 ship: ShipRef::Player,
                 window: 100.0,
@@ -2886,7 +2898,7 @@ mod tests {
         assert!(merchant.escort.is_some());
         assert!(session.is_escort(NpcId(0)));
         assert_eq!(session.target, None, "the player's target cleared");
-        let other = session.npc(other).expect("there");
+        let other = session.space.npc(other).expect("there");
         assert_eq!((other.target, other.goal), (None, Goal::Idle), "let go");
         assert!(session.take_save_due());
         assert!(

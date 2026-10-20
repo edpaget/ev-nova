@@ -107,7 +107,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Session, Statics};
+use super::{Session, Setup, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::swarm::{self, FormationParent};
 use crate::ai::{Goal, Surroundings};
@@ -127,7 +127,7 @@ use crate::escort::{
 };
 use crate::flight::ShipState;
 use crate::market;
-use crate::pilot::Escort;
+use crate::pilot::{Escort, Pilot};
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
@@ -137,7 +137,7 @@ use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN, NpcDisplay, Rolls};
 use crate::traffic::table::ShipKind;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
-/// ([`Session::fleet_kept`]).
+/// ([`Space::fleet_kept`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
@@ -162,83 +162,10 @@ pub(super) struct KeptEscort {
 }
 
 impl Session {
-    /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
-    /// takes as the system is set up, by its index. As
-    /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
-    /// the table across every setup, an escort whose NPC is in the system
-    /// keeps its berth. Every other (a loaded pilot's, or one whose ship
-    /// type has no record) takes the lowest berth not already chosen, in
-    /// fleet order, before anything else is set up, as `_LoadPilotData`
-    /// spawns a loaded pilot's escorts first (@0x759a4-0x75b2b). The old
-    /// ship kept after a capture and a ship hired are placed at once, so
-    /// they keep theirs.
-    pub(super) fn fleet_berths(&self) -> Vec<u32> {
-        let kept: Vec<Option<u32>> = (0..self.pilot.escorts.len())
-            .map(|index| {
-                let id = self.space.escorts.fleet.get(index).copied().flatten()?;
-                self.npc(id).map(|npc| npc.berth)
-            })
-            .collect();
-        let mut taken: BTreeSet<u32> = kept.iter().flatten().copied().collect();
-        kept.into_iter()
-            .map(|berth| {
-                berth.unwrap_or_else(|| {
-                    let free = (1..=u32::MAX)
-                        .find(|b| !taken.contains(b))
-                        .unwrap_or(u32::MAX);
-                    taken.insert(free);
-                    free
-                })
-            })
-            .collect()
-    }
-
-    /// What each of the fleet's escorts keeps across a setup, by its
-    /// index, from its NPC in the system, if any (none, and uncloaked,
-    /// without one).
-    ///
-    /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
-    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark, and every
-    /// escort its skill and its afterburner (+0xbd), which `_RespawnEscort`
-    /// never writes. Its
-    /// ionization is not kept: `_RespawnEscort` clears the charge
-    /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
-    /// the first frame (@0x3a783) clears the colour of a ship with no
-    /// charge (@0x2bf8a). Neither `_RespawnEscort` (@0x3d4b8-0x3d62c), its
-    /// tail `_AIMakeEscortFlyInForm` (@0x89b8e-0x89c3d) nor the kept slot
-    /// (@0x3bf7e-0x3bfb6) writes the cloak's fade (+0x64) or direction
-    /// (+0xc8d8), so the escort keeps its cloak as it was, cloaked, fading
-    /// or seen.
-    pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
-        (0..self.pilot.escorts.len())
-            .map(|index| {
-                let npc = self
-                    .space
-                    .escorts
-                    .fleet
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .and_then(|id| self.npc(id));
-                npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
-                    aux: npc.aux,
-                    display: Some((
-                        npc.display.frames,
-                        npc.armament.fold(),
-                        npc.display.rolls.anim,
-                    )),
-                    skill: Some(npc.skill),
-                    afterburner: Some(npc.afterburner),
-                    cloak: npc.cloak,
-                })
-            })
-            .collect()
-    }
-
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
-    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
-    /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
+    /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
+    /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its cloak, and its display and
     /// fold, with no ionization, or a loaded pilot's fold set with none
     /// kept
@@ -273,9 +200,10 @@ impl Session {
                     &mut *chance,
                 )?;
                 let loaded = self
+                    .space
                     .npc(id)
                     .map(|npc| self.ship.loaded_escort_set(&self.setup, &npc.hull.frames));
-                if let Some(npc) = self.npc_mut(id) {
+                if let Some(npc) = self.space.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.ion = Ion::default();
                     npc.cloak = kept.cloak;
@@ -292,7 +220,7 @@ impl Session {
                 }
                 match kept.afterburner {
                     Some(afterburner) => {
-                        if let Some(npc) = self.npc_mut(id) {
+                        if let Some(npc) = self.space.npc_mut(id) {
                             npc.afterburner = afterburner;
                         }
                     }
@@ -470,7 +398,7 @@ impl Session {
         let carrier = ship
             .filter(|_| record.carried)
             .map(|(_, maneuver)| self.player_carrier(maneuver));
-        let Some(npc) = self.npc_mut(id) else {
+        let Some(npc) = self.space.npc_mut(id) else {
             return;
         };
         fall_in(
@@ -506,7 +434,7 @@ impl Session {
     /// which gives the same slots at every frame.
     pub(super) fn reform(&mut self) {
         for (id, formation) in self.formation_slots() {
-            let Some(npc) = self.npc_mut(id) else {
+            let Some(npc) = self.space.npc_mut(id) else {
                 continue;
             };
             if let Some(duty) = &mut npc.escort {
@@ -553,7 +481,7 @@ impl Session {
     /// the player, with the player's heading and velocity.
     pub(super) fn snap(&mut self, id: NpcId) {
         let player = self.ship.player;
-        if let Some(npc) = self.npc_mut(id)
+        if let Some(npc) = self.space.npc_mut(id)
             && let Some(formation) = npc.formation()
         {
             npc.state = ShipState {
@@ -563,46 +491,10 @@ impl Session {
         }
     }
 
-    /// NPC `id`, if it is in the system.
-    pub(super) fn npc(&self, id: NpcId) -> Option<&Npc> {
-        self.space.traffic.npcs().iter().find(|npc| npc.id == id)
-    }
-
     /// NPC `id`, if it is in the system, to change.
+    #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
-        self.space
-            .traffic
-            .npcs_mut()
-            .iter_mut()
-            .find(|npc| npc.id == id)
-    }
-
-    /// Each escort's shield, armour and fuel, full as its class holds
-    /// them, the fuel as recorded no more than it holds.
-    /// A person escort, whose fitted ship only the system's traffic knows,
-    /// is restocked to it as it is placed next.
-    pub(super) fn restock_fleet(&mut self) {
-        for index in 0..self.pilot.escorts.len() {
-            let ship = self.pilot.escorts[index].ship;
-            let Some(record) = self.statics.ship_record(ship) else {
-                continue;
-            };
-            let kind = self.setup.ship_kind(&self.statics, record);
-            restock(&mut self.pilot.escorts[index].reserves, &kind);
-        }
-        self.space.escorts.restock_persons = true;
-    }
-
-    /// Each escort's record takes its NPC's shield, armour and fuel.
-    pub(super) fn sync_fleet(&mut self) {
-        for index in 0..self.pilot.escorts.len() {
-            let Some(id) = self.space.escorts.fleet.get(index).copied().flatten() else {
-                continue;
-            };
-            if let Some(reserves) = self.npc(id).map(|npc| npc.reserves) {
-                self.pilot.escorts[index].reserves = reserves;
-            }
-        }
+        self.space.npc_mut(id)
     }
 
     /// Every escort the fight's tick left disabled or breaking up, or
@@ -639,7 +531,8 @@ impl Session {
             .flatten()
             .copied()
             .filter(|&id| {
-                self.npc(id)
+                self.space
+                    .npc(id)
                     .is_none_or(|npc| npc.condition != Condition::Intact && downed(id))
             })
             .collect();
@@ -656,8 +549,8 @@ impl Session {
             let takes = record
                 .filter(|escort| !escort.carried)
                 .map(|escort| escort.ship);
-            let here = self.npc(id).is_some();
-            if let (Some(npc), Some(record)) = (self.npc_mut(id), record) {
+            let here = self.space.npc(id).is_some();
+            if let (Some(npc), Some(record)) = (self.space.npc_mut(id), record) {
                 npc.former = Some(FormerEscort { record });
             }
             self.dismiss(id);
@@ -734,7 +627,7 @@ impl Session {
         if self.pilot.escorts.get(index).is_some() {
             self.pilot.escorts.remove(index);
         }
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             npc.escort = None;
             if npc.goal == Goal::Wait {
                 npc.goal = Goal::Idle;
@@ -755,63 +648,22 @@ impl Session {
         if !self.is_escort(id) {
             return;
         }
-        if let Some(holds) = self.released_holds(id) {
+        if let Some(holds) = self
+            .space
+            .released_holds(&self.pilot, &self.statics, &self.setup, id)
+        {
             self.destroy_cargo_share(holds, false);
         }
         self.dismiss(id);
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             super::hail::make_leave(npc);
-        }
-    }
-
-    /// The `Holds` escort NPC `id` takes its share of the cargo by as it
-    /// is released, as [`RuleKey::ReleaseCargoShare`] reads: none when
-    /// its ship class has no record, or by the other reading when it is
-    /// not a trader.
-    fn released_holds(&self, id: NpcId) -> Option<i16> {
-        let index = self
-            .space
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))?;
-        let ship = self.pilot.escorts.get(index)?.ship;
-        match self.setup.rules.source_for(RuleKey::ReleaseCargoShare) {
-            RuleSource::Engine => self
-                .statics
-                .ship_record(ship)
-                .map(|record| record.fields.holds),
-            RuleSource::Bible => self.statics.trader_holds(ship),
         }
     }
 
     /// Whether NPC `id` is one of the player's escorts.
     #[must_use]
     pub fn is_escort(&self, id: NpcId) -> bool {
-        self.space.escorts.fleet.contains(&Some(id))
-    }
-
-    /// The escort class of the fleet's escort `index`: its NPC's, or its
-    /// ship type's by its record.
-    pub(super) fn escort_class(&self, index: usize) -> EscortClass {
-        if let Some(npc) = self
-            .space
-            .escorts
-            .fleet
-            .get(index)
-            .copied()
-            .flatten()
-            .and_then(|id| self.npc(id))
-        {
-            return npc.class;
-        }
-        self.pilot
-            .escorts
-            .get(index)
-            .and_then(|escort| self.statics.ship_record(escort.ship))
-            .map_or_else(EscortClass::default, |record| {
-                EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
-            })
+        self.space.is_escort(id)
     }
 
     /// Gives every escort of `group` `command` (see the module docs), and
@@ -842,12 +694,12 @@ impl Session {
             command == EscortCommand::Attack && !self.player_led().any(|npc| npc.id == target)
         });
         let target = reported
-            .filter(|&target| !self.allied_with_player(target))
+            .filter(|&target| !self.space.allied_with_player(target))
             .map(ShipRef::Npc);
         let mut changed = false;
         let mut recalled = false;
         for index in 0..self.pilot.escorts.len() {
-            if !group.holds(self.escort_class(index)) {
+            if !group.holds(self.space.escort_class(&self.pilot, &self.statics, index)) {
                 continue;
             }
             let escort = &mut self.pilot.escorts[index];
@@ -856,7 +708,7 @@ impl Session {
             changed |= escort.order != order;
             escort.order = order;
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
-            let Some(npc) = placed.and_then(|id| self.npc_mut(id)) else {
+            let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) else {
                 continue;
             };
             if let Some(duty) = &mut npc.escort {
@@ -878,7 +730,7 @@ impl Session {
             .map(|npc| npc.id)
             .collect();
         for id in mission_escorts {
-            let Some(npc) = self.npc_mut(id) else {
+            let Some(npc) = self.space.npc_mut(id) else {
                 continue;
             };
             let Some(mark) = &mut npc.mission else {
@@ -905,56 +757,13 @@ impl Session {
         })
     }
 
-    /// Whether NPC `id` is here and allied with the player
-    /// ([`Surroundings::allied_with_player`]).
-    fn allied_with_player(&self, id: NpcId) -> bool {
-        let npcs = self.space.traffic.npcs();
-        self.npc(id)
-            .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
-    }
-
-    /// `class`'s row in the escort menu: whether the player leads a ship
-    /// of it, hired or a mission escort, and the standing order of its
-    /// first hired escort, else of its first mission escort.
-    fn class_row(&self, class: EscortClass) -> ClassRow {
-        let hired = (0..self.pilot.escorts.len())
-            .find(|&index| self.escort_class(index) == class)
-            .map(|index| self.pilot.escorts[index].order);
-        let first = hired.or_else(|| {
-            self.player_led()
-                .find(|npc| npc.mission_escort() && npc.class == class)
-                .map(Npc::escort_order)
-        });
-        ClassRow {
-            class,
-            present: first.is_some(),
-            order: first.flatten(),
-        }
-    }
-
-    /// The standing order of `class` that a ship joining it takes, as
-    /// the original's one order per class does (`_EscortAI`
-    /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
-    /// else the last order given the class (kept across a jump or a
-    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it),
-    /// Return to Hangar excepted. A fighter the player launches and a
-    /// mission escort joining both take it.
-    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
-        let kept = EscortClass::ALL
-            .iter()
-            .position(|&each| each == class)
-            .and_then(|index| self.space.escorts.class_orders[index]);
-        let row = self.class_row(class);
-        if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
-    }
-
     /// The escort menu's class rows, in its order: whether the player
     /// leads a ship of each class, hired or a mission escort, disabled
     /// included (`_DrawEscortMenuInFrame` @0x56392-0x563ca), and the
     /// standing order of its first escort (`class_row`).
     #[must_use]
     pub fn escort_menu(&self) -> [ClassRow; 4] {
-        EscortClass::ALL.map(|class| self.class_row(class))
+        EscortClass::ALL.map(|class| self.space.class_row(&self.pilot, &self.statics, class))
     }
 
     /// Whether the player has an escort flying, for the escort menu to
@@ -976,6 +785,222 @@ impl Statics {
         self.ship_record(ship)
             .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
             .map(|record| record.fields.holds)
+    }
+}
+
+impl Space {
+    /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
+    /// takes as the system is set up, by its index. As
+    /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
+    /// the table across every setup, an escort whose NPC is in the system
+    /// keeps its berth. Every other (a loaded pilot's, or one whose ship
+    /// type has no record) takes the lowest berth not already chosen, in
+    /// fleet order, before anything else is set up, as `_LoadPilotData`
+    /// spawns a loaded pilot's escorts first (@0x759a4-0x75b2b). The old
+    /// ship kept after a capture and a ship hired are placed at once, so
+    /// they keep theirs.
+    pub(super) fn fleet_berths(&self, pilot: &Pilot) -> Vec<u32> {
+        let kept: Vec<Option<u32>> = (0..pilot.escorts.len())
+            .map(|index| {
+                let id = self.escorts.fleet.get(index).copied().flatten()?;
+                self.npc(id).map(|npc| npc.berth)
+            })
+            .collect();
+        let mut taken: BTreeSet<u32> = kept.iter().flatten().copied().collect();
+        kept.into_iter()
+            .map(|berth| {
+                berth.unwrap_or_else(|| {
+                    let free = (1..=u32::MAX)
+                        .find(|b| !taken.contains(b))
+                        .unwrap_or(u32::MAX);
+                    taken.insert(free);
+                    free
+                })
+            })
+            .collect()
+    }
+
+    /// What each of the fleet's escorts keeps across a setup, by its
+    /// index, from its NPC in the system, if any (none, and uncloaked,
+    /// without one).
+    ///
+    /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark, and every
+    /// escort its skill and its afterburner (+0xbd), which `_RespawnEscort`
+    /// never writes. Its
+    /// ionization is not kept: `_RespawnEscort` clears the charge
+    /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
+    /// the first frame (@0x3a783) clears the colour of a ship with no
+    /// charge (@0x2bf8a). Neither `_RespawnEscort` (@0x3d4b8-0x3d62c), its
+    /// tail `_AIMakeEscortFlyInForm` (@0x89b8e-0x89c3d) nor the kept slot
+    /// (@0x3bf7e-0x3bfb6) writes the cloak's fade (+0x64) or direction
+    /// (+0xc8d8), so the escort keeps its cloak as it was, cloaked, fading
+    /// or seen.
+    pub(super) fn fleet_kept(&self, pilot: &Pilot) -> Vec<KeptEscort> {
+        (0..pilot.escorts.len())
+            .map(|index| {
+                let npc = self
+                    .escorts
+                    .fleet
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .and_then(|id| self.npc(id));
+                npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
+                    aux: npc.aux,
+                    display: Some((
+                        npc.display.frames,
+                        npc.armament.fold(),
+                        npc.display.rolls.anim,
+                    )),
+                    skill: Some(npc.skill),
+                    afterburner: Some(npc.afterburner),
+                    cloak: npc.cloak,
+                })
+            })
+            .collect()
+    }
+
+    /// NPC `id`, if it is in the system.
+    pub(super) fn npc(&self, id: NpcId) -> Option<&Npc> {
+        self.traffic.npcs().iter().find(|npc| npc.id == id)
+    }
+
+    /// NPC `id`, if it is in the system, to change.
+    pub(super) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
+        self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id)
+    }
+
+    /// Each escort's shield, armour and fuel, full as its class holds
+    /// them, the fuel as recorded no more than it holds.
+    /// A person escort, whose fitted ship only the system's traffic knows,
+    /// is restocked to it as it is placed next.
+    pub(super) fn restock_fleet(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup) {
+        for index in 0..pilot.escorts.len() {
+            let ship = pilot.escorts[index].ship;
+            let Some(record) = statics.ship_record(ship) else {
+                continue;
+            };
+            let kind = setup.ship_kind(statics, record);
+            restock(&mut pilot.escorts[index].reserves, &kind);
+        }
+        self.escorts.restock_persons = true;
+    }
+
+    /// Each escort's record takes its NPC's shield, armour and fuel.
+    pub(super) fn sync_fleet(&mut self, pilot: &mut Pilot) {
+        for index in 0..pilot.escorts.len() {
+            let Some(id) = self.escorts.fleet.get(index).copied().flatten() else {
+                continue;
+            };
+            if let Some(reserves) = self.npc(id).map(|npc| npc.reserves) {
+                pilot.escorts[index].reserves = reserves;
+            }
+        }
+    }
+
+    /// The `Holds` escort NPC `id` takes its share of the cargo by as it
+    /// is released, as [`RuleKey::ReleaseCargoShare`] reads: none when
+    /// its ship class has no record, or by the other reading when it is
+    /// not a trader.
+    fn released_holds(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        id: NpcId,
+    ) -> Option<i16> {
+        let index = self
+            .escorts
+            .fleet
+            .iter()
+            .position(|&placed| placed == Some(id))?;
+        let ship = pilot.escorts.get(index)?.ship;
+        match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
+            RuleSource::Engine => statics.ship_record(ship).map(|record| record.fields.holds),
+            RuleSource::Bible => statics.trader_holds(ship),
+        }
+    }
+
+    /// Whether NPC `id` is one of the player's escorts.
+    #[must_use]
+    fn is_escort(&self, id: NpcId) -> bool {
+        self.escorts.fleet.contains(&Some(id))
+    }
+
+    /// The escort class of the fleet's escort `index`: its NPC's, or its
+    /// ship type's by its record.
+    pub(super) fn escort_class(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        index: usize,
+    ) -> EscortClass {
+        if let Some(npc) = self
+            .escorts
+            .fleet
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|id| self.npc(id))
+        {
+            return npc.class;
+        }
+        pilot
+            .escorts
+            .get(index)
+            .and_then(|escort| statics.ship_record(escort.ship))
+            .map_or_else(EscortClass::default, |record| {
+                EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
+            })
+    }
+
+    /// Whether NPC `id` is here and allied with the player
+    /// ([`Surroundings::allied_with_player`]).
+    fn allied_with_player(&self, id: NpcId) -> bool {
+        let npcs = self.traffic.npcs();
+        self.npc(id)
+            .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
+    }
+
+    /// `class`'s row in the escort menu: whether the player leads a ship
+    /// of it, hired or a mission escort, and the standing order of its
+    /// first hired escort, else of its first mission escort.
+    fn class_row(&self, pilot: &Pilot, statics: &Statics, class: EscortClass) -> ClassRow {
+        let hired = (0..pilot.escorts.len())
+            .find(|&index| self.escort_class(pilot, statics, index) == class)
+            .map(|index| pilot.escorts[index].order);
+        let first = hired.or_else(|| {
+            self.player_led()
+                .find(|npc| npc.mission_escort() && npc.class == class)
+                .map(Npc::escort_order)
+        });
+        ClassRow {
+            class,
+            present: first.is_some(),
+            order: first.flatten(),
+        }
+    }
+
+    /// The standing order of `class` that a ship joining it takes, as
+    /// the original's one order per class does (`_EscortAI`
+    /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
+    /// else the last order given the class (kept across a jump or a
+    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it),
+    /// Return to Hangar excepted. A fighter the player launches and a
+    /// mission escort joining both take it.
+    pub(super) fn class_order(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        class: EscortClass,
+    ) -> Option<EscortOrder> {
+        let kept = EscortClass::ALL
+            .iter()
+            .position(|&each| each == class)
+            .and_then(|index| self.escorts.class_orders[index]);
+        let row = self.class_row(pilot, statics, class);
+        if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
     }
 }
 
@@ -1295,7 +1320,7 @@ mod tests {
             .fleet
             .iter()
             .flatten()
-            .map(|&id| session.npc(id).expect("in the system"))
+            .map(|&id| session.space.npc(id).expect("in the system"))
             .collect()
     }
 
@@ -1466,7 +1491,13 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(warship).expect("there").reserves.shield.now = 4.0;
+        session
+            .space
+            .npc_mut(warship)
+            .expect("there")
+            .reserves
+            .shield
+            .now = 4.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             session.pilot().escorts()[0].reserves.shield.now,
@@ -1591,12 +1622,12 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let id = pirate(&mut session, 0.0, -400.0, Goal::Idle);
-        let ship = session.npc_mut(id).expect("there");
+        let ship = session.space.npc_mut(id).expect("there");
         ship.govt = Some(crate::catalog::GovtId(140));
         ship.skill_mult = 2.0;
         ship.skill = 0.8;
         session.enlist(id, escort(WARSHIP, worn(), None));
-        let ship = session.npc(id).expect("there");
+        let ship = session.space.npc(id).expect("there");
         assert_eq!((ship.govt, ship.skill_mult, ship.skill), (None, 1.0, 0.8));
     }
 
@@ -1614,10 +1645,13 @@ mod tests {
             .flatten()
             .collect();
         assert_ne!(escorts[0], before, "a new NPC");
-        let first = session.npc(escorts[0]).expect("there").ion;
+        let first = session.space.npc(escorts[0]).expect("there").ion;
         assert_eq!(first, Ion::default());
-        assert_eq!(session.npc(escorts[1]).expect("there").ion, Ion::default());
-        let npc = session.npc_mut(escorts[0]).expect("there");
+        assert_eq!(
+            session.space.npc(escorts[1]).expect("there").ion,
+            Ion::default()
+        );
+        let npc = session.space.npc_mut(escorts[0]).expect("there");
         let at = npc.state.position;
         npc.ion.take(
             crate::combat::ion::Dose {
@@ -1639,7 +1673,7 @@ mod tests {
 
     fn ionize_first_escort(session: &mut Session) -> NpcId {
         let warship = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(warship).expect("there").ion = Ion {
+        session.space.npc_mut(warship).expect("there").ion = Ion {
             charge: 30.0,
             colour: 0x00FF_0000,
             ..Ion::default()
@@ -1681,16 +1715,16 @@ mod tests {
             .flatten()
             .collect();
         assert_ne!(escorts[0], before, "a new NPC");
-        assert_eq!(session.npc(escorts[0]).expect("there").cloak, cloak);
+        assert_eq!(session.space.npc(escorts[0]).expect("there").cloak, cloak);
         assert_eq!(
-            session.npc(escorts[1]).expect("there").cloak,
+            session.space.npc(escorts[1]).expect("there").cloak,
             Cloak::default()
         );
     }
 
     fn cloak_first_escort(session: &mut Session, cloak: Cloak) -> NpcId {
         let warship = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(warship).expect("there").cloak = cloak;
+        session.space.npc_mut(warship).expect("there").cloak = cloak;
         warship
     }
 
@@ -1707,7 +1741,7 @@ mod tests {
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         assert_cloak_kept(&session, before, FULLY_CLOAKED);
         let first = session.space.escorts.fleet[0].expect("placed");
-        assert!(session.npc(first).expect("there").cloak.is_cloaked());
+        assert!(session.space.npc(first).expect("there").cloak.is_cloaked());
     }
 
     #[test]
@@ -1758,7 +1792,7 @@ mod tests {
             Some(first),
             "the same escort"
         );
-        let cloak = session.npc(first).expect("there").cloak;
+        let cloak = session.space.npc(first).expect("there").cloak;
         assert_eq!(
             cloak,
             Cloak {
@@ -1790,7 +1824,13 @@ mod tests {
         let catalog = crate::testkit::far_129_reachable(fleeted());
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(warship).expect("there").reserves.shield.now = 4.0;
+        session
+            .space
+            .npc_mut(warship)
+            .expect("there")
+            .reserves
+            .shield
+            .now = 4.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 4.0);
@@ -1848,7 +1888,13 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Bible);
         session.take_save_due();
         let warship = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(warship).expect("there").reserves.armor.now = 10.0;
+        session
+            .space
+            .npc_mut(warship)
+            .expect("there")
+            .reserves
+            .armor
+            .now = 10.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             session
@@ -1860,7 +1906,7 @@ mod tests {
             [FREIGHTER],
             "its record is gone"
         );
-        let lost = session.npc(warship).expect("still in the system");
+        let lost = session.space.npc(warship).expect("still in the system");
         assert_eq!(lost.condition, Condition::Disabled);
         assert_eq!(lost.escort, None);
         assert_eq!(lost.ai_type, AiType::Warship, "its InherentAI");
@@ -1893,6 +1939,7 @@ mod tests {
         session.take_save_due();
         let freighter = session.space.escorts.fleet[1].expect("placed");
         session
+            .space
             .npc_mut(freighter)
             .expect("there")
             .reserves
@@ -1904,7 +1951,7 @@ mod tests {
         for _ in 0..3 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
-        assert_eq!(session.npc(freighter), None, "destroyed and gone");
+        assert_eq!(session.space.npc(freighter), None, "destroyed and gone");
         assert_eq!(session.pilot().escorts()[0].ship, WARSHIP);
         assert!(!session.take_save_due(), "only once");
     }
@@ -1946,8 +1993,8 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), 3);
         for &id in &ids {
-            assert_eq!(session.npc(id).expect("there").former, None);
-            session.npc_mut(id).expect("there").reserves.armor.now = 10.0;
+            assert_eq!(session.space.npc(id).expect("there").former, None);
+            session.space.npc_mut(id).expect("there").reserves.armor.now = 10.0;
         }
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert!(session.pilot().escorts().is_empty(), "all lost");
@@ -1956,7 +2003,7 @@ mod tests {
             FormerKind::Captured,
             FormerKind::Fighter,
         ]) {
-            let npc = session.npc(id).expect("left behind");
+            let npc = session.space.npc(id).expect("left behind");
             assert_eq!(npc.condition, Condition::Disabled);
             let former = npc.former.expect("remembers");
             assert_eq!(former.kind(), kind);
@@ -1982,11 +2029,11 @@ mod tests {
         let catalog = fleeted();
         let mut session = mixed(&catalog);
         let hired = session.space.escorts.fleet[0].expect("placed");
-        let npc = session.npc_mut(hired).expect("there");
+        let npc = session.space.npc_mut(hired).expect("there");
         npc.hull.death_delay = 10;
         npc.reserves.armor.now = 0.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
-        let npc = session.npc(hired).expect("breaking up");
+        let npc = session.space.npc(hired).expect("breaking up");
         assert!(matches!(npc.condition, Condition::Dying { .. }));
         assert_eq!(
             npc.former.map(|former| former.kind()),
@@ -2040,7 +2087,7 @@ mod tests {
     /// Escort `index`'s armour goes to `armor`, and the fight ticks.
     fn hit(session: &mut Session, index: usize, armor: f32) {
         let id = session.space.escorts.fleet[index].expect("placed");
-        session.npc_mut(id).expect("there").reserves.armor.now = armor;
+        session.space.npc_mut(id).expect("there").reserves.armor.now = armor;
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
 
@@ -2183,7 +2230,7 @@ mod tests {
                 .with_override(RuleKey::DeadlyStellarKill, reading);
             let mut session = session.with_rules(rules);
             let id = session.space.escorts.fleet[1].expect("placed");
-            let at = session.npc(id).expect("there").state.position;
+            let at = session.space.npc(id).expect("there").state.position;
             session.sites = vec![crate::catalog::LandingSite {
                 flags2: crate::deadly_stellar::DEADLY_STELLAR,
                 frame_size: Some((2, 2)),
@@ -2191,7 +2238,7 @@ mod tests {
             }];
             session.listed = session.sites.clone();
             session.tick_combat(Rules::default(), &mut NeverFires);
-            assert!(session.npc(id).is_none(), "{reading:?}");
+            assert!(session.space.npc(id).is_none(), "{reading:?}");
             assert_eq!(
                 session.pilot().escorts().len(),
                 2,
@@ -2220,7 +2267,7 @@ mod tests {
             let id = session.space.escorts.fleet[1].expect("placed");
             session.story_raised();
             disabled_then_killed(&mut session, id, &Gunner::Npc);
-            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}: lost");
             assert_eq!(
                 cargo(&session),
@@ -2337,6 +2384,7 @@ mod tests {
         for _ in 0..300 {
             fight(&mut session, &catalog, &ai);
             hit |= session
+                .space
                 .npc(quarry)
                 .is_none_or(|npc| npc.reserves.shield.now < 30.0);
         }
@@ -2650,7 +2698,7 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let freighter = session.space.escorts.fleet[1].expect("placed");
         let launched = pirate(&mut session, 0.0, -400.0, Goal::Idle);
-        session.npc_mut(launched).expect("here").leader = Some(freighter);
+        session.space.npc_mut(launched).expect("here").leader = Some(freighter);
         session.target = Some(launched);
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Attack),
@@ -2756,7 +2804,13 @@ mod tests {
             let off = slot_of(&session, warship) - warship.state.position;
             assert!(off.length() < 20.0, "in formation: {off:?}");
         }
-        let shield = session.npc(raider).expect("there").reserves.shield.now;
+        let shield = session
+            .space
+            .npc(raider)
+            .expect("there")
+            .reserves
+            .shield
+            .now;
         assert!(shield < 30.0, "{shield}");
     }
 
@@ -2816,7 +2870,7 @@ mod tests {
             Some(attacker)
         );
         let beside = session.player().position + Vec2::new(10.0, 0.0);
-        let escort = session.npc_mut(warship).expect("in the system");
+        let escort = session.space.npc_mut(warship).expect("in the system");
         escort.goal = Goal::Attack(ShipRef::Player);
         escort.state.position = beside;
         assert_eq!(
@@ -2824,7 +2878,8 @@ mod tests {
             Some(attacker),
             "the escort is passed over"
         );
-        session.npc_mut(attacker).expect("there").goal = Goal::Attack(ShipRef::Npc(bystander));
+        session.space.npc_mut(attacker).expect("there").goal =
+            Goal::Attack(ShipRef::Npc(bystander));
         session.target = None;
         assert_eq!(session.select_target(TargetPick::NearestThreat), None);
     }
@@ -2918,8 +2973,14 @@ mod tests {
             "and its record"
         );
         let ace = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
-        session.sync_fleet();
+        session
+            .space
+            .npc_mut(ace)
+            .expect("there")
+            .reserves
+            .shield
+            .now = 5.0;
+        session.space.sync_fleet(&mut session.pilot);
         land_now(&mut session).expect("lands on 128, under the ship");
         session
             .take_off(&catalog, &mut NeverFires)
@@ -2934,8 +2995,14 @@ mod tests {
         let mut session = flying_ace(&catalog);
         let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
         let ace = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
-        session.sync_fleet();
+        session
+            .space
+            .npc_mut(ace)
+            .expect("there")
+            .reserves
+            .shield
+            .now = 5.0;
+        session.space.sync_fleet(&mut session.pilot);
         land_now(&mut session).expect("lands on 128, under the ship");
         session
             .take_off(&catalog, &mut NeverFires)
@@ -2944,7 +3011,7 @@ mod tests {
         for id in &session.space.escorts.fleet {
             let id = id.expect("placed");
             assert!(!before.contains(&id), "{id:?} is a new ship");
-            assert!(session.npc(id).is_some(), "{id:?} is in the system");
+            assert!(session.space.npc(id).is_some(), "{id:?} is in the system");
         }
         assert_eq!(
             escort_npcs(&session)[0].reserves.shield.now,
@@ -2962,8 +3029,14 @@ mod tests {
         let catalog = with_ace();
         let mut session = flying_ace(&catalog);
         let ace = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
-        session.sync_fleet();
+        session
+            .space
+            .npc_mut(ace)
+            .expect("there")
+            .reserves
+            .shield
+            .now = 5.0;
+        session.space.sync_fleet(&mut session.pilot);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         let ace = escort_npcs(&session)[0];
         assert_eq!(
@@ -3003,9 +3076,9 @@ mod tests {
         ] {
             let mut session = flying_ace(&catalog);
             let ace = session.space.escorts.fleet[0].expect("placed");
-            session.npc_mut(ace).expect("here").goal = goal;
+            session.space.npc_mut(ace).expect("here").goal = goal;
             assert!(session.unfleet(ace));
-            assert_eq!(session.npc(ace).expect("here").goal, left, "{goal:?}");
+            assert_eq!(session.space.npc(ace).expect("here").goal, left, "{goal:?}");
         }
     }
 
@@ -3039,7 +3112,13 @@ mod tests {
         let catalog = with_ace();
         let mut session = flying_ace(&catalog);
         let ace = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(ace).expect("there").reserves.armor.now = 0.0;
+        session
+            .space
+            .npc_mut(ace)
+            .expect("there")
+            .reserves
+            .armor
+            .now = 0.0;
         for _ in 0..4 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
@@ -3052,10 +3131,16 @@ mod tests {
         let catalog = with_ace();
         let mut session = flying_ace(&catalog);
         let ace = session.space.escorts.fleet[0].expect("placed");
-        session.npc_mut(ace).expect("there").reserves.armor.now = 10.0;
+        session
+            .space
+            .npc_mut(ace)
+            .expect("there")
+            .reserves
+            .armor
+            .now = 10.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.pilot().escorts(), []);
-        let left = session.npc(ace).expect("left behind");
+        let left = session.space.npc(ace).expect("left behind");
         assert_eq!(left.condition, Condition::Disabled);
         assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
         assert!(!session.pilot().gone(PersonId(700)));
@@ -3063,7 +3148,7 @@ mod tests {
         let ace = session.space.escorts.fleet[0].expect("placed");
         session.release(ace);
         assert_eq!(session.pilot().escorts(), []);
-        let left = session.npc(ace).expect("leaving");
+        let left = session.space.npc(ace).expect("leaving");
         assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
         assert!(!session.pilot().gone(PersonId(700)));
     }
@@ -3077,7 +3162,7 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let escorts: Vec<NpcId> = escort_npcs(&session).iter().map(|npc| npc.id).collect();
-        let mut pirate = session.npc(escorts[0]).expect("the escort").clone();
+        let mut pirate = session.space.npc(escorts[0]).expect("the escort").clone();
         pirate.escort = None;
         pirate.govt = Some(crate::catalog::GovtId(142));
         pirate.state.position.x += 200.0;
@@ -3092,7 +3177,7 @@ mod tests {
             session.weigh_strikes(&mut strikes, &mut NeverFires);
             session.space.strikes = strikes;
             session.answer_strikes(&NovaAi::default());
-            session.npc(escorts[0]).expect("the escort").target
+            session.space.npc(escorts[0]).expect("the escort").target
         };
         assert_eq!(answer(&mut session, escorts[1]), None, "its fleetmate");
         assert_eq!(

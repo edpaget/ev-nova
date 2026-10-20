@@ -67,8 +67,11 @@ impl Session {
             }
         }
         for id in disabled {
-            let held = self.npc(id).is_some_and(|npc| self.held_disabled(npc));
-            let Some(npc) = self.npc_mut(id) else {
+            let held = self
+                .space
+                .npc(id)
+                .is_some_and(|npc| self.held_disabled(npc));
+            let Some(npc) = self.space.npc_mut(id) else {
                 continue;
             };
             // The gear is tested before the draw, so that a ship without
@@ -93,13 +96,13 @@ impl Session {
     /// Former escort NPC `id`, repaired, rejoins the fleet as `former`
     /// says (see the module docs).
     fn rejoin(&mut self, id: NpcId, former: FormerEscort) {
-        let Some(npc) = self.npc_mut(id) else {
+        let Some(npc) = self.space.npc_mut(id) else {
             return;
         };
         npc.reserves.shield.now = 0.0;
         let record = former.rejoined(npc.reserves);
         self.enlist(id, record);
-        self.say(rejoin_message(former.kind()));
+        self.space.say(&mut self.out, rejoin_message(former.kind()));
         self.out.sounds.push(SimSound::EscortRepaired);
     }
 }
@@ -232,7 +235,7 @@ mod tests {
     /// Escort NPC `id` is disabled (armour 3 of 45, below a tenth) and
     /// the fight ticks, drawing nothing: it leaves the fleet.
     fn disable(session: &mut Session, id: NpcId) {
-        session.npc_mut(id).expect("there").reserves.armor.now = 3.0;
+        session.space.npc_mut(id).expect("there").reserves.armor.now = 3.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert!(!session.is_escort(id));
         let _ = (session.take_messages(), session.take_sounds());
@@ -278,7 +281,7 @@ mod tests {
             "hired at its wage, defending"
         );
         assert!(session.is_escort(hired));
-        let npc = session.npc(hired).expect("here");
+        let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.condition, Condition::Intact);
         assert_eq!(npc.reserves, reserves);
         assert_eq!(npc.former, None);
@@ -313,10 +316,10 @@ mod tests {
             window: 7.0,
             reach: 9.0,
         });
-        session.npc_mut(captured).expect("here").carrier = elsewhere;
+        session.space.npc_mut(captured).expect("here").carrier = elsewhere;
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         assert_eq!(
-            session.npc(captured).expect("here").carrier,
+            session.space.npc(captured).expect("here").carrier,
             elsewhere,
             "an escort not carried keeps whatever carrier it had"
         );
@@ -340,12 +343,12 @@ mod tests {
         let mut session = flying(&catalog);
         let fighter = placed(&session)[2];
         disable(&mut session, fighter);
-        session.npc_mut(fighter).expect("here").carrier = None;
+        session.space.npc_mut(fighter).expect("here").carrier = None;
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         let record = session.pilot().escorts().last().expect("rejoined");
         assert!(record.carried);
         assert_eq!(record.wage, None);
-        let npc = session.npc(fighter).expect("here");
+        let npc = session.space.npc(fighter).expect("here");
         assert_eq!(
             npc.carrier,
             Some(Carrier {
@@ -366,7 +369,7 @@ mod tests {
         let hired = placed(&session)[0];
         disable(&mut session, hired);
         assert_eq!(fight(&mut session, &[1]), [REPAIR_ODDS]);
-        let npc = session.npc(hired).expect("here");
+        let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.condition, Condition::Disabled);
         assert_eq!(npc.reserves.armor.now, 3.0);
         assert!(npc.former.is_some(), "still remembers");
@@ -383,7 +386,7 @@ mod tests {
         let bare = placed(&session)[3];
         disable(&mut session, bare);
         assert_eq!(fight(&mut session, &[0]), Vec::<u32>::new());
-        let npc = session.npc(bare).expect("here");
+        let npc = session.space.npc(bare).expect("here");
         assert_eq!(npc.condition, Condition::Disabled);
         assert!(!session.is_escort(bare));
     }
@@ -394,9 +397,9 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        session.npc_mut(hired).expect("here").former = None;
+        session.space.npc_mut(hired).expect("here").former = None;
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
-        let npc = session.npc(hired).expect("here");
+        let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.condition, Condition::Intact);
         assert_eq!(npc.reserves.armor.now, repaired_armor(45.0, false));
         assert_eq!(npc.escort, None);
@@ -412,11 +415,11 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        let npc = session.npc_mut(hired).expect("here");
+        let npc = session.space.npc_mut(hired).expect("here");
         npc.reserves.armor.max = 40_000.0;
         npc.reserves.armor.now = 100.0;
         session.self_repair(Rules::default(), &mut Draws::of(&[0]));
-        let npc = session.npc(hired).expect("here");
+        let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.reserves.armor.now, repaired_armor(40_000.0, false));
         assert_eq!(npc.condition, Condition::Disabled, "below a third");
         assert!(session.is_escort(hired), "rejoins all the same");
@@ -428,7 +431,7 @@ mod tests {
         }
         // A hit on it, disabled, loses it.
         let was = [crate::session::NpcBefore::of(
-            session.npc(hired).expect("here"),
+            session.space.npc(hired).expect("here"),
         )];
         session.lose_escorts(&was, &std::collections::BTreeSet::from([hired]));
         assert!(!session.is_escort(hired), "hit");
@@ -440,10 +443,19 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        session.npc_mut(hired).expect("here").reserves.armor.now = 0.0;
+        session
+            .space
+            .npc_mut(hired)
+            .expect("here")
+            .reserves
+            .armor
+            .now = 0.0;
         session.self_repair(Rules::default(), &mut Draws::of(&[0]));
         assert!(!session.is_escort(hired));
-        assert_eq!(session.npc(hired).expect("here").reserves.armor.now, 0.0);
+        assert_eq!(
+            session.space.npc(hired).expect("here").reserves.armor.now,
+            0.0
+        );
     }
 
     #[test]
@@ -452,12 +464,24 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        session.npc_mut(hired).expect("here").reserves.armor.now = 45.0;
+        session
+            .space
+            .npc_mut(hired)
+            .expect("here")
+            .reserves
+            .armor
+            .now = 45.0;
         assert_eq!(fight(&mut session, &[]), Vec::<u32>::new());
-        let npc = session.npc(hired).expect("here");
+        let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.condition, Condition::Intact);
         assert_eq!(npc.former, None);
-        session.npc_mut(hired).expect("here").reserves.armor.now = 3.0;
+        session
+            .space
+            .npc_mut(hired)
+            .expect("here")
+            .reserves
+            .armor
+            .now = 3.0;
         fight(&mut session, &[]);
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         assert!(!session.is_escort(hired), "no longer remembers");
@@ -479,7 +503,7 @@ mod tests {
             .iter()
             .position(|record| record.wage == Some(50))
             .expect("still in the fleet");
-        let npc = session.space.escorts.fleet[index].and_then(|id| session.npc(id));
+        let npc = session.space.escorts.fleet[index].and_then(|id| session.space.npc(id));
         assert_eq!(
             npc.map(|npc| (npc.ship, npc.escort.is_some())),
             Some((WARSHIP, true)),
@@ -510,8 +534,14 @@ mod tests {
         let mut session = flying(&catalog);
         let bare = placed(&session)[3];
         disable(&mut session, bare);
-        session.npc_mut(bare).expect("there").reserves.fuel.now = 298.0;
-        let fuel = |session: &Session| session.npc(bare).expect("there").reserves.fuel;
+        session
+            .space
+            .npc_mut(bare)
+            .expect("there")
+            .reserves
+            .fuel
+            .now = 298.0;
+        let fuel = |session: &Session| session.space.npc(bare).expect("there").reserves.fuel;
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(fuel(&session).now, 298.5);
         for _ in 0..10 {
@@ -520,7 +550,7 @@ mod tests {
         assert_eq!(fuel(&session).now, 300.0, "up to its capacity");
         assert_eq!(fuel(&session).max, 300.0);
         assert_eq!(
-            session.npc(bare).map(|npc| npc.condition),
+            session.space.npc(bare).map(|npc| npc.condition),
             Some(Condition::Disabled)
         );
     }

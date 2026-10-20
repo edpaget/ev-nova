@@ -17,7 +17,7 @@
 //! | `_IncrementGameTime` @0xb724-0xb759 | the daily step's reinforcements ([`Session::reinforcements_day`]) |
 //! | `_ResetPlayerPrecalcedValues` @0xc628-0xc68f | [`Session::reset_precalced`], after the sabotage clock and before the trim |
 //! | `_WarshipAI` @0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e | the coming fleet in the traffic's [`World`](crate::traffic::World) ([`Session::reinforcements_coming`]) |
-//! | `_ResetPlayer` @0x1db17-0x1db30, the escape pod's `_ResetPlayer(0)` @0x68f2f | the rescue's reset ([`Session::reset_reinforcements_here`]) |
+//! | `_ResetPlayer` @0x1db17-0x1db30, the escape pod's `_ResetPlayer(0)` @0x68f2f | the rescue's reset ([`Space::reset_reinforcements_here`]) |
 //! | `_ResetPlayer(1)` @0x1d9e8-0x1d9f4, before `_LoadPilotData` @0x76027-0x7605b | a session built afresh: no timer runs, and the saved countdowns are the pilot's ([`Pilot::reinforcement_days`](crate::pilot::Pilot::reinforcement_days)) |
 //!
 //! **The state.** Each system's timer (+0xc8, not saved, as the
@@ -36,7 +36,7 @@
 //! and #307, a missing entry read as empty. A government with no
 //! `MediumName` announces nothing (@0x3914d). On its arrival the fleet's
 //! own `Quote`, if it has one, shows on the tick it comes
-//! ([`Session::announce_fleets`]).
+//! ([`Space::announce_fleets`]).
 //!
 //! **The inhibitors.** Each reset sets the global inhibitor for an owned
 //! `ModType` 44 outfit of `ModVal` -1, and every government whose
@@ -57,9 +57,10 @@
 //! there too and brings the fleet into the traffic, which stands still
 //! past the warp's lead-in and is dropped at the arrival.
 
+use crate::pilot::Pilot;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::ai::odds::cached_odds_at;
 use crate::ai::reinforcements::{
     self, Called, Clock, Coming, Event, Inhibitors, ReinforcementFacts,
@@ -123,36 +124,6 @@ impl Session {
         }
     }
 
-    /// Sets the clock of the player's system to `clock`.
-    fn set_clock_here(&mut self, clock: Clock) {
-        let system = self.pilot.system;
-        if clock.timer == 0 {
-            self.space.reinforcements.timers.remove(&system);
-        } else {
-            self.space.reinforcements.timers.insert(system, clock.timer);
-        }
-        if clock.countdown == 0 {
-            self.pilot.reinforcement_days.remove(&system);
-        } else {
-            self.pilot
-                .reinforcement_days
-                .insert(system, clock.countdown);
-        }
-    }
-
-    /// The inhibitors a call of a ship of `ship_govt` for a fleet of
-    /// `fleet_govt` reads (@0x7f6b2-0x7f6ed).
-    fn inhibitors(&self, ship_govt: Option<GovtId>, fleet_govt: Option<GovtId>) -> Inhibitors {
-        let inhibited = |govt: Option<GovtId>| {
-            govt.is_some_and(|govt| self.space.reinforcements.inhibited.contains(&govt))
-        };
-        Inhibitors {
-            global: self.space.reinforcements.every_government,
-            ship_govt: inhibited(ship_govt),
-            fleet_govt: inhibited(fleet_govt),
-        }
-    }
-
     /// NPC `id` calls for its system's reinforcement fleet, `force`d past
     /// the strength test or not (`_AICallForReinforcements(ship, force)`,
     /// see the module docs): its facts gathered now. The odds against it
@@ -186,14 +157,14 @@ impl Session {
                 allied: self.statics.govts.allies(npc.govt, fleet_govt),
                 fleet_max_odds: self.statics.govts.max_odds(fleet_govt),
                 force,
-                inhibitors: self.inhibitors(npc.govt, fleet_govt),
+                inhibitors: self.space.inhibitors(npc.govt, fleet_govt),
             }
         };
         let called = reinforcements::call(&facts);
         if called != Called::No {
             let mut clock = facts.clock;
             clock.answer(called);
-            self.set_clock_here(clock);
+            self.space.set_clock_here(&mut self.pilot, clock);
         }
     }
 
@@ -213,7 +184,7 @@ impl Session {
             .unwrap_or_default();
         let mut clock = self.clock_here();
         let event = reinforcements::tick(&mut clock, fleet, !name.is_empty());
-        self.set_clock_here(clock);
+        self.space.set_clock_here(&mut self.pilot, clock);
         match event {
             Some(Event::Announce) => {
                 let line = |entry| {
@@ -227,11 +198,13 @@ impl Session {
                     line(FLEET_APPROACHING)
                 );
                 self.out.sounds.push(SimSound::ReinforcementsApproaching);
-                self.say(SimMessage::ReinforcementsApproaching(text));
+                self.space
+                    .say(&mut self.out, SimMessage::ReinforcementsApproaching(text));
             }
             Some(Event::Arrive) => {
                 self.step_traffic(|traffic, world| traffic.bring_reinforcements(&world, chance));
-                self.announce_fleets(chance);
+                self.space
+                    .announce_fleets(&self.setup, &mut self.out, chance);
             }
             None => {}
         }
@@ -257,42 +230,71 @@ impl Session {
         }
         self.pilot.reinforcement_days.retain(|_, days| *days > 0);
     }
+}
+
+impl Space {
+    /// Sets the clock of the player's system to `clock`.
+    fn set_clock_here(&mut self, pilot: &mut Pilot, clock: Clock) {
+        let system = pilot.system;
+        if clock.timer == 0 {
+            self.reinforcements.timers.remove(&system);
+        } else {
+            self.reinforcements.timers.insert(system, clock.timer);
+        }
+        if clock.countdown == 0 {
+            pilot.reinforcement_days.remove(&system);
+        } else {
+            pilot.reinforcement_days.insert(system, clock.countdown);
+        }
+    }
+
+    /// The inhibitors a call of a ship of `ship_govt` for a fleet of
+    /// `fleet_govt` reads (@0x7f6b2-0x7f6ed).
+    fn inhibitors(&self, ship_govt: Option<GovtId>, fleet_govt: Option<GovtId>) -> Inhibitors {
+        let inhibited = |govt: Option<GovtId>| {
+            govt.is_some_and(|govt| self.reinforcements.inhibited.contains(&govt))
+        };
+        Inhibitors {
+            global: self.reinforcements.every_government,
+            ship_govt: inhibited(ship_govt),
+            fleet_govt: inhibited(fleet_govt),
+        }
+    }
 
     /// `_ResetPlayer`'s part (@0x1db17-0x1db30): the player's system's
     /// timer and countdown cleared.
-    pub(super) fn reset_reinforcements_here(&mut self) {
-        self.set_clock_here(Clock::default());
+    pub(super) fn reset_reinforcements_here(&mut self, pilot: &mut Pilot) {
+        self.set_clock_here(pilot, Clock::default());
     }
 
     /// The reset's inhibitors (@0xc628-0xc68f): set by each owned
     /// `ModType` 44 outfit, on top of those set before by the engine's
     /// reading of [`RuleKey::ReinforcementInhibitor`], in place of them by
     /// the other.
-    pub(super) fn reset_inhibitors(&mut self) {
-        if self.setup.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
-            self.space.reinforcements.every_government = false;
-            self.space.reinforcements.inhibited.clear();
+    pub(super) fn reset_inhibitors(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+        if setup.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
+            self.reinforcements.every_government = false;
+            self.reinforcements.inhibited.clear();
         }
-        for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
+        for owned in outfit_mods(&pilot.outfits, &statics.outfits) {
             if owned.mod_type != INHIBITOR {
                 continue;
             }
             if owned.mod_val == EVERY_GOVERNMENT {
-                self.space.reinforcements.every_government = true;
+                self.reinforcements.every_government = true;
                 continue;
             }
-            let classed: Vec<GovtId> = self
-                .statics
+            let classed: Vec<GovtId> = statics
                 .govts
                 .ids()
                 .filter(|&govt| {
-                    self.statics
+                    statics
                         .govts
                         .get(govt)
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })
                 .collect();
-            self.space.reinforcements.inhibited.extend(classed);
+            self.reinforcements.inhibited.extend(classed);
         }
     }
 }

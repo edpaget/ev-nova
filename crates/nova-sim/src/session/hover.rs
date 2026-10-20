@@ -30,8 +30,11 @@ impl Session {
         )
         .or_else(|| {
             self.jump.is_none().then(|| {
-                stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
-                    .map(Hover::Stellar)
+                stellar_under(&self.sites, at, |site| {
+                    self.space
+                        .drawn_frame_size(&self.statics, &self.setup, site)
+                })
+                .map(Hover::Stellar)
             })?
         })
     }
@@ -110,7 +113,8 @@ impl Session {
         }
         let selected = self.nav.stellar();
         let picked = stellar_under_past(&self.sites, at, selected, |site| {
-            self.drawn_frame_size(site)
+            self.space
+                .drawn_frame_size(&self.statics, &self.setup, site)
         })?;
         self.out.sounds.push(SimSound::NavSelected);
         self.nav_fly_in.start();

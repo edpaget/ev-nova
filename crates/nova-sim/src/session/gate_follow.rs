@@ -108,9 +108,10 @@ impl Session {
         if self.setup.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
             self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
         }
-        let last = self.last_npc();
+        let last = self.space.last_npc();
         self.step_traffic(|traffic, world| traffic.enter_more_ships(world, chance));
-        self.announce_fleets(chance);
+        self.space
+            .announce_fleets(&self.setup, &mut self.out, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
     }
 

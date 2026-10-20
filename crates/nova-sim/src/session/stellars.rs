@@ -109,7 +109,7 @@
 //! shots, as the original's sprite tick (@0x444d2) follows
 //! `_CheckShotProximities` (@0x44015).
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -136,7 +136,7 @@ impl Session {
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
     #[must_use]
     pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
-        self.space.rebuilt.dead(stellar)
+        self.space.dead_since_rebuild(stellar)
     }
 
     /// A rebuild point (see the module docs): in flight the stellars shown
@@ -175,27 +175,6 @@ impl Session {
         reshown | rebuilt
     }
 
-    /// The frame size of the sheet drawn for `site`, one of the stellars
-    /// shown, or `None` when no sheet is: the box a click on it reads (see
-    /// the module docs). It must match the view's `SceneStellar::drawn`
-    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
-    /// sheet while destroyed, when there is one; graphic type 0's while
-    /// destroyed and dead since the last rebuild point, by
-    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
-    /// otherwise.
-    pub(super) fn drawn_frame_size(&self, site: &LandingSite) -> Option<(u32, u32)> {
-        match site.dead_frame_size {
-            Some(dead) if site.destroyed => Some(dead),
-            _ if site.destroyed
-                && self.space.rebuilt.dead(site.id)
-                && self.setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
-            {
-                self.statics.fallback_frame
-            }
-            _ => site.frame_size,
-        }
-    }
-
     /// A flight frame's sprite tick (see the module docs): every stellar
     /// it finds whole is no longer dead since the last rebuild point, and
     /// each owned sprite slot is placed (see the `stale_sprites` module).
@@ -205,22 +184,6 @@ impl Session {
             .rebuilt
             .frame(&self.sites, |id| galaxy.destroyed(id));
         self.place_stellar_sprites();
-    }
-
-    /// How close the ship must be to `site`, one of the stellars shown, to
-    /// land on it, by [`RuleKey::LandingDistance`]: the original's box
-    /// reads what the last rebuild point and the flight frames since left
-    /// of its sprite slot and its `Type` master (see the module docs).
-    pub(super) fn landing_reach(&self, site: &LandingSite) -> LandingReach {
-        let shown = StellarShown {
-            frame: self.space.rebuilt.shows_frame(site.id),
-            type_width: self.space.rebuilt.type_width(site),
-        };
-        landing_reach(
-            site,
-            shown,
-            self.setup.rules.source_for(RuleKey::LandingDistance),
-        )
     }
 
     /// The width each hypergate and wormhole shown takes its entry box
@@ -447,6 +410,61 @@ impl Session {
             .stellars()
             .filter(|&(id, _)| after.is_none_or(|after| id > after))
             .find_map(|(id, change)| Some((id, change.destroyed?)))
+    }
+}
+
+impl Space {
+    /// Whether `stellar` has been dead since the last rebuild point: it
+    /// is among the stellars shown, the last rebuild point found it
+    /// destroyed, and no flight frame has found it whole since (see the
+    /// module docs). A stellar with no `DeadType` sheet draws graphic type
+    /// 0 while this holds, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    #[must_use]
+    fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
+        self.rebuilt.dead(stellar)
+    }
+
+    /// The frame size of the sheet drawn for `site`, one of the stellars
+    /// shown, or `None` when no sheet is: the box a click on it reads (see
+    /// the module docs). It must match the view's `SceneStellar::drawn`
+    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
+    /// sheet while destroyed, when there is one; graphic type 0's while
+    /// destroyed and dead since the last rebuild point, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
+    /// otherwise.
+    pub(super) fn drawn_frame_size(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<(u32, u32)> {
+        match site.dead_frame_size {
+            Some(dead) if site.destroyed => Some(dead),
+            _ if site.destroyed
+                && self.rebuilt.dead(site.id)
+                && setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
+            {
+                statics.fallback_frame
+            }
+            _ => site.frame_size,
+        }
+    }
+
+    /// How close the ship must be to `site`, one of the stellars shown, to
+    /// land on it, by [`RuleKey::LandingDistance`]: the original's box
+    /// reads what the last rebuild point and the flight frames since left
+    /// of its sprite slot and its `Type` master (see the module docs).
+    pub(super) fn landing_reach(&self, setup: &Setup, site: &LandingSite) -> LandingReach {
+        let shown = StellarShown {
+            frame: self.rebuilt.shows_frame(site.id),
+            type_width: self.rebuilt.type_width(site),
+        };
+        landing_reach(
+            site,
+            shown,
+            setup.rules.source_for(RuleKey::LandingDistance),
+        )
     }
 }
 
@@ -2408,7 +2426,7 @@ mod tests {
             npc.state.position = Vec2::new(30.0, 0.0);
             let id = session.space.traffic.add_npc(npc);
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
-            session.npc(id).expect("there").entering_gate()
+            session.space.npc(id).expect("there").entering_gate()
         };
         assert!(!entering(false), "30 out of 25");
         assert!(entering(true), "30 within 37");
@@ -2421,7 +2439,7 @@ mod tests {
         let site = session.sites[0];
         assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
-            session.landing_reach(&site),
+            session.space.landing_reach(&session.setup, &site),
             crate::landing::LandingReach::Box(175.0)
         );
     }

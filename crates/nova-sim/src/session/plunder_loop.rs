@@ -34,21 +34,11 @@
 //! not a frame. Abort, a self-destruct, a failed capture and a capture
 //! close the dialog first and count nothing.
 
-use super::{Aboard, Session};
+use super::{Aboard, Outbox, Session, Space};
 use crate::board::Taken;
 use crate::sound::SimSound;
 
 impl Session {
-    /// A press that leaves the plunder dialog open, the boarding going
-    /// on as `aboard`: the loop's pass ends with `_HandleComm`
-    /// (@0x949a1), counting the message line down one tick (see the
-    /// module docs). Gives `taken`.
-    pub(super) fn keep_plunder_open(&mut self, aboard: Aboard, taken: Taken) -> Taken {
-        self.space.escorts.aboard = Some(aboard);
-        self.count_down_comm_line();
-        taken
-    }
-
     /// Lets the boarding under way go, as the plunder dialog's close does
     /// (the session resets, @0x94a0b), but silently and taking nothing:
     /// the flight's way out when it has no dialog to show it in. A capture
@@ -58,12 +48,24 @@ impl Session {
             self.close_plunder();
         }
     }
+}
+
+impl Space {
+    /// A press that leaves the plunder dialog open, the boarding going
+    /// on as `aboard`: the loop's pass ends with `_HandleComm`
+    /// (@0x949a1), counting the message line down one tick (see the
+    /// module docs). Gives `taken`.
+    pub(super) fn keep_plunder_open(&mut self, aboard: Aboard, taken: Taken) -> Taken {
+        self.escorts.aboard = Some(aboard);
+        self.count_down_comm_line();
+        taken
+    }
 
     /// A take whose value is not on board: the refusal's beep
     /// ([`SimSound::Refused`], @0x93ad2, @0x93cb8, @0x93d2f, @0x94256),
     /// nothing taken, and the dialog open.
-    pub(super) fn refuse_take(&mut self, aboard: Aboard) -> Taken {
-        self.out.sounds.push(SimSound::Refused);
+    pub(super) fn refuse_take(&mut self, out: &mut Outbox, aboard: Aboard) -> Taken {
+        out.sounds.push(SimSound::Refused);
         self.keep_plunder_open(aboard, Taken::Missed)
     }
 }

@@ -137,7 +137,7 @@ impl Session {
             self.top_speed(),
         );
         self.jump = None;
-        self.say(SimMessage::JumpCollapsed);
+        self.space.say(&mut self.out, SimMessage::JumpCollapsed);
         self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         self.out.sounds.push(SimSound::JumpCollapsed);
     }

@@ -928,10 +928,10 @@ impl Session {
             self.space.combat.clear();
         }
         if resets.has(Reset::Boxes) {
-            self.clear_boxes();
+            self.space.clear_boxes();
         }
         if resets.has(Reset::Asteroids) {
-            self.kill_asteroids();
+            self.space.kill_asteroids();
         }
         if resets.has(Reset::Strikes) {
             self.space.strikes.clear();
@@ -1015,7 +1015,7 @@ impl Session {
                     .traffic
                     .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
                 self.space.traffic.keep_berths(kept);
-                self.set_first_class();
+                self.space.set_first_class(&self.statics);
                 self.space.traffic_due = true;
                 self.space.escorts.fleet.clear();
                 self.story.watched.clear();
@@ -1048,7 +1048,7 @@ impl Session {
             if matches!(message, SimMessage::Buoy(_)) {
                 self.out.fighter_notes.truncate(notes);
             }
-            self.say(message);
+            self.space.say(&mut self.out, message);
             // The hyperspace arrival leaves the pilot past the tutorial
             // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
             self.tutorial.jumped();

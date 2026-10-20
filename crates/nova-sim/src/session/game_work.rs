@@ -116,7 +116,7 @@
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
 use super::ship_loop::Motion;
-use super::{FightTerms, NpcBefore, Session, TrafficMarks};
+use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
 use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
@@ -141,7 +141,7 @@ impl PassStart {
     /// `session` as its pass's fight begins.
     pub(super) fn of(session: &Session) -> Self {
         Self {
-            npcs: session.npcs_before(),
+            npcs: session.space.npcs_before(),
             player_dying: matches!(
                 session.ship.condition,
                 Condition::Dying { .. } | Condition::Destroyed
@@ -257,7 +257,7 @@ impl Session {
         let thought = if let Some(catalog) = ai {
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
-            self.hold_derelicts();
+            self.space.hold_derelicts(&self.statics);
             // `_LaunchFighter` marks each fighter's slot active in
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
@@ -359,7 +359,7 @@ impl Session {
     /// from the next; otherwise the session's work before the AI and the
     /// traffic's think half ([`Traffic::think_holding`]), and the fleets
     /// it brings said and the refuel it gave landed
-    /// (`Session::after_traffic_ai`); the work it queues on the line
+    /// (`Space::after_traffic_ai`); the work it queues on the line
     /// settles after the launch frame's loop. What its motion is read
     /// against, when it thought.
     ///
@@ -381,19 +381,9 @@ impl Session {
         self.step_traffic(|traffic, world| {
             traffic.think_holding(behaviour, world, &strikes, chance);
         });
-        self.after_traffic_ai(chance);
-        Some(marks)
-    }
-
-    /// Every NPC as it is now, for the strikes that follow to be read
-    /// against.
-    fn npcs_before(&self) -> Vec<NpcBefore> {
         self.space
-            .traffic
-            .npcs()
-            .iter()
-            .map(NpcBefore::of)
-            .collect()
+            .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
+        Some(marks)
     }
 
     /// Runs `phase` of the fight on `pass` by `rules`, drawing on
@@ -505,7 +495,7 @@ impl Session {
     /// it as each hit lands (@0x3ad72): the fight notes each escort lost
     /// with the strike that lost it ([`Combat::take_landed`]), so a kill an
     /// escort scored up to that strike in the phase still counts and one
-    /// after it does not ([`Session::credit_kills`]).
+    /// after it does not ([`Space::credit_kills`]).
     ///
     /// The original's `_DamageShip` settles each hit as it lands; here a
     /// phase's hits settle together after it, before the next phase or
@@ -525,7 +515,7 @@ impl Session {
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
         self.raise_disabled(was, chance);
-        self.sync_fleet();
+        self.space.sync_fleet(&mut self.pilot);
         self.lose_escorts(was, &struck);
         self.settle_strikes((strikes, losses), was, rules.law, chance);
     }
@@ -539,7 +529,7 @@ impl Session {
         chance: &mut dyn Chance,
         phase: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
     ) {
-        let was = self.npcs_before();
+        let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, phase);
         self.settle_landed(&was, (player_was, None), rules, chance);
@@ -555,7 +545,7 @@ impl Session {
     /// as a phase that lands hits settles ([`Session::settle_landed`]).
     pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         let hazards = self.stellar_hazards();
-        let was = self.npcs_before();
+        let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.hazards(fighters, &hazards);
@@ -578,7 +568,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let mut stellars = self.stellar_targets();
-        let mut rocks = self.asteroid_targets();
+        let mut rocks = self.space.asteroid_targets(&self.statics);
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             let scenery = Scenery {
                 stellars: &mut stellars,
@@ -588,7 +578,8 @@ impl Session {
             combat.test_hits(fighters, arena, scenery, chance);
         });
         self.strike_stellars(&stellars, rules.law, chance);
-        self.settle_asteroid_hits(&rocks, chance);
+        self.space
+            .settle_asteroid_hits(&self.statics, &rocks, chance);
     }
 
     /// What a pass's fight leaves, settled once after its last phase, by
@@ -617,20 +608,28 @@ impl Session {
         // drawn, crosses no boundary (see the `stray_words` module). None
         // is left when nothing stepped one since the ship loop.
         self.step_stray_words(chance);
-        self.sync_fleet();
+        self.space.sync_fleet(&mut self.pilot);
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
-        self.orphan_fighters();
+        self.space.orphan_fighters();
         self.let_go_of_gone_target();
         self.see_stellars();
-        self.hold_derelicts();
+        self.space.hold_derelicts(&self.statics);
         self.lay_out_ships();
         self.display_ships(&mut *chance);
         self.note_drawn();
+    }
+}
+
+impl Space {
+    /// Every NPC as it is now, for the strikes that follow to be read
+    /// against.
+    fn npcs_before(&self) -> Vec<NpcBefore> {
+        self.traffic.npcs().iter().map(NpcBefore::of).collect()
     }
 }
 
@@ -1046,7 +1045,7 @@ mod tests {
         };
         let id = session.space.traffic.add_npc(npc);
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.0);
+        assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.0);
     }
 
     #[test]
@@ -1069,7 +1068,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert!(session.in_warp_lead_in());
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.75);
+        assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.75);
     }
 
     #[test]

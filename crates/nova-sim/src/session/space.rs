@@ -94,7 +94,7 @@ pub(super) struct Space {
     /// every system entry and every ship leaving; never saved.
     pub(super) slot_sprites: crate::ship_layer::SlotSprites,
     /// The ship each slot last displayed and showed (see
-    /// [`Session::is_displayed`](super::Session::is_displayed)); never carried into another session, as
+    /// [`Space::is_displayed`]); never carried into another session, as
     /// every entry into flight displays every slot again.
     pub(super) slot_shown: BTreeMap<crate::ship_layer::Slot, ShipRef>,
     /// The ship each slot last displayed, shown or hidden: the one its
@@ -138,7 +138,7 @@ pub(super) struct Escorts {
     /// The last order the player gave each escort class, in
     /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
     /// original's one order per class (0x3b5394), which a ship joining
-    /// the class takes (see [`Session::class_order`](super::Session::class_order)). Not saved, as the
+    /// the class takes (see [`Space::class_order`]). Not saved, as the
     /// hired escorts keep theirs on their records and mission escorts are
     /// never saved; reset with their orders on entering a system by the
     /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders).

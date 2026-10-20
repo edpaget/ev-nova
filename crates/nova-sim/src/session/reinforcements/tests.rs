@@ -200,7 +200,7 @@ fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
     step(&mut session, &catalog, &calls);
     assert_eq!(timer(&session), 0, "-1 at its think");
     assert_eq!(
-        session.npc(warship).map(|npc| npc.odds),
+        session.space.npc(warship).map(|npc| npc.odds),
         Some(1.5),
         "refreshed after it"
     );
@@ -734,7 +734,7 @@ fn the_escape_pods_reset_cancels_the_timer_and_clears_the_countdown_here() {
         .timers
         .insert(SystemId(130), 12);
     session.space.reinforcements.timers.insert(SystemId(131), 7);
-    session.reset_reinforcements_here();
+    session.space.reset_reinforcements_here(&mut session.pilot);
     assert_eq!(session.clock_here(), Clock::default());
     assert_eq!(
         session.pilot().reinforcement_days,

@@ -840,7 +840,7 @@ mod tests {
         session.fleet_up(ids[0], None);
         land_and_take_off(&mut session, &catalog);
         let escort = session.space.escorts.fleet[0].expect("placed");
-        assert_eq!(session.npc(escort).expect("in").aux, Some(0));
+        assert_eq!(session.space.npc(escort).expect("in").aux, Some(0));
     }
 
     /// Each escort keeps its own mark: one with none (as a hired escort,
@@ -851,7 +851,7 @@ mod tests {
         let mut session = accepted(&catalog);
         let ids = three_in(&mut session, &catalog);
         session.fleet_up(ids[0], None);
-        session.npc_mut(ids[0]).expect("in").aux = None;
+        session.space.npc_mut(ids[0]).expect("in").aux = None;
         session.fleet_up(ids[1], None);
         land_and_take_off(&mut session, &catalog);
         let marks: Vec<Option<u8>> = session
@@ -859,7 +859,7 @@ mod tests {
             .escorts
             .fleet
             .iter()
-            .map(|id| session.npc(id.expect("placed")).expect("in").aux)
+            .map(|id| session.space.npc(id.expect("placed")).expect("in").aux)
             .collect();
         assert_eq!(marks, vec![None, Some(0)]);
         assert_eq!(aux_of(&session).left, 1, "only the third given back");

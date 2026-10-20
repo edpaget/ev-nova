@@ -487,14 +487,14 @@ mod tests {
         let catalog = arming(blaster(), blaster(), 0);
         let mut session = with_an_npc_at(&catalog, 750, 850, 180);
         let id = session.npcs()[0].id;
-        session.npc_mut(id).expect("there").ion.charge = 10.0;
+        session.space.npc_mut(id).expect("there").ion.charge = 10.0;
         session.tick_traffic(
             &catalog,
             &crate::ai::NovaAi::default(),
             &mut crate::chance::NeverFires,
         );
         // `Deionize` 0 sheds 1 a tick.
-        assert_eq!(session.npc(id).expect("there").ion.charge, 9.0);
+        assert_eq!(session.space.npc(id).expect("there").ion.charge, 9.0);
     }
 
     // The display.

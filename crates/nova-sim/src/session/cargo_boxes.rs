@@ -4,7 +4,7 @@
 //! stepped each flight tick, and cleared on every system change and
 //! landing. They are never saved.
 
-use super::{PlayerShip, Session, Statics};
+use super::{PlayerShip, Session, Space, Statics};
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
 use crate::market::Good;
@@ -16,7 +16,7 @@ impl Session {
     /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
     #[must_use]
     pub fn cargo_boxes(&self) -> &[CargoBox] {
-        self.space.boxes.boxes()
+        self.space.cargo_boxes()
     }
 
     /// Drops the boxes of a jettison of `total` tons, `goods` of them
@@ -50,7 +50,7 @@ impl Session {
                     .statics
                     .holds_of(escort)
                     .filter(|holds| holds.adds_holds())?;
-                let npc = self.npc(placed?)?;
+                let npc = self.space.npc(placed?)?;
                 Some((
                     npc.state,
                     npc.hull.sprite_size,
@@ -149,20 +149,6 @@ impl Session {
             }
         }
     }
-
-    /// Steps the cargo boxes one tick (see
-    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every flight tick, whatever the player's
-    /// state, as `_DoPlayGameWork` runs `_HandleBoxes` (@0x444f0).
-    pub(super) fn boxes_tick(&mut self) {
-        self.space.boxes.step();
-    }
-
-    /// Clears the cargo boxes. The original sets `_killBoxes` and the
-    /// next `_HandleBoxes` kills them (@0x2dfb7); here they go at once,
-    /// which no frame drawn in between can tell apart.
-    pub(super) fn clear_boxes(&mut self) {
-        self.space.boxes.clear();
-    }
 }
 
 impl PlayerShip {
@@ -185,6 +171,28 @@ impl PlayerShip {
             self.capacity(pilot, statics),
             pilot.total_cargo(),
         )
+    }
+}
+
+impl Space {
+    /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
+    #[must_use]
+    fn cargo_boxes(&self) -> &[CargoBox] {
+        self.boxes.boxes()
+    }
+
+    /// Steps the cargo boxes one tick (see
+    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every flight tick, whatever the player's
+    /// state, as `_DoPlayGameWork` runs `_HandleBoxes` (@0x444f0).
+    pub(super) fn boxes_tick(&mut self) {
+        self.boxes.step();
+    }
+
+    /// Clears the cargo boxes. The original sets `_killBoxes` and the
+    /// next `_HandleBoxes` kills them (@0x2dfb7); here they go at once,
+    /// which no frame drawn in between can tell apart.
+    pub(super) fn clear_boxes(&mut self) {
+        self.boxes.clear();
     }
 }
 
@@ -360,7 +368,7 @@ mod tests {
             .get(1)
             .copied()
             .flatten()
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("the freighter flies")
             .state;
         session.jettison_cargo(true, &mut NeverFires);
@@ -392,7 +400,7 @@ mod tests {
             .get(1)
             .copied()
             .flatten()
-            .and_then(|id| session.npc(id))
+            .and_then(|id| session.space.npc(id))
             .expect("the freighter flies")
             .state;
         session.jettison_cargo(true, &mut NeverFires);
@@ -744,6 +752,9 @@ mod tests {
             .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.cargo_boxes().len(), 1);
-        assert_eq!(session.npc(id).expect("here").cargo, NpcHold::default());
+        assert_eq!(
+            session.space.npc(id).expect("here").cargo,
+            NpcHold::default()
+        );
     }
 }

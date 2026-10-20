@@ -310,7 +310,8 @@ impl Session {
         let info = self.mission_info();
         if info.rows.is_empty() {
             self.out.sounds.push(SimSound::Refused);
-            self.say(crate::SimMessage::NoActiveMissions);
+            self.space
+                .say(&mut self.out, crate::SimMessage::NoActiveMissions);
             return MissionInfoPress::NoActiveMissions;
         }
         MissionInfoPress::Opens(info)

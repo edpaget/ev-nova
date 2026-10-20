@@ -57,7 +57,7 @@ impl Session {
     #[must_use]
     pub fn target_brackets(&self) -> Option<TargetBrackets> {
         let npc = self.target()?;
-        let leader = npc.leader.and_then(|id| self.npc(id));
+        let leader = npc.leader.and_then(|id| self.space.npc(id));
         Some(TargetBrackets {
             npc: npc.id,
             expand: self.target_fly_in.expand(),
@@ -290,7 +290,7 @@ mod tests {
     }
 
     fn attack(session: &mut Session, id: NpcId) {
-        session.npc_mut(id).expect("there").goal = Goal::Attack(ShipRef::Player);
+        session.space.npc_mut(id).expect("there").goal = Goal::Attack(ShipRef::Player);
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(session.target, Some(edge));
         assert_eq!(target_expand(&session), 0.0, "off screen");
         assert_eq!(target_over(&mut session, 1), [0.0]);
-        session.npc_mut(edge).expect("there").state.position = Vec2::new(119.0, 0.0);
+        session.space.npc_mut(edge).expect("there").state.position = Vec2::new(119.0, 0.0);
         session.target = Some(near);
         assert_eq!(session.select_target(TargetPick::Next), Some(edge));
         assert_eq!(target_expand(&session), 196.0, "a pixel in");
@@ -397,11 +397,11 @@ mod tests {
         let mut session = session(&three_stellars());
         let escort = ship_at(&mut session, Vec2::new(50.0, 0.0));
         let fighter = ship_at(&mut session, Vec2::new(60.0, 0.0));
-        session.npc_mut(fighter).expect("there").leader = Some(escort);
+        session.space.npc_mut(fighter).expect("there").leader = Some(escort);
         session.target = Some(fighter);
         let standing = |session: &Session| session.target_brackets().expect("bracketed").standing;
         assert_eq!(standing(&session), Standing::Neutral);
-        session.npc_mut(escort).expect("there").escort = Some(EscortDuty {
+        session.space.npc_mut(escort).expect("there").escort = Some(EscortDuty {
             formation: FormationSlot::default(),
             order: None,
         });

@@ -133,8 +133,10 @@ impl Session {
         self.ship.latches.junk_latches =
             market::JunkLatches::of(&self.statics.goods, &self.pilot.cargo);
         self.ship.refresh_sabotage(&self.pilot, &self.statics);
-        self.reset_inhibitors();
-        self.reset_iff_scramblers();
+        self.space
+            .reset_inhibitors(&self.pilot, &self.statics, &self.setup);
+        self.space
+            .reset_iff_scramblers(&self.pilot, &self.statics, &self.setup);
         if self.ship.trims(&self.setup, cause) {
             self.ship
                 .trim_to_holds(&mut self.pilot, &self.statics, &mut self.out);

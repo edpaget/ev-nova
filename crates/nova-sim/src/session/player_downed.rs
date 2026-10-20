@@ -85,7 +85,7 @@ impl Session {
         let now = killed.unwrap_or(self.ship.condition);
         if was == Condition::Intact && now != Condition::Intact {
             self.out.sounds.push(SimSound::ShipDowned);
-            self.say(SimMessage::ShipDisabled);
+            self.space.say(&mut self.out, SimMessage::ShipDisabled);
             self.ship.arm_repair_inhibit();
             self.fail_downed_mission(chance);
         }
@@ -93,7 +93,7 @@ impl Session {
         let down = matches!(now, Condition::Dying { .. } | Condition::Destroyed);
         if was_up && down {
             self.out.sounds.push(SimSound::ShipDowned);
-            self.say(SimMessage::ShipDestroyed);
+            self.space.say(&mut self.out, SimMessage::ShipDestroyed);
             self.fail_downed_mission(chance);
         }
     }
@@ -115,7 +115,8 @@ impl Session {
         };
         self.out.sounds.push(SimSound::DownedMissionFailed);
         self.quick_failure(slot, &record, chance);
-        self.say(SimMessage::DownedMissionFailed);
+        self.space
+            .say(&mut self.out, SimMessage::DownedMissionFailed);
     }
 }
 

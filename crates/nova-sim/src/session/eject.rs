@@ -152,7 +152,7 @@
 use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
-use super::{PlayerShip, Session, Setup, Statics};
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::launch_velocity;
@@ -262,7 +262,7 @@ impl Session {
             .ship
             .hulk(&self.pilot, &self.statics, &self.setup, old, hulk, chance);
         let hulk = self.space.traffic.add_npc(hulk);
-        if let Some(slot) = self.npc(hulk).map(slot_of) {
+        if let Some(slot) = self.space.npc(hulk).map(slot_of) {
             self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
         self.target = None;
@@ -279,10 +279,11 @@ impl Session {
         self.ship.fate.pod_zeroed = false;
         if let Some(ship) = escape {
             self.pod = None;
-            self.say(SimMessage::EscapingIn { ship });
+            self.space
+                .say(&mut self.out, SimMessage::EscapingIn { ship });
         } else {
             self.pod = Some(POD_TICKS);
-            self.drop_the_player();
+            self.space.drop_the_player();
         }
         self.walk_the_threats(hulk, escape.is_none());
         if let Some(record) = &record {
@@ -353,27 +354,6 @@ impl Session {
         }
     }
 
-    /// Every NPC that targets, fights or inspects the player lets it go
-    /// and decides again, as the pod's loop clears each +0x70 of 0
-    /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
-    /// provocation, as the high level's goal-0 drop of an attack with no
-    /// target does (@0x8e731), but for one fleeing the player: state 3
-    /// with no target is state 0 with +0x96 0 (@0x8e228-0x8e23d).
-    fn drop_the_player(&mut self) {
-        let player = ShipRef::Player;
-        for npc in self.space.traffic.npcs_mut() {
-            if npc.target == Some(player) {
-                npc.target = None;
-            }
-            if npc.goal == Goal::Flee(player) {
-                npc.provoked = 0.0;
-            }
-            if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
-                npc.goal = Goal::Idle;
-            }
-        }
-    }
-
     /// The threat walk (see the module docs): each threat to the player
     /// that targets it targets the `hulk` instead; in the `pod`, every
     /// other ship the player leads is released.
@@ -394,21 +374,7 @@ impl Session {
             }
         }
         if pod {
-            self.drop_unplaced_escorts();
-        }
-    }
-
-    /// Every escort of the pilot's with no NPC in the system leaves the
-    /// fleet (see the module docs).
-    fn drop_unplaced_escorts(&mut self) {
-        let escorts = std::mem::take(&mut self.pilot.escorts);
-        let fleet = std::mem::take(&mut self.space.escorts.fleet);
-        let placed = fleet.into_iter().chain(std::iter::repeat(None));
-        for (escort, placed) in escorts.into_iter().zip(placed) {
-            if placed.is_some() {
-                self.pilot.escorts.push(escort);
-                self.space.escorts.fleet.push(placed);
-            }
+            self.space.drop_unplaced_escorts(&mut self.pilot);
         }
     }
 
@@ -418,10 +384,11 @@ impl Session {
     fn release_for_the_pod(&mut self, id: NpcId) {
         self.unfleet(id);
         let inherent = self
+            .space
             .npc(id)
             .and_then(|npc| self.statics.ship_record(npc.ship))
             .map(|record| AiType::from_raw(record.inherent_ai));
-        if let Some(npc) = self.npc_mut(id) {
+        if let Some(npc) = self.space.npc_mut(id) {
             if let Some(mark) = &mut npc.mission
                 && mark.formation.take().is_some()
                 && let Some(ai_type) = inherent
@@ -569,6 +536,43 @@ impl PlayerShip {
         };
         hulk.independent();
         hulk
+    }
+}
+
+impl Space {
+    /// Every NPC that targets, fights or inspects the player lets it go
+    /// and decides again, as the pod's loop clears each +0x70 of 0
+    /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
+    /// provocation, as the high level's goal-0 drop of an attack with no
+    /// target does (@0x8e731), but for one fleeing the player: state 3
+    /// with no target is state 0 with +0x96 0 (@0x8e228-0x8e23d).
+    fn drop_the_player(&mut self) {
+        let player = ShipRef::Player;
+        for npc in self.traffic.npcs_mut() {
+            if npc.target == Some(player) {
+                npc.target = None;
+            }
+            if npc.goal == Goal::Flee(player) {
+                npc.provoked = 0.0;
+            }
+            if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
+                npc.goal = Goal::Idle;
+            }
+        }
+    }
+
+    /// Every escort of the pilot's with no NPC in the system leaves the
+    /// fleet (see the module docs).
+    fn drop_unplaced_escorts(&mut self, pilot: &mut Pilot) {
+        let escorts = std::mem::take(&mut pilot.escorts);
+        let fleet = std::mem::take(&mut self.escorts.fleet);
+        let placed = fleet.into_iter().chain(std::iter::repeat(None));
+        for (escort, placed) in escorts.into_iter().zip(placed) {
+            if placed.is_some() {
+                pilot.escorts.push(escort);
+                self.escorts.fleet.push(placed);
+            }
+        }
     }
 }
 
@@ -951,11 +955,11 @@ mod tests {
                     matches!(event, CombatEvent::PodEjected { ship, .. } if *ship == ShipRef::Npc(left))
                 })
                 .count();
-            if session.npc(left).is_none() {
+            if session.space.npc(left).is_none() {
                 break;
             }
         }
-        assert!(session.npc(left).is_none(), "the hulk explodes");
+        assert!(session.space.npc(left).is_none(), "the hulk explodes");
         assert!((1..=3).contains(&pods), "{pods} of its 3 pods");
     }
 
@@ -1330,7 +1334,7 @@ mod tests {
         assert_eq!(hulk(&session).speed, 4.0, "the player's speed");
         for _ in 0..3 {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
-            let hulk = session.npc(id).expect("still here");
+            let hulk = session.space.npc(id).expect("still here");
             assert_eq!(hulk.condition, Condition::Disabled, "a derelict");
             let along = crate::flight::facing(hulk.state.heading) * hulk.speed;
             assert!(hulk.speed > 3.9, "slowed only by the drag: {}", hulk.speed);
@@ -1482,7 +1486,7 @@ mod tests {
             let (_, events) = fight(&mut session, false);
             assert!(!hulk_destroyed(&events));
         }
-        let derelict = session.npc(id).expect("still here");
+        let derelict = session.space.npc(id).expect("still here");
         assert_eq!(derelict.condition, Condition::Disabled);
     }
 
@@ -1531,23 +1535,23 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             Some(ShipRef::Player),
         );
-        session.npc_mut(attacker).expect("here").provoked = 5.0;
+        session.space.npc_mut(attacker).expect("here").provoked = 5.0;
         let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
         let fleeing = aimed(
             &mut session,
             Goal::Flee(ShipRef::Player),
             Some(ShipRef::Player),
         );
-        session.npc_mut(fleeing).expect("here").provoked = 4.0;
+        session.space.npc_mut(fleeing).expect("here").provoked = 4.0;
         let inspector = aimed(&mut session, Goal::Inspect(ShipRef::Player), None);
-        session.npc_mut(inspector).expect("here").provoked = 3.0;
+        session.space.npc_mut(inspector).expect("here").provoked = 3.0;
         let hired = escort(&mut session);
         let raider = aimed(
             &mut session,
             Goal::Attack(ShipRef::Npc(hired)),
             Some(ShipRef::Npc(hired)),
         );
-        session.npc_mut(raider).expect("here").provoked = 2.0;
+        session.space.npc_mut(raider).expect("here").provoked = 2.0;
         let mission = session.space.traffic.add_npc(Npc {
             mission: Some(MissionMark {
                 slot: 0,
@@ -1576,7 +1580,7 @@ mod tests {
             (f32::from(POD_SHIELD), f32::from(POD_ARMOR), fuel),
             "full, with no outfit bonus, fuel untouched"
         );
-        let npc = |id| session.npc(id).expect("here").clone();
+        let npc = |id| session.space.npc(id).expect("here").clone();
         assert_eq!(
             (
                 npc(attacker).target,
@@ -1784,7 +1788,7 @@ mod tests {
         });
         let (attacker, sniper, fleeing, hired, pirate) = ids.expect("set up");
         let hulk = ShipRef::Npc(hulk(&session).id);
-        let npc = |id| session.npc(id).expect("here");
+        let npc = |id| session.space.npc(id).expect("here");
         assert_eq!(
             (npc(attacker).target, npc(attacker).goal),
             (Some(hulk), Goal::Attack(hulk))
@@ -1808,7 +1812,10 @@ mod tests {
             ),
             "goal 0xd kept, +0x70 the hulk"
         );
-        assert!(session.npc(hired).expect("here").escorts_player(), "kept");
+        assert!(
+            session.space.npc(hired).expect("here").escorts_player(),
+            "kept"
+        );
         assert_eq!(session.space.escorts.fleet, [Some(hired)]);
     }
 

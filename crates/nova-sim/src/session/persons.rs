@@ -72,10 +72,11 @@
 //! (the original refills them every frame; its order against a shot's
 //! damage is not traced).
 
+use crate::pilot::Pilot;
 use std::rc::Rc;
 
 use super::missions::TextSource;
-use super::{Outbox, Session, Setup, hire};
+use super::{Outbox, Session, Setup, Space, Statics, hire};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -165,16 +166,7 @@ impl Session {
     /// person's, or its ship type's, if the session has either.
     #[must_use]
     pub fn npc_name(&self, npc: &Npc) -> Option<&str> {
-        if let Some(name) = self.mission_ship_text(npc.mission, |ships| &ships.name) {
-            return Some(name);
-        }
-        match npc
-            .person
-            .and_then(|person| self.space.traffic.person(person.id))
-        {
-            Some(person) => Some(&person.record.name),
-            None => self.ship_name(npc.ship),
-        }
+        self.space.npc_name(&self.pilot, &self.statics, npc)
     }
 
     /// `npc`'s subtitle, in place of its ship type's: while it is a
@@ -183,11 +175,7 @@ impl Session {
     /// person's, unless it has none or it is empty (@0x4b880).
     #[must_use]
     pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
-        if npc.mission.is_some() {
-            return self.mission_ship_text(npc.mission, |ships| &ships.subtitle);
-        }
-        let person = self.space.traffic.person(npc.person?.id)?;
-        Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
+        self.space.npc_subtitle(&self.pilot, npc)
     }
 
     /// A tick of the persons' hail quotes in flight, each drawn on
@@ -209,7 +197,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
-        self.count_down_comm_line();
+        self.space.count_down_comm_line();
         self.roll_quotes(catalog, chance);
         self.space.escorts.quote_clock.ticks += 1;
     }
@@ -400,88 +388,7 @@ impl Session {
     /// grudge goes with it (`_LoadPilotData` @0x75e1e-0x75e2f). No save is
     /// due: the next one keeps it.
     pub(super) fn go(&mut self, id: PersonId) {
-        self.pilot.gone_persons.insert(id);
-        self.pilot.grudges.remove(&id);
-    }
-
-    /// NPC `id`, destroyed, is taken out of the system, its record kept
-    /// for the thinks that still read its slot
-    /// ([`Traffic::remove_destroyed`](crate::traffic::Traffic::remove_destroyed)):
-    /// a person without an escape pod is gone for good
-    /// (`_HandleShipDisplay` @0x2dc4a-0x2dca1).
-    pub(super) fn lose_destroyed(&mut self, id: NpcId) {
-        let person = self
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .and_then(|npc| npc.person);
-        if let Some(person) = person.filter(|person| person.flags & ESCAPE_POD == 0) {
-            self.go(person.id);
-        }
-        self.space.traffic.remove_destroyed(id);
-    }
-
-    /// NPC `id`, captured, no longer flies as its person, its slot holds
-    /// no person from now on, for `<OSN>` (+0xc8d0 = -1: @0x411b3,
-    /// @0x89741, @0x946a6), and it has no `düde` (+0x78 = -1, @0x411aa).
-    /// The person is gone for good, escape pod or not, when `gone`: Use As
-    /// My Ship always (`_DoShipCapture` @0x41180), Use As Escort as
-    /// [`RuleKey::CapturedPerson`](crate::RuleKey::CapturedPerson) reads
-    /// (see the `capture` module); otherwise it lives on with its grudge.
-    ///
-    /// A mission's special ship keeps its mark +0xc8d2, as the original
-    /// does: the escort path never writes it (`_DoPlunderDialog`
-    /// @0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89693-0x89780), so
-    /// it flies on as a mission escort (see the `captured_mission_ship`
-    /// module); and `_DoShipCapture` clears the old ship's mark
-    /// (@0x413c2), not the captured one's, whose slot it makes inactive
-    /// (@0x41a46). Every reader of the mark tests the active flag first
-    /// (@0x9ea2a, @0x99ab5), and Use As My Ship takes the NPC out of the
-    /// system, so that stale mark is never seen.
-    pub(super) fn lose_captured(&mut self, id: NpcId, gone: bool) {
-        let npc = self
-            .space
-            .traffic
-            .npcs_mut()
-            .iter_mut()
-            .find(|npc| npc.id == id);
-        let taken = npc.map(|npc| {
-            npc.booty = None;
-            (npc.berth, npc.person.take())
-        });
-        if let Some((berth, person)) = taken {
-            self.space.traffic.forget_berth_person(berth);
-            if let Some(person) = person.filter(|_| gone) {
-                self.go(person.id);
-            }
-        }
-    }
-
-    /// Each person of `Flags` 0x0001 flying one of the NPCs `hit` holds a
-    /// grudge against the player from now on, on the pilot too
-    /// (`_DamageShip` @0x3be83-0x3beb3). The traffic decides which hits
-    /// count as it answers each strike in turn
-    /// ([`Traffic::take_grudges`](crate::traffic::Traffic::take_grudges),
-    /// `in_turn::grudge`): an answered direct hit of the player's whose
-    /// victim, by [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s engine
-    /// reading, does not keep its target against the player. No save is
-    /// due.
-    pub(super) fn hold_grudges(&mut self, hit: &[NpcId]) {
-        for &id in hit {
-            let npc = self
-                .space
-                .traffic
-                .npcs_mut()
-                .iter_mut()
-                .find(|npc| npc.id == id);
-            let Some(person) = npc.and_then(|npc| npc.person.as_mut()) else {
-                continue;
-            };
-            if person.flags & GRUDGE != 0 {
-                person.grudge = true;
-                self.pilot.grudges.insert(person.id);
-            }
-        }
+        go(&mut self.pilot, id);
     }
 
     /// Holds the grudges of `strikes` that the traffic never answers, as
@@ -502,26 +409,7 @@ impl Session {
                 .filter_map(|strike| crate::traffic::in_turn::grudge(strike, &around))
                 .collect()
         };
-        self.hold_grudges(&hit);
-    }
-
-    /// Refills each invincible person's shield and armour at the end of
-    /// the fight's tick, after its shots landed, and keeps it flying: no
-    /// hit among `strikes` disabled or broke it up (`_HandleShip`
-    /// @0x33c0d-0x33c38 refills every frame).
-    pub(super) fn refill_invincible(&mut self, strikes: &mut [Strike]) {
-        for npc in self.space.traffic.npcs_mut() {
-            if !npc.person.is_some_and(|person| person.invincible) {
-                continue;
-            }
-            npc.reserves.shield.now = npc.reserves.shield.max;
-            npc.reserves.armor.now = npc.reserves.armor.max;
-            npc.condition = Condition::Intact;
-            let me = ShipRef::Npc(npc.id);
-            for strike in strikes.iter_mut().filter(|strike| strike.ship == me) {
-                strike.downed = None;
-            }
-        }
+        self.space.hold_grudges(&mut self.pilot, &hit);
     }
 }
 
@@ -539,6 +427,141 @@ impl Setup {
     fn person_rules(&self) -> &dyn PersonRules {
         &*self.person_rules.0
     }
+}
+
+impl Space {
+    /// `npc`'s name: a mission ship's drawn name while it is marked and
+    /// that is not empty (`_DrawStatusTarg` @0x4b6c8-0x4b6e7), else its
+    /// person's, or its ship type's, if the session has either.
+    #[must_use]
+    fn npc_name<'a>(
+        &'a self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        npc: &Npc,
+    ) -> Option<&'a str> {
+        if let Some(name) =
+            super::mission_ships::mission_ship_text(pilot, npc.mission, |ships| &ships.name)
+        {
+            return Some(name);
+        }
+        match npc.person.and_then(|person| self.traffic.person(person.id)) {
+            Some(person) => Some(&person.record.name),
+            None => statics.ship_name(npc.ship),
+        }
+    }
+
+    /// `npc`'s subtitle, in place of its ship type's: while it is a
+    /// marked mission ship, the mission's drawn subtitle unless that is
+    /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
+    /// person's, unless it has none or it is empty (@0x4b880).
+    #[must_use]
+    fn npc_subtitle<'a>(&'a self, pilot: &'a Pilot, npc: &Npc) -> Option<&'a str> {
+        if npc.mission.is_some() {
+            return super::mission_ships::mission_ship_text(pilot, npc.mission, |ships| {
+                &ships.subtitle
+            });
+        }
+        let person = self.traffic.person(npc.person?.id)?;
+        Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
+    }
+
+    /// NPC `id`, destroyed, is taken out of the system, its record kept
+    /// for the thinks that still read its slot
+    /// ([`Traffic::remove_destroyed`](crate::traffic::Traffic::remove_destroyed)):
+    /// a person without an escape pod is gone for good
+    /// (`_HandleShipDisplay` @0x2dc4a-0x2dca1).
+    pub(super) fn lose_destroyed(&mut self, pilot: &mut Pilot, id: NpcId) {
+        let person = self
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .and_then(|npc| npc.person);
+        if let Some(person) = person.filter(|person| person.flags & ESCAPE_POD == 0) {
+            go(pilot, person.id);
+        }
+        self.traffic.remove_destroyed(id);
+    }
+
+    /// NPC `id`, captured, no longer flies as its person, its slot holds
+    /// no person from now on, for `<OSN>` (+0xc8d0 = -1: @0x411b3,
+    /// @0x89741, @0x946a6), and it has no `düde` (+0x78 = -1, @0x411aa).
+    /// The person is gone for good, escape pod or not, when `gone`: Use As
+    /// My Ship always (`_DoShipCapture` @0x41180), Use As Escort as
+    /// [`RuleKey::CapturedPerson`](crate::RuleKey::CapturedPerson) reads
+    /// (see the `capture` module); otherwise it lives on with its grudge.
+    ///
+    /// A mission's special ship keeps its mark +0xc8d2, as the original
+    /// does: the escort path never writes it (`_DoPlunderDialog`
+    /// @0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89693-0x89780), so
+    /// it flies on as a mission escort (see the `captured_mission_ship`
+    /// module); and `_DoShipCapture` clears the old ship's mark
+    /// (@0x413c2), not the captured one's, whose slot it makes inactive
+    /// (@0x41a46). Every reader of the mark tests the active flag first
+    /// (@0x9ea2a, @0x99ab5), and Use As My Ship takes the NPC out of the
+    /// system, so that stale mark is never seen.
+    pub(super) fn lose_captured(&mut self, pilot: &mut Pilot, id: NpcId, gone: bool) {
+        let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+        let taken = npc.map(|npc| {
+            npc.booty = None;
+            (npc.berth, npc.person.take())
+        });
+        if let Some((berth, person)) = taken {
+            self.traffic.forget_berth_person(berth);
+            if let Some(person) = person.filter(|_| gone) {
+                go(pilot, person.id);
+            }
+        }
+    }
+
+    /// Each person of `Flags` 0x0001 flying one of the NPCs `hit` holds a
+    /// grudge against the player from now on, on the pilot too
+    /// (`_DamageShip` @0x3be83-0x3beb3). The traffic decides which hits
+    /// count as it answers each strike in turn
+    /// ([`Traffic::take_grudges`](crate::traffic::Traffic::take_grudges),
+    /// `in_turn::grudge`): an answered direct hit of the player's whose
+    /// victim, by [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s engine
+    /// reading, does not keep its target against the player. No save is
+    /// due.
+    pub(super) fn hold_grudges(&mut self, pilot: &mut Pilot, hit: &[NpcId]) {
+        for &id in hit {
+            let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+            let Some(person) = npc.and_then(|npc| npc.person.as_mut()) else {
+                continue;
+            };
+            if person.flags & GRUDGE != 0 {
+                person.grudge = true;
+                pilot.grudges.insert(person.id);
+            }
+        }
+    }
+
+    /// Refills each invincible person's shield and armour at the end of
+    /// the fight's tick, after its shots landed, and keeps it flying: no
+    /// hit among `strikes` disabled or broke it up (`_HandleShip`
+    /// @0x33c0d-0x33c38 refills every frame).
+    pub(super) fn refill_invincible(&mut self, strikes: &mut [Strike]) {
+        for npc in self.traffic.npcs_mut() {
+            if !npc.person.is_some_and(|person| person.invincible) {
+                continue;
+            }
+            npc.reserves.shield.now = npc.reserves.shield.max;
+            npc.reserves.armor.now = npc.reserves.armor.max;
+            npc.condition = Condition::Intact;
+            let me = ShipRef::Npc(npc.id);
+            for strike in strikes.iter_mut().filter(|strike| strike.ship == me) {
+                strike.downed = None;
+            }
+        }
+    }
+}
+
+/// Person `id` is gone for good: it never appears again, and its
+/// grudge goes with it (`_LoadPilotData` @0x75e1e-0x75e2f). No save is
+/// due: the next one keeps it.
+fn go(pilot: &mut Pilot, id: PersonId) {
+    pilot.gone_persons.insert(id);
+    pilot.grudges.remove(&id);
 }
 
 #[cfg(test)]
@@ -583,11 +606,11 @@ mod tests {
         trader.target = Some(ShipRef::Npc(attacker));
         trader.goal = Goal::Flee(ShipRef::Npc(attacker));
         let trader = session.space.traffic.add_npc_at(trader, 1);
-        session.npc_mut(attacker).expect("there").condition = Condition::Destroyed;
+        session.space.npc_mut(attacker).expect("there").condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
         session.tick(Controls::default());
         session.tick_traffic(&catalog, &ai, &mut NeverFires);
-        let after = session.npc(trader).expect("stays");
+        let after = session.space.npc(trader).expect("stays");
         assert_eq!((after.goal, after.target), (Goal::Idle, None));
         assert!((after.provoked - 10.0).abs() < f32::EPSILON, "kept");
     }
@@ -1383,7 +1406,7 @@ mod tests {
             downed(ShipRef::Npc(NpcId(0))),
             downed(ShipRef::Npc(NpcId(7))),
         ];
-        session.refill_invincible(&mut strikes);
+        session.space.refill_invincible(&mut strikes);
         assert_eq!(strikes[0].downed, None, "Ace's");
         assert_eq!(
             strikes[1].downed,
@@ -2099,7 +2122,9 @@ mod tests {
         // `_HandleShip`'s roll reads `_commCount` (@0x33f42-0x33f4b), set
         // by every `_DisplayComm`, not only the quotes'.
         let (catalog, mut session) = quoting([0, 0]);
-        session.say(crate::SimMessage::NoResponse);
+        session
+            .space
+            .say(&mut session.out, crate::SimMessage::NoResponse);
         let _ = session.take_messages();
         for tick in 0..249 {
             let (said, _) = quote_tick(&catalog, &mut session, &[0, 0]);
