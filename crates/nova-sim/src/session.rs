@@ -1233,7 +1233,7 @@ impl Session {
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
         // reads the state as it builds, so nothing is told.
         session.rebuild_quietly();
-        session.open_outfit_visit();
+        session.port.open_outfit_visit(&session.pilot);
         session.ship.refit(
             &mut session.pilot,
             &session.statics,
@@ -1540,7 +1540,7 @@ impl Session {
         // `ship_display` module).
         self.ship.fit.armament.tick_fire_clock();
         self.ship.latch_double_time();
-        self.takeoff_grace_tick();
+        self.port.takeoff_grace_tick();
         self.sound_script();
         let frame = self.space.frame;
         self.space.pass_frame = frame;
@@ -2727,7 +2727,7 @@ impl Session {
     /// nothing when refused.
     #[must_use]
     pub fn takes(&self, command: PlayerCommand) -> bool {
-        self.player_fate().row().input.takes(command) && !self.takeoff_grace_refuses(command)
+        self.player_fate().row().input.takes(command) && !self.port.takeoff_grace_refuses(command)
     }
 
     /// The shots in flight.
@@ -3668,8 +3668,8 @@ impl Session {
         self.chart.target = None;
         self.space.escorts.talk = None;
         self.leave_with_fighters(true);
-        self.land_day_rolls();
-        self.open_outfit_visit();
+        self.port.land_day_rolls(&self.setup);
+        self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
         self.out.save_due = true;
         self.ship.stop_thrust(&mut self.out);
@@ -3686,26 +3686,6 @@ impl Session {
         self.raise(StoryEvent::Landed { stellar });
         // The port dialog's rebuild point (@0x5fbf0).
         self.rebuild_stellars();
-    }
-
-    /// What a landing, or a relocation, does to the day rolls, as
-    /// [`RuleKey::DayRolls`] reads. By the engine, it keeps them, as no
-    /// landing path in the original writes one, and only the classes
-    /// bought or declined since the shipyard was last listed are
-    /// forgotten, to be drawn again when next asked: the original draws
-    /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
-    /// reading, it forgets every roll.
-    fn land_day_rolls(&mut self) {
-        if self.setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
-            for ship in std::mem::take(&mut self.port.ship_redraws) {
-                self.port.ship_rolls.redraw(&ship);
-            }
-        } else {
-            self.port.hire_rolls.clear();
-            self.port.outfit_rolls.clear();
-            self.port.ship_rolls.clear();
-            self.port.ship_redraws.clear();
-        }
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
@@ -4002,7 +3982,7 @@ impl Session {
     /// the session resets (@0x5bb57; see the `precalced` module), before
     /// the outfitter's list is built.
     pub fn open_outfitter(&mut self) {
-        self.open_outfit_visit();
+        self.port.open_outfit_visit(&self.pilot);
         self.reset_precalced();
     }
 
@@ -4031,17 +4011,6 @@ impl Session {
     /// is this one, after it.
     pub fn close_hire(&mut self) {
         self.reset_precalced();
-    }
-
-    /// Opens a new outfitter visit: clears the once-an-opening flags and
-    /// copies the counts owned, as `_DoOutfitDialog` does on entry
-    /// (@0x5badd-0x5bafa, @0x5bb37-0x5bb44). A landing, and a session's
-    /// start, do it too, so a sale made without the dialog opened first
-    /// (a headless one) refunds against the counts owned since then, and
-    /// an outfit owned before never refunds in full.
-    fn open_outfit_visit(&mut self) {
-        self.port.outfit_visit = OutfitVisit::open(&self.pilot.outfits);
-        self.port.outfit_reselected = None;
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -4533,7 +4502,7 @@ impl Session {
     /// ([`shipyard`](Self::shipyard)); until then it can be named and
     /// bought again. Nothing about the pilot changes, so no save is due.
     pub fn decline_ship(&mut self, ship: ShipId) {
-        self.port.ship_redraws.insert(ship);
+        self.port.decline_ship(ship);
     }
 
     /// Buys a ship of class `ship`, named `name` ([`shipyard::cull_name`]
@@ -6576,6 +6545,49 @@ impl Chart {
     /// against, as [`Chart::record_in`] reads it at `site`.
     fn landing_record(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> i16 {
         self.record_in(pilot, setup, pilot.system, Some(site))
+    }
+}
+
+impl Port {
+    /// What a landing, or a relocation, does to the day rolls, as
+    /// [`RuleKey::DayRolls`] reads. By the engine, it keeps them, as no
+    /// landing path in the original writes one, and only the classes
+    /// bought or declined since the shipyard was last listed are
+    /// forgotten, to be drawn again when next asked: the original draws
+    /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
+    /// reading, it forgets every roll.
+    fn land_day_rolls(&mut self, setup: &Setup) {
+        if setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
+            for ship in std::mem::take(&mut self.ship_redraws) {
+                self.ship_rolls.redraw(&ship);
+            }
+        } else {
+            self.hire_rolls.clear();
+            self.outfit_rolls.clear();
+            self.ship_rolls.clear();
+            self.ship_redraws.clear();
+        }
+    }
+
+    /// Opens a new outfitter visit: clears the once-an-opening flags and
+    /// copies the counts owned, as `_DoOutfitDialog` does on entry
+    /// (@0x5badd-0x5bafa, @0x5bb37-0x5bb44). A landing, and a session's
+    /// start, do it too, so a sale made without the dialog opened first
+    /// (a headless one) refunds against the counts owned since then, and
+    /// an outfit owned before never refunds in full.
+    fn open_outfit_visit(&mut self, pilot: &Pilot) {
+        self.outfit_visit = OutfitVisit::open(&pilot.outfits);
+        self.outfit_reselected = None;
+    }
+
+    /// Declines to buy a ship of class `ship`, as cancelling its name
+    /// prompt does: nothing is bought, but the class's roll is drawn
+    /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
+    /// ([`shipyard`](Session::shipyard)); until then it can be named and
+    /// bought again. Nothing about the pilot changes, so no save is due.
+    fn decline_ship(&mut self, ship: ShipId) {
+        self.ship_redraws.insert(ship);
     }
 }
 

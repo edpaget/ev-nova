@@ -763,8 +763,8 @@ impl Session {
             self.place_asteroids(chance);
         }
         if resets.has(Reset::ShopRolls) {
-            self.land_day_rolls();
-            self.open_outfit_visit();
+            self.port.land_day_rolls(&self.setup);
+            self.port.open_outfit_visit(&self.pilot);
         }
         if resets.has(Reset::SaveDue) {
             self.out.save_due = true;

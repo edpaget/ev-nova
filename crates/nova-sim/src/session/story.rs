@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, VecDeque};
 use super::entry::Dock;
 use super::missions;
 use super::script_effects::Settled;
-use super::{Chart, Outbox, ScriptNote, Session, SessionEvent};
+use super::{Chart, Outbox, Port, ScriptNote, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{
     GovtId, LandingSite, NebulaId, PilotCatalog, StellarId, SystemId, TrafficCatalog,
 };
@@ -253,7 +253,11 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // The destroyed stellars' regeneration; the dominated ones'
             // defence regrowing joins it with rdm task planet-domination.
             Participant::Stellars => session.stellars_day(&mut *self.chance),
-            Participant::DayRolls => session.draw_day_rolls(&mut self.chance),
+            Participant::DayRolls => {
+                session
+                    .port
+                    .draw_day_rolls(&session.statics, &session.setup, &mut self.chance);
+            }
             Participant::DayPassed => session.raise(StoryEvent::DayPassed {
                 date: session.pilot.date,
             }),
@@ -627,40 +631,6 @@ impl Session {
             },
         );
     }
-
-    /// The daily step's day rolls, as [`RuleKey::DayRolls`] reads: by the
-    /// engine, every ship class's hire and buy roll and every outfit's
-    /// buy roll drawn afresh on `chance` in the original's order
-    /// ([`wares::draw_day`], `_IncrementGameTime` @0xb7c4-0xb833), each
-    /// read as the bar and the shops read it. Every redraw due is dropped
-    /// with them: the day drew those classes afresh already. By the other
-    /// reading, nothing: a landing forgets the rolls instead.
-    fn draw_day_rolls(&mut self, chance: &mut dyn Chance) {
-        if self.setup.rules.source_for(RuleKey::DayRolls) != RuleSource::Engine {
-            return;
-        }
-        let buy_random = self.setup.rules.source_for(RuleKey::BuyRandom);
-        wares::draw_day(
-            &mut self.port.hire_rolls,
-            &mut self.port.ship_rolls,
-            &mut self.port.outfit_rolls,
-            self.statics.ships.iter().map(|ship| {
-                (
-                    ship.id,
-                    hire::hire_roll(ship.hire_random),
-                    shipyard::buy_roll(ship.buy_random, buy_random),
-                )
-            }),
-            self.statics.outfits.iter().map(|record| {
-                (
-                    record.id,
-                    outfitter::buy_roll(record.buy_random, buy_random),
-                )
-            }),
-            chance,
-        );
-        self.port.ship_redraws.clear();
-    }
 }
 
 impl Chart {
@@ -746,6 +716,42 @@ impl Chart {
             .iter()
             .map_while(|&hop| self.galaxy.same_place(hop))
             .collect()
+    }
+}
+
+impl Port {
+    /// The daily step's day rolls, as [`RuleKey::DayRolls`] reads: by the
+    /// engine, every ship class's hire and buy roll and every outfit's
+    /// buy roll drawn afresh on `chance` in the original's order
+    /// ([`wares::draw_day`], `_IncrementGameTime` @0xb7c4-0xb833), each
+    /// read as the bar and the shops read it. Every redraw due is dropped
+    /// with them: the day drew those classes afresh already. By the other
+    /// reading, nothing: a landing forgets the rolls instead.
+    fn draw_day_rolls(&mut self, statics: &Statics, setup: &Setup, chance: &mut dyn Chance) {
+        if setup.rules.source_for(RuleKey::DayRolls) != RuleSource::Engine {
+            return;
+        }
+        let buy_random = setup.rules.source_for(RuleKey::BuyRandom);
+        wares::draw_day(
+            &mut self.hire_rolls,
+            &mut self.ship_rolls,
+            &mut self.outfit_rolls,
+            statics.ships.iter().map(|ship| {
+                (
+                    ship.id,
+                    hire::hire_roll(ship.hire_random),
+                    shipyard::buy_roll(ship.buy_random, buy_random),
+                )
+            }),
+            statics.outfits.iter().map(|record| {
+                (
+                    record.id,
+                    outfitter::buy_roll(record.buy_random, buy_random),
+                )
+            }),
+            chance,
+        );
+        self.ship_redraws.clear();
     }
 }
 

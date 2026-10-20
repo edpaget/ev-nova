@@ -66,7 +66,7 @@
 //! request on the press, between ticks, and the approach from the next
 //! tick the land key is up, so the two agree.
 
-use super::{Chart, Outbox, Session};
+use super::{Chart, Outbox, Port, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
 use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal};
 use crate::message::SimMessage;
@@ -78,14 +78,14 @@ impl Session {
     /// dock approach back (the original's `_dockTryFlag`, see the
     /// `clearance` module). Up until it says otherwise.
     pub fn set_land_key(&mut self, on: bool) {
-        self.port.land_key = on;
+        self.port.set_land_key(on);
     }
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
     #[must_use]
     pub fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
-        self.port.dock
+        self.port.dock_request()
     }
 
     /// Applies the land key's `press`: the stellar it selected, in mode
@@ -217,6 +217,22 @@ impl Chart {
             .iter()
             .find(|site| site.id == stellar)
             .map_or(DockKind::Planet, DockKind::of_site)
+    }
+}
+
+impl Port {
+    /// Takes the land key's state: `on` while it is held, which holds the
+    /// dock approach back (the original's `_dockTryFlag`, see the
+    /// `clearance` module). Up until it says otherwise.
+    fn set_land_key(&mut self, on: bool) {
+        self.land_key = on;
+    }
+
+    /// The dock request, if any: the stellar requested and its counter
+    /// (see the `clearance` module).
+    #[must_use]
+    fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
+        self.dock
     }
 }
 

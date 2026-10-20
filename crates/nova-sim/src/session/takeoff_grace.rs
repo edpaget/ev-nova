@@ -48,7 +48,7 @@
 //! state the session doesn't hold, as [`Session::open_player_info`]
 //! records for its dialog.
 
-use super::Session;
+use super::{Port, Session};
 use crate::market;
 use crate::player_fate::PlayerCommand;
 
@@ -65,15 +65,17 @@ impl Session {
         self.space.frame = market::AFTER_TAKE_OFF_FRAME;
         self.port.takeoff_grace = TAKEOFF_GRACE_TICKS;
     }
+}
 
+impl Port {
     /// Counts the take-off grace down a flight tick.
     pub(super) fn takeoff_grace_tick(&mut self) {
-        self.port.takeoff_grace = self.port.takeoff_grace.saturating_sub(1);
+        self.takeoff_grace = self.takeoff_grace.saturating_sub(1);
     }
 
     /// Whether the take-off grace is still running.
     pub(super) fn in_takeoff_grace(&self) -> bool {
-        self.port.takeoff_grace > 0
+        self.takeoff_grace > 0
     }
 
     /// Whether the take-off grace refuses `command`: the map and the

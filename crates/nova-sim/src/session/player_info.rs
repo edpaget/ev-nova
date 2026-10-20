@@ -82,7 +82,7 @@ impl Session {
     /// fate's row refuses the press before it gets here.
     pub fn press_player_info(&mut self) -> bool {
         if self.jump.is_some()
-            || self.in_takeoff_grace()
+            || self.port.in_takeoff_grace()
             || matches!(self.ship.condition, Condition::Dying { .. })
         {
             self.out.sounds.push(SimSound::Refused);

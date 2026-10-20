@@ -44,7 +44,7 @@
 //! News has no participant in the daily step and no trigger point of its
 //! own.
 
-use super::{Chart, Session, Statics};
+use super::{Chart, Port, Session, Statics};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::market;
@@ -109,7 +109,7 @@ impl Session {
     /// before the bar opens, and after the ship's docking changes.
     #[must_use]
     pub fn news(&self) -> Option<&News> {
-        self.port.bar_news.as_ref()
+        self.port.news()
     }
 
     /// The `öops` story at `docked`, the story the cron news replaces
@@ -150,6 +150,15 @@ impl Chart {
     fn news_picture(&self, statics: &Statics, landed: Option<StellarId>) -> Option<i16> {
         let site = self.bar_site(landed)?;
         Some(news_picture(site.govt.and_then(|id| statics.govts.get(id))))
+    }
+}
+
+impl Port {
+    /// The news of the bar visit under way, as it was drawn: `None`
+    /// before the bar opens, and after the ship's docking changes.
+    #[must_use]
+    fn news(&self) -> Option<&News> {
+        self.bar_news.as_ref()
     }
 }
 
