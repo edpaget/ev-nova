@@ -63,9 +63,9 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{DisasterId, DisasterRecord, StellarId};
 use crate::market::{self, ActiveEvent};
-use crate::news::StoryWords;
 #[cfg(doc)]
 use crate::news::{CARGO_NAMES, HAS, LOWERED, PRICE_OF, RAISED};
+use crate::news::{StoryWords, event_clause};
 use crate::rulebook::{RuleKey, Rulebook};
 use crate::rules::{Context, Value};
 use crate::text_tags::TagNames;
@@ -107,20 +107,7 @@ pub fn event_line(
     words: &StoryWords,
     names: &dyn TagNames,
 ) -> Option<String> {
-    let cargo = market::event_commodity(event.commodity)?;
-    let moved = if event.price_delta > 0 {
-        &words.raised
-    } else {
-        &words.lowered
-    };
-    Some(format!(
-        "{} {} {} {} {}.",
-        event.name,
-        words.has,
-        moved,
-        words.price_of,
-        names.cargo_name(cargo).unwrap_or_default(),
-    ))
+    event_clause(event, words, names).map(|clause| clause + ".")
 }
 
 /// What the exchange shows of the local events (see the module docs).
