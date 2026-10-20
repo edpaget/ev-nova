@@ -447,6 +447,7 @@ mod entry;
 mod escort_loss;
 mod escorts;
 mod events;
+mod exchange_events;
 #[cfg(test)]
 mod exit_cursors;
 mod explored;
@@ -3841,12 +3842,13 @@ impl Session {
     }
 
     /// The exchange of the stellar the ship is docked at, if it has landed
-    /// at a trade center, priced by the stellar's [`Markup`].
+    /// at a trade center, priced by the stellar's [`Markup`], with its
+    /// event line (see the `exchange_events` module).
     #[must_use]
     pub fn market(&self) -> Option<Market> {
         let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
-        market::market(&market::Exchange {
+        let mut market = market::market(&market::Exchange {
             goods: &self.statics.goods,
             stellar,
             flags: site.flags,
@@ -3855,7 +3857,9 @@ impl Session {
             gate: self.gate(),
             rules: self.setup.rules,
             markup: self.chart.markup(&self.pilot, &self.setup, site),
-        })
+        })?;
+        market.events = self.exchange_events(stellar);
+        Some(market)
     }
 
     /// What traffic control weighs of the pilot at `site` (see
@@ -11233,7 +11237,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
     }
 
     #[test]
@@ -11347,7 +11355,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
 
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Scripted::answering(&[true]).and_rolling(&[0]);
@@ -11372,7 +11384,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         let market = session.market().expect("docked at the exchange");
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
         session.take_off(&catalog, &mut NeverFires);
         let mut chance = Scripted::default();
         jump_with(&mut session, &catalog, 132, &mut chance);

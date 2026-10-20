@@ -5,7 +5,10 @@
 //! The stock dialog is 426 x 252, centred, and drawn over `PICT` 8510,
 //! whose black list area and status bar match its items: the header row
 //! (item 3), eight rows of goods under it (items 4 to 11), the area below
-//! them (item 12), where the events under way here are named, the status
+//! them (item 12), which shows the event line ([`Market::events`]: by
+//! the engine the first local event's sentence, "… has lowered the price
+//! of food.", or every local event's name under `exchange_events` =
+//! bible; see `nova_sim::exchange_events`), the status
 //! bar (item 15), showing the free cargo space and the credits, and Buy
 //! (13), Sell (14) and Done (1) along the bottom.
 //!
@@ -88,7 +91,12 @@ pub const HEADER_ITEM: usize = 3;
 pub const FIRST_ROW_ITEM: usize = 4;
 /// How many rows show at once.
 pub const ROWS: usize = 8;
-/// The item the events under way are named in.
+/// The item the event line is drawn in, one line per entry of
+/// [`Market::events`]: the first local event's sentence by the engine,
+/// every local event's name under `exchange_events` = bible. The
+/// original draws the sentence in item 15, wrapped and inverted
+/// (`_TradeDialogUpdate` @0x4df54-0x4dfb5); moving it there is the
+/// crons-news-ranks-fidelity follow-up on the exchange's drawing.
 pub const EVENTS_ITEM: usize = 12;
 /// Buy's item.
 pub const BUY_ITEM: usize = 13;

@@ -177,8 +177,11 @@
 //! held in 16 bits (@0x5dd19-0x5dd40 adds the delta with `addw`; the Bible
 //! is silent on a price's width), and then a price of 4 or less is 5.
 //! Wrapping the sum once is wrapping each addition, so the order of
-//! several events does not matter. The exchange shows the names of the events active at its
-//! stellar.
+//! several events does not matter. What the exchange says of the events
+//! active at its stellar is told by the story layer
+//! (`nova_sim::exchange_events`), which [`Market::events`] holds; an
+//! event of a negative commodity moves no price (the engine's reading of
+//! the original's `_commodityPrice[-1]` write, @0x5dd19-0x5dd40).
 //!
 //! An event starts at its stellar: the `spöb` its `Stellar` names, from
 //! 128 up, or, for a `Stellar` of -1 ("any stellar"), an even pick by
@@ -829,7 +832,10 @@ pub struct Market {
     /// The goods traded, standard commodities first by number, then
     /// `jünk` by ID.
     pub rows: Vec<MarketRow>,
-    /// The names of the events active here, by `öops` ID.
+    /// What the exchange says of the events active here, one line each.
+    /// [`market`] leaves it empty: the story layer fills it through
+    /// `nova_sim::exchange_events` (`nova_sim::Session::market`), since
+    /// the text needs `STR#` strings this crate cannot read.
     pub events: Vec<String>,
     /// The player's credits.
     pub cash: i64,
@@ -1415,7 +1421,7 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
     let free = (i64::from(capacity) - pilot.total_cargo()).max(0);
     Some(Market {
         rows,
-        events: here.iter().map(|event| event.name.clone()).collect(),
+        events: Vec::new(),
         cash: pilot.cash(),
         capacity,
         free: u32::try_from(free).unwrap_or(u32::MAX),
@@ -3575,15 +3581,13 @@ mod tests {
     }
 
     #[test]
-    fn an_active_event_moves_its_commoditys_price_at_its_stellar_and_names_itself() {
+    fn an_active_event_moves_its_commoditys_price_at_its_stellar() {
         let flags = PORT_KANE;
         let food = Good::Commodity(0);
         let quiet = with_events(EARTH, flags, &[], RuleSource::Engine);
         assert_eq!(price(&quiet, food), 93);
-        assert_eq!(quiet.events, Vec::<String>::new());
         let surplus = with_events(EARTH, flags, &[(128, 30)], RuleSource::Engine);
         assert_eq!(price(&surplus, food), 60, "75 - 15");
-        assert_eq!(surplus.events, ["An enormous food surplus"]);
         assert_eq!(
             price(&surplus, Good::Commodity(1)),
             350,
@@ -3591,17 +3595,22 @@ mod tests {
         );
         let both = with_events(EARTH, flags, &[(128, 1), (130, 7)], RuleSource::Engine);
         assert_eq!(price(&both, food), 90, "75 + 15, the higher ID");
-        assert_eq!(both.events, ["An enormous food surplus", "A minor drought"]);
         let elsewhere = with_events(MARS, flags, &[(128, 30)], RuleSource::Engine);
         assert_eq!(price(&elsewhere, food), 93);
-        assert_eq!(elsewhere.events, Vec::<String>::new());
         let glut = with_events(MARS, flags, &[(129, 3), (999, 3)], RuleSource::Engine);
         assert_eq!(price(&glut, Good::Commodity(1)), 280, "350 - 70");
-        assert_eq!(
-            glut.events,
-            ["A glut on the market"],
-            "a gone öops is not shown"
-        );
+    }
+
+    /// The story layer tells the events (`nova_sim::exchange_events`),
+    /// since their text needs `STR#` strings this crate cannot read.
+    #[test]
+    fn the_market_leaves_its_events_to_the_story_layer() {
+        for active in [&[][..], &[(128, 30)], &[(128, 1), (130, 7)]] {
+            let found = with_events(EARTH, PORT_KANE, active, RuleSource::Engine);
+            assert_eq!(found.events, Vec::<String>::new(), "{active:?}");
+            let found = with_events(EARTH, PORT_KANE, active, RuleSource::Bible);
+            assert_eq!(found.events, Vec::<String>::new(), "{active:?}");
+        }
     }
 
     #[test]
@@ -3639,7 +3648,6 @@ mod tests {
     fn by_the_engine_the_higher_id_of_two_events_on_one_commodity_wins() {
         let both = with_events(EARTH, PORT_KANE, &[(130, 7), (128, 1)], RuleSource::Engine);
         assert_eq!(price(&both, Good::Commodity(0)), 90, "not 93");
-        assert_eq!(both.events, ["An enormous food surplus", "A minor drought"]);
         let mut records = disasters();
         records.reverse();
         let goods = Goods::new(&stock(), Vec::new(), records);
@@ -3721,7 +3729,6 @@ mod tests {
                 row(Good::Junk(JunkId(146)), "Opals", 960),
             ]
         );
-        assert_eq!(found.events, ["An enormous food surplus"]);
         assert_eq!(
             found.tons(order(0, FOOD, Direction::Buy, Lot::Click)),
             Ok(8),
@@ -3757,7 +3764,6 @@ mod tests {
         let bible = RuleSource::Bible;
         let surplus = with_events(EARTH, PORT_KANE, &[(128, 30)], bible);
         assert_eq!(price(&surplus, food), 78, "93 - 15");
-        assert_eq!(surplus.events, ["An enormous food surplus"]);
         let both = with_events(EARTH, PORT_KANE, &[(128, 1), (130, 7)], bible);
         assert_eq!(price(&both, food), 93, "-15 and +15");
         assert_eq!(price(&food_event(-100, PORT_KANE, bible), food), 5);
@@ -4178,7 +4184,6 @@ mod tests {
     #[test]
     fn an_event_beyond_the_standard_commodities_moves_equipment() {
         let found = odd_event(6);
-        assert_eq!(found.events, ["Odd".to_owned()]);
         assert_eq!(
             price(&found, Good::Commodity(5)),
             540,
@@ -4187,10 +4192,19 @@ mod tests {
     }
 
     #[test]
-    fn an_event_on_a_negative_commodity_moves_nothing_and_is_not_shown() {
+    fn an_event_on_a_negative_commodity_moves_nothing() {
         let found = odd_event(-1);
-        assert_eq!(found.events, Vec::<String>::new());
+        let quiet = odd_event(0);
+        let prices = |market: &Market| -> Vec<i64> {
+            (1..6).map(|n| price(market, Good::Commodity(n))).collect()
+        };
+        assert_eq!(
+            prices(&found),
+            prices(&quiet),
+            "no commodity but food moves"
+        );
         assert_eq!(price(&found, Good::Commodity(5)), 440);
+        assert_eq!(price(&found, Good::Commodity(0)), 93, "not food either");
     }
 
     /// The exchange at `here` (Port Kane's levels) with one food event
@@ -4227,40 +4241,34 @@ mod tests {
         .expect("trades")
     }
 
-    /// Food's price and the events shown at `market`.
-    fn food_and_events(market: &Market) -> (i64, Vec<String>) {
-        (price(market, Good::Commodity(0)), market.events.clone())
+    /// Food's price at `market`.
+    fn food(market: &Market) -> i64 {
+        price(market, Good::Commodity(0))
     }
 
+    /// Whether the event is shown is the story layer's
+    /// (`nova_sim::exchange_events`).
     #[test]
-    fn an_event_moves_the_price_and_shows_at_its_stored_stellar_only() {
-        let surplus = (60, vec!["Surplus".to_owned()]);
-        let quiet = (93, Vec::new());
+    fn an_event_moves_the_price_at_its_stored_stellar_only() {
+        let (surplus, quiet) = (60, 93);
         for record in [-1, 140] {
             let mars = one_event(record, Some(MARS), MARS, RuleSource::Engine);
-            assert_eq!(food_and_events(&mars), surplus, "{record}");
+            assert_eq!(food(&mars), surplus, "{record}");
             let earth = one_event(record, Some(MARS), EARTH, RuleSource::Engine);
-            assert_eq!(food_and_events(&earth), quiet, "{record}");
+            assert_eq!(food(&earth), quiet, "{record}");
         }
     }
 
     #[test]
     fn an_event_from_an_older_save_is_at_its_records_stellar() {
-        let surplus = (60, vec!["Surplus".to_owned()]);
-        let quiet = (93, Vec::new());
+        let (surplus, quiet) = (60, 93);
         assert_eq!(
-            food_and_events(&one_event(140, None, EARTH, RuleSource::Engine)),
+            food(&one_event(140, None, EARTH, RuleSource::Engine)),
             surplus
         );
-        assert_eq!(
-            food_and_events(&one_event(140, None, MARS, RuleSource::Engine)),
-            quiet
-        );
+        assert_eq!(food(&one_event(140, None, MARS, RuleSource::Engine)), quiet);
         for here in [EARTH, MARS, StellarId(-1)] {
-            assert_eq!(
-                food_and_events(&one_event(-1, None, here, RuleSource::Engine)),
-                quiet
-            );
+            assert_eq!(food(&one_event(-1, None, here, RuleSource::Engine)), quiet);
         }
     }
 
