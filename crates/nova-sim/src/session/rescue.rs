@@ -307,7 +307,7 @@ impl Session {
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.ship.secondary = None;
         self.pilot.jumped_from = None;
-        self.pilot.course.clear();
+        self.pilot.clear_course();
         self.pilot.cargo.clear();
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
@@ -1062,6 +1062,7 @@ mod tests {
         session.pod = Some(0);
         session.ship.fate.rescue_due = true;
         session.pilot.course = vec![SystemId(131), SystemId(132)];
+        session.pilot.course_start = Some(SystemId(133));
         session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
         session.ship.secondary = Some(WeaponId(128));
         session.pilot.jumped_from = Some(SystemId(133));
@@ -1083,6 +1084,7 @@ mod tests {
         assert_eq!(session.system(), RESCUE_FALLBACK);
         assert!(session.pilot.has_explored(RESCUE_FALLBACK), "explored");
         assert_eq!(session.pilot.course(), []);
+        assert_eq!(session.pilot.course_start(), None);
         assert_eq!(session.pilot.paint, None);
         assert_eq!(session.ship.secondary, None);
         assert_eq!(session.pilot.jumped_from, None);

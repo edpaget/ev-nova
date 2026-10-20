@@ -2770,9 +2770,10 @@ impl Session {
 
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
-    /// links it follows. A route cues its first hop
-    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
-    /// no route the course is cleared, and the nav selection let go with
+    /// links it follows. A route starts the course at the system the ship
+    /// is in and cues its first hop ([`Session::cue_course`]), selecting it
+    /// in nav mode 3. When there is no route the course is cleared, its
+    /// start included, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
     /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
@@ -6443,9 +6444,10 @@ impl Chart {
 
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
-    /// links it follows. A route cues its first hop
-    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
-    /// no route the course is cleared, and the nav selection let go with
+    /// links it follows. A route starts the course at the system the ship
+    /// is in and cues its first hop ([`Session::cue_course`]), selecting it
+    /// in nav mode 3. When there is no route the course is cleared, its
+    /// start included, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
     /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
@@ -6461,12 +6463,13 @@ impl Chart {
     ) -> Result<&'a [SystemId], RouteError> {
         match self.galaxy.map().route(pilot.system, to, setup.hyperlinks) {
             Ok(route) => {
+                pilot.restart_course(pilot.system);
                 pilot.course = route;
                 self.cue_course(pilot, setup);
                 Ok(&pilot.course)
             }
             Err(error) => {
-                pilot.course.clear();
+                pilot.clear_course();
                 self.deselect();
                 Err(error)
             }

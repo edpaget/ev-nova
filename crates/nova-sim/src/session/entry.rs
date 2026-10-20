@@ -307,8 +307,14 @@ pub(super) enum CourseStep {
     /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
     /// the `course` module).
     Arrival { hops: usize },
-    /// It is cleared.
+    /// It is cleared, its start included: the rescue (`_ResetPlayer`
+    /// @0x1d6bb). The relocation and the move by
+    /// [`RuleKey::MoveArrival`](crate::RuleKey::MoveArrival)'s other
+    /// reading have no original, so they take the plain clear too.
     Clear,
+    /// Its hops are cleared and it starts at the system entered: the gate
+    /// exits (@0x63e1d-0x63e3c, @0x64713-0x64731).
+    Restart,
 }
 
 /// What becomes of the player's nav mode and its selection (see the
@@ -477,7 +483,8 @@ fn jump(hops: usize, placed: bool) -> Resets {
 
 /// Out of a hypergate or wormhole: `_PlayerEnterHypergate` (@0x637bf)
 /// and `_PlayerEnterWormhole` (@0x64005) bypass the hyperspace arrival,
-/// so a held sound is kept. The course is cleared and the thrust
+/// so a held sound is kept. The course is restarted at the system
+/// entered (@0x63e0e-0x63e3c, @0x64708-0x64731) and the thrust
 /// stopped; the system is populated even when it is the one gone in,
 /// and the arrival sounds but raises no message of its own (the caller
 /// raises the gate's). The caller arms the escort-strength timer before
@@ -503,7 +510,7 @@ fn gate() -> Resets {
             Reset::ArrivalSound,
             Reset::Rebuild,
         ],
-        CourseStep::Clear,
+        CourseStep::Restart,
         NavStep::Deselect,
         TrafficStep::Populate,
     )
@@ -732,7 +739,8 @@ impl Session {
                 self.chart
                     .course_after_arrival(&mut self.pilot, &self.setup, hops, system);
             }
-            CourseStep::Clear => self.pilot.course.clear(),
+            CourseStep::Clear => self.pilot.clear_course(),
+            CourseStep::Restart => self.pilot.restart_course(system),
         }
         if resets.has(Reset::Touchdown) {
             self.port.touchdown = self.ship.player.position;
@@ -1244,8 +1252,8 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_clears_the_course_stops_the_thrust_keeps_a_held_sound_and_populates_into_any_system()
-    {
+    fn a_gate_restarts_the_course_stops_the_thrust_keeps_a_held_sound_and_populates_into_any_system()
+     {
         let expected = Resets::of(
             &with(
                 &SCENE,
@@ -1257,7 +1265,7 @@ mod tests {
                     Reset::ArrivalSound,
                 ],
             ),
-            CourseStep::Clear,
+            CourseStep::Restart,
             NavStep::Deselect,
             TrafficStep::Populate,
         );

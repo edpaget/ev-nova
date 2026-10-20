@@ -3,22 +3,31 @@
 //! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says.
 //!
 //! The original's course is 32 words at 0x3b51c8. Slot 0 is the system
-//! last reached: a plot leaves it there, and `_SpoolNextHyperRouteDest`
-//! (0x12103-0x121a2) shifts the course left once slot 1's stand-in is the
-//! player's system's stand-in. Slot 1 is the next hop. The engine's
-//! course is the original's slots 1 and up, so its first hop is the
+//! the course was last started or advanced from: Clear Route and the gate
+//! exits restart it there, a Shift-click's append sets it when it is -1,
+//! and `_SpoolNextHyperRouteDest` (0x12103-0x121a2) shifts the course left
+//! once slot 1's stand-in is the player's system's stand-in. Only `M` and
+//! `N` (@0x1570e-0x159ad) move the player without touching it. Slot 1 is
+//! the next hop. The engine keeps slot 0 as `Pilot::course_start` and the
+//! original's slots 1 and up as `Pilot::course`, so its first hop is the
 //! original's slot 1. How a Shift-click on the course map writes the
 //! course is the [`map_route`](crate::map_route) module's.
 //!
 //! **Rewrite and cut** ([`rewritten`]). `_HandleStellarSystemVisibility`
-//! runs it first (@0x32ab3-0x32b0d), so every rebuild point runs it. For
-//! each slot, an empty one (-1) is skipped (@0x32abe); a visible hop is
+//! runs it first (@0x32aaa-0x32b0d), so every rebuild point runs it. It
+//! starts at slot 0, the course's start (%esi = 0 @0x32aaa). For each
+//! slot, an empty one (-1) is skipped (@0x32abe); a visible hop is
 //! left as it is, even when another visible system shadows it at its
 //! place (the +0x1eb test @0x32ad4); a hidden hop is overwritten with the
 //! system `_FindActiveCoLocatedSystem` gives (@0x32ae1-0x32ae6), its
 //! [`Places::stand_in`]; and when that is -1, the slot and every later
-//! slot are set to -1 (@0x32aed-0x32b02), cutting the course for good. No
-//! sound plays.
+//! slot are set to -1 (@0x32aed-0x32b02), cutting the course for good.
+//! A start hidden with no stand-in so cuts the whole course, start and
+//! hops; this is reachable only after an `M` or `N` keeps a course whose
+//! start later hides, as every other writer leaves the start at the
+//! player's place, which always has a visible system. A hidden start's
+//! stand-in shares its place, so rewriting it is unobservable, but it is
+//! done. No sound plays.
 //!
 //! **Arrival clear** ([`after_arrival`], @0x6c472-0x6c4c6). The course is
 //! cleared only when slot 1 is set, the jump flag at -0x2c9(%ebp) is
@@ -44,9 +53,14 @@
 //! only makes that resolution stick at each rebuild point. The move out of
 //! a hidden system (@0x998f1-0x99a36) doesn't touch the course.
 //!
+//! An arrival leaves the start at the last hop made, raw, and a course
+//! with no hops left has no start, as `_SpoolNextHyperRouteDest` and the
+//! arrival clear leave slot 0.
+//!
 //! **Branches left out.**
-//! - The rewrite of slot 0, the system last reached (@0x32abb, %esi = 0),
-//!   which the engine doesn't store: crons-news-ranks-fidelity phase 23.
+//! - `_DrawMap` draws the course from slot 0 (@0xe661-0xe7a2), where the
+//!   engine's map draws it from the current system:
+//!   crons-news-ranks-fidelity phase 39.
 //! - A multi-jump hop with no stand-in partway through the chain
 //!   (@0x6bdc6-0x6bdcc → 0x6bdfe → 0x6be0b): the original writes system
 //!   -1 as the player's system. The engine stops the chain at the previous

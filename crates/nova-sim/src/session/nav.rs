@@ -845,6 +845,7 @@ impl Chart {
         };
         out.sounds.push(SimSound::HyperSelected);
         if setup.hyper_select == HyperSelectRule::OneJumpCourse {
+            pilot.restart_course(pilot.system);
             pilot.course = vec![next];
         }
         self.set_nav(NavMode::Hyperspace(Some(next)));
@@ -1275,6 +1276,12 @@ mod tests {
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.nav_mode(), hyperspace(131));
         assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+        assert_eq!(session.course(), [SystemId(131)]);
+        assert_eq!(
+            session.pilot.course_start(),
+            Some(session.system()),
+            "the one-jump course starts at the current system"
+        );
     }
 
     // The stellar keys, the click and the land key.
