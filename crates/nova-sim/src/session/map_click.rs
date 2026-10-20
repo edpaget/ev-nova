@@ -671,6 +671,11 @@ mod tests {
         let mut session = hub_session();
         assert_eq!(shift_click(&mut session, &[131]), shifted(Some(131)));
         assert_eq!(session.course(), ids(&[131]));
+        assert_eq!(
+            session.pilot.course_start(),
+            Some(session.system()),
+            "the new start written back"
+        );
         assert_eq!(session.nav_mode(), NavMode::Off, "nothing cued");
         session.pilot.explore(SystemId(131));
         assert_eq!(shift_click(&mut session, &[132]), shifted(Some(132)));
@@ -738,9 +743,11 @@ mod tests {
     fn a_shift_click_at_the_current_systems_place_clears_the_course() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.pilot.course = ids(&[131, 132]);
+        session.pilot.course_start = Some(SystemId(130));
         session.chart.nav = hyperspace(131);
         assert_eq!(shift_click(&mut session, &[130]), shifted(None));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot.course_start(), None, "the start cleared");
         assert_eq!(session.nav_mode(), hyperspace(131), "no nav written");
     }
 
