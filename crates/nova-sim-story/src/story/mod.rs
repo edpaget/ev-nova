@@ -741,7 +741,15 @@
 //! list: those it owns, and, for the player's system, any it lists that
 //! no system owns, the rescue `_HandleStellarSystemVisibility` writes
 //! (@0x32c58-0x32cb3) and that lasts until the next refresh
-//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). The session
+//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). By the engine
+//! reading of
+//! [`RuleKey::RescueUntilRefresh`](crate::RuleKey::RescueUntilRefresh) the
+//! galaxy keeps each rescue, never saved, from the rebuild point that
+//! makes it to the next refresh ([`OverlaidGalaxy::keep_rescues`],
+//! [`OverlaidGalaxy::forget_rescues`]), so a stellar rescued in one system
+//! stays that system's, unshown, after a gate's exit or an `M` into
+//! another that lists it; by the other reading the rescue is derived for
+//! the player's system alone. The session
 //! derives the stellars shown at the original's rebuild points, and the
 //! flight view draws only those. A reader that turns a stellar into a
 //! system goes owner-first, as the original's do: the holder, else

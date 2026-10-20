@@ -45,8 +45,9 @@
 //! Which of a system's stellars are shown is the galaxy's: those it holds
 //! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as
 //! `_HandleStellarSystemVisibility` shows only the active stellars the
-//! player's system owns, so a stellar another visible system owns is not
-//! shown though the system lists it. The stellar the ship is docked at
+//! player's system owns, so a stellar another visible system owns, or
+//! keeps rescued until the next refresh (the `kept_rescues` module), is
+//! not shown though the system lists it. The stellar the ship is docked at
 //! is always among those shown. The session keeps every stellar the
 //! system lists, and derives the stellars shown from them as the system
 //! changes and at each flight rebuild point ([`Session::reshow`]); a

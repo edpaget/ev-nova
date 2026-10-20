@@ -34,10 +34,13 @@
 //!   visible ([`OverlaidGalaxy::arrival`], @0x998f1-0x99a36). A player in
 //!   a visible system shadowed at its place stays: the original's move
 //!   tests only the player's own system's visible flag (@0x99918).
-//! - A stellar with no owner that the player's system lists is held by
-//!   the player's system ([`OverlaidGalaxy::holder`]), as
-//!   `_HandleStellarSystemVisibility`'s rescue writes it (@0x32c58-0x32cb3)
-//!   until the next refresh clears every owner. The player's system shows
+//! - A stellar with no owner is held by the system a rebuild point
+//!   rescued it in, kept until the next refresh forgets it
+//!   ([`OverlaidGalaxy::keep_rescues`], [`OverlaidGalaxy::forget_rescues`]),
+//!   else by the player's system when that lists it
+//!   ([`OverlaidGalaxy::holder`]), as `_HandleStellarSystemVisibility`'s
+//!   rescue writes the owner word (@0x32c58-0x32cb3) until the next
+//!   refresh clears every owner (@0x9968a). The player's system shows
 //!   exactly the stellars it holds, while it is visible
 //!   ([`OverlaidGalaxy::shows`], [`OverlaidGalaxy::shown`]): the
 //!   original's active stellars owned by the player's system
@@ -621,7 +624,9 @@ impl OverlaidGalaxy {
     /// stands for itself at its place ([`OverlaidGalaxy::same_place`]).
     ///
     /// This is `_PropagateMissionBitEffects`' ownership (@0x996ed-0x997bd),
-    /// derived rather than stored: it visits the systems by ascending ID,
+    /// derived rather than stored; the rescue the original writes into the
+    /// same word afterwards is kept apart ([`rescued`](Self::rescued)) and
+    /// read with it by [`holder`](Self::holder). It visits the systems by ascending ID,
     /// and a visible system not yet done claims each of its stellars still
     /// unowned, then marks every higher system at its place done. So by
     /// [`CoLocated::Lowest`] a visible system shadowed by a lower visible
