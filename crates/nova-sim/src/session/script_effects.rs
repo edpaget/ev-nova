@@ -1260,9 +1260,11 @@ mod tests {
         pilot.escorts = vec![escort(129, false), escort(130, true)];
         let mut session = flying_with(&catalog, pilot).with_rules(rules);
         session.plot_course(SystemId(132)).expect("a route");
+        assert!(session.pilot().course_start().is_some());
         moved(&mut session, &catalog, "M131");
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
         assert_eq!(session.pilot().escorts().len(), 1, "the dry fighter left");
         assert_eq!(
             session.take_fighter_notes(),
@@ -1511,9 +1513,11 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut session = landed(&catalog).with_rules(rules);
         session.plot_course(SystemId(131)).expect("a route");
+        assert!(session.pilot().course_start().is_some());
         moved(&mut session, &catalog, "N131");
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
         assert_eq!(session.landed(), Some(StellarId(128)));
     }
 
