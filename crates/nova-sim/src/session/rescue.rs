@@ -176,8 +176,13 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
                 let session = self.session;
                 let active = session
                     .chart
-                    .stellar_holder(&session.pilot, &session.statics, site.id)
-                    .is_some_and(|holder| session.chart.galaxy.visible(holder));
+                    .galaxy
+                    .active_holder(
+                        site.id,
+                        session.statics.listers(site.id),
+                        session.pilot.system,
+                    )
+                    .is_some();
                 (site.id, qualifies(&site, active, record))
             })
             .collect()
@@ -352,7 +357,7 @@ impl Session {
             RESCUE_FALLBACK,
             |(stellar, found_in)| {
                 self.chart
-                    .stellar_holder(&self.pilot, &self.statics, stellar)
+                    .holder_of(&self.pilot, &self.statics, stellar)
                     .unwrap_or(found_in)
             },
         )
@@ -395,19 +400,6 @@ impl Chart {
             &BTreeMap::new(),
             &statics.govts,
         ));
-    }
-
-    /// The system that holds `stellar`, with the player where `pilot` is
-    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
-    /// its owner word (+0x14), a kept rescue included.
-    fn stellar_holder(
-        &self,
-        pilot: &Pilot,
-        statics: &Statics,
-        stellar: StellarId,
-    ) -> Option<SystemId> {
-        self.galaxy
-            .holder(stellar, statics.listers(stellar), pilot.system)
     }
 }
 
@@ -575,7 +567,7 @@ mod tests {
         assert_eq!(
             session
                 .chart
-                .stellar_holder(&session.pilot, &session.statics, StellarId(170)),
+                .holder_of(&session.pilot, &session.statics, StellarId(170)),
             None,
             "133 stands for 134's place"
         );
