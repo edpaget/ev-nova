@@ -12,7 +12,7 @@
 //! a gate still shown keeps its sprite, a gate newly shown starts closed,
 //! and one no longer shown is let go.
 
-use super::{Session, Setup, Space, Statics};
+use super::{Chart, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
@@ -26,7 +26,7 @@ impl Session {
     /// that is not a hypergate, or one not shown.
     #[must_use]
     pub fn gate_frame(&self, gate: StellarId) -> Option<u16> {
-        let site = self.gate_site(gate)?;
+        let site = self.chart.gate_site(gate)?;
         let anim = GateAnimation::of(site);
         Some(
             self.space
@@ -40,20 +40,12 @@ impl Session {
     /// ([`GateSprite::is_open`](crate::gate_sprite::GateSprite::is_open)).
     #[must_use]
     pub fn gate_open(&self, gate: StellarId) -> bool {
-        self.gate_site(gate).is_some_and(|site| {
+        self.chart.gate_site(gate).is_some_and(|site| {
             self.space
                 .gate_sprites
                 .get(&gate)
                 .is_some_and(|sprite| sprite.is_open(&GateAnimation::of(site)))
         })
-    }
-
-    /// Hypergate `gate`, when it is shown.
-    fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
-        self.chart
-            .sites
-            .iter()
-            .find(|site| site.id == gate && is_hypergate(site))
     }
 
     /// Keeps a sprite for each hypergate shown, and only for those.
@@ -103,6 +95,15 @@ impl Space {
         self.drawn_frame_size(statics, setup, site)
             .filter(|_| self.rebuilt.shows_frame(site.id))
             .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
+    }
+}
+
+impl Chart {
+    /// Hypergate `gate`, when it is shown.
+    fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
+        self.sites
+            .iter()
+            .find(|site| site.id == gate && is_hypergate(site))
     }
 }
 
@@ -278,7 +279,7 @@ mod tests {
             let mut session = flying(&catalog);
             heading_in(&mut session, still, GATE_AT.x + 210.0);
             if open_first {
-                let site = *session.gate_site(StellarId(300)).expect("a gate");
+                let site = *session.chart.gate_site(StellarId(300)).expect("a gate");
                 let sprite = session
                     .space
                     .gate_sprites
@@ -384,7 +385,7 @@ mod tests {
         // 12: the release tick shows frame 2 where held it would show 3.
         emerging(&mut session, 12);
         let gate = StellarId(300);
-        let site = *session.gate_site(gate).expect("a gate");
+        let site = *session.chart.gate_site(gate).expect("a gate");
         let stepped = |mut sprite: crate::gate_sprite::GateSprite, held: bool| {
             sprite.step(&GateAnimation::of(&site), false, held, &mut NeverFires);
             sprite

@@ -12,24 +12,33 @@
 //! and [`Session::is_known`], each named as the catalog names it, by
 //! ascending ID.
 
-use super::Session;
+use super::{Chart, Session, Statics};
 use crate::map_search::{self, SearchOutcome};
-use crate::pilot::ExploredLevel;
+use crate::pilot::{ExploredLevel, Pilot};
 
 impl Session {
     /// The system the in-flight map's Find finds for `query` (see the
     /// module docs).
     #[must_use]
     pub fn find_map_system(&self, query: &str) -> SearchOutcome {
-        let candidates = self
-            .statics
+        self.chart
+            .find_map_system(&self.pilot, &self.statics, query)
+    }
+}
+
+impl Chart {
+    /// The system the in-flight map's Find finds for `query` (see the
+    /// module docs).
+    #[must_use]
+    fn find_map_system(&self, pilot: &Pilot, statics: &Statics, query: &str) -> SearchOutcome {
+        let candidates = statics
             .place_names
             .systems
             .iter()
             .filter(|&(&id, _)| {
-                self.chart.galaxy.exists(id)
-                    && self.chart.galaxy.visible(id)
-                    && self.pilot.explored_level(id) > ExploredLevel::Unexplored
+                self.galaxy.exists(id)
+                    && self.galaxy.visible(id)
+                    && pilot.explored_level(id) > ExploredLevel::Unexplored
                     && self.is_known(id)
             })
             .map(|(&id, name)| (id, name.as_str()));

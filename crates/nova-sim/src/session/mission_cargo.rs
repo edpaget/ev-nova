@@ -268,7 +268,13 @@ impl Session {
         ) else {
             return;
         };
-        self.convict_of(law, Crime::Smuggle, Some(govt_id));
+        self.chart.convict_of(
+            &mut self.pilot,
+            &self.statics,
+            law,
+            Crime::Smuggle,
+            Some(govt_id),
+        );
         self.lose_ranks_to(Crime::Smuggle, Some(govt_id));
         self.space.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;

@@ -72,7 +72,7 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
-use super::{PlayerShip, Session, Setup, Statics, clamp_i16};
+use super::{Chart, PlayerShip, Session, Setup, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
@@ -157,12 +157,17 @@ impl Session {
             for system in reached {
                 // At level 2, with its place's head, by the engine
                 // (`_RecursiveAutoExplore` @0xd9a6-0xd9af, @0xda07-0xda10).
-                self.explore_place(system, ExploredLevel::Charted);
+                self.chart.explore_place(
+                    &mut self.pilot,
+                    &self.setup,
+                    system,
+                    ExploredLevel::Charted,
+                );
                 self.raise(StoryEvent::Explored { system });
             }
             // Its known pass, with no clear (`_AutoSetExploration`
             // @0xdb06-0xdbd4).
-            self.add_known();
+            self.chart.add_known(&self.pilot);
         }
         if let Some(paint) = effect.paint {
             self.pilot.paint = paint;
@@ -202,15 +207,6 @@ impl Session {
                 true,
                 self.setup.script_reserves(),
             );
-        }
-    }
-
-    /// `X`: explores `system` when it is in the catalog's galaxy, hidden
-    /// or not: the original writes the explored level itself (@0x15c71),
-    /// whatever the system's visibility.
-    pub(super) fn explore_system(&mut self, system: SystemId) {
-        if self.chart.galaxy.exists(system) {
-            self.pilot.explore(system);
         }
     }
 
@@ -326,6 +322,17 @@ impl PlayerShip {
             pilot.cash = pilot.cash.saturating_add(resale(price));
         }
         self.refit(pilot, statics, setup, false, setup.script_reserves());
+    }
+}
+
+impl Chart {
+    /// `X`: explores `system` when it is in the catalog's galaxy, hidden
+    /// or not: the original writes the explored level itself (@0x15c71),
+    /// whatever the system's visibility.
+    pub(super) fn explore_system(&mut self, pilot: &mut Pilot, system: SystemId) {
+        if self.galaxy.exists(system) {
+            pilot.explore(system);
+        }
     }
 }
 

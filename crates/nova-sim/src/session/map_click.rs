@@ -71,12 +71,12 @@
 //! the position compare of a link that resolves to −1, which reads system
 //! −1 out of bounds (@0x130f0-0x13113): ours skips the link.
 
-use super::Session;
 use super::nav::CON_SLOTS;
-use crate::catalog::SystemId;
+use super::{Chart, Session, Setup};
+use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::HyperlinkRule;
 use crate::map_route;
-use crate::pilot::ExploredLevel;
+use crate::pilot::{ExploredLevel, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// A left press in an in-flight map's item 3, as `_DoSystemMap` reads it.
@@ -124,11 +124,36 @@ impl Session {
     /// hit is accepted, and the map drags; otherwise what the first
     /// accepted hit did.
     pub fn map_click(&mut self, press: &MapPress<'_>) -> Option<MapClicked> {
+        self.chart
+            .map_click(&mut self.pilot, &self.setup, self.landed, press)
+    }
+
+    /// Clear Route, from its button or C (@0x12c69-0x12dbf): the course
+    /// cleared and the selection let go with the mode kept, in flight, in
+    /// port and on the hypergate map alike. The caller turns
+    /// `showClearRouteButton` off and redraws the nav area at once
+    /// (`_DrawStatus` @0x12dba).
+    pub fn clear_route(&mut self) {
+        self.chart.clear_route(&mut self.pilot);
+    }
+}
+
+impl Chart {
+    /// A press on an in-flight map (see the module docs): `None` when no
+    /// hit is accepted, and the map drags; otherwise what the first
+    /// accepted hit did.
+    fn map_click(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        landed: Option<StellarId>,
+        press: &MapPress<'_>,
+    ) -> Option<MapClicked> {
         let (hit, flagged) = press
             .hits
             .iter()
-            .find_map(|&hit| self.accepted(press, hit))?;
-        let pick = self.chart.galaxy.same_place(hit)?;
+            .find_map(|&hit| self.accepted(pilot, setup, press, hit))?;
+        let pick = self.galaxy.same_place(hit)?;
         if press.hypergate.is_some() {
             return Some(MapClicked {
                 selected: Some(pick),
@@ -138,29 +163,28 @@ impl Session {
                 nav_redraw: false,
             });
         }
-        let docked = self.landed.is_some();
-        if self.setup.rules.source_for(RuleKey::MapPlotting) == RuleSource::Bible {
-            let _ = self.plot_course(pick);
+        let docked = landed.is_some();
+        if setup.rules.source_for(RuleKey::MapPlotting) == RuleSource::Bible {
+            let _ = self.plot_course(pilot, setup, pick);
             return Some(MapClicked {
                 selected: Some(pick),
                 gate_pick: None,
-                clear_route: Some(!self.pilot.course.is_empty()),
+                clear_route: Some(!pilot.course.is_empty()),
                 course_changed: true,
                 nav_redraw: !docked,
             });
         }
         if press.shift {
-            return Some(self.shift_click(pick));
+            return Some(self.shift_click(pilot, setup, pick));
         }
         if !docked {
             if self
-                .chart
                 .galaxy
                 .map()
-                .jumps(self.pilot.system, self.setup.hyperlinks)
+                .jumps(pilot.system, setup.hyperlinks)
                 .contains(&pick)
             {
-                self.select_at_place(pick);
+                self.select_at_place(pilot, pick);
             } else {
                 self.deselect();
             }
@@ -179,18 +203,24 @@ impl Session {
     /// port and on the hypergate map alike. The caller turns
     /// `showClearRouteButton` off and redraws the nav area at once
     /// (`_DrawStatus` @0x12dba).
-    pub fn clear_route(&mut self) {
-        self.pilot.course.clear();
+    fn clear_route(&mut self, pilot: &mut Pilot) {
+        pilot.course.clear();
         self.deselect();
     }
 
     /// The system `hit` is accepted as, and its gate flag, or `None` when
     /// it is passed over (see the module docs' acceptance).
-    fn accepted(&self, press: &MapPress<'_>, hit: SystemId) -> Option<(SystemId, bool)> {
+    fn accepted(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        press: &MapPress<'_>,
+        hit: SystemId,
+    ) -> Option<(SystemId, bool)> {
         let flagged = press
             .hypergate
             .is_some_and(|offered| offered.contains(&hit));
-        if press.hypergate.is_some() && !flagged && hit != self.pilot.system {
+        if press.hypergate.is_some() && !flagged && hit != pilot.system {
             return None;
         }
         if flagged
@@ -200,22 +230,22 @@ impl Session {
         {
             return Some((hit, flagged));
         }
-        let places = self.chart.galaxy.map().places();
-        let source = match self.pilot.course.last() {
+        let places = self.galaxy.map().places();
+        let source = match pilot.course.last() {
             Some(&last) if press.shift => {
                 if places.together(last, hit) {
                     return Some((hit, false));
                 }
                 last
             }
-            _ => self.pilot.system,
+            _ => pilot.system,
         };
         let linked = self
             .links(source)
             .find(|&to| to == hit || places.together(to, hit));
         let back = || {
-            let stood = self.chart.galaxy.same_place(hit)?;
-            self.links_back(source, stood).then_some(stood)
+            let stood = self.galaxy.same_place(hit)?;
+            self.links_back(setup, source, stood).then_some(stood)
         };
         linked.or_else(back).map(|to| (to, false))
     }
@@ -224,21 +254,19 @@ impl Session {
     /// in order: each set, in the catalog and with a visible system at its
     /// place (`_FindActiveCoLocatedSystem`).
     fn links(&self, source: SystemId) -> impl Iterator<Item = SystemId> + '_ {
-        self.chart
-            .galaxy
+        self.galaxy
             .con_slots(source)
             .iter()
             .take(CON_SLOTS)
-            .filter(|&&slot| self.chart.galaxy.exists(slot))
-            .filter_map(|&slot| self.chart.galaxy.same_place(slot))
+            .filter(|&&slot| self.galaxy.exists(slot))
+            .filter_map(|&slot| self.galaxy.same_place(slot))
     }
 
     /// Whether, by [`HyperlinkRule::BothWays`], `to` links to `source`, so
     /// its jumps reach `to` from `source`.
-    fn links_back(&self, source: SystemId, to: SystemId) -> bool {
-        self.setup.hyperlinks == HyperlinkRule::BothWays
+    fn links_back(&self, setup: &Setup, source: SystemId, to: SystemId) -> bool {
+        setup.hyperlinks == HyperlinkRule::BothWays
             && self
-                .chart
                 .galaxy
                 .map()
                 .jumps(source, HyperlinkRule::BothWays)
@@ -247,19 +275,20 @@ impl Session {
 
     /// A Shift-click on the course map picking `pick`, by the engine's
     /// reading (see the module docs).
-    fn shift_click(&mut self, pick: SystemId) -> MapClicked {
+    fn shift_click(&mut self, pilot: &mut Pilot, setup: &Setup, pick: SystemId) -> MapClicked {
         let edit = map_route::shift_click(
-            &self.pilot.course,
-            self.pilot.system,
+            &pilot.course,
+            pilot.system,
             pick,
-            self.chart.galaxy.map().places(),
+            self.galaxy.map().places(),
             |source| {
-                let gate = self.pilot.explored_level(source) != ExploredLevel::Unexplored
+                let gate = pilot.explored_level(source) != ExploredLevel::Unexplored
                     || self.is_known(pick);
-                gate && (self.links(source).any(|to| to == pick) || self.links_back(source, pick))
+                gate && (self.links(source).any(|to| to == pick)
+                    || self.links_back(setup, source, pick))
             },
         );
-        self.pilot.course = edit.course;
+        pilot.course = edit.course;
         MapClicked {
             selected: edit.appended.then_some(pick),
             gate_pick: None,

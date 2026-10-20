@@ -46,11 +46,12 @@
 //! An inertialess ship's reverse (@0x6c770-0x6c7d3) aims at nothing: it
 //! brakes the ship's speed instead (see the `inertialess` module).
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::StellarId;
 use crate::flight::{Controls, Face};
 use crate::geometry::Vec2;
 use crate::navigation::NavMode;
+use crate::pilot::Pilot;
 use crate::player_turn::reverse_aim;
 use crate::trig::intercept_angle;
 use crate::{Condition, RuleKey, RuleSource};
@@ -85,7 +86,9 @@ impl Session {
             return None;
         }
         let from = self.ship.player.position;
-        let stellar = self.face_stellar();
+        let stellar = self
+            .chart
+            .face_stellar(&self.pilot, &self.statics, &self.setup);
         let target = self.target().map(|npc| npc.state.position);
         let at = match (target, stellar) {
             (Some(_), Some(stellar)) if face == Face::Stellar => stellar,
@@ -94,29 +97,31 @@ impl Session {
         };
         Some(intercept_angle(from, at))
     }
+}
 
+impl Chart {
     /// The position of stellar record [+0x6c], the nav selection read as
     /// a stellar's index whatever the mode: the stellar selected in mode
     /// 2; in mode 3, by [`RuleKey::FaceNavSlot`]'s engine reading, the
     /// stellar whose index is the selected system's link slot, and by its
     /// other reading none; none with no selection (see the module docs
     /// for where the position is read).
-    fn face_stellar(&self) -> Option<Vec2> {
-        let id = match self.chart.nav {
+    fn face_stellar(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Option<Vec2> {
+        let id = match self.nav {
             NavMode::Off | NavMode::Stellar(None) | NavMode::Hyperspace(None) => return None,
             NavMode::Stellar(Some(id)) => id,
             NavMode::Hyperspace(Some(selected)) => {
-                if self.setup.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
+                if setup.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
                     return None;
                 }
-                let slot = i16::try_from(self.selected_slot(selected)?).ok()?;
+                let slot = i16::try_from(self.selected_slot(pilot, selected)?).ok()?;
                 StellarId(FIRST_STELLAR + slot)
             }
         };
-        let here = self.chart.sites.iter().find(|site| site.id == id);
+        let here = self.sites.iter().find(|site| site.id == id);
         Some(here.map_or_else(
             || {
-                let (x, y) = self.statics.stellar_marks.place(id).unwrap_or_default();
+                let (x, y) = statics.stellar_marks.place(id).unwrap_or_default();
                 Vec2::new(f32::from(x), f32::from(y))
             },
             |site| site.position,
@@ -289,7 +294,9 @@ mod tests {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
         target_at(&mut session, Vec2::new(500.0, 0.0));
-        session.set_nav(NavMode::Stellar(Some(StellarId(128))));
+        session
+            .chart
+            .set_nav(NavMode::Stellar(Some(StellarId(128))));
         session.tick(face(Face::Stellar, Turn::None));
         assert_eq!(
             session.ship.aim,
@@ -297,7 +304,7 @@ mod tests {
         );
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(session.ship.aim, 90, "without Option, the target");
-        session.set_nav(NavMode::Stellar(None));
+        session.chart.set_nav(NavMode::Stellar(None));
         session.tick(face(Face::Stellar, Turn::None));
         assert_eq!(session.ship.aim, 90, "with Option but nothing selected");
     }
@@ -306,7 +313,9 @@ mod tests {
     fn with_no_ship_target_the_face_key_faces_the_stellar_selected() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
-        session.set_nav(NavMode::Stellar(Some(StellarId(128))));
+        session
+            .chart
+            .set_nav(NavMode::Stellar(Some(StellarId(128))));
         for face_key in [Face::Target, Face::Stellar] {
             session.ship.aim = 0;
             session.tick(face(face_key, Turn::None));
@@ -333,12 +342,16 @@ mod tests {
         let mut session = flying(&catalog, 0.0);
         // 132 is 130's second link, slot 1: stellar 129, 131's, at
         // (2000, 0), as if it stood in this system.
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(session.ship.aim, 90);
         assert_eq!(session.ship.player.heading, 2.0);
         // 131, slot 0: stellar 128, this system's.
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(
             session.ship.aim,
@@ -352,7 +365,9 @@ mod tests {
         let mut session = flying(&catalog, 0.0)
             .with_rules(Rulebook::default().with_override(RuleKey::FaceNavSlot, RuleSource::Bible));
         session.ship.aim = 7;
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::Right));
         assert_eq!(session.ship.aim, 7);
         assert_eq!(session.ship.player.heading, 2.0, "the turn key");
@@ -368,7 +383,9 @@ mod tests {
         catalog.unloaded.push(StellarId(129));
         let mut session = flying(&catalog, 0.0);
         session.ship.player.position = Vec2::new(100.0, 0.0);
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(132))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(132))));
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(session.ship.aim, 270, "toward the centre");
     }
@@ -415,7 +432,9 @@ mod tests {
         let mut session = flying(&catalog, 0.0);
         session.ship.player.position = Vec2::new(0.0, 5000.0);
         target_at(&mut session, Vec2::new(-500.0, 5000.0));
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.begin_jump().expect("jumps");
         session.tick(face(Face::Target, Turn::None));
         assert_eq!(session.ship.aim, 90, "the jump's bearing, not the target");
@@ -435,7 +454,9 @@ mod tests {
             Rulebook::default().with_override(RuleKey::ColocatedResolution, RuleSource::Bible),
         );
         session.ship.player.position = Vec2::new(0.0, 5000.0);
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.preparing_jump(),

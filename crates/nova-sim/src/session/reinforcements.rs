@@ -14,7 +14,7 @@
 //! | `_DoCommDialog` @0x9636d, battle help | the hail's Defend, forced (`Session::act`), at the ship's cached odds |
 //! | `_AICallForReinforcements`' reads of +0xc914 (@0x7f60d, @0x7f69b) | the caller's cached odds ([`Npc::odds`](crate::traffic::npc::Npc::odds)) by the engine's reading of [`RuleKey::OddsCache`], worked out fresh by the other |
 //! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in [`Session::tick_traffic`] after the frame's calls, on every tick in flight, a jump's included, or held behind calls held behind a scan into [`Session::tick_combat`] (see the `comm_calls` module); and after double time's second pass ([`Session::tick_again`]) |
-//! | `_IncrementGameTime` @0xb724-0xb759 | the daily step's reinforcements ([`Session::reinforcements_day`]) |
+//! | `_IncrementGameTime` @0xb724-0xb759 | the daily step's reinforcements ([`Chart::reinforcements_day`]) |
 //! | `_ResetPlayerPrecalcedValues` @0xc628-0xc68f | [`Session::reset_precalced`], after the sabotage clock and before the trim |
 //! | `_WarshipAI` @0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e | the coming fleet in the traffic's [`World`](crate::traffic::World) ([`Session::reinforcements_coming`]) |
 //! | `_ResetPlayer` @0x1db17-0x1db30, the escape pod's `_ResetPlayer(0)` @0x68f2f | the rescue's reset ([`Space::reset_reinforcements_here`]) |
@@ -60,7 +60,7 @@
 use crate::pilot::Pilot;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Session, Setup, Space, Statics};
+use super::{Chart, Session, Setup, Space, Statics};
 use crate::ai::odds::cached_odds_at;
 use crate::ai::reinforcements::{
     self, Called, Clock, Coming, Event, Inhibitors, ReinforcementFacts,
@@ -218,18 +218,6 @@ impl Session {
             .coming()
             .then_some(Coming { govt: fleet.govt })
     }
-
-    /// The daily step's reinforcements: each visible system's countdown
-    /// goes down by one (@0xb724-0xb759).
-    pub(super) fn reinforcements_day(&mut self) {
-        let galaxy = &self.chart.galaxy;
-        for (system, days) in &mut self.pilot.reinforcement_days {
-            if galaxy.visible(*system) {
-                *days = reinforcements::day(*days);
-            }
-        }
-        self.pilot.reinforcement_days.retain(|_, days| *days > 0);
-    }
 }
 
 impl Space {
@@ -296,6 +284,20 @@ impl Space {
                 .collect();
             self.reinforcements.inhibited.extend(classed);
         }
+    }
+}
+
+impl Chart {
+    /// The daily step's reinforcements: each visible system's countdown
+    /// goes down by one (@0xb724-0xb759).
+    pub(super) fn reinforcements_day(&mut self, pilot: &mut Pilot) {
+        let galaxy = &self.galaxy;
+        for (system, days) in &mut pilot.reinforcement_days {
+            if galaxy.visible(*system) {
+                *days = reinforcements::day(*days);
+            }
+        }
+        pilot.reinforcement_days.retain(|_, days| *days > 0);
     }
 }
 

@@ -793,7 +793,8 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert!(session.jumping().is_some(), "facing the bearing at rest");
         let aim = session
-            .jump_aim(crate::catalog::SystemId(131))
+            .chart
+            .jump_aim(&session.pilot, crate::catalog::SystemId(131))
             .expect("on the map");
         assert_eq!(aim, 90, "east, as the player faces");
         for &id in &led {

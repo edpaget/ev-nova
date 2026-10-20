@@ -570,7 +570,7 @@ impl Session {
         let system = self.pilot.system;
         let arrival = Arrival {
             system,
-            sites: self.read_sites(catalog, system),
+            sites: self.chart.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Keep,
                 stellar: None,
@@ -591,7 +591,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let sites = self.read_sites(catalog, system);
+        let sites = self.chart.read_sites(catalog, system);
         let first = sites.first().map(|site| {
             let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
             (site.position, dock)
@@ -802,7 +802,7 @@ mod tests {
     fn moved(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
         run(session, text);
         let _ = settle(session, catalog);
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
     }
 
     fn ids(sites: &[LandingSite]) -> Vec<i16> {
@@ -1467,7 +1467,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
@@ -1497,7 +1497,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
@@ -2004,7 +2004,7 @@ mod tests {
         session.drop_raised();
         run(session, text);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.story_raised()
     }
 
@@ -2090,7 +2090,7 @@ mod tests {
             run(&mut session, text);
             let mut settled = Settled::default();
             session.settle_moves(&catalog, &mut NeverFires, &mut settled);
-            session.assert_docked_among_shown();
+            session.chart.assert_docked_among_shown(session.landed);
             assert_eq!(
                 session.story_raised(),
                 [crate::story::StoryEvent::EnteredSystem {

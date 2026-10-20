@@ -74,7 +74,7 @@ use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use super::mission_screens::MissionTextKind;
-use super::{PlayerShip, Session, Setup, Statics};
+use super::{Chart, Outbox, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{
     AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
     SystemId,
@@ -655,7 +655,9 @@ impl Session {
         // `BriefText`, filled for the slot after `OnAccept` and the charge
         // (@0xa1e0b-0xa1f13, @0xa1e56), opening the map marked for the
         // mission accepted (@0xa1e8d-0xa1eda, @0xa1f0e).
-        let map = self.briefing_map_marks(slot);
+        let map = self
+            .chart
+            .briefing_map_marks(&self.pilot, &self.statics, slot);
         self.show_mission_text_with_map(
             MissionTextKind::Brief,
             record.id,
@@ -715,11 +717,7 @@ impl Session {
         slot: u8,
         mission: MissionId,
     ) -> Option<&mut ActiveMission> {
-        self.out.save_due = true;
-        self.pilot
-            .missions
-            .get_mut(slot)
-            .filter(|active| active.mission == mission)
+        slot_holding(&mut self.pilot, &mut self.out, slot, mission)
     }
 
     /// Keeps only the offers still available at the stellar docked at
@@ -842,48 +840,14 @@ impl Session {
             self.pilot.reserves.fuel.now -= AUTO_ABORT_FUEL_TAKEN;
         }
         if record.flags2 & AUTO_ABORT_PAYS != 0 {
-            self.apply_pay(pay);
+            self.chart
+                .apply_pay(&mut self.pilot, &self.statics, &mut self.out, pay);
         }
         if self.landed.is_some() {
             self.release_mission_ships(slot);
         }
         self.ending.remove(&slot);
         true
-    }
-
-    /// Applies a mission's pay (`_ApplyMissionPay` @0x98326; see
-    /// [`pay_effect`]).
-    fn apply_pay(&mut self, pay: i64) {
-        match pay_effect(pay) {
-            PayEffect::Nothing => return,
-            PayEffect::Cash(credits) => self.pilot.cash = self.pilot.cash.saturating_add(credits),
-            PayEffect::Clean { of, among } => {
-                let govts = cleaned(
-                    self.pilot
-                        .legal_records()
-                        .map(|(govt, _)| (govt, Some(govt))),
-                    |govt| self.pilot.legal_record(govt),
-                    of,
-                    among,
-                    &self.statics.govts,
-                );
-                let systems = cleaned(
-                    self.chart.galaxy.governed(),
-                    |system| self.pilot.system_record(system),
-                    of,
-                    among,
-                    &self.statics.govts,
-                );
-                for govt in govts {
-                    self.pilot.set_legal_record(govt, 0);
-                }
-                for system in systems {
-                    self.pilot.set_system_record(system, 0);
-                }
-            }
-            PayEffect::Fine(percent) => self.pilot.cash = fined(self.pilot.cash, percent),
-        }
-        self.out.save_due = true;
     }
 
     /// Sets each government's record as `records` says, and each
@@ -1039,7 +1003,8 @@ impl Session {
             |system| self.pilot.system_record(system),
         );
         self.set_records(&changes, &in_systems);
-        self.apply_pay(done.pay);
+        self.chart
+            .apply_pay(&mut self.pilot, &self.statics, &mut self.out, done.pay);
         self.forget_offers();
         self.reoffer_due = true;
     }
@@ -1149,18 +1114,22 @@ impl Session {
         if !restarts && !self.pilot.missions.holding(mission).is_empty() {
             return;
         }
-        let origin = self.landed.unwrap_or_else(|| self.first_listed_stellar());
+        let origin = self
+            .landed
+            .unwrap_or_else(|| self.chart.first_listed_stellar());
         let today = self.pilot.date;
-        let offer = self.in_world(|world| {
-            mission::resolve(
-                &record,
-                Venue::of(record.avail_loc),
-                Some(origin),
-                world,
-                today,
-                chance,
-            )
-        });
+        let offer = self
+            .chart
+            .in_world(&self.pilot, &self.statics, &self.setup, |world| {
+                mission::resolve(
+                    &record,
+                    Venue::of(record.avail_loc),
+                    Some(origin),
+                    world,
+                    today,
+                    chance,
+                )
+            });
         if self.refuse_accept(&offer, chance).is_err() {
             return;
         }
@@ -1242,22 +1211,6 @@ impl Session {
         })
     }
 
-    /// `f` of the galaxy a mission's stellars are chosen from.
-    pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
-        let player = self.pilot.system;
-        let stellars = stellars_of(&self.chart.galaxy, &self.statics.listed_stellars, player);
-        let placed = placements(&self.chart.galaxy, &self.statics.listed_stellars, player);
-        f(&World {
-            stellars: &stellars,
-            placed: &placed,
-            map: self.chart.galaxy.map(),
-            govts: &self.statics.govts,
-            draw: self.setup.rules.source_for(RuleKey::MissionStellarDraw),
-            distance: self.setup.rules.source_for(RuleKey::MissionStellarDistance),
-            ally_index: self.setup.rules.source_for(RuleKey::MissionAllyIndex),
-        })
-    }
-
     /// `f` of the visit to `stellar`, one of the stellars shown: `None`
     /// when it is not shown.
     pub(super) fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
@@ -1281,26 +1234,27 @@ impl Session {
     ) -> T {
         let player = self.mission_player(system);
         let active = self.pilot.missions.missions();
-        self.in_world(|&world| {
-            f(&Visit {
-                docked,
-                system,
-                world,
-                player,
-                active: &active,
-                gate: self.gate(),
-                rules: &self.setup.rules,
-                today: self.pilot.date,
+        self.chart
+            .in_world(&self.pilot, &self.statics, &self.setup, |&world| {
+                f(&Visit {
+                    docked,
+                    system,
+                    world,
+                    player,
+                    active: &active,
+                    gate: self.gate(),
+                    rules: &self.setup.rules,
+                    today: self.pilot.date,
+                })
             })
-        })
     }
 
     /// The player as availability reads it, its legal record the one in
-    /// `system`, as [`Session::record_in`] reads it.
+    /// `system`, as [`Chart::record_in`] reads it.
     fn mission_player(&self, system: SystemId) -> Player {
         let ship = self.statics.ship_record(self.pilot.ship);
         Player {
-            record: self.record_in(system, None),
+            record: self.chart.record_in(&self.pilot, &self.setup, system, None),
             rating: self.pilot.combat_rating,
             ship: self.pilot.ship,
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
@@ -1645,6 +1599,77 @@ impl PlayerShip {
         let spilled = (pilot.goods_held() - escorts).max(0);
         own - (spilled + pilot.missions.cargo_aboard())
     }
+}
+
+impl Chart {
+    /// Applies a mission's pay (`_ApplyMissionPay` @0x98326; see
+    /// [`pay_effect`]).
+    fn apply_pay(&mut self, pilot: &mut Pilot, statics: &Statics, out: &mut Outbox, pay: i64) {
+        match pay_effect(pay) {
+            PayEffect::Nothing => return,
+            PayEffect::Cash(credits) => pilot.cash = pilot.cash.saturating_add(credits),
+            PayEffect::Clean { of, among } => {
+                let govts = cleaned(
+                    pilot.legal_records().map(|(govt, _)| (govt, Some(govt))),
+                    |govt| pilot.legal_record(govt),
+                    of,
+                    among,
+                    &statics.govts,
+                );
+                let systems = cleaned(
+                    self.galaxy.governed(),
+                    |system| pilot.system_record(system),
+                    of,
+                    among,
+                    &statics.govts,
+                );
+                for govt in govts {
+                    pilot.set_legal_record(govt, 0);
+                }
+                for system in systems {
+                    pilot.set_system_record(system, 0);
+                }
+            }
+            PayEffect::Fine(percent) => pilot.cash = fined(pilot.cash, percent),
+        }
+        out.save_due = true;
+    }
+
+    /// `f` of the galaxy a mission's stellars are chosen from.
+    pub(super) fn in_world<T>(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        f: impl FnOnce(&World) -> T,
+    ) -> T {
+        let player = pilot.system;
+        let stellars = stellars_of(&self.galaxy, &statics.listed_stellars, player);
+        let placed = placements(&self.galaxy, &statics.listed_stellars, player);
+        f(&World {
+            stellars: &stellars,
+            placed: &placed,
+            map: self.galaxy.map(),
+            govts: &statics.govts,
+            draw: setup.rules.source_for(RuleKey::MissionStellarDraw),
+            distance: setup.rules.source_for(RuleKey::MissionStellarDistance),
+            ally_index: setup.rules.source_for(RuleKey::MissionAllyIndex),
+        })
+    }
+}
+
+/// The mission in `slot`, to change, if it is `mission`.
+pub(super) fn slot_holding<'a>(
+    pilot: &'a mut Pilot,
+    out: &mut Outbox,
+    slot: u8,
+    mission: MissionId,
+) -> Option<&'a mut ActiveMission> {
+    out.save_due = true;
+    pilot
+        .missions
+        .get_mut(slot)
+        .filter(|active| active.mission == mission)
 }
 
 /// Where a text the session fills comes from, which decides the rank
@@ -2499,7 +2524,11 @@ mod tests {
         assert!(overlay.set_visible(SystemId(130), Some(false)));
         session.chart.galaxy.set_overlay(overlay);
         assert!(!session.galaxy().visible(SystemId(130)), "hidden");
-        assert_eq!(session.system_record(), 5, "govt 128's, though hidden");
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            5,
+            "govt 128's, though hidden"
+        );
         assert_eq!(
             session.offer_refusals(MissionId(140)),
             Some(vec![]),

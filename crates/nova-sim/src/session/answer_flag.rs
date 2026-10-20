@@ -61,7 +61,10 @@ mod tests {
     /// Sets the player's record in its system to `record`.
     fn on_record(session: &mut Session, record: i16) {
         session.pilot.set_system_record(SystemId(130), record);
-        assert_eq!(session.system_record(), record);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            record
+        );
     }
 
     /// Adds a police warship far off, idle: a Good Samaritan.

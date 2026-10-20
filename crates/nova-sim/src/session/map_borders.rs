@@ -25,11 +25,12 @@
 //! [`galaxy_map::draw_map`]: crate::galaxy_map::draw_map
 //! [`OverlaidGalaxy::same_place`]: crate::story::OverlaidGalaxy::same_place
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::SystemId;
 use crate::exploration;
 use crate::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use crate::map_borders::{BorderSource, BorderSources};
+use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
 
 impl Session {
@@ -38,14 +39,25 @@ impl Session {
     /// governments.
     #[must_use]
     pub fn map_border_sources(&self) -> BorderSources {
-        let galaxy = &self.chart.galaxy;
+        self.chart
+            .map_border_sources(&self.pilot, &self.statics, &self.setup)
+    }
+}
+
+impl Chart {
+    /// What the galaxy map's borders add now (see the module docs): the
+    /// coarse pass's sources, one a place, the fine pass's walk, and the
+    /// governments.
+    #[must_use]
+    fn map_border_sources(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> BorderSources {
+        let galaxy = &self.galaxy;
         let places = galaxy.map().places();
         let mut coarse = Vec::new();
         let mut walk = Vec::new();
         for system in galaxy.catalog_systems() {
             let Some(source) = galaxy
                 .same_place(system)
-                .and_then(|stand_in| self.border_source(stand_in))
+                .and_then(|stand_in| self.border_source(pilot, statics, setup, stand_in))
             else {
                 continue;
             };
@@ -57,24 +69,30 @@ impl Session {
         BorderSources {
             coarse,
             walk,
-            govts: self.statics.govts.clone(),
+            govts: statics.govts.clone(),
         }
     }
 
     /// `system`'s source, a visible system standing for a place, when it
     /// passes `_AddSystemInfluenceToMap`'s flag tests (@0x115b2-0x1160e).
-    fn border_source(&self, system: SystemId) -> Option<BorderSource> {
-        let galaxy = &self.chart.galaxy;
-        if !self.chart.known.contains(&system) || !self.pilot.has_explored(system) {
+    fn border_source(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        system: SystemId,
+    ) -> Option<BorderSource> {
+        let galaxy = &self.galaxy;
+        if !self.known.contains(&system) || !pilot.has_explored(system) {
             return None;
         }
         let govt = galaxy.govt(system)?;
-        if self.statics.govts.flag2(Some(govt), NO_INFLUENCE) {
+        if statics.govts.flag2(Some(govt), NO_INFLUENCE) {
             return None;
         }
         let inhabited = exploration::inhabited(
             galaxy.map().stellars(system),
-            self.setup.rules.source_for(RuleKey::MapExplore),
+            setup.rules.source_for(RuleKey::MapExplore),
         );
         let position = galaxy.position(system)?;
         // A system's map position is a whole `i16` in its `sÿst`.
@@ -84,7 +102,7 @@ impl Session {
             system,
             pos,
             govt,
-            small: self.statics.govts.flag2(Some(govt), SMALL_INFLUENCE),
+            small: statics.govts.flag2(Some(govt), SMALL_INFLUENCE),
         })
     }
 }

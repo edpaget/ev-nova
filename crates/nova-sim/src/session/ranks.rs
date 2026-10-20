@@ -85,12 +85,12 @@
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
-use super::{PlayerShip, Setup, Statics};
+use super::{Chart, PlayerShip, Setup, Statics};
 use crate::pilot::Pilot;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use crate::catalog::{GovtId, RankId};
+use crate::catalog::{GovtId, RankId, StellarId};
 use crate::legal::Crime;
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
@@ -111,20 +111,13 @@ pub(super) struct PortRanks {
 }
 
 impl Session {
-    /// The docked stellar's government now: none in flight or at an
-    /// independent stellar.
-    fn docked_govt(&self) -> Option<GovtId> {
-        let landed = self.landed?;
-        self.chart.sites.iter().find(|site| site.id == landed)?.govt
-    }
-
     /// Takes what the price multipliers read as the spaceport opens
     /// (`_DoPortDialog` @0x5f970-0x5fa04): the active ranks and the docked
     /// stellar's government.
     pub(super) fn open_port_prices(&mut self) {
         self.port_ranks = PortRanks {
             active: self.pilot.ranks.clone(),
-            govt: self.docked_govt(),
+            govt: self.chart.docked_govt(self.landed),
         };
     }
 
@@ -139,7 +132,7 @@ impl Session {
         let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
         let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
             RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
-            RuleSource::Bible => (&self.pilot.ranks, self.docked_govt()),
+            RuleSource::Bible => (&self.pilot.ranks, self.chart.docked_govt(self.landed)),
         };
         rank::price_mults(
             &self.statics.ranks,
@@ -290,6 +283,15 @@ impl PlayerShip {
             RuleSource::Bible => &pilot.ranks,
         };
         rank::blessing(&statics.ranks, active, &statics.govts, reach)
+    }
+}
+
+impl Chart {
+    /// The docked stellar's government now: none in flight or at an
+    /// independent stellar.
+    fn docked_govt(&self, landed: Option<StellarId>) -> Option<GovtId> {
+        let landed = landed?;
+        self.sites.iter().find(|site| site.id == landed)?.govt
     }
 }
 

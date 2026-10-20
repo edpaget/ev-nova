@@ -154,7 +154,7 @@ impl Session {
         if !catalog.system_exists(system) {
             return Err(RelocateRefusal::NoSystem);
         }
-        let sites = self.read_sites(catalog, system);
+        let sites = self.chart.read_sites(catalog, system);
         let site = sites
             .iter()
             .find(|site| site.id == stellar)
@@ -598,7 +598,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.hire_rolls, hire, "kept");
         assert_eq!(session.outfit_rolls, outfits, "kept");
         let mut kept = DayRolls::default();
@@ -627,7 +627,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.hire_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.outfit_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.ship_rolls, crate::wares::DayRolls::default());
@@ -661,7 +661,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(130), StellarId(129))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(session.player().position, Vec2::new(2000.0, 0.0));
     }
@@ -700,7 +700,7 @@ mod tests {
             session
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");
-            session.assert_docked_among_shown();
+            session.chart.assert_docked_among_shown(session.landed);
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
             session.take_off(&catalog, &mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
@@ -714,7 +714,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.take_off(&catalog, &mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
@@ -761,7 +761,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(flown.system(), SystemId(131));
@@ -834,7 +834,7 @@ mod tests {
             session.land_at(&catalog, SystemId(130), StellarId(129)),
             Ok(())
         );
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(
             landings(&session),
@@ -977,7 +977,7 @@ mod tests {
                 Ok(()),
                 "{stellar}"
             );
-            session.assert_docked_among_shown();
+            session.chart.assert_docked_among_shown(session.landed);
             assert_eq!(session.system(), SystemId(system));
             assert_eq!(session.landed(), Some(StellarId(stellar)));
             assert_eq!(session.pilot().stellar(), Some(StellarId(stellar)));
@@ -1123,7 +1123,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.ship.warp.gate, None);

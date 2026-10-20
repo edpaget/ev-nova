@@ -62,8 +62,8 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use super::control::Facts;
-use super::{Outbox, Session, Setup, Space, Statics};
-use crate::catalog::{LandingSite, ShipId};
+use super::{Chart, Outbox, Session, Setup, Space, Statics};
+use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
 use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
@@ -170,7 +170,7 @@ impl Session {
     /// the day not drawn yet; `None` when it has not landed at a stellar
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
-        let site = self.bar_site()?;
+        let site = self.chart.bar_site(self.landed)?;
         let facts = Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
@@ -196,17 +196,6 @@ impl Session {
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))
     }
 
-    /// The stellar the ship is docked at, if it has a bar.
-    pub(super) fn bar_site(&self) -> Option<LandingSite> {
-        let stellar = self.landed?;
-        self.chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .filter(|site| site.flags & StellarFlags::BAR != 0)
-            .copied()
-    }
-
     /// Hires a ship of class `ship` in the bar (see the module docs), the
     /// rolls not drawn yet drawn on `chance`, and gives what the hire did.
     ///
@@ -224,7 +213,7 @@ impl Session {
             .ship_record(ship)
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
-        let site = self.bar_site().ok_or(HireRefusal::NoBar)?;
+        let site = self.chart.bar_site(self.landed).ok_or(HireRefusal::NoBar)?;
         let fee = self.setup.hire_terms.0.charge(
             &record,
             &site,
@@ -309,6 +298,18 @@ impl Space {
             .collect();
         self.traffic
             .free_berth_skipping(setup.spawn_reserve(SPAWN_RESERVE), &unplaced)
+    }
+}
+
+impl Chart {
+    /// The stellar the ship is docked at, if it has a bar.
+    pub(super) fn bar_site(&self, landed: Option<StellarId>) -> Option<LandingSite> {
+        let stellar = landed?;
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .filter(|site| site.flags & StellarFlags::BAR != 0)
+            .copied()
     }
 }
 

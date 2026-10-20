@@ -172,7 +172,7 @@
 //! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
 //! it as their marks are cleared.
 
-use super::{Session, Space, Statics};
+use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
@@ -311,8 +311,12 @@ impl Session {
         active: &ActiveMission,
         chance: &mut dyn Chance,
     ) -> SpecialShips {
-        let held =
-            |stop: Option<crate::mission::Stop>| stop.map(|stop| self.holder_of(stop.stellar));
+        let held = |stop: Option<crate::mission::Stop>| {
+            stop.map(|stop| {
+                self.chart
+                    .holder_of(&self.pilot, &self.statics, stop.stellar)
+            })
+        };
         let facts = ShipFacts {
             player_system: self.pilot.system,
             destination: held(active.destination),
@@ -352,27 +356,6 @@ impl Session {
         }
     }
 
-    /// Whether ships in `system` are in the player's system
-    /// ([`ShipSystem::with_player`]), over the overlaid map's places.
-    fn ships_here(&self, system: ShipSystem) -> bool {
-        system.with_player(self.pilot.system, self.chart.galaxy.map().places())
-    }
-
-    /// Whether the enter-system hook, on an entry `how`, restarts the
-    /// appear timer of `active`, a mission of `record`: an entry it runs
-    /// on, `ShipStart` 1, ships left, and the player in their system
-    /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
-    /// player while the exit decides for them
-    /// ([`Setup::gate_decides`](super::setup::Setup::gate_decides)), as the original's loop A overwrites
-    /// the restart.
-    fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission, how: Entrance) -> bool {
-        restarts_on(how)
-            && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
-            && active.ships.left > 0
-            && self.ships_here(active.ships.system)
-            && !self.setup.gate_decides(how, active.ships.system)
-    }
-
     /// Slot `id.record`'s hook `id.hook` on `event`, drawing on `chance`
     /// (see the module docs): the enter-system hook restarts the timer,
     /// then checks the goals in flight; the other hooks check the goals,
@@ -388,7 +371,15 @@ impl Session {
         };
         match (id.hook, *event) {
             (ENTERED, StoryEvent::EnteredSystem { how, .. }) => {
-                self.restart_on_entry(slot, how, chance);
+                self.chart.restart_on_entry(
+                    &mut self.pilot,
+                    &self.statics,
+                    &self.setup,
+                    &mut self.out,
+                    slot,
+                    how,
+                    chance,
+                );
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
@@ -404,24 +395,6 @@ impl Session {
                 self.check_ship_goals(slot, sighted, chance);
             }
             _ => {}
-        }
-    }
-
-    /// The enter-system hook of the mission in `slot` on an entry `how`,
-    /// drawing on `chance`: restarts its special ships' appear timer
-    /// ([`appear_timer`]) and zeroes their arrived count.
-    fn restart_on_entry(&mut self, slot: u8, how: Entrance, chance: &mut dyn Chance) {
-        let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let record = self.statics.lifecycle_record(active.mission);
-        if !self.hook_restarts(&record, active, how) {
-            return;
-        }
-        let appear = appear_timer(&record.ships, chance);
-        if let Some(active) = self.slot_holding(slot, record.id) {
-            active.ships.appear = appear;
-            active.ships.arrived = 0;
         }
     }
 
@@ -458,7 +431,7 @@ impl Session {
             boarded: ships.boarded,
             disabled: ships.disabled,
             chased_off: ships.chased_off,
-            here: seen.here || self.ships_here(ships.system),
+            here: seen.here || self.chart.ships_here(&self.pilot, ships.system),
             escorted: self
                 .npcs()
                 .iter()
@@ -526,28 +499,6 @@ impl Session {
         }
     }
 
-    /// The system's `NavDefs` slots: each its stellar's position, none
-    /// for an empty slot (or one whose stellar cannot be read).
-    fn nav_slots(&self) -> Vec<Option<Vec2>> {
-        let mut sites = self.chart.sites.iter();
-        self.chart
-            .galaxy
-            .map()
-            .stellars(self.pilot.system)
-            .iter()
-            .map(|slot| slot.and_then(|_| sites.next()).map(|site| site.position))
-            .collect()
-    }
-
-    /// The `düde`s of the active missions' special ships, in slot order.
-    pub(super) fn mission_dudes(&self) -> Vec<DudeId> {
-        self.pilot
-            .missions
-            .iter()
-            .filter_map(|(_, active)| self.statics.lifecycle_record(active.mission).ships.dude)
-            .collect()
-    }
-
     /// The active missions' special ships set up in the system from
     /// `table`, drawing on `chance`, in slot order (`_SetupShipsInSystem`
     /// @0x42dc4-0x43194): a slot whose ships are here, with ships left and
@@ -564,7 +515,7 @@ impl Session {
         entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
     ) -> (Vec<NewShip>, Vec<(u8, MissionId)>) {
-        let nav = self.nav_slots();
+        let nav = self.chart.nav_slots(&self.pilot);
         let mut ships = Vec::new();
         let mut set_up = Vec::new();
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
@@ -576,10 +527,13 @@ impl Session {
             let state = &active.ships;
             let left = state.left;
             let expired = active.days_left == Some(0);
-            if !self.ships_here(state.system)
+            if !self.chart.ships_here(&self.pilot, state.system)
                 || left <= 0
                 || state.appear >= 0
-                || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
+                || entering.is_some_and(|how| {
+                    self.chart
+                        .hook_restarts(&self.pilot, &self.setup, &record, active, how)
+                })
             {
                 continue;
             }
@@ -645,14 +599,6 @@ impl Session {
             active.ships.uniform_type = drawn;
         }
         drawn
-    }
-
-    /// The way from the player's system to the one it last jumped from,
-    /// on the map: none before a jump, or when either is not on it.
-    fn way_back(&self) -> Option<Vec2> {
-        let from = self.chart.galaxy.position(self.pilot.jumped_from?)?;
-        let here = self.chart.galaxy.position(self.pilot.system)?;
-        Some(from - here)
     }
 
     /// A tick of the special ships' appear timers in flight, as
@@ -733,7 +679,10 @@ impl Session {
         };
         let record = self.statics.lifecycle_record(active.mission);
         let active = active.clone();
-        if entering.is_some_and(|how| self.hook_restarts(&record, &active, how)) {
+        if entering.is_some_and(|how| {
+            self.chart
+                .hook_restarts(&self.pilot, &self.setup, &record, &active, how)
+        }) {
             return;
         }
         let Some(part) = self.special_part(catalog, slot, &record, &active, chance) else {
@@ -795,7 +744,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SpecialPart> {
         let state = &active.ships;
-        if !self.ships_here(state.system) {
+        if !self.chart.ships_here(&self.pilot, state.system) {
             return None;
         }
         let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
@@ -868,7 +817,7 @@ impl Session {
         let ships = spawn::arriving_mission_ships(
             self.space.traffic.table(),
             &spawn,
-            self.way_back(),
+            self.chart.way_back(&self.pilot),
             self.gate(),
             chance,
         );
@@ -1460,6 +1409,93 @@ impl Space {
             .filter_map(|npc| Some((npc.id, npc.mission?)))
             .collect()
     }
+}
+
+impl Chart {
+    /// Whether ships in `system` are in the player's system
+    /// ([`ShipSystem::with_player`]), over the overlaid map's places.
+    fn ships_here(&self, pilot: &Pilot, system: ShipSystem) -> bool {
+        system.with_player(pilot.system, self.galaxy.map().places())
+    }
+
+    /// Whether the enter-system hook, on an entry `how`, restarts the
+    /// appear timer of `active`, a mission of `record`: an entry it runs
+    /// on, `ShipStart` 1, ships left, and the player in their system
+    /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
+    /// player while the exit decides for them
+    /// ([`Setup::gate_decides`](super::setup::Setup::gate_decides)), as the original's loop A overwrites
+    /// the restart.
+    fn hook_restarts(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        record: &MissionRecord,
+        active: &ActiveMission,
+        how: Entrance,
+    ) -> bool {
+        restarts_on(how)
+            && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
+            && active.ships.left > 0
+            && self.ships_here(pilot, active.ships.system)
+            && !setup.gate_decides(how, active.ships.system)
+    }
+
+    /// The enter-system hook of the mission in `slot` on an entry `how`,
+    /// drawing on `chance`: restarts its special ships' appear timer
+    /// ([`appear_timer`]) and zeroes their arrived count.
+    #[allow(clippy::too_many_arguments)] // what it reads outside Chart, then its own three
+    fn restart_on_entry(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+        slot: u8,
+        how: Entrance,
+        chance: &mut dyn Chance,
+    ) {
+        let Some(active) = pilot.missions.get(slot) else {
+            return;
+        };
+        let record = statics.lifecycle_record(active.mission);
+        if !self.hook_restarts(pilot, setup, &record, active, how) {
+            return;
+        }
+        let appear = appear_timer(&record.ships, chance);
+        if let Some(active) = super::missions::slot_holding(pilot, out, slot, record.id) {
+            active.ships.appear = appear;
+            active.ships.arrived = 0;
+        }
+    }
+
+    /// The system's `NavDefs` slots: each its stellar's position, none
+    /// for an empty slot (or one whose stellar cannot be read).
+    fn nav_slots(&self, pilot: &Pilot) -> Vec<Option<Vec2>> {
+        let mut sites = self.sites.iter();
+        self.galaxy
+            .map()
+            .stellars(pilot.system)
+            .iter()
+            .map(|slot| slot.and_then(|_| sites.next()).map(|site| site.position))
+            .collect()
+    }
+
+    /// The way from the player's system to the one it last jumped from,
+    /// on the map: none before a jump, or when either is not on it.
+    fn way_back(&self, pilot: &Pilot) -> Option<Vec2> {
+        let from = self.galaxy.position(pilot.jumped_from?)?;
+        let here = self.galaxy.position(pilot.system)?;
+        Some(from - here)
+    }
+}
+
+/// The `düde`s of the active missions' special ships, in slot order.
+pub(super) fn mission_dudes(pilot: &Pilot, statics: &Statics) -> Vec<DudeId> {
+    pilot
+        .missions
+        .iter()
+        .filter_map(|(_, active)| statics.lifecycle_record(active.mission).ships.dude)
+        .collect()
 }
 
 /// Whether `npc` is held disabled whatever its armour, as

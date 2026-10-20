@@ -1,8 +1,9 @@
 //! What the murk asks of the session (see [`murk`]): the
 //! player's effective murk in its system, which the view darkens shots by.
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::murk;
+use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
 
 impl Session {
@@ -18,12 +19,27 @@ impl Session {
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
     pub fn effective_murk(&self) -> u8 {
-        let raw = self.chart.galaxy.map().murk(self.pilot.system);
-        let loaded = murk::loaded_murk(raw, self.setup.rules.source_for(RuleKey::LowMurk));
-        murk::effective_murk(
-            loaded,
-            murk::outfit_murk(&self.pilot.outfits, &self.statics.outfits),
-        )
+        self.chart
+            .effective_murk(&self.pilot, &self.statics, &self.setup)
+    }
+}
+
+impl Chart {
+    /// The player's effective murk, 0..=100 ([`murk::effective_murk`]):
+    /// its system's `Murk` as loaded ([`murk::loaded_murk`], by the
+    /// rulebook's [`RuleKey::LowMurk`] reading), plus what its outfits
+    /// add ([`murk::outfit_murk`]), as `_PlayerEffectiveMurk`
+    /// (@0x6f8f-0x704b) sums them.
+    ///
+    /// It is worked out afresh at every call, as
+    /// [`Session::interference`] is. The original caches it in
+    /// `_playerEffectiveMurk`; when that goes stale is
+    /// rdm:task/reset-player-precalced-left-out-branches's question.
+    #[must_use]
+    fn effective_murk(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> u8 {
+        let raw = self.galaxy.map().murk(pilot.system);
+        let loaded = murk::loaded_murk(raw, setup.rules.source_for(RuleKey::LowMurk));
+        murk::effective_murk(loaded, murk::outfit_murk(&pilot.outfits, &statics.outfits))
     }
 }
 

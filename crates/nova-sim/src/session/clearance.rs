@@ -66,7 +66,7 @@
 //! request on the press, between ticks, and the approach from the next
 //! tick the land key is up, so the two agree.
 
-use super::{Outbox, Session};
+use super::{Chart, Outbox, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
 use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal};
 use crate::message::SimMessage;
@@ -92,13 +92,13 @@ impl Session {
     /// 2 with the brackets' fly-in, the request after it, and what it
     /// said, and gives its outcome.
     pub(super) fn apply_press(&mut self, press: DockPress) -> Result<LandOutcome, LandingRefusal> {
-        self.select_pressed(press.selected);
+        self.chart.select_pressed(press.selected);
         self.dock = press.dock;
         match press.said {
             Some(DockSaid::NoResponse) => self.space.say(&mut self.out, SimMessage::NoResponse),
             Some(DockSaid::Requested) => {
                 if let Ok(LandOutcome::Requested { stellar, .. }) = press.outcome {
-                    let kind = self.dock_kind(stellar);
+                    let kind = self.chart.dock_kind(stellar);
                     self.out.sounds.push(SimSound::TrafficControl);
                     self.space
                         .say(&mut self.out, SimMessage::DockRequested { stellar, kind });
@@ -110,25 +110,6 @@ impl Session {
             self.out.sounds.push(SimSound::TrafficControl);
         }
         press.outcome
-    }
-
-    /// Selects the stellar the land key `selected`, if it selected one, in
-    /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
-    pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
-        if let Some(stellar) = selected {
-            self.set_nav(NavMode::Stellar(Some(stellar)));
-            self.chart.nav_fly_in.start();
-        }
-    }
-
-    /// How the request's line and the greeting word `stellar`, one of the
-    /// system's.
-    fn dock_kind(&self, stellar: crate::catalog::StellarId) -> DockKind {
-        self.chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .map_or(DockKind::Planet, DockKind::of_site)
     }
 
     /// One frame of the dock approach, then nav mode 3's reset (see the
@@ -216,6 +197,26 @@ impl Outbox {
             index += 1;
             index <= sounds || *sound != SimSound::TrafficControl
         });
+    }
+}
+
+impl Chart {
+    /// Selects the stellar the land key `selected`, if it selected one, in
+    /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
+    pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
+        if let Some(stellar) = selected {
+            self.set_nav(NavMode::Stellar(Some(stellar)));
+            self.nav_fly_in.start();
+        }
+    }
+
+    /// How the request's line and the greeting word `stellar`, one of the
+    /// system's.
+    fn dock_kind(&self, stellar: crate::catalog::StellarId) -> DockKind {
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or(DockKind::Planet, DockKind::of_site)
     }
 }
 
@@ -731,7 +732,7 @@ mod tests {
         session.land().expect("requests 128");
         session.dock = request(128, permission);
         session.ship.player.position = Vec2::new(2000.0, 0.0);
-        session.deselect();
+        session.chart.deselect();
         session.land()
     }
 

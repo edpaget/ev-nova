@@ -59,9 +59,10 @@
 //! days and crons (phase 25), and the escape pod's exploration (roadmap
 //! player-death).
 
-use super::{Session, SessionEvent};
+use super::{Chart, Outbox, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{NebulaId, SystemId};
 use crate::nebula::{self, nebula_hook};
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::{EventFilter, StoryEvent, StoryEventKind, Subscription};
 
@@ -75,44 +76,6 @@ impl Session {
                 EventFilter::Any(StoryEventKind::Explored),
                 record.on_explore.clone(),
             ));
-        }
-    }
-
-    /// Whether `nebula`'s subscription runs on `event` now: an `Explored`
-    /// of a system its inset rectangle holds while it is active and not
-    /// yet explored ([`nebula::explores`]). Never for a nebula with no
-    /// record.
-    pub(super) fn nebula_admits(&self, nebula: NebulaId, event: &StoryEvent) -> bool {
-        let StoryEvent::Explored { system } = *event else {
-            return false;
-        };
-        let Some(record) = self
-            .statics
-            .nebulae
-            .iter()
-            .find(|record| record.id == nebula)
-        else {
-            return false;
-        };
-        nebula::explores(
-            record,
-            self.chart.galaxy.nebula_active(nebula),
-            self.chart.galaxy.nebula_explored(nebula),
-            self.chart.galaxy.position(system),
-        )
-    }
-
-    /// `nebula`'s subscription's effect, before its `OnExplore`: marks it
-    /// explored and tells [`SessionEvent::GalaxyChanged`]; by the other
-    /// reading of [`RuleKey::NebulaExploreOnce`], keeps it in the
-    /// once-fired record too, making a save due.
-    pub(super) fn explore_nebula(&mut self, nebula: NebulaId) {
-        self.pilot.galaxy.set_nebula_explored(nebula, true);
-        self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
-        self.out.emit(SessionEvent::GalaxyChanged);
-        if self.setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
-            self.pilot.story_fired.insert(nebula_hook(nebula));
-            self.out.save_due = true;
         }
     }
 
@@ -147,6 +110,52 @@ impl Session {
     pub(super) fn withdraw_new_pilot_explored(&mut self) {
         if self.setup.rules.source_for(RuleKey::NebulaNewPilot) == RuleSource::Engine {
             self.withdraw_raised(StoryEventKind::Explored);
+        }
+    }
+}
+
+impl Chart {
+    /// Whether `nebula`'s subscription runs on `event` now: an `Explored`
+    /// of a system its inset rectangle holds while it is active and not
+    /// yet explored ([`nebula::explores`]). Never for a nebula with no
+    /// record.
+    pub(super) fn nebula_admits(
+        &self,
+        statics: &Statics,
+        nebula: NebulaId,
+        event: &StoryEvent,
+    ) -> bool {
+        let StoryEvent::Explored { system } = *event else {
+            return false;
+        };
+        let Some(record) = statics.nebulae.iter().find(|record| record.id == nebula) else {
+            return false;
+        };
+        nebula::explores(
+            record,
+            self.galaxy.nebula_active(nebula),
+            self.galaxy.nebula_explored(nebula),
+            self.galaxy.position(system),
+        )
+    }
+
+    /// `nebula`'s subscription's effect, before its `OnExplore`: marks it
+    /// explored and tells [`SessionEvent::GalaxyChanged`]; by the other
+    /// reading of [`RuleKey::NebulaExploreOnce`], keeps it in the
+    /// once-fired record too, making a save due.
+    pub(super) fn explore_nebula(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+        nebula: NebulaId,
+    ) {
+        pilot.galaxy.set_nebula_explored(nebula, true);
+        self.galaxy.set_overlay(pilot.galaxy.clone());
+        out.emit(SessionEvent::GalaxyChanged);
+        if setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
+            pilot.story_fired.insert(nebula_hook(nebula));
+            out.save_due = true;
         }
     }
 }
@@ -415,10 +424,16 @@ mod tests {
         let at_131 = StoryEvent::Explored {
             system: SystemId(131),
         };
-        assert!(session.nebula_admits(N128, &at_131));
-        assert!(!session.nebula_admits(NebulaId(129), &at_131), "no record");
+        assert!(session.chart.nebula_admits(&session.statics, N128, &at_131));
         assert!(
-            !session.nebula_admits(
+            !session
+                .chart
+                .nebula_admits(&session.statics, NebulaId(129), &at_131),
+            "no record"
+        );
+        assert!(
+            !session.chart.nebula_admits(
+                &session.statics,
                 N128,
                 &StoryEvent::EnteredSystem {
                     system: SystemId(131),
@@ -428,7 +443,8 @@ mod tests {
             "not an exploration"
         );
         assert!(
-            !session.nebula_admits(
+            !session.chart.nebula_admits(
+                &session.statics,
                 N128,
                 &StoryEvent::Explored {
                     system: SystemId(999),

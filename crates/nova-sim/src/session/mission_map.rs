@@ -9,7 +9,7 @@
 //! | An offer ([`Session::offer_map_marks`], `_OfferOneMission` @0xa3059-0xa30e8) | the offer's | 1 (@0xa3064) |
 //! | The mission computer ([`Session::computer_map_marks`], `_DoMissionDialog` @0xa3ce3-0xa3d51) | the selected offer's; none with no row selected | 1 (@0xa3ce0) |
 //! | Mission info ([`Session::mission_info_map_marks`], `_DoMissionInfoDialog` @0x9e3d3-0x9e43f) | the selected held mission's | 0 (@0x9e3e2) |
-//! | The accept's briefing (`Session::briefing_map_marks`, `_DoMissionAccept` @0xa1e8d-0xa1eda) | the accepted mission's | 1 (@0xa1e98) |
+//! | The accept's briefing (`Chart::briefing_map_marks`, `_DoMissionAccept` @0xa1e8d-0xa1eda) | the accepted mission's | 1 (@0xa1e98) |
 //!
 //! **The green system** is −1 unless the mission's `Flags` has
 //! [`MARKS_DESTINATION`] (@0xa307c, @0xa3d0d, @0x9e40c, @0xa1ea8). With
@@ -33,9 +33,10 @@
 //! None of this plays a sound or makes a random draw. The word width of
 //! `_greenMissionSyst`, compared raw, is not modelled apart.
 
-use super::Session;
+use super::{Chart, Session, Statics};
 use crate::catalog::{MissionId, StellarId, SystemId};
 use crate::galaxy_map::{MARKS_DESTINATION, MapMarks};
+use crate::pilot::Pilot;
 
 impl Session {
     /// The marks of the map an offer of `mission` opens (see the module
@@ -45,7 +46,9 @@ impl Session {
     #[must_use]
     pub fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
         let green = self.offer_of(mission).and_then(|offer| {
-            self.green_system(
+            self.chart.green_system(
+                &self.pilot,
+                &self.statics,
                 mission,
                 offer.destination.map(|stop| stop.stellar),
                 offer.return_to.map(|stop| stop.stellar),
@@ -72,8 +75,25 @@ impl Session {
     /// one.
     #[must_use]
     pub fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
+        self.chart
+            .mission_info_map_marks(&self.pilot, &self.statics, slot)
+    }
+}
+
+impl Chart {
+    /// The marks of the map mission info opens with the mission held in
+    /// `slot` selected, if any (see the module docs): its green system,
+    /// and the green system's red arrow cleared whether or not there is
+    /// one.
+    #[must_use]
+    fn mission_info_map_marks(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        slot: Option<u8>,
+    ) -> MapMarks {
         MapMarks {
-            green: slot.and_then(|slot| self.held_green(slot)),
+            green: slot.and_then(|slot| self.held_green(pilot, statics, slot)),
             multi_arrows: false,
         }
     }
@@ -82,17 +102,24 @@ impl Session {
     /// into `slot` opens (see the module docs), multiple arrows allowed:
     /// worked out as its text is queued, as `_DoMissionAccept` writes
     /// them just before `_ShowTextDialog` (@0xa1e8d-0xa1f0e).
-    pub(super) fn briefing_map_marks(&self, slot: u8) -> MapMarks {
+    pub(super) fn briefing_map_marks(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        slot: u8,
+    ) -> MapMarks {
         MapMarks {
-            green: self.held_green(slot),
+            green: self.held_green(pilot, statics, slot),
             multi_arrows: true,
         }
     }
 
     /// The green system of the mission held in `slot`, if any.
-    fn held_green(&self, slot: u8) -> Option<SystemId> {
-        let held = self.pilot.missions.get(slot)?;
+    fn held_green(&self, pilot: &Pilot, statics: &Statics, slot: u8) -> Option<SystemId> {
+        let held = pilot.missions.get(slot)?;
         self.green_system(
+            pilot,
+            statics,
             held.mission,
             held.destination.map(|stop| stop.stellar),
             held.return_to.map(|stop| stop.stellar),
@@ -104,21 +131,20 @@ impl Session {
     /// docs).
     fn green_system(
         &self,
+        pilot: &Pilot,
+        statics: &Statics,
         mission: MissionId,
         destination: Option<StellarId>,
         return_to: Option<StellarId>,
     ) -> Option<SystemId> {
-        let flags = self
-            .statics
+        let flags = statics
             .mission_record(mission)
             .map_or(0, |record| record.flags);
         if flags & MARKS_DESTINATION == 0 {
             return None;
         }
         let stellar = destination.or(return_to)?;
-        self.chart
-            .galaxy
-            .holder(self.statics.listers(stellar), self.pilot.system)
+        self.galaxy.holder(statics.listers(stellar), pilot.system)
     }
 }
 
@@ -357,9 +383,19 @@ mod tests {
     fn the_briefings_marks_are_the_held_missions_with_multiple_arrows() {
         let mut session = Session::start(&marking()).expect("starts");
         let slot = holding(&mut session, 302, None, Some(150));
-        assert_eq!(session.briefing_map_marks(slot), green(132, true));
+        assert_eq!(
+            session
+                .chart
+                .briefing_map_marks(&session.pilot, &session.statics, slot),
+            green(132, true)
+        );
         let slot = holding(&mut session, 301, Some(140), None);
-        assert_eq!(session.briefing_map_marks(slot), MapMarks::NONE);
+        assert_eq!(
+            session
+                .chart
+                .briefing_map_marks(&session.pilot, &session.statics, slot),
+            MapMarks::NONE
+        );
     }
 
     #[test]

@@ -463,10 +463,10 @@ fn a_second_call_before_the_interval_brings_none_and_one_after_it_does() {
     arrived(&mut session, &catalog, warship);
     session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), reinforcements::ARRIVED, "2 days to go");
-    session.reinforcements_day();
+    session.chart.reinforcements_day(&mut session.pilot);
     session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), reinforcements::ARRIVED, "1 day to go");
-    session.reinforcements_day();
+    session.chart.reinforcements_day(&mut session.pilot);
     assert_eq!(countdown(&session), 0);
     assert!(session.pilot().reinforcement_days.is_empty(), "none kept");
     session.call_for_reinforcements(warship, false, None);
@@ -482,7 +482,7 @@ fn a_day_counts_down_only_the_visible_systems() {
     session.chart.galaxy.set_overlay(overlay);
     session.pilot.reinforcement_days =
         BTreeMap::from([(SystemId(130), 3), (SystemId(131), 2), (SystemId(132), 1)]);
-    session.reinforcements_day();
+    session.chart.reinforcements_day(&mut session.pilot);
     assert_eq!(
         session.pilot().reinforcement_days,
         BTreeMap::from([(SystemId(130), 2), (SystemId(131), 2)]),
@@ -593,7 +593,7 @@ fn comes_after_the_sale(source: RuleSource) -> bool {
     assert_eq!(countdown(&session), 1, "marked");
     session.pilot.outfits.remove(&JAMMER);
     session.reset_precalced();
-    session.reinforcements_day();
+    session.chart.reinforcements_day(&mut session.pilot);
     session.call_for_reinforcements(warship, false, None);
     timer(&session) > 0
 }

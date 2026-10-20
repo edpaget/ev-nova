@@ -2,10 +2,11 @@
 //! player's radar outfits, each ship's and stellar's IFF colour code, and
 //! the interference in the player's system.
 
-use super::{Session, Space};
+use super::{Chart, Session, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::iff::{self, RadarGear, ShipIff, Standing, StellarIff};
 use crate::market;
+use crate::pilot::Pilot;
 use crate::rank::Blessed;
 use crate::traffic::npc::Npc;
 
@@ -20,7 +21,7 @@ impl Session {
     /// read, so the two match.
     #[must_use]
     pub fn radar_gear(&self) -> RadarGear {
-        RadarGear::of(&self.pilot.outfits, &self.statics.outfits)
+        radar_gear(&self.pilot, &self.statics)
     }
 
     /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
@@ -58,12 +59,16 @@ impl Session {
             dominated: Self::iff_dominated(site),
             blessed: self.blessing().blesses(site.govt, Blessed::Landing),
         };
-        Some(iff::stellar_iff(site, self.landing_record(site), standing))
+        Some(iff::stellar_iff(
+            site,
+            self.chart.landing_record(&self.pilot, &self.setup, site),
+            standing,
+        ))
     }
 
     /// Whether `site` is dominated, the +0x46 byte `_ColorCodeStellar`
     /// and the nav brackets read: only the always-dominated bit
-    /// ([`DOMINATED`](market::DOMINATED)), as [`Session::markup`] reads
+    /// ([`DOMINATED`](market::DOMINATED)), as [`Chart::markup`] reads
     /// it. Domination by tribute (`_DoPlanetCommDialog` @0x978fa, cleared
     /// @0x9740f) has no state yet: rdm:task/planet-domination feeds it in
     /// here.
@@ -83,8 +88,7 @@ impl Session {
     /// 0..=100.
     #[must_use]
     pub fn interference(&self) -> u8 {
-        let system = self.chart.galaxy.map().interference(self.pilot.system);
-        iff::interference(system, self.radar_gear().anti_interference)
+        self.chart.interference(&self.pilot, &self.statics)
     }
 }
 
@@ -97,6 +101,30 @@ impl Space {
     fn ship_iff(&self, npc: &Npc) -> ShipIff {
         iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
     }
+}
+
+impl Chart {
+    /// The interference in the player's system ([`iff::interference`]):
+    /// its `sÿst` `Interference` less the player's anti-interference,
+    /// 0..=100.
+    #[must_use]
+    fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
+        let system = self.galaxy.map().interference(pilot.system);
+        iff::interference(system, radar_gear(pilot, statics).anti_interference)
+    }
+}
+
+/// What the player's outfits give the radar: IFF, a density scanner
+/// and anti-interference ([`RadarGear::of`]).
+///
+/// It is read afresh at every call. The original caches it lazily,
+/// and every change to the outfits (the outfitter included, through
+/// `_SystemInfoToShipStats` @0x5c305 / @0x5cffb) resets the cache
+/// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
+/// read, so the two match.
+#[must_use]
+fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
+    RadarGear::of(&pilot.outfits, &statics.outfits)
 }
 
 #[cfg(test)]

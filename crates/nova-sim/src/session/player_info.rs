@@ -17,7 +17,7 @@
 //! catalog gives them, through the galaxy overlay; a `NavDefs` slot the
 //! catalog cannot read is skipped there, so it does not take up one of
 //! the first three or four places the original's scans count. Its string
-//! is `Session::legal_status_in`, which the galaxy map's panel reads for
+//! is `Chart::legal_status_in`, which the galaxy map's panel reads for
 //! the system it selects; there a stellar counts only while active, as
 //! another system's stellars may not be. The
 //! tribute counts each stellar some system lists, held as
@@ -25,7 +25,7 @@
 //! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
 //! is read from the holder's stellars in `catalog`.
 
-use super::{PlayerShip, Session, Setup, Statics, overlaid_sites};
+use super::{Chart, PlayerShip, Session, Setup, Statics, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
@@ -159,7 +159,11 @@ impl Session {
                     .map(|record| record.cost)
             })
             .collect();
-        let day = player_info::daily_income(costs, self.tribute(catalog), ranks.salary);
+        let day = player_info::daily_income(
+            costs,
+            self.chart.tribute(&self.pilot, &self.statics, catalog),
+            ranks.salary,
+        );
         PlayerInfo {
             pilot_name: self.pilot.name().to_owned(),
             date: self.med_date_text(),
@@ -170,7 +174,13 @@ impl Session {
                 .get(&self.pilot.system)
                 .cloned()
                 .unwrap_or_default(),
-            legal_status: self.legal_status(catalog, &words),
+            legal_status: self.chart.legal_status(
+                &self.pilot,
+                &self.statics,
+                &self.setup,
+                catalog,
+                &words,
+            ),
             ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
             ship_class: self
                 .ship_name(self.pilot.ship)
@@ -191,82 +201,6 @@ impl Session {
             honors,
             jettisonable: player_info::has_jettisonable_cargo(&cargo),
             words,
-        }
-    }
-
-    /// The day's tribute (@0x5352c-0x53583): each stellar some system
-    /// lists that is dominated and active, its tribute read from its
-    /// holder's stellars in `catalog`.
-    fn tribute(&self, catalog: &impl PilotCatalog) -> i64 {
-        self.statics
-            .listed_stellars
-            .iter()
-            .filter(|listed| listed.flags2 & DOMINATED != 0)
-            .filter_map(|listed| {
-                let holder = self
-                    .chart
-                    .galaxy
-                    .holder(&listed.systems, self.pilot.system)?;
-                let sites = catalog.landing_sites(holder);
-                let site = sites.iter().find(|site| site.id == listed.id)?;
-                Some(player_info::tribute_of(site))
-            })
-            .sum()
-    }
-
-    /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
-    /// [`Session::legal_status_in`]): the player's system's stellars read
-    /// from `catalog`; "N/A" in an uninhabited system.
-    pub(super) fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
-        let system = self.pilot.system;
-        let sites = overlaid_sites(&self.chart.galaxy, catalog, system);
-        let inhabited = player_info::system_is_inhabited(
-            sites.iter().map(|site| (uninhabited(site), gate(site))),
-        );
-        if !inhabited {
-            return words.not_available.to_string();
-        }
-        self.legal_status_in(catalog, system, words)
-    }
-
-    /// The legal status string in `system`, as `_DrawLegalStatusString`
-    /// (@0xd43f-0xd66d) writes it: the record there as
-    /// [`RuleKey::LegalRecords`] reads it (`Session::record_in`), the
-    /// tolerance of its government (government slot 0's for an
-    /// independent one), "N/A" under a xenophobic government, and the
-    /// domination of its first three stellars that count: each active
-    /// (its holder visible, +0x44 @0xd5ba), inhabited, landable and no
-    /// gate. Its stellars are read from `catalog`; a status missing from
-    /// the string lists reads empty.
-    pub(super) fn legal_status_in(
-        &self,
-        catalog: &impl PilotCatalog,
-        system: SystemId,
-        words: &Words,
-    ) -> String {
-        let sites = overlaid_sites(&self.chart.galaxy, catalog, system);
-        let govt = self.chart.galaxy.govt(system);
-        let counting = sites.iter().take(3).filter(|site| {
-            self.chart
-                .galaxy
-                .active_holder(self.statics.listers(site.id), self.pilot.system)
-                .is_some()
-                && !uninhabited(site)
-                && is_landable(site)
-                && !gate(site)
-        });
-        let index = player_info::legal_status_index(
-            i64::from(self.record_in(system, None)),
-            i64::from(self.statics.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
-            self.statics.govts.xenophobic(govt),
-            Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
-        );
-        match index {
-            Some(index) => self
-                .setup
-                .nth_string(LEGAL_STATUS_STRINGS, index + 1)
-                .unwrap_or_default(),
-            None => words.not_available.to_string(),
         }
     }
 }
@@ -349,6 +283,89 @@ impl PlayerShip {
             setup.rules.source_for(RuleKey::TradeInOutfits),
             &setup.rules,
         )
+    }
+}
+
+impl Chart {
+    /// The day's tribute (@0x5352c-0x53583): each stellar some system
+    /// lists that is dominated and active, its tribute read from its
+    /// holder's stellars in `catalog`.
+    fn tribute(&self, pilot: &Pilot, statics: &Statics, catalog: &impl PilotCatalog) -> i64 {
+        statics
+            .listed_stellars
+            .iter()
+            .filter(|listed| listed.flags2 & DOMINATED != 0)
+            .filter_map(|listed| {
+                let holder = self.galaxy.holder(&listed.systems, pilot.system)?;
+                let sites = catalog.landing_sites(holder);
+                let site = sites.iter().find(|site| site.id == listed.id)?;
+                Some(player_info::tribute_of(site))
+            })
+            .sum()
+    }
+
+    /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
+    /// [`Chart::legal_status_in`]): the player's system's stellars read
+    /// from `catalog`; "N/A" in an uninhabited system.
+    pub(super) fn legal_status(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+        words: &Words,
+    ) -> String {
+        let system = pilot.system;
+        let sites = overlaid_sites(&self.galaxy, catalog, system);
+        let inhabited = player_info::system_is_inhabited(
+            sites.iter().map(|site| (uninhabited(site), gate(site))),
+        );
+        if !inhabited {
+            return words.not_available.to_string();
+        }
+        self.legal_status_in(pilot, statics, setup, catalog, system, words)
+    }
+
+    /// The legal status string in `system`, as `_DrawLegalStatusString`
+    /// (@0xd43f-0xd66d) writes it: the record there as
+    /// [`RuleKey::LegalRecords`] reads it (`Chart::record_in`), the
+    /// tolerance of its government (government slot 0's for an
+    /// independent one), "N/A" under a xenophobic government, and the
+    /// domination of its first three stellars that count: each active
+    /// (its holder visible, +0x44 @0xd5ba), inhabited, landable and no
+    /// gate. Its stellars are read from `catalog`; a status missing from
+    /// the string lists reads empty.
+    pub(super) fn legal_status_in(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+        system: SystemId,
+        words: &Words,
+    ) -> String {
+        let sites = overlaid_sites(&self.galaxy, catalog, system);
+        let govt = self.galaxy.govt(system);
+        let counting = sites.iter().take(3).filter(|site| {
+            self.galaxy
+                .active_holder(statics.listers(site.id), pilot.system)
+                .is_some()
+                && !uninhabited(site)
+                && is_landable(site)
+                && !gate(site)
+        });
+        let index = player_info::legal_status_index(
+            i64::from(self.record_in(pilot, setup, system, None)),
+            i64::from(statics.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
+            statics.govts.xenophobic(govt),
+            Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
+        );
+        match index {
+            Some(index) => setup
+                .nth_string(LEGAL_STATUS_STRINGS, index + 1)
+                .unwrap_or_default(),
+            None => words.not_available.to_string(),
+        }
     }
 }
 

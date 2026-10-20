@@ -387,8 +387,13 @@
 //!   open); the coordinators that read other state too (`step_traffic`,
 //!   `tick_combat`, `ship_loop`, `populate`, `reform`, `world`,
 //!   `settle_line_queue`) stay on `Session`.
-//! - `chart: chart::Chart` (`chart` module; phase 6, to come): the system
-//!   shown, the galaxy overlay and the nav selection.
+//! - `chart: chart::Chart` (`chart` module; phase 6, done): what the
+//!   player sees of the galaxy and has selected in it (the stellars
+//!   shown, the galaxy overlay and the systems known, the nav selection
+//!   and its saved copies, the target and the brackets' fly-ins); the
+//!   coordinators that read other state too (`set_player_system`,
+//!   `refresh_galaxy`, `rebuild_stellars`, `let_go_of_gone_target`,
+//!   `enter_system`) stay on `Session`.
 //! - `port: port::Port` (`port` module; phase 7, to come): landing,
 //!   take-off and the spaceport visit.
 //! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, to
@@ -1657,7 +1662,7 @@ impl Session {
             self.red_alert.step(frame);
         }
         self.tutorial_tick(frame);
-        self.brackets_tick();
+        self.chart.brackets_tick();
         self.scoop_boxes();
         self.space.boxes_tick();
     }
@@ -1760,7 +1765,7 @@ impl Session {
                     to,
                     warp: if again { warp } else { warp.saturating_add(1) },
                 });
-                let bearing = self.jump_aim(to);
+                let bearing = self.chart.jump_aim(&self.pilot, to);
                 self.fly_warp_stage(bearing, controls);
                 self.ship.ionize_tick(&self.pilot, &self.setup);
                 self.burn_afterburner();
@@ -1790,20 +1795,9 @@ impl Session {
     /// (`_CalcInterceptAngle` @0x6b0cf; see the `double_time` module):
     /// left alone when either is off the map.
     fn aim_at_jump(&mut self, to: SystemId) {
-        if let Some(aim) = self.jump_aim(to) {
+        if let Some(aim) = self.chart.jump_aim(&self.pilot, to) {
             self.ship.aim = aim;
         }
-    }
-
-    /// The map bearing of `to` from the current system, in whole degrees,
-    /// `_CalcInterceptAngle` of their map positions (@0x6b0cf), which the
-    /// warp stage turns to; none when either is off the map. Two systems
-    /// at one place give 0, as the original's table does.
-    fn jump_aim(&self, to: SystemId) -> Option<i16> {
-        let map = |id| self.chart.galaxy.map().position(id);
-        map(self.pilot.system)
-            .zip(map(to))
-            .map(|(from, to)| intercept_angle(from, to))
     }
 
     /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
@@ -1815,7 +1809,7 @@ impl Session {
     /// runs, as the original finishes the frame it sets `gPause` in.
     fn dead_tick(&mut self) {
         self.chart.target = None;
-        self.deselect();
+        self.chart.deselect();
         let ending = self.player_end.get_or_insert(Ending::Holding {
             ticks_left: HOLD_TICKS,
         });
@@ -1937,7 +1931,9 @@ impl Session {
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
-        let table = self.spawn_table(catalog);
+        let table = self
+            .chart
+            .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
@@ -1978,39 +1974,6 @@ impl Session {
         self.space.escorts.aboard = None;
         self.space.escorts.talk = None;
         self.let_go_of_gone_target();
-    }
-
-    /// What the system's traffic is drawn from, read from `catalog`: its
-    /// ships, persons and fleets, the pilot's person escorts aside, and
-    /// the `düde`s of the active missions' special ships.
-    fn spawn_table(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> SpawnTable {
-        let system = self.pilot.system;
-        let mut table = SpawnTable::resolve(
-            catalog,
-            system,
-            self.chart.galaxy.govt(system),
-            &self.statics.govts,
-            &self.statics.ships,
-            &self.statics.outfits,
-            &self.statics.arsenal,
-            &*self.setup.person_rules.0,
-            &self
-                .pilot
-                .escorts
-                .iter()
-                .filter_map(|escort| escort.person)
-                .collect(),
-            self.setup.npc_items(),
-        );
-        table.add_mission_dudes(
-            catalog,
-            &self.mission_dudes(),
-            &self.statics.ships,
-            &self.statics.outfits,
-            &self.statics.arsenal,
-            self.setup.npc_items(),
-        );
-        table
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -2170,7 +2133,7 @@ impl Session {
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
-            record: self.system_record(),
+            record: self.chart.system_record(&self.pilot, &self.setup),
             persons: PersonWorld {
                 rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -2236,7 +2199,7 @@ impl Session {
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
-            record: self.system_record(),
+            record: self.chart.system_record(&self.pilot, &self.setup),
             persons: PersonWorld {
                 rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -2720,29 +2683,11 @@ impl Session {
                 (None, _) => &[],
             };
             for &crime in crimes {
-                self.convict_of(law, crime, govt);
+                self.chart
+                    .convict_of(&mut self.pilot, &self.statics, law, crime, govt);
                 self.lose_ranks_to(crime, govt);
             }
         }
-    }
-
-    /// Convicts the player of one `crime` against a ship of `victim`, as
-    /// `law` says: its records with each government, and its record in
-    /// each system along the crime's walk from the player's system, as
-    /// every caller of `_SlapWithPenalty` passes it (player +0x74; see the
-    /// [`legal`] module's **The walk**). The walk never reads the records,
-    /// so a crime convicted again walks the same systems and each
-    /// conviction truncates in turn.
-    fn convict_of(&mut self, law: &dyn LegalCode, crime: Crime, victim: Option<GovtId>) {
-        let govt_changes = law.penalties(crime, victim, &self.statics.govts);
-        let system_changes = law.system_penalties(
-            crime,
-            victim,
-            self.system(),
-            &self.chart.galaxy,
-            &self.statics.govts,
-        );
-        legal::convict(&mut self.pilot, &govt_changes, &system_changes);
     }
 
     /// Picks the player's target as `pick` says (see
@@ -2954,23 +2899,7 @@ impl Session {
     /// the current one lists (@0x137b3-0x137bb), a Shift-click adds a hop
     /// at a time, and the course is cued as the map closes (@0x13c16).
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
-        match self
-            .chart
-            .galaxy
-            .map()
-            .route(self.pilot.system, to, self.setup.hyperlinks)
-        {
-            Ok(route) => {
-                self.pilot.course = route;
-                self.cue_course();
-                Ok(&self.pilot.course)
-            }
-            Err(error) => {
-                self.pilot.course.clear();
-                self.deselect();
-                Err(error)
-            }
-        }
+        self.chart.plot_course(&mut self.pilot, &self.setup, to)
     }
 
     /// The systems still to jump to, in order, ending at the destination;
@@ -3029,7 +2958,7 @@ impl Session {
                 self.out.sounds.push(SimSound::Refused);
             }
         })?;
-        let bearing = self.jump_aim(next);
+        let bearing = self.chart.jump_aim(&self.pilot, next);
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
@@ -3048,7 +2977,7 @@ impl Session {
         check_jump(
             &self.ship.player,
             self.pilot.reserves.fuel.now,
-            self.jump_selection(),
+            self.chart.jump_selection(&self.pilot, &self.setup),
             jump_zone(
                 &self.chart.sites,
                 self.ship.fit.stats.jump_distance,
@@ -3302,7 +3231,7 @@ impl Session {
         }
         let entered = Arrival {
             system: at,
-            sites: self.read_sites(catalog, at),
+            sites: self.chart.read_sites(catalog, at),
             placement: Placement {
                 ship: self.jump_arrival(departure, first, from, at),
                 stellar: None,
@@ -3314,7 +3243,8 @@ impl Session {
         // @0x6be0b). The player is between systems: its entry resolves the
         // arrival by the same rule as any move out of a hidden system.
         if self
-            .write_galaxy(|overlay| {
+            .chart
+            .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
                 refresh.write(overlay);
             })
             .is_some()
@@ -3368,7 +3298,7 @@ impl Session {
     /// [`Session::galaxy`]).
     #[must_use]
     pub fn star_map(&self) -> &StarMap {
-        self.chart.galaxy.map()
+        self.chart.star_map()
     }
 
     /// The galaxy every reader sees: the catalog's, read when the session
@@ -3376,17 +3306,7 @@ impl Session {
     /// [`story`](crate::story) module's "Galaxy overlay").
     #[must_use]
     pub fn galaxy(&self) -> &OverlaidGalaxy {
-        &self.chart.galaxy
-    }
-
-    /// `system`'s stellars, read from `catalog`, each with the galaxy
-    /// overlay's government for it: the one way the session reads them.
-    fn read_sites(
-        &self,
-        catalog: &(impl PilotCatalog + ?Sized),
-        system: SystemId,
-    ) -> Vec<LandingSite> {
-        overlaid_sites(&self.chart.galaxy, catalog, system)
+        self.chart.galaxy()
     }
 
     /// Today's date.
@@ -3407,7 +3327,7 @@ impl Session {
     /// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
     #[must_use]
     pub fn med_date_text(&self) -> String {
-        date::med_date_text(self.pilot.date, &self.statics.date_affixes)
+        med_date_text(&self.pilot, &self.statics)
     }
 
     /// The fuel the ship gains each tick in flight.
@@ -3508,7 +3428,7 @@ impl Session {
             |site| self.space.landing_reach(&self.setup, site),
         );
         if disabled {
-            self.select_pressed(press.selected);
+            self.chart.select_pressed(press.selected);
             return match press.outcome {
                 Err(
                     refusal @ (LandingRefusal::NotLandable { .. }
@@ -3533,8 +3453,7 @@ impl Session {
     /// hypergate or wormhole.
     #[must_use]
     pub fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
-        let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
-        GateKind::of(site.flags2)
+        self.chart.gate_kind(stellar)
     }
 
     /// The pending entry, if it is through a gate of `kind`; it ends here
@@ -3545,15 +3464,6 @@ impl Session {
             .gate
             .take()
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
-    }
-
-    /// The system that holds `stellar` now, with the player where they
-    /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
-    /// the stellar's +0x14 as the aux and mission ship readers find it.
-    fn holder_of(&self, stellar: StellarId) -> Option<SystemId> {
-        self.chart
-            .galaxy
-            .holder(self.statics.listers(stellar), self.pilot.system)
     }
 
     /// The links of `stellar` among `sites`; none when no system lists it.
@@ -3602,7 +3512,7 @@ impl Session {
             ))
         } else {
             self.ship.warp.gate = None;
-            self.set_nav(NavMode::Off);
+            self.chart.set_nav(NavMode::Off);
             Err(GateRefusal::NoLinks)
         }
     }
@@ -3671,7 +3581,7 @@ impl Session {
                 .say(&mut self.out, SimMessage::ExitedHypergate(system));
             system
         });
-        self.set_nav(NavMode::Off);
+        self.chart.set_nav(NavMode::Off);
         entered
     }
 
@@ -3729,7 +3639,7 @@ impl Session {
         let Some(exit) =
             wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
-            self.deselect();
+            self.chart.deselect();
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
@@ -3780,7 +3690,7 @@ impl Session {
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
-            sites: self.read_sites(catalog, system),
+            sites: self.chart.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Arrive(ship),
                 stellar: None,
@@ -3983,7 +3893,9 @@ impl Session {
         // At level 2, with its place's head, by the engine
         // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
         // @0x634b1-0x634c8; see the `explored` module).
-        self.explore_place(self.pilot.system, ExploredLevel::Charted);
+        let system = self.pilot.system;
+        self.chart
+            .explore_place(&mut self.pilot, &self.setup, system, ExploredLevel::Charted);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
@@ -4021,7 +3933,7 @@ impl Session {
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
         // flight view's `took_off`.
         self.dock = None;
-        self.deselect();
+        self.chart.deselect();
         self.cue_course();
         Some(stellar)
     }
@@ -4058,60 +3970,14 @@ impl Session {
             capacity: self.capacity(),
             gate: self.gate(),
             rules: self.setup.rules,
-            markup: self.markup(site),
+            markup: self.chart.markup(&self.pilot, &self.setup, site),
         })
-    }
-
-    /// The markup at `site`, one of the system's: by whether it has a
-    /// government, the player's legal record in the system (with the
-    /// system's government, 0 in an independent system), and whether it
-    /// is dominated ([`Markup::of`]).
-    ///
-    /// The port has no domination state yet (task `planet-domination`):
-    /// the only dominated stellars are those whose `Flags2` has
-    /// [`DOMINATED`](market::DOMINATED), so a stellar the player dominates
-    /// by hailing is not yet priced at 1.5. That task feeds its dominated
-    /// state in here.
-    fn markup(&self, site: &LandingSite) -> Markup {
-        Markup::of(
-            site.govt.is_some(),
-            self.system_record(),
-            site.flags2 & market::DOMINATED != 0,
-        )
-    }
-
-    /// The player's legal record in the current system, as
-    /// [`Session::record_in`] reads it.
-    fn system_record(&self) -> i16 {
-        self.record_in(self.pilot.system, None)
-    }
-
-    /// The player's legal record in `system`, at `site` when landing
-    /// there, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
-    /// it; the one place the rule is read. By the engine the system's own,
-    /// whatever the stellar's government (`_IsMissionAvailable` @0x9b59d,
-    /// @0x9b5bf; `_HandlePlayerDockRequest` @0x67903). By the Bible the
-    /// record with the system's government (hidden or not), 0 in an
-    /// independent system; at `site`,
-    /// [`landing_record`](crate::landing::landing_record).
-    fn record_in(&self, system: SystemId, site: Option<&LandingSite>) -> i16 {
-        match self.setup.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => self.pilot.system_record(system),
-            RuleSource::Bible => {
-                let govt = self.chart.galaxy.govt(system);
-                let record = |govt| self.pilot.legal_record(govt);
-                site.map_or_else(
-                    || govt.map_or(0, record),
-                    |site| crate::landing::landing_record(site, govt, record),
-                )
-            }
-        }
     }
 
     /// What traffic control weighs of the pilot at `site` (see
     /// [`landing::cleared`](crate::landing::cleared)), its government
     /// blessing as `blessing` says: the legal record
-    /// ([`Session::landing_record`]), whether the pilot's ranks contribute
+    /// ([`Chart::landing_record`]), whether the pilot's ranks contribute
     /// every `Require` bit of `site`'s government, whether `site` is an
     /// active mission's travel or return stellar, compared as raw IDs over
     /// every slot, failed ones included (@0x67996-0x679b4), and whether its
@@ -4125,7 +3991,7 @@ impl Session {
                 .any(|stop| stop.stellar == site.id)
         });
         Standing {
-            record: self.landing_record(site),
+            record: self.chart.landing_record(&self.pilot, &self.setup, site),
             meets_require: self.ship.contributed(&self.pilot, &self.statics) & require == require,
             mission_stellar,
             blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
@@ -4133,12 +3999,6 @@ impl Session {
                 .dock
                 .is_some_and(|request| request.permission >= crate::clearance::CLEARED),
         }
-    }
-
-    /// The player's legal record that `site`'s `MinStatus` is checked
-    /// against, as [`Session::record_in`] reads it at `site`.
-    fn landing_record(&self, site: &LandingSite) -> i16 {
-        self.record_in(self.pilot.system, Some(site))
     }
 
     /// Trades on the exchange as `order` asks, on its row at that row's
@@ -4938,13 +4798,13 @@ impl Session {
     /// The ship's shield, armour and fuel.
     #[must_use]
     pub fn reserves(&self) -> Reserves {
-        self.pilot.reserves
+        reserves(&self.pilot)
     }
 
     /// The system the player is in.
     #[must_use]
     pub fn system(&self) -> SystemId {
-        self.pilot.system
+        system(&self.pilot)
     }
 
     /// The player's ship class.
@@ -5102,7 +4962,8 @@ impl Session {
         }
         self.ship.player.velocity = npc.state.velocity;
         if npc.mission.is_none() {
-            self.convict_of(law, Crime::Board, npc.govt);
+            self.chart
+                .convict_of(&mut self.pilot, &self.statics, law, Crime::Board, npc.govt);
             self.lose_ranks_to(Crime::Board, npc.govt);
         }
         self.space.call_good_samaritans(&npc);
@@ -5759,7 +5620,7 @@ impl Session {
         // The captured ship's place (@0x416e3-0x41722), and no nav
         // selection, ship target or secondary (@0x4172e-0x4173e).
         self.ship.player = npc.state;
-        self.deselect();
+        self.chart.deselect();
         self.chart.target = None;
         self.ship.secondary = None;
         for other in self.space.traffic.npcs_mut() {
@@ -6585,6 +6446,229 @@ impl Space {
             .filter(|aboard| !aboard.captured)
             .map(|aboard| aboard.view())
     }
+}
+
+impl Chart {
+    /// The map bearing of `to` from the current system, in whole degrees,
+    /// `_CalcInterceptAngle` of their map positions (@0x6b0cf), which the
+    /// warp stage turns to; none when either is off the map. Two systems
+    /// at one place give 0, as the original's table does.
+    fn jump_aim(&self, pilot: &Pilot, to: SystemId) -> Option<i16> {
+        let map = |id| self.galaxy.map().position(id);
+        map(pilot.system)
+            .zip(map(to))
+            .map(|(from, to)| intercept_angle(from, to))
+    }
+
+    /// What the system's traffic is drawn from, read from `catalog`: its
+    /// ships, persons and fleets, the pilot's person escorts aside, and
+    /// the `düde`s of the active missions' special ships.
+    fn spawn_table(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &(impl TrafficCatalog + ?Sized),
+    ) -> SpawnTable {
+        let system = pilot.system;
+        let mut table = SpawnTable::resolve(
+            catalog,
+            system,
+            self.galaxy.govt(system),
+            &statics.govts,
+            &statics.ships,
+            &statics.outfits,
+            &statics.arsenal,
+            &*setup.person_rules.0,
+            &pilot
+                .escorts
+                .iter()
+                .filter_map(|escort| escort.person)
+                .collect(),
+            setup.npc_items(),
+        );
+        table.add_mission_dudes(
+            catalog,
+            &mission_ships::mission_dudes(pilot, statics),
+            &statics.ships,
+            &statics.outfits,
+            &statics.arsenal,
+            setup.npc_items(),
+        );
+        table
+    }
+
+    /// Convicts the player of one `crime` against a ship of `victim`, as
+    /// `law` says: its records with each government, and its record in
+    /// each system along the crime's walk from the player's system, as
+    /// every caller of `_SlapWithPenalty` passes it (player +0x74; see the
+    /// [`legal`] module's **The walk**). The walk never reads the records,
+    /// so a crime convicted again walks the same systems and each
+    /// conviction truncates in turn.
+    fn convict_of(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        law: &dyn LegalCode,
+        crime: Crime,
+        victim: Option<GovtId>,
+    ) {
+        let govt_changes = law.penalties(crime, victim, &statics.govts);
+        let system_changes =
+            law.system_penalties(crime, victim, system(pilot), &self.galaxy, &statics.govts);
+        legal::convict(pilot, &govt_changes, &system_changes);
+    }
+
+    /// Plots a course from the system the ship is in to `to`, replacing any
+    /// course, and gives it: the session's [`HyperlinkRule`] decides which
+    /// links it follows. A route cues its first hop
+    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
+    /// no route the course is cleared, and the nav selection let go with
+    /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
+    ///
+    /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
+    /// other reading ([`Session::map_click`]), and a helper for tests and
+    /// tools. The original has no planner: its click selects only a system
+    /// the current one lists (@0x137b3-0x137bb), a Shift-click adds a hop
+    /// at a time, and the course is cued as the map closes (@0x13c16).
+    pub(super) fn plot_course<'a>(
+        &mut self,
+        pilot: &'a mut Pilot,
+        setup: &Setup,
+        to: SystemId,
+    ) -> Result<&'a [SystemId], RouteError> {
+        match self.galaxy.map().route(pilot.system, to, setup.hyperlinks) {
+            Ok(route) => {
+                pilot.course = route;
+                self.cue_course(pilot, setup);
+                Ok(&pilot.course)
+            }
+            Err(error) => {
+                pilot.course.clear();
+                self.deselect();
+                Err(error)
+            }
+        }
+    }
+
+    /// The star map every reader sees: the catalog's, read when the
+    /// session started, with the galaxy overlay applied (see
+    /// [`Session::galaxy`]).
+    #[must_use]
+    fn star_map(&self) -> &StarMap {
+        self.galaxy.map()
+    }
+
+    /// The galaxy every reader sees: the catalog's, read when the session
+    /// started, with the pilot's overlay applied (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    #[must_use]
+    fn galaxy(&self) -> &OverlaidGalaxy {
+        &self.galaxy
+    }
+
+    /// `system`'s stellars, read from `catalog`, each with the galaxy
+    /// overlay's government for it: the one way the session reads them.
+    fn read_sites(
+        &self,
+        catalog: &(impl PilotCatalog + ?Sized),
+        system: SystemId,
+    ) -> Vec<LandingSite> {
+        overlaid_sites(&self.galaxy, catalog, system)
+    }
+
+    /// What `stellar`, one of the system's, leads through, if it is a
+    /// hypergate or wormhole.
+    #[must_use]
+    fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
+        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        GateKind::of(site.flags2)
+    }
+
+    /// The system that holds `stellar` now, with the player where they
+    /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+    /// the stellar's +0x14 as the aux and mission ship readers find it.
+    fn holder_of(&self, pilot: &Pilot, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
+        self.galaxy.holder(statics.listers(stellar), pilot.system)
+    }
+
+    /// The markup at `site`, one of the system's: by whether it has a
+    /// government, the player's legal record in the system (with the
+    /// system's government, 0 in an independent system), and whether it
+    /// is dominated ([`Markup::of`]).
+    ///
+    /// The port has no domination state yet (task `planet-domination`):
+    /// the only dominated stellars are those whose `Flags2` has
+    /// [`DOMINATED`](market::DOMINATED), so a stellar the player dominates
+    /// by hailing is not yet priced at 1.5. That task feeds its dominated
+    /// state in here.
+    fn markup(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Markup {
+        Markup::of(
+            site.govt.is_some(),
+            self.system_record(pilot, setup),
+            site.flags2 & market::DOMINATED != 0,
+        )
+    }
+
+    /// The player's legal record in the current system, as
+    /// [`Chart::record_in`] reads it.
+    fn system_record(&self, pilot: &Pilot, setup: &Setup) -> i16 {
+        self.record_in(pilot, setup, pilot.system, None)
+    }
+
+    /// The player's legal record in `system`, at `site` when landing
+    /// there, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
+    /// it; the one place the rule is read. By the engine the system's own,
+    /// whatever the stellar's government (`_IsMissionAvailable` @0x9b59d,
+    /// @0x9b5bf; `_HandlePlayerDockRequest` @0x67903). By the Bible the
+    /// record with the system's government (hidden or not), 0 in an
+    /// independent system; at `site`,
+    /// [`landing_record`](crate::landing::landing_record).
+    fn record_in(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        system: SystemId,
+        site: Option<&LandingSite>,
+    ) -> i16 {
+        match setup.rules.source_for(RuleKey::LegalRecords) {
+            RuleSource::Engine => pilot.system_record(system),
+            RuleSource::Bible => {
+                let govt = self.galaxy.govt(system);
+                let record = |govt| pilot.legal_record(govt);
+                site.map_or_else(
+                    || govt.map_or(0, record),
+                    |site| crate::landing::landing_record(site, govt, record),
+                )
+            }
+        }
+    }
+
+    /// The player's legal record that `site`'s `MinStatus` is checked
+    /// against, as [`Chart::record_in`] reads it at `site`.
+    fn landing_record(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> i16 {
+        self.record_in(pilot, setup, pilot.system, Some(site))
+    }
+}
+
+/// Today's date as the mission screens show it, the original's medium
+/// date with the first `chär`'s prefix and suffix
+/// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
+#[must_use]
+fn med_date_text(pilot: &Pilot, statics: &Statics) -> String {
+    date::med_date_text(pilot.date, &statics.date_affixes)
+}
+
+/// The ship's shield, armour and fuel.
+#[must_use]
+fn reserves(pilot: &Pilot) -> Reserves {
+    pilot.reserves
+}
+
+/// The system the player is in.
+#[must_use]
+fn system(pilot: &Pilot) -> SystemId {
+    pilot.system
 }
 
 /// The warp's clock: the engine's ticks since the warp stage began,
@@ -7757,10 +7841,17 @@ pub(super) mod tests {
         let catalog = governed([None, None], Some(WANTED));
         let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
         session.pilot.set_system_record(SystemId(130), -3);
-        assert_eq!(session.system_record(), -3);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            -3
+        );
         assert_eq!(session.pilot.legal_record(WANTED), 9, "kept");
         let session = session.with_rules(bible_records());
-        assert_eq!(session.system_record(), 9, "by the Bible, WANTED's");
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            9,
+            "by the Bible, WANTED's"
+        );
     }
 
     #[test]
@@ -28270,17 +28361,27 @@ pub(super) mod tests {
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(bible_records());
-        assert_eq!(session.system_record(), 9);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            9
+        );
         assert_eq!(land_now(&mut session), denied(128));
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_govt(SystemId(130), Some(Some(LAWFUL)));
         });
-        assert_eq!(session.system_record(), 10);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            10
+        );
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_govt(SystemId(130), Some(None));
         });
-        assert_eq!(session.system_record(), 0, "made independent");
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            0,
+            "made independent"
+        );
     }
 
     #[test]
@@ -28289,16 +28390,27 @@ pub(super) mod tests {
         let mut pilot = on_record(&catalog);
         pilot.stellar = Some(StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert_eq!(session.system_record(), 9);
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            9
+        );
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_govt(SystemId(130), Some(Some(LAWFUL)));
         });
-        assert_eq!(session.system_record(), 9, "the system's own record");
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            9,
+            "the system's own record"
+        );
         assert_eq!(land_now(&mut session), denied(128));
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_govt(SystemId(130), Some(None));
         });
-        assert_eq!(session.system_record(), 9, "made independent, kept");
+        assert_eq!(
+            session.chart.system_record(&session.pilot, &session.setup),
+            9,
+            "made independent, kept"
+        );
     }
 
     #[test]
@@ -28416,7 +28528,7 @@ pub(super) mod tests {
         let _ = session.settle_script(catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert!(session.chart.next_sites.is_some(), "deferred");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session
     }
 
@@ -28427,7 +28539,7 @@ pub(super) mod tests {
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
         });
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(
             session.chart.sites[0].id,
             StellarId(128),
@@ -28528,7 +28640,7 @@ pub(super) mod tests {
         session.drop_raised();
         session.take_messages();
         assert!(hide(&mut session, &catalog, &[131]));
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(*session.player(), player);
         assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
@@ -28574,7 +28686,7 @@ pub(super) mod tests {
     /// Takes off from `session`, and checks it flies in 134 among its
     /// stellars, the scene told changed.
     fn takes_off_into_134(session: &mut Session) {
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.take_events();
         assert_eq!(
             session.take_off(&NoTraffic, &mut NeverFires),
@@ -28592,7 +28704,7 @@ pub(super) mod tests {
         let mut session = docked_at_140(&catalog);
         assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
         hide(&mut session, &catalog, &[131]);
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert_eq!(
             session.recharge(),
@@ -29137,7 +29249,7 @@ pub(super) mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)), "docked as asked");
         assert_eq!(session.pilot().stellar, Some(StellarId(140)));

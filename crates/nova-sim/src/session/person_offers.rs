@@ -52,7 +52,7 @@
 use std::collections::BTreeMap;
 
 use super::hail::{HailTarget, make_leave};
-use super::{Session, Space};
+use super::{Chart, Session, Setup, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -116,28 +116,6 @@ pub enum Hailed {
 }
 
 impl Session {
-    /// The stellar a person's mission is offered from, as
-    /// [`RuleKey::PersonMissionStellar`] reads the player ship's stellar
-    /// target: by the engine the navigation target; by the other reading
-    /// the first stellar the player's system lists, or spöb 128 with none.
-    pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
-        match self.setup.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target(),
-            RuleSource::Bible => Some(self.first_listed_stellar()),
-        }
-    }
-
-    /// The first stellar the player's system lists, or spöb 128 when it
-    /// lists none, as `_RandomizeOneMission` reads the origin with
-    /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
-    /// -1, else index 0 @0xa1514).
-    pub(super) fn first_listed_stellar(&self) -> StellarId {
-        self.chart
-            .sites
-            .first()
-            .map_or(StellarId(128), |site| site.id)
-    }
-
     /// The stellar whose being a mission's destination counts it reached
     /// as an offer from a ship is accepted in flight (`_DoMissionAccept`
     /// @0xa1fc5-0xa1ff8): none with no such offer open; else, as
@@ -174,11 +152,13 @@ impl Session {
             let Some(record) = self.statics.mission_record(id).cloned() else {
                 continue;
             };
-            let origin = self.person_mission_stellar();
+            let origin = self.chart.person_mission_stellar(&self.setup);
             let today = self.pilot.date;
-            let offer = self.in_world(|world| {
-                mission::resolve(&record, Venue::Ship, origin, world, today, chance)
-            });
+            let offer = self
+                .chart
+                .in_world(&self.pilot, &self.statics, &self.setup, |world| {
+                    mission::resolve(&record, Venue::Ship, origin, world, today, chance)
+                });
             self.ship_offers.insert(id, offer);
         }
     }
@@ -415,6 +395,27 @@ impl Space {
             let ship = OfferingShip { berth: npc.berth };
             (ship, mission)
         })
+    }
+}
+
+impl Chart {
+    /// The stellar a person's mission is offered from, as
+    /// [`RuleKey::PersonMissionStellar`] reads the player ship's stellar
+    /// target: by the engine the navigation target; by the other reading
+    /// the first stellar the player's system lists, or spöb 128 with none.
+    pub(super) fn person_mission_stellar(&self, setup: &Setup) -> Option<StellarId> {
+        match setup.rules.source_for(RuleKey::PersonMissionStellar) {
+            RuleSource::Engine => self.nav_target(),
+            RuleSource::Bible => Some(self.first_listed_stellar()),
+        }
+    }
+
+    /// The first stellar the player's system lists, or spöb 128 when it
+    /// lists none, as `_RandomizeOneMission` reads the origin with
+    /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
+    /// -1, else index 0 @0xa1514).
+    pub(super) fn first_listed_stellar(&self) -> StellarId {
+        self.sites.first().map_or(StellarId(128), |site| site.id)
     }
 }
 

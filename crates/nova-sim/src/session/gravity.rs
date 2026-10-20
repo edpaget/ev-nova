@@ -32,7 +32,7 @@
 //! The pull is a shove the session sets after the tick, with the hits'.
 //! None of this plays a sound.
 
-use super::{PlayerShip, Session, Setup};
+use super::{Chart, PlayerShip, Session, Setup};
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -50,21 +50,7 @@ impl Session {
     /// `Gravity` not none (@0x39c20-0x39c27). None in the stock data.
     #[must_use]
     pub fn gravity_sources_present(&self) -> bool {
-        self.chart.listed.iter().any(|site| site.gravity != 0)
-    }
-
-    /// `_HandleGravity`'s sources (see the module docs): each listed
-    /// stellar of `Gravity` not none, in slot order.
-    fn gravity_sources(&self) -> Vec<GravitySource> {
-        self.chart
-            .listed
-            .iter()
-            .filter(|site| site.gravity != 0)
-            .map(|site| GravitySource {
-                at: site.position,
-                gravity: site.gravity,
-            })
-            .collect()
+        self.chart.gravity_sources_present()
     }
 
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
@@ -96,7 +82,7 @@ impl Session {
     /// `_DoPlayGameWork` calls them (@0x44509, @0x4450e).
     pub(super) fn stellar_hazards(&self) -> StellarHazards {
         StellarHazards {
-            gravity: self.gravity_sources(),
+            gravity: self.chart.gravity_sources(),
             deadly: self.deadly_discs(),
         }
     }
@@ -146,6 +132,30 @@ impl PlayerShip {
                 Flyer::Player,
             ),
         }
+    }
+}
+
+impl Chart {
+    /// Whether any gravity source is in the player's system,
+    /// `_gravitySourcesPresent` (*0x3b5568) as `_HandleGravity` leaves it:
+    /// any stellar the system lists, shown or not, destroyed or not, of
+    /// `Gravity` not none (@0x39c20-0x39c27). None in the stock data.
+    #[must_use]
+    fn gravity_sources_present(&self) -> bool {
+        self.listed.iter().any(|site| site.gravity != 0)
+    }
+
+    /// `_HandleGravity`'s sources (see the module docs): each listed
+    /// stellar of `Gravity` not none, in slot order.
+    fn gravity_sources(&self) -> Vec<GravitySource> {
+        self.listed
+            .iter()
+            .filter(|site| site.gravity != 0)
+            .map(|site| GravitySource {
+                at: site.position,
+                gravity: site.gravity,
+            })
+            .collect()
     }
 }
 

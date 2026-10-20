@@ -106,7 +106,7 @@ use std::collections::BTreeMap;
 
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use super::hooks::ShipHook;
-use super::{PlayerShip, Session, Setup};
+use super::{Chart, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{PilotCatalog, ShipId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -170,7 +170,11 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
             .into_iter()
             .map(|site| {
                 let site = self.session.chart.galaxy.site(site);
-                let active = self.session.stellar_owner(site.id).is_some();
+                let active = self
+                    .session
+                    .chart
+                    .stellar_owner(&self.session.statics, site.id)
+                    .is_some();
                 (site.id, qualifies(&site, active, record))
             })
             .collect()
@@ -198,7 +202,7 @@ impl Session {
         let system = self.escape_destination(from, catalog);
         let arrival = Arrival {
             system,
-            sites: self.read_sites(catalog, system),
+            sites: self.chart.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Arrive(ShipState {
                     position: RESCUE_AT,
@@ -216,7 +220,8 @@ impl Session {
         self.pass_days(days, chance);
         self.rebuild_stellars();
         self.rename_for_rescue(&mut &mut *chance);
-        self.reset_records_for_rescue();
+        self.chart
+            .reset_records_for_rescue(&mut self.pilot, &self.statics);
         self.out.save_due = save_due;
         self.strict_play_save(catalog);
         self.ship.fate.rescue_desc_due = true;
@@ -238,6 +243,7 @@ impl Session {
             return;
         }
         let first = self
+            .chart
             .read_sites(catalog, self.pilot.system)
             .first()
             .map_or(STRICT_SAVE_FALLBACK, |site| site.id);
@@ -288,7 +294,7 @@ impl Session {
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
         // modules).
-        self.set_nav(crate::navigation::NavMode::Off);
+        self.chart.set_nav(crate::navigation::NavMode::Off);
         self.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.ship.secondary = None;
@@ -313,22 +319,6 @@ impl Session {
         self.pilot.ship_name = Some(crate::shipyard::numbered_name(name, 4, chance));
     }
 
-    /// Every system's record, hidden ones included, and the record with
-    /// each government, its government's `InitialRec` (see the module
-    /// docs).
-    fn reset_records_for_rescue(&mut self) {
-        let govts: Vec<_> = self.statics.govts.ids().collect();
-        for govt in govts {
-            let record = self.statics.govts.initial_record(Some(govt));
-            self.pilot.set_legal_record(govt, record);
-        }
-        self.pilot.system_legal = Some(crate::legal::systems_from_govts(
-            self.chart.galaxy.governed(),
-            &BTreeMap::new(),
-            &self.statics.govts,
-        ));
-    }
-
     /// The escape search's galaxy, read from `catalog` (see the module
     /// docs).
     pub(super) fn search_map<'a, C: PilotCatalog + ?Sized>(
@@ -347,16 +337,6 @@ impl Session {
         }
     }
 
-    /// The system a visible system owns `stellar` in, if any.
-    fn stellar_owner(&self, stellar: StellarId) -> Option<SystemId> {
-        let listed = self
-            .statics
-            .listed_stellars
-            .iter()
-            .find(|listed| listed.id == stellar)?;
-        self.chart.galaxy.owner(&listed.systems)
-    }
-
     /// Where the rescue takes the pod from `from`, the system the player
     /// died in (see the module docs): the system of the stellar the escape
     /// search finds, or [`RESCUE_FALLBACK`].
@@ -365,10 +345,14 @@ impl Session {
         from: SystemId,
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> SystemId {
-        escape_stellar(from, &self.search_map(catalog))
-            .map_or(RESCUE_FALLBACK, |(stellar, found_in)| {
-                self.stellar_owner(stellar).unwrap_or(found_in)
-            })
+        escape_stellar(from, &self.search_map(catalog)).map_or(
+            RESCUE_FALLBACK,
+            |(stellar, found_in)| {
+                self.chart
+                    .stellar_owner(&self.statics, stellar)
+                    .unwrap_or(found_in)
+            },
+        )
     }
 }
 
@@ -390,6 +374,33 @@ impl PlayerShip {
         reserves.fuel.now = stats.fuel;
         reserves.shield.now = stats.shield;
         reserves.armor.now = armor;
+    }
+}
+
+impl Chart {
+    /// Every system's record, hidden ones included, and the record with
+    /// each government, its government's `InitialRec` (see the module
+    /// docs).
+    fn reset_records_for_rescue(&mut self, pilot: &mut Pilot, statics: &Statics) {
+        let govts: Vec<_> = statics.govts.ids().collect();
+        for govt in govts {
+            let record = statics.govts.initial_record(Some(govt));
+            pilot.set_legal_record(govt, record);
+        }
+        pilot.system_legal = Some(crate::legal::systems_from_govts(
+            self.galaxy.governed(),
+            &BTreeMap::new(),
+            &statics.govts,
+        ));
+    }
+
+    /// The system a visible system owns `stellar` in, if any.
+    fn stellar_owner(&self, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
+        let listed = statics
+            .listed_stellars
+            .iter()
+            .find(|listed| listed.id == stellar)?;
+        self.galaxy.owner(&listed.systems)
     }
 }
 
@@ -437,7 +448,7 @@ mod tests {
         for &system in systems {
             session.pilot.explore(SystemId(system));
         }
-        session.rework_known();
+        session.chart.rework_known(&session.pilot);
         session
     }
 
@@ -555,7 +566,9 @@ mod tests {
         let session = explored(&catalog, &[133, 134]);
         assert!(session.search_map(&catalog).open(SystemId(134)));
         assert_eq!(
-            session.stellar_owner(StellarId(170)),
+            session
+                .chart
+                .stellar_owner(&session.statics, StellarId(170)),
             None,
             "133 stands for 134's place"
         );

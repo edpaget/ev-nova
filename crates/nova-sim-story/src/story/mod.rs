@@ -872,7 +872,7 @@
 //! pilot's overlay and the galaxy's and makes a save due, and two entries:
 //! `nova_sim::Session::change_galaxy`, which takes
 //! a catalog for its follow-ups (a hidden system, a government, the
-//! spawn table), and `Session::set_stellar_state`, catalog-free, which
+//! spawn table), and `Chart::set_stellar_state`, catalog-free, which
 //! can change a stellar's destroyed state alone, so it never needs them.
 //! `apply_op` and the daily step have no catalog, and a cron's `Y` must
 //! be counted by the same day's sixth participant, so neither waits for
@@ -1121,7 +1121,7 @@
 //! sprite tick does. It samples the live state,
 //! [`OverlaidGalaxy::destroyed`], through `Session::galaxy`, on the
 //! events it already reacts to; there is no snapshot and no new event.
-//! The one writer of the destroyed state, `Session::set_stellar_state`,
+//! The one writer of the destroyed state, `Chart::set_stellar_state`,
 //! raises `GalaxyChanged` exactly when a stellar is destroyed or
 //! regenerated (by `Y`, `U`, the daily step or a new pilot), and a
 //! countdown that only ticks raises nothing, so reacting to it gives the
@@ -1252,7 +1252,7 @@
 //!   whole stellar (@0xb700): nothing damages one within a day.
 //! - **Shot down** below 0, exactly 0 being whole. In order: its
 //!   `ExplodType` explosion at its centre, the overlay's destroyed state
-//!   through `Session::set_stellar_state` with the countdown `Y` gives it
+//!   through `Chart::set_stellar_state` with the countdown `Y` gives it
 //!   (so `GalaxyChanged` is raised and the view draws its `DeadType`),
 //!   its `OnDestroy` at once through `Session::run_script`, with the
 //!   stellar already destroyed, its `M`, `N`, `Q` and `S` deferred to the

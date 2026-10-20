@@ -25,7 +25,7 @@
 //!   with no new layout.
 //!   That is how a destroyed stellar's `DeadType` sheet shows from the
 //!   next frame (story-runtime phase 7), so every writer of the destroyed
-//!   state goes through `Session::set_stellar_state`, which raises this
+//!   state goes through `Chart::set_stellar_state`, which raises this
 //!   event: `Y`, `U`, the daily step, a new pilot and the shots that
 //!   shoot a stellar down (story-runtime phase 8).
 //! - [`SessionEvent::StellarsRebuilt`]: a rebuild point changed which

@@ -266,7 +266,7 @@ impl Session {
             self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
         self.chart.target = None;
-        self.deselect();
+        self.chart.deselect();
         self.ship.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
         let escape = self.escape_ship();

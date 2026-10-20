@@ -20,7 +20,7 @@
 //!   as [`RuleKey::LowMurk`] reads it: the runtime +0xbc the panel reads,
 //!   which `_LoadObjectData` sets @0x77eb7-0x77f08);
 //! - the legal status string in it (`_DrawLegalStatusString(_selSystem)`
-//!   @0x10eb0; `Session::legal_status_in`), its record read as
+//!   @0x10eb0; `Chart::legal_status_in`), its record read as
 //!   [`RuleKey::LegalRecords`] says;
 //! - the standard commodities' names, as the trade screen names them
 //!   (`_cargoName`, [`market::commodities`]);
@@ -28,14 +28,14 @@
 //!
 //! With nothing selected the panel reads as for an unexplored system.
 
-use super::{Session, overlaid_sites};
+use super::{Chart, Session, Setup, Statics, overlaid_sites};
 use crate::catalog::{PilotCatalog, SystemId};
 use crate::exploration;
 use crate::map_panel::{self, MapPanel, PanelInput, PanelStellar, PanelWords};
 use crate::market;
 use crate::murk;
 use crate::news::MISC_STRINGS;
-use crate::pilot::ExploredLevel;
+use crate::pilot::{ExploredLevel, Pilot};
 use crate::rulebook::RuleKey;
 
 impl Session {
@@ -50,21 +50,47 @@ impl Session {
         selected: Option<SystemId>,
         hypergate: Option<&[SystemId]>,
     ) -> MapPanel {
-        let words = PanelWords::from_list(&self.strings().string_list(MISC_STRINGS));
+        self.chart.map_panel(
+            &self.pilot,
+            &self.statics,
+            &self.setup,
+            catalog,
+            selected,
+            hypergate,
+        )
+    }
+}
+
+impl Chart {
+    /// The galaxy map's two info panels (see the module docs), for the
+    /// system `selected` on the map, `catalog` the stellars, names and
+    /// commodities are read from; `hypergate`, on the hypergate map, the
+    /// systems its gate offers.
+    #[must_use]
+    fn map_panel(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+        selected: Option<SystemId>,
+        hypergate: Option<&[SystemId]>,
+    ) -> MapPanel {
+        let words = PanelWords::from_list(&setup.strings().string_list(MISC_STRINGS));
         let commodities: Vec<String> = market::commodities(&catalog.commodity_strings())
             .into_iter()
             .map(|(_, commodity)| commodity.name)
             .collect();
-        let date = self.med_date_text();
+        let date = super::med_date_text(pilot, statics);
         // An unexplored system's panel reads nothing more of it.
         let facts = selected
-            .filter(|&system| self.pilot.explored_level(system) > ExploredLevel::Unexplored)
-            .map(|system| self.panel_facts(catalog, system));
+            .filter(|&system| pilot.explored_level(system) > ExploredLevel::Unexplored)
+            .map(|system| self.panel_facts(pilot, statics, setup, catalog, system));
         let facts = facts.as_ref();
         let input = PanelInput {
             words: &words,
             selected,
-            current: self.pilot.system,
+            current: pilot.system,
             nav: self.nav_mode(),
             hypergate,
             level: facts.map_or(ExploredLevel::Unexplored, |facts| facts.level),
@@ -83,13 +109,19 @@ impl Session {
     }
 
     /// What the panel reads of `system` (see the module docs).
-    fn panel_facts(&self, catalog: &impl PilotCatalog, system: SystemId) -> PanelFacts {
-        let map = self.chart.galaxy.map();
-        let stellars = overlaid_sites(&self.chart.galaxy, catalog, system)
+    fn panel_facts(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+        system: SystemId,
+    ) -> PanelFacts {
+        let map = self.galaxy.map();
+        let stellars = overlaid_sites(&self.galaxy, catalog, system)
             .into_iter()
             .map(|site| PanelStellar {
-                name: self
-                    .statics
+                name: statics
                     .place_names
                     .stellars
                     .get(&site.id)
@@ -99,45 +131,46 @@ impl Session {
                 flags2: site.flags2,
                 gravity: site.gravity,
                 active: self
-                    .chart
                     .galaxy
-                    .active_holder(self.statics.listers(site.id), self.pilot.system)
+                    .active_holder(statics.listers(site.id), pilot.system)
                     .is_some(),
                 destroyed: site.destroyed,
             })
             .collect();
         PanelFacts {
-            level: self.pilot.explored_level(system),
-            name: self
-                .statics
+            level: pilot.explored_level(system),
+            name: statics
                 .place_names
                 .systems
                 .get(&system)
                 .cloned()
                 .unwrap_or_default(),
-            government: self.chart.galaxy.govt(system).map(|govt| {
-                self.statics
+            government: self.galaxy.govt(system).map(|govt| {
+                statics
                     .govts
                     .get(govt)
                     .map(|record| record.name.clone())
                     .unwrap_or_default()
             }),
-            asteroids: self
-                .statics
+            asteroids: statics
                 .asteroid_fields
                 .get(&system)
                 .map_or(0, |field| field.count),
             interference: map.interference(system),
-            murk: murk::loaded_murk(
-                map.murk(system),
-                self.setup.rules.source_for(RuleKey::LowMurk),
-            ),
+            murk: murk::loaded_murk(map.murk(system), setup.rules.source_for(RuleKey::LowMurk)),
             stellars,
             inhabited: exploration::inhabited(
                 map.stellars(system),
-                self.setup.rules.source_for(RuleKey::MapExplore),
+                setup.rules.source_for(RuleKey::MapExplore),
             ),
-            legal: self.legal_status_in(catalog, system, &self.setup.player_info_words()),
+            legal: self.legal_status_in(
+                pilot,
+                statics,
+                setup,
+                catalog,
+                system,
+                &setup.player_info_words(),
+            ),
         }
     }
 }

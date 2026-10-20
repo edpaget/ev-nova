@@ -43,7 +43,7 @@
 //! the original compares masks: see rdm
 //! phase/ship-handling-fidelity-followups/phase-1-deadly-stellars-pixel-masks.
 
-use super::{PlayerShip, Session, Setup, Space, Statics};
+use super::{Chart, PlayerShip, Session, Setup, Space, Statics};
 use crate::catalog::LandingSite;
 use crate::combat::stellar_hazards::DeadlyDisc;
 use crate::deadly_stellar::{is_deadly, sprite_radius};
@@ -94,7 +94,7 @@ impl Session {
             .iter()
             .filter(|site| is_deadly(site.flags2))
             .filter_map(|listed| {
-                let shown = self.shown_site(listed);
+                let shown = self.chart.shown_site(listed);
                 let sprite = match shown {
                     Some(_) => SlotSprite::Own,
                     None if stale => self.space.stellar_sprites.sprite_of(listed.id, false),
@@ -111,11 +111,6 @@ impl Session {
                 }
             })
             .collect()
-    }
-
-    /// `listed` among the stellars shown, as they hold it now.
-    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
-        self.chart.sites.iter().find(|site| site.id == listed.id)
     }
 
     /// The stellar sprite pool, to hand to the next pilot's session in the
@@ -173,6 +168,13 @@ impl Space {
     #[must_use]
     fn stellar_sprite_pool(&self) -> &StellarSpritePool {
         &self.stellar_sprites
+    }
+}
+
+impl Chart {
+    /// `listed` among the stellars shown, as they hold it now.
+    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
+        self.sites.iter().find(|site| site.id == listed.id)
     }
 }
 

@@ -175,8 +175,14 @@ impl Session {
         // `_DoNewPilot` explores the start system's neighbours
         // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
         // its `OnStart` (see the `explored` module).
-        self.explore_start_neighbours();
-        self.destroy_from_the_start();
+        self.chart
+            .explore_start_neighbours(&mut self.pilot, &self.setup);
+        self.chart.destroy_from_the_start(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            &mut self.out,
+        );
         if let Ok(start) = catalog.first_character() {
             // `_DoNewPilot`'s first `_ActivateCharResource` (@0x18e5f),
             // after `_ResetPlayerRecord` (@0x18de0) and before the

@@ -24,7 +24,7 @@
 //! fly-in: the next tick settles it, and with no target there are no
 //! brackets.
 
-use super::Session;
+use super::{Chart, Session};
 use crate::brackets::{self, NavBrackets, TargetBrackets};
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -38,18 +38,7 @@ impl Session {
     /// `Session::iff_dominated` models.
     #[must_use]
     pub fn nav_brackets(&self) -> Option<NavBrackets> {
-        let stellar = self.nav_target()?;
-        let dominated = self
-            .chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .is_some_and(Self::iff_dominated);
-        Some(NavBrackets {
-            stellar,
-            expand: self.chart.nav_fly_in.expand(),
-            dominated,
-        })
+        self.chart.nav_brackets()
     }
 
     /// The brackets round the ship target, if there is one, in the frames
@@ -73,20 +62,6 @@ impl Session {
         self.npc_in_play_area(npc, brackets::sprite_in_area)
     }
 
-    /// The brackets' part of a flight tick (see the module docs).
-    pub(super) fn brackets_tick(&mut self) {
-        if self.nav_target().is_some() {
-            self.chart.nav_fly_in.step();
-        } else {
-            self.chart.nav_fly_in.settle();
-        }
-        if self.chart.target.is_some() {
-            self.chart.target_fly_in.step();
-        } else {
-            self.chart.target_fly_in.settle();
-        }
-    }
-
     /// After a pick that had `before` as the target: when the target
     /// changed to a ship, starts its fly-in if its sprite is on screen,
     /// else settles it (@0x6a5ac-0x6a5e4, @0x6aa95-0x6aab6). A pick that
@@ -102,6 +77,44 @@ impl Session {
             self.chart.target_fly_in.start();
         } else {
             self.chart.target_fly_in.settle();
+        }
+    }
+}
+
+impl Chart {
+    /// The brackets round the nav target, if there is one.
+    ///
+    /// They show while [`Session::nav_target`] is set: nav mode 2 with a
+    /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
+    /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
+    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
+    /// `Session::iff_dominated` models.
+    #[must_use]
+    fn nav_brackets(&self) -> Option<NavBrackets> {
+        let stellar = self.nav_target()?;
+        let dominated = self
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .is_some_and(Session::iff_dominated);
+        Some(NavBrackets {
+            stellar,
+            expand: self.nav_fly_in.expand(),
+            dominated,
+        })
+    }
+
+    /// The brackets' part of a flight tick (see the module docs).
+    pub(super) fn brackets_tick(&mut self) {
+        if self.nav_target().is_some() {
+            self.nav_fly_in.step();
+        } else {
+            self.nav_fly_in.settle();
+        }
+        if self.target.is_some() {
+            self.target_fly_in.step();
+        } else {
+            self.target_fly_in.settle();
         }
     }
 }

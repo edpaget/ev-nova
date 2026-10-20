@@ -44,7 +44,7 @@
 //! News has no participant in the daily step and no trigger point of its
 //! own.
 
-use super::Session;
+use super::{Chart, Session, Statics};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::market;
@@ -61,7 +61,7 @@ impl Session {
     /// `_DoBarDialog` does (@0x48efe-0x48f11), for the bar's map to put
     /// back ([`Session::restore_bar_nav`]).
     pub fn open_bar(&mut self, chance: &mut dyn Chance) -> bool {
-        let Some(site) = self.bar_site() else {
+        let Some(site) = self.chart.bar_site(self.landed) else {
             return false;
         };
         self.chart.bar_nav = Some(self.chart.nav);
@@ -102,10 +102,7 @@ impl Session {
     /// unless the ship is docked at a stellar with a bar.
     #[must_use]
     pub fn news_picture(&self) -> Option<i16> {
-        let site = self.bar_site()?;
-        Some(news_picture(
-            site.govt.and_then(|id| self.statics.govts.get(id)),
-        ))
+        self.chart.news_picture(&self.statics, self.landed)
     }
 
     /// The news of the bar visit under way, as it was drawn: `None`
@@ -143,6 +140,16 @@ impl Session {
         };
         let words = StoryWords::read(&*self.setup.strings.0);
         oops_story(record, market::place(active, record), &words, self).unwrap_or_default()
+    }
+}
+
+impl Chart {
+    /// The `PICT` the news is drawn over (see the module docs): `None`
+    /// unless the ship is docked at a stellar with a bar.
+    #[must_use]
+    fn news_picture(&self, statics: &Statics, landed: Option<StellarId>) -> Option<i16> {
+        let site = self.bar_site(landed)?;
+        Some(news_picture(site.govt.and_then(|id| statics.govts.get(id))))
     }
 }
 

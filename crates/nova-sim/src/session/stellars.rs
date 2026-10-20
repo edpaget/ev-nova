@@ -2,7 +2,7 @@
 //! handed to `Session::apply_op`, each read from the stellar's
 //! [`StellarLife`](crate::StellarLife) the session read when it started.
 //! Each writes the galaxy overlay through the writer's catalog-free entry,
-//! `Session::set_stellar_state`, so every reader sees it at once (see the
+//! `Chart::set_stellar_state`, so every reader sees it at once (see the
 //! [`story`](crate::story) module's "Galaxy overlay").
 //!
 //! - `Yxxx` destroys the stellar with its countdown, its `DeadTime` or 1
@@ -109,7 +109,7 @@
 //! shots, as the original's sprite tick (@0x444d2) follows
 //! `_CheckShotProximities` (@0x44015).
 
-use super::{Session, Setup, Space, Statics};
+use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -118,6 +118,7 @@ use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
 use crate::legal::{Crime, LegalCode};
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
@@ -151,19 +152,19 @@ impl Session {
     }
 
     /// A rebuild point that tells nothing: first, docked or not, the
-    /// course rewritten (`Session::rewrite_course`, as
+    /// course rewritten (`Chart::rewrite_course`, as
     /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
-    /// the exploration shared by place (`Session::share_explored`, as
+    /// the exploration shared by place (`Chart::share_explored`, as
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
-    /// and the known set worked out afresh (`Session::rework_known`,
+    /// and the known set worked out afresh (`Chart::rework_known`,
     /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it, then the sprite pool handed out (see the
     /// `stale_sprites` module). Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
-        self.rewrite_course();
-        self.share_explored();
-        self.rework_known();
+        self.chart.rewrite_course(&mut self.pilot, &self.setup);
+        self.chart.share_explored(&mut self.pilot, &self.setup);
+        self.chart.rework_known(&self.pilot);
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(
@@ -226,7 +227,8 @@ impl Session {
             self.setup.rules.source_for(RuleKey::DestroyInvincible),
         ) {
             let countdown = wreck::countdown_on_destroy(&life);
-            self.set_stellar_state(stellar, Some(countdown));
+            self.chart
+                .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
             if !destroyed_before
                 && self.setup.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
             {
@@ -240,7 +242,8 @@ impl Session {
     /// slots, so any other is never destroyed.
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
         self.space.strength.remove(&stellar);
-        self.set_stellar_state(stellar, None);
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, None);
     }
 
     /// Runs `stellar`'s `OnDestroy`, `script`, drawing on `chance`, unless
@@ -347,13 +350,16 @@ impl Session {
             self.space.combat.explode(site.position, explosion);
         }
         let countdown = wreck::countdown_on_destroy(&life);
-        self.set_stellar_state(stellar, Some(countdown));
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
         self.run_on_destroy(stellar, &life.on_destroy, chance);
-        self.set_stellar_state(stellar, Some(countdown));
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
         self.space.strength.remove(&stellar);
         if by == Some(ShipRef::Player) {
             for _ in 0..STELLAR_KILLINGS {
-                self.convict_of(law, Crime::Kill, site.govt);
+                self.chart
+                    .convict_of(&mut self.pilot, &self.statics, law, Crime::Kill, site.govt);
             }
             // `_CheckShotProximities` slaps ten times (@0x374e9), but
             // after the first pass no rank it takes is still active, so
@@ -379,37 +385,19 @@ impl Session {
             };
             match wreck::day(&life, countdown) {
                 Tick::Stays(countdown) => {
-                    self.set_stellar_state(stellar, Some(countdown));
+                    self.chart.set_stellar_state(
+                        &mut self.pilot,
+                        &mut self.out,
+                        stellar,
+                        Some(countdown),
+                    );
                 }
                 Tick::Regenerates => {
-                    self.set_stellar_state(stellar, None);
+                    self.chart
+                        .set_stellar_state(&mut self.pilot, &mut self.out, stellar, None);
                     self.run_script(&life.on_regen, chance);
                 }
             }
-        }
-    }
-
-    /// Destroys a new pilot's stellars that start the game destroyed
-    /// (`Flags2` 0x0040), within the original's slots, each with the
-    /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
-    /// (@0x192d6-0x1931c); by [`RuleKey::DestroyInvincible`]'s engine
-    /// reading an invincible one starts whole, as `_StellarIsDestroyed`
-    /// holds it.
-    pub(super) fn destroy_from_the_start(&mut self) {
-        let reading = self.setup.rules.source_for(RuleKey::DestroyInvincible);
-        let ruined: Vec<_> = self
-            .statics
-            .lives
-            .values()
-            .filter(|life| {
-                wreck::starts_destroyed(life)
-                    && wreck::in_range(life.id)
-                    && wreck::destroys(life, reading)
-            })
-            .map(|life| (life.id, wreck::countdown_on_destroy(life)))
-            .collect();
-        for (stellar, countdown) in ruined {
-            self.set_stellar_state(stellar, Some(countdown));
         }
     }
 
@@ -476,6 +464,37 @@ impl Space {
             shown,
             setup.rules.source_for(RuleKey::LandingDistance),
         )
+    }
+}
+
+impl Chart {
+    /// Destroys a new pilot's stellars that start the game destroyed
+    /// (`Flags2` 0x0040), within the original's slots, each with the
+    /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
+    /// (@0x192d6-0x1931c); by [`RuleKey::DestroyInvincible`]'s engine
+    /// reading an invincible one starts whole, as `_StellarIsDestroyed`
+    /// holds it.
+    pub(super) fn destroy_from_the_start(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+    ) {
+        let reading = setup.rules.source_for(RuleKey::DestroyInvincible);
+        let ruined: Vec<_> = statics
+            .lives
+            .values()
+            .filter(|life| {
+                wreck::starts_destroyed(life)
+                    && wreck::in_range(life.id)
+                    && wreck::destroys(life, reading)
+            })
+            .map(|life| (life.id, wreck::countdown_on_destroy(life)))
+            .collect();
+        for (stellar, countdown) in ruined {
+            self.set_stellar_state(pilot, out, stellar, Some(countdown));
+        }
     }
 }
 
@@ -694,7 +713,7 @@ mod tests {
             session.relocate(&catalog, SystemId(131), StellarId(140)),
             Ok(())
         );
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.landed(), Some(StellarId(140)));
     }
 
@@ -703,7 +722,12 @@ mod tests {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
         run(&mut session, "Y128");
-        session.set_stellar_state(StellarId(128), Some(left(1)));
+        session.chart.set_stellar_state(
+            &mut session.pilot,
+            &mut session.out,
+            StellarId(128),
+            Some(left(1)),
+        );
         session.take_events();
         run(&mut session, "Y128");
         assert_eq!(destroyed(&session, 128), Some(left(2)));
@@ -797,7 +821,7 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         run(&mut session, "Y128");
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.pilot().stellar, Some(StellarId(128)));
         assert_eq!(
             session.take_off(&catalog, &mut Scripted::default()),
@@ -934,7 +958,12 @@ mod tests {
     fn a_destroyed_stellar_with_no_record_is_left_as_it_is() {
         let catalog = regenerating([(129, 1, ""), (128, 0, "")]);
         let mut session = quiet(&catalog);
-        session.set_stellar_state(StellarId(300), Some(left(4)));
+        session.chart.set_stellar_state(
+            &mut session.pilot,
+            &mut session.out,
+            StellarId(300),
+            Some(left(4)),
+        );
         run(&mut session, "Y129");
         session.pass_days(1, &mut Scripted::default());
         assert_eq!(destroyed(&session, 300), Some(left(4)));
@@ -1030,7 +1059,7 @@ mod tests {
         land_now(&mut session).expect("lands");
         run(&mut session, script);
         let _ = session.settle_script(catalog, &mut Scripted::default());
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.pilot().stellar, Some(StellarId(140)), "{script}");
         assert_eq!(
@@ -2572,7 +2601,7 @@ mod tests {
         assert_eq!(shown(&session), [128, 129, 200], "130 owns 200");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(shown(&session), [140], "200 is 130's, though 131 lists it");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
     }
 
     #[test]
@@ -2711,11 +2740,11 @@ mod tests {
             "a load resumes in its stellar's owner, whatever system was saved"
         );
         assert_eq!(shown(&session), [128, 129, 200], "130's, docked at 200");
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(200), Some(None));
         });
-        session.assert_docked_among_shown();
+        session.chart.assert_docked_among_shown(session.landed);
         session
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");

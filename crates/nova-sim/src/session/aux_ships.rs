@@ -96,7 +96,12 @@ impl Session {
         };
         let record = self.statics.lifecycle_record(active.mission);
         let coming = active.aux.coming(&record.aux);
-        let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
+        let holder = |stop: Option<Stop>| {
+            stop.and_then(|stop| {
+                self.chart
+                    .holder_of(&self.pilot, &self.statics, stop.stellar)
+            })
+        };
         let holders = (holder(active.destination), holder(active.return_to));
         let map = self.chart.galaxy.map();
         if coming <= 0

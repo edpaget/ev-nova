@@ -819,7 +819,7 @@ mod tests {
             (NavMode::Off, NavMode::Off),
         ] {
             let mut session = crate::session::tests::captured(&catalog);
-            session.set_nav(nav);
+            session.chart.set_nav(nav);
             session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
             assert_eq!(session.chart.nav, after, "the mode kept (@0x4172e)");
             assert_eq!(session.target(), None, "@0x41736");

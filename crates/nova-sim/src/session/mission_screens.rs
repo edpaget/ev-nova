@@ -36,7 +36,7 @@
 
 #[cfg(test)]
 use super::missions::TextSource;
-use super::{Outbox, Session, Statics};
+use super::{Chart, Outbox, Session, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
@@ -45,6 +45,7 @@ use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
 };
 use crate::navigation::NavMode;
+use crate::pilot::Pilot;
 use crate::player_fate::PlayerCommand;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -466,14 +467,18 @@ impl Session {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
         };
-        self.queue_text(MissionText {
-            kind,
-            mission,
-            text,
-            graphic,
-            movie,
-            map,
-        });
+        self.chart.queue_text(
+            &self.pilot,
+            &mut self.out,
+            MissionText {
+                kind,
+                mission,
+                text,
+                graphic,
+                movie,
+                map,
+            },
+        );
         true
     }
 
@@ -484,26 +489,18 @@ impl Session {
     /// shown in order, so no load comes between the two.
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
         let movie = self.loaded_after_movie();
-        self.queue_text(MissionText {
-            kind,
-            mission,
-            text,
-            graphic: None,
-            movie,
-            map: None,
-        });
-    }
-
-    /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
-    /// noting the bar as it is now ([`Session::text_bars`]).
-    fn queue_text(&mut self, text: MissionText) {
-        self.out.texts_queued += 1;
-        self.out.text_bars.push(TextBar {
-            texts: self.out.texts_queued,
-            nav: self.nav_mode(),
-            reserves: self.reserves(),
-        });
-        self.out.shown_texts.push(MissionShown::Text(text));
+        self.chart.queue_text(
+            &self.pilot,
+            &mut self.out,
+            MissionText {
+                kind,
+                mission,
+                text,
+                graphic: None,
+                movie,
+                map: None,
+            },
+        );
     }
 
     /// The mission computer of the stellar docked at (`_DoMissionDialog`
@@ -860,6 +857,20 @@ impl Statics {
     fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
         self.mission_texts(mission)
             .and_then(|texts| texts.movies.offer.clone())
+    }
+}
+
+impl Chart {
+    /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
+    /// noting the bar as it is now ([`Session::text_bars`]).
+    fn queue_text(&mut self, pilot: &Pilot, out: &mut Outbox, text: MissionText) {
+        out.texts_queued += 1;
+        out.text_bars.push(TextBar {
+            texts: out.texts_queued,
+            nav: self.nav_mode(),
+            reserves: super::reserves(pilot),
+        });
+        out.shown_texts.push(MissionShown::Text(text));
     }
 }
 

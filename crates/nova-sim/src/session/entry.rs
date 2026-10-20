@@ -72,7 +72,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Outbox, PlayerShip, Session, SessionEvent, Statics, story};
+use super::{Chart, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -656,6 +656,7 @@ impl Session {
     /// populating from `catalog` on `chance` where it says so (see the
     /// module docs). A chain head made visible makes a save due and tells
     /// [`SessionEvent::GalaxyChanged`].
+    #[allow(clippy::too_many_lines)] // the Chart calls' explicit parameters wrap
     pub(super) fn enter_system<S, C, R>(
         &mut self,
         how: Entry,
@@ -702,7 +703,7 @@ impl Session {
         let sites = if system == asked {
             sites
         } else {
-            self.read_sites(stellars, system)
+            self.chart.read_sites(stellars, system)
         };
         self.place(placement);
         if resets.has(Reset::Stellar) {
@@ -711,11 +712,19 @@ impl Session {
         if resets.has(Reset::Explore) {
             // At level 1, with its place's head, by the engine (see the
             // `explored` module).
-            self.explore_place(system, ExploredLevel::Explored);
+            self.chart.explore_place(
+                &mut self.pilot,
+                &self.setup,
+                system,
+                ExploredLevel::Explored,
+            );
         }
         match resets.course {
             CourseStep::Keep => {}
-            CourseStep::Arrival { hops } => self.course_after_arrival(hops, system),
+            CourseStep::Arrival { hops } => {
+                self.chart
+                    .course_after_arrival(&mut self.pilot, &self.setup, hops, system);
+            }
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
@@ -860,21 +869,7 @@ impl Session {
     /// The stellars shown, in navigation order (their system's `NavDefs`
     /// order): what the flight view draws.
     pub fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
-        self.chart.sites.iter().map(|site| site.id)
-    }
-
-    /// Checks the invariant [`Session::set_player_system`] keeps: docked,
-    /// the stellar the ship is docked at is among the stellars shown.
-    #[cfg(test)]
-    pub(crate) fn assert_docked_among_shown(&self) {
-        if let Some(stellar) = self.landed {
-            let shown: Vec<StellarId> = self.chart.sites.iter().map(|site| site.id).collect();
-            assert!(
-                shown.contains(&stellar),
-                "docked at {stellar:?}, showing {shown:?} of {:?}",
-                self.chart.shown
-            );
-        }
+        self.chart.stellars_shown()
     }
 
     /// Puts the ship where `placement` says, its speed along its heading
@@ -915,9 +910,9 @@ impl Session {
         }
         match resets.nav {
             NavStep::Keep => {}
-            NavStep::Deselect => self.deselect(),
+            NavStep::Deselect => self.chart.deselect(),
             NavStep::OffThenCue => {
-                self.set_nav(NavMode::Off);
+                self.chart.set_nav(NavMode::Off);
                 self.cue_course();
             }
         }
@@ -972,7 +967,9 @@ impl Session {
             TrafficStep::None => {}
             TrafficStep::Populate => self.populate_as(catalog, chance, how),
             TrafficStep::Retarget => {
-                let table = self.spawn_table(catalog);
+                let table =
+                    self.chart
+                        .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
                 // Every ship the player leads, as `_EvalSetExp`
                 // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
                 let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
@@ -1028,7 +1025,7 @@ impl Session {
     /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
     /// names an entrance ([`Entry::entrance`]). The arrival message is the
     /// system's buoy, its strings read from `catalog`, or the arrival line
-    /// ([`Session::arrival_message`]); a buoy replaces the
+    /// ([`Chart::arrival_message`]); a buoy replaces the
     /// abandoned-fighters suffix too, so it drops the fighter notes this
     /// entry queued (see the `buoys` module).
     fn announce<S>(&mut self, how: Entry, resets: &Resets, heard: Heard, catalog: &S)
@@ -1044,7 +1041,7 @@ impl Session {
             self.ship.sound_warp_out(&self.statics, &mut self.out);
         }
         if resets.has(Reset::ArrivalMessage) {
-            let message = self.arrival_message(system, catalog);
+            let message = self.chart.arrival_message(&self.setup, system, catalog);
             if matches!(message, SimMessage::Buoy(_)) {
                 self.out.fighter_notes.truncate(notes);
             }
@@ -1085,6 +1082,28 @@ impl PlayerShip {
                 ..
             }
         ) || !self.warp.warp_out.playing()
+    }
+}
+
+impl Chart {
+    /// The stellars shown, in navigation order (their system's `NavDefs`
+    /// order): what the flight view draws.
+    fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
+        self.sites.iter().map(|site| site.id)
+    }
+
+    /// Checks the invariant [`Session::set_player_system`] keeps: docked,
+    /// the stellar the ship is docked at is among the stellars shown.
+    #[cfg(test)]
+    pub(super) fn assert_docked_among_shown(&self, landed: Option<StellarId>) {
+        if let Some(stellar) = landed {
+            let shown: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
+            assert!(
+                shown.contains(&stellar),
+                "docked at {stellar:?}, showing {shown:?} of {:?}",
+                self.shown
+            );
+        }
     }
 }
 

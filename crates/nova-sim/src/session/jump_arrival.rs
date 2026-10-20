@@ -6,7 +6,7 @@
 //! comes in [`ARRIVAL_RADIUS`](crate::jump_arrival::ARRIVAL_RADIUS) from
 //! the centre on the departure's side, along the bearing from the system
 //! it left to the first hop (@0x6bc1b-0x6bccd) — the one the warp stage
-//! turned it to ([`Session::jump_aim`]), so for a multi-jump the first
+//! turned it to ([`Chart::jump_aim`](super::Chart::jump_aim)), so for a multi-jump the first
 //! hop's side, not the last leg's, as the block runs once before the hop
 //! loop (@0x6bdb4-0x6bdfc). It keeps the heading the warp left. An
 //! inertial ship moves at its top speed ([`Session::top_speed`]) along its

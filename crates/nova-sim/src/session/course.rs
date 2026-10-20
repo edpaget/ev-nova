@@ -2,7 +2,7 @@
 //! arrival, as [`RuleKey::RouteRewrite`] reads it (see
 //! [`course`](crate::course) for the rules themselves).
 //!
-//! **Rebuild points** ([`Session::rewrite_course`]):
+//! **Rebuild points** ([`Chart::rewrite_course`]):
 //! `_HandleStellarSystemVisibility` rewrites the course first thing
 //! (@0x32ab3-0x32b0d), before it shares exploration (@0x32b13). The
 //! session rewrites first thing at each rebuild point, docked or not (see
@@ -16,47 +16,56 @@
 //! `Session::fly` runs before `Session::with_rules` (task
 //! load-reads-rules-before-fly).
 //!
-//! **An arrival** ([`Session::course_after_arrival`]): the jump's entry
+//! **An arrival** ([`Chart::course_after_arrival`]): the jump's entry
 //! drops the hops made, and an arrival that made none clears the course
 //! or drops its first hop by the engine (@0x6c472-0x6c4c6; see the
 //! `entry` module's `CourseStep::Arrival`). The entry tells
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
 
-use super::{Session, Setup};
+use super::{Chart, Session, Setup};
 use crate::catalog::SystemId;
 use crate::course;
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 
-impl Session {
-    /// A rebuild point's rewrite (see the module docs): by the engine,
-    /// each hidden hop rewritten to the system at its place and the
-    /// course cut at the first with none. Raises no event.
-    pub(super) fn rewrite_course(&mut self) {
-        self.pilot.course = course::rewritten(
-            &self.pilot.course,
-            self.chart.galaxy.map().places(),
-            self.setup.route_rewrite(),
-        );
-    }
-
-    /// The course after a jump's arrival at `arrived` that made `hops` of
-    /// its hops (see the module docs).
-    pub(super) fn course_after_arrival(&mut self, hops: usize, arrived: SystemId) {
-        self.pilot.course = course::after_arrival(
-            &self.pilot.course,
-            hops,
-            arrived,
-            self.chart.galaxy.map().places(),
-            self.setup.route_rewrite(),
-        );
-    }
-}
+impl Session {}
 
 impl Setup {
     /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
     fn route_rewrite(&self) -> RuleSource {
         self.rules.source_for(RuleKey::RouteRewrite)
+    }
+}
+
+impl Chart {
+    /// A rebuild point's rewrite (see the module docs): by the engine,
+    /// each hidden hop rewritten to the system at its place and the
+    /// course cut at the first with none. Raises no event.
+    pub(super) fn rewrite_course(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        pilot.course = course::rewritten(
+            &pilot.course,
+            self.galaxy.map().places(),
+            setup.route_rewrite(),
+        );
+    }
+
+    /// The course after a jump's arrival at `arrived` that made `hops` of
+    /// its hops (see the module docs).
+    pub(super) fn course_after_arrival(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        hops: usize,
+        arrived: SystemId,
+    ) {
+        pilot.course = course::after_arrival(
+            &pilot.course,
+            hops,
+            arrived,
+            self.galaxy.map().places(),
+            setup.route_rewrite(),
+        );
     }
 }
 
