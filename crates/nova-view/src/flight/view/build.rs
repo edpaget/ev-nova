@@ -15,8 +15,8 @@ use nova_sim::{
     StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, KeptBerths, MissionInfo, MissionInfoPress, OfferPrompt,
-    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
+    ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
+    OfferPrompt, PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
     story::sprite_pool::StellarSpritePool,
 };
 
@@ -88,6 +88,15 @@ impl<
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.place_ship();
+        }
+    }
+
+    /// Enters play from the main screen as [`Session::enter_game`] does:
+    /// the refresh a later new pilot reads is taken afresh. A session that
+    /// failed enters nothing.
+    pub fn enter_game(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.enter_game();
         }
     }
 
@@ -352,6 +361,27 @@ impl<
     #[must_use]
     pub fn kept_berths(&self) -> Option<KeptBerths> {
         self.session.as_ref().ok().map(Session::kept_berths)
+    }
+
+    /// The flight with a new pilot's neighbour pass reading `carried`,
+    /// what an earlier flight of the same run left
+    /// ([`Session::with_last_refresh`]).
+    #[must_use]
+    pub fn with_last_refresh(self, carried: LastRefresh) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_last_refresh(carried)),
+            ..self
+        }
+    }
+
+    /// What the flight's last galaxy refresh left hidden, for a new pilot
+    /// made later in the run ([`Session::last_refresh`]), or `None` when
+    /// its session never started.
+    #[must_use]
+    pub fn last_refresh(&self) -> Option<LastRefresh> {
+        self.session.as_ref().ok().map(Session::last_refresh)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
