@@ -838,9 +838,6 @@ impl From<LandOutcome> for LandPress {
 }
 
 /// The player's ship, flying in one system.
-// Each flag is its own part of the flight's state, set and read on its
-// own.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
     /// The pilot flying: everything a save keeps.
@@ -1007,7 +1004,7 @@ impl Session {
     ///
     /// When the ship cannot be read, or no system exists at all
     /// ([`StartError::NoSystem`] with the pilot's saved system).
-    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
+    #[allow(clippy::too_many_lines)] // the load's repairs, then the sub-states' setup, in the original's order
     pub fn load(
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         mut pilot: Pilot,
