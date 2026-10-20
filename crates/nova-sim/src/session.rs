@@ -1338,6 +1338,7 @@ impl Session {
         self.space
             .traffic
             .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        self.chart.read_rescue_rule(&rules);
         self.setup.rules = rules;
         self
     }

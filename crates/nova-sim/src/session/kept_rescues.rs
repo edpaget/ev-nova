@@ -46,11 +46,13 @@
 //!
 //! By the other reading (crons-news-ranks phase 13's) no rescue is kept:
 //! the holder derives it for the player's current system alone, so a
-//! rescued stellar follows the player. The rescue plays no sound.
+//! rescued stellar follows the player. A session is built by the default
+//! rulebook, whose rebuilds keep rescues, so `Session::with_rules`
+//! forgets them when it installs this reading. The rescue plays no sound.
 
 use super::{Chart, Setup, Statics};
 use crate::pilot::Pilot;
-use crate::rulebook::{RuleKey, RuleSource};
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 impl Chart {
     /// A rebuild point's rescue pass (see the module docs): by the engine
@@ -68,6 +70,17 @@ impl Chart {
     /// @0x9968a-0x9969f): every rescue kept is forgotten.
     pub(super) fn forget_rescues(&mut self) {
         self.galaxy.forget_rescues();
+    }
+
+    /// The session given `rules` (`Session::with_rules`): by the other
+    /// reading of [`RuleKey::RescueUntilRefresh`], every rescue kept so far
+    /// is forgotten, as the session was built by the default rulebook, whose
+    /// rebuilds keep them, and the holder reads no kept rescue by that
+    /// reading.
+    pub(super) fn read_rescue_rule(&mut self, rules: &Rulebook) {
+        if rules.source_for(RuleKey::RescueUntilRefresh) == RuleSource::Bible {
+            self.forget_rescues();
+        }
     }
 }
 
@@ -271,6 +284,30 @@ mod tests {
     }
 
     #[test]
+    fn a_session_given_the_bible_reading_after_its_load_keeps_no_rescue() {
+        // Built as the app builds a flight: flown, so the load's rebuild and
+        // refresh run by the default rulebook and rescue 150 into 130, then
+        // given its rules.
+        let catalog = shared();
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.bits_mut().set(hiding_bit(131));
+        let mut session = Session::fly(&catalog, pilot).expect("flies").with_rules(
+            Rulebook::default().with_override(RuleKey::RescueUntilRefresh, RuleSource::Bible),
+        );
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.galaxy().rescued(SHARED), None);
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(true));
+        }));
+        gate_to_131(&mut session, &catalog);
+        assert_eq!(
+            shared_held(&session),
+            (Some(SystemId(131)), true),
+            "the rescue follows the player"
+        );
+    }
+
+    #[test]
     fn a_load_keeps_no_rescue_and_rescues_for_the_loaded_system_only() {
         let catalog = shared();
         for source in RuleSource::ALL {
@@ -283,7 +320,7 @@ mod tests {
             assert_eq!(loaded.system(), SystemId(131), "{source:?}");
             assert_eq!(
                 loaded.galaxy().rescued(SHARED),
-                Some(SystemId(131)),
+                by(source, Some(SystemId(131)), None),
                 "{source:?}: flown by the engine's default, then read"
             );
             assert_eq!(
