@@ -60,9 +60,11 @@
 //! `_HandleStellarSystemVisibility` (@0x159a3), which has no hidden move:
 //! a visible shadowed target is entered as it is. The escape pod's
 //! rescue writes the found stellar's owner (+0x14) as it is
-//! (@0x68f99-0x68f9e), or system 128 with none (@0x68f7f); an owner
-//! stands for itself at its place, so the two readings never differ for
-//! it. The developer tools' relocation and the edit's move have no
+//! (@0x68f99-0x68f9e), or system 128 with none (@0x68f7f). The owner
+//! word includes `_HandleStellarSystemVisibility`'s rescue, kept until
+//! the next refresh (the `kept_rescues` module), so it can be a visible
+//! system shadowed at its place: the pod enters it as it is by the
+//! engine, and by its stand-in by the other reading. The developer tools' relocation and the edit's move have no
 //! original and follow the key. No resolution branch makes a sound; the
 //! arrival's and the gates' sounds are raised elsewhere.
 //!

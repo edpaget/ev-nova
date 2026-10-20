@@ -2171,7 +2171,9 @@ rule_keys! {
     /// written @0x6be0b). A wormhole comes out in its exit's owner as it
     /// is (`_PlayerEnterWormhole` @0x642a7), `M` and `N` enter the system
     /// they name (@0x158f2), and the escape pod's rescue the found
-    /// stellar's owner (@0x68f99-0x68f9e). By the other reading,
+    /// stellar's owner (@0x68f99-0x68f9e), a rescue kept until the next
+    /// refresh included, so possibly a system shadowed at its place. By
+    /// the other reading,
     /// story-runtime phase 4's and crons-news-ranks phase 5's, every
     /// arrival is resolved by place after the refresh, and a jump enters
     /// the stand-in J took.

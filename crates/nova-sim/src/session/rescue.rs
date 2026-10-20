@@ -92,14 +92,17 @@
 //! visible ([`OverlaidGalaxy::visible`](crate::story::OverlaidGalaxy::visible)),
 //! known (+0x1ec, @0xd166; [`Session::is_known`]) and explored
 //! ([`Pilot::has_explored`](crate::Pilot::has_explored)). A stellar is active (+0x44)
-//! while a visible system owns it
-//! ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)), as
+//! while a visible system holds it
+//! ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder): its
+//! owner, else the system that rescued it, kept until the next refresh,
+//! else the player's system when that lists it), as
 //! `_HandleStellarSystemVisibility` sets it from its owner's visibility
-//! (@0x32c42-0x32cdf), and is read with the overlay's destruction; the
-//! rest of the test is [`qualifies`], against the player's record in the
-//! system searched. The system the pod goes to is the found stellar's
-//! owner (+0x14, @0x68f87-0x68f9e), or the system it was found in when no
-//! system owns it.
+//! after its rescue (@0x32c42-0x32cdf), and is read with the overlay's
+//! destruction; the rest of the test is [`qualifies`], against the
+//! player's record in the system searched. The system the pod goes to is
+//! the found stellar's owner word (+0x14, @0x68f87-0x68f9e), the rescue's
+//! included, so a system shadowed at its place that rescued it, or the
+//! system it was found in when no system holds it.
 
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
@@ -170,11 +173,11 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
             .into_iter()
             .map(|site| {
                 let site = self.session.chart.galaxy.site(site);
-                let active = self
-                    .session
+                let session = self.session;
+                let active = session
                     .chart
-                    .stellar_owner(&self.session.statics, site.id)
-                    .is_some();
+                    .stellar_holder(&session.pilot, &session.statics, site.id)
+                    .is_some_and(|holder| session.chart.galaxy.visible(holder));
                 (site.id, qualifies(&site, active, record))
             })
             .collect()
@@ -349,7 +352,7 @@ impl Session {
             RESCUE_FALLBACK,
             |(stellar, found_in)| {
                 self.chart
-                    .stellar_owner(&self.statics, stellar)
+                    .stellar_holder(&self.pilot, &self.statics, stellar)
                     .unwrap_or(found_in)
             },
         )
@@ -394,13 +397,17 @@ impl Chart {
         ));
     }
 
-    /// The system a visible system owns `stellar` in, if any.
-    fn stellar_owner(&self, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
-        let listed = statics
-            .listed_stellars
-            .iter()
-            .find(|listed| listed.id == stellar)?;
-        self.galaxy.owner(&listed.systems)
+    /// The system that holds `stellar`, with the player where `pilot` is
+    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+    /// its owner word (+0x14), a kept rescue included.
+    fn stellar_holder(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        stellar: StellarId,
+    ) -> Option<SystemId> {
+        self.galaxy
+            .holder(stellar, statics.listers(stellar), pilot.system)
     }
 }
 
@@ -568,7 +575,7 @@ mod tests {
         assert_eq!(
             session
                 .chart
-                .stellar_owner(&session.statics, StellarId(170)),
+                .stellar_holder(&session.pilot, &session.statics, StellarId(170)),
             None,
             "133 stands for 134's place"
         );
@@ -579,6 +586,43 @@ mod tests {
         assert_eq!(
             session.escape_destination(SystemId(130), &catalog),
             SystemId(133)
+        );
+    }
+
+    #[test]
+    fn the_pod_goes_where_a_kept_rescue_holds_the_found_stellar_and_counts_it_active() {
+        // 130 links to 134 alone, shadowed by 133 at its place; 135,
+        // shadowed by 131 at its place, lists 134's shipyard 170 too, so no
+        // system owns it.
+        let mut catalog = galaxy();
+        catalog.star_map[0].links = vec![SystemId(134)];
+        catalog.star_map.push(star(134, (-600.0, 0.0), &[]));
+        catalog.star_map.push(star(135, (600.0, 0.0), &[]));
+        catalog.systems.extend([SystemId(134), SystemId(135)]);
+        catalog.sites.push((SystemId(134), vec![yard(170)]));
+        catalog.sites.push((SystemId(135), vec![yard(170)]));
+        let mut session = explored(&catalog, &[134]);
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            RESCUE_FALLBACK,
+            "held by no system: inactive, passed over"
+        );
+        // The rescue 135 kept at a rebuild point there (@0x32ca1).
+        let listed = session.statics.listed_stellars.clone();
+        session.chart.galaxy.keep_rescues(&listed, SystemId(135));
+        assert_eq!(
+            session.galaxy().rescued(StellarId(170)),
+            Some(SystemId(135))
+        );
+        assert_eq!(
+            session.search_map(&catalog).stellars(SystemId(134)),
+            [(StellarId(170), true)],
+            "active in its visible rescuer (+0x44, @0x32cbe-0x32cdf)"
+        );
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            SystemId(135),
+            "the found stellar's owner word, the rescue's (@0x68f87-0x68f9e)"
         );
     }
 
