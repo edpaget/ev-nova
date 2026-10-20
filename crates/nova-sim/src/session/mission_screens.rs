@@ -523,7 +523,11 @@ impl Session {
     /// (`_IsMissionAvailable(i, 1)` @0xa38bd-0xa3956), checked as an
     /// accept leaves them, drawing nothing.
     pub fn mission_computer(&self) -> Result<MissionComputer, ComputerRefusal> {
-        if self.accept_refusal(0, &mut NeverFires) == Err(AcceptRefusal::SlotsFull) {
+        if self
+            .ship
+            .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
+            == Err(AcceptRefusal::SlotsFull)
+        {
             return Err(ComputerRefusal::SlotsFull);
         }
         let offers = self.mission_offers(Venue::Computer);
@@ -682,7 +686,11 @@ impl Session {
     ///
     /// As [`Session::mission_computer`].
     pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
-        if self.accept_refusal(0, &mut NeverFires) != Err(AcceptRefusal::SlotsFull) {
+        if self
+            .ship
+            .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
+            != Err(AcceptRefusal::SlotsFull)
+        {
             let listed: Vec<MissionId> = self
                 .mission_offers(Venue::Computer)
                 .iter()

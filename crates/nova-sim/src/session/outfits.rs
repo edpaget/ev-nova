@@ -72,7 +72,7 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
-use super::{Session, Setup, Statics, clamp_i16};
+use super::{PlayerShip, Session, Setup, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
@@ -138,31 +138,6 @@ fn take_one(pilot: &mut Pilot, outfit: OutfitId) -> bool {
 }
 
 impl Session {
-    /// `record` as a grant sees it on the pilot's ship, its `Max` as the
-    /// `ModType` 27 outfits owned raise it.
-    pub(crate) fn grant_stock(&self, record: &OutfitRecord) -> GrantStock {
-        GrantStock {
-            outfit: record.id,
-            item_class: record.item_class,
-            mass: record.mass,
-            unit_mass: unit_mass(record, self.ship.fit.fields.mass, &self.setup.rules),
-            owned: self.pilot.owned(record.id),
-            max: clamp_i16(self.raised_max_of(record)),
-        }
-    }
-
-    /// The ship's free mass, with the outfits the pilot owns, its
-    /// standard equipment left out.
-    pub(crate) fn free_mass(&self) -> i64 {
-        outfitter::free_mass(
-            self.ship.fit.fields,
-            &self.standard(),
-            &self.pilot.outfits,
-            &self.statics.outfits,
-            &self.setup.rules,
-        )
-    }
-
     /// Grants one of `outfit` through the grant path (see the module
     /// docs), without refitting: whether one more is owned.
     pub(crate) fn grant_outfit(&mut self, outfit: OutfitId) -> bool {
@@ -212,46 +187,21 @@ impl Session {
         effect.added
     }
 
-    /// Whether `G` may grant `outfit` (see the module docs): unless the
-    /// grant would add it and [`held_to_max`] holds a grant of one to
-    /// none, as a boarding grant is held.
-    fn script_may_grant(&self, outfit: OutfitId) -> bool {
-        if !self.setup.grant_effect(&self.statics, outfit).added {
-            return true;
-        }
-        self.statics.outfit_record(outfit).is_none_or(|record| {
-            let stock = self.grant_stock(record);
-            held_to_max(
-                self.setup.outfit_rules().grant_max,
-                1,
-                &stock,
-                self.free_mass(),
-            )
-            .is_none_or(|count| count > 0)
-        })
-    }
-
     /// `G`: grants one of `outfit` and refits (see the module docs).
     pub(super) fn script_grant(&mut self, outfit: OutfitId) {
-        if self.script_may_grant(outfit) {
+        if self
+            .ship
+            .script_may_grant(&self.pilot, &self.statics, &self.setup, outfit)
+        {
             self.grant_outfit(outfit);
-            self.refit(true, self.setup.script_reserves());
+            self.ship.refit(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                true,
+                self.setup.script_reserves(),
+            );
         }
-    }
-
-    /// `D`: removes one of `outfit`, if owned, and refits, paying for it
-    /// as [`OutfitRules::remove_refund`] says (see the module docs).
-    pub(super) fn script_remove(&mut self, outfit: OutfitId) {
-        if !OUTFIT_IDS.contains(&outfit.0) || !take_one(&mut self.pilot, outfit) {
-            return;
-        }
-        if self.setup.outfit_rules().remove_refund == RuleSource::Bible {
-            let price = self.statics.outfit_record(outfit).map_or(0, |record| {
-                unit_price(record, self.ship.fit.fields.mass, &self.setup.rules)
-            });
-            self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
-        }
-        self.refit(false, self.setup.script_reserves());
     }
 
     /// `X`: explores `system` when it is in the catalog's galaxy, hidden
@@ -296,6 +246,85 @@ impl Statics {
     /// The record of `outfit`, if there is one.
     fn outfit_record(&self, outfit: OutfitId) -> Option<&OutfitRecord> {
         self.outfits.iter().find(|record| record.id == outfit)
+    }
+}
+
+impl PlayerShip {
+    /// `record` as a grant sees it on the pilot's ship, its `Max` as the
+    /// `ModType` 27 outfits owned raise it.
+    pub(super) fn grant_stock(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        record: &OutfitRecord,
+    ) -> GrantStock {
+        GrantStock {
+            outfit: record.id,
+            item_class: record.item_class,
+            mass: record.mass,
+            unit_mass: unit_mass(record, self.fit.fields.mass, &setup.rules),
+            owned: pilot.owned(record.id),
+            max: clamp_i16(super::raised_max_of(pilot, statics, setup, record)),
+        }
+    }
+
+    /// The ship's free mass, with the outfits the pilot owns, its
+    /// standard equipment left out.
+    pub(super) fn free_mass(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> i64 {
+        outfitter::free_mass(
+            self.fit.fields,
+            &self.standard(),
+            &pilot.outfits,
+            &statics.outfits,
+            &setup.rules,
+        )
+    }
+
+    /// Whether `G` may grant `outfit` (see the module docs): unless the
+    /// grant would add it and [`held_to_max`] holds a grant of one to
+    /// none, as a boarding grant is held.
+    fn script_may_grant(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        outfit: OutfitId,
+    ) -> bool {
+        if !setup.grant_effect(statics, outfit).added {
+            return true;
+        }
+        statics.outfit_record(outfit).is_none_or(|record| {
+            let stock = self.grant_stock(pilot, statics, setup, record);
+            held_to_max(
+                setup.outfit_rules().grant_max,
+                1,
+                &stock,
+                self.free_mass(pilot, statics, setup),
+            )
+            .is_none_or(|count| count > 0)
+        })
+    }
+
+    /// `D`: removes one of `outfit`, if owned, and refits, paying for it
+    /// as [`OutfitRules::remove_refund`] says (see the module docs).
+    pub(super) fn script_remove(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        outfit: OutfitId,
+    ) {
+        if !OUTFIT_IDS.contains(&outfit.0) || !take_one(pilot, outfit) {
+            return;
+        }
+        if setup.outfit_rules().remove_refund == RuleSource::Bible {
+            let price = statics.outfit_record(outfit).map_or(0, |record| {
+                unit_price(record, self.fit.fields.mass, &setup.rules)
+            });
+            pilot.cash = pilot.cash.saturating_add(resale(price));
+        }
+        self.refit(pilot, statics, setup, false, setup.script_reserves());
     }
 }
 
@@ -590,7 +619,12 @@ mod tests {
         assert!(run(&mut session, "G305 G305 G305 G307"));
         assert_eq!(session.pilot().owned(SHIELD), 3, "past its Max of 2");
         assert_eq!(session.pilot().owned(HEAVY), 1, "100 tons of 30 free");
-        assert!(session.free_mass() < 0);
+        assert!(
+            session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup)
+                < 0
+        );
     }
 
     #[test]
@@ -611,7 +645,12 @@ mod tests {
         let mut session = scripted(&catalog).with_rules(rules);
         run(&mut session, "G307 G307");
         assert_eq!(session.pilot().owned(HEAVY), 1);
-        assert_eq!(session.free_mass(), 0);
+        assert_eq!(
+            session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup),
+            0
+        );
     }
 
     #[test]
@@ -625,11 +664,18 @@ mod tests {
         let weighed = |source| {
             let rules = Rulebook::default().with_override(RuleKey::ScaledMass, source);
             let mut session = session(&catalog).with_rules(rules);
-            let free = session.free_mass();
+            let free = session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup);
             session.pilot.outfits.insert(HEAVY, 1);
             (
-                free - session.free_mass(),
-                session.grant_stock(&record).unit_mass,
+                free - session
+                    .ship
+                    .free_mass(&session.pilot, &session.statics, &session.setup),
+                session
+                    .ship
+                    .grant_stock(&session.pilot, &session.statics, &session.setup, &record)
+                    .unit_mass,
             )
         };
         assert_eq!(weighed(RuleSource::Engine), (20, 20));
@@ -642,13 +688,20 @@ mod tests {
         run(&mut session, "G305 G305");
         let (cash, free, shield) = (
             session.pilot().cash(),
-            session.free_mass(),
+            session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup),
             session.stats().shield,
         );
         assert_eq!(session.reserves().shield.now, shield);
         assert!(run(&mut session, "D305"));
         assert_eq!(session.pilot().owned(SHIELD), 1);
-        assert_eq!(session.free_mass(), free + 1);
+        assert_eq!(
+            session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup),
+            free + 1
+        );
         assert_eq!(session.stats().shield, shield - 10.0);
         assert_eq!(
             session.reserves().shield.now,

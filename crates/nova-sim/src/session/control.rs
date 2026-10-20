@@ -45,7 +45,7 @@ use std::collections::BTreeSet;
 
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
-use super::{Outbox, Session};
+use super::{Outbox, PlayerShip, Session, Statics};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
@@ -110,23 +110,25 @@ impl PilotFacts for Facts<'_> {
 /// The session's pilot, as its `Facts` read it.
 impl PilotFacts for Session {
     fn bit(&self, bit: Bit) -> bool {
-        self.facts().bit(bit)
+        self.ship.facts(&self.pilot, &self.statics).bit(bit)
     }
 
     fn gender(&self) -> Gender {
-        self.facts().gender()
+        self.ship.facts(&self.pilot, &self.statics).gender()
     }
 
     fn paid(&self, days: u16) -> bool {
-        self.facts().paid(days)
+        self.ship.facts(&self.pilot, &self.statics).paid(days)
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.facts().has_outfit(outfit)
+        self.ship
+            .facts(&self.pilot, &self.statics)
+            .has_outfit(outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
-        self.facts().explored(system)
+        self.ship.facts(&self.pilot, &self.statics).explored(system)
     }
 }
 
@@ -159,7 +161,10 @@ impl Session {
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
-            SetOp::RemoveOutfit(outfit) => self.script_remove(*outfit),
+            SetOp::RemoveOutfit(outfit) => {
+                self.ship
+                    .script_remove(&mut self.pilot, &self.statics, &self.setup, *outfit);
+            }
             SetOp::Explore(system) => self.explore_system(*system),
             SetOp::ChangeShip(ship) => self.change_ship(*ship, OutfitCarry::Keep, false),
             SetOp::ChangeShipWithDefaults(ship) => {
@@ -285,15 +290,6 @@ impl Session {
         self.out.take_script_notes()
     }
 
-    /// What a control-bit test reads about the pilot.
-    pub(crate) fn facts(&self) -> Facts<'_> {
-        Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-        }
-    }
-
     /// The session's control bits ([`Session::with_control_bits`]) and its
     /// pilot, as the rules that test a record's control bits ask them.
     pub(crate) fn gate(&self) -> Gate<'_> {
@@ -327,6 +323,17 @@ impl Outbox {
     /// in order; taking it empties the list.
     fn take_script_notes(&mut self) -> Vec<ScriptNote> {
         std::mem::take(&mut self.script_notes)
+    }
+}
+
+impl PlayerShip {
+    /// What a control-bit test reads about the pilot.
+    pub(super) fn facts<'a>(&'a self, pilot: &'a Pilot, statics: &'a Statics) -> Facts<'a> {
+        Facts {
+            pilot,
+            ammo_outfits: &statics.ammo_outfits,
+            armament: &self.fit.armament,
+        }
     }
 }
 
@@ -381,7 +388,7 @@ mod tests {
     fn the_pilot_view_reads_the_bits_gender_and_explored_systems() {
         let mut session = session();
         session.set_control_bit(bit(12), true);
-        let facts = session.facts();
+        let facts = session.ship.facts(&session.pilot, &session.statics);
         assert!(facts.bit(bit(12)));
         assert!(!facts.bit(bit(13)));
         assert_eq!(facts.gender(), Gender::Male);
@@ -393,7 +400,13 @@ mod tests {
             .expect("starts")
             .with_gender(Gender::Female);
         let session = Session::fly(&catalog, female).expect("flies");
-        assert_eq!(session.facts().gender(), Gender::Female);
+        assert_eq!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .gender(),
+            Gender::Female
+        );
     }
 
     #[test]
@@ -423,7 +436,13 @@ mod tests {
     fn the_pilot_view_always_counts_the_game_as_paid() {
         let session = session();
         for days in [0, 30, u16::MAX] {
-            assert!(session.facts().paid(days), "{days}");
+            assert!(
+                session
+                    .ship
+                    .facts(&session.pilot, &session.statics)
+                    .paid(days),
+                "{days}"
+            );
         }
     }
 
@@ -433,8 +452,18 @@ mod tests {
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.outfits.insert(OutfitId(300), 1);
         let session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.facts().has_outfit(OutfitId(300)));
-        assert!(!session.facts().has_outfit(OutfitId(301)));
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(300))
+        );
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(301))
+        );
     }
 
     fn set(text: &str) -> SetExpr {

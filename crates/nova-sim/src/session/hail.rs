@@ -79,7 +79,7 @@
 //!   `reinforcements` module).
 
 use super::missions::TextSource;
-use super::{Outbox, Session};
+use super::{Jump, Outbox, PlayerShip, Session};
 use crate::ai::Goal;
 use crate::catalog::{CommCatalog, MissionId, ShipId, StellarId};
 use crate::chance::Chance;
@@ -221,7 +221,7 @@ impl Session {
     /// [`HailRefusal::NoTarget`] with none (@0x6206c); else the ship
     /// target as [`Session::answering`] says.
     pub(super) fn hail_target(&self, option: bool) -> Result<HailTarget, HailRefusal> {
-        self.player_hails()?;
+        self.ship.player_hails(self.landed, self.jump)?;
         if self.target().is_some() && !option {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
@@ -234,21 +234,6 @@ impl Session {
             .ok_or(HailRefusal::NoResponse)
     }
 
-    /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
-    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
-    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
-    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
-    fn player_hails(&self) -> Result<(), HailRefusal> {
-        let flying = !matches!(
-            self.ship.condition,
-            Condition::Dying { .. } | Condition::Destroyed
-        );
-        if self.landed.is_some() || self.jump.is_some() || !flying {
-            return Err(HailRefusal::NoTarget);
-        }
-        Ok(())
-    }
-
     /// The player's ship target, when it answers a hail, drawing nothing:
     /// otherwise [`HailRefusal::NoTarget`] with no ship target, or while
     /// landed, jumping (the pre-jump stage included) or breaking up; [`HailRefusal::InHyperspace`] for a
@@ -258,7 +243,7 @@ impl Session {
     /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
     /// class 0x2ff, mute whoever leads it, @0x62145).
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
-        self.player_hails()?;
+        self.ship.player_hails(self.landed, self.jump)?;
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
         // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
@@ -662,6 +647,27 @@ impl Outbox {
     /// taken, in order; taking it empties the list.
     fn take_comm(&mut self) -> Vec<CommNote> {
         std::mem::take(&mut self.comm)
+    }
+}
+
+impl PlayerShip {
+    /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
+    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
+    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
+    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
+    fn player_hails(
+        &self,
+        landed: Option<StellarId>,
+        jump: Option<Jump>,
+    ) -> Result<(), HailRefusal> {
+        let flying = !matches!(
+            self.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        );
+        if landed.is_some() || jump.is_some() || !flying {
+            return Err(HailRefusal::NoTarget);
+        }
+        Ok(())
     }
 }
 

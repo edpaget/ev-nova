@@ -86,7 +86,7 @@ impl Session {
         if was == Condition::Intact && now != Condition::Intact {
             self.out.sounds.push(SimSound::ShipDowned);
             self.say(SimMessage::ShipDisabled);
-            self.arm_repair_inhibit();
+            self.ship.arm_repair_inhibit();
             self.fail_downed_mission(chance);
         }
         let was_up = matches!(was, Condition::Intact | Condition::Disabled);

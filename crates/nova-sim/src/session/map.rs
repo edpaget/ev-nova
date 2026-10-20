@@ -35,9 +35,10 @@
 //!   @0xd864-0xd8a1), and the record with the system's government (0 for
 //!   an independent one) by the Bible's.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
-use super::Session;
+use super::{PlayerShip, Session, Setup, Statics};
 use crate::catalog::{ListedStellar, SystemId};
 use crate::exploration;
 use crate::galaxy_map::{self, HIDES_ARROW, MARKS_SHIPS, MapDrawing, MapMarks, MapState};
@@ -58,25 +59,14 @@ struct Coding<'a> {
 }
 
 impl Session {
-    /// What the colour codes read, worked out once.
-    fn coding(&self) -> Coding<'_> {
-        let mut listed: BTreeMap<SystemId, Vec<&ListedStellar>> = BTreeMap::new();
-        for stellar in &self.statics.listed_stellars {
-            for &system in &stellar.systems {
-                listed.entry(system).or_default().push(stellar);
-            }
-        }
-        Coding {
-            blessing: self.blessing(),
-            listed,
-        }
-    }
-
     /// What the galaxy map frames `system` in, as `_ColorCodeSystem`
     /// works it out (see the module docs).
     #[must_use]
     pub fn system_color_code(&self, system: SystemId) -> SystemColorCode {
-        self.color_code(&self.coding(), system)
+        self.color_code(
+            &self.ship.coding(&self.pilot, &self.statics, &self.setup),
+            system,
+        )
     }
 
     /// [`Session::system_color_code`] with `coding` read already.
@@ -234,7 +224,7 @@ impl Session {
         missions: &[SystemId],
         marks: MapMarks,
     ) -> MapDrawing {
-        let coding = self.coding();
+        let coding = self.ship.coding(&self.pilot, &self.statics, &self.setup);
         let state = MapState {
             galaxy: &self.galaxy,
             explored: &self.pilot.explored,
@@ -249,6 +239,22 @@ impl Session {
             pairing: self.setup.rules.source_for(RuleKey::MapLinkPairing),
         };
         galaxy_map::draw_map(&state, |system| self.color_code(&coding, system))
+    }
+}
+
+impl PlayerShip {
+    /// What the colour codes read, worked out once.
+    fn coding<'a>(&self, pilot: &Pilot, statics: &'a Statics, setup: &Setup) -> Coding<'a> {
+        let mut listed: BTreeMap<SystemId, Vec<&ListedStellar>> = BTreeMap::new();
+        for stellar in &statics.listed_stellars {
+            for &system in &stellar.systems {
+                listed.entry(system).or_default().push(stellar);
+            }
+        }
+        Coding {
+            blessing: self.blessing(pilot, statics, setup),
+            listed,
+        }
     }
 }
 

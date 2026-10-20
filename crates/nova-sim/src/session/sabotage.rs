@@ -62,12 +62,13 @@
 //! before the player's steering, as the original does; the separate parts
 //! run it after [`Session::tick`]'s steering in the same step.
 
-use super::Session;
+use super::{PlayerShip, Session, Statics};
 use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
+use crate::pilot::Pilot;
 use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
 use crate::sound::{SimSound, WARP_UP_HALTS};
 
@@ -77,19 +78,7 @@ impl Session {
     /// ([`death_descs`](crate::sabotage::death_descs)).
     #[must_use]
     pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        crate::sabotage::death_descs(
-            self.ship.latches.sabotage.flag(),
-            &self.pilot.outfits,
-            &self.statics.outfits,
-        )
-    }
-
-    /// The sabotage clock's part of the refresh (see the module docs).
-    pub(super) fn refresh_sabotage(&mut self) {
-        self.ship
-            .latches
-            .sabotage
-            .refresh(&self.pilot.outfits, &self.statics.outfits);
+        self.ship.sabotage_death_descs(&self.pilot, &self.statics)
     }
 
     /// A tick of the sabotage clock, and what goes off with it, drawing on
@@ -154,13 +143,34 @@ impl Session {
         reserves.shield.now = -1.0;
         self.jump = None;
         let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
-        self.halt_sounds(&WARP_UP_HALTS);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
         self.say(if outfit.is_none() && self.setup.leet {
             SimMessage::BombSetUp
         } else {
             SimMessage::Sabotaged { outfit }
         });
+    }
+}
+
+impl PlayerShip {
+    /// The `dësc` IDs the player sees as it dies, from the outfits it
+    /// owns, gated on the flag the last refresh cached
+    /// ([`death_descs`](crate::sabotage::death_descs)).
+    #[must_use]
+    fn sabotage_death_descs(&self, pilot: &Pilot, statics: &Statics) -> Vec<i16> {
+        crate::sabotage::death_descs(
+            self.latches.sabotage.flag(),
+            &pilot.outfits,
+            &statics.outfits,
+        )
+    }
+
+    /// The sabotage clock's part of the refresh (see the module docs).
+    pub(super) fn refresh_sabotage(&mut self, pilot: &Pilot, statics: &Statics) {
+        self.latches
+            .sabotage
+            .refresh(&pilot.outfits, &statics.outfits);
     }
 }
 

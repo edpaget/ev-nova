@@ -69,7 +69,7 @@ impl Session {
         let mut aim = self.face_aim(controls.face);
         // An inertialess ship's reverse brakes instead, with no aim (see
         // the `inertialess` module).
-        if controls.reverse && !disabled && !self.player_inertialess() {
+        if controls.reverse && !disabled && !self.ship.player_inertialess(&self.setup) {
             aim = reverse_aim(self.ship.player.velocity).or(aim);
         }
         if let Some(aim) = aim {
@@ -167,7 +167,7 @@ mod tests {
     /// A session of [`pegasus`] at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.settle_box();
+        session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
         session.ship.player.heading = heading;

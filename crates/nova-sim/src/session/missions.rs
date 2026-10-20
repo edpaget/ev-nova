@@ -70,10 +70,11 @@
 //! refused for want of room for the cargo. A deadline missed in flight
 //! raises [`SimMessage::DeadlineMissed`] unless the mission is hidden.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use super::mission_screens::MissionTextKind;
-use super::{Session, Setup, Statics};
+use super::{PlayerShip, Session, Setup, Statics};
 use crate::catalog::{
     AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
     SystemId,
@@ -387,31 +388,6 @@ impl Session {
         })
     }
 
-    /// The first refusal of the accept checks for an offer of `tons`,
-    /// drawing on `chance`: the room for them is the ship's own holds
-    /// and [`Session::mission_cargo_space`].
-    pub(super) fn accept_refusal(
-        &self,
-        tons: i64,
-        chance: &mut dyn Chance,
-    ) -> Result<(), AcceptRefusal> {
-        let facts = AcceptFacts {
-            active: &self.pilot.missions,
-            cargo: self.room_for(tons),
-            rules: &self.setup.rules,
-        };
-        accept_checks().first_refusal(&facts, chance)
-    }
-
-    /// The room the ship has for `tons` of a mission's cargo.
-    pub(super) fn room_for(&self, tons: i64) -> Room {
-        Room {
-            tons,
-            holds: i64::from(self.ship.fit.stats.capacity),
-            space: self.mission_cargo_space(),
-        }
-    }
-
     /// The first refusal of the accept checks for `offer`, drawing on
     /// `chance`. A cargo refusal is shown as the original's
     /// `_ShowTextDialog` shows it (@0xa1b61-0xa1be5); a full table shows
@@ -421,7 +397,13 @@ impl Session {
         offer: &Offer,
         chance: &mut dyn Chance,
     ) -> Result<(), AcceptRefusal> {
-        let refused = self.accept_refusal(offer.cargo_tons, chance);
+        let refused = self.ship.accept_refusal(
+            &self.pilot,
+            &self.statics,
+            &self.setup,
+            offer.cargo_tons,
+            chance,
+        );
         if let Err(refusal @ (AcceptRefusal::NoHolds | AcceptRefusal::NoSpace)) = refused {
             self.show_text(MissionTextKind::NoRoom, offer.mission, refusal.message());
         }
@@ -1260,19 +1242,6 @@ impl Session {
         })
     }
 
-    /// The room a mission's cargo has, in tons, as `_TotalMissionCargoSpace`
-    /// (@0xcffb) reckons it: the ship's own holds, with its cargo outfits,
-    /// less the goods held that the trader escorts' holds do not take and
-    /// the mission cargo aboard, which rides in the ship alone
-    /// (@0xd0c7-0xd0eb); below 0 when it holds more. With no escort's
-    /// holds this is the holds less `_TotalCargo` (@0xd0ed).
-    pub(super) fn mission_cargo_space(&self) -> i64 {
-        let own = i64::from(self.ship.fit.stats.capacity);
-        let escorts = i64::from(self.capacity()) - own;
-        let spilled = (self.pilot.goods_held() - escorts).max(0);
-        own - (spilled + self.pilot.missions.cargo_aboard())
-    }
-
     /// `f` of the galaxy a mission's stellars are chosen from.
     pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
         let player = self.pilot.system;
@@ -1337,9 +1306,9 @@ impl Session {
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
             inherent_govt: ship.and_then(|ship| ship.inherent_govt),
             combat_govt: ship.and_then(|ship| ship.combat_govt),
-            contributed: self.contributed(),
+            contributed: self.ship.contributed(&self.pilot, &self.statics),
             fuel: self.pilot.reserves.fuel.now,
-            free_cargo: self.mission_cargo_space(),
+            free_cargo: self.ship.mission_cargo_space(&self.pilot, &self.statics),
             cash: self.pilot.cash,
         }
     }
@@ -1632,6 +1601,49 @@ impl Statics {
         let ids: std::collections::BTreeSet<GovtId> =
             self.govts.ids().chain(record.comp_govt).collect();
         ids.into_iter().map(|govt| (govt, Some(govt))).collect()
+    }
+}
+
+impl PlayerShip {
+    /// The first refusal of the accept checks for an offer of `tons`,
+    /// drawing on `chance`: the room for them is the ship's own holds
+    /// and [`PlayerShip::mission_cargo_space`].
+    pub(super) fn accept_refusal(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        tons: i64,
+        chance: &mut dyn Chance,
+    ) -> Result<(), AcceptRefusal> {
+        let facts = AcceptFacts {
+            active: &pilot.missions,
+            cargo: self.room_for(pilot, statics, tons),
+            rules: &setup.rules,
+        };
+        accept_checks().first_refusal(&facts, chance)
+    }
+
+    /// The room the ship has for `tons` of a mission's cargo.
+    pub(super) fn room_for(&self, pilot: &Pilot, statics: &Statics, tons: i64) -> Room {
+        Room {
+            tons,
+            holds: i64::from(self.fit.stats.capacity),
+            space: self.mission_cargo_space(pilot, statics),
+        }
+    }
+
+    /// The room a mission's cargo has, in tons, as `_TotalMissionCargoSpace`
+    /// (@0xcffb) reckons it: the ship's own holds, with its cargo outfits,
+    /// less the goods held that the trader escorts' holds do not take and
+    /// the mission cargo aboard, which rides in the ship alone
+    /// (@0xd0c7-0xd0eb); below 0 when it holds more. With no escort's
+    /// holds this is the holds less `_TotalCargo` (@0xd0ed).
+    pub(super) fn mission_cargo_space(&self, pilot: &Pilot, statics: &Statics) -> i64 {
+        let own = i64::from(self.fit.stats.capacity);
+        let escorts = i64::from(self.capacity(pilot, statics)) - own;
+        let spilled = (pilot.goods_held() - escorts).max(0);
+        own - (spilled + pilot.missions.cargo_aboard())
     }
 }
 
@@ -2230,12 +2242,29 @@ mod tests {
                 "{held} tons held: 20 own, 15 the escort's"
             );
         }
-        assert_eq!(session.mission_cargo_space(), 5);
+        assert_eq!(
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
+            5
+        );
         session.pilot.escorts.clear();
         session.pilot.cargo.insert(Good::Commodity(0), 14);
-        assert_eq!(session.mission_cargo_space(), 6, "no escort");
+        assert_eq!(
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
+            6,
+            "no escort"
+        );
         session.pilot.cargo.insert(Good::Commodity(0), 25);
-        assert_eq!(session.mission_cargo_space(), -5, "over the holds");
+        assert_eq!(
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
+            -5,
+            "over the holds"
+        );
     }
 
     #[test]
@@ -2258,7 +2287,13 @@ mod tests {
             .pilot
             .missions
             .put(0, crate::testkit::carrying(140, 4));
-        assert_eq!(session.mission_cargo_space(), 16, "20 own, 4 aboard");
+        assert_eq!(
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
+            16,
+            "20 own, 4 aboard"
+        );
         session.pilot.escorts = vec![Escort {
             ship: crate::catalog::ShipId(129),
             reserves: crate::reserves::Reserves::default(),
@@ -2269,13 +2304,17 @@ mod tests {
         }];
         session.pilot.cargo.insert(Good::Commodity(0), 25);
         assert_eq!(
-            session.mission_cargo_space(),
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
             6,
             "10 of the 25 tons spill past the escort's 15; the 4 aboard stay"
         );
         session.pilot.cargo.insert(Good::Commodity(0), 10);
         assert_eq!(
-            session.mission_cargo_space(),
+            session
+                .ship
+                .mission_cargo_space(&session.pilot, &session.statics),
             16,
             "the escort takes all 10, but none of the mission's"
         );

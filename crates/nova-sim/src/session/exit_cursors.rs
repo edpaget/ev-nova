@@ -145,7 +145,13 @@ fn a_refit_keeps_the_players_exit_cursors_by_either_reading() {
     let catalog = four_guns();
     for reading in [RuleSource::Engine, RuleSource::Bible] {
         let mut session = fired_once(&catalog, reading);
-        session.refit(true, ReservePolicy::Hold);
+        session.ship.refit(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+            true,
+            ReservePolicy::Hold,
+        );
         assert_eq!(
             session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
             1,
@@ -160,7 +166,13 @@ fn a_refit_keeps_the_players_fold_set() {
     let catalog = four_guns();
     let mut session = Session::start(&catalog).expect("starts");
     session.ship.fit.armament = session.ship.fit.armament.clone().with_fold_set(2);
-    session.refit(true, ReservePolicy::Hold);
+    session.ship.refit(
+        &mut session.pilot,
+        &session.statics,
+        &session.setup,
+        true,
+        ReservePolicy::Hold,
+    );
     assert_eq!(session.ship.fit.armament.fold_set(), 2);
 }
 

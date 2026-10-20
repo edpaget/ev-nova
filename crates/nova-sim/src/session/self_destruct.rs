@@ -49,7 +49,7 @@
 //! (*0x3b5550, set @0x6fe0d, @0x701d5) and the status redraw flag
 //! (*0x3b506c +3, @0x70278).
 
-use super::Session;
+use super::{PlayerShip, Session};
 use crate::combat::hull::Condition;
 use crate::message::{SelfDestructLine, SimMessage};
 use crate::rulebook::{RuleKey, RuleSource};
@@ -63,7 +63,7 @@ impl Session {
     /// it only while the player's fate takes
     /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
     pub fn hold_self_destruct(&mut self, held: bool) {
-        self.ship.fate.self_destruct_held = held;
+        self.ship.hold_self_destruct(held);
     }
 
     /// One step of the countdown, the player `dying_at_head` as the pass's
@@ -115,6 +115,16 @@ impl Session {
                 npc.reserves.armor.now = -1.0;
             }
         }
+    }
+}
+
+impl PlayerShip {
+    /// Holds the self-destruct chord, Command and `-` down together, or
+    /// lets it go: what the next pass's countdown reads. The session takes
+    /// it only while the player's fate takes
+    /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
+    fn hold_self_destruct(&mut self, held: bool) {
+        self.fate.self_destruct_held = held;
     }
 }
 

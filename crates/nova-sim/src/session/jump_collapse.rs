@@ -128,7 +128,7 @@ impl Session {
         let speed = warp::lead_in_speed(
             collapse_ticks(warp, again),
             warp::warp_factor(flags),
-            self.warp_sound(),
+            self.ship.warp_sound(&self.statics),
         );
         self.ship.player.velocity = collapsed_velocity(
             self.ship.player.velocity,
@@ -138,7 +138,7 @@ impl Session {
         );
         self.jump = None;
         self.say(SimMessage::JumpCollapsed);
-        self.halt_sounds(&WARP_UP_HALTS);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         self.out.sounds.push(SimSound::JumpCollapsed);
     }
 }

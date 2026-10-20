@@ -46,7 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Outbox, Session};
+use super::{Outbox, PlayerShip, Session, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, leave};
 #[cfg(doc)]
@@ -439,47 +439,6 @@ impl Session {
         room
     }
 
-    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
-    /// `MaxAmmo` above 0, the most of it the player may own: that
-    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
-    /// included, as the 16-bit product the original compares
-    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
-    /// [`MOD_AMMO`] mod in a later slot is not capped, so
-    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
-    /// is not read here.
-    pub(super) fn ammo_caps(&self) -> BTreeMap<OutfitId, i16> {
-        let mut caps = BTreeMap::new();
-        for record in &self.statics.outfits {
-            let (kind, val) = record.mods[0];
-            if kind != MOD_AMMO {
-                continue;
-            }
-            let weapon = WeaponId(val);
-            let Some(spec) = self
-                .statics
-                .arsenal
-                .weapon(weapon)
-                .filter(|spec| spec.max_ammo > 0)
-            else {
-                continue;
-            };
-            let launchers: u32 = self
-                .ship
-                .fit
-                .armament
-                .mounts()
-                .iter()
-                .filter(|mount| mount.spec.id == weapon)
-                .map(|mount| mount.count)
-                .sum();
-            caps.insert(
-                record.id,
-                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
-            );
-        }
-        caps
-    }
-
     /// The player's fighters out of type `carried`: none for `None`.
     fn fighters_out(&self, carried: Option<ShipId>) -> u32 {
         let out = self
@@ -549,6 +508,47 @@ impl Outbox {
     /// last taken, in order; taking it empties the list.
     fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
         std::mem::take(&mut self.fighter_notes)
+    }
+}
+
+impl PlayerShip {
+    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
+    /// `MaxAmmo` above 0, the most of it the player may own: that
+    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
+    /// included, as the 16-bit product the original compares
+    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
+    /// [`MOD_AMMO`] mod in a later slot is not capped, so
+    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
+    /// is not read here.
+    pub(super) fn ammo_caps(&self, statics: &Statics) -> BTreeMap<OutfitId, i16> {
+        let mut caps = BTreeMap::new();
+        for record in &statics.outfits {
+            let (kind, val) = record.mods[0];
+            if kind != MOD_AMMO {
+                continue;
+            }
+            let weapon = WeaponId(val);
+            let Some(spec) = statics
+                .arsenal
+                .weapon(weapon)
+                .filter(|spec| spec.max_ammo > 0)
+            else {
+                continue;
+            };
+            let launchers: u32 = self
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == weapon)
+                .map(|mount| mount.count)
+                .sum();
+            caps.insert(
+                record.id,
+                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
+            );
+        }
+        caps
     }
 }
 
@@ -3084,11 +3084,28 @@ pub(super) mod tests {
         use crate::control::PilotFacts;
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 1, Vec::new()), RuleSource::Engine);
-        assert!(session.facts().has_outfit(VIPERS), "aboard");
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS),
+            "aboard"
+        );
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 0);
-        assert!(session.facts().has_outfit(VIPERS), "out of its bay");
-        assert!(!session.facts().has_outfit(OutfitId(159)));
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS),
+            "out of its bay"
+        );
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(159))
+        );
         // A carried escort of a type no bay launches docks into nothing.
         let stray = Escort {
             ship: WARSHIP,
@@ -3099,7 +3116,12 @@ pub(super) mod tests {
             person: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
-        assert!(!session.facts().has_outfit(VIPERS));
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS)
+        );
         // Nor does an escort of the fighter's type that is not carried.
         let own = Escort {
             ship: VIPER,
@@ -3107,7 +3129,12 @@ pub(super) mod tests {
             ..stray
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![own])).expect("flies");
-        assert!(!session.facts().has_outfit(VIPERS));
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS)
+        );
     }
 
     #[test]
@@ -3133,7 +3160,7 @@ pub(super) mod tests {
             person: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
-        let facts = session.facts();
+        let facts = session.ship.facts(&session.pilot, &session.statics);
         assert!(facts.has_outfit(OutfitId(157)));
         assert!(!facts.has_outfit(VIPERS));
         assert!(!facts.has_outfit(OutfitId(160)));

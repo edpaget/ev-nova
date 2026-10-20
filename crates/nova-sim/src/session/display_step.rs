@@ -84,7 +84,8 @@ impl Session {
         self.player_end = Some(Ending::Holding {
             ticks_left: HOLD_TICKS,
         });
-        self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        self.ship
+            .halt_sounds(&mut self.out, &crate::sound::PLAYER_EXPLOSION_HALTS);
     }
 }
 

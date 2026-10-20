@@ -32,7 +32,7 @@
 //! The pull is a shove the session sets after the tick, with the hits'.
 //! None of this plays a sound.
 
-use super::{Session, Setup};
+use super::{PlayerShip, Session, Setup};
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -64,17 +64,6 @@ impl Session {
                 gravity: site.gravity,
             })
             .collect()
-    }
-
-    /// Whether gravity leaves the player alone (`_ShipResistsGravity`):
-    /// its hull, its inertialess flight or its `ModType` 41 outfit.
-    fn player_resists_gravity(&self) -> bool {
-        resists_gravity(
-            self.ship.fit.hull.stellar_immune,
-            self.player_inertialess(),
-            self.ship.fit.stats.gravity_resistance,
-            Flyer::Player,
-        )
     }
 
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
@@ -111,20 +100,6 @@ impl Session {
         }
     }
 
-    /// Which stellar hazards the player resists: gravity by
-    /// `_ShipResistsGravity`, a deadly stellar by
-    /// `_ShipResistsDeadlyStellars` ([`resists_deadly`]).
-    pub(super) fn player_hazard_resistance(&self) -> HazardResistance {
-        HazardResistance {
-            gravity: self.player_resists_gravity(),
-            deadly: resists_deadly(
-                self.ship.fit.hull.stellar_immune,
-                self.ship.fit.stats.deadly_resistance,
-                Flyer::Player,
-            ),
-        }
-    }
-
     /// Which stellar hazards `npc` resists, its outfits never counting.
     pub(super) fn npc_hazard_resistance(&self, npc: &Npc) -> HazardResistance {
         HazardResistance {
@@ -143,6 +118,33 @@ impl Setup {
     /// by [`RuleKey::GravityAfterburner`].
     pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
         GravityAfterburner::from(self.rules.source_for(RuleKey::GravityAfterburner))
+    }
+}
+
+impl PlayerShip {
+    /// Whether gravity leaves the player alone (`_ShipResistsGravity`):
+    /// its hull, its inertialess flight or its `ModType` 41 outfit.
+    fn player_resists_gravity(&self, setup: &Setup) -> bool {
+        resists_gravity(
+            self.fit.hull.stellar_immune,
+            self.player_inertialess(setup),
+            self.fit.stats.gravity_resistance,
+            Flyer::Player,
+        )
+    }
+
+    /// Which stellar hazards the player resists: gravity by
+    /// `_ShipResistsGravity`, a deadly stellar by
+    /// `_ShipResistsDeadlyStellars` ([`resists_deadly`]).
+    pub(super) fn player_hazard_resistance(&self, setup: &Setup) -> HazardResistance {
+        HazardResistance {
+            gravity: self.player_resists_gravity(setup),
+            deadly: resists_deadly(
+                self.fit.hull.stellar_immune,
+                self.fit.stats.deadly_resistance,
+                Flyer::Player,
+            ),
+        }
     }
 }
 
@@ -407,7 +409,7 @@ mod tests {
         for rules in readings() {
             let catalog = armed();
             let mut session = among(rules, &catalog, &[east()], 1);
-            session.settle_box();
+            session.ship.settle_box(&session.pilot, &session.setup);
             fight(&mut session);
             let once = session.ship.player.velocity;
             session.tick_again(

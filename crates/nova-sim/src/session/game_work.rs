@@ -311,7 +311,7 @@ impl Session {
     /// regenerate (@0x6cf86-0x6d093, [`Combat::regenerate_player`]), after
     /// its trigger and before its position step (@0x6d4b0).
     pub(super) fn player_fires(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
-        self.unboard_unless_disabled();
+        self.ship.unboard_unless_disabled();
         self.player_repair_tick(rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_player(fighters, arena, chance);
@@ -406,7 +406,7 @@ impl Session {
         let (player_terms, terms): (FightTerms, Vec<FightTerms>) = self.fight_terms();
         let field = self.field();
         let scanner = self.scanner();
-        let armor_regen = self.player_armor_regen();
+        let armor_regen = self.ship.player_armor_regen();
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
         let knockback = self.afterburner_knockback();

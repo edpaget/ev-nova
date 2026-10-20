@@ -28,7 +28,8 @@ pub(super) struct Statics {
     pub(super) ships: Vec<ShipRecord>,
     /// The warp sounds' durations, in Mac ticks, read when the session
     /// starts: `snd ` 128's and 129's, `_jumpSoundLength`, of which
-    /// [`Session::warp_sound`](super::Session::warp_sound) gives the d of the warp's clock
+    /// [`PlayerShip::warp_sound`](super::PlayerShip::warp_sound) gives the
+    /// d of the warp's clock
     /// ([`warp::sound_duration`](crate::warp::sound_duration)).
     pub(super) warp_sounds: [u32; 2],
     /// The warp-out's duration, in Mac ticks, read when the session

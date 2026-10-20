@@ -85,6 +85,8 @@
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
+use super::{PlayerShip, Setup, Statics};
+use crate::pilot::Pilot;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
@@ -166,12 +168,7 @@ impl Session {
     /// now.
     #[must_use]
     pub fn blessing(&self) -> Blessing {
-        let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
-        let active = match self.setup.rules.source_for(RuleKey::BlessingRefresh) {
-            RuleSource::Engine => &self.ship.latches.blessing_ranks,
-            RuleSource::Bible => &self.pilot.ranks,
-        };
-        rank::blessing(&self.statics.ranks, active, &self.statics.govts, reach)
+        self.ship.blessing(&self.pilot, &self.statics, &self.setup)
     }
 
     /// The pilot's ranks and the recent rank, as `K` and `L` change them.
@@ -276,6 +273,23 @@ impl Session {
         if self.pilot.cash != before {
             self.out.save_due = true;
         }
+    }
+}
+
+impl PlayerShip {
+    /// The ranks' blessing table (see [`rank::blessing`]), the ranks
+    /// reaching governments as the session's `rank_govt_reach` rule reads.
+    /// By the engine's reading of `blessing_refresh` it is built from the
+    /// ranks the last reset took; by the other, from the active ranks
+    /// now.
+    #[must_use]
+    pub(super) fn blessing(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Blessing {
+        let reach = setup.rules.source_for(RuleKey::RankGovtReach);
+        let active = match setup.rules.source_for(RuleKey::BlessingRefresh) {
+            RuleSource::Engine => &self.latches.blessing_ranks,
+            RuleSource::Bible => &pilot.ranks,
+        };
+        rank::blessing(&statics.ranks, active, &statics.govts, reach)
     }
 }
 
@@ -437,11 +451,20 @@ pub(super) mod tests {
             contribute: 0x0100_0000_0004,
             ..rank(200)
         }]);
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0
+        );
         session.run_set(&set("K200"), &mut Scripted::default());
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0x0100_0000_0004);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0x0100_0000_0004
+        );
         session.run_set(&set("L200"), &mut Scripted::default());
-        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+        assert_eq!(
+            session.ship.contributed(&session.pilot, &session.statics) & 0x0100_0000_0004,
+            0
+        );
     }
 
     #[test]

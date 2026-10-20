@@ -61,13 +61,13 @@
 //! alive, keeps its grudge and can appear again; by the other it is gone,
 //! as Use As My Ship has it.
 
-use super::{Session, Setup};
+use super::{PlayerShip, Session, Setup, Statics};
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{ShipId, ShipRecord, outfit_mods};
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::market::Good;
-use crate::pilot::Escort;
+use crate::pilot::{Escort, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::stats::MORE_FUEL;
 use crate::stats::ShipStats;
@@ -134,20 +134,6 @@ impl Session {
         self.led_escorts().len() < MAX_ESCORTS
     }
 
-    /// The capacities "Use As My Ship" taking a ship of `record` can draw
-    /// its fuel below, read before the swap (see the module docs).
-    pub(super) fn capture_fuel(&self, record: &ShipRecord) -> CaptureFuel {
-        let more: i64 = outfit_mods(&self.pilot.outfits, &self.statics.outfits)
-            .into_iter()
-            .filter(|outfit| outfit.mod_type == MORE_FUEL)
-            .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
-            .sum();
-        CaptureFuel {
-            old: self.ship.fit.stats.fuel as i64,
-            captured: (i64::from(record.fields.fuel) + more).clamp(0, FUEL_CAPACITY_MOST),
-        }
-    }
-
     /// The player's old ship, escort `index`, comes into the system after
     /// "Use As My Ship" (see the module docs): where the player was
     /// (`at`), holding `hold`, keeping formation by flying to its slot, its
@@ -167,30 +153,6 @@ impl Session {
             npc.cargo = hold;
         }
         Some(id)
-    }
-
-    /// The record of the player's old ship as it joins the fleet on "Use
-    /// As My Ship": of the player's class, stock and full as an NPC's
-    /// stats are ([`ShipStats::for_npc`], by the engine its class's
-    /// alone), but for its fuel, its class's bare `Fuel`, as an NPC's
-    /// capacity is (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module
-    /// docs).
-    pub(super) fn old_ship_escort(&self) -> Escort {
-        let stock = ShipStats::for_npc(
-            self.ship.fit.fields,
-            &outfit_mods(&self.ship.fit.defaults, &self.statics.outfits),
-            self.setup.npc_items(),
-        );
-        let mut reserves = stock.full();
-        reserves.fuel.now = f32::from(self.ship.fit.fields.fuel.max(0));
-        Escort {
-            ship: self.pilot.ship,
-            reserves,
-            order: None,
-            carried: false,
-            wage: None,
-            person: None,
-        }
     }
 
     /// The player's commodities 0-5 leave for the old ship's hold on "Use
@@ -228,6 +190,56 @@ impl Setup {
     /// [`RuleKey::CapturedPerson`] reads: by the engine it lives on.
     pub(super) fn escort_capture_loses_person(&self) -> bool {
         self.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
+    /// The capacities "Use As My Ship" taking a ship of `record` can draw
+    /// its fuel below, read before the swap (see the module docs).
+    pub(super) fn capture_fuel(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        record: &ShipRecord,
+    ) -> CaptureFuel {
+        let more: i64 = outfit_mods(&pilot.outfits, &statics.outfits)
+            .into_iter()
+            .filter(|outfit| outfit.mod_type == MORE_FUEL)
+            .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
+            .sum();
+        CaptureFuel {
+            old: self.fit.stats.fuel as i64,
+            captured: (i64::from(record.fields.fuel) + more).clamp(0, FUEL_CAPACITY_MOST),
+        }
+    }
+
+    /// The record of the player's old ship as it joins the fleet on "Use
+    /// As My Ship": of the player's class, stock and full as an NPC's
+    /// stats are ([`ShipStats::for_npc`], by the engine its class's
+    /// alone), but for its fuel, its class's bare `Fuel`, as an NPC's
+    /// capacity is (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module
+    /// docs).
+    pub(super) fn old_ship_escort(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> Escort {
+        let stock = ShipStats::for_npc(
+            self.fit.fields,
+            &outfit_mods(&self.fit.defaults, &statics.outfits),
+            setup.npc_items(),
+        );
+        let mut reserves = stock.full();
+        reserves.fuel.now = f32::from(self.fit.fields.fuel.max(0));
+        Escort {
+            ship: pilot.ship,
+            reserves,
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }
     }
 }
 
@@ -422,15 +434,31 @@ mod tests {
             .cloned()
             .expect("the trader");
         assert_eq!(
-            session.capture_fuel(&record).captured,
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &record)
+                .captured,
             i64::from(record.fields.fuel) + 200
         );
         session.pilot.outfits.insert(OutfitId(330), 400);
-        assert_eq!(session.capture_fuel(&record).captured, FUEL_CAPACITY_MOST);
+        assert_eq!(
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &record)
+                .captured,
+            FUEL_CAPACITY_MOST
+        );
         let mut empty = record.clone();
         empty.fields.fuel = -500;
         session.pilot.outfits.insert(OutfitId(330), 2);
-        assert_eq!(session.capture_fuel(&empty).captured, 0, "held at none");
+        assert_eq!(
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &empty)
+                .captured,
+            0,
+            "held at none"
+        );
     }
 
     #[test]
@@ -478,7 +506,13 @@ mod tests {
                 let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, order);
                 let mut session = alongside(&catalog).with_rules(rules);
                 session.pilot.outfits.insert(OutfitId(330), 1);
-                session.refit(true, session.setup.script_reserves());
+                session.ship.refit(
+                    &mut session.pilot,
+                    &session.statics,
+                    &session.setup,
+                    true,
+                    session.setup.script_reserves(),
+                );
                 board_by(&mut session, &NovaLaw::default()).expect("boards");
                 assert_eq!(
                     take(&mut session, Take::Capture, &[43, 1]).0,
@@ -643,7 +677,10 @@ mod tests {
             let armor = f32::from(session.ship.fit.fields.armor) + more;
             let fuel = f32::from(session.ship.fit.fields.fuel) + more;
             assert_eq!(session.ship.fit.fields.fuel, 300);
-            let record = session.old_ship_escort();
+            let record =
+                session
+                    .ship
+                    .old_ship_escort(&session.pilot, &session.statics, &session.setup);
             assert_eq!(
                 (record.reserves.armor.max, record.reserves.fuel.max),
                 (armor, fuel),

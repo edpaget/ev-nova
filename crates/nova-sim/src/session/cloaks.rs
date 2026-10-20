@@ -39,23 +39,24 @@
 //!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
 //!   not.
 
-use super::Session;
+use super::{PlayerShip, Session, Statics};
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
+use crate::pilot::Pilot;
 use crate::traffic::npc::Npc;
 
 impl Session {
     /// What the player's cloak scanners give, from the outfits it owns.
     #[must_use]
     pub fn scanner(&self) -> Scanner {
-        Scanner::of(&self.pilot.outfits, &self.statics.outfits)
+        scanner(&self.pilot, &self.statics)
     }
 
     /// Whether the player sees `npc` (see the module docs).
     #[must_use]
     pub fn sees(&self, npc: &Npc) -> bool {
-        !npc.emerging() && self.sees_past_cloak(npc)
+        self.ship.sees(&self.pilot, &self.statics, npc)
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
@@ -63,12 +64,7 @@ impl Session {
     /// draws a ship fading in at its gate by.
     #[must_use]
     pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
-        let observer = Observer {
-            at: self.ship.player.position,
-            scanner: self.scanner().on_screen,
-            cloaked_escort: false,
-        };
-        cloak::visible(npc.cloak, npc.state.position, false, observer)
+        self.ship.sees_past_cloak(&self.pilot, &self.statics, npc)
     }
 
     /// How `npc`'s cloak lets the player's screen show it, as
@@ -87,19 +83,7 @@ impl Session {
     /// ship waiting at its gate is left to the view's tint, as now.
     #[must_use]
     pub fn cloak_shown(&self, npc: &Npc) -> CloakShown {
-        let led = npc.escorts_player();
-        if npc.cloak.full() {
-            let level = cloak::full_fade_translucency(led, self.scanner().on_screen);
-            if level < cloak::TRANSLUCENCY_STEPS {
-                CloakShown::Translucent(level)
-            } else {
-                CloakShown::Hidden
-            }
-        } else if led || self.sees_past_cloak(npc) {
-            CloakShown::Opaque
-        } else {
-            CloakShown::Hidden
-        }
+        self.ship.cloak_shown(&self.pilot, &self.statics, npc)
     }
 
     /// Whether `npc` shows on the player's radar: uncloaked, its cloak
@@ -179,6 +163,64 @@ impl Session {
             }
         }
     }
+}
+
+impl PlayerShip {
+    /// Whether the player sees `npc` (see the module docs).
+    #[must_use]
+    fn sees(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
+        !npc.emerging() && self.sees_past_cloak(pilot, statics, npc)
+    }
+
+    /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
+    /// it waits at, which [`Session::sees`] holds unseen: what the view
+    /// draws a ship fading in at its gate by.
+    #[must_use]
+    fn sees_past_cloak(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
+        let observer = Observer {
+            at: self.player.position,
+            scanner: scanner(pilot, statics).on_screen,
+            cloaked_escort: false,
+        };
+        cloak::visible(npc.cloak, npc.state.position, false, observer)
+    }
+
+    /// How `npc`'s cloak lets the player's screen show it, as
+    /// `_HandleShipDisplay` decides (@0x2d187-0x2d1cd).
+    ///
+    /// At a full cloak ([`FADE_FULL`](cloak::FADE_FULL)) a ship the player
+    /// leads is drawn faint, and so is any ship while the player scans for
+    /// cloaked ships on screen, at any range, as @0x2d1aa has no range test
+    /// ([`cloak::full_fade_translucency`]); any other is not drawn. Still
+    /// fading, or uncloaked, a ship the player leads is drawn, and any
+    /// other while the player sees past its cloak
+    /// ([`Session::sees_past_cloak`]). The original draws every ship still
+    /// fading jittered and translucent (@0x2d2c0-0x2d648), which
+    /// rdm:phase/cloaking-fidelity/phase-1-cloak-fade-and-sounds owns;
+    /// until then an opaque led ship is the nearest the engine draws. A
+    /// ship waiting at its gate is left to the view's tint, as now.
+    #[must_use]
+    fn cloak_shown(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> CloakShown {
+        let led = npc.escorts_player();
+        if npc.cloak.full() {
+            let level = cloak::full_fade_translucency(led, scanner(pilot, statics).on_screen);
+            if level < cloak::TRANSLUCENCY_STEPS {
+                CloakShown::Translucent(level)
+            } else {
+                CloakShown::Hidden
+            }
+        } else if led || self.sees_past_cloak(pilot, statics, npc) {
+            CloakShown::Opaque
+        } else {
+            CloakShown::Hidden
+        }
+    }
+}
+
+/// What the player's cloak scanners give, from the outfits it owns.
+#[must_use]
+fn scanner(pilot: &Pilot, statics: &Statics) -> Scanner {
+    Scanner::of(&pilot.outfits, &statics.outfits)
 }
 
 #[cfg(test)]

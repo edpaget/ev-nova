@@ -149,15 +149,16 @@
 //! `_keyPressedThisFrame` (@0x6f2d3) and the status-redraw flags
 //! (@0x6f433-0x6f442) have no counterpart.
 
-use super::Session;
 use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
+use super::{PlayerShip, Session, Setup, Statics};
 use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::combat::ion::Ion;
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, ShipId, ShipRecord};
@@ -186,7 +187,7 @@ impl Session {
     /// session takes it only while the player's fate takes
     /// [`PlayerCommand::Eject`].
     pub fn hold_eject(&mut self, held: bool) {
-        self.ship.fate.eject_held = held;
+        self.ship.hold_eject(held);
     }
 
     /// The eject check (@0x6f22c), in the player's display step after
@@ -257,7 +258,9 @@ impl Session {
     fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
         self.collapse_jump(false);
         let save_due = self.out.save_due;
-        let hulk = self.hulk(old, hulk, chance);
+        let hulk = self
+            .ship
+            .hulk(&self.pilot, &self.statics, &self.setup, old, hulk, chance);
         let hulk = self.traffic.add_npc(hulk);
         if let Some(slot) = self.npc(hulk).map(slot_of) {
             self.slot_sprites.frames.clone_frames(slot, old.id);
@@ -311,9 +314,9 @@ impl Session {
         self.ship.player.velocity =
             self.ship.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
         self.ship.condition = Condition::Intact;
-        self.stop_thrust();
+        self.ship.stop_thrust(&mut self.out);
         self.out.sounds.push(SimSound::Ejected);
-        self.halt_sounds(&WARP_UP_HALTS);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         self.out.save_due = save_due;
     }
 
@@ -333,7 +336,9 @@ impl Session {
         let Some(left) = self.pod else {
             return;
         };
-        let handling = self.flying_handling();
+        let handling = self
+            .ship
+            .flying_handling(&self.pilot, &self.setup, self.jump);
         // Whole degrees (`cvttss2si` @0x68d84).
         let heading = self.ship.player.heading.trunc();
         let state = &mut self.ship.player;
@@ -345,96 +350,6 @@ impl Session {
         if left == 0 {
             self.ship.fate.rescue_due = true;
         }
-    }
-
-    /// The hulk the player leaves in `condition`, a ship of class `old`
-    /// (see the module docs), of no government, its skill rolled on
-    /// `chance` as its spawn rolls it.
-    fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
-        let kind = self.setup.ship_kind(&self.statics, old);
-        // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
-        // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
-        // anim set and timer after (@0x6f3a3, @0x6f3bb; see
-        // `nova_sim::traffic::ship_display`).
-        // A spawn of no origin rolls none (`AnimRoll::None`).
-        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
-        let mut reserves = kind.stats.full();
-        reserves.shield = self.pilot.reserves.shield;
-        reserves.armor = self.pilot.reserves.armor;
-        let mut hulk = Npc {
-            id: NpcId::default(),
-            berth: 0,
-            ship: old.id,
-            govt: None,
-            ai_type: AiType::from_raw(kind.inherent_ai),
-            leader: None,
-            class: kind.escort_class,
-            escort: None,
-            stats: kind.stats,
-            reserves,
-            state: self.ship.player,
-            // The ship left as it was, its speed along its heading too.
-            speed: self.ship.player_speed,
-            mode: Mode::Flying,
-            goal: Goal::Idle,
-            condition,
-            hull: kind.hull,
-            armament: kind.armament.with_fold(fold),
-            rounds: kind.rounds,
-            trigger: Trigger::default(),
-            pick: None,
-            target: None,
-            provoked: 0.0,
-            stray: 0.0,
-            aggression: 0,
-            inspected: None,
-            booty: None,
-            boarded: true,
-            info_types: 0,
-            cargo: NpcHold::default(),
-            spared: false,
-            carrier: None,
-            person: None,
-            mission: None,
-            aux: None,
-            cloak: crate::cloak::Cloak::default(),
-            cloak_gear: kind.cloak,
-            led_out: false,
-            emerges_from: None,
-            visited: None,
-            travel_set: false,
-            self_repair: kind.self_repair,
-            immobile: kind.immobile,
-            // `_GenericRandomShipSpawn` rolls it (@0x3cad1).
-            skill: random_skill_level(kind.skill_var, chance),
-            skill_mult: 1.0,
-            still: kind.still,
-            miner: kind.miner,
-            can_scoop: kind.can_scoop,
-            holds: kind.holds,
-            class_fuel: kind.class_fuel,
-            former: None,
-            tractor: None,
-            ion: Ion::default(),
-            afterburner: false,
-            pursuit: Pursuit::default(),
-            ai_wait: 0,
-            docking: None,
-            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
-            swarm_leader: None,
-            marines: kind.marines,
-            // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
-            // its class's `PodCount` (@0x3ca48).
-            pods_left: kind.hull.signed_pod_count,
-            warp: crate::traffic::warp_out::Warp::default(),
-            display,
-            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
-            odds: crate::traffic::odds_cache::STALE,
-            // AI type -1 (@0x6f31f).
-            no_ai: true,
-        };
-        hulk.independent();
-        hulk
     }
 
     /// Every NPC that targets, fights or inspects the player lets it go
@@ -545,6 +460,114 @@ impl Session {
             reserves: super::ReservePolicy::Hold,
         };
         self.become_class(record, change, |_| {});
+    }
+}
+
+impl PlayerShip {
+    /// Holds the eject chord, Command and the eject key down together, or
+    /// lets it go: what the next fight tick's eject check reads. The
+    /// session takes it only while the player's fate takes
+    /// [`PlayerCommand::Eject`].
+    fn hold_eject(&mut self, held: bool) {
+        self.fate.eject_held = held;
+    }
+
+    /// The hulk the player leaves in `condition`, a ship of class `old`
+    /// (see the module docs), of no government, its skill rolled on
+    /// `chance` as its spawn rolls it.
+    fn hulk(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        old: &ShipRecord,
+        condition: Condition,
+        chance: &mut dyn Chance,
+    ) -> Npc {
+        let kind = setup.ship_kind(statics, old);
+        // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
+        // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
+        // anim set and timer after (@0x6f3a3, @0x6f3bb; see
+        // `nova_sim::traffic::ship_display`).
+        // A spawn of no origin rolls none (`AnimRoll::None`).
+        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
+        let mut reserves = kind.stats.full();
+        reserves.shield = pilot.reserves.shield;
+        reserves.armor = pilot.reserves.armor;
+        let mut hulk = Npc {
+            id: NpcId::default(),
+            berth: 0,
+            ship: old.id,
+            govt: None,
+            ai_type: AiType::from_raw(kind.inherent_ai),
+            leader: None,
+            class: kind.escort_class,
+            escort: None,
+            stats: kind.stats,
+            reserves,
+            state: self.player,
+            // The ship left as it was, its speed along its heading too.
+            speed: self.player_speed,
+            mode: Mode::Flying,
+            goal: Goal::Idle,
+            condition,
+            hull: kind.hull,
+            armament: kind.armament.with_fold(fold),
+            rounds: kind.rounds,
+            trigger: Trigger::default(),
+            pick: None,
+            target: None,
+            provoked: 0.0,
+            stray: 0.0,
+            aggression: 0,
+            inspected: None,
+            booty: None,
+            boarded: true,
+            info_types: 0,
+            cargo: NpcHold::default(),
+            spared: false,
+            carrier: None,
+            person: None,
+            mission: None,
+            aux: None,
+            cloak: crate::cloak::Cloak::default(),
+            cloak_gear: kind.cloak,
+            led_out: false,
+            emerges_from: None,
+            visited: None,
+            travel_set: false,
+            self_repair: kind.self_repair,
+            immobile: kind.immobile,
+            // `_GenericRandomShipSpawn` rolls it (@0x3cad1).
+            skill: random_skill_level(kind.skill_var, chance),
+            skill_mult: 1.0,
+            still: kind.still,
+            miner: kind.miner,
+            can_scoop: kind.can_scoop,
+            holds: kind.holds,
+            class_fuel: kind.class_fuel,
+            former: None,
+            tractor: None,
+            ion: Ion::default(),
+            afterburner: false,
+            pursuit: Pursuit::default(),
+            ai_wait: 0,
+            docking: None,
+            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
+            swarm_leader: None,
+            marines: kind.marines,
+            // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
+            // its class's `PodCount` (@0x3ca48).
+            pods_left: kind.hull.signed_pod_count,
+            warp: crate::traffic::warp_out::Warp::default(),
+            display,
+            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+            odds: crate::traffic::odds_cache::STALE,
+            // AI type -1 (@0x6f31f).
+            no_ai: true,
+        };
+        hulk.independent();
+        hulk
     }
 }
 
@@ -1837,7 +1860,9 @@ mod tests {
     fn the_pod_thrusts_along_its_heading_and_ignores_controls_and_fire() {
         let catalog = ejecting(100);
         let mut session = in_a_pod(&catalog, 90.0);
-        let handling = session.flying_handling();
+        let handling = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump);
         assert!(handling.accel > 0.0 && handling.max_speed > handling.accel);
         let controls = crate::flight::Controls {
             thrust: false,

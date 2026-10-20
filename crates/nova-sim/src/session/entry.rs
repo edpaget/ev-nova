@@ -72,7 +72,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Session, SessionEvent, story};
+use super::{Outbox, PlayerShip, Session, SessionEvent, Statics, story};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -883,7 +883,7 @@ impl Session {
         match placement.ship {
             ShipPlacement::Arrive(state) => {
                 self.ship.player = state;
-                self.arrive_at_speed();
+                self.ship.arrive_at_speed();
             }
             ShipPlacement::ArriveAtSpeed { ship, speed } => {
                 self.ship.player = ship;
@@ -911,7 +911,7 @@ impl Session {
             self.jump = None;
         }
         if resets.has(Reset::Thrust) {
-            self.stop_thrust();
+            self.ship.stop_thrust(&mut self.out);
         }
         match resets.nav {
             NavStep::Keep => {}
@@ -1020,30 +1020,6 @@ impl Session {
         }
     }
 
-    /// Plays the warp-out, `snd ` 130 ([`SimSound::Arrived`]), its
-    /// countdown started: on an arrival ([`Session::announce`]) or on the
-    /// warp end's fallback pass (see the `warp_stage` module).
-    pub(super) fn sound_warp_out(&mut self) {
-        self.ship.warp.warp_out.start(self.statics.warp_out_sound);
-        self.out.sounds.push(SimSound::Arrived);
-    }
-
-    /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
-    /// natural end only while it is not still playing (`_HandlePlayer`
-    /// @0x6bbe1-0x6bbe9); a jump arrived with a warp-up still playing,
-    /// with no fallback pass first, and a gate's or wormhole's exit always
-    /// (@0x6c706, @0x63e57, @0x6443d). The arrival after the warp end's
-    /// fallback is a natural end: the fallback halted the warp-ups.
-    fn sounds_warp_out(&self, how: Entry) -> bool {
-        !matches!(
-            how,
-            Entry::Jump {
-                natural_end: true,
-                ..
-            }
-        ) || !self.ship.warp.warp_out.playing()
-    }
-
     /// Sounds and raises the arrival in `heard`'s system, as `resets`
     /// says, tells its event, if any ([`scene_event`]), and raises
     /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
@@ -1061,8 +1037,8 @@ impl Session {
             event,
             notes,
         } = heard;
-        if resets.has(Reset::ArrivalSound) && self.sounds_warp_out(how) {
-            self.sound_warp_out();
+        if resets.has(Reset::ArrivalSound) && self.ship.sounds_warp_out(how) {
+            self.ship.sound_warp_out(&self.statics, &mut self.out);
         }
         if resets.has(Reset::ArrivalMessage) {
             let message = self.arrival_message(system, catalog);
@@ -1080,6 +1056,32 @@ impl Session {
         if let Some(how) = how.entrance() {
             self.raise(StoryEvent::EnteredSystem { system, how });
         }
+    }
+}
+
+impl PlayerShip {
+    /// Plays the warp-out, `snd ` 130 ([`SimSound::Arrived`]), its
+    /// countdown started: on an arrival ([`Session::announce`]) or on the
+    /// warp end's fallback pass (see the `warp_stage` module).
+    pub(super) fn sound_warp_out(&mut self, statics: &Statics, out: &mut Outbox) {
+        self.warp.warp_out.start(statics.warp_out_sound);
+        out.sounds.push(SimSound::Arrived);
+    }
+
+    /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
+    /// natural end only while it is not still playing (`_HandlePlayer`
+    /// @0x6bbe1-0x6bbe9); a jump arrived with a warp-up still playing,
+    /// with no fallback pass first, and a gate's or wormhole's exit always
+    /// (@0x6c706, @0x63e57, @0x6443d). The arrival after the warp end's
+    /// fallback is a natural end: the fallback halted the warp-ups.
+    fn sounds_warp_out(&self, how: Entry) -> bool {
+        !matches!(
+            how,
+            Entry::Jump {
+                natural_end: true,
+                ..
+            }
+        ) || !self.warp.warp_out.playing()
     }
 }
 

@@ -9,7 +9,7 @@
 //! @0x3b186-0x3b18d, see the `player_downed` module), a one-hit breakup
 //! included, and turned off by every reset ([`Session::reset_precalced`],
 //! `_ResetPlayerPrecalcedValues` @0xc998). While it holds, the player's
-//! armour does not regenerate ([`Session::player_armor_regen`], which the
+//! armour does not regenerate ([`PlayerShip::player_armor_regen`], which the
 //! fight's [`Fighter::armor_regen`](crate::combat::Fighter::armor_regen)
 //! takes) and its gear does not repair it.
 //!
@@ -48,7 +48,7 @@
 //! **Left out.** The cheat that writes the inhibit (@0x6ebdf), as the
 //! engine has no cheats.
 
-use super::Session;
+use super::{PlayerShip, Session};
 use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::hull::Condition;
@@ -80,21 +80,23 @@ impl Session {
         self.say(SimMessage::PropulsionRepaired);
         self.out.sounds.push(SimSound::PropulsionRepaired);
     }
+}
 
+impl PlayerShip {
     /// The armour the player regenerates a fight tick: none while the
     /// repair inhibit holds (@0x6d03e-0x6d049), else its ship's rate.
     pub(super) fn player_armor_regen(&self) -> f32 {
-        if self.ship.repair_inhibit.holds() {
+        if self.repair_inhibit.holds() {
             0.0
         } else {
-            self.ship.fit.stats.armor_regen
+            self.fit.stats.armor_regen
         }
     }
 
     /// Arms the repair inhibit, as the player is newly disabled
     /// (`_DamageShip` @0x3b186-0x3b18d).
     pub(super) fn arm_repair_inhibit(&mut self) {
-        self.ship.repair_inhibit = RepairInhibit::armed();
+        self.repair_inhibit = RepairInhibit::armed();
     }
 }
 
@@ -224,7 +226,7 @@ mod tests {
     fn while_the_inhibit_holds_nothing_is_drawn_or_repaired() {
         let catalog = repairing(0);
         let mut session = disabled(&catalog, true);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         let mut chance = Draws::of(&[0]);
         for tick in 0..REPAIR_INHIBIT_TICKS {
             session.tick_combat(Rules::default(), &mut chance);
@@ -280,7 +282,7 @@ mod tests {
         session.ship.fit.stats.shield_regen = 1.0;
         session.ship.fit.stats.armor_regen = 1.0;
         session.pilot.reserves.shield.now = 5.0;
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         for _ in 0..REPAIR_INHIBIT_TICKS + 20 {
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.ship.condition, Condition::Disabled);
@@ -303,7 +305,7 @@ mod tests {
     fn an_armed_inhibit_holds_back_armour_regeneration_for_300_ticks() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         for tick in 0..REPAIR_INHIBIT_TICKS {
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(armor(&session), 30.0, "tick {tick}");
@@ -316,7 +318,7 @@ mod tests {
     fn in_double_time_both_passes_count_the_inhibit_down() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         let pass = |session: &mut Session| {
             session.tick_combat(Rules::default(), &mut NeverFires);
             session.tick_again(
@@ -346,7 +348,7 @@ mod tests {
     fn a_reset_turns_the_inhibit_off() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         session.jettison_cargo(true, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(armor(&session), 31.0);

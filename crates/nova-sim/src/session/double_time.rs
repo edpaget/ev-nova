@@ -132,8 +132,8 @@
 //! still one counter tick apart from the last, so the difference is a
 //! constant phase of one pass that no player can see.
 
-use super::Session;
 use super::game_work::PassStart;
+use super::{PlayerShip, Session};
 use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
@@ -159,26 +159,13 @@ impl Session {
     /// run, and latches the switch at once (see the module docs). Off
     /// until it says otherwise.
     pub fn set_double_time_key(&mut self, on: bool) {
-        self.ship.warp.double_time_key = on;
-        self.latch_double_time();
-    }
-
-    /// Sets double time by the switch (see the module docs).
-    pub(super) fn latch_double_time(&mut self) {
-        #[allow(clippy::cast_possible_truncation)]
-        let facing = self.ship.player.heading as i16;
-        let off = i32::from(angular_difference(facing, self.ship.aim)).abs();
-        self.ship.warp.double_time = switch(
-            self.ship.warp.double_time_key,
-            [false, true].map(|double| self.ship.warp.warp_ups.playing(double)),
-            off <= ALIGNED,
-        );
+        self.ship.set_double_time_key(on);
     }
 
     /// Whether double time is on.
     #[must_use]
     pub fn double_time(&self) -> bool {
-        self.ship.warp.double_time
+        self.ship.double_time()
     }
 
     /// Runs double time's second pass under the player's `controls`, the
@@ -223,6 +210,34 @@ impl Session {
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
         self.pass_after_move(&start, pass, None, behaviour, rules, chance);
+    }
+}
+
+impl PlayerShip {
+    /// Takes the double-time key's state: `on` while double time should
+    /// run, and latches the switch at once (see the module docs). Off
+    /// until it says otherwise.
+    fn set_double_time_key(&mut self, on: bool) {
+        self.warp.double_time_key = on;
+        self.latch_double_time();
+    }
+
+    /// Sets double time by the switch (see the module docs).
+    pub(super) fn latch_double_time(&mut self) {
+        #[allow(clippy::cast_possible_truncation)]
+        let facing = self.player.heading as i16;
+        let off = i32::from(angular_difference(facing, self.aim)).abs();
+        self.warp.double_time = switch(
+            self.warp.double_time_key,
+            [false, true].map(|double| self.warp.warp_ups.playing(double)),
+            off <= ALIGNED,
+        );
+    }
+
+    /// Whether double time is on.
+    #[must_use]
+    fn double_time(&self) -> bool {
+        self.warp.double_time
     }
 }
 
@@ -1010,11 +1025,11 @@ mod tests {
             .expect("a route");
         fly_out(&mut jumping);
         begin_jump_now(&mut jumping).expect("jumps");
-        let (stage, clock) = (jumping.warp_stage(), jumping.warp_clock());
+        let (stage, clock) = (jumping.ship.warp_stage(jumping.jump), jumping.warp_clock());
         assert!(stage > 1.0, "in the warp stage: {stage}");
         again(&mut jumping, THRUST);
         assert_eq!(
-            jumping.warp_stage().to_bits(),
+            jumping.ship.warp_stage(jumping.jump).to_bits(),
             (stage + 1.0).to_bits(),
             "+0x50 grows on it too"
         );

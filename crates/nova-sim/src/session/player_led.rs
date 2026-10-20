@@ -70,7 +70,7 @@
 //! is cleared as it is disabled or starts to break up. None of them plays
 //! a sound.
 
-use super::{Session, Setup};
+use super::{PlayerShip, Session, Setup};
 use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::HullSpec;
@@ -140,7 +140,7 @@ impl Session {
                         });
                     let player = (self.setup.shown(&self.ship.fit.hull)
                         && self.is_displayed(ShipRef::Player, Slot::Player))
-                    .then(|| (ShipRef::Player, self.player_layer()));
+                    .then(|| (ShipRef::Player, self.ship.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
                     (in_draw_order(layers.iter().copied()), layers)
                 }
@@ -322,11 +322,6 @@ impl Session {
             .then_some((ShipRef::Player, Slot::Player));
         player.into_iter().chain(npcs).collect()
     }
-
-    /// The layer the player stands in: never led.
-    fn player_layer(&self) -> ShipLayer {
-        ShipLayer::of(disabled(self.player_condition()), false)
-    }
 }
 
 impl Setup {
@@ -334,6 +329,13 @@ impl Setup {
     /// [`Session::is_hidden`]).
     fn shown(&self, hull: &HullSpec) -> bool {
         !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
+    /// The layer the player stands in: never led.
+    fn player_layer(&self) -> ShipLayer {
+        ShipLayer::of(disabled(self.player_condition()), false)
     }
 }
 
@@ -756,7 +758,7 @@ mod tests {
         }
         let traffic_was = session.npc(traffic).expect("there").state;
         let state = |session: &Session, id: NpcId| session.npc(id).expect("there").state;
-        let duration = session.warp_sound();
+        let duration = session.ship.warp_sound(&session.statics);
         let factor = session.player_warp_factor();
         let mut moved_off = None;
         for tick in 1..200 {

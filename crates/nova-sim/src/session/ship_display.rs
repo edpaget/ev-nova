@@ -4,7 +4,7 @@
 //! player and every NPC (see `nova_sim::combat::ship_frames` and
 //! `nova_sim::traffic::ship_display`).
 //!
-//! **The bank** ([`Session::bank_player`], `_HandlePlayer`
+//! **The bank** ([`PlayerShip::bank_player`], `_HandlePlayer`
 //! @0x6cd59-0x6cf06, right after the thrust's glow step). The flag
 //! (+0xc8f8) is first cleared. A ship of `shän` `Flags` 0x0001 moves its
 //! bank (+0xc8e4) a frame toward ±16 turning that way (its turn keys or
@@ -65,14 +65,14 @@
 //! app quits, which is recorded only. As a flight is entered the player's
 //! lights block runs once before the first frame, as `_PrepareAllSprites`
 //! runs `_HandleShipDisplay` (@0x3a776-0x3a78e;
-//! [`Session::prepare_player_lights`]); its other parts are weapons-fidelity
+//! [`PlayerShip::prepare_player_lights`]); its other parts are weapons-fidelity
 //! phase 47's. The NPCs come into the system on a traffic tick, whose
 //! display runs before the frame.
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
 
-use super::{Session, Setup, Statics};
+use super::{Jump, PlayerShip, Session, Setup, Statics};
 use crate::Chance;
 use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
@@ -81,6 +81,7 @@ use crate::combat::ship_frames::{
     BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, ShipFrames, UNFOLDS_TO_FIRE,
 };
 use crate::flight::{Turn, shortest_turn};
+use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
 
 /// The most the player banks either way (16.0 @0xdd048).
@@ -156,100 +157,6 @@ pub(super) fn way_turned(before: f32, after: f32) -> Turn {
 }
 
 impl Session {
-    /// Which way the player's ship turns this tick out of a jump under
-    /// `controls`, toward `aim` while the auto-turn aims, as its turn
-    /// block does ([`player_turn::turn`](crate::player_turn::turn)).
-    pub(super) fn turn_way(&self, controls: crate::flight::Controls, aim: Option<i16>) -> Turn {
-        let rate = self.flying_handling().turn_rate;
-        let rule = self.setup.flight_rules().player_turn;
-        crate::player_turn::turn(self.ship.player.heading, rate, aim, controls.turn, rule).1
-    }
-
-    /// One frame of the player's bank out of a jump, turning `way`,
-    /// auto-turning when `auto` (see the module docs).
-    pub(super) fn bank_player(&mut self, way: Turn, auto: bool) {
-        let spec = self.ship.fit.hull.frames;
-        bank(&mut self.ship.ship_display.frames, &spec, way, auto);
-    }
-
-    /// One frame of the player's bank through a jump, its auto-turn turning
-    /// it `way`: a banking ship levels at once past a stage of 30 (see the
-    /// module docs).
-    pub(super) fn bank_through_jump(&mut self, way: Turn) {
-        self.bank_player(way, true);
-        if self.ship.fit.hull.frames.has(BANKS) && self.warp_stage() > JUMP_LEVEL_STAGE {
-            self.ship.ship_display.frames.bank = 0.0;
-        }
-    }
-
-    /// Whether the banking glow raises the player's glow this frame: a
-    /// banked ship of 0x0002 (@0x6cece-0x6cef1).
-    pub(super) fn banking_glow(&self) -> bool {
-        self.ship.ship_display.frames.flag != 0 && self.ship.fit.hull.frames.has(FOLDS)
-    }
-
-    /// `_ResetPlayer`'s fold: set 0, folding up.
-    pub(super) fn reset_fold(&mut self) {
-        *self.ship.fit.armament.fold_mut() = Fold {
-            set: 0,
-            dir: 1,
-            ..self.ship.fit.armament.fold()
-        };
-    }
-
-    /// A load's or a change of ship's fold: the last set, no direction,
-    /// the timer 0.
-    pub(super) fn last_set_fold(&mut self) {
-        let last = self.ship.fit.hull.frames.last_set();
-        *self.ship.fit.armament.fold_mut() = self.ship.fit.armament.fold().at(last);
-        self.ship.ship_display.frames.bank = 0.0;
-    }
-
-    /// The take-off's fold (see the module docs).
-    pub(super) fn take_off_fold(&mut self) {
-        let spec = self.ship.fit.hull.frames;
-        self.land_fold(spec.has(FOLDS) && spec.has(UNFOLDS_TO_FIRE));
-    }
-
-    /// The arrival's fold (see the module docs).
-    pub(super) fn arrival_fold(&mut self) {
-        let unfolds = self.ship.fit.hull.frames.has(UNFOLDS_TO_FIRE);
-        self.land_fold(unfolds);
-    }
-
-    /// A take-off's or an arrival's fold: the last set with no direction
-    /// when `folded`, else set 0 folding up; the timer 0.
-    fn land_fold(&mut self, folded: bool) {
-        if folded {
-            self.last_set_fold();
-            return;
-        }
-        self.reset_fold();
-        self.ship.ship_display.frames.bank = 0.0;
-    }
-
-    /// The warp stage's unfold (@0x6b59c-0x6b5cb): a ship of 0x0002, not
-    /// 0x0080, above set 0 unfolds.
-    pub(super) fn jump_unfold(&mut self) {
-        let spec = self.ship.fit.hull.frames;
-        let fold = self.ship.fit.armament.fold_mut();
-        if spec.has(FOLDS) && !spec.has(UNFOLDS_TO_FIRE) && fold.set > 0 {
-            fold.dir = -1;
-        }
-    }
-
-    /// The fold set a loaded pilot's escort of class `escort` takes (see
-    /// the module docs).
-    pub(super) fn loaded_escort_set(&self, escort: &FrameSpec) -> u16 {
-        if !escort.has(UNFOLDS_TO_FIRE) {
-            return 0;
-        }
-        match self.setup.rules.source_for(RuleKey::LoadedEscortFoldSet) {
-            RuleSource::Engine => self.ship.fit.hull.frames.last_set(),
-            RuleSource::Bible => escort.last_set(),
-        }
-    }
-
     /// `_HandleShipDisplay` for the player and then every NPC, after the
     /// pass's fight (see the module docs), the NPCs' spawn rolls made on
     /// `chance`.
@@ -282,27 +189,6 @@ impl Session {
             .display_ships(|govt| govts.derelict(govt), rules, chance);
     }
 
-    /// The player's lights block run once as a flight is entered, before
-    /// its first frame, as `_PrepareAllSprites` runs `_HandleShipDisplay`
-    /// (@0x3a776-0x3a78e): so the first frame shows the lights at their
-    /// first step from rest, and each step's display the next. A random
-    /// light's first roll is the stateless solver's first, on
-    /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
-    /// chance is to hand.
-    pub(super) fn prepare_player_lights(&mut self) {
-        use crate::blink::BlinkChance;
-        let spec = self.ship.fit.hull.frames;
-        let moment = Moment {
-            disabled: self.ship.condition.disabled(),
-            key_aboard: false,
-            rules: self.setup.display_rules(),
-        };
-        let rolls = crate::blink::HashedRolls::new(0);
-        let frames = &mut self.ship.ship_display.frames;
-        self.ship.ship_display.drawn.lights =
-            frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
-    }
-
     /// Tells the traffic the first class, ID 128, which a spawn of most
     /// origins rolls its animation on
     /// (`nova_sim::traffic::ship_display::FirstClass`).
@@ -319,14 +205,14 @@ impl Session {
     /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
     #[must_use]
     pub fn player_drawn(&self) -> Drawn {
-        self.ship.ship_display.drawn
+        self.ship.player_drawn()
     }
 
     /// The player's ion tint as its last display left it, if it glows
     /// (see `nova_sim::combat::ion_tint`).
     #[must_use]
     pub fn player_ion_tint(&self) -> Option<IonTint> {
-        self.ship.ship_display.ion_tint
+        self.ship.player_ion_tint()
     }
 
     /// How a murk-colorized ionized ship's tint takes its colour
@@ -380,6 +266,143 @@ impl Statics {
         #[allow(clippy::cast_precision_loss)]
         self.ship_record(ship)
             .map(|record| crate::reserves::shield_points(record.fields.shield) as f32)
+    }
+}
+
+impl PlayerShip {
+    /// Which way the player's ship turns this tick out of a jump under
+    /// `controls`, toward `aim` while the auto-turn aims, as its turn
+    /// block does ([`player_turn::turn`](crate::player_turn::turn)).
+    pub(super) fn turn_way(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        jump: Option<Jump>,
+        controls: crate::flight::Controls,
+        aim: Option<i16>,
+    ) -> Turn {
+        let rate = self.flying_handling(pilot, setup, jump).turn_rate;
+        let rule = setup.flight_rules().player_turn;
+        crate::player_turn::turn(self.player.heading, rate, aim, controls.turn, rule).1
+    }
+
+    /// One frame of the player's bank out of a jump, turning `way`,
+    /// auto-turning when `auto` (see the module docs).
+    pub(super) fn bank_player(&mut self, way: Turn, auto: bool) {
+        let spec = self.fit.hull.frames;
+        bank(&mut self.ship_display.frames, &spec, way, auto);
+    }
+
+    /// One frame of the player's bank through a jump, its auto-turn turning
+    /// it `way`: a banking ship levels at once past a stage of 30 (see the
+    /// module docs).
+    pub(super) fn bank_through_jump(&mut self, jump: Option<Jump>, way: Turn) {
+        self.bank_player(way, true);
+        if self.fit.hull.frames.has(BANKS) && self.warp_stage(jump) > JUMP_LEVEL_STAGE {
+            self.ship_display.frames.bank = 0.0;
+        }
+    }
+
+    /// Whether the banking glow raises the player's glow this frame: a
+    /// banked ship of 0x0002 (@0x6cece-0x6cef1).
+    pub(super) fn banking_glow(&self) -> bool {
+        self.ship_display.frames.flag != 0 && self.fit.hull.frames.has(FOLDS)
+    }
+
+    /// `_ResetPlayer`'s fold: set 0, folding up.
+    pub(super) fn reset_fold(&mut self) {
+        *self.fit.armament.fold_mut() = Fold {
+            set: 0,
+            dir: 1,
+            ..self.fit.armament.fold()
+        };
+    }
+
+    /// A load's or a change of ship's fold: the last set, no direction,
+    /// the timer 0.
+    pub(super) fn last_set_fold(&mut self) {
+        let last = self.fit.hull.frames.last_set();
+        *self.fit.armament.fold_mut() = self.fit.armament.fold().at(last);
+        self.ship_display.frames.bank = 0.0;
+    }
+
+    /// The take-off's fold (see the module docs).
+    pub(super) fn take_off_fold(&mut self) {
+        let spec = self.fit.hull.frames;
+        self.land_fold(spec.has(FOLDS) && spec.has(UNFOLDS_TO_FIRE));
+    }
+
+    /// The arrival's fold (see the module docs).
+    pub(super) fn arrival_fold(&mut self) {
+        let unfolds = self.fit.hull.frames.has(UNFOLDS_TO_FIRE);
+        self.land_fold(unfolds);
+    }
+
+    /// A take-off's or an arrival's fold: the last set with no direction
+    /// when `folded`, else set 0 folding up; the timer 0.
+    fn land_fold(&mut self, folded: bool) {
+        if folded {
+            self.last_set_fold();
+            return;
+        }
+        self.reset_fold();
+        self.ship_display.frames.bank = 0.0;
+    }
+
+    /// The warp stage's unfold (@0x6b59c-0x6b5cb): a ship of 0x0002, not
+    /// 0x0080, above set 0 unfolds.
+    pub(super) fn jump_unfold(&mut self) {
+        let spec = self.fit.hull.frames;
+        let fold = self.fit.armament.fold_mut();
+        if spec.has(FOLDS) && !spec.has(UNFOLDS_TO_FIRE) && fold.set > 0 {
+            fold.dir = -1;
+        }
+    }
+
+    /// The fold set a loaded pilot's escort of class `escort` takes (see
+    /// the module docs).
+    pub(super) fn loaded_escort_set(&self, setup: &Setup, escort: &FrameSpec) -> u16 {
+        if !escort.has(UNFOLDS_TO_FIRE) {
+            return 0;
+        }
+        match setup.rules.source_for(RuleKey::LoadedEscortFoldSet) {
+            RuleSource::Engine => self.fit.hull.frames.last_set(),
+            RuleSource::Bible => escort.last_set(),
+        }
+    }
+
+    /// The player's lights block run once as a flight is entered, before
+    /// its first frame, as `_PrepareAllSprites` runs `_HandleShipDisplay`
+    /// (@0x3a776-0x3a78e): so the first frame shows the lights at their
+    /// first step from rest, and each step's display the next. A random
+    /// light's first roll is the stateless solver's first, on
+    /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
+    /// chance is to hand.
+    pub(super) fn prepare_player_lights(&mut self, setup: &Setup) {
+        use crate::blink::BlinkChance;
+        let spec = self.fit.hull.frames;
+        let moment = Moment {
+            disabled: self.condition.disabled(),
+            key_aboard: false,
+            rules: setup.display_rules(),
+        };
+        let rolls = crate::blink::HashedRolls::new(0);
+        let frames = &mut self.ship_display.frames;
+        self.ship_display.drawn.lights = frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
+    }
+
+    /// The sets the player's ship was last drawn on: its hull's, and its
+    /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
+    #[must_use]
+    fn player_drawn(&self) -> Drawn {
+        self.ship_display.drawn
+    }
+
+    /// The player's ion tint as its last display left it, if it glows
+    /// (see `nova_sim::combat::ion_tint`).
+    #[must_use]
+    fn player_ion_tint(&self) -> Option<IonTint> {
+        self.ship_display.ion_tint
     }
 }
 
@@ -588,10 +611,10 @@ mod tests {
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 180.0);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         for _ in 0..400 {
-            let stage = session.warp_stage();
+            let stage = session.ship.warp_stage(session.jump);
             session.ship.ship_display.frames.bank = 14.0;
             session.tick(Controls::default());
-            if session.warp_stage() > JUMP_LEVEL_STAGE {
+            if session.ship.warp_stage(session.jump) > JUMP_LEVEL_STAGE {
                 assert_eq!(session.ship.ship_display.frames.bank, 0.0, "past 30");
                 return;
             }
@@ -649,16 +672,16 @@ mod tests {
             let expected = if folded { (5, 0) } else { (0, 1) };
             assert_eq!((fold.set, fold.dir), expected, "{flags:#x} took off");
             session.ship.fit.armament.fold_mut().set = 3;
-            session.arrival_fold();
+            session.ship.arrival_fold();
             let fold = session.ship.fit.armament.fold();
             assert_eq!((fold.set, fold.dir), expected, "{flags:#x} arrived");
         }
         // The arrival tests 0x0080 alone.
         let catalog = displaying(0x0080, 6);
         let mut session = Session::start(&catalog).expect("starts");
-        session.arrival_fold();
+        session.ship.arrival_fold();
         assert_eq!(session.ship.fit.armament.fold().set, 5);
-        session.take_off_fold();
+        session.ship.take_off_fold();
         assert_eq!(
             session.ship.fit.armament.fold().set,
             0,
@@ -676,7 +699,7 @@ mod tests {
             assert_eq!(session.begin_jump(), Ok(SystemId(131)));
             for _ in 0..200 {
                 session.tick(Controls::default());
-                if session.warp_stage() > 1.0 {
+                if session.ship.warp_stage(session.jump) > 1.0 {
                     break;
                 }
             }
@@ -685,7 +708,7 @@ mod tests {
         // Unfolded already, nothing turns.
         let mut session = Session::start(&displaying(FOLDS, 6)).expect("starts");
         *session.ship.fit.armament.fold_mut() = crate::combat::armament::Fold::default();
-        session.jump_unfold();
+        session.ship.jump_unfold();
         assert_eq!(session.ship.fit.armament.fold().dir, 0);
     }
 
@@ -704,8 +727,16 @@ mod tests {
         for (reading, set) in [(RuleSource::Engine, 3), (RuleSource::Bible, 5)] {
             let rules = Rulebook::default().with_override(RuleKey::LoadedEscortFoldSet, reading);
             let session = Session::start(&catalog).expect("starts").with_rules(rules);
-            assert_eq!(session.loaded_escort_set(&escort), set, "{reading:?}");
-            assert_eq!(session.loaded_escort_set(&plain), 0, "{reading:?}");
+            assert_eq!(
+                session.ship.loaded_escort_set(&session.setup, &escort),
+                set,
+                "{reading:?}"
+            );
+            assert_eq!(
+                session.ship.loaded_escort_set(&session.setup, &plain),
+                0,
+                "{reading:?}"
+            );
         }
     }
 

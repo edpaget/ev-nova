@@ -239,8 +239,9 @@ impl Session {
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its cloak, and its display and
     /// fold, with no ionization, or a loaded pilot's fold set with none
-    /// kept ([`Session::loaded_escort_set`]). One that kept no skill rolls
-    /// one on `chance`, and one that kept no afterburner, having no NPC (a
+    /// kept
+    /// ([`PlayerShip::loaded_escort_set`](super::PlayerShip::loaded_escort_set)).
+    /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
     pub(super) fn enter_escorts(
@@ -271,7 +272,7 @@ impl Session {
                 )?;
                 let loaded = self
                     .npc(id)
-                    .map(|npc| self.loaded_escort_set(&npc.hull.frames));
+                    .map(|npc| self.ship.loaded_escort_set(&self.setup, &npc.hull.frames));
                 if let Some(npc) = self.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.ion = Ion::default();

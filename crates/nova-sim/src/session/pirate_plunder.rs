@@ -9,7 +9,7 @@
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
 //!   cleared at the head of each combat tick the player isn't disabled
-//!   ([`Session::unboard_unless_disabled`]), as `_HandlePlayer` clears it
+//!   ([`PlayerShip::unboard_unless_disabled`]), as `_HandlePlayer` clears it
 //!   each frame before the ships think (@0x68b02), and kept only in
 //!   flight: a ship slot field, it is never saved. The frame's traffic
 //!   tick reads the flag the last frame left, as it runs before the
@@ -42,7 +42,7 @@
 //! tick after the player is repaired, which the player never sees. The pirate's credits
 //! (+0xa0) are read by no one, so the credits it gains are not kept.
 
-use super::Session;
+use super::{PlayerShip, Session};
 #[cfg(doc)]
 use crate::ai::plunder_contents;
 use crate::ai::plunder_contents::{
@@ -86,19 +86,11 @@ impl Session {
         }
     }
 
-    /// `_HandlePlayer` clears the boarded flag on each frame the player
-    /// isn't disabled (@0x68b02), before the frame's ships think.
-    pub(super) fn unboard_unless_disabled(&mut self) {
-        if self.ship.condition != Condition::Disabled {
-            self.ship.fate.player_boarded = false;
-        }
-    }
-
     /// Whether a pirate has docked with the player's ship (+0xb9), while it
     /// is disabled (see the module docs).
     #[must_use]
     pub fn player_boarded(&self) -> bool {
-        self.ship.fate.player_boarded
+        self.ship.player_boarded()
     }
 
     /// The player plundered by NPC `pirate`, drawing on `chance` (see the
@@ -175,6 +167,23 @@ impl Session {
     fn say_stolen_cargo(&mut self, tons: u32, credits: i64) {
         self.out.sounds.push(SimSound::CargoStolen);
         self.say(SimMessage::CargoStolen { tons, credits });
+    }
+}
+
+impl PlayerShip {
+    /// `_HandlePlayer` clears the boarded flag on each frame the player
+    /// isn't disabled (@0x68b02), before the frame's ships think.
+    pub(super) fn unboard_unless_disabled(&mut self) {
+        if self.condition != Condition::Disabled {
+            self.fate.player_boarded = false;
+        }
+    }
+
+    /// Whether a pirate has docked with the player's ship (+0xb9), while it
+    /// is disabled (see the module docs).
+    #[must_use]
+    fn player_boarded(&self) -> bool {
+        self.fate.player_boarded
     }
 }
 

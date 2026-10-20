@@ -8,16 +8,16 @@
 //! @0x3225, `_ShipDeionizationRate` @0x6ec3; see
 //! `nova_sim::stats::IonStats`).
 //!
-//! **The turn and thrust** ([`Session::ionized`]): every reader of the
+//! **The turn and thrust** ([`PlayerShip::ionized`]): every reader of the
 //! player's `_ShipTurnRate` and `_ShipAccelRate` reads them slowed by the
 //! charge as it is when it reads them: its flight's
-//! ([`Session::flying_handling`], `_HandlePlayer`'s five turn and eleven
+//! ([`PlayerShip::flying_handling`], `_HandlePlayer`'s five turn and eleven
 //! thrust reads), the NPCs' view of it (`PlayerSide::handling`), and the
 //! Player Info rows (`_PlayerInfoDialogUpdate` @0x52cd0, @0x52d90). The
 //! turn is spared from J on, as the player's +0x50 is above 0 through the
 //! pre-jump and the warp.
 //!
-//! **The frame's block** ([`Session::ionize_tick`], @0x6d7fd-0x6d96d):
+//! **The frame's block** ([`PlayerShip::ionize_tick`], @0x6d7fd-0x6d96d):
 //! after the move and the box's clamp (@0x6d43f-0x6d4aa), before the fuel
 //! regenerates (@0x6d97a) and the afterburner's block (@0x6f970), so the
 //! afterburner's push reads the charge the block left. It runs on every
@@ -33,55 +33,93 @@
 //! stats are worked out afresh whenever the outfits change, so they need
 //! no copy. None of this plays a sound.
 
-use super::Session;
+use super::{Jump, PlayerShip, Session, Setup};
 use crate::flight::Flyer;
 use crate::handling::Handling;
 use crate::ionization::{Ionization, deionize, factor, lowered_top, pull};
+use crate::pilot::Pilot;
 
 impl Session {
     /// The ion charge at which the player is fully ionized: its class's
     /// `IonizeMax` and its Ion Absorbers' (see the module docs).
     #[must_use]
     pub fn ion_capacity(&self) -> f32 {
-        self.ship.fit.stats.ion.capacity(Flyer::Player)
+        self.ship.ion_capacity()
     }
 
     /// The ion charge the player sheds a tick: its class's rate and its
     /// Ion Dissipaters' (see the module docs).
     #[must_use]
     pub fn ion_rate(&self) -> f32 {
-        self.ship.fit.stats.ion.rate(Flyer::Player)
+        self.ship.ion_rate()
     }
 
     /// The player's ionization factor, `_ShipIonizationFactor`: its charge
     /// over its capacity ([`factor`]).
     #[must_use]
     pub fn ion_factor(&self) -> f32 {
-        factor(self.ship.ion.charge, self.ion_capacity())
+        self.ship.ion_factor()
     }
 
     /// What the player's handling reads of its ionization now: its
     /// charge, its factor, and its jump under way from J on.
     #[must_use]
     pub fn ionization(&self) -> Ionization {
-        Ionization {
-            charge: self.ship.ion.charge,
-            factor: self.ion_factor(),
-            jumping: self.jump.is_some(),
-        }
-    }
-
-    /// `handling` slowed by the player's charge as it is now
-    /// ([`Ionization::slows`]): its turn spared from J on.
-    pub(super) fn ionized(&self, handling: Handling) -> Handling {
-        self.ionization().slows(handling)
+        self.ship.ionization(self.jump)
     }
 
     /// Sets the player's ionization directly, for
     /// [`fixture::set_player_ion`](crate::fixture::set_player_ion).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_ion(&mut self, ion: crate::combat::ion::Ion) {
-        self.ship.ion = ion;
+        self.ship.set_player_ion(ion);
+    }
+}
+
+impl PlayerShip {
+    /// The ion charge at which the player is fully ionized: its class's
+    /// `IonizeMax` and its Ion Absorbers' (see the module docs).
+    #[must_use]
+    fn ion_capacity(&self) -> f32 {
+        self.fit.stats.ion.capacity(Flyer::Player)
+    }
+
+    /// The ion charge the player sheds a tick: its class's rate and its
+    /// Ion Dissipaters' (see the module docs).
+    #[must_use]
+    fn ion_rate(&self) -> f32 {
+        self.fit.stats.ion.rate(Flyer::Player)
+    }
+
+    /// The player's ionization factor, `_ShipIonizationFactor`: its charge
+    /// over its capacity ([`factor`]).
+    #[must_use]
+    fn ion_factor(&self) -> f32 {
+        factor(self.ion.charge, self.ion_capacity())
+    }
+
+    /// What the player's handling reads of its ionization now: its
+    /// charge, its factor, and its jump under way from J on.
+    #[must_use]
+    fn ionization(&self, jump: Option<Jump>) -> Ionization {
+        Ionization {
+            charge: self.ion.charge,
+            factor: self.ion_factor(),
+            jumping: jump.is_some(),
+        }
+    }
+
+    /// `handling` slowed by the player's charge as it is now
+    /// ([`Ionization::slows`]): its turn spared from J on.
+    pub(super) fn ionized(&self, jump: Option<Jump>, handling: Handling) -> Handling {
+        self.ionization(jump).slows(handling)
+    }
+
+    /// Sets the player's ionization directly, for
+    /// [`fixture::set_player_ion`](crate::fixture::set_player_ion).
+    #[cfg(any(test, feature = "fixture"))]
+    fn set_player_ion(&mut self, ion: crate::combat::ion::Ion) {
+        self.ion = ion;
     }
 
     /// The player's frame's ion block (see the module docs): a charge
@@ -89,17 +127,17 @@ impl Session {
     /// speed lowered by the charge left; one at or below none is cleared.
     /// What it took off is kept in the ion's `shed`, for the fight's
     /// lockout ([`Ion::as_block_found`](crate::combat::ion::Ion::as_block_found)).
-    pub(super) fn ionize_tick(&mut self) {
-        let found = self.ship.ion.charge;
+    pub(super) fn ionize_tick(&mut self, pilot: &Pilot, setup: &Setup) {
+        let found = self.ion.charge;
         let Some(charge) = deionize(found, self.ion_rate()) else {
-            self.ship.ion.charge = 0.0;
-            self.ship.ion.shed = found;
+            self.ion.charge = 0.0;
+            self.ion.shed = found;
             return;
         };
-        self.ship.ion.charge = charge;
-        self.ship.ion.shed = found - charge;
-        let cap = lowered_top(self.top_speed(), self.ion_factor());
-        self.ship.player.velocity = pull(self.ship.player.velocity, cap);
+        self.ion.charge = charge;
+        self.ion.shed = found - charge;
+        let cap = lowered_top(self.top_speed(pilot, setup), self.ion_factor());
+        self.player.velocity = pull(self.player.velocity, cap);
     }
 }
 
@@ -154,7 +192,7 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, charge: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.tick(Controls::default());
-        session.settle_box();
+        session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
         session.ship.player.heading = 90.0;
@@ -304,11 +342,18 @@ mod tests {
     fn an_ionized_player_turns_slower_and_at_most_by_0_7() {
         let session = flying(&ionizing(), 200.0);
         let own = session.setup.flight_rules().handling(session.handling());
-        let flying = session.flying_handling();
+        let flying = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump);
         assert_eq!(flying.turn_rate, own.turn_rate * 0.5);
         assert_eq!(flying.accel, (f64::from(own.accel) * 0.5) as f32);
         assert_eq!(flying.max_speed, session.top_speed(), "the pull holds it");
-        let swamped = flying_session(4000.0).flying_handling();
+        let swamped_session = flying_session(4000.0);
+        let swamped = swamped_session.ship.flying_handling(
+            &swamped_session.pilot,
+            &swamped_session.setup,
+            swamped_session.jump,
+        );
         assert_eq!(
             swamped.turn_rate,
             (f64::from(own.turn_rate) * (1.0 - f64::from(0.7_f32))) as f32
@@ -347,9 +392,13 @@ mod tests {
         );
         session.tick(Controls::default());
         session.ship.ion.charge = 200.0;
-        let out = session.flying_handling();
+        let out = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        let jumping = session.flying_handling();
+        let jumping = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump);
         assert_eq!(jumping.turn_rate, out.turn_rate * 2.0);
         assert_eq!(jumping.accel, out.accel);
     }

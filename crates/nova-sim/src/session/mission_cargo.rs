@@ -236,7 +236,11 @@ impl Session {
         let Some(govt) = self.statics.govts.get(govt_id).cloned() else {
             return;
         };
-        if !scan::goes_on(ai_type, &govt, off, chance) || self.warp_holds_scans() {
+        if !scan::goes_on(ai_type, &govt, off, chance)
+            || self
+                .ship
+                .warp_holds_scans(&self.pilot, &self.statics, self.jump)
+        {
             return;
         }
         self.scan_mission_cargo(id, scanner, &govt, chance);
@@ -371,7 +375,7 @@ impl Session {
             .get(slot)
             .map_or(0, |active| active.cargo_tons);
         let facts = PickupFacts {
-            cargo: self.room_for(tons),
+            cargo: self.ship.room_for(&self.pilot, &self.statics, tons),
             rules: &self.setup.rules,
         };
         match pickup_checks().first_refusal(&facts, &mut NeverFires) {
@@ -2087,10 +2091,19 @@ mod tests {
         session.begin_jump().expect("jumps");
         let _ = session.take_sounds();
         step_to(&mut session, &catalog, 2 * LAST_LEAD_IN_TICK);
-        assert!(session.warp_holds_scans(), "past the lead-in");
+        assert!(
+            session
+                .ship
+                .warp_holds_scans(&session.pilot, &session.statics, session.jump),
+            "past the lead-in"
+        );
         session.ship.condition = crate::combat::hull::Condition::Disabled;
         assert!(session.in_warp_lead_in(), "never past it");
-        assert!(!session.warp_holds_scans());
+        assert!(
+            !session
+                .ship
+                .warp_holds_scans(&session.pilot, &session.statics, session.jump)
+        );
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.jumping(), None, "the warp collapsed");
         assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);

@@ -33,7 +33,7 @@
 //!
 //! **The speed's resets.** It starts at none (`_ResetPlayer` @0x1d43c), and
 //! landing sets it to none (`_PlayerLandOnStellar` @0x63409). A gate's
-//! exit takes its velocity's length ([`Session::arrive_at_speed`]), half
+//! exit takes its velocity's length ([`PlayerShip::arrive_at_speed`]), half
 //! the top speed along the exit heading (`_PlayerEnterHypergate`
 //! @0x63b17, `_PlayerEnterWormhole` @0x643cd). A jump's arrival, by the
 //! engine's reading of `jump_arrival`, sets it to the top speed, the
@@ -44,38 +44,27 @@
 //!
 //! None of these blocks plays a sound.
 
-use super::Session;
+use super::{Outbox, PlayerShip, Session, Setup};
 use crate::flight::{Controls, Flyer, drag, inertialess_player_step};
 use crate::glow::{Follow, step_glow};
 use crate::inertialess::{PLAYER_DISABLED_DECAY, is_inertialess};
 
 impl Session {
-    /// Whether the player's ship flies inertialess
-    /// ([`is_inertialess`]), by its stats and the rules: the player is
-    /// never in an NPC's close formation.
-    pub(crate) fn player_inertialess(&self) -> bool {
-        is_inertialess(
-            self.ship.fit.stats.inertialess_hull,
-            self.ship.fit.stats.dampener,
-            Flyer::Player,
-            false,
-            self.setup.flight_rules().inertial_dampener,
-        )
-    }
-
     /// The player's speed along its heading, the original's +0x48: what
     /// an inertialess ship's velocity follows (see the module docs). An
     /// inertial ship's is left as it was last set.
     #[must_use]
     pub fn player_speed(&self) -> f32 {
-        self.ship.player_speed
+        self.ship.player_speed()
     }
 
     /// One tick of the player's inertialess ship out of a jump under
     /// `controls`, turning toward `aim` when there is one (see the module
     /// docs), its glow ramped and the thrust sounded as any ship's.
     pub(super) fn fly_inertialess(&mut self, controls: Controls, aim: Option<i16>) {
-        let handling = self.flying_handling();
+        let handling = self
+            .ship
+            .flying_handling(&self.pilot, &self.setup, self.jump);
         let caps = self.player_caps();
         let disabled = self.player_fate().row().drag;
         if disabled {
@@ -101,30 +90,48 @@ impl Session {
                 max_speed: handling.max_speed,
             }
         };
-        self.ramp_inertialess(controls.thrust, follow);
+        self.ship
+            .ramp_inertialess(&mut self.out, controls.thrust, follow);
+    }
+}
+
+impl PlayerShip {
+    /// Whether the player's ship flies inertialess
+    /// ([`is_inertialess`]), by its stats and the rules: the player is
+    /// never in an NPC's close formation.
+    pub(super) fn player_inertialess(&self, setup: &Setup) -> bool {
+        is_inertialess(
+            self.fit.stats.inertialess_hull,
+            self.fit.stats.dampener,
+            Flyer::Player,
+            false,
+            setup.flight_rules().inertial_dampener,
+        )
+    }
+
+    /// The player's speed along its heading, the original's +0x48: what
+    /// an inertialess ship's velocity follows (see the module docs). An
+    /// inertial ship's is left as it was last set.
+    #[must_use]
+    fn player_speed(&self) -> f32 {
+        self.player_speed
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
     /// an inertialess ship's glow, following `follow`, with the
     /// banking glow and the afterburner's step while it is on
     /// ([`step_glow`]).
-    pub(super) fn ramp_inertialess(&mut self, thrust: bool, follow: Follow) {
-        self.sound_thrust(thrust);
-        let burning = self.ship.afterburner_on;
+    pub(super) fn ramp_inertialess(&mut self, out: &mut Outbox, thrust: bool, follow: Follow) {
+        self.sound_thrust(out, thrust);
+        let burning = self.afterburner_on;
         let banking = self.banking_glow();
-        self.ship.engine_glow = step_glow(
-            self.ship.engine_glow,
-            thrust,
-            banking,
-            Some(follow),
-            burning,
-        );
+        self.engine_glow = step_glow(self.engine_glow, thrust, banking, Some(follow), burning);
     }
 
     /// Sets the player's speed as it arrives moving at its velocity: its
     /// length (see the module docs).
     pub(super) fn arrive_at_speed(&mut self) {
-        self.ship.player_speed = self.ship.player.velocity.length();
+        self.player_speed = self.player.velocity.length();
     }
 }
 
@@ -169,7 +176,7 @@ mod tests {
     /// A session of `catalog` at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.settle_box();
+        session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
         session.ship.player.heading = heading;
@@ -211,13 +218,19 @@ mod tests {
 
     #[test]
     fn an_inertialess_hull_and_a_dampener_each_make_the_player_inertialess() {
-        assert!(!flying(&catalog(), 0.0).player_inertialess());
-        assert!(flying(&hull(), 0.0).player_inertialess());
-        assert!(flying(&dampened(), 0.0).player_inertialess());
+        let plain = flying(&catalog(), 0.0);
+        assert!(!plain.ship.player_inertialess(&plain.setup));
+        let hulled = flying(&hull(), 0.0);
+        assert!(hulled.ship.player_inertialess(&hulled.setup));
+        let damped = flying(&dampened(), 0.0);
+        assert!(damped.ship.player_inertialess(&damped.setup));
         let bible = flying(&dampened(), 0.0).with_rules(
             Rulebook::default().with_override(RuleKey::InertialDampener, RuleSource::Bible),
         );
-        assert!(bible.player_inertialess(), "the player's counts either way");
+        assert!(
+            bible.ship.player_inertialess(&bible.setup),
+            "the player's counts either way"
+        );
     }
 
     #[test]
@@ -273,7 +286,10 @@ mod tests {
         session.ship.player_speed = 1.0;
         session.ship.player.velocity = Vec2::new(1.0, 0.0);
         session.ship.aim = 45;
-        let accel = session.flying_handling().accel;
+        let accel = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .accel;
         session.tick(held(false, Turn::None, true));
         assert!((session.player_speed() - (1.0 - accel)).abs() < 1e-6);
         assert_eq!(session.ship.player.heading, 90.0, "reverse turns nothing");
@@ -346,7 +362,10 @@ mod tests {
         session.ship.player_speed = 6.0;
         session.ship.aim = 7;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        let accel = session.flying_handling().accel;
+        let accel = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .accel;
         session.tick(Controls::default());
         assert!((session.player_speed() - (6.0 - accel)).abs() < 1e-5);
         assert_eq!(session.ship.player.heading, 0.0, "the brake does not turn");
@@ -388,7 +407,10 @@ mod tests {
         );
         session.ship.player_speed = 6.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
-        let max_speed = session.flying_handling().max_speed;
+        let max_speed = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump)
+            .max_speed;
         for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
             session.ship.engine_glow = base;
             session.tick(Controls::default());

@@ -157,12 +157,13 @@
 //! counter garbles a name past 255 characters, reachable only by a `*`
 //! in a long name; it is not reproduced, and the name has no limit.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{Outbox, ReservePolicy, Session, SessionEvent, Setup};
+use super::{Outbox, PlayerShip, ReservePolicy, Session, SessionEvent, Setup};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -395,7 +396,13 @@ impl Session {
                 .arsenal
                 .stock_fits(ship.id, &self.statics.outfits),
         );
-        self.refit(false, change.reserves);
+        self.ship.refit(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            false,
+            change.reserves,
+        );
         // The original's ship change writes no exit cursor (+0xc8fe-+0xc905),
         // so the turn of exits goes on, as the refit carried it; by the
         // other reading a new ship starts each `ExitType` at exit 0.
@@ -406,7 +413,7 @@ impl Session {
         // as the new hull's `BaseSets` − 1 with no direction and its timer
         // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
         // by either reading (see the `ship_display` module).
-        self.last_set_fold();
+        self.ship.last_set_fold();
         self.out.save_due = true;
         self.out.emit(SessionEvent::ShipChanged);
     }
@@ -458,7 +465,7 @@ impl Session {
             reserves: ReservePolicy::reading(rules.reserves),
         };
         self.become_class(&record, change, |_| {});
-        self.bump_armor();
+        self.ship.bump_armor(&mut self.pilot, &self.setup);
         // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
         if self.landed.is_some() {
             self.out.interface_loads.push(InterfaceLoad {
@@ -485,18 +492,6 @@ impl Session {
     /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
         self.out.take_interface_loads()
-    }
-
-    /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
-    /// its most, while the session's disable rule has its ship disabled,
-    /// as the original's loop does (@0x15677-0x156c5). It ends at the
-    /// most, so a rule that never lets the ship fly still ends.
-    fn bump_armor(&mut self) {
-        let rule = Rc::clone(&self.setup.disable_rule.0);
-        let armor = &mut self.pilot.reserves.armor;
-        while armor.now < armor.max && rule.disabled(*armor, &self.ship.fit.hull) {
-            armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
-        }
     }
 
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
@@ -580,6 +575,20 @@ impl Setup {
     pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         self.random_string(list, chance)
             .filter(|pick| !pick.is_empty())
+    }
+}
+
+impl PlayerShip {
+    /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
+    /// its most, while the session's disable rule has its ship disabled,
+    /// as the original's loop does (@0x15677-0x156c5). It ends at the
+    /// most, so a rule that never lets the ship fly still ends.
+    fn bump_armor(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let rule = Rc::clone(&setup.disable_rule.0);
+        let armor = &mut pilot.reserves.armor;
+        while armor.now < armor.max && rule.disabled(*armor, &self.fit.hull) {
+            armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
+        }
     }
 }
 
@@ -1108,7 +1117,13 @@ mod tests {
             (KEPT_LAUNCHER, 1),
             (ROCKETS, 5),
         ]);
-        session.refit(false, ReservePolicy::Hold);
+        session.ship.refit(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+            false,
+            ReservePolicy::Hold,
+        );
         session
     }
 

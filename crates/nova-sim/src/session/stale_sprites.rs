@@ -43,7 +43,7 @@
 //! the original compares masks: see rdm
 //! phase/ship-handling-fidelity-followups/phase-1-deadly-stellars-pixel-masks.
 
-use super::Session;
+use super::{PlayerShip, Session, Statics};
 use crate::catalog::LandingSite;
 use crate::combat::stellar_hazards::DeadlyDisc;
 use crate::deadly_stellar::{is_deadly, sprite_radius};
@@ -100,7 +100,7 @@ impl Session {
                         let owner = self.sites.iter().find(|site| site.id == owner)?;
                         self.drawn_disc(owner)
                     }
-                    SlotSprite::Ghost { top_left } => self.ghost_disc(top_left),
+                    SlotSprite::Ghost { top_left } => self.ship.ghost_disc(&self.statics, top_left),
                     SlotSprite::None => None,
                 }
             })
@@ -120,23 +120,6 @@ impl Session {
         })
     }
 
-    /// The disc of an unowned slot placed at `top_left` from the player:
-    /// graphic type 0's frame there, none when it cannot be read.
-    fn ghost_disc(&self, top_left: (i32, i32)) -> Option<DeadlyDisc> {
-        let frame = self.statics.fallback_frame?;
-        // A screen offset and a sprite's side are far within a float's
-        // exact range.
-        #[allow(clippy::cast_precision_loss)]
-        let (corner, size) = (
-            Vec2::new(top_left.0 as f32, top_left.1 as f32),
-            Vec2::new(frame.0 as f32, frame.1 as f32),
-        );
-        Some(DeadlyDisc {
-            at: self.ship.player.position + corner + size * 0.5,
-            radius: sprite_radius(frame),
-        })
-    }
-
     /// The stellar sprite pool, to hand to the next pilot's session in the
     /// same run (see the module docs).
     #[must_use]
@@ -151,6 +134,25 @@ impl Session {
     pub fn carry_stellar_sprite_pool(&mut self, pool: StellarSpritePool) {
         self.stellar_sprites = pool;
         self.rebuild_sprite_pool();
+    }
+}
+
+impl PlayerShip {
+    /// The disc of an unowned slot placed at `top_left` from the player:
+    /// graphic type 0's frame there, none when it cannot be read.
+    fn ghost_disc(&self, statics: &Statics, top_left: (i32, i32)) -> Option<DeadlyDisc> {
+        let frame = statics.fallback_frame?;
+        // A screen offset and a sprite's side are far within a float's
+        // exact range.
+        #[allow(clippy::cast_precision_loss)]
+        let (corner, size) = (
+            Vec2::new(top_left.0 as f32, top_left.1 as f32),
+            Vec2::new(frame.0 as f32, frame.1 as f32),
+        );
+        Some(DeadlyDisc {
+            at: self.player.position + corner + size * 0.5,
+            radius: sprite_radius(frame),
+        })
     }
 }
 

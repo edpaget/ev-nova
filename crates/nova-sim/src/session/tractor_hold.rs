@@ -9,7 +9,7 @@
 //! toward its holder's velocity (rest when it holds itself) unless it was
 //! released, then the age, on the advance pass alone, and the lapse.
 //!
-//! **The step** ([`Session::tractor_step`]): a quarter of slot 0's
+//! **The step** ([`PlayerShip::tractor_step`]): a quarter of slot 0's
 //! `_ShipAccelRate`, for the player's hold and every NPC's
 //! ([`World::tractor_step`](crate::traffic::World::tractor_step)): the
 //! player's thrust as it flies, ionized and under the flight's divisor.
@@ -24,35 +24,29 @@
 //! never saves it. A landing and a jump's arrival leave it to lapse on the
 //! wall-clock `TickCount`, and both take far longer than half a second,
 //! so the engine drops it as a landing completes and as a jump arrives
-//! ([`Session::clear_tractor`]), as the flight doesn't tick through
+//! ([`PlayerShip::clear_tractor`]), as the flight doesn't tick through
 //! either.
 //!
 //! None of this plays a sound.
 
-use super::Session;
+use super::{Jump, PlayerShip, Session, Setup};
 use crate::combat::GamePass;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::combat::tractor_hold::{Holder, held_by_other, player_pass, step};
+use crate::pilot::Pilot;
 
 impl Session {
-    /// The step a tractor's hold pulls a held ship's velocity by on each
-    /// axis, the player's or an NPC's: a quarter of the player's thrust
-    /// as it flies ([`step`]).
-    pub(crate) fn tractor_step(&self) -> f32 {
-        step(self.flying_handling().accel)
-    }
-
     /// Whether a ship other than the player holds it in a tractor beam
     /// ([`held_by_other`]): its jump is refused.
     #[must_use]
     pub fn held_by_other(&self) -> bool {
-        held_by_other(self.ship.tractor, ShipRef::Player)
+        self.ship.held_by_other()
     }
 
     /// The player's frame's hold on `pass` (see the module docs).
     pub(super) fn hold_player(&mut self, pass: GamePass) {
-        let step = self.tractor_step();
+        let step = self.ship.tractor_step(&self.pilot, &self.setup, self.jump);
         let npcs = self.traffic.npcs();
         player_pass(
             &mut self.ship.tractor,
@@ -77,13 +71,36 @@ impl Session {
     /// [`fixture::set_player_tractor`](crate::fixture::set_player_tractor).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_tractor(&mut self, lock: Option<crate::combat::impact::TractorLock>) {
-        self.ship.tractor = lock;
+        self.ship.set_player_tractor(lock);
+    }
+}
+
+impl PlayerShip {
+    /// The step a tractor's hold pulls a held ship's velocity by on each
+    /// axis, the player's or an NPC's: a quarter of the player's thrust
+    /// as it flies ([`step`]).
+    pub(super) fn tractor_step(&self, pilot: &Pilot, setup: &Setup, jump: Option<Jump>) -> f32 {
+        step(self.flying_handling(pilot, setup, jump).accel)
+    }
+
+    /// Whether a ship other than the player holds it in a tractor beam
+    /// ([`held_by_other`]): its jump is refused.
+    #[must_use]
+    fn held_by_other(&self) -> bool {
+        held_by_other(self.tractor, ShipRef::Player)
+    }
+
+    /// Sets the player's lock directly, for
+    /// [`fixture::set_player_tractor`](crate::fixture::set_player_tractor).
+    #[cfg(any(test, feature = "fixture"))]
+    fn set_player_tractor(&mut self, lock: Option<crate::combat::impact::TractorLock>) {
+        self.tractor = lock;
     }
 
     /// Drops the player's lock, as a landing completes and as a jump
     /// arrives (see the module docs).
     pub(super) fn clear_tractor(&mut self) {
-        self.ship.tractor = None;
+        self.tractor = None;
     }
 }
 
@@ -108,7 +125,7 @@ mod tests {
     /// NPC 0, which moves at `velocity`.
     fn held(velocity: Vec2) -> Session {
         let mut session = facing_an_npc(&armed(), 180);
-        session.settle_box();
+        session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
         session.traffic.npcs_mut()[0].state.velocity = velocity;
@@ -119,8 +136,17 @@ mod tests {
     #[test]
     fn the_player_is_pulled_toward_its_holders_velocity_by_a_quarter_of_its_thrust() {
         let mut session = held(Vec2::new(-2.0, 2.0));
-        let step = session.tractor_step();
-        assert_eq!(step, session.flying_handling().accel * 0.25);
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
+        assert_eq!(
+            step,
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .accel
+                * 0.25
+        );
         assert!(step > 0.0);
         session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(-step, step));
@@ -143,8 +169,17 @@ mod tests {
         let mut session = held(Vec2::new(-5.0, 0.0)).with_rules(divided);
         session.ship.fit.stats.ion.class_capacity = 400.0;
         session.ship.ion.charge = 200.0;
-        let step = session.tractor_step();
-        assert_eq!(step, session.flying_handling().accel * 0.25);
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
+        assert_eq!(
+            step,
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.jump)
+                .accel
+                * 0.25
+        );
         // What the NPCs see of the player's thrust skips the divisor.
         let seen = session.player_side().handling.accel * 0.25;
         assert!(step > seen * 1.5, "{step} against {seen}");
@@ -154,7 +189,9 @@ mod tests {
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.tractor = Some(TractorLock::by(ShipRef::Player));
         npc.condition = Condition::Disabled;
-        let step = session.tractor_step();
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             session.npcs()[0].state.velocity,
@@ -165,7 +202,9 @@ mod tests {
     #[test]
     fn the_second_pass_pulls_but_does_not_age() {
         let mut session = held(Vec2::new(-2.0, 2.0));
-        let step = session.tractor_step();
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
@@ -184,7 +223,9 @@ mod tests {
         let mut session = held(Vec2::ZERO);
         session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
         session.ship.player.velocity = Vec2::new(1.0, -1.0);
-        let step = session.tractor_step();
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
         session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(1.0 - step, step - 1.0));
         assert!(!session.held_by_other());
@@ -194,7 +235,9 @@ mod tests {
     fn the_escape_pod_is_pulled_too() {
         let mut session = held(Vec2::new(-2.0, 0.0));
         session.pod = Some(100);
-        let step = session.tractor_step();
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.jump);
         session.tick(Controls::default());
         assert_eq!(session.pod, Some(99), "the pod flew");
         assert_eq!(session.player().velocity.x, -step);
@@ -203,11 +246,18 @@ mod tests {
     #[test]
     fn a_held_player_is_not_slowed() {
         let mut session = held(Vec2::ZERO);
-        let handling = session.flying_handling();
+        let handling = session
+            .ship
+            .flying_handling(&session.pilot, &session.setup, session.jump);
         let top = session.top_speed();
         assert!(session.held_by_other());
         session.ship.tractor = None;
-        assert_eq!(session.flying_handling(), handling);
+        assert_eq!(
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.jump),
+            handling
+        );
         assert_eq!(session.top_speed(), top);
     }
 

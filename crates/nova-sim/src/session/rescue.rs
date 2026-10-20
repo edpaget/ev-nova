@@ -101,11 +101,12 @@
 //! owner (+0x14, @0x68f87-0x68f9e), or the system it was found in when no
 //! system owns it.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
-use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use super::hooks::ShipHook;
+use super::{PlayerShip, Session, Setup};
 use crate::catalog::{PilotCatalog, ShipId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -209,7 +210,8 @@ impl Session {
             },
         };
         self.enter_system(Entry::Rescue, arrival, catalog, catalog, chance);
-        self.fill_reserves_for_rescue();
+        self.ship
+            .fill_reserves_for_rescue(&mut self.pilot, &self.setup);
         let days = RESCUE_DAYS + u32::from(chance.roll(RESCUE_EXTRA_DAYS));
         self.pass_days(days, chance);
         self.rebuild_stellars();
@@ -245,7 +247,7 @@ impl Session {
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
     pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        std::mem::take(&mut self.ship.fate.rescue_desc_due).then_some(RESCUE_DESC)
+        self.ship.take_rescue_desc()
     }
 
     /// Ends every active mission as `_AbortMission(slot, 1)` does, in slot
@@ -300,20 +302,6 @@ impl Session {
         // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
         self.reset_reinforcements_here();
         self.reset_precalced();
-    }
-
-    /// The rescue's reserves: fuel and shield full, the armour as
-    /// [`RuleKey::RescueArmor`] reads (see the module docs).
-    fn fill_reserves_for_rescue(&mut self) {
-        let stats = self.ship.fit.stats;
-        let armor = match self.setup.rules.source_for(RuleKey::RescueArmor) {
-            RuleSource::Engine => stats.shield,
-            RuleSource::Bible => stats.armor,
-        };
-        let reserves = &mut self.pilot.reserves;
-        reserves.fuel.now = stats.fuel;
-        reserves.shield.now = stats.shield;
-        reserves.armor.now = armor;
     }
 
     /// Names the rescued ship `shïp` 128's name, a space and four digits
@@ -381,6 +369,27 @@ impl Session {
             .map_or(RESCUE_FALLBACK, |(stellar, found_in)| {
                 self.stellar_owner(stellar).unwrap_or(found_in)
             })
+    }
+}
+
+impl PlayerShip {
+    /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
+    fn take_rescue_desc(&mut self) -> Option<i16> {
+        std::mem::take(&mut self.fate.rescue_desc_due).then_some(RESCUE_DESC)
+    }
+
+    /// The rescue's reserves: fuel and shield full, the armour as
+    /// [`RuleKey::RescueArmor`] reads (see the module docs).
+    fn fill_reserves_for_rescue(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let stats = self.fit.stats;
+        let armor = match setup.rules.source_for(RuleKey::RescueArmor) {
+            RuleSource::Engine => stats.shield,
+            RuleSource::Bible => stats.armor,
+        };
+        let reserves = &mut pilot.reserves;
+        reserves.fuel.now = stats.fuel;
+        reserves.shield.now = stats.shield;
+        reserves.armor.now = armor;
     }
 }
 

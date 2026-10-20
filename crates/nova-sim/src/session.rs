@@ -373,8 +373,13 @@
 //! - `out: outbox::Outbox` (`outbox` module; phase 3, done): what the
 //!   session fills and the view takes with the `take_*` methods; nothing
 //!   reads it back but to undo its own writes.
-//! - `ship: player_ship::PlayerShip` (`player_ship` module; phase 4, to
-//!   come): the player's ship.
+//! - `ship: player_ship::PlayerShip` (`player_ship` module; phase 4,
+//!   done): the player's ship in flight, with its parts `fit` (what its
+//!   class and outfits give), `latches` (what each reset arms), `fate`
+//!   (its death, the pod and self-destruct) and `warp` (its warp and
+//!   double time); the coordinators that read other state too
+//!   (`become_class`, `reset_precalced`, the player's move and display
+//!   passes) stay on `Session`.
 //! - `space: space::Space` (`space` module; phase 5, to come): what is in
 //!   the system, the NPCs and the fleet among it.
 //! - `chart: chart::Chart` (`chart` module; phase 6, to come): the system
@@ -1170,7 +1175,7 @@ impl Session {
         let mut session = Self::fly(catalog, Pilot::new(catalog, "")?)?;
         // A new pilot's ship folds as `_ResetPlayer` leaves it
         // (@0x1d55a-0x1d565; see the `ship_display` module).
-        session.reset_fold();
+        session.ship.reset_fold();
         Ok(session)
     }
 
@@ -1496,7 +1501,13 @@ impl Session {
         // reads the state as it builds, so nothing is told.
         session.rebuild_quietly();
         session.open_outfit_visit();
-        session.refit(false, ReservePolicy::Hold);
+        session.ship.refit(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+            false,
+            ReservePolicy::Hold,
+        );
         session.restock_fleet();
         // A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f),
         // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
@@ -1517,11 +1528,11 @@ impl Session {
         session.reset_precalced();
         // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
         // `ship_display` module).
-        session.last_set_fold();
+        session.ship.last_set_fold();
         session.set_first_class();
         // `_PrepareAllSprites`' display of the player's lights before the
         // first frame (see the `ship_display` module).
-        session.prepare_player_lights();
+        session.ship.prepare_player_lights(&session.setup);
         // `_EnterGameFromMainScreen` (@0x1a36c).
         session.prepare_all_sprites();
         Ok(session)
@@ -1543,7 +1554,7 @@ impl Session {
     /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
     /// off keeps the heading.
     pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
-        self.ship.player.heading = f32::from(chance.roll(360));
+        self.ship.face_on_load(chance);
     }
 
     /// Resumes a pilot opened from a save, after [`Session::fly`], on
@@ -1695,68 +1706,6 @@ impl Session {
         self
     }
 
-    /// The ship's standard equipment: its default items and its stock
-    /// weapons and their ammunition, whose mass `FreeMass` leaves out
-    /// (`_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d).
-    fn standard(&self) -> BTreeMap<OutfitId, u16> {
-        pilot::merged(&self.ship.fit.defaults, &self.ship.fit.stock)
-    }
-
-    /// The ship's stats with the outfits the pilot owns.
-    fn current_stats(&self) -> ShipStats {
-        ShipStats::for_player(
-            self.ship.fit.fields,
-            &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
-        )
-    }
-
-    /// Recomputes the stats from the outfits the pilot owns: each gauge
-    /// holds up to the stats' most and, when `gain`, one whose most rose
-    /// gains as much. The fuel keeps no more than its most; the shield and
-    /// armour keep no more only under [`ReservePolicy::Hold`]. The hull
-    /// and the weapons follow the ship and the outfits, ready to fire.
-    /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
-    /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
-    /// reads [`RuleKey::ShipChangeReserves`] (see
-    /// [`ReservePolicy::reading`]). The exit cursors and the fold set carry
-    /// over, as no refit writes them (see the `exit_cursors` tests); a
-    /// change of class then sets the fold set back to 0
-    /// ([`Session::become_class`]). Capture, a change of ship and a
-    /// purchase refit through [`Session::become_class`], by the policy
-    /// they chose. By the engine, a refit leaves the secondary selected as
-    /// it is, one the ship no longer carries too, as the original's
-    /// `_SystemInfoToShipStats` never writes it; by the other reading of
-    /// [`RuleKey::StaleSecondary`], it lets go of one the ship no longer
-    /// carries (see the module docs).
-    fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
-        let hold = reserves == ReservePolicy::Hold;
-        self.ship.fit.hull = self.statics.arsenal.hull(self.pilot.ship);
-        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
-        // set (+0xc8fc): the new armament carries the old's (a change of
-        // class resets the fold set after, in `become_class`).
-        self.ship.fit.armament = self
-            .statics
-            .arsenal
-            .player(&self.pilot.outfits, &self.statics.outfits)
-            .with_exit_cursors(*self.ship.fit.armament.exit_cursors())
-            .with_fold_set(self.ship.fit.armament.fold_set());
-        let stats = self.current_stats();
-        let reserves = &mut self.pilot.reserves;
-        for (gauge, max, hold) in [
-            (&mut reserves.shield, stats.shield, hold),
-            (&mut reserves.armor, stats.armor, hold),
-            (&mut reserves.fuel, stats.fuel, true),
-        ] {
-            refit(gauge, max, gain, hold);
-        }
-        self.ship.fit.stats = stats;
-        if self.setup.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
-            && !carries(&self.pilot, &self.statics.outfits, self.ship.secondary)
-        {
-            self.ship.secondary = None;
-        }
-    }
-
     /// Advances the session one tick under the player's `controls`, ramps
     /// the engine glow with the thrust, then regenerates fuel. During the
     /// pre-jump stage the controls are ignored: the ship flies the stage
@@ -1827,7 +1776,7 @@ impl Session {
         // The last shot's clock is `TickCount`, real time (see the
         // `ship_display` module).
         self.ship.fit.armament.tick_fire_clock();
-        self.latch_double_time();
+        self.ship.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
@@ -1858,7 +1807,7 @@ impl Session {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
         self.hold_player(pass);
-        self.gamma_tick();
+        self.ship.gamma_tick(self.jump);
         self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
             let capacity = self.capacity();
@@ -1920,7 +1869,8 @@ impl Session {
     /// capped by the box the last tick left ([`Session::player_caps`]).
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
-        self.engage_afterburner(controls);
+        self.ship
+            .engage_afterburner(&self.pilot, self.jump, controls);
         let controls = match self.ship.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1931,7 +1881,7 @@ impl Session {
                 }
             }
             Condition::Destroyed => {
-                self.stop_thrust();
+                self.ship.stop_thrust(&mut self.out);
                 self.ship.player.velocity = Vec2::ZERO;
                 self.dead_tick();
                 return;
@@ -1940,12 +1890,18 @@ impl Session {
         match self.jump {
             None => {
                 let aim = self.steer(controls);
-                self.bank_player(self.turn_way(controls, aim), aim.is_some());
-                if self.player_inertialess() {
+                self.ship.bank_player(
+                    self.ship
+                        .turn_way(&self.pilot, &self.setup, self.jump, controls, aim),
+                    aim.is_some(),
+                );
+                if self.ship.player_inertialess(&self.setup) {
                     self.fly_inertialess(controls, aim);
                 } else {
-                    self.thrust(controls.thrust);
-                    let handling = self.flying_handling();
+                    self.ship.thrust(&mut self.out, controls.thrust);
+                    let handling = self
+                        .ship
+                        .flying_handling(&self.pilot, &self.setup, self.jump);
                     if self.player_fate().row().drag {
                         crate::flight::drag(&mut self.ship.player);
                     }
@@ -1960,7 +1916,7 @@ impl Session {
                         flight,
                     );
                 }
-                self.ionize_tick();
+                self.ship.ionize_tick(&self.pilot, &self.setup);
                 self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
@@ -1974,7 +1930,7 @@ impl Session {
                 });
                 let bearing = self.jump_aim(to);
                 self.fly_warp_stage(bearing, controls);
-                self.ionize_tick();
+                self.ship.ionize_tick(&self.pilot, &self.setup);
                 self.burn_afterburner();
                 // `_HandlePlayer` regenerates and clamps the fuel through
                 // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
@@ -2047,7 +2003,7 @@ impl Session {
     /// stepping on it.
     #[must_use]
     pub fn hold_expired(&self) -> bool {
-        self.ship.condition == Condition::Destroyed && self.player_end.is_some_and(Ending::expired)
+        self.ship.hold_expired(self.player_end)
     }
 
     /// Whether the hold ran out since this was last asked: the seam at the
@@ -2081,7 +2037,7 @@ impl Session {
     /// dying or dead ([`crate::FateRow::saves`]).
     #[must_use]
     pub fn may_save(&self) -> bool {
-        self.player_fate().row().saves
+        self.ship.may_save(self.player_end, self.pod)
     }
 
     /// Whether ending play now deletes the pilot: `_EnterGameFromMainScreen`'s
@@ -2094,34 +2050,8 @@ impl Session {
     /// use for, so it is left out. The gate makes no sound.
     #[must_use]
     pub fn deletes_pilot_on_ending_play(&self) -> bool {
-        self.pilot.strict_play() && !self.may_save() && self.pilot.ship != ESCAPE_POD_SHIP
-    }
-
-    /// Sounds the thrust starting or stopping as `thrust` says, and ramps
-    /// the engine glow with it, the banking glow and the afterburner
-    /// ([`step_glow`]).
-    fn thrust(&mut self, thrust: bool) {
-        self.sound_thrust(thrust);
-        let banking = self.banking_glow();
-        self.ship.engine_glow = step_glow(
-            self.ship.engine_glow,
-            thrust,
-            banking,
-            None,
-            self.ship.afterburner_on,
-        );
-    }
-
-    /// Sounds the thrust starting or stopping as `thrust` says.
-    fn sound_thrust(&mut self, thrust: bool) {
-        if thrust != self.ship.thrusting {
-            self.ship.thrusting = thrust;
-            self.out.sounds.push(if thrust {
-                SimSound::ThrustStarted
-            } else {
-                SimSound::ThrustStopped
-            });
-        }
+        self.ship
+            .deletes_pilot_on_ending_play(&self.pilot, self.player_end, self.pod)
     }
 
     /// Fills the system with its initial NPC population, replacing any
@@ -2448,8 +2378,8 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self.warp_world(),
-            tractor_step: self.tractor_step(),
+            warp: self.ship.warp_world(&self.pilot, &self.statics, self.jump),
+            tractor_step: self.ship.tractor_step(&self.pilot, &self.setup, self.jump),
             weapons: &self.statics.arsenal,
         };
         let stepped = f(&mut self.traffic, world);
@@ -2532,8 +2462,8 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self.warp_world(),
-            tractor_step: self.tractor_step(),
+            warp: self.ship.warp_world(&self.pilot, &self.statics, self.jump),
+            tractor_step: self.ship.tractor_step(&self.pilot, &self.setup, self.jump),
             weapons: &self.statics.arsenal,
         }
     }
@@ -2555,7 +2485,7 @@ impl Session {
             },
             // Its `_ShipTurnRate` and `_ShipAccelRate`, slowed by its ion
             // charge (see the `ionization` module).
-            handling: self.ionized(self.ship.fit.stats.handling),
+            handling: self.ship.ionized(self.jump, self.ship.fit.stats.handling),
             rating: self.pilot.combat_rating,
             yardstick: self.statics.arsenal.strength(ShipId(128)),
             untargetable: record
@@ -2574,36 +2504,21 @@ impl Session {
 
     /// Holds `trigger`, the player's fire command, until another is held.
     pub fn hold_trigger(&mut self, trigger: Trigger) {
-        self.ship.trigger = trigger;
+        self.ship.hold_trigger(trigger);
     }
 
     /// Holds the player's fire keys: the `primary` trigger, and the
     /// `secondary` one on the secondary weapon selected.
     pub fn hold_fire(&mut self, primary: bool, secondary: bool) {
-        self.hold_trigger(Trigger {
-            primary,
-            secondary: self.ship.secondary.filter(|_| secondary),
-            ..Trigger::default()
-        });
-    }
-
-    /// The secondary after `current`, `backwards` or not (see
-    /// [`next_secondary`]), skipping one hidden while the pilot owns none
-    /// of its rounds.
-    fn next_secondary(&self, current: Option<WeaponId>, backwards: bool) -> Option<WeaponId> {
-        next_secondary(
-            self.ship.fit.armament.mounts(),
-            current,
-            backwards,
-            |ammo| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo),
-        )
+        self.ship.hold_fire(primary, secondary);
     }
 
     /// Selects the next secondary weapon, or the one before it when
     /// `backwards`, in the order they were mounted, wrapping (see
     /// [`next_secondary`]).
     pub fn select_secondary(&mut self, backwards: bool) {
-        self.ship.secondary = self.next_secondary(self.ship.secondary, backwards);
+        self.ship
+            .select_secondary(&self.pilot, &self.statics, backwards);
     }
 
     /// The secondary weapon selected, if any: none when the session
@@ -2615,7 +2530,7 @@ impl Session {
     /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
     #[must_use]
     pub fn secondary(&self) -> Option<WeaponId> {
-        self.ship.secondary
+        self.ship.secondary()
     }
 
     /// The count the status bar's secondary weapon line shows after the
@@ -2626,16 +2541,7 @@ impl Session {
     /// session has no record of the weapon.
     #[must_use]
     pub fn secondary_line_count(&self) -> Option<u32> {
-        let counted = self
-            .statics
-            .arsenal
-            .weapon(self.ship.secondary?)?
-            .line_count?;
-        Some(outfit_rounds(
-            &self.pilot.outfits,
-            &self.statics.ammo_outfits,
-            counted,
-        ))
+        self.ship.secondary_line_count(&self.pilot, &self.statics)
     }
 
     /// Advances the fight a tick among the player and the NPCs, its phases
@@ -2731,7 +2637,7 @@ impl Session {
     /// self-destruct countdown after it, come in the player's display
     /// step, after its fire ([`Session::fight`]).
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.unboard_unless_disabled();
+        self.ship.unboard_unless_disabled();
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
     }
@@ -2845,7 +2751,7 @@ impl Session {
             drawn_heading: drawn(ShipRef::Player, self.ship.player.heading),
             jamming: self.player_jamming(),
             sprite: sprite(ShipRef::Player),
-            resists: self.player_hazard_resistance(),
+            resists: self.ship.player_hazard_resistance(&self.setup),
         };
         let led_speed = self.led_speed();
         let npcs = self
@@ -3147,20 +3053,20 @@ impl Session {
     /// The player's ship type's hull: how it breaks up and dies.
     #[must_use]
     pub fn hull(&self) -> HullSpec {
-        self.ship.fit.hull
+        self.ship.hull()
     }
 
     /// How the player's ship is holding up.
     #[must_use]
     pub fn player_condition(&self) -> Condition {
-        self.ship.condition
+        self.ship.player_condition()
     }
 
     /// Sets the player's condition directly, for
     /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_condition(&mut self, to: Condition) {
-        self.ship.condition = to;
+        self.ship.set_player_condition(to);
     }
 
     /// Where the player's ship is in its lifecycle: its condition, whether
@@ -3168,12 +3074,7 @@ impl Session {
     /// got since, and the escape pod's countdown.
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
-        PlayerFate::of(
-            self.ship.condition,
-            self.ship.fate.player_exploded_this_tick,
-            self.player_end,
-            self.pod,
-        )
+        self.ship.player_fate(self.player_end, self.pod)
     }
 
     /// Whether the session takes the player's `command` now: its
@@ -3269,17 +3170,6 @@ impl Session {
     #[must_use]
     pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
         self.statics.junk_lc_name(id)
-    }
-
-    /// Stops the thrust, if the ship was thrusting, and puts the engine
-    /// glow out, even as it fades after the thrust, as the ship lands or
-    /// jumps.
-    fn stop_thrust(&mut self) {
-        self.ship.engine_glow = 0;
-        if self.ship.thrusting {
-            self.ship.thrusting = false;
-            self.out.sounds.push(SimSound::ThrustStopped);
-        }
     }
 
     /// Plots a course from the system the ship is in to `to`, replacing any
@@ -3427,14 +3317,16 @@ impl Session {
     /// Once the ship is ready to turn no further and slow no more, the
     /// jump begins: the thrust sound stops, as the warp takes no thrust.
     fn stage_jump(&mut self, to: SystemId, bearing: Option<i16>, warp: Option<u32>) {
-        let handling = self.flying_handling();
+        let handling = self
+            .ship
+            .flying_handling(&self.pilot, &self.setup, self.jump);
         let stage = pre_jump::stage(
             &self.ship.player,
             &handling,
             bearing,
             !self.ship.fit.stats.fast_jump,
             self.setup.flight_rules().player_turn,
-            self.player_inertialess(),
+            self.ship.player_inertialess(&self.setup),
         );
         let started = warp.is_none() && stage != PreJump::Brake;
         let warp = match stage {
@@ -3444,7 +3336,7 @@ impl Session {
         match (stage, warp) {
             (PreJump::Ready, Some(warp)) => {
                 self.jump = Some(Jump::Hyperspace { to, warp });
-                self.sound_thrust(false);
+                self.ship.sound_thrust(&mut self.out, false);
             }
             _ => self.jump = Some(Jump::PreJump { to, bearing, warp }),
         }
@@ -3453,71 +3345,10 @@ impl Session {
         }
     }
 
-    /// Sounds the warp-up for the warp stage's start: 129 in double time,
-    /// else 128, unless it is still playing (see [`Session::stage_jump`]),
-    /// pitched by the ship class's warp factor (`_AdjustWarpSoundSpeed`
-    /// @0x6b66f-0x6b688, [`warp::warp_up_rate`]), so it lasts its pitched
-    /// length ([`warp::pitched_length`]); a warp-up played clears
-    /// `_warpSoundDone` (@0x6b695).
-    fn sound_warp_up(&mut self) {
-        let double_time = self.ship.warp.double_time;
-        if self.ship.warp.warp_ups.playing(double_time) {
-            return;
-        }
-        let rate = warp::warp_up_rate(self.player_warp_factor());
-        let duration = self.statics.warp_sounds[usize::from(double_time)];
-        self.ship
-            .warp
-            .warp_ups
-            .start(double_time, warp::pitched_length(duration, rate));
-        self.clear_warp_sound_done();
-        self.out.sounds.push(if double_time {
-            SimSound::JumpBeganInDoubleTime { rate }
-        } else {
-            SimSound::JumpBegan { rate }
-        });
-    }
-
-    /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
-    /// warp-ups and the warp-out among them over for the session too.
-    pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
-        self.ship.warp.warp_ups.halt(sounds);
-        self.ship.warp.warp_out.halt(sounds);
-        self.out.sounds.push(SimSound::Halt(sounds));
-    }
-
     /// The warp's clock: the engine's ticks since the warp stage began,
     /// if it has (see [`Jump`]).
     fn warp_clock(&self) -> Option<u32> {
-        match self.jump? {
-            Jump::PreJump { warp, .. } => warp,
-            Jump::Hyperspace { warp, .. } => Some(warp),
-        }
-    }
-
-    /// The warp sound's duration now, d, in Mac ticks: `snd ` 129's in
-    /// double time, else 128's, as `_WarpSoundDuration` gives it
-    /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
-    fn warp_sound(&self) -> u32 {
-        warp::warp_sound_duration(self.statics.warp_sounds, self.ship.warp.double_time)
-    }
-
-    /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
-    /// ([`warp::held`]): the warp is past its lead-in, by its clock as Mac
-    /// ticks, the warp factor of the player's ship class and the warp
-    /// sound's duration, and the player is not disabled (`_IsDisabled`,
-    /// whose armour test also holds for a ship breaking up).
-    fn warp_holds_scans(&self) -> bool {
-        let flags = self
-            .statics
-            .ship_record(self.pilot.ship)
-            .map_or(0, |record| record.flags);
-        warp::held(
-            self.warp_clock().map(warp::mac_ticks),
-            warp::warp_factor(flags),
-            self.warp_sound(),
-            self.ship.condition != Condition::Intact,
-        )
+        warp_clock(self.jump)
     }
 
     /// Whether the jump has begun ([`Session::jumping`]) and its warp is
@@ -3527,17 +3358,15 @@ impl Session {
     /// `warp` module).
     #[must_use]
     pub fn in_warp_lead_in(&self) -> bool {
-        self.jumping().is_some() && !self.warp_holds_scans()
+        self.ship
+            .in_warp_lead_in(&self.pilot, &self.statics, self.jump)
     }
 
     /// The system being jumped to, once the jump itself has begun and
     /// until the ship arrives; `None` during the pre-jump stage.
     #[must_use]
     pub fn jumping(&self) -> Option<SystemId> {
-        match self.jump {
-            Some(Jump::Hyperspace { to, .. }) => Some(to),
-            _ => None,
-        }
+        jumping(self.jump)
     }
 
     /// The system a jump is bound for while the ship brakes and turns
@@ -3633,10 +3462,10 @@ impl Session {
             return None;
         };
         self.jump = None;
-        self.clear_tractor();
+        self.ship.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
         // module).
-        self.arrival_fold();
+        self.ship.arrival_fold();
         // The natural end, the warp-ups finished (`_warpSoundDone`
         // @0x6bb5e-0x6bba4), read before the halt ends them.
         let natural_end =
@@ -3649,8 +3478,9 @@ impl Session {
         // while the sound plays on. After the fallback's pass, which has
         // raised it already, the arrival is the natural end on the flag it
         // set (@0x6bbb8-0x6bc0d) and halts nothing.
-        if !self.take_fell_back() {
-            self.halt_sounds(&crate::sound::WARP_UP_HALTS);
+        if !self.ship.take_fell_back() {
+            self.ship
+                .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
@@ -3820,7 +3650,7 @@ impl Session {
     /// The fuel the ship gains each tick in flight.
     #[must_use]
     pub fn fuel_regen_per_tick(&self) -> f32 {
-        self.ship.fit.stats.fuel_regen
+        self.ship.fuel_regen_per_tick()
     }
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
@@ -4214,7 +4044,7 @@ impl Session {
         // `_PlayerLandOnStellar` @0x63409.
         self.ship.player_speed = 0.0;
         self.landed = Some(stellar);
-        self.clear_tractor();
+        self.ship.clear_tractor();
         self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
@@ -4237,7 +4067,7 @@ impl Session {
         self.open_outfit_visit();
         self.stay = Stay::default();
         self.out.save_due = true;
-        self.stop_thrust();
+        self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
         self.out.sounds.push(SimSound::Landed);
@@ -4399,7 +4229,7 @@ impl Session {
         // and colour, before the strength timer (@0x67008, @0x67020).
         self.ship.ion = Ion::default();
         // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
-        self.take_off_fold();
+        self.ship.take_off_fold();
         self.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
         // setup (@0x6709b; see the `precalced` module), whose
@@ -4525,7 +4355,7 @@ impl Session {
         });
         Standing {
             record: self.landing_record(site),
-            meets_require: self.contributed() & require == require,
+            meets_require: self.ship.contributed(&self.pilot, &self.statics) & require == require,
             mission_stellar,
             blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
             granted: self
@@ -4564,16 +4394,6 @@ impl Session {
             })
     }
 
-    /// The ship's own free cargo, as the outfitter reads it for a mass
-    /// expansion: its cargo space less every ton held, commodities, jünk
-    /// and the mission cargo aboard, below zero when it holds more than
-    /// that (`_CanBuyOutfitItem` @0x4e980-0x4e9a8 subtracts
-    /// `_TotalCargo(player)` from `_ShipTotalHolds()`). The escorts' holds
-    /// add nothing.
-    fn free_cargo(&self) -> i64 {
-        i64::from(self.ship.fit.stats.capacity) - self.pilot.total_cargo()
-    }
-
     /// The outfitter of the stellar the ship is docked at, if it has
     /// landed at one, drawing on `chance` each outfit's roll for the day
     /// not drawn yet (see [`outfitter`]). After an order that changed the
@@ -4601,12 +4421,12 @@ impl Session {
             crons: &self.statics.crons,
             ranks: &self.statics.ranks,
             fields: self.ship.fit.fields,
-            standard: &self.standard(),
+            standard: &self.ship.standard(),
             site,
             fighter_room: &self.fighter_room(),
-            ammo_caps: &self.ammo_caps(),
+            ammo_caps: &self.ship.ammo_caps(&self.statics),
             hardpoints: self.hardpoints(),
-            free_cargo: self.free_cargo(),
+            free_cargo: self.ship.free_cargo(&self.pilot),
             launchers: &self.launchers(),
             visit: &self.outfit_visit,
             price_mult: self.outfit_price_mult(),
@@ -5005,7 +4825,13 @@ impl Session {
             }
         }
         self.stay.outfit_traded = true;
-        self.refit(true, ReservePolicy::Hold);
+        self.ship.refit(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            true,
+            ReservePolicy::Hold,
+        );
         // A sale's reset, after each pass (`_DoOutfitDialog` @0x5cffb; see
         // the `precalced` module). A buy's runs once after its loop
         // ([`outfit_order`](Self::outfit_order), @0x5c305).
@@ -5257,22 +5083,19 @@ impl Session {
     /// free space against it.
     #[must_use]
     pub fn capacity(&self) -> u32 {
-        market::fleet_holds(self.ship.fit.stats.capacity, self.escort_holds())
+        self.ship.capacity(&self.pilot, &self.statics)
     }
 
     /// What the fleet's cargo space needs of each escort whose ship class
     /// has a record.
     fn escort_holds(&self) -> impl Iterator<Item = EscortHolds> + '_ {
-        self.pilot
-            .escorts
-            .iter()
-            .filter_map(|escort| self.statics.holds_of(escort))
+        escort_holds(&self.pilot, &self.statics)
     }
 
     /// How the ship performs, with the outfits it carries.
     #[must_use]
     pub fn stats(&self) -> ShipStats {
-        self.ship.fit.stats
+        self.ship.stats()
     }
 
     /// Whether the pilot should be saved: it has landed, taken off,
@@ -5292,7 +5115,7 @@ impl Session {
     /// beginning a jump stop it, as they stop the thrust sound.
     #[must_use]
     pub fn thrusting(&self) -> bool {
-        self.ship.thrusting
+        self.ship.thrusting()
     }
 
     /// The engine glow's base level, as [`glow`](crate::glow) says: each
@@ -5304,13 +5127,13 @@ impl Session {
     /// ([`drawn_base`](crate::glow::drawn_base)).
     #[must_use]
     pub fn engine_glow(&self) -> u8 {
-        crate::glow::drawn_base(self.ship.engine_glow)
+        self.ship.engine_glow()
     }
 
     /// The player's ship as it flies.
     #[must_use]
     pub fn player(&self) -> &ShipState {
-        &self.ship.player
+        self.ship.player()
     }
 
     /// The player's tractor lock, if a tractor beam holds its ship or it
@@ -5322,7 +5145,7 @@ impl Session {
     /// `tractor_hold` module).
     #[must_use]
     pub fn tractor(&self) -> Option<TractorLock> {
-        self.ship.tractor
+        self.ship.tractor()
     }
 
     /// The player's ionization (see [`ion`](crate::combat::ion)): none at
@@ -5332,7 +5155,7 @@ impl Session {
     /// kept through a jump and an eject.
     #[must_use]
     pub fn ion(&self) -> Ion {
-        self.ship.ion
+        self.ship.ion()
     }
 
     /// The pilot flying.
@@ -5365,7 +5188,7 @@ impl Session {
     /// [`Session::top_speed`].
     #[must_use]
     pub fn handling(&self) -> Handling {
-        self.ship.fit.stats.handling
+        self.ship.handling()
     }
 
     /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
@@ -5374,29 +5197,14 @@ impl Session {
     /// [`top_speed`]).
     #[must_use]
     pub fn top_speed(&self) -> f32 {
-        self.ship.fit.stats.handling.max_speed * self.led_speed()
+        self.ship.top_speed(&self.pilot, &self.setup)
     }
 
     /// The factor on the top speed of the player and of every ship it
     /// leads (see [`top_speed::led_speed`]), read from the rules and the
     /// pilot at each use, so nothing is deferred.
     pub(crate) fn led_speed(&self) -> f32 {
-        top_speed::led_speed(&self.setup.rules, self.pilot.strict_play())
-    }
-
-    /// How the player's ship flies in flight: its own handling at
-    /// [`Session::top_speed`], its thrust under the flight rules
-    /// ([`FlightRules::handling`]), its turn and thrust slowed by its ion
-    /// charge as it is now (see the `ionization` module).
-    fn flying_handling(&self) -> Handling {
-        Handling {
-            max_speed: self.top_speed(),
-            ..self.ionized(
-                self.setup
-                    .flight_rules()
-                    .handling(self.ship.fit.stats.handling),
-            )
-        }
+        led_speed(&self.pilot, &self.setup)
     }
 
     /// The government whose `Interface` picks the status bar, as
@@ -5595,12 +5403,15 @@ impl Session {
             .statics
             .outfits
             .iter()
-            .map(|record| self.grant_stock(record))
+            .map(|record| {
+                self.ship
+                    .grant_stock(&self.pilot, &self.statics, &self.setup, record)
+            })
             .collect();
         let granted = rule.grant(
             &grant,
             &stock,
-            self.free_mass(),
+            self.ship.free_mass(&self.pilot, &self.statics, &self.setup),
             self.setup.outfit_rules().grant_max,
             chance,
         )?;
@@ -5615,7 +5426,13 @@ impl Session {
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
-        self.refit(true, self.setup.script_reserves());
+        self.ship.refit(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            true,
+            self.setup.script_reserves(),
+        );
         // And again once it is granted (@0x93226).
         self.reset_precalced();
         // The grant line's beep, only for a count above none (@0x933fe;
@@ -5853,12 +5670,7 @@ impl Session {
     /// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
     /// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
     fn raised_max_of(&self, record: &OutfitRecord) -> i64 {
-        outfitter::raised_max(
-            record,
-            &self.pilot.outfits,
-            &self.statics.outfits,
-            self.setup.rules.source_for(RuleKey::RaisedMax),
-        )
+        raised_max_of(&self.pilot, &self.statics, &self.setup, record)
     }
 
     /// Takes up to `rounds` of ammunition outfit `outfit`, one at a time
@@ -5891,7 +5703,7 @@ impl Session {
             && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
             && outfitter::free_mass(
                 self.ship.fit.fields,
-                &self.standard(),
+                &self.ship.standard(),
                 &self.pilot.outfits,
                 &self.statics.outfits,
                 &self.setup.rules,
@@ -5902,7 +5714,13 @@ impl Session {
             // The reset after each round (@0x93dcb).
             self.reset_precalced();
         }
-        self.refit(true, self.setup.script_reserves());
+        self.ship.refit(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            true,
+            self.setup.script_reserves(),
+        );
         count
     }
 
@@ -6114,7 +5932,9 @@ impl Session {
         let hooks_first = self.setup.hook_rules().capture_hook_order == RuleSource::Engine;
         // Where the player was, which the old ship takes (@0x411bd-0x411ea).
         let left = self.ship.player;
-        let old = self.old_ship_escort();
+        let old = self
+            .ship
+            .old_ship_escort(&self.pilot, &self.statics, &self.setup);
         // The commodities go to the old ship, and the player takes the
         // captured ship's below, as `capture_cargo` reads: before the
         // hooks, as the original swaps them.
@@ -6133,7 +5953,7 @@ impl Session {
         // The capacities the fuel is drawn below, the cache's (the old
         // ship's) or the one worked out afresh from the old outfits, read
         // before they change (@0x41786).
-        let fuel = self.capture_fuel(&record);
+        let fuel = self.ship.capture_fuel(&self.pilot, &self.statics, &record);
         let records = &self.statics.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
         // whatever the ship-change rules say, and tops the stock weapons
@@ -6163,7 +5983,9 @@ impl Session {
             if !hooks_first {
                 session.retire_for_capture(record.id, chance);
             }
-            session.take_over_reserves(&record, share, fuel, chance);
+            session
+                .ship
+                .take_over_reserves(&mut session.pilot, &record, share, fuel, chance);
         });
         self.take_captured_commodities(&npc.cargo);
         // The captured ship's place (@0x416e3-0x41722), and no nav
@@ -6198,26 +6020,6 @@ impl Session {
         self.reset_precalced();
         self.close_plunder();
         Some(Assigned::MyShip)
-    }
-
-    /// The reserves a ship of `record` is taken over with: no shield,
-    /// `share` of its armour and [`TAKEOVER_ARMOR_BASE`], and its fuel
-    /// drawn on `chance` below the capacity `fuel` gives as the cache
-    /// stands at the draw (none, with no draw, for no tank; see the
-    /// `capture` module).
-    fn take_over_reserves(
-        &mut self,
-        record: &ShipRecord,
-        share: f64,
-        fuel: CaptureFuel,
-        chance: &mut dyn Chance,
-    ) {
-        let drawn = fuel.draw(self.ship.fuel_cap_cached, chance);
-        let reserves = &mut self.pilot.reserves;
-        reserves.shield.now = 0.0;
-        reserves.armor.now =
-            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
-        reserves.fuel.now = drawn;
     }
 }
 
@@ -6391,6 +6193,496 @@ impl Outbox {
     fn take_grant(&mut self) -> Option<Granted> {
         self.granted.take()
     }
+}
+
+impl PlayerShip {
+    /// Turns the player's ship to a whole degree from 0 to 359 drawn on
+    /// `chance`, as `_LoadPilotData` faces every pilot it loads, docked or
+    /// not, with `Rand(0x168)` (@0x7535b-0x75372). For a pilot opened from
+    /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
+    /// off keeps the heading.
+    fn face_on_load(&mut self, chance: &mut dyn Chance) {
+        self.player.heading = f32::from(chance.roll(360));
+    }
+
+    /// The ship's standard equipment: its default items and its stock
+    /// weapons and their ammunition, whose mass `FreeMass` leaves out
+    /// (`_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d).
+    fn standard(&self) -> BTreeMap<OutfitId, u16> {
+        pilot::merged(&self.fit.defaults, &self.fit.stock)
+    }
+
+    /// The ship's stats with the outfits the pilot owns.
+    fn current_stats(&self, pilot: &Pilot, statics: &Statics) -> ShipStats {
+        ShipStats::for_player(
+            self.fit.fields,
+            &outfit_mods(&pilot.outfits, &statics.outfits),
+        )
+    }
+
+    /// Recomputes the stats from the outfits the pilot owns: each gauge
+    /// holds up to the stats' most and, when `gain`, one whose most rose
+    /// gains as much. The fuel keeps no more than its most; the shield and
+    /// armour keep no more only under [`ReservePolicy::Hold`]. The hull
+    /// and the weapons follow the ship and the outfits, ready to fire.
+    /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
+    /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
+    /// reads [`RuleKey::ShipChangeReserves`] (see
+    /// [`ReservePolicy::reading`]). The exit cursors and the fold set carry
+    /// over, as no refit writes them (see the `exit_cursors` tests); a
+    /// change of class then sets the fold set back to 0
+    /// ([`Session::become_class`]). Capture, a change of ship and a
+    /// purchase refit through [`Session::become_class`], by the policy
+    /// they chose. By the engine, a refit leaves the secondary selected as
+    /// it is, one the ship no longer carries too, as the original's
+    /// `_SystemInfoToShipStats` never writes it; by the other reading of
+    /// [`RuleKey::StaleSecondary`], it lets go of one the ship no longer
+    /// carries (see the module docs).
+    fn refit(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        gain: bool,
+        reserves: ReservePolicy,
+    ) {
+        let hold = reserves == ReservePolicy::Hold;
+        self.fit.hull = statics.arsenal.hull(pilot.ship);
+        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
+        // set (+0xc8fc): the new armament carries the old's (a change of
+        // class resets the fold set after, in `become_class`).
+        self.fit.armament = statics
+            .arsenal
+            .player(&pilot.outfits, &statics.outfits)
+            .with_exit_cursors(*self.fit.armament.exit_cursors())
+            .with_fold_set(self.fit.armament.fold_set());
+        let stats = self.current_stats(pilot, statics);
+        let reserves = &mut pilot.reserves;
+        for (gauge, max, hold) in [
+            (&mut reserves.shield, stats.shield, hold),
+            (&mut reserves.armor, stats.armor, hold),
+            (&mut reserves.fuel, stats.fuel, true),
+        ] {
+            refit(gauge, max, gain, hold);
+        }
+        self.fit.stats = stats;
+        if setup.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
+            && !carries(pilot, &statics.outfits, self.secondary)
+        {
+            self.secondary = None;
+        }
+    }
+
+    /// Whether the hold after the player's explosion has run out, now or
+    /// on an earlier tick: true from the expiry's tick on, through the fade
+    /// and game over. Asking leaves it as it is; the flight view stops
+    /// stepping on it.
+    #[must_use]
+    fn hold_expired(&self, player_end: Option<Ending>) -> bool {
+        self.condition == Condition::Destroyed && player_end.is_some_and(Ending::expired)
+    }
+
+    /// Whether the pilot may be saved now: only while the player is not
+    /// dying or dead ([`crate::FateRow::saves`]).
+    #[must_use]
+    fn may_save(&self, player_end: Option<Ending>, pod: Option<u32>) -> bool {
+        self.player_fate(player_end, pod).row().saves
+    }
+
+    /// Whether ending play now deletes the pilot: `_EnterGameFromMainScreen`'s
+    /// gate after `_PlayGame` returns (@0x1a4ab-0x1a4e1). A strict-play
+    /// pilot whose player is dying (`_IsDying` @0x253d, which the fate
+    /// table's [`crate::FateRow::saves`] already answers) and is not in
+    /// the [`ESCAPE_POD_SHIP`] has its pilot file deleted
+    /// (`_DeletePilotFile` @0x1a4d9). The original also writes a crash log
+    /// line there (`_crashlog` @0x1a4cd), a debugging aid the engine has no
+    /// use for, so it is left out. The gate makes no sound.
+    #[must_use]
+    fn deletes_pilot_on_ending_play(
+        &self,
+        pilot: &Pilot,
+        player_end: Option<Ending>,
+        pod: Option<u32>,
+    ) -> bool {
+        pilot.strict_play() && !self.may_save(player_end, pod) && pilot.ship != ESCAPE_POD_SHIP
+    }
+
+    /// Sounds the thrust starting or stopping as `thrust` says, and ramps
+    /// the engine glow with it, the banking glow and the afterburner
+    /// ([`step_glow`]).
+    fn thrust(&mut self, out: &mut Outbox, thrust: bool) {
+        self.sound_thrust(out, thrust);
+        let banking = self.banking_glow();
+        self.engine_glow = step_glow(self.engine_glow, thrust, banking, None, self.afterburner_on);
+    }
+
+    /// Sounds the thrust starting or stopping as `thrust` says.
+    fn sound_thrust(&mut self, out: &mut Outbox, thrust: bool) {
+        if thrust != self.thrusting {
+            self.thrusting = thrust;
+            out.sounds.push(if thrust {
+                SimSound::ThrustStarted
+            } else {
+                SimSound::ThrustStopped
+            });
+        }
+    }
+
+    /// Holds `trigger`, the player's fire command, until another is held.
+    fn hold_trigger(&mut self, trigger: Trigger) {
+        self.trigger = trigger;
+    }
+
+    /// Holds the player's fire keys: the `primary` trigger, and the
+    /// `secondary` one on the secondary weapon selected.
+    fn hold_fire(&mut self, primary: bool, secondary: bool) {
+        self.hold_trigger(Trigger {
+            primary,
+            secondary: self.secondary.filter(|_| secondary),
+            ..Trigger::default()
+        });
+    }
+
+    /// The secondary after `current`, `backwards` or not (see
+    /// [`next_secondary`]), skipping one hidden while the pilot owns none
+    /// of its rounds.
+    fn next_secondary(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        current: Option<WeaponId>,
+        backwards: bool,
+    ) -> Option<WeaponId> {
+        next_secondary(self.fit.armament.mounts(), current, backwards, |ammo| {
+            outfit_rounds(&pilot.outfits, &statics.ammo_outfits, ammo)
+        })
+    }
+
+    /// Selects the next secondary weapon, or the one before it when
+    /// `backwards`, in the order they were mounted, wrapping (see
+    /// [`next_secondary`]).
+    fn select_secondary(&mut self, pilot: &Pilot, statics: &Statics, backwards: bool) {
+        self.secondary = self.next_secondary(pilot, statics, self.secondary, backwards);
+    }
+
+    /// The secondary weapon selected, if any: none when the session
+    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
+    /// and let go on a ship purchase, a capture as the player's ship and
+    /// the sale of the last outfit mounting it (see the module docs). By
+    /// the engine it may name a weapon the ship no longer carries, which
+    /// fires nothing, as the original's `_DrawStatusWeap` still names it
+    /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
+    #[must_use]
+    fn secondary(&self) -> Option<WeaponId> {
+        self.secondary
+    }
+
+    /// The count the status bar's secondary weapon line shows after the
+    /// selected secondary's name, if any: the rounds of the weapon its
+    /// [`line_count`](crate::combat::weapon::line_count) names, as
+    /// `_DrawStatusWeap` (@0x4c1ce-0x4c1f4) reads the player's rounds of
+    /// it; none when that names none, nothing is selected, or the
+    /// session has no record of the weapon.
+    #[must_use]
+    fn secondary_line_count(&self, pilot: &Pilot, statics: &Statics) -> Option<u32> {
+        let counted = statics.arsenal.weapon(self.secondary?)?.line_count?;
+        Some(outfit_rounds(
+            &pilot.outfits,
+            &statics.ammo_outfits,
+            counted,
+        ))
+    }
+
+    /// The player's ship type's hull: how it breaks up and dies.
+    #[must_use]
+    fn hull(&self) -> HullSpec {
+        self.fit.hull
+    }
+
+    /// How the player's ship is holding up.
+    #[must_use]
+    fn player_condition(&self) -> Condition {
+        self.condition
+    }
+
+    /// Sets the player's condition directly, for
+    /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
+    #[cfg(any(test, feature = "fixture"))]
+    fn set_player_condition(&mut self, to: Condition) {
+        self.condition = to;
+    }
+
+    /// Where the player's ship is in its lifecycle: its condition, whether
+    /// it exploded on the latest fight tick, how far the game's end has
+    /// got since, and the escape pod's countdown.
+    #[must_use]
+    fn player_fate(&self, player_end: Option<Ending>, pod: Option<u32>) -> PlayerFate {
+        PlayerFate::of(
+            self.condition,
+            self.fate.player_exploded_this_tick,
+            player_end,
+            pod,
+        )
+    }
+
+    /// Stops the thrust, if the ship was thrusting, and puts the engine
+    /// glow out, even as it fades after the thrust, as the ship lands or
+    /// jumps.
+    fn stop_thrust(&mut self, out: &mut Outbox) {
+        self.engine_glow = 0;
+        if self.thrusting {
+            self.thrusting = false;
+            out.sounds.push(SimSound::ThrustStopped);
+        }
+    }
+
+    /// Sounds the warp-up for the warp stage's start: 129 in double time,
+    /// else 128, unless it is still playing (see [`Session::stage_jump`]),
+    /// pitched by the ship class's warp factor (`_AdjustWarpSoundSpeed`
+    /// @0x6b66f-0x6b688, [`warp::warp_up_rate`]), so it lasts its pitched
+    /// length ([`warp::pitched_length`]); a warp-up played clears
+    /// `_warpSoundDone` (@0x6b695).
+    fn sound_warp_up(&mut self, pilot: &Pilot, statics: &Statics, out: &mut Outbox) {
+        let double_time = self.warp.double_time;
+        if self.warp.warp_ups.playing(double_time) {
+            return;
+        }
+        let rate = warp::warp_up_rate(warp_stage::player_warp_factor(pilot, statics));
+        let duration = statics.warp_sounds[usize::from(double_time)];
+        self.warp
+            .warp_ups
+            .start(double_time, warp::pitched_length(duration, rate));
+        self.clear_warp_sound_done();
+        out.sounds.push(if double_time {
+            SimSound::JumpBeganInDoubleTime { rate }
+        } else {
+            SimSound::JumpBegan { rate }
+        });
+    }
+
+    /// Halts each of `sounds` that is playing ([`SimSound::Halt`]), the
+    /// warp-ups and the warp-out among them over for the session too.
+    pub(super) fn halt_sounds(
+        &mut self,
+        out: &mut Outbox,
+        sounds: &'static [crate::catalog::SoundId],
+    ) {
+        self.warp.warp_ups.halt(sounds);
+        self.warp.warp_out.halt(sounds);
+        out.sounds.push(SimSound::Halt(sounds));
+    }
+
+    /// The warp sound's duration now, d, in Mac ticks: `snd ` 129's in
+    /// double time, else 128's, as `_WarpSoundDuration` gives it
+    /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
+    fn warp_sound(&self, statics: &Statics) -> u32 {
+        warp::warp_sound_duration(statics.warp_sounds, self.warp.double_time)
+    }
+
+    /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
+    /// ([`warp::held`]): the warp is past its lead-in, by its clock as Mac
+    /// ticks, the warp factor of the player's ship class and the warp
+    /// sound's duration, and the player is not disabled (`_IsDisabled`,
+    /// whose armour test also holds for a ship breaking up).
+    fn warp_holds_scans(&self, pilot: &Pilot, statics: &Statics, jump: Option<Jump>) -> bool {
+        let flags = statics
+            .ship_record(pilot.ship)
+            .map_or(0, |record| record.flags);
+        warp::held(
+            warp_clock(jump).map(warp::mac_ticks),
+            warp::warp_factor(flags),
+            self.warp_sound(statics),
+            self.condition != Condition::Intact,
+        )
+    }
+
+    /// Whether the jump has begun ([`Session::jumping`]) and its warp is
+    /// still in its lead-in, where the player is scanned as before the
+    /// warp: past it, until the ship arrives, `_ScanPlayer` holds every
+    /// scan. A disabled player's warp never ends its lead-in (see the
+    /// `warp` module).
+    #[must_use]
+    fn in_warp_lead_in(&self, pilot: &Pilot, statics: &Statics, jump: Option<Jump>) -> bool {
+        jumping(jump).is_some() && !self.warp_holds_scans(pilot, statics, jump)
+    }
+
+    /// The fuel the ship gains each tick in flight.
+    #[must_use]
+    fn fuel_regen_per_tick(&self) -> f32 {
+        self.fit.stats.fuel_regen
+    }
+
+    /// The ship's own free cargo, as the outfitter reads it for a mass
+    /// expansion: its cargo space less every ton held, commodities, jünk
+    /// and the mission cargo aboard, below zero when it holds more than
+    /// that (`_CanBuyOutfitItem` @0x4e980-0x4e9a8 subtracts
+    /// `_TotalCargo(player)` from `_ShipTotalHolds()`). The escorts' holds
+    /// add nothing.
+    fn free_cargo(&self, pilot: &Pilot) -> i64 {
+        i64::from(self.fit.stats.capacity) - pilot.total_cargo()
+    }
+
+    /// The fleet's cargo space, in tons (`_TotalFleetHolds`): the ship's
+    /// own, with its cargo outfits, plus the `Holds` of each trader escort
+    /// ([`market::fleet_holds`]). The exchange and the jünk step measure
+    /// free space against it.
+    #[must_use]
+    fn capacity(&self, pilot: &Pilot, statics: &Statics) -> u32 {
+        market::fleet_holds(self.fit.stats.capacity, escort_holds(pilot, statics))
+    }
+
+    /// How the ship performs, with the outfits it carries.
+    #[must_use]
+    fn stats(&self) -> ShipStats {
+        self.fit.stats
+    }
+
+    /// Whether the ship flew its last tick under thrust. Landing and
+    /// beginning a jump stop it, as they stop the thrust sound.
+    #[must_use]
+    fn thrusting(&self) -> bool {
+        self.thrusting
+    }
+
+    /// The engine glow's base level, as [`glow`](crate::glow) says: each
+    /// tick in flight thrust raises it by 1 up to
+    /// [`GLOW_CRUISE`](crate::GLOW_CRUISE) and coasting lowers it by 1 to
+    /// 0, so it stays within 0 to 24; an inertialess ship's follows its
+    /// speed too. It starts at 0, and landing and beginning a jump put it
+    /// back to 0. The base drawn: none below none
+    /// ([`drawn_base`](crate::glow::drawn_base)).
+    #[must_use]
+    fn engine_glow(&self) -> u8 {
+        crate::glow::drawn_base(self.engine_glow)
+    }
+
+    /// The player's ship as it flies.
+    #[must_use]
+    fn player(&self) -> &ShipState {
+        &self.player
+    }
+
+    /// The player's tractor lock, if a tractor beam holds its ship or it
+    /// holds itself along its own (see
+    /// [`impact`](crate::combat::impact)); none at the start of a session
+    /// and of a load, as it is never saved. The fight sets and touches it;
+    /// the player's hold pulls it, releases it and lets it lapse, a landing
+    /// and an arrival clear it, and it refuses the jump (see the
+    /// `tractor_hold` module).
+    #[must_use]
+    fn tractor(&self) -> Option<TractorLock> {
+        self.tractor
+    }
+
+    /// The player's ionization (see [`ion`](crate::combat::ion)): none at
+    /// the start of a session and of a load, as `_DoNewPilot` and
+    /// `_ResetPlayer` set it (@0x19227, @0x1d523) and it is never saved,
+    /// and cleared as the player takes off. The fight raises it; it is
+    /// kept through a jump and an eject.
+    #[must_use]
+    fn ion(&self) -> Ion {
+        self.ion
+    }
+
+    /// How the player's ship flies, before `_ShipMaxSpeed`'s factor for a
+    /// pilot without Strict Play: the ship's own top speed, which the
+    /// outfitter and the shipyard show. The player flies at
+    /// [`Session::top_speed`].
+    #[must_use]
+    fn handling(&self) -> Handling {
+        self.fit.stats.handling
+    }
+
+    /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
+    /// own ([`Session::handling`]) × the led speed, 1.5 for a pilot
+    /// without Strict Play by the engine (see
+    /// [`top_speed`]).
+    #[must_use]
+    fn top_speed(&self, pilot: &Pilot, setup: &Setup) -> f32 {
+        self.fit.stats.handling.max_speed * led_speed(pilot, setup)
+    }
+
+    /// How the player's ship flies in flight: its own handling at
+    /// [`Session::top_speed`], its thrust under the flight rules
+    /// ([`FlightRules::handling`]), its turn and thrust slowed by its ion
+    /// charge as it is now (see the `ionization` module).
+    fn flying_handling(&self, pilot: &Pilot, setup: &Setup, jump: Option<Jump>) -> Handling {
+        Handling {
+            max_speed: self.top_speed(pilot, setup),
+            ..self.ionized(jump, setup.flight_rules().handling(self.fit.stats.handling))
+        }
+    }
+
+    /// The reserves a ship of `record` is taken over with: no shield,
+    /// `share` of its armour and [`TAKEOVER_ARMOR_BASE`], and its fuel
+    /// drawn on `chance` below the capacity `fuel` gives as the cache
+    /// stands at the draw (none, with no draw, for no tank; see the
+    /// `capture` module).
+    fn take_over_reserves(
+        &mut self,
+        pilot: &mut Pilot,
+        record: &ShipRecord,
+        share: f64,
+        fuel: CaptureFuel,
+        chance: &mut dyn Chance,
+    ) {
+        let drawn = fuel.draw(self.fuel_cap_cached, chance);
+        let reserves = &mut pilot.reserves;
+        reserves.shield.now = 0.0;
+        reserves.armor.now =
+            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
+        reserves.fuel.now = drawn;
+    }
+}
+
+/// The warp's clock: the engine's ticks since the warp stage began,
+/// if it has (see [`Jump`]).
+fn warp_clock(jump: Option<Jump>) -> Option<u32> {
+    match jump? {
+        Jump::PreJump { warp, .. } => warp,
+        Jump::Hyperspace { warp, .. } => Some(warp),
+    }
+}
+
+/// The system being jumped to, once the jump itself has begun and
+/// until the ship arrives; `None` during the pre-jump stage.
+#[must_use]
+fn jumping(jump: Option<Jump>) -> Option<SystemId> {
+    match jump {
+        Some(Jump::Hyperspace { to, .. }) => Some(to),
+        _ => None,
+    }
+}
+
+/// What the fleet's cargo space needs of each escort whose ship class
+/// has a record.
+fn escort_holds<'a>(
+    pilot: &'a Pilot,
+    statics: &'a Statics,
+) -> impl Iterator<Item = EscortHolds> + 'a {
+    pilot
+        .escorts
+        .iter()
+        .filter_map(|escort| statics.holds_of(escort))
+}
+
+/// The factor on the top speed of the player and of every ship it
+/// leads (see [`top_speed::led_speed`]), read from the rules and the
+/// pilot at each use, so nothing is deferred.
+fn led_speed(pilot: &Pilot, setup: &Setup) -> f32 {
+    top_speed::led_speed(&setup.rules, pilot.strict_play())
+}
+
+/// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
+/// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
+/// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
+fn raised_max_of(pilot: &Pilot, statics: &Statics, setup: &Setup, record: &OutfitRecord) -> i64 {
+    outfitter::raised_max(
+        record,
+        &pilot.outfits,
+        &statics.outfits,
+        setup.rules.source_for(RuleKey::RaisedMax),
+    )
 }
 
 /// What a traffic tick's motion is read against, as its AI began: the
@@ -8028,7 +8320,7 @@ pub(super) mod tests {
         heading: f32,
     ) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.settle_box();
+        session.ship.settle_box(&session.pilot, &session.setup);
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player = ShipState {
             position,
@@ -13582,7 +13874,13 @@ pub(super) mod tests {
                     .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
                 if order.direction == Direction::Sell {
                     session.pilot.outfits.insert(OutfitId(302), 1);
-                    session.refit(false, ReservePolicy::Hold);
+                    session.ship.refit(
+                        &mut session.pilot,
+                        &session.statics,
+                        &session.setup,
+                        false,
+                        ReservePolicy::Hold,
+                    );
                 }
                 let (shield, armor) = (session.stats().shield, session.stats().armor);
                 session.pilot.reserves.shield.now = shield + 5.0;
@@ -21580,7 +21878,13 @@ pub(super) mod tests {
             .iter()
             .map(|&(id, count)| (OutfitId(id), count))
             .collect();
-        session.refit(false, ReservePolicy::Hold);
+        session.ship.refit(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+            false,
+            ReservePolicy::Hold,
+        );
         selecting(&mut session, nth);
         session
     }
@@ -24439,7 +24743,13 @@ pub(super) mod tests {
         for source in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = ammo_session(&catalog)
                 .with_rules(Rulebook::default().with_override(RuleKey::ScaledMass, source));
-            assert_eq!(session.free_mass(), 30, "{source:?}");
+            assert_eq!(
+                session
+                    .ship
+                    .free_mass(&session.pilot, &session.statics, &session.setup),
+                30,
+                "{source:?}"
+            );
             assert_eq!(
                 take(&mut session, Take::Ammo, &[]).0,
                 Taken::Ammo {
@@ -24448,7 +24758,13 @@ pub(super) mod tests {
                 },
                 "{source:?}"
             );
-            assert_eq!(session.free_mass(), -2, "charged 8 a round: {source:?}");
+            assert_eq!(
+                session
+                    .ship
+                    .free_mass(&session.pilot, &session.statics, &session.setup),
+                -2,
+                "charged 8 a round: {source:?}"
+            );
         }
         // Exactly on the raw `Mass`: rounds of 6 (12 scaled) at 30 and 18
         // free, and the third at 6 free, as the raw test admits `>=`.
@@ -24465,7 +24781,12 @@ pub(super) mod tests {
                 count: 3
             }
         );
-        assert_eq!(session.free_mass(), -6);
+        assert_eq!(
+            session
+                .ship
+                .free_mass(&session.pilot, &session.statics, &session.setup),
+            -6
+        );
     }
 
     #[test]
@@ -25982,7 +26303,12 @@ pub(super) mod tests {
             booster(&mut catalog).mass = mass;
             booster(&mut catalog).flags = OutfitFlags::MASS_BY_MASS;
             let mut boarded = alongside_ace(&catalog).with_rules(rules);
-            assert_eq!(boarded.free_mass(), 30);
+            assert_eq!(
+                boarded
+                    .ship
+                    .free_mass(&boarded.pilot, &boarded.statics, &boarded.setup),
+                30
+            );
             board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");

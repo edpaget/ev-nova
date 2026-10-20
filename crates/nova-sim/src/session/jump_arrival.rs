@@ -54,7 +54,7 @@ impl Session {
                     map(first),
                     self.ship.player.heading,
                     self.top_speed(),
-                    self.player_inertialess(),
+                    self.ship.player_inertialess(&self.setup),
                 );
                 ShipPlacement::ArriveAtSpeed { ship, speed }
             }

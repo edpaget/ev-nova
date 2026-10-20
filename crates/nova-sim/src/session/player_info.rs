@@ -25,13 +25,14 @@
 //! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
 //! is read from the holder's stellars in `catalog`.
 
-use super::{Session, Setup, overlaid_sites};
+use super::{PlayerShip, Session, Setup, Statics, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
 use crate::market::{DOMINATED, Good};
 use crate::news::{CARGO_NAMES, MISC_STRINGS};
 use crate::outfitter::outfit_mods;
+use crate::pilot::Pilot;
 use crate::player_info::{
     self, COMMODITIES, Domination, HeldCargo, LEGAL_STATUS_STRINGS, MissionLoad, PlayerInfo, Words,
 };
@@ -117,7 +118,9 @@ impl Session {
     pub fn player_info(&self, catalog: &impl PilotCatalog) -> PlayerInfo {
         let words = self.setup.player_info_words();
         let cargo_names = self.strings().string_list(CARGO_NAMES);
-        let cargo = self.held_cargo(&cargo_names);
+        let cargo = self
+            .ship
+            .held_cargo(&self.pilot, &self.statics, &cargo_names);
         let reserves = self.reserves();
         let totals = HandlingTotals::new(
             self.ship.fit.fields,
@@ -140,7 +143,8 @@ impl Session {
                 records,
                 owned,
                 &words,
-                self.trade_in_shown(),
+                self.ship
+                    .trade_in_shown(&self.pilot, &self.statics, &self.setup),
                 self.setup.rules.source_for(RuleKey::PayMillions),
             )
         });
@@ -188,74 +192,6 @@ impl Session {
             jettisonable: player_info::has_jettisonable_cargo(&cargo),
             words,
         }
-    }
-
-    /// The cargo the Cargo text lists, its types named by `cargo_names`.
-    fn held_cargo<'a>(&'a self, cargo_names: &'a [String]) -> HeldCargo<'a> {
-        let mut commodities = [0; COMMODITIES];
-        let mut junk = Vec::new();
-        for (good, tons) in self.pilot.cargo() {
-            match good {
-                Good::Commodity(n) => {
-                    if let Some(held) = commodities.get_mut(usize::from(n)) {
-                        *held = i64::from(tons);
-                    }
-                }
-                Good::Junk(id) => {
-                    junk.push((
-                        id,
-                        self.junk_lc_name(id).unwrap_or_default(),
-                        i64::from(tons),
-                    ));
-                }
-            }
-        }
-        junk.sort_by_key(|&(id, _, _)| id);
-        let missions = self
-            .pilot
-            .missions()
-            .iter()
-            .filter_map(|(_, active)| {
-                let cargo_type = active.cargo_type.filter(|_| active.aboard)?;
-                (active.cargo_tons >= 0).then(|| MissionLoad {
-                    cargo_type,
-                    tons: active.cargo_tons,
-                    can_abort: self
-                        .statics
-                        .mission_record(active.mission)
-                        .is_some_and(|record| record.can_abort != 0),
-                })
-            })
-            .collect();
-        let holds = i64::from(self.capacity());
-        HeldCargo {
-            commodities,
-            missions,
-            junk: junk
-                .into_iter()
-                .map(|(_, name, count)| (name, count))
-                .collect(),
-            cargo_names,
-            fleet: holds > i64::from(self.ship.fit.stats.capacity),
-            free: holds - self.pilot.total_cargo(),
-            mission_room: self.mission_cargo_space(),
-        }
-    }
-
-    /// What the ship flown trades in for, unfluxed, as
-    /// `_PlayerShipTradeInPrice` (@0xb079-0xb144) values it for the
-    /// Extras text ([`shipyard::trade_in`]).
-    fn trade_in_shown(&self) -> i64 {
-        shipyard::trade_in(
-            self.statics
-                .ship_record(self.pilot.ship)
-                .map_or(0, |record| record.cost),
-            self.ship.fit.fields.mass,
-            &self.pilot.outfits,
-            &self.statics.outfits,
-            self.setup.rules.source_for(RuleKey::TradeInOutfits),
-            &self.setup.rules,
-        )
     }
 
     /// The day's tribute (@0x5352c-0x53583): each stellar some system
@@ -336,6 +272,79 @@ impl Setup {
     /// string lists; a missing one reads empty.
     pub(super) fn player_info_words(&self) -> Words {
         Words::from_list(&self.strings().string_list(MISC_STRINGS))
+    }
+}
+
+impl PlayerShip {
+    /// The cargo the Cargo text lists, its types named by `cargo_names`.
+    fn held_cargo<'a>(
+        &'a self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        cargo_names: &'a [String],
+    ) -> HeldCargo<'a> {
+        let mut commodities = [0; COMMODITIES];
+        let mut junk = Vec::new();
+        for (good, tons) in pilot.cargo() {
+            match good {
+                Good::Commodity(n) => {
+                    if let Some(held) = commodities.get_mut(usize::from(n)) {
+                        *held = i64::from(tons);
+                    }
+                }
+                Good::Junk(id) => {
+                    junk.push((
+                        id,
+                        statics.junk_lc_name(id).unwrap_or_default(),
+                        i64::from(tons),
+                    ));
+                }
+            }
+        }
+        junk.sort_by_key(|&(id, _, _)| id);
+        let missions = pilot
+            .missions()
+            .iter()
+            .filter_map(|(_, active)| {
+                let cargo_type = active.cargo_type.filter(|_| active.aboard)?;
+                (active.cargo_tons >= 0).then(|| MissionLoad {
+                    cargo_type,
+                    tons: active.cargo_tons,
+                    can_abort: statics
+                        .mission_record(active.mission)
+                        .is_some_and(|record| record.can_abort != 0),
+                })
+            })
+            .collect();
+        let holds = i64::from(self.capacity(pilot, statics));
+        HeldCargo {
+            commodities,
+            missions,
+            junk: junk
+                .into_iter()
+                .map(|(_, name, count)| (name, count))
+                .collect(),
+            cargo_names,
+            fleet: holds > i64::from(self.fit.stats.capacity),
+            free: holds - pilot.total_cargo(),
+            mission_room: self.mission_cargo_space(pilot, statics),
+        }
+    }
+
+    /// What the ship flown trades in for, unfluxed, as
+    /// `_PlayerShipTradeInPrice` (@0xb079-0xb144) values it for the
+    /// Extras text ([`shipyard::trade_in`]).
+    fn trade_in_shown(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> i64 {
+        shipyard::trade_in(
+            statics
+                .ship_record(pilot.ship)
+                .map_or(0, |record| record.cost),
+            self.fit.fields.mass,
+            &pilot.outfits,
+            &statics.outfits,
+            setup.rules.source_for(RuleKey::TradeInOutfits),
+            &setup.rules,
+        )
     }
 }
 

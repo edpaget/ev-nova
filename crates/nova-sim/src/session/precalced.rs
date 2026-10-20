@@ -82,8 +82,9 @@
 //! (`_screenFaded` @0x5a013, `_fadePending` @0x5a052-0x5a064), which are
 //! the screens' state, not the session's.
 
-use super::{Session, Setup};
+use super::{Outbox, PlayerShip, Session, Setup, Statics};
 use crate::market;
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::Latches;
 
@@ -106,7 +107,7 @@ impl Session {
     /// in the original's order (see the module docs): re-arms
     /// `_ScanPlayer`'s contraband latches (@0xc3ef-0xc5a3, @0xc7b0),
     /// sets the `jünk` latches, refreshes the sabotage clock
-    /// (@0xc3ff-0xc769, `Session::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
+    /// (@0xc3ff-0xc769, `PlayerShip::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
     /// takes the active ranks the blessing table is built from
     /// (@0xc8be-0xc981), and turns the repair inhibit off (@0xc998).
     ///
@@ -131,11 +132,12 @@ impl Session {
         self.ship.latches.scan_latches = Latches::ARMED;
         self.ship.latches.junk_latches =
             market::JunkLatches::of(&self.statics.goods, &self.pilot.cargo);
-        self.refresh_sabotage();
+        self.ship.refresh_sabotage(&self.pilot, &self.statics);
         self.reset_inhibitors();
         self.reset_iff_scramblers();
-        if self.trims(cause) {
-            self.trim_to_holds();
+        if self.ship.trims(&self.setup, cause) {
+            self.ship
+                .trim_to_holds(&mut self.pilot, &self.statics, &mut self.out);
         }
         self.ship
             .latches
@@ -146,16 +148,27 @@ impl Session {
         // see the `capture` module).
         self.ship.fuel_cap_cached = false;
     }
+}
 
+impl Setup {
+    /// Whether the outfit sale about to run keeps the cargo past the holds
+    /// through its resets, `OnSell`'s included: by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`].
+    pub(super) fn sell_keeps_cargo(&self) -> bool {
+        self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
     /// Whether the reset for `cause` trims the commodities: never through
     /// an outfit sale that keeps the cargo ([`Setup::sell_keeps_cargo`](super::setup::Setup::sell_keeps_cargo)).
-    fn trims(&self, cause: ResetCause) -> bool {
-        if self.ship.latches.sale_keeps_cargo {
+    fn trims(&self, setup: &Setup, cause: ResetCause) -> bool {
+        if self.latches.sale_keeps_cargo {
             return false;
         }
         match cause {
             ResetCause::SetExpr => {
-                self.setup.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
+                setup.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
             }
             ResetCause::Purchase => false,
             ResetCause::Other => true,
@@ -167,23 +180,17 @@ impl Session {
     /// `_TotalFleetHolds` works them out (@0xc24d): from the outfits owned
     /// now, so an `OnSell`'s reset sees the outfit sold gone before the
     /// sale's refit.
-    fn trim_to_holds(&mut self) {
-        let holds = market::fleet_holds(self.current_stats().capacity, self.escort_holds());
-        let total = self.pilot.total_cargo();
-        let before = self.pilot.cargo.clone();
-        market::trim_commodities(&mut self.pilot.cargo, holds, total);
-        if self.pilot.cargo != before {
-            self.out.save_due = true;
+    fn trim_to_holds(&mut self, pilot: &mut Pilot, statics: &Statics, out: &mut Outbox) {
+        let holds = market::fleet_holds(
+            self.current_stats(pilot, statics).capacity,
+            super::escort_holds(pilot, statics),
+        );
+        let total = pilot.total_cargo();
+        let before = pilot.cargo.clone();
+        market::trim_commodities(&mut pilot.cargo, holds, total);
+        if pilot.cargo != before {
+            out.save_due = true;
         }
-    }
-}
-
-impl Setup {
-    /// Whether the outfit sale about to run keeps the cargo past the holds
-    /// through its resets, `OnSell`'s included: by the other reading of
-    /// [`RuleKey::OutfitSaleCargo`].
-    pub(super) fn sell_keeps_cargo(&self) -> bool {
-        self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
     }
 }
 

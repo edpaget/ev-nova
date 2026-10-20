@@ -4,10 +4,11 @@
 //! stepped each flight tick, and cleared on every system change and
 //! landing. They are never saved.
 
-use super::Session;
+use super::{PlayerShip, Session, Statics};
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
 use crate::market::Good;
+use crate::pilot::Pilot;
 use crate::scoop::{Haul, Scooper, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop};
 use crate::ship_layer::disabled;
 
@@ -75,11 +76,7 @@ impl Session {
     /// for, until the next reset. The engine reads the hold as it is.
     #[must_use]
     pub fn player_scoops(&self) -> bool {
-        crate::scoop::player_scoops(
-            has_asteroid_scoop(&self.pilot.outfits, &self.statics.outfits),
-            self.capacity(),
-            self.pilot.total_cargo(),
-        )
+        self.ship.player_scoops(&self.pilot, &self.statics)
     }
 
     /// Scoops up the asteroid boxes the ships touch, as `_DoPlayGameWork`
@@ -164,6 +161,29 @@ impl Session {
     /// which no frame drawn in between can tell apart.
     pub(super) fn clear_boxes(&mut self) {
         self.boxes.clear();
+    }
+}
+
+impl PlayerShip {
+    /// The player's scoop flag (ship +0xc3, see
+    /// [`scoop::player_scoops`](crate::scoop::player_scoops)): it owns an
+    /// asteroid scoop and the fleet's holds ([`Session::capacity`]) are
+    /// past the cargo it holds ([`Pilot::total_cargo`](crate::pilot::Pilot::total_cargo)).
+    ///
+    /// Read live. The original keeps the flag from the last
+    /// `_ResetPlayerPrecalcedValues` (14 callers, the scoop itself among
+    /// them), and the only time that shows is a jünk step in flight
+    /// (`market::step_junk` in `fly_player`), which can fill or free the
+    /// hold with no reset: the original then still scoops one box into a
+    /// hold the step just filled, or passes over one it just freed room
+    /// for, until the next reset. The engine reads the hold as it is.
+    #[must_use]
+    fn player_scoops(&self, pilot: &Pilot, statics: &Statics) -> bool {
+        crate::scoop::player_scoops(
+            has_asteroid_scoop(&pilot.outfits, &statics.outfits),
+            self.capacity(pilot, statics),
+            pilot.total_cargo(),
+        )
     }
 }
 

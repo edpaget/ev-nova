@@ -179,7 +179,7 @@ impl Session {
         let bar = Bar {
             ships: &self.statics.ships,
             site: &site,
-            contributed: self.contributed(),
+            contributed: self.ship.contributed(&self.pilot, &self.statics),
             cash: self.pilot.cash,
             room: self.can_hire_escorts(),
             slot: self.hire_berth().is_some()
