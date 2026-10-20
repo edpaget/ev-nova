@@ -12,6 +12,8 @@
 //!   and `TrackControl`-style pointer tracking.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time.
+//! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
+//!   line clipped to the box.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
 //!   selected by a click or the arrow keys.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
@@ -82,6 +84,7 @@ pub mod quantity;
 pub mod row_list;
 pub mod scroll_text;
 pub mod slice;
+pub mod text_box;
 pub mod text_field;
 pub mod text_input;
 pub mod toggle;
