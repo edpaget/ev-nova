@@ -318,7 +318,9 @@ pub enum CoLocated {
     /// stands for every system there, a visible one too
     /// (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40), so a link reaches
     /// only it, and a visible system it shadows claims no stellar
-    /// (`_PropagateMissionBitEffects` @0x996ed-0x997bd).
+    /// (`_PropagateMissionBitEffects` @0x996ed-0x997bd). An arrival still
+    /// enters a shadowed visible system as it is, by the engine's
+    /// [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem).
     #[default]
     Lowest,
     /// The other reading, story-runtime phase 4's: a visible system stands
