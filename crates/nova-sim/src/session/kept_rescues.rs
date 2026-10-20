@@ -308,6 +308,22 @@ mod tests {
     }
 
     #[test]
+    fn a_loads_refresh_forgets_a_rescue_kept_for_another_system() {
+        // By the engine, 150 kept in 130 after the gate's exit into 131: the
+        // load's refresh hides 131 again and shows it as its chain head, so
+        // 150 has no owner and the rescue after the refresh keeps it in 131,
+        // not in 130, which the stale rescue would give.
+        let catalog = shared();
+        let mut session = rescued_in_130(&catalog, RuleSource::Engine);
+        gate_to_131(&mut session, &catalog);
+        assert_eq!(session.galaxy().rescued(SHARED), Some(SystemId(130)));
+        session.refresh_galaxy_quietly(&catalog);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.galaxy().rescued(SHARED), Some(SystemId(131)));
+        assert_eq!(shared_held(&session), (Some(SystemId(131)), true));
+    }
+
+    #[test]
     fn a_load_keeps_no_rescue_and_rescues_for_the_loaded_system_only() {
         let catalog = shared();
         for source in RuleSource::ALL {
