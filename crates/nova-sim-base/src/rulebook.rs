@@ -147,6 +147,7 @@
 //! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see `nova_sim::rank`) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
 //! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar, so a mission's random destination never draws a stellar only shadowed systems list, unless the player is in one that lists it (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x9968a-0x997ae, `_HandleStellarSystemVisibility` @0x32c58-0x32cdf; see `nova_sim::story` and `nova_sim::mission`) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it, so a mission may draw it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see `nova_sim::story`) | after every settled script as well\*\*\*\*\*\*\*\* |
+//! | [`ArrivalSystem`](RuleKey::ArrivalSystem) | `arrival_system` | an arrival enters the system it is given as it is, a visible one shadowed at its place too, and only a system hidden after its refresh moves the player (@0x99918); a jump's system is decided before its refresh (@0x6bf3f): the last hop's stand-in on the multi-jump branch (@0x6bdc1-0x6bdd4), else the raw Con target of the slot selected (+0x6c, @0x6bd3a, @0x6be0b); a wormhole's exit its owner as it is (@0x642a7) (see `nova_sim::session`'s `arrival_system` module) | every arrival resolved by place after the refresh, a jump into the stand-in J took¶¶¶¶¶¶¶ |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see `nova_sim::cron`) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see `nova_sim::cron`) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronZeroDurationNoHoldoff`](RuleKey::CronZeroDurationNoHoldoff) | `cron_zero_duration_no_holdoff` | a `Duration` 0 crön with no holdoffs runs `OnStart` and `OnEnd`, sets its days to -1 and stays active (`_CronEventHandler` @0x388cb-0x388ff), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and it goes inactive (see `nova_sim::cron`) | `OnEnd` once, inactive at once |
@@ -511,7 +512,10 @@
 //! ¶¶¶¶¶¶¶ The Bible says a replacement system shares its original's
 //! coordinates and does not say which of two visible systems at one place
 //! wins. The other reading is story-runtime phase 4's, the port's choice,
-//! not anything the Bible says (see `nova_sim::story`).
+//! not anything the Bible says (see `nova_sim::story`). The Bible says
+//! nothing of which system an arrival at such a place enters either:
+//! `arrival_system`'s other reading is story-runtime phase 4's and
+//! crons-news-ranks phase 5's, the port's choice.
 //!
 //! \*\*\*\*\*\*\*\* The Bible gives `Visibility` as a test and does not
 //! say when it is evaluated. The other reading is the port's choice, not
@@ -2151,6 +2155,25 @@ rule_keys! {
     /// reading, after every settled script as well (see the
     /// `nova_sim::story` module's "Visibility and governments").
     VisibilityRefresh => "visibility_refresh",
+    /// Which system an arrival enters (see `nova_sim::session`'s
+    /// `arrival_system` module and the `nova_sim::story` module's
+    /// "Visibility and governments"). By the engine, the system it is
+    /// given, as it is, unless that system is hidden after any refresh the
+    /// arrival runs, when the refresh's move takes the player out of it
+    /// (`_PropagateMissionBitEffects` @0x998f1-0x99a36, the +0x1eb test
+    /// @0x99918): a visible system shadowed at its place by a lower one is
+    /// entered as it is. A jump's system is decided before its refresh
+    /// (@0x6bf3f): on the multi-jump branch the last hop's stand-in
+    /// (`_HandlePlayer` @0x6bdc1-0x6bdd4), otherwise the raw Con target of
+    /// the slot the jump was selected from (+0x6c, @0x6bd3a-0x6bd47,
+    /// written @0x6be0b). A wormhole comes out in its exit's owner as it
+    /// is (`_PlayerEnterWormhole` @0x642a7), `M` and `N` enter the system
+    /// they name (@0x158f2), and the escape pod's rescue the found
+    /// stellar's owner (@0x68f99-0x68f9e). By the other reading,
+    /// story-runtime phase 4's and crons-news-ranks phase 5's, every
+    /// arrival is resolved by place after the refresh, and a jump enters
+    /// the stand-in J took.
+    ArrivalSystem => "arrival_system",
     /// What a `Duration` 0 crön does on the day its `PreHoldoff` ends: by
     /// the engine, `OnStart` and `OnEnd` run but nothing more is written
     /// (`_CronEventHandler` @0x387a8-0x387c1), so the next day the
@@ -3800,7 +3823,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(163),
+            RuleKey::ALL.iter().rev().nth(164),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -3817,7 +3840,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(162),
+            RuleKey::ALL.iter().rev().nth(163),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -3831,7 +3854,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(161),
+            RuleKey::ALL.iter().rev().nth(162),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -3848,7 +3871,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(160),
+            RuleKey::ALL.iter().rev().nth(161),
             Some(&RuleKey::DescMovieGlobals)
         );
     }
@@ -3888,7 +3911,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(159),
+            RuleKey::ALL.iter().rev().nth(160),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -3910,7 +3933,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(158),
+            RuleKey::ALL.iter().rev().nth(159),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -3935,7 +3958,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(157),
+            RuleKey::ALL.iter().rev().nth(158),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -3961,7 +3984,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(156),
+            RuleKey::ALL.iter().rev().nth(157),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -3981,7 +4004,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(155),
+            RuleKey::ALL.iter().rev().nth(156),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -3998,7 +4021,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(154),
+            RuleKey::ALL.iter().rev().nth(155),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -4018,7 +4041,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(153),
+            RuleKey::ALL.iter().rev().nth(154),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -4038,7 +4061,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(150),
+            RuleKey::ALL.iter().rev().nth(151),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -4060,7 +4083,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(149),
+            RuleKey::ALL.iter().rev().nth(150),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -4970,7 +4993,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(148), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(149), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -4985,7 +5008,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(147),
+            RuleKey::ALL.iter().rev().nth(148),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -5002,7 +5025,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(146),
+            RuleKey::ALL.iter().rev().nth(147),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -5019,7 +5042,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(145),
+            RuleKey::ALL.iter().rev().nth(146),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -5036,7 +5059,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(144),
+            RuleKey::ALL.iter().rev().nth(145),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -5053,7 +5076,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(143),
+            RuleKey::ALL.iter().rev().nth(144),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -5070,7 +5093,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(142),
+            RuleKey::ALL.iter().rev().nth(143),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -5087,7 +5110,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(141),
+            RuleKey::ALL.iter().rev().nth(142),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -5104,7 +5127,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(140),
+            RuleKey::ALL.iter().rev().nth(141),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -5118,7 +5141,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(139),
+            RuleKey::ALL.iter().rev().nth(140),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -5135,7 +5158,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(138),
+            RuleKey::ALL.iter().rev().nth(139),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -5152,7 +5175,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(137),
+            RuleKey::ALL.iter().rev().nth(138),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -5169,7 +5192,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(136),
+            RuleKey::ALL.iter().rev().nth(137),
             Some(&RuleKey::CachedAvailBits)
         );
     }
@@ -5192,7 +5215,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(135),
+            RuleKey::ALL.iter().rev().nth(136),
             Some(&RuleKey::SpawnAvailability)
         );
     }
@@ -5206,7 +5229,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(134),
+            RuleKey::ALL.iter().rev().nth(135),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -5220,7 +5243,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(133),
+            RuleKey::ALL.iter().rev().nth(134),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -5233,7 +5256,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(152),
+            RuleKey::ALL.iter().rev().nth(153),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -5251,7 +5274,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(131),
+            RuleKey::ALL.iter().rev().nth(132),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -5268,7 +5291,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(130),
+            RuleKey::ALL.iter().rev().nth(131),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -5285,11 +5308,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(129),
+            RuleKey::ALL.iter().rev().nth(130),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(128),
+            RuleKey::ALL.iter().rev().nth(129),
             Some(&RuleKey::SalaryCap)
         );
     }
@@ -5306,7 +5329,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(127),
+            RuleKey::ALL.iter().rev().nth(128),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -5325,15 +5348,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(126),
+            RuleKey::ALL.iter().rev().nth(127),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(125),
+            RuleKey::ALL.iter().rev().nth(126),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(124),
+            RuleKey::ALL.iter().rev().nth(125),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -5350,7 +5373,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(123),
+            RuleKey::ALL.iter().rev().nth(124),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -5364,12 +5387,35 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(122),
+            RuleKey::ALL.iter().rev().nth(123),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(121),
+            RuleKey::ALL.iter().rev().nth(122),
             Some(&RuleKey::VisibilityRefresh)
+        );
+    }
+
+    #[test]
+    fn the_arrival_system_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ArrivalSystem.key(), "arrival_system");
+        assert_eq!(
+            RuleKey::from_key("arrival_system"),
+            Some(RuleKey::ArrivalSystem)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ArrivalSystem),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::ArrivalSystem, RuleSource::Bible)
+                .source_for(RuleKey::ArrivalSystem),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(121),
+            Some(&RuleKey::ArrivalSystem)
         );
     }
 
@@ -5694,7 +5740,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(165),
+            RuleKey::ALL.iter().rev().nth(166),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -5879,6 +5925,7 @@ mod tests {
                 RuleKey::RankCrimeReach,
                 RuleKey::ColocatedResolution,
                 RuleKey::VisibilityRefresh,
+                RuleKey::ArrivalSystem,
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::CronZeroDurationNoHoldoff,
