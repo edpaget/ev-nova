@@ -770,10 +770,10 @@ impl Session {
             self.out.save_due = true;
         }
         if resets.has(Reset::ForgetOffers) {
-            self.forget_offers();
+            self.run.forget_offers();
         }
         if resets.has(Reset::EmptyOffers) {
-            self.empty_offers();
+            self.run.empty_offers();
         }
         let heard = Heard {
             system,
@@ -787,7 +787,7 @@ impl Session {
         // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
         // module).
         if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate) {
-            self.raise(StoryEvent::Explored { system });
+            self.run.raise(StoryEvent::Explored { system });
         }
         if resets.has(Reset::Rebuild) {
             self.rebuild_stellars();
@@ -1054,7 +1054,7 @@ impl Session {
             self.out.emit(event);
         }
         if let Some(how) = how.entrance() {
-            self.raise(StoryEvent::EnteredSystem { system, how });
+            self.run.raise(StoryEvent::EnteredSystem { system, how });
         }
     }
 }

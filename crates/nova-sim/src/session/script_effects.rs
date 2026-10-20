@@ -221,7 +221,7 @@
 //! a gate or a stellar without the can-land flag leaves it on none.
 
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use super::{Session, Setup};
+use super::{MissionRun, Outbox, Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -402,24 +402,6 @@ impl Session {
         }
     }
 
-    /// Applies a `Q`'s leave in flight, if one is pending, noting its
-    /// message on `settled`: whether one was. Landed, the leave is held,
-    /// as `_absquatulateStr` is ([`Session::leave_due`]), for
-    /// [`Session::leave_if_due`] to carry out, and nothing is applied.
-    pub(super) fn settle_leave(&mut self, settled: &mut Settled) -> bool {
-        if self.landed.is_some() {
-            return false;
-        }
-        let Some(text) = self.run.queued.leave.take() else {
-            return false;
-        };
-        settled.message = Some(text).filter(|text| !text.is_empty());
-        if settled.message.is_some() {
-            self.out.sounds.push(SimSound::ScriptMessage);
-        }
-        true
-    }
-
     /// Whether a `Q` run while landed waits for the take-off: every port
     /// filter of the original leaves on its next call while
     /// `_absquatulateStr` is set (`_PortFilter` @0x4f047-0x4f063 and the
@@ -427,7 +409,7 @@ impl Session {
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.landed.is_some() && self.run.queued.leave.is_some()
+        self.run.leave_due(self.landed)
     }
 
     /// Carries out a held `Q`'s leave ([`Session::leave_due`]) as the
@@ -464,57 +446,11 @@ impl Session {
         Some(Departure { stellar, settled })
     }
 
-    /// The take-off's part of a held `Q`: it consumes the leave, keeping
-    /// its message, if it has one, for [`Session::take_leave_message`]
-    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
-    /// keeps none.
-    pub(super) fn depart(&mut self) {
-        self.run.queued.left_with = self.run.queued.leave.take().filter(|text| !text.is_empty());
-    }
-
     /// The message the last take-off left on, a held `Q`'s, once: the
     /// take-off line, shown in place of the take-off's greeting, with no
     /// beep (`_DisplayComm` @0x635cf).
     pub fn take_leave_message(&mut self) -> Option<String> {
-        self.run.queued.left_with.take()
-    }
-
-    /// Whether the last take-off left on a held `Q`'s message, not yet
-    /// taken: the take-off's greeting is not said, as the message shows
-    /// in its place and leaves the tutorial as it was
-    /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
-    pub(super) fn left_with_message(&self) -> bool {
-        self.run.queued.left_with.is_some()
-    }
-
-    /// The landing's part: a leave still pending is dropped
-    /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
-    /// opens, @0x6332a-0x63335).
-    pub(super) fn drop_leave(&mut self) {
-        self.run.queued.leave = None;
-    }
-
-    /// `P`: plays `sound`, held to the next flight tick or at once, as
-    /// [`ScriptEffectRules::sound`] says (see the module docs).
-    pub(super) fn play_script_sound(&mut self, sound: SoundId) {
-        match self.setup.script_effect_rules().sound {
-            RuleSource::Engine => self.run.queued.sound = Some(sound),
-            RuleSource::Bible => self.out.sounds.push(SimSound::Script {
-                sound,
-                exclusive: false,
-            }),
-        }
-    }
-
-    /// Sounds the mission sound a `P` holds, if any, as the flight's
-    /// tick does.
-    pub(super) fn sound_script(&mut self) {
-        if let Some(sound) = self.run.queued.sound.take() {
-            self.out.sounds.push(SimSound::Script {
-                sound,
-                exclusive: true,
-            });
-        }
+        self.run.take_leave_message()
     }
 
     /// `Q`: draws the message to leave on from `STR#` `list` on `chance`
@@ -532,25 +468,6 @@ impl Session {
         self.run.queued.leave = picked.or_else(|| self.setup.blank_leave());
     }
 
-    /// A `Q` whose list is past 32767, the engine's widest ID, so names
-    /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
-    /// `_absquatulateStr` empty for a missing list (@0x72f0f).
-    pub(super) fn leave_on_no_list(&mut self) {
-        self.run.queued.leave = self.setup.blank_leave();
-    }
-
-    /// A `P` whose sound is past 32767, the engine's widest ID, so names
-    /// none. By [`ScriptEffectRules::sound`]'s engine reading it replaces
-    /// a held sound with none, as `_missionSoundID` is overwritten
-    /// (@0x15a30) and `_PlayGame` plays nothing for a sound that does not
-    /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
-    /// is nothing to sound.
-    pub(super) fn drop_script_sound(&mut self) {
-        if self.setup.script_effect_rules().sound == RuleSource::Engine {
-            self.run.queued.sound = None;
-        }
-    }
-
     /// An `N` out of range, or by [`ScriptEffectRules::missing_system_move`]'s
     /// engine reading an `M` or `N` to a system with no record: the
     /// move's tail, with no move (see the module docs). Landed, the offers are emptied and nothing else changes;
@@ -564,7 +481,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         if self.landed.is_some() {
-            self.empty_offers();
+            self.run.empty_offers();
             return;
         }
         let system = self.pilot.system;
@@ -638,6 +555,113 @@ impl Setup {
     /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
     fn blank_leave(&self) -> Option<String> {
         (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
+    }
+}
+
+impl MissionRun {
+    /// Applies a `Q`'s leave in flight, if one is pending, noting its
+    /// message on `settled`: whether one was. Landed, the leave is held,
+    /// as `_absquatulateStr` is ([`Session::leave_due`]), for
+    /// [`Session::leave_if_due`] to carry out, and nothing is applied.
+    pub(super) fn settle_leave(
+        &mut self,
+        out: &mut Outbox,
+        landed: Option<StellarId>,
+        settled: &mut Settled,
+    ) -> bool {
+        if landed.is_some() {
+            return false;
+        }
+        let Some(text) = self.queued.leave.take() else {
+            return false;
+        };
+        settled.message = Some(text).filter(|text| !text.is_empty());
+        if settled.message.is_some() {
+            out.sounds.push(SimSound::ScriptMessage);
+        }
+        true
+    }
+
+    /// Whether a `Q` run while landed waits for the take-off: every port
+    /// filter of the original leaves on its next call while
+    /// `_absquatulateStr` is set (`_PortFilter` @0x4f047-0x4f063 and the
+    /// others; see the module docs). The leave waits for the texts and
+    /// dialogs shown over the spaceport, which never read it.
+    #[must_use]
+    fn leave_due(&self, landed: Option<StellarId>) -> bool {
+        landed.is_some() && self.queued.leave.is_some()
+    }
+
+    /// The take-off's part of a held `Q`: it consumes the leave, keeping
+    /// its message, if it has one, for [`Session::take_leave_message`]
+    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
+    /// keeps none.
+    pub(super) fn depart(&mut self) {
+        self.queued.left_with = self.queued.leave.take().filter(|text| !text.is_empty());
+    }
+
+    /// The message the last take-off left on, a held `Q`'s, once: the
+    /// take-off line, shown in place of the take-off's greeting, with no
+    /// beep (`_DisplayComm` @0x635cf).
+    fn take_leave_message(&mut self) -> Option<String> {
+        self.queued.left_with.take()
+    }
+
+    /// Whether the last take-off left on a held `Q`'s message, not yet
+    /// taken: the take-off's greeting is not said, as the message shows
+    /// in its place and leaves the tutorial as it was
+    /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
+    pub(super) fn left_with_message(&self) -> bool {
+        self.queued.left_with.is_some()
+    }
+
+    /// The landing's part: a leave still pending is dropped
+    /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
+    /// opens, @0x6332a-0x63335).
+    pub(super) fn drop_leave(&mut self) {
+        self.queued.leave = None;
+    }
+
+    /// `P`: plays `sound`, held to the next flight tick or at once, as
+    /// [`ScriptEffectRules::sound`] says (see the module docs).
+    pub(super) fn play_script_sound(&mut self, setup: &Setup, out: &mut Outbox, sound: SoundId) {
+        match setup.script_effect_rules().sound {
+            RuleSource::Engine => self.queued.sound = Some(sound),
+            RuleSource::Bible => out.sounds.push(SimSound::Script {
+                sound,
+                exclusive: false,
+            }),
+        }
+    }
+
+    /// Sounds the mission sound a `P` holds, if any, as the flight's
+    /// tick does.
+    pub(super) fn sound_script(&mut self, out: &mut Outbox) {
+        if let Some(sound) = self.queued.sound.take() {
+            out.sounds.push(SimSound::Script {
+                sound,
+                exclusive: true,
+            });
+        }
+    }
+
+    /// A `Q` whose list is past 32767, the engine's widest ID, so names
+    /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
+    /// `_absquatulateStr` empty for a missing list (@0x72f0f).
+    pub(super) fn leave_on_no_list(&mut self, setup: &Setup) {
+        self.queued.leave = setup.blank_leave();
+    }
+
+    /// A `P` whose sound is past 32767, the engine's widest ID, so names
+    /// none. By [`ScriptEffectRules::sound`]'s engine reading it replaces
+    /// a held sound with none, as `_missionSoundID` is overwritten
+    /// (@0x15a30) and `_PlayGame` plays nothing for a sound that does not
+    /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
+    /// is nothing to sound.
+    pub(super) fn drop_script_sound(&mut self, setup: &Setup) {
+        if setup.script_effect_rules().sound == RuleSource::Engine {
+            self.queued.sound = None;
+        }
     }
 }
 
@@ -1756,7 +1780,7 @@ mod tests {
         let landed_on = session.date();
         run_rolling(&mut session, "Q25048", &[2]);
         let _ = settle(&mut session, &catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         assert_eq!(
             session.leave_if_due(&catalog, &mut NeverFires),
             Some(Departure {
@@ -1794,7 +1818,7 @@ mod tests {
     fn the_ports_leave_takes_off_and_settles_as_a_qs_does() {
         let catalog = moving();
         let mut session = told(landed(&catalog));
-        session.drop_raised();
+        session.run.drop_raised();
         let departure = session
             .leave_port(&catalog, &mut NeverFires)
             .expect("leaves");
@@ -2001,7 +2025,7 @@ mod tests {
         catalog: &FakePilotCatalog,
         text: &str,
     ) -> Vec<crate::story::StoryEvent> {
-        session.drop_raised();
+        session.run.drop_raised();
         run(session, text);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
         session.chart.assert_docked_among_shown(session.landed);
@@ -2086,7 +2110,7 @@ mod tests {
             session.ship.player.velocity = Vec2::new(5.0, -1.0);
             session.stage_scene(NpcId(0));
             session.take_events();
-            session.drop_raised();
+            session.run.drop_raised();
             run(&mut session, text);
             let mut settled = Settled::default();
             session.settle_moves(&catalog, &mut NeverFires, &mut settled);
@@ -2143,7 +2167,7 @@ mod tests {
         let explored = session.pilot().explored.clone();
         let course = session.course().to_vec();
         let npcs: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        session.drop_raised();
+        session.run.drop_raised();
         run(&mut session, "N9999");
         let mut chance = crate::testkit::Draws::default();
         session.settle_moves(&catalog, &mut chance, &mut Settled::default());

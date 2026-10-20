@@ -1098,7 +1098,7 @@ mod tests {
     fn the_rescue_raises_no_entered_system_hook() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let raised = session.story_raised();
         assert!(

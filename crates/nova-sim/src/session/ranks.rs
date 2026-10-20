@@ -68,7 +68,7 @@
 //! clock (see [`sabotage`](crate::sabotage)), so every site reaches it
 //! too. So a `K` or
 //! `L` blesses, or stops blessing, as its set
-//! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
+//! expression ends, and a crime's rank loss (`MissionRun::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
 //! reset. By the other reading the table is built
 //! from the active ranks as they are when it is asked.
@@ -85,7 +85,7 @@
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
-use super::{Chart, PlayerShip, Setup, Statics};
+use super::{Chart, MissionRun, PlayerShip, Setup, Statics};
 use crate::pilot::Pilot;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -164,71 +164,6 @@ impl Session {
         self.ship.blessing(&self.pilot, &self.statics, &self.setup)
     }
 
-    /// The pilot's ranks and the recent rank, as `K` and `L` change them.
-    fn held_ranks(&mut self) -> Held<'_> {
-        Held {
-            active: &mut self.pilot.ranks,
-            recent: &mut self.run.recent_rank,
-        }
-    }
-
-    /// `K`: activates rank `rank` (see [`rank::activate`]), unaffiliated
-    /// ranks grouped by the session's `rank_unaffiliated_group` rule.
-    pub(super) fn activate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.statics.ranks);
-        rank::activate(&records, self.held_ranks(), rank, unaffiliated);
-    }
-
-    /// `L`: deactivates rank `rank` (see [`rank::deactivate`]),
-    /// unaffiliated ranks grouped by the session's
-    /// `rank_unaffiliated_group` rule.
-    pub(super) fn deactivate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.statics.ranks);
-        rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
-    }
-
-    /// `_SlapWithPenalty`'s rank pass (see [`rank::lose_to_crime`]) for
-    /// `crime` the player commits against a ship of `victim`, reaching
-    /// the ranks by the session's `rank_crime_reach` rule and sweeping
-    /// them by its `rank_unaffiliated_group` rule. The callers skip a
-    /// mission's special ship, as the original passes its mark
-    /// (@0x9c10). No save is due, as a conviction makes none in flight,
-    /// and no sound plays.
-    pub(super) fn lose_ranks_to(&mut self, crime: Crime, victim: Option<GovtId>) {
-        let reach = self.setup.rules.source_for(RuleKey::RankCrimeReach);
-        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        rank::lose_to_crime(
-            &self.statics.ranks,
-            Held {
-                active: &mut self.pilot.ranks,
-                recent: &mut self.run.recent_rank,
-            },
-            crime,
-            victim,
-            &self.statics.govts,
-            reach,
-            unaffiliated,
-        );
-    }
-
-    /// What the rank tags read: the pilot's active ranks, the recent
-    /// rank, and `STR#` 2002 #341 from the session's string lists as the
-    /// fallback, [`NO_RANK`] when the lists lack it (none are wired by
-    /// default).
-    pub(super) fn rank_names(&self) -> RankNames<'_> {
-        RankNames {
-            records: &self.statics.ranks,
-            active: &self.pilot.ranks,
-            recent: self.run.recent_rank,
-            fallback: self
-                .setup
-                .nth_string(MISC_STRINGS, NO_RANK_STRING)
-                .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
-        }
-    }
-
     /// The pilot info's ranks line and the salaries' share of the daily
     /// income (see [`rank::pilot_info`]), against the pilot's cash and the
     /// session's `salary_cap` rule, joined with `STR#` 2002 #392 (nothing
@@ -292,6 +227,96 @@ impl Chart {
     fn docked_govt(&self, landed: Option<StellarId>) -> Option<GovtId> {
         let landed = landed?;
         self.sites.iter().find(|site| site.id == landed)?.govt
+    }
+}
+
+impl MissionRun {
+    /// The pilot's ranks and the recent rank, as `K` and `L` change them.
+    fn held_ranks<'a>(&'a mut self, pilot: &'a mut Pilot) -> Held<'a> {
+        Held {
+            active: &mut pilot.ranks,
+            recent: &mut self.recent_rank,
+        }
+    }
+
+    /// `K`: activates rank `rank` (see [`rank::activate`]), unaffiliated
+    /// ranks grouped by the session's `rank_unaffiliated_group` rule.
+    pub(super) fn activate_rank(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        rank: RankId,
+    ) {
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let records = std::rc::Rc::clone(&statics.ranks);
+        rank::activate(&records, self.held_ranks(pilot), rank, unaffiliated);
+    }
+
+    /// `L`: deactivates rank `rank` (see [`rank::deactivate`]),
+    /// unaffiliated ranks grouped by the session's
+    /// `rank_unaffiliated_group` rule.
+    pub(super) fn deactivate_rank(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        rank: RankId,
+    ) {
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let records = std::rc::Rc::clone(&statics.ranks);
+        rank::deactivate(&records, self.held_ranks(pilot), rank, unaffiliated);
+    }
+
+    /// `_SlapWithPenalty`'s rank pass (see [`rank::lose_to_crime`]) for
+    /// `crime` the player commits against a ship of `victim`, reaching
+    /// the ranks by the session's `rank_crime_reach` rule and sweeping
+    /// them by its `rank_unaffiliated_group` rule. The callers skip a
+    /// mission's special ship, as the original passes its mark
+    /// (@0x9c10). No save is due, as a conviction makes none in flight,
+    /// and no sound plays.
+    pub(super) fn lose_ranks_to(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        crime: Crime,
+        victim: Option<GovtId>,
+    ) {
+        let reach = setup.rules.source_for(RuleKey::RankCrimeReach);
+        let unaffiliated = setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        rank::lose_to_crime(
+            &statics.ranks,
+            Held {
+                active: &mut pilot.ranks,
+                recent: &mut self.recent_rank,
+            },
+            crime,
+            victim,
+            &statics.govts,
+            reach,
+            unaffiliated,
+        );
+    }
+
+    /// What the rank tags read: the pilot's active ranks, the recent
+    /// rank, and `STR#` 2002 #341 from the session's string lists as the
+    /// fallback, [`NO_RANK`] when the lists lack it (none are wired by
+    /// default).
+    pub(super) fn rank_names<'a>(
+        &self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        setup: &Setup,
+    ) -> RankNames<'a> {
+        RankNames {
+            records: &statics.ranks,
+            active: &pilot.ranks,
+            recent: self.recent_rank,
+            fallback: setup
+                .nth_string(MISC_STRINGS, NO_RANK_STRING)
+                .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
+        }
     }
 }
 
@@ -1055,7 +1080,13 @@ pub(super) mod tests {
             let mut session = Session::fly(&catalog, pilot)
                 .expect("flies")
                 .with_rules(reading(RuleKey::BlessingRefresh, source));
-            session.lose_ranks_to(crate::legal::Crime::Board, Some(GovtId(140)));
+            session.run.lose_ranks_to(
+                &mut session.pilot,
+                &session.statics,
+                &session.setup,
+                crate::legal::Crime::Board,
+                Some(GovtId(140)),
+            );
             assert_eq!(active(&session), [] as [i16; 0], "{source:?}");
             assert_eq!(blessed(&session), after_crime, "{source:?}");
             session.jettison_cargo(false, &mut NeverFires);

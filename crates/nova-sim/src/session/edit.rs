@@ -895,7 +895,10 @@ mod tests {
         );
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(
-            session.offer_rolls().roll(crate::catalog::MissionId(201)),
+            session
+                .run
+                .offer_rolls()
+                .roll(crate::catalog::MissionId(201)),
             Some(77),
             "the visit's offers not rolled again"
         );
@@ -949,7 +952,7 @@ mod tests {
             .run
             .offers
             .set_roll(crate::catalog::MissionId(201), 77);
-        session.drop_raised();
+        session.run.drop_raised();
         assert_eq!(
             session.land_at(&catalog, SystemId(130), StellarId(128)),
             Ok(())
@@ -964,7 +967,10 @@ mod tests {
         assert_eq!(session.pilot().missions().get(slot), None, "completed");
         assert!(bit_set(&session, 10));
         assert_eq!(
-            session.offer_rolls().roll(crate::catalog::MissionId(201)),
+            session
+                .run
+                .offer_rolls()
+                .roll(crate::catalog::MissionId(201)),
             Some(77),
             "the offers not rolled again"
         );
@@ -983,7 +989,7 @@ mod tests {
                 .expect("takes off");
             let _ = session.settle_script(&catalog, &mut NeverFires);
             session.ship.player.velocity = Vec2::new(5.0, 0.0);
-            session.drop_raised();
+            session.run.drop_raised();
             assert_eq!(
                 session.land_at(&catalog, SystemId(system), StellarId(stellar)),
                 Ok(()),
@@ -1067,7 +1073,7 @@ mod tests {
         let catalog = atlas();
         for (system, stellar) in [(131, 140), (130, 129), (130, 128)] {
             let mut session = landed(&catalog);
-            session.drop_raised();
+            session.run.drop_raised();
             session
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");

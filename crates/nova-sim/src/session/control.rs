@@ -45,7 +45,7 @@ use std::collections::BTreeSet;
 
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
-use super::{Outbox, PlayerShip, Session, Statics};
+use super::{MissionRun, Outbox, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
@@ -193,50 +193,27 @@ impl Session {
                     .push(ScriptMove::KeepPosition(*system));
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
-            SetOp::PlaySound(sound) => self.play_script_sound(*sound),
+            SetOp::PlaySound(sound) => {
+                self.run
+                    .play_script_sound(&self.setup, &mut self.out, *sound);
+            }
             SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar, chance),
             SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
             SetOp::AbortMission(mission) => self.script_abort(*mission, chance),
             SetOp::FailMission(mission) => self.script_fail(*mission),
             SetOp::StartMission(mission) => self.script_start(*mission, chance),
-            SetOp::ActivateRank(rank) => self.activate_rank(*rank),
-            SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
-            SetOp::OutOfRange { op, .. } => self.out_of_range(*op),
+            SetOp::ActivateRank(rank) => {
+                self.run
+                    .activate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::DeactivateRank(rank) => {
+                self.run
+                    .deactivate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::OutOfRange { op, .. } => self.run.out_of_range(&self.setup, *op),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
-        }
-    }
-
-    /// An operator whose number is out of range (see
-    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
-    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
-    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
-    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
-    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
-    /// and does nothing by the other.
-    ///
-    /// `P`, `T` and `Q` have no check, and a number past 32767, the
-    /// engine's widest ID, names no resource, so each does what the
-    /// original does with a missing one: `T` nothing (an empty pick
-    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
-    /// leaves the message empty, @0x15c02); `P` a sound that does not
-    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
-    /// replaces a held one with none (@0x15a30; `_PlayGame`
-    /// @0x4631b-0x46348).
-    ///
-    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
-    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
-    fn out_of_range(&mut self, op: SetOpKind) {
-        match op {
-            SetOpKind::MoveKeepPosition
-                if self.setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
-            {
-                self.run.queued.moves.push(ScriptMove::Stay);
-            }
-            SetOpKind::PlaySound => self.drop_script_sound(),
-            SetOpKind::LeaveStellar => self.leave_on_no_list(),
-            _ => {}
         }
     }
 
@@ -338,6 +315,40 @@ impl PlayerShip {
             pilot,
             ammo_outfits: &statics.ammo_outfits,
             armament: &self.fit.armament,
+        }
+    }
+}
+
+impl MissionRun {
+    /// An operator whose number is out of range (see
+    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
+    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
+    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
+    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
+    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
+    /// and does nothing by the other.
+    ///
+    /// `P`, `T` and `Q` have no check, and a number past 32767, the
+    /// engine's widest ID, names no resource, so each does what the
+    /// original does with a missing one: `T` nothing (an empty pick
+    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
+    /// leaves the message empty, @0x15c02); `P` a sound that does not
+    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
+    /// replaces a held one with none (@0x15a30; `_PlayGame`
+    /// @0x4631b-0x46348).
+    ///
+    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
+    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
+    fn out_of_range(&mut self, setup: &Setup, op: SetOpKind) {
+        match op {
+            SetOpKind::MoveKeepPosition
+                if setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+            {
+                self.queued.moves.push(ScriptMove::Stay);
+            }
+            SetOpKind::PlaySound => self.drop_script_sound(setup),
+            SetOpKind::LeaveStellar => self.leave_on_no_list(setup),
+            _ => {}
         }
     }
 }

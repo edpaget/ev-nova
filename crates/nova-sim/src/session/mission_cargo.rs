@@ -275,7 +275,13 @@ impl Session {
             Crime::Smuggle,
             Some(govt_id),
         );
-        self.lose_ranks_to(Crime::Smuggle, Some(govt_id));
+        self.run.lose_ranks_to(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            Crime::Smuggle,
+            Some(govt_id),
+        );
         self.space.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
         self.take_scan_fine(fine);

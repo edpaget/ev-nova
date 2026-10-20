@@ -394,10 +394,19 @@
 //!   coordinators that read other state too (`set_player_system`,
 //!   `refresh_galaxy`, `rebuild_stellars`, `let_go_of_gone_target`,
 //!   `enter_system`) stay on `Session`.
-//! - `port: port::Port` (`port` module; phase 7, to come): landing,
-//!   take-off and the spaceport visit.
-//! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, to
-//!   come): the missions' runtime state and the story runtime.
+//! - `port: port::Port` (`port` module; phase 7, done): the landing,
+//!   take-off and spaceport visit under way (the dock request and land
+//!   key, the take-off grace and touchdown, the stay, the bar's news, the
+//!   outfitter visit, the day's rolls and the ranks' port prices); landing
+//!   and take-off themselves (`land`, `dock`, `take_off`) coordinate and
+//!   stay on `Session`.
+//! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, done):
+//!   the missions' runtime state (the offers and their dialog, the avail
+//!   cache, the slots due, the rank tags' governments, what the set
+//!   expressions queued) and the story runtime; the coordinators that read
+//!   other state too (`run_mission_script`, the offer rolls,
+//!   `accept_mission`, and the text parsing that hands `Session` to
+//!   `TextSource::parse`) stay on `Session`.
 //! - The mode fields `landed`, `jump`, `pod` and `player_end`: phase 8
 //!   decides whether they become one enum.
 //! - The stragglers `red_alert`, `tutorial` and `load_repaired`, which
@@ -1134,9 +1143,9 @@ impl Session {
             port: Port::new(player.position),
             run: MissionRun::new(),
         };
-        session.register_offer_roll();
-        session.register_nebulae();
-        session.register_slots();
+        session.run.register_offer_roll();
+        session.run.register_nebulae(&session.statics);
+        session.run.register_slots(&session.pilot);
         session.set_player_system(system, here, Dock::AsItWas);
         // A load and the main screen are rebuild points (@0x751cf,
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
@@ -1210,7 +1219,7 @@ impl Session {
     /// as the original's dock request does.
     pub fn resume(&mut self, chance: &mut dyn Chance) {
         self.face_on_load(chance);
-        self.draw_offer_rolls(chance);
+        self.run.draw_offer_rolls(chance);
     }
 
     /// This session with every disputed rule reading as `rules` says
@@ -1450,7 +1459,7 @@ impl Session {
         self.ship.fit.armament.tick_fire_clock();
         self.ship.latch_double_time();
         self.port.takeoff_grace_tick();
-        self.sound_script();
+        self.run.sound_script(&mut self.out);
         let frame = self.space.frame;
         self.space.pass_frame = frame;
         self.space.frame = market::next_frame(frame);
@@ -2446,7 +2455,7 @@ impl Session {
             .map(|npc| npc.id)
             .collect();
         for id in destroyed {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship: id,
                 fate: Fate::Destroyed,
             });
@@ -2476,7 +2485,7 @@ impl Session {
             .map(|npc| npc.id)
             .collect();
         for ship in downed {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Disabled,
             });
@@ -2520,7 +2529,8 @@ impl Session {
             for &crime in crimes {
                 self.chart
                     .convict_of(&mut self.pilot, &self.statics, law, crime, govt);
-                self.lose_ranks_to(crime, govt);
+                self.run
+                    .lose_ranks_to(&mut self.pilot, &self.statics, &self.setup, crime, govt);
             }
         }
     }
@@ -3016,7 +3026,7 @@ impl Session {
             self.ship
                 .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
-        let mark = self.story_mark();
+        let mark = self.run.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
         // @0x6c144); the `AvailBits` cached with it.
@@ -3062,7 +3072,7 @@ impl Session {
         // to, should the galaxy have hidden it on the way.
         let arrived = self.chart.galaxy.arrival(at).to;
         for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
-            self.raise_at(mark + n, StoryEvent::Explored { system });
+            self.run.raise_at(mark + n, StoryEvent::Explored { system });
         }
         let entered = Arrival {
             system: at,
@@ -3566,7 +3576,7 @@ impl Session {
         self.ship.warp.warp_out.clear();
         self.pilot.stellar = Some(stellar);
         // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
-        self.drop_leave();
+        self.run.drop_leave();
         self.port.bar_news = None;
         self.chart.bar_nav = None;
         self.space.combat.clear();
@@ -3592,7 +3602,7 @@ impl Session {
         // land check (@0x5fbeb) and its rebuild point (see the `ranks`
         // module).
         self.open_port_prices();
-        self.raise(StoryEvent::Landed { stellar });
+        self.run.raise(StoryEvent::Landed { stellar });
         // The port dialog's rebuild point (@0x5fbf0).
         self.rebuild_stellars();
     }
@@ -3647,7 +3657,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.lift_off(catalog, chance)?;
-        if !self.left_with_message() {
+        if !self.run.left_with_message() {
             self.greet(stellar, chance);
         }
         Some(stellar)
@@ -3680,7 +3690,7 @@ impl Session {
         self.out.takeoff_nav = Some(self.nav_mode());
         // A held `Q`'s leave is consumed (@0x63588-0x635e3; see the
         // `script_effects` module).
-        self.depart();
+        self.run.depart();
         let stay = std::mem::take(&mut self.port.stay);
         self.port.bar_news = None;
         self.chart.bar_nav = None;
@@ -3711,7 +3721,7 @@ impl Session {
         let system = self.pilot.system;
         self.chart
             .explore_place(&mut self.pilot, &self.setup, system, ExploredLevel::Charted);
-        self.raise(StoryEvent::Explored {
+        self.run.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
         self.space
@@ -3738,7 +3748,7 @@ impl Session {
         self.populate(catalog, chance);
         self.out.sounds.push(SimSound::TookOff);
         self.out.save_due = true;
-        self.raise(StoryEvent::TookOff { stellar });
+        self.run.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
@@ -4770,7 +4780,13 @@ impl Session {
         if npc.mission.is_none() {
             self.chart
                 .convict_of(&mut self.pilot, &self.statics, law, Crime::Board, npc.govt);
-            self.lose_ranks_to(Crime::Board, npc.govt);
+            self.run.lose_ranks_to(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                Crime::Board,
+                npc.govt,
+            );
         }
         self.space.call_good_samaritans(&npc);
         let linked = self
@@ -4816,7 +4832,7 @@ impl Session {
             npc.boarded = true;
             npc.former = None;
         }
-        self.raise(StoryEvent::ShipFate {
+        self.run.raise(StoryEvent::ShipFate {
             ship: id,
             fate: Fate::Boarded,
         });
@@ -9293,11 +9309,11 @@ pub(super) mod tests {
         );
         assert!(chance.sides_asked[1..].iter().all(|&sides| sides == 100));
         assert_eq!(
-            session.offer_rolls().roll(MissionId(128)),
+            session.run.offer_rolls().roll(MissionId(128)),
             Some(42),
             "drawn before any landing effect runs"
         );
-        assert_eq!(session.offer_rolls().roll(MissionId(129)), Some(1));
+        assert_eq!(session.run.offer_rolls().roll(MissionId(129)), Some(1));
         assert_eq!(session.landed(), None, "in space");
         assert_eq!(
             resumed_on(&session),
@@ -13476,7 +13492,7 @@ pub(super) mod tests {
     #[test]
     fn buying_a_map_raises_explored_for_each_system_it_reaches() {
         let mut session = outfitted(&limiting());
-        session.drop_raised();
+        session.run.drop_raised();
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
         assert_eq!(
             session.story_raised(),
@@ -24261,7 +24277,7 @@ pub(super) mod tests {
         }];
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         session.chart.target = None;
         assert!(board_by(&mut session, &NovaLaw::default()).is_err());
         assert_eq!(session.story_raised(), [], "no target");
@@ -24282,7 +24298,7 @@ pub(super) mod tests {
             ..NovaBoarding::default()
         };
         let mut session = alongside(&catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         assert_eq!(
             session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
             Ok(Boarding::Repelled)
@@ -28503,7 +28519,7 @@ pub(super) mod tests {
         assert!(session.pilot.explored.remove(&SystemId(134)));
         let explored: Vec<SystemId> = session.pilot().explored().collect();
         session.take_events();
-        session.drop_raised();
+        session.run.drop_raised();
         session.take_messages();
         assert!(hide(&mut session, &catalog, &[131]));
         session.chart.assert_docked_among_shown(session.landed);
@@ -28732,7 +28748,7 @@ pub(super) mod tests {
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
         hide(&mut session, &catalog, &[131]);
-        session.drop_raised();
+        session.run.drop_raised();
         session.arrive(&catalog, &mut NeverFires);
         let explored: Vec<SystemId> = session
             .story_raised()
@@ -28777,7 +28793,7 @@ pub(super) mod tests {
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
         hide(&mut session, &catalog, &[131]);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
-        session.drop_raised();
+        session.run.drop_raised();
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -28795,7 +28811,7 @@ pub(super) mod tests {
                 .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
             hide(&mut session, &catalog, &[132]);
             assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-            session.drop_raised();
+            session.run.drop_raised();
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))

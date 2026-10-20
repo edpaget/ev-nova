@@ -163,7 +163,7 @@ impl Session {
                     system,
                     ExploredLevel::Charted,
                 );
-                self.raise(StoryEvent::Explored { system });
+                self.run.raise(StoryEvent::Explored { system });
             }
             // Its known pass, with no clear (`_AutoSetExploration`
             // @0xdb06-0xdbd4).
@@ -896,7 +896,7 @@ mod tests {
     fn a_map_grant_explores_each_reached_systems_head_and_raises_explored_for_the_reached_only() {
         for source in RuleSource::ALL {
             let (_, mut session) = shadowed(source);
-            session.drop_raised();
+            session.run.drop_raised();
             session.grant_outfit(JUMPS_2);
             let heads: &[i16] = match source {
                 RuleSource::Engine => &[129],
@@ -1021,7 +1021,7 @@ mod tests {
 
     /// `session` with the story events raised so far let go of.
     fn quiet(mut session: Session) -> Session {
-        session.drop_raised();
+        session.run.drop_raised();
         session
     }
 

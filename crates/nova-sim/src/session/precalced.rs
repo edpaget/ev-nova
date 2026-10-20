@@ -552,7 +552,7 @@ pub(super) mod tests {
         );
         session.register_story(subscription).expect("registers");
         let trimmed = overloaded(&mut session);
-        session.raise(StoryEvent::Landed {
+        session.run.raise(StoryEvent::Landed {
             stellar: StellarId(128),
         });
         let untouched = cargo(&session);
@@ -611,7 +611,7 @@ pub(super) mod tests {
         use crate::session::tests::{outfitted, outfitting};
         let mut session = outfitted(&outfitting());
         session.enter_offer_venue(OUTFITTER);
-        session.suppress_offer(MissionId(200));
+        session.run.suppress_offer(MissionId(200));
         session.enter_offer_venue(OUTFITTER);
         assert!(
             session.run.suppressed.contains(&MissionId(200)),

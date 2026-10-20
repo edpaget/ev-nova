@@ -171,7 +171,7 @@ impl Session {
         self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;
         // `_DoNewPilot` explores its start system's nebulae while every
         // one is inactive (@0x19118; see the `nebulae` module).
-        self.withdraw_new_pilot_explored();
+        self.run.withdraw_new_pilot_explored(&self.setup);
         // `_DoNewPilot` explores the start system's neighbours
         // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
         // its `OnStart` (see the `explored` module).
@@ -224,7 +224,7 @@ impl Session {
         // table before its `OnStart`; nothing above reads the table, so
         // drawing it last settles the same table before the first frame
         // and the first save.
-        self.draw_offer_rolls(chance);
+        self.run.draw_offer_rolls(chance);
     }
 }
 

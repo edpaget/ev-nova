@@ -52,7 +52,7 @@
 use std::collections::BTreeMap;
 
 use super::hail::{HailTarget, make_leave};
-use super::{Chart, Session, Setup, Space};
+use super::{Chart, MissionRun, Session, Setup, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -163,12 +163,6 @@ impl Session {
         }
     }
 
-    /// The offer from a ship of `mission`, as the last person linked to it
-    /// resolved it.
-    pub(super) fn ship_offer(&self, mission: MissionId) -> Option<&Offer> {
-        self.run.ship_offers.get(&mission)
-    }
-
     /// Hails as the original's comm key does, Option not held: see
     /// [`Session::hail_key`].
     ///
@@ -249,7 +243,7 @@ impl Session {
             return None;
         }
         let mission = MissionId(person.record.link_mission?);
-        (self.ship_offer(mission).is_some() && self.ship_mission_available(mission)).then_some(
+        (self.run.ship_offer(mission).is_some() && self.ship_mission_available(mission)).then_some(
             Offering {
                 npc: npc.id,
                 person: person.record.id,
@@ -421,6 +415,14 @@ impl Chart {
     }
 }
 
+impl MissionRun {
+    /// The offer from a ship of `mission`, as the last person linked to it
+    /// resolved it.
+    pub(super) fn ship_offer(&self, mission: MissionId) -> Option<&Offer> {
+        self.ship_offers.get(&mission)
+    }
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -473,7 +475,7 @@ pub(super) mod tests {
     /// The stellar mission 130's offer from a ship, which there must be,
     /// goes to.
     fn offered_to(session: &Session) -> Option<StellarId> {
-        let offer = session.ship_offer(MissionId(130)).expect("an offer");
+        let offer = session.run.ship_offer(MissionId(130)).expect("an offer");
         offer.destination.map(|stop| stop.stellar)
     }
 
@@ -490,7 +492,10 @@ pub(super) mod tests {
         let session = populated(&catalog, Rulebook::default(), Some(129));
         assert_eq!(offered_to(&session), Some(StellarId(129)));
         assert_eq!(
-            session.ship_offer(MissionId(130)).map(|offer| offer.venue),
+            session
+                .run
+                .ship_offer(MissionId(130))
+                .map(|offer| offer.venue),
             Some(Venue::Ship)
         );
         let session = populated(&catalog, Rulebook::default(), None);
@@ -547,6 +552,7 @@ pub(super) mod tests {
         assert_eq!(chance.asked.last(), Some(&6), "{:?}", chance.asked);
         assert_eq!(
             session
+                .run
                 .ship_offer(MissionId(130))
                 .and_then(|offer| offer.cargo_type),
             Some(5)
@@ -678,7 +684,7 @@ pub(super) mod tests {
             .collect();
         assert_eq!(names, [Some(601)], "Bee comes on the pass");
         assert!(
-            session.ship_offer(MissionId(130)).is_some(),
+            session.run.ship_offer(MissionId(130)).is_some(),
             "resolved before the first frame"
         );
     }
@@ -954,7 +960,7 @@ pub(super) mod tests {
         assert_eq!(accept(&mut session), Ok(0));
         assert_eq!(session.npcs()[0], before);
         assert!(!session.pilot().gone(PersonId(600)));
-        assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(0));
+        assert_eq!(session.run.offer_rolls().roll(MissionId(130)), Some(0));
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
         assert_eq!(
             session.out.take_texts_only().len(),
@@ -1043,7 +1049,7 @@ pub(super) mod tests {
         let mut session = targeting_ace(&catalog);
         let (first, _) = hail(&mut session, &catalog);
         let before = session.npcs()[0].clone();
-        let offer = session.ship_offer(MissionId(130)).cloned();
+        let offer = session.run.ship_offer(MissionId(130)).cloned();
         assert_eq!(
             session
                 .refuse_mission(MissionId(130), &mut NeverFires)
@@ -1063,7 +1069,7 @@ pub(super) mod tests {
         assert!(session.pilot().missions().missions().is_empty());
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
         assert_eq!(hail(&mut session, &catalog).0, first, "offered again");
-        assert_eq!(session.ship_offer(MissionId(130)).cloned(), offer);
+        assert_eq!(session.run.ship_offer(MissionId(130)).cloned(), offer);
     }
 
     #[test]

@@ -172,7 +172,7 @@
 //! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
 //! it as their marks are cleared.
 
-use super::{Chart, Outbox, Session, Setup, Space, Statics};
+use super::{Chart, MissionRun, Outbox, Session, Setup, Space, Statics};
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
@@ -340,20 +340,6 @@ impl Session {
             &mut draw_type,
             chance,
         )
-    }
-
-    /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
-    /// and its goal checks, each with a blank guard and no script.
-    pub(super) fn register_ship_hooks(&mut self, slot: u8) {
-        for (hook, kind) in HOOKS {
-            let subscription = Subscription::new(
-                ship_hook(slot, hook),
-                EventFilter::Any(kind),
-                Script::default(),
-            );
-            let registered = self.register_story(subscription);
-            debug_assert!(registered.is_ok(), "a slot filled registers once");
-        }
     }
 
     /// Slot `id.record`'s hook `id.hook` on `event`, drawing on `chance`
@@ -1157,7 +1143,7 @@ impl Session {
         }
         self.join_mission_escorts();
         for (ship, slot) in came {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Arrived,
             });
@@ -1228,7 +1214,7 @@ impl Session {
             })
             .collect();
         for (ship, mark, counts) in left {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Departed,
             });
@@ -1486,6 +1472,22 @@ impl Chart {
         let from = self.galaxy.position(pilot.jumped_from?)?;
         let here = self.galaxy.position(pilot.system)?;
         Some(from - here)
+    }
+}
+
+impl MissionRun {
+    /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
+    /// and its goal checks, each with a blank guard and no script.
+    pub(super) fn register_ship_hooks(&mut self, slot: u8) {
+        for (hook, kind) in HOOKS {
+            let subscription = Subscription::new(
+                ship_hook(slot, hook),
+                EventFilter::Any(kind),
+                Script::default(),
+            );
+            let registered = self.register_story(subscription);
+            debug_assert!(registered.is_ok(), "a slot filled registers once");
+        }
     }
 }
 
@@ -2204,7 +2206,7 @@ pub(super) mod tests {
             active.ships.appear = -1;
             active.ships.arrived = 2;
         }
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how,
         });
@@ -3884,7 +3886,7 @@ pub(super) mod tests {
     fn only_the_ships_numbered_after_the_last_before_are_taken_as_come() {
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         session.run.story.watched.clear();
         let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
         session.mission_ships_came(Some(first));

@@ -54,9 +54,10 @@
 //! [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
 //! [`AuxShips::give_back`]: crate::mission::aux_ships::AuxShips::give_back
 
+use crate::pilot::Pilot;
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{MissionRun, Session, Statics};
 use crate::catalog::TrafficCatalog;
 use crate::chance::Chance;
 use crate::mission::Stop;
@@ -170,23 +171,14 @@ impl Session {
     ///
     /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
     pub(super) fn restart_aux(&mut self, slot: u8, chance: &mut dyn Chance) {
-        let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let record = self.statics.lifecycle_record(active.mission);
-        if let Some(active) = self.pilot.missions.get_mut(slot) {
-            active.aux.restart(&record.aux, record.flags, chance);
-        }
+        restart_aux(&mut self.pilot, &self.statics, slot, chance);
     }
 
     /// The take-off's restart of every active mission's auxiliary ships,
     /// in slot order ([`Session::restart_aux`]), drawing on `chance`; the
     /// launch's too ([`Session::open_at_launch`]).
     pub(super) fn restart_every_aux(&mut self, chance: &mut dyn Chance) {
-        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
-        for slot in slots {
-            self.restart_aux(slot, chance);
-        }
+        restart_every_aux(&mut self.pilot, &self.statics, chance);
     }
 
     /// Open Pilot's restart of every active mission's auxiliary ships, in
@@ -231,8 +223,8 @@ impl Session {
     ///
     /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
     pub fn open_at_launch(&mut self, chance: &mut dyn Chance) {
-        self.restart_every_aux(chance);
-        self.explore_here();
+        self.run
+            .open_at_launch(&mut self.pilot, &self.statics, chance);
     }
 
     /// The player's exit from a hypergate or wormhole, after the
@@ -290,6 +282,56 @@ impl Session {
         if how == Entrance::Gate {
             self.lose_aux_at_gate(slot);
         }
+    }
+}
+
+impl MissionRun {
+    /// The setup of a pilot opened at launch, once the load has run (its
+    /// sweep with it), drawing on `chance`, as `_OpenLastPilotFile` and
+    /// `_DoMainScreen`'s once-a-launch setup do:
+    ///
+    /// - every active mission's auxiliary ships restarted, in slot order,
+    ///   in the unguarded form the take-off uses ([`AuxShips::restart`],
+    ///   @0x765d4-0x76637): unlike [`Session::restart_aux_from_main_screen`]
+    ///   it redraws the countdown and zeroes those arrived even with none
+    ///   left to come;
+    /// - the player's system explored (`_ExploreNebulaeFromSystem(current)`
+    ///   @0x1affe), raising `Explored` for it to settle.
+    ///
+    /// No save is due. Open Pilot runs neither, nor does a return from
+    /// play. The original sweeps after the load and this runs after the
+    /// session's own sweep; both settle before the main menu's first
+    /// frame.
+    ///
+    /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+    fn open_at_launch(&mut self, pilot: &mut Pilot, statics: &Statics, chance: &mut dyn Chance) {
+        restart_every_aux(pilot, statics, chance);
+        self.explore_here(pilot);
+    }
+}
+
+/// The restart of the auxiliary ships of the mission in `slot`, if
+/// any, by the enter-system hook or the take-off
+/// ([`AuxShips::restart`]), drawing on `chance`.
+///
+/// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+fn restart_aux(pilot: &mut Pilot, statics: &Statics, slot: u8, chance: &mut dyn Chance) {
+    let Some(active) = pilot.missions.get(slot) else {
+        return;
+    };
+    let record = statics.lifecycle_record(active.mission);
+    if let Some(active) = pilot.missions.get_mut(slot) {
+        active.aux.restart(&record.aux, record.flags, chance);
+    }
+}
+
+/// The take-off's restart of every active mission's auxiliary ships,
+/// in slot order ([`Session::restart_aux`]), drawing on `chance`; the
+/// launch's too ([`Session::open_at_launch`]).
+fn restart_every_aux(pilot: &mut Pilot, statics: &Statics, chance: &mut dyn Chance) {
+    let slots: Vec<u8> = pilot.missions.iter().map(|(slot, _)| slot).collect();
+    for slot in slots {
+        restart_aux(pilot, statics, slot, chance);
     }
 }
 
@@ -1167,7 +1209,7 @@ mod tests {
                 left: 1,
             },
         );
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how,
         });
@@ -1259,7 +1301,7 @@ mod tests {
     fn the_hook_draws_each_slots_special_timer_then_its_aux_countdown_in_slot_order() {
         let (catalog, mut session) = two_slots();
         take_off(&mut session, &catalog);
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how: Entrance::Jump,
         });
@@ -1400,7 +1442,7 @@ mod tests {
         let catalog = gated_aux(2, -1);
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how: Entrance::Gate,
         });

@@ -1730,7 +1730,7 @@
 //! Every end (a success, a failure, `A`, an abort or an auto-abort) frees
 //! the slot and unregisters its hooks, clearing their once-fired entries,
 //! so a mission accepted into the reused slot starts fresh, and forgets
-//! the stellar the offers were rolled at (`Session::forget_offers`).
+//! the stellar the offers were rolled at (`MissionRun::forget_offers`).
 //! `EnteredSystem` moves no mission: the original's enter-system hook only
 //! restarts its ships' timers (mission-ships phase 1). Offers are rolled
 //! as the player lands, before the spaceport opens, and kept until a

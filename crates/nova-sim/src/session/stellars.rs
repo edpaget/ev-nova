@@ -364,7 +364,13 @@ impl Session {
             // `_CheckShotProximities` slaps ten times (@0x374e9), but
             // after the first pass no rank it takes is still active, so
             // one pass takes the same ranks.
-            self.lose_ranks_to(Crime::Kill, site.govt);
+            self.run.lose_ranks_to(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                Crime::Kill,
+                site.govt,
+            );
         }
     }
 

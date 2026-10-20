@@ -494,7 +494,7 @@ pub(super) mod tests {
             let catalog = gated(following(0, 0), flags2);
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.drop_raised();
+            session.run.drop_raised();
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             let ships = specials(&session);
             assert_eq!(ships.len(), 2, "{kind:?}: ships left, none set up besides");

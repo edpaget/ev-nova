@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, VecDeque};
 use super::entry::Dock;
 use super::missions;
 use super::script_effects::Settled;
-use super::{Chart, Outbox, Port, ScriptNote, Session, SessionEvent, Setup, Statics};
+use super::{Chart, MissionRun, Outbox, Port, ScriptNote, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{
     GovtId, LandingSite, NebulaId, PilotCatalog, StellarId, SystemId, TrafficCatalog,
 };
@@ -215,7 +215,9 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn settle_leave(&mut self) -> bool {
-        self.session.settle_leave(self.settled)
+        self.session
+            .run
+            .settle_leave(&mut self.session.out, self.session.landed, self.settled)
     }
 
     fn take_raised(&mut self) -> VecDeque<StoryEvent> {
@@ -258,7 +260,7 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
                     .port
                     .draw_day_rolls(&session.statics, &session.setup, &mut self.chance);
             }
-            Participant::DayPassed => session.raise(StoryEvent::DayPassed {
+            Participant::DayPassed => session.run.raise(StoryEvent::DayPassed {
                 date: session.pilot.date,
             }),
             // The active missions' days left; their deadlines fail on the
@@ -276,25 +278,6 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
 }
 
 impl Session {
-    /// Raises `event` from its one source: it waits, with the others
-    /// raised, for the next settling ([`Session::settle_script`]). A
-    /// source only raises; nothing here dispatches.
-    pub(super) fn raise(&mut self, event: StoryEvent) {
-        self.run.story.raised.push_back(event);
-    }
-
-    /// How many events have been raised and not yet settled: a mark to
-    /// raise earlier ones at ([`Session::raise_at`]).
-    pub(super) fn story_mark(&self) -> usize {
-        self.run.story.raised.len()
-    }
-
-    /// Raises `event` at `mark`, before the events raised since: where a
-    /// source learns of an event only after later ones.
-    pub(super) fn raise_at(&mut self, mark: usize, event: StoryEvent) {
-        self.run.story.raised.insert(mark, event);
-    }
-
     /// Watches the NPC `ship`: the next flight tick of the traffic that
     /// finds it in the system and observed raises its first sighting,
     /// [`Fate::Observed`], once, and forgets it. Observed is seen by the
@@ -306,7 +289,7 @@ impl Session {
     /// system or resetting its traffic forgets every one, its ships
     /// replaced (see the `story` module's findings).
     pub fn watch_ship(&mut self, ship: NpcId) {
-        self.run.story.watched.insert(ship);
+        self.run.watch_ship(ship);
     }
 
     /// Raises the first sighting of each watched ship in the system that
@@ -321,7 +304,7 @@ impl Session {
                 continue;
             };
             if self.observes(npc) {
-                self.raise(StoryEvent::ShipFate {
+                self.run.raise(StoryEvent::ShipFate {
                     ship,
                     fate: Fate::Observed,
                 });
@@ -329,24 +312,6 @@ impl Session {
                 self.run.story.watched.insert(ship);
             }
         }
-    }
-
-    /// The subscriptions `event` would run now, in the order they run.
-    #[cfg(test)]
-    pub(super) fn story_matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
-        self.run.story.registry.matching(event)
-    }
-
-    /// Lets go of the events of `kind` raised and not yet settled, keeping
-    /// every other in order.
-    pub(super) fn withdraw_raised(&mut self, kind: StoryEventKind) {
-        self.run.story.raised.retain(|event| event.kind() != kind);
-    }
-
-    /// Lets go of the events raised, undispatched: a test's clean slate.
-    #[cfg(test)]
-    pub(super) fn drop_raised(&mut self) {
-        self.run.story.raised.clear();
     }
 
     /// Registers `subscription`, which runs from the next event it matches
@@ -360,17 +325,15 @@ impl Session {
         &mut self,
         subscription: Subscription,
     ) -> Result<(), DuplicateSubscription> {
-        self.run.story.registry.register(subscription)
+        self.run.register_story(subscription)
     }
 
     /// Unregisters the subscription `id`, and clears its once-fired entry,
     /// so one registered under the same id again starts fresh: whether one
     /// was registered. Clearing a fired entry makes a save due.
     pub fn unregister_story(&mut self, id: SubscriptionId) -> bool {
-        if self.pilot.story_fired.remove(&id) {
-            self.out.save_due = true;
-        }
-        self.run.story.registry.unregister(id).is_some()
+        self.run
+            .unregister_story(&mut self.pilot, &mut self.out, id)
     }
 
     /// Settles what the set expressions left and the events raised,
@@ -407,7 +370,7 @@ impl Session {
     /// The events raised and not yet settled, in order.
     #[cfg(test)]
     pub(crate) fn story_raised(&self) -> Vec<StoryEvent> {
-        self.run.story.raised.iter().copied().collect()
+        self.run.story_raised()
     }
 
     /// Changes the galaxy overlay as `change` says: the one writer's entry
@@ -755,6 +718,94 @@ impl Port {
     }
 }
 
+impl MissionRun {
+    /// Raises `event` from its one source: it waits, with the others
+    /// raised, for the next settling ([`Session::settle_script`]). A
+    /// source only raises; nothing here dispatches.
+    pub(super) fn raise(&mut self, event: StoryEvent) {
+        self.story.raised.push_back(event);
+    }
+
+    /// How many events have been raised and not yet settled: a mark to
+    /// raise earlier ones at ([`MissionRun::raise_at`]).
+    pub(super) fn story_mark(&self) -> usize {
+        self.story.raised.len()
+    }
+
+    /// Raises `event` at `mark`, before the events raised since: where a
+    /// source learns of an event only after later ones.
+    pub(super) fn raise_at(&mut self, mark: usize, event: StoryEvent) {
+        self.story.raised.insert(mark, event);
+    }
+
+    /// Watches the NPC `ship`: the next flight tick of the traffic that
+    /// finds it in the system and observed raises its first sighting,
+    /// [`Fate::Observed`], once, and forgets it. Observed is seen by the
+    /// player ([`Session::sees`]: not waiting at the gate it comes out of
+    /// ([`Npc::emerging`](crate::traffic::npc::Npc::emerging)), and uncloaked
+    /// or within a cloak scanner's sight) and, for a ship that can cloak,
+    /// on screen ([`Session::on_screen`]); until then it stays watched. A
+    /// ship no longer in the system is forgotten, and populating the
+    /// system or resetting its traffic forgets every one, its ships
+    /// replaced (see the `story` module's findings).
+    fn watch_ship(&mut self, ship: NpcId) {
+        self.story.watched.insert(ship);
+    }
+
+    /// The subscriptions `event` would run now, in the order they run.
+    #[cfg(test)]
+    pub(super) fn story_matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
+        self.story.registry.matching(event)
+    }
+
+    /// Lets go of the events of `kind` raised and not yet settled, keeping
+    /// every other in order.
+    pub(super) fn withdraw_raised(&mut self, kind: StoryEventKind) {
+        self.story.raised.retain(|event| event.kind() != kind);
+    }
+
+    /// Lets go of the events raised, undispatched: a test's clean slate.
+    #[cfg(test)]
+    pub(super) fn drop_raised(&mut self) {
+        self.story.raised.clear();
+    }
+
+    /// Registers `subscription`, which runs from the next event it matches
+    /// (see the `story` module's "Dispatch").
+    ///
+    /// # Errors
+    ///
+    /// [`DuplicateSubscription`] when one is registered under its id
+    /// already, which is kept.
+    pub(super) fn register_story(
+        &mut self,
+        subscription: Subscription,
+    ) -> Result<(), DuplicateSubscription> {
+        self.story.registry.register(subscription)
+    }
+
+    /// Unregisters the subscription `id`, and clears its once-fired entry,
+    /// so one registered under the same id again starts fresh: whether one
+    /// was registered. Clearing a fired entry makes a save due.
+    pub(super) fn unregister_story(
+        &mut self,
+        pilot: &mut Pilot,
+        out: &mut Outbox,
+        id: SubscriptionId,
+    ) -> bool {
+        if pilot.story_fired.remove(&id) {
+            out.save_due = true;
+        }
+        self.story.registry.unregister(id).is_some()
+    }
+
+    /// The events raised and not yet settled, in order.
+    #[cfg(test)]
+    pub(super) fn story_raised(&self) -> Vec<StoryEvent> {
+        self.story.raised.iter().copied().collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
@@ -1049,8 +1100,8 @@ mod tests {
         let catalog = testkit::catalog();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.story_raised(), [EXPLORED_130], "the start's only");
-        session.raise(LANDED_128);
-        session.raise(TOOK_OFF_128);
+        session.run.raise(LANDED_128);
+        session.run.raise(TOOK_OFF_128);
         assert_eq!(
             session.story_raised(),
             [EXPLORED_130, LANDED_128, TOOK_OFF_128]
@@ -1220,7 +1271,7 @@ mod tests {
     fn a_jumps_explored_follows_the_events_raised_before_it() {
         let catalog = testkit::catalog();
         let mut session = quiet(Session::start(&catalog).expect("starts"));
-        session.raise(LANDED_128);
+        session.run.raise(LANDED_128);
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
         let mut expected = vec![LANDED_128, explored(131)];
@@ -1749,7 +1800,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         land_now(&mut session).expect("lands");
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
-        session.raise(TOOK_OFF_128);
+        session.run.raise(TOOK_OFF_128);
         assert_eq!(
             session.settle_script(&catalog, &mut NeverFires),
             Settled {

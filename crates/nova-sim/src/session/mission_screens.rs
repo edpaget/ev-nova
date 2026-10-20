@@ -36,7 +36,7 @@
 
 #[cfg(test)]
 use super::missions::TextSource;
-use super::{Chart, Outbox, Session, Statics};
+use super::{Chart, MissionRun, Outbox, Session, Setup, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
@@ -344,28 +344,6 @@ impl Session {
         }
     }
 
-    /// Queues the after-movie the offer dialog of `mission` plays once its
-    /// answer has queued its texts (`_OfferOneMission` @0xa3580-0xa35b8):
-    /// only for an offer the dialog showed, at a venue or from a ship; the
-    /// mission computer (`_DoMissionDialog`) plays none. The check reads
-    /// the globals as the answer left them ([`RuleKey::DescMovieGlobals`]):
-    /// by the engine, the last `dësc` loaded's after-movie, which after an
-    /// accept is the offer's again (reloaded @0xa2e29), and after a
-    /// `RefuseText` that text's, as nothing reloads the offer after it
-    /// (@0xa2eb5-0xa2f4d); by the other reading the offer's own.
-    pub(super) fn show_offer_after_movie(&mut self, mission: MissionId, venue: Venue) {
-        if venue == Venue::Computer {
-            return;
-        }
-        let movie = match self.setup.rules.source_for(RuleKey::DescMovieGlobals) {
-            RuleSource::Engine => self.run.loaded_movie.clone(),
-            RuleSource::Bible => self.statics.offer_movie(mission),
-        };
-        if let Some(movie) = movie.filter(|movie| movie.after) {
-            self.out.shown_texts.push(MissionShown::Movie(movie));
-        }
-    }
-
     /// Loads `mission`'s offer `dësc` again, drawing on `chance`, as
     /// `_OfferOneMission` does once the mission info screen opened over the
     /// offer dialog closes (@0xa335c): the movie and the governments it
@@ -391,7 +369,8 @@ impl Session {
     pub fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
         self.landed.is_some()
             && self
-                .offer_of(mission)
+                .run
+                .offer_of(self.landed, mission)
                 .is_some_and(|offer| offer.venue != Venue::Computer)
             && self
                 .statics
@@ -605,7 +584,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Option<ComputerRow> {
-        self.offer_of(mission)?;
+        self.run.offer_of(self.landed, mission)?;
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts.and_then(|texts| texts.offer.clone());
@@ -755,18 +734,7 @@ impl Session {
     /// @0xa36a7-0xa36d7): entering one other than the last forgets the
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
     pub fn enter_offer_venue(&mut self, loc: i16) {
-        if self.run.offer_venue != Some(loc) {
-            if loc != SPACEPORT {
-                self.run.suppressed.clear();
-            }
-            self.run.offer_venue = Some(loc);
-        }
-    }
-
-    /// Suppresses the offer of `mission`, whose accept was refused, until
-    /// another venue is entered (`_OfferMissionFromPort` @0xa3765).
-    pub(super) fn suppress_offer(&mut self, mission: MissionId) {
-        self.run.suppressed.insert(mission);
+        self.run.enter_offer_venue(loc);
     }
 
     /// Whether `offer`, on the visit under way, is still available at its
@@ -871,6 +839,55 @@ impl Chart {
             reserves: super::reserves(pilot),
         });
         out.shown_texts.push(MissionShown::Text(text));
+    }
+}
+
+impl MissionRun {
+    /// Queues the after-movie the offer dialog of `mission` plays once its
+    /// answer has queued its texts (`_OfferOneMission` @0xa3580-0xa35b8):
+    /// only for an offer the dialog showed, at a venue or from a ship; the
+    /// mission computer (`_DoMissionDialog`) plays none. The check reads
+    /// the globals as the answer left them ([`RuleKey::DescMovieGlobals`]):
+    /// by the engine, the last `dësc` loaded's after-movie, which after an
+    /// accept is the offer's again (reloaded @0xa2e29), and after a
+    /// `RefuseText` that text's, as nothing reloads the offer after it
+    /// (@0xa2eb5-0xa2f4d); by the other reading the offer's own.
+    pub(super) fn show_offer_after_movie(
+        &mut self,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+        mission: MissionId,
+        venue: Venue,
+    ) {
+        if venue == Venue::Computer {
+            return;
+        }
+        let movie = match setup.rules.source_for(RuleKey::DescMovieGlobals) {
+            RuleSource::Engine => self.loaded_movie.clone(),
+            RuleSource::Bible => statics.offer_movie(mission),
+        };
+        if let Some(movie) = movie.filter(|movie| movie.after) {
+            out.shown_texts.push(MissionShown::Movie(movie));
+        }
+    }
+
+    /// Enters venue `loc` for its offers (`_OfferMissionFromPort`
+    /// @0xa36a7-0xa36d7): entering one other than the last forgets the
+    /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
+    fn enter_offer_venue(&mut self, loc: i16) {
+        if self.offer_venue != Some(loc) {
+            if loc != SPACEPORT {
+                self.suppressed.clear();
+            }
+            self.offer_venue = Some(loc);
+        }
+    }
+
+    /// Suppresses the offer of `mission`, whose accept was refused, until
+    /// another venue is entered (`_OfferMissionFromPort` @0xa3765).
+    pub(super) fn suppress_offer(&mut self, mission: MissionId) {
+        self.suppressed.insert(mission);
     }
 }
 
