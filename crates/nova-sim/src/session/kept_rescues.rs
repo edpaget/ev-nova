@@ -40,7 +40,7 @@
 //!   original forgets them before the jump's days (@0x6bf3f, the days
 //!   @0x6c144); the engine forgets them after, and in between derives the
 //!   rescue for the departure system as the holder's last case does
-//!   (filed as crons-news-ranks-fidelity's owner-unset-until-rebuild).
+//!   (filed as crons-news-ranks-fidelity phase 38).
 //! - The developer tools' galaxy change (`Session::change_galaxy`) is no
 //!   refresh, and forgets nothing.
 //!
