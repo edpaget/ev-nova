@@ -616,6 +616,48 @@ pub(super) mod tests {
         }
     }
 
+    /// A jump outlives the kill: the deadly stellar takes no account of
+    /// one (`_HandleDeadlyStellars` tests only +0xb8, @0x39d3f), its kill
+    /// writes no +0x50 (@0x39da4-0x39e1f), and the dead branch returns
+    /// before the jump's match. In play, the warp-out run or the
+    /// pre-jump's drift carries the ship into the stellar; here the jump is
+    /// set directly. So the game's end sits beside the mode, not in it.
+    #[test]
+    fn a_deadly_stellar_kills_a_jumping_player_and_the_jump_stays() {
+        use crate::catalog::SystemId;
+        use crate::session::Jump;
+        let to = SystemId(131);
+        for jump in [
+            Jump::PreJump {
+                to,
+                bearing: Some(90),
+                warp: Some(3),
+            },
+            Jump::Hyperspace { to, warp: 3 },
+        ] {
+            let catalog = armed();
+            let on_the_player = deadly_at(140, 0.0, 40.0);
+            let mut session = among(&catalog, &[on_the_player], 1, Rulebook::default());
+            session.jump = Some(jump);
+            fight(&mut session);
+            assert_eq!(session.ship.condition, Condition::Destroyed, "{jump:?}");
+            assert!(
+                matches!(session.player_end, Some(Ending::Holding { .. })),
+                "{jump:?}"
+            );
+            assert_eq!(session.jump, Some(jump), "the jump stays");
+            for tick in 0..5 {
+                session.tick(Controls::default());
+                fight(&mut session);
+                assert!(
+                    matches!(session.player_end, Some(Ending::Holding { .. })),
+                    "{jump:?} tick {tick}"
+                );
+                assert_eq!(session.jump, Some(jump), "{jump:?} tick {tick}");
+            }
+        }
+    }
+
     /// The pod's countdown runs out on the tick a deadly stellar covers
     /// it: `_HandlePlayer` rescues it (@0x68de3) before
     /// `_HandleDeadlyStellars` runs that pass, so it is never killed. The
