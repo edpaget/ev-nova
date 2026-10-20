@@ -3613,9 +3613,17 @@ impl RuleKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rulebook {
     global: Option<RuleSource>,
-    overrides: [Option<RuleSource>; RuleKey::ALL.len()],
+    /// The rules overridden, a bit for each by its index, packed so the
+    /// rulebook stays small enough to pass by value however many rules
+    /// there are.
+    overridden: [u64; OVERRIDE_WORDS],
+    /// Of the rules overridden, those that follow the Bible.
+    bible: [u64; OVERRIDE_WORDS],
     values: [Option<NonZeroU32>; RuleValue::ALL.len()],
 }
+
+/// The words a [`Rulebook`]'s override bits take, one bit per rule.
+const OVERRIDE_WORDS: usize = RuleKey::ALL.len().div_ceil(64);
 
 /// Every rule following its own default, overriding none: the engine's,
 /// but for the two cron holdoff keys, the breakup stall, the beam cone
@@ -3626,7 +3634,8 @@ impl Default for Rulebook {
     fn default() -> Self {
         Self {
             global: None,
-            overrides: [None; RuleKey::ALL.len()],
+            overridden: [0; OVERRIDE_WORDS],
+            bible: [0; OVERRIDE_WORDS],
             values: [None; RuleValue::ALL.len()],
         }
     }
@@ -3639,7 +3648,8 @@ impl Rulebook {
     pub const fn new(global: RuleSource) -> Self {
         Self {
             global: Some(global),
-            overrides: [None; RuleKey::ALL.len()],
+            overridden: [0; OVERRIDE_WORDS],
+            bible: [0; OVERRIDE_WORDS],
             values: [None; RuleValue::ALL.len()],
         }
     }
@@ -3662,8 +3672,25 @@ impl Rulebook {
     /// source.
     #[must_use]
     pub fn with_override(mut self, rule: RuleKey, source: RuleSource) -> Self {
-        self.overrides[rule.index()] = Some(source);
+        let (word, bit) = override_bit(rule);
+        self.overridden[word] |= bit;
+        match source {
+            RuleSource::Engine => self.bible[word] &= !bit,
+            RuleSource::Bible => self.bible[word] |= bit,
+        }
         self
+    }
+
+    /// The source `rule` is overridden to follow, if it is.
+    fn override_of(&self, rule: RuleKey) -> Option<RuleSource> {
+        let (word, bit) = override_bit(rule);
+        (self.overridden[word] & bit != 0).then(|| {
+            if self.bible[word] & bit == 0 {
+                RuleSource::Engine
+            } else {
+                RuleSource::Bible
+            }
+        })
     }
 
     /// The source chosen for every rule, if one was; `None` when each
@@ -3677,15 +3704,55 @@ impl Rulebook {
     /// else its own default.
     #[must_use]
     pub fn source_for(&self, rule: RuleKey) -> RuleSource {
-        self.overrides[rule.index()]
+        self.override_of(rule)
             .or(self.global)
             .unwrap_or(rule.default_source())
     }
 }
 
+/// The word of a [`Rulebook`]'s override bits that holds `rule`'s, and
+/// its bit there.
+const fn override_bit(rule: RuleKey) -> (usize, u64) {
+    let index = rule.index();
+    (index / 64, 1 << (index % 64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rulebook_is_small_enough_to_pass_by_value() {
+        // Clippy's `large_types_passed_by_value` asks for a reference past
+        // 256 bytes, and tests across the workspace take a `Rulebook` by
+        // value: its size must not grow with the number of keys.
+        assert!(
+            std::mem::size_of::<Rulebook>() <= 128,
+            "{} bytes",
+            std::mem::size_of::<Rulebook>()
+        );
+    }
+
+    #[test]
+    fn an_override_reads_back_and_a_later_one_replaces_it() {
+        let rule = RuleKey::ALL[RuleKey::ALL.len() - 1];
+        for global in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
+            let base = global.map_or_else(Rulebook::default, Rulebook::new);
+            for first in RuleSource::ALL {
+                for then in RuleSource::ALL {
+                    let rulebook = base.with_override(rule, first).with_override(rule, then);
+                    assert_eq!(rulebook.source_for(rule), then, "{global:?} {first:?}");
+                }
+            }
+            let one = base.with_override(RuleKey::ALL[64], RuleSource::Bible);
+            for (n, other) in RuleKey::ALL.into_iter().enumerate() {
+                if n != 64 {
+                    assert_eq!(one.source_for(other), base.source_for(other), "{other:?}");
+                }
+            }
+            assert_eq!(one.source_for(RuleKey::ALL[64]), RuleSource::Bible);
+        }
+    }
 
     #[test]
     fn every_rule_follows_its_default_the_engines_but_the_recorded_departures() {
