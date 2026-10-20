@@ -699,6 +699,30 @@ fn a_new_pilot_with_no_game_held_reads_the_refresh_the_last_flight_left() {
 }
 
 #[test]
+fn a_new_pilot_reads_the_game_helds_refresh_before_the_last_flights() {
+    let store = MemoryPilots::new();
+    let mut screen = hiding_beta(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    let ada = screen
+        .game
+        .as_ref()
+        .expect("Ada's game held")
+        .last_refresh();
+    create_held(&mut screen, "Bea");
+    let bea = screen
+        .game
+        .as_ref()
+        .expect("Bea's game held")
+        .last_refresh();
+    assert_eq!(screen.last_refresh, ada, "Ada's play put away: Beta hidden");
+    assert_ne!(bea, ada, "Bea's @0x1925e, before her OnStart: Beta visible");
+    create_held(&mut screen, "Cea");
+    let cea = screen.game.as_ref().expect("Cea's game held");
+    assert!(explored_beta(cea), "Bea's refresh, not Ada's");
+}
+
+#[test]
 fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
