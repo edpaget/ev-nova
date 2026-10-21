@@ -10,7 +10,9 @@
 //! its turn (@0x3444b-0x34586: 1 turning clockwise, -1 the other way, 0
 //! not turning or snapping onto its heading) and its thrust word +0x30
 //! against `_ShipAccelRate`. A tick it is not flown by a step (an AI wait,
-//! its glide in, keeping formation) reads as coasting straight.
+//! its glide in, keeping formation by the port's earlier reading,
+//! [`FormationFlight::Earlier`](crate::flight::FormationFlight::Earlier))
+//! reads as coasting straight.
 //!
 //! **The bank and glow** ([`bank_and_glow`], `_HandleShip`
 //! @0x34d93-0x34fcb, after its flight):
@@ -30,15 +32,20 @@
 //! - A ship of a derelict government (`_ShipIsDerelict` @0x8225) holds its
 //!   glow at 0 every frame (@0x35449-0x3545b).
 //!
-//! Three copies come before: sub-goal 0xc, close formation, takes its
-//! leader's glow (@0x87dce-0x87deb, [`Drive::formation`], the player's
-//! for the player's escorts); sub-goal 0xd, following a leader's jump, the
-//! leader's while the leader's stage is 1.0 or below (@0x85a2d-0x85a4a,
+//! Four copies come before, each recorded by the flight in its drive
+//! ([`Drive::glow`], [`GlowCopy`]): sub-goal 0xc, close formation, takes
+//! its leader's glow (@0x87dce-0x87deb, [`GlowCopy::Leader`], the
+//! player's for the player's escorts); sub-goal 0xb with a swarm leader
+//! takes the swarm leader's, as the pass began (@0x87364-0x873a3,
+//! [`GlowCopy::Swarm`], see
+//! [`formation_flight`](crate::traffic::formation_flight)); sub-goal 0xd,
+//! following a leader's jump, the leader's while the leader's stage is
+//! 1.0 or below (@0x85a2d-0x85a4a,
 //! [`warp_out::follow_jump`](crate::traffic::warp_out::follow_jump)); and
 //! the warp-out raises it by 3 to 32 as it moves the ship
 //! (@0x349fc-0x34a25, [`warp_glow`]). The swarm leader's copies in
-//! sub-goals 5, 0x11, 7 and 0xb (@0x85cb7, @0x86632, @0x86810,
-//! @0x87394) are rdm:phase/combat-ai-fidelity/phase-14-swarming's.
+//! sub-goals 5, 0x11 and 7 (@0x85cb7, @0x86632, @0x86810) are
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14's.
 //!
 //! **The fold's writers** ([`dispatch_fold`], each advance pass, and
 //! [`landing_unfold`]), each for a ship of 0x0002 with no direction
@@ -147,9 +154,24 @@ pub struct Drive {
     pub turn: i8,
     /// How it thrust.
     pub thrust: Thrust,
-    /// Whether it kept close formation (sub-goal 0xc), taking its leader's
-    /// glow.
-    pub formation: bool,
+    /// Whose glow it copied before its step.
+    pub glow: GlowCopy,
+}
+
+/// Whose glow a flight copies before `_HandleShip` steps its own (see the
+/// module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlowCopy {
+    /// None.
+    #[default]
+    None,
+    /// Its leader's, as the bank and glow are given it: sub-goal 0xc,
+    /// close formation (@0x87dce-0x87deb), the player's for the player's
+    /// escorts.
+    Leader,
+    /// This glow, its swarm leader's as the pass began: sub-goal 0xb's
+    /// swarm branch (@0x87364-0x873a3).
+    Swarm(i16),
 }
 
 /// Which class a spawn rolls its anim set and animation timer on (see the
@@ -349,10 +371,9 @@ pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Opt
     let spec = npc.hull.frames;
     let drive = std::mem::take(&mut npc.display.drive);
     let display = &mut npc.display;
-    if drive.formation
-        && let Some(glow) = leader_glow
-    {
-        display.glow = glow;
+    match (drive.glow, leader_glow) {
+        (GlowCopy::Leader, Some(glow)) | (GlowCopy::Swarm(glow), _) => display.glow = glow,
+        (GlowCopy::Leader | GlowCopy::None, _) => {}
     }
     if held {
         fade(&mut display.glow);
@@ -619,7 +640,7 @@ mod tests {
         ship.display.drive = Drive {
             turn,
             thrust,
-            formation: false,
+            glow: GlowCopy::None,
         };
         bank_and_glow(ship, false, false, None);
     }
@@ -707,7 +728,7 @@ mod tests {
         ship.display.drive = Drive {
             turn: -1,
             thrust: Thrust::Rush,
-            formation: false,
+            glow: GlowCopy::None,
         };
         bank_and_glow(&mut ship, true, false, None);
         assert_eq!(
@@ -802,12 +823,23 @@ mod tests {
     #[test]
     fn a_ship_in_close_formation_takes_its_leaders_glow_before_its_own_step() {
         let mut ship = ship_of_glow(0, 3);
-        ship.display.drive.formation = true;
+        ship.display.drive.glow = GlowCopy::Leader;
         bank_and_glow(&mut ship, false, false, Some(20));
         assert_eq!(ship.display.glow, 19, "the leader's, then coasting");
         ship.display.glow = 3;
         bank_and_glow(&mut ship, false, false, Some(20));
         assert_eq!(ship.display.glow, 2, "out of formation: its own");
+        ship.display.drive.glow = GlowCopy::Leader;
+        bank_and_glow(&mut ship, false, false, None);
+        assert_eq!(ship.display.glow, 1, "with no leader's glow, its own");
+    }
+
+    #[test]
+    fn a_ship_closing_with_a_swarm_leader_takes_its_glow_before_its_own_step() {
+        let mut ship = ship_of_glow(0, 3);
+        ship.display.drive.glow = GlowCopy::Swarm(12);
+        bank_and_glow(&mut ship, false, false, Some(20));
+        assert_eq!(ship.display.glow, 11, "the swarm leader's, then coasting");
     }
 
     #[test]
@@ -846,7 +878,7 @@ mod tests {
             Drive {
                 turn: 1,
                 thrust: Thrust::Plain,
-                formation: false
+                glow: GlowCopy::None
             }
         );
         let rushing = Handling {

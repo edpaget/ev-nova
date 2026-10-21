@@ -60,6 +60,7 @@ use crate::ai::plunder_contents::{
     CAPTURED_ARMOR_SHARE, CAPTURED_WAIT, CargoLine, Led, PLUNDER_HOLD, Side, Taken, Victim,
     captures, cargo_line, roll_odds, steal, taken,
 };
+use crate::ai::swarm::SwarmLead;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -233,8 +234,8 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
 }
 
 /// Flies `npc`'s docking one tick at `victim` (none when that ship is gone,
-/// which drops the docking), at `speeds` under `flight`, its dock's wait rolled on
-/// `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
+/// which drops the docking), at `speeds` under `flight`, with `swarm` its
+/// swarm lead, its dock's wait rolled on `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
 /// no docking to fly, is not intact or not flying, for the autopilot to
 /// fly it instead.
 pub fn fly_docking(
@@ -242,6 +243,7 @@ pub fn fly_docking(
     victim: Option<&ShipState>,
     speeds: TopSpeeds,
     flight: FlightRules,
+    swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<DockOutcome> {
     npc.docking?;
@@ -253,7 +255,9 @@ pub fn fly_docking(
         return None;
     };
     let handling = npc.flying_handling(speeds.own, flight);
-    Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
+    Some(plunder_dock::fly(
+        npc, victim, &handling, flight, swarm, chance,
+    ))
 }
 
 /// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
@@ -852,6 +856,7 @@ mod tests {
                 Some(&victim),
                 speeds,
                 FlightRules::default(),
+                None,
                 &mut Draws::of(&[])
             ),
             Some(DockOutcome::Flying)
@@ -877,6 +882,7 @@ mod tests {
                     Some(&victim),
                     speeds,
                     FlightRules::default(),
+                    None,
                     &mut Draws::of(&[])
                 ),
                 None,
@@ -890,6 +896,7 @@ mod tests {
                 None,
                 speeds,
                 FlightRules::default(),
+                None,
                 &mut Draws::of(&[])
             ),
             None

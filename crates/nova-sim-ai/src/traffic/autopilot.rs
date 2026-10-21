@@ -52,7 +52,16 @@
 //!   (@0x87345-0x87351).
 //! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
 //!   keeps its slot beside the player ([`Npc::formation`],
-//!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within
+//!   [`slot_position`](crate::escort::slot_position)); with no leader or
+//!   slot it brakes. By the original's flight
+//!   ([`FormationFlight::Original`], the engine's reading of
+//!   [`RuleKey::FormationFlight`](crate::RuleKey::FormationFlight)) it
+//!   flies goal 0xa as [`formation_flight`] says: by its distance from
+//!   the player, it closes formation, counter-thrusting onto the player's
+//!   velocity and stepping its heading a degree a tick, nudged toward its
+//!   slot; or closes in or approaches, steering at its guard or the
+//!   player; or, the player unseen, stops. By the port's earlier one
+//!   ([`FormationFlight::Earlier`]), measured from the slot: within
 //!   [`KEEP_FORMATION`] of it on each axis, it takes the player's
 //!   velocity and heading and moves with it, nudged back towards the slot
 //!   on each axis more than [`FORMATION_SLACK`] off by at most
@@ -218,7 +227,8 @@ use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
-    self, AT_REST_SPEED, Controls, FlightRules, Flyer, ShipState, Turn, heading_of, shortest_turn,
+    self, AT_REST_SPEED, Controls, FlightRules, Flyer, FormationFlight, ShipState, Turn,
+    heading_of, shortest_turn,
 };
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
@@ -227,12 +237,13 @@ use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::rulebook::RuleSource;
 use crate::traffic::emerge::exit_speed;
+use crate::traffic::formation_flight;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
-use crate::traffic::ship_display;
+use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
@@ -274,6 +285,35 @@ pub struct Readings {
     /// its attacker's reach reads ([`leave::can_jump`](crate::ai::leave::can_jump),
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub jump_fuel: RuleSource,
+}
+
+/// What a flight reads beside the ship its goal is about: its swarm lead,
+/// and, keeping formation, its guard and whether it sees its leader.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Beside {
+    /// Its swarm lead ([`swarm::lead`](crate::ai::swarm::lead)), for a
+    /// frame its step has not worked out and for sub-goal 0xb's swarm
+    /// branch.
+    pub swarm: Option<SwarmLead>,
+    /// Where the guard of a [`Goal::Formation`] escort is, the ship its
+    /// turrets fire at (+0x70), when it is there: its approach steers at
+    /// it ([`formation_flight`]).
+    pub guard: Option<ShipState>,
+    /// Whether a [`Goal::Formation`] escort sees its leader
+    /// (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): with its leader
+    /// unseen it brakes near it ([`formation_flight`]).
+    pub leader_seen: bool,
+}
+
+/// No swarm lead, no guard, and its leader seen.
+impl Default for Beside {
+    fn default() -> Self {
+        Self {
+            swarm: None,
+            guard: None,
+            leader_seen: true,
+        }
+    }
 }
 
 /// What became of an NPC this tick.
@@ -341,9 +381,10 @@ impl TopSpeeds {
 /// ship its goal is about (the lead it follows, the ship it fights or
 /// inspects) at `other`, when it is there, disabled as `other_disabled`
 /// says (a stand-off ship's band halves against a disabled target, see
-/// [`stand_off`](crate::ai::stand_off)), with `swarm` its swarm lead
-/// ([`swarm::lead`](crate::ai::swarm::lead)) for a frame its step has not
-/// worked out, at its top speed `speeds.own`, its burst out of a gate or glide in capped at
+/// [`stand_off`](crate::ai::stand_off)), with `beside` what it reads beside
+/// that ship ([`Beside`]: its swarm lead for a frame its step has not
+/// worked out, a formation escort's guard and sight of its leader), at its
+/// top speed `speeds.own`, its burst out of a gate or glide in capped at
 /// [`TopSpeeds::burst_cap`], under the flight rules `flight` (its thrust
 /// [`FlightRules::handling`]'s, which every plan here reads), by
 /// `readings` of the disputed rules (a moving sniper with a last gun
@@ -367,7 +408,7 @@ pub fn fly(
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     other_disabled: bool,
-    swarm: Option<SwarmLead>,
+    beside: Beside,
     speeds: TopSpeeds,
     flight: FlightRules,
     readings: Readings,
@@ -375,7 +416,7 @@ pub fn fly(
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let rules = (flight, readings, weapons);
-    let quarry = (other, other_disabled, swarm);
+    let quarry = (other, other_disabled, beside);
     if !npc.immobile {
         return fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
     }
@@ -387,13 +428,13 @@ pub fn fly(
 }
 
 /// [`fly`] for a ship that may move, at its quarry `(other,
-/// other_disabled, swarm)`, under the flight rules and the disputed rules'
+/// other_disabled, beside)`, under the flight rules and the disputed rules'
 /// readings, leading by the weapon records `(flight, readings, weapons)`.
 fn fly_mobile(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
-    (other, other_disabled, swarm): (Option<&ShipState>, bool, Option<SwarmLead>),
+    (other, other_disabled, beside): (Option<&ShipState>, bool, Beside),
     speeds: TopSpeeds,
     (flight, readings, weapons): (FlightRules, Readings, &Arsenal),
     chance: &mut (impl Chance + ?Sized),
@@ -448,7 +489,7 @@ fn fly_mobile(
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
                 if let Some((body, speed_cap)) =
-                    pursuit::frame_of(npc, target, other_disabled, swarm, weapons)
+                    pursuit::frame_of(npc, target, other_disabled, beside.swarm, weapons)
                         .and_then(|frame| Some((frame.last()?, frame.speed_cap)))
                 {
                     let flown = Flown {
@@ -479,6 +520,10 @@ fn fly_mobile(
             }
             None => brake(&state, &handling, inertia),
         },
+        Goal::Formation { .. } if flight.formation_flight == FormationFlight::Original => {
+            formation_flight::fly(npc, other, beside, &handling, flight, inertia);
+            return Outcome::Flying;
+        }
         Goal::Formation { .. } => match formation(npc, other, &handling, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
@@ -558,7 +603,8 @@ fn enter_box(
 }
 
 /// How `npc` keeps its slot in the formation of its leader at `leader`
-/// (see the module docs): the controls to rejoin it, or braking with no
+/// by the port's earlier formation ([`FormationFlight::Earlier`], see
+/// the module docs): the controls to rejoin it, or braking with no
 /// leader or slot; or, within [`KEEP_FORMATION`] of it, having flown.
 fn formation(
     npc: &mut Npc,
@@ -1192,14 +1238,15 @@ fn close_on(
     match_velocity(state, handling, velocity + closing, inertia)
 }
 
-/// Keeps formation on `slot` beside a leader at `leader`
-/// (`_AIMaintainFormation` @0x84f04): `npc` takes the leader's velocity
+/// Keeps formation on `slot` beside a leader at `leader` by the port's
+/// earlier formation ([`FormationFlight::Earlier`]; the original's is
+/// [`formation_flight`]'s): `npc` takes the leader's velocity
 /// and heading and moves with it, then each axis more than
 /// [`FORMATION_SLACK`] off the slot is nudged towards it by
 /// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it: the
 /// thrust `handling` flies it with.
 fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Handling) {
-    npc.display.drive.formation = true;
+    npc.display.drive.glow = GlowCopy::Leader;
     let state = &mut npc.state;
     state.velocity = leader.velocity;
     state.heading = leader.heading;
@@ -1324,6 +1371,21 @@ mod tests {
         ))
     }
 
+    /// `rules` but the port's earlier formation
+    /// ([`FormationFlight::Earlier`]), which the formation tests here fly.
+    fn earlier(rules: FlightRules) -> FlightRules {
+        FlightRules {
+            formation_flight: FormationFlight::Earlier,
+            ..rules
+        }
+    }
+
+    /// Flies `npc` at its own top speed, with no lead, beside `other`,
+    /// under the original's rules but the port's earlier formation.
+    fn fly_earlier(npc: &mut Npc, other: Option<&ShipState>) -> Outcome {
+        fly_own_under(npc, other, earlier(FlightRules::default()))
+    }
+
     /// Flies `npc` at its own top speed, with no lead, under `rules`.
     fn fly_own_under(npc: &mut Npc, other: Option<&ShipState>, rules: FlightRules) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
@@ -1346,7 +1408,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
-            None,
+            Beside::default(),
             speeds,
             rules,
             Readings::default(),
@@ -1369,7 +1431,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
-            None,
+            Beside::default(),
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -1441,7 +1503,7 @@ mod tests {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_of(&leader);
         let mut ship = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 200.0));
-        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(fly_earlier(&mut ship, Some(&leader)), Outcome::Flying);
         assert_eq!(ship.state.velocity, leader.velocity);
         assert_eq!(ship.state.heading, 30.0);
         assert_eq!(
@@ -1459,7 +1521,7 @@ mod tests {
         let off = |x: f32, y: f32| at(slot.x + x, slot.y + y, 0.0, 0.0, 0.0);
         let nudged = |fields: ShipFields, x: f32, y: f32| {
             let mut ship = escort(fields, off(x, y));
-            fly(&mut ship, &[], Some(&leader));
+            fly_earlier(&mut ship, Some(&leader));
             ship.state.position - slot
         };
         let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
@@ -1508,7 +1570,7 @@ mod tests {
         let slot = slot_of(&leader);
         let nudged = |rules: FlightRules| {
             let mut ship = escort(FAST, at(slot.x + 20.0, slot.y - 20.0, 0.0, 0.0, 0.0));
-            fly_own_under(&mut ship, Some(&leader), rules);
+            fly_own_under(&mut ship, Some(&leader), earlier(rules));
             ship.state.position - slot
         };
         let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
@@ -1533,8 +1595,8 @@ mod tests {
         let mut near = escort(AVERAGE, at(slot.x, slot.y - 400.0, 0.0, 3.0, 180.0));
         let mut far = escort(AVERAGE, at(slot.x, slot.y - 700.0, 0.0, 3.0, 180.0));
         let before = (near.state, far.state);
-        fly(&mut near, &[], Some(&leader));
-        fly(&mut far, &[], Some(&leader));
+        fly_earlier(&mut near, Some(&leader));
+        fly_earlier(&mut far, Some(&leader));
         assert_ne!(
             near.state.heading, before.0.heading,
             "400 off, it turns to slow down"
@@ -1548,13 +1610,13 @@ mod tests {
         // From rest, facing the slot, either thrusts towards it.
         for distance in [301.0, 400.0, 700.0] {
             let mut ship = escort(AVERAGE, at(slot.x, slot.y - distance, 0.0, 0.0, 180.0));
-            fly(&mut ship, &[], Some(&leader));
+            fly_earlier(&mut ship, Some(&leader));
             assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
             assert_eq!(ship.state.heading, 180.0, "{distance}");
         }
         // Beyond 300 on one axis only, it flies rather than keeps formation.
         let mut aside = escort(AVERAGE, at(slot.x + 301.0, slot.y, 0.0, 0.0, 270.0));
-        fly(&mut aside, &[], Some(&leader));
+        fly_earlier(&mut aside, Some(&leader));
         assert!(aside.state.velocity.x < 0.0, "{:?}", aside.state);
         assert_eq!(aside.state.heading, 270.0, "not the leader's");
     }
@@ -1598,7 +1660,7 @@ mod tests {
             ships: 3,
             spacing: 30.0,
         })));
-        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(fly_earlier(&mut ship, Some(&leader)), Outcome::Flying);
         assert_eq!(ship.state.velocity, leader.velocity);
         assert_eq!(ship.state.position, slot + leader.velocity);
         assert_eq!(ship.escort, None);
@@ -1736,11 +1798,11 @@ mod tests {
         let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let slot = slot_of(&leader);
         let mut kept = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 0.0));
-        fly(&mut kept, &[], Some(&leader));
-        assert!(kept.display.drive.formation, "close formation");
+        fly_earlier(&mut kept, Some(&leader));
+        assert_eq!(kept.display.drive.glow, GlowCopy::Leader, "close formation");
         let mut far = escort(FAST, at(slot.x + 400.0, slot.y, 0.0, 0.0, 0.0));
-        fly(&mut far, &[], Some(&leader));
-        assert!(!far.display.drive.formation, "rejoining");
+        fly_earlier(&mut far, Some(&leader));
+        assert_eq!(far.display.drive.glow, GlowCopy::None, "rejoining");
     }
 
     #[test]
@@ -1905,15 +1967,18 @@ mod tests {
         };
         let leader = at(20_000.0, 0.0, 0.0, 0.0, 90.0);
         let mut ship = escort(AVERAGE, at(0.0, 0.0, 0.0, 0.0, 90.0));
+        // The earlier formation closes on its slot at the speed it wants,
+        // which shows its top speed.
+        let rules = earlier(FlightRules::default());
         let mut fastest: f32 = 0.0;
         for _ in 0..300 {
-            fly_at(&mut ship, &[], Some(&leader), raised);
+            fly_under(&mut ship, &[], Some(&leader), raised, rules);
             fastest = fastest.max(ship.state.velocity.length());
         }
         assert!((fastest - 4.5).abs() < 1e-3, "{fastest}");
         let mut own = escort(AVERAGE, at(0.0, 0.0, 0.0, 0.0, 90.0));
         for _ in 0..300 {
-            fly(&mut own, &[], Some(&leader));
+            fly_earlier(&mut own, Some(&leader));
         }
         assert!(own.state.velocity.length() <= 3.0 + 1e-4);
         let drifting = |speed: f32, rules: FlightRules| {
@@ -2196,7 +2261,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&player),
                 false,
-                None,
+                Beside::default(),
                 top,
                 FlightRules::default(),
                 Readings::default(),
@@ -2363,7 +2428,7 @@ mod tests {
             &BTreeMap::new(),
             None,
             false,
-            None,
+            Beside::default(),
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -2377,7 +2442,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
-                None,
+                Beside::default(),
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2414,7 +2479,7 @@ mod tests {
                         &BTreeMap::new(),
                         None,
                         false,
-                        None,
+                        Beside::default(),
                         speeds,
                         FlightRules::default(),
                         Readings::default(),
@@ -2440,7 +2505,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
-                None,
+                Beside::default(),
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2492,7 +2557,7 @@ mod tests {
                     &BTreeMap::new(),
                     None,
                     false,
-                    None,
+                    Beside::default(),
                     speeds,
                     FlightRules::default(),
                     Readings::default(),
@@ -2511,7 +2576,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
-                None,
+                Beside::default(),
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2599,7 +2664,7 @@ mod tests {
             widths,
             None,
             false,
-            None,
+            Beside::default(),
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -3398,7 +3463,7 @@ mod tests {
             &BTreeMap::new(),
             Some(other),
             disabled,
-            None,
+            Beside::default(),
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -3569,7 +3634,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&target),
                 false,
-                None,
+                Beside::default(),
                 TopSpeeds::own_of(&ship),
                 FlightRules::default(),
                 Readings {

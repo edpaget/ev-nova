@@ -14,7 +14,7 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, KEEP_FORMATION};
-use crate::flight::{Flyer, ShipState};
+use crate::flight::{FlightRules, Flyer, FormationFlight, ShipState};
 use crate::geometry::Vec2;
 use crate::inertialess::{InertialDampener, is_inertialess};
 use crate::market::Good;
@@ -22,6 +22,7 @@ use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
+use crate::traffic::formation_flight;
 use crate::traffic::plunder_dock::Docking;
 use crate::traffic::ship_display::NpcDisplay;
 use crate::traffic::warp_out::Warp;
@@ -745,35 +746,62 @@ impl Npc {
             .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
-    /// Whether it keeps close formation with its leader, at `leader`:
-    /// it keeps formation ([`Goal::Formation`]) on a slot
-    /// ([`Npc::formation`]) beside a leader that is there, within
-    /// [`KEEP_FORMATION`] of the slot on each axis, where the autopilot
-    /// moves it with the leader. That is the engine's counterpart of the
-    /// original's substate 0xc, which `_IsShipInCloseForm` tests
-    /// (@0x82f54-0x82f69).
+    /// Whether it keeps close formation with its leader, at `leader`,
+    /// as `reading` flies formation: the original's substate 0xc, which
+    /// `_IsShipInCloseForm` tests (@0x82f54-0x82f69). It keeps formation
+    /// ([`Goal::Formation`]) on a slot ([`Npc::formation`]) beside a
+    /// leader that is there and, by the original's flight, is within
+    /// [`KEEP_FORMATION`] of the leader on each axis, where goal 0xa picks
+    /// substate 0xc ([`formation_flight::sub`], its leader seen, as every
+    /// leader is until cloaking-fidelity's phase 8 gives the player a
+    /// cloak); by the port's earlier one, within [`KEEP_FORMATION`] of
+    /// the slot, where the autopilot moves it with its leader.
     #[must_use]
-    pub fn keeps_close_formation(&self, leader: Option<&ShipState>) -> bool {
+    pub fn keeps_close_formation(
+        &self,
+        leader: Option<&ShipState>,
+        reading: FormationFlight,
+    ) -> bool {
         let (Goal::Formation { .. }, Some(leader), Some(place)) =
             (self.goal, leader, self.formation())
         else {
             return false;
         };
-        let off = place.position(leader) - self.state.position;
-        off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+        match reading {
+            FormationFlight::Original => {
+                formation_flight::sub(self.state.position, leader.position, true)
+                    == formation_flight::Sub::Keep
+            }
+            FormationFlight::Earlier => {
+                let off = place.position(leader) - self.state.position;
+                off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+            }
+        }
     }
 
-    /// Whether it flies inertialess, its leader at `leader` (see
-    /// [`is_inertialess`]): by its hull, or by an inertial dampener as
-    /// `rule` counts an NPC's; never while it
-    /// [keeps close formation](Npc::keeps_close_formation).
+    /// Whether it flies inertialess, its leader at `leader`, under
+    /// `flight` (see [`is_inertialess`]): by its hull, or by an inertial
+    /// dampener as `flight` counts an NPC's ([`Npc::hull_inertialess`]);
+    /// never while it [keeps close formation](Npc::keeps_close_formation)
+    /// as `flight` flies formation.
     #[must_use]
-    pub fn flies_inertialess(&self, leader: Option<&ShipState>, rule: InertialDampener) -> bool {
+    pub fn flies_inertialess(&self, leader: Option<&ShipState>, flight: FlightRules) -> bool {
+        !self.keeps_close_formation(leader, flight.formation_flight)
+            && self.hull_inertialess(flight.inertial_dampener)
+    }
+
+    /// Whether its hull or an inertial dampener, counted as `rule` says,
+    /// makes it inertialess, close formation aside: `_ShipIsInertialess`
+    /// for a ship not in substate 0xc, as every ship but a formation
+    /// escort is, and as close formation's own test reads it
+    /// ([`formation_flight`]).
+    #[must_use]
+    pub fn hull_inertialess(&self, rule: InertialDampener) -> bool {
         is_inertialess(
             self.stats.inertialess_hull,
             self.stats.dampener,
             Flyer::Npc,
-            self.keeps_close_formation(leader),
+            false,
             rule,
         )
     }

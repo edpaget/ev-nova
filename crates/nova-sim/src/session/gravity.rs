@@ -59,7 +59,7 @@ impl Session {
         let leader = self.leader_state(npc);
         resists_gravity(
             npc.hull.stellar_immune,
-            npc.flies_inertialess(leader.as_ref(), self.setup.flight_rules().inertial_dampener),
+            npc.flies_inertialess(leader.as_ref(), self.setup.flight_rules()),
             npc.stats.gravity_resistance,
             Flyer::Npc,
         )

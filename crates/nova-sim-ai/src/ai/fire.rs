@@ -3536,7 +3536,7 @@ mod tests {
             },
             &[],
         );
-        assert!(npc.flies_inertialess(None, crate::inertialess::InertialDampener::PlayerOnly));
+        assert!(npc.hull_inertialess(crate::inertialess::InertialDampener::PlayerOnly));
         npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
         npc.state.velocity = Vec2::new(0.0, -0.36);
         npc.speed = 0.36;

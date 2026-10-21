@@ -171,6 +171,7 @@ pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fly_pass;
+pub mod formation_flight;
 pub mod gate_entry;
 pub mod gone;
 #[cfg(test)]
@@ -4268,6 +4269,15 @@ mod tests {
             ..World::new(&[])
         };
         traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        let escort = &traffic.npcs()[0];
+        assert_ne!(
+            escort.state.velocity, player.state.velocity,
+            "closing on it"
+        );
+        assert!(escort.state.velocity.x > 0.0, "{:?}", escort.state);
+        for _ in 0..40 {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        }
         let escort = &traffic.npcs()[0];
         assert_eq!(escort.state.velocity, player.state.velocity, "in formation");
     }

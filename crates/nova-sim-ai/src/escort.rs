@@ -38,8 +38,10 @@
 //! session's `mission_escorts` module), each a number of spacings
 //! behind and beside the player along its heading. The spacing is six tenths of the widest sprite,
 //! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
-//! its slot moves with the player, nudged back towards the slot
-//! (`_AIMaintainFormation` @0x84f04); farther off it flies there. A ship
+//! the player matches the player's velocity and moves with it, nudged
+//! back towards its slot (`_AIMaintainFormation` @0x84f04); farther off
+//! it flies toward the player (see
+//! [`formation_flight`](crate::traffic::formation_flight)). A ship
 //! it leads that attacks with a swarm leader forms on that ship instead,
 //! so it leaves the player's formation and the rest close up
 //! ([`swarm::formation_parent`](crate::ai::swarm::formation_parent); see
@@ -259,17 +261,23 @@ impl FormationSlot {
     }
 }
 
-/// How near its slot, in pixels on each axis, an escort keeps formation
-/// (300.0 @0xdd95c).
+/// How near its leader, in pixels on each axis, inclusive, an escort
+/// keeps close formation (300.0 @0xdd95c; goal 0xa's substate 0xc, see
+/// [`formation_flight`](crate::traffic::formation_flight)); by the port's
+/// earlier formation, how near its slot.
 pub const KEEP_FORMATION: f32 = 300.0;
-/// How near its slot, in pixels on each axis, an escort approaches it;
-/// farther off it flies at full speed (600.0 @0xdda54).
+/// How near its leader, in pixels on each axis, inclusive, an escort
+/// closes in; farther off it approaches at full speed (600.0 @0xdda54;
+/// substates 0xb and 9). By the port's earlier formation, how near its
+/// slot it closes on it.
 pub const APPROACH_FORMATION: f32 = 600.0;
-/// How far off its slot, in pixels on an axis, an escort keeping
-/// formation may drift before it is nudged back (8.0 @0xdd044).
+/// How far off its slot, in pixels on an axis, an escort in close
+/// formation is nudged back from: from 8 off, inclusive (8.0 @0xdd044,
+/// `_AIMaintainFormation`); by the port's earlier formation, beyond it.
 pub const FORMATION_SLACK: f32 = 8.0;
-/// How many ticks' acceleration the nudge back to the slot is at most
-/// (10.0 @0xdd65c).
+/// How many ticks' acceleration the nudge back to the slot is (10.0
+/// @0xdd65c): the whole of it, which can carry it past the slot; by the
+/// port's earlier formation, at most that, never past it.
 pub const FORMATION_NUDGE: f32 = 10.0;
 
 /// The share of the widest sprite the formation is spaced by (0.6

@@ -74,7 +74,7 @@ impl Inertia {
     /// dampener counts as `flight` says ([`Npc::flies_inertialess`]).
     #[must_use]
     pub fn of(npc: &Npc, leader: Option<&ShipState>, flight: crate::flight::FlightRules) -> Self {
-        if npc.flies_inertialess(leader, flight.inertial_dampener) {
+        if npc.flies_inertialess(leader, flight) {
             Self::Inertialess { speed: npc.speed }
         } else {
             Self::Inertial
@@ -233,7 +233,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             speeds,
             rules,
             crate::traffic::autopilot::Readings::default(),
@@ -291,7 +291,7 @@ mod tests {
             ),
             ..plain
         };
-        assert!(!dampened.flies_inertialess(None, InertialDampener::PlayerOnly));
+        assert!(!dampened.hull_inertialess(InertialDampener::PlayerOnly));
         let bible = FlightRules::from_rulebook(
             &Rulebook::default().with_override(RuleKey::InertialDampener, RuleSource::Bible),
         );
@@ -317,36 +317,104 @@ mod tests {
         }
     }
 
+    /// The original's flight rules but the port's earlier formation.
+    fn earlier() -> FlightRules {
+        FlightRules::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::FormationFlight, RuleSource::Bible),
+        )
+    }
+
     #[test]
-    fn an_escort_within_300_of_its_slot_keeps_close_formation_and_is_not_inertialess() {
+    fn an_escort_within_300_of_its_leader_keeps_close_formation_and_is_not_inertialess() {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_position(&leader, 2, 3, 30.0);
-        let rule = InertialDampener::PlayerOnly;
-        let on = escort(at(slot.x + 300.0, slot.y - 300.0, 0.0, 0.0, 0.0), 0.0);
-        assert!(on.keeps_close_formation(Some(&leader)));
-        assert!(!on.flies_inertialess(Some(&leader), rule));
-        let off = escort(at(slot.x + 301.0, slot.y, 0.0, 0.0, 0.0), 0.0);
-        assert!(!off.keeps_close_formation(Some(&leader)));
-        assert!(off.flies_inertialess(Some(&leader), rule));
-        assert!(!on.keeps_close_formation(None), "with its leader gone");
+        let original = FlightRules::default();
+        let reading = original.formation_flight;
+        let on = escort(at(400.0 + 300.0, -200.0 - 300.0, 0.0, 0.0, 0.0), 0.0);
+        assert!(on.keeps_close_formation(Some(&leader), reading));
+        assert!(!on.flies_inertialess(Some(&leader), original));
+        let off = escort(at(400.0 + 301.0, -200.0, 0.0, 0.0, 0.0), 0.0);
+        assert!(!off.keeps_close_formation(Some(&leader), reading));
+        assert!(off.flies_inertialess(Some(&leader), original));
+        // 290 from its leader on each axis, beyond 300 from its slot: by
+        // the leader.
+        let aside = escort(at(400.0 + 290.0, -200.0 - 290.0, 0.0, 0.0, 0.0), 0.0);
+        let from_slot = aside.state.position - slot;
+        assert!(from_slot.x > 300.0 || -from_slot.y > 300.0, "{from_slot:?}");
+        assert!(aside.keeps_close_formation(Some(&leader), reading));
+        assert!(!aside.keeps_close_formation(Some(&leader), earlier().formation_flight));
+        assert!(
+            !on.keeps_close_formation(None, reading),
+            "with its leader gone"
+        );
         let idle = Npc {
             goal: Goal::Idle,
             ..on.clone()
         };
         assert!(
-            !idle.keeps_close_formation(Some(&leader)),
+            !idle.keeps_close_formation(Some(&leader), reading),
+            "not in formation"
+        );
+        let dutiless = Npc {
+            escort: None,
+            ..on.clone()
+        };
+        assert!(
+            !dutiless.keeps_close_formation(Some(&leader), reading),
+            "with no slot"
+        );
+    }
+
+    #[test]
+    fn by_the_earlier_formation_an_escort_within_300_of_its_slot_keeps_close_formation() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_position(&leader, 2, 3, 30.0);
+        let rules = earlier();
+        let reading = rules.formation_flight;
+        let on = escort(at(slot.x + 300.0, slot.y - 300.0, 0.0, 0.0, 0.0), 0.0);
+        assert!(on.keeps_close_formation(Some(&leader), reading));
+        assert!(!on.flies_inertialess(Some(&leader), rules));
+        let off = escort(at(slot.x + 301.0, slot.y, 0.0, 0.0, 0.0), 0.0);
+        assert!(!off.keeps_close_formation(Some(&leader), reading));
+        assert!(off.flies_inertialess(Some(&leader), rules));
+        assert!(
+            !on.keeps_close_formation(None, reading),
+            "with its leader gone"
+        );
+        let idle = Npc {
+            goal: Goal::Idle,
+            ..on.clone()
+        };
+        assert!(
+            !idle.keeps_close_formation(Some(&leader), reading),
             "not in formation"
         );
     }
 
     #[test]
-    fn an_inertialess_escort_on_its_slot_is_flown_with_its_leader_as_an_inertial_one() {
+    fn by_the_earlier_formation_an_inertialess_escort_on_its_slot_is_flown_with_its_leader_as_an_inertial_one()
+     {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_position(&leader, 2, 3, 30.0);
         let mut ship = escort(at(slot.x, slot.y, 0.0, 0.0, 200.0), 4.0);
-        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        let speeds = TopSpeeds::own_of(&ship);
+        assert_eq!(
+            fly_at(&mut ship, &[], Some(&leader), speeds, earlier()),
+            Outcome::Flying
+        );
         assert_eq!(ship.state.velocity, leader.velocity);
         assert_eq!(ship.state.heading, 30.0);
+        assert_eq!(ship.speed, 4.0, "its speed left as it was");
+    }
+
+    #[test]
+    fn an_inertialess_escort_beside_its_leader_is_flown_with_it_as_an_inertial_one() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_position(&leader, 2, 3, 30.0);
+        let mut ship = escort(at(slot.x, slot.y, 3.0, -2.0, 30.0), 4.0);
+        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(ship.state.velocity, leader.velocity, "its hull: matched");
+        assert_eq!(ship.state.position, slot + leader.velocity);
         assert_eq!(ship.speed, 4.0, "its speed left as it was");
     }
 
@@ -354,22 +422,27 @@ mod tests {
     fn an_inertialess_escort_off_its_slot_flies_along_its_heading_and_rejoins() {
         let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let slot = slot_position(&leader, 2, 3, 30.0);
-        // Far off, moving sideways at full speed and facing away.
-        let mut ship = escort(at(slot.x + 2000.0, slot.y, 0.0, 6.0, 180.0), 6.0);
-        fly(&mut ship, &[], Some(&leader));
-        let along = facing(ship.state.heading) * ship.speed;
-        assert!(
-            (ship.state.velocity - along).length() < 6.0,
-            "pulled toward its heading: {:?}",
-            ship.state
-        );
-        for _ in 0..2000 {
-            if ship.keeps_close_formation(Some(&leader)) {
-                return;
-            }
-            fly(&mut ship, &[], Some(&leader));
+        for rules in [FlightRules::default(), earlier()] {
+            // Far off, moving sideways at full speed and facing away.
+            let mut ship = escort(at(slot.x + 2000.0, slot.y, 0.0, 6.0, 180.0), 6.0);
+            let speeds = TopSpeeds::own_of(&ship);
+            fly_at(&mut ship, &[], Some(&leader), speeds, rules);
+            let along = facing(ship.state.heading) * ship.speed;
+            assert!(
+                (ship.state.velocity - along).length() < 6.0,
+                "pulled toward its heading: {:?}",
+                ship.state
+            );
+            let rejoined = (0..2000).any(|_| {
+                fly_at(&mut ship, &[], Some(&leader), speeds, rules);
+                ship.keeps_close_formation(Some(&leader), rules.formation_flight)
+            });
+            assert!(
+                rejoined,
+                "never rejoined: {:?} at {}",
+                ship.state, ship.speed
+            );
         }
-        panic!("never rejoined: {:?} at {}", ship.state, ship.speed);
     }
 
     // Flying.

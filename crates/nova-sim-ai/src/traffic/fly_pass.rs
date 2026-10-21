@@ -41,7 +41,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::autopilot::{self, Outcome, TopSpeeds};
+use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
@@ -303,6 +303,34 @@ impl Traffic {
     }
 }
 
+/// Where the fly half `pass` found `ship`, if it is there.
+fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
+    match ship {
+        ShipRef::Player => pass.player,
+        ShipRef::Npc(id) => pass.states.get(&id).copied(),
+    }
+}
+
+/// What `npc`'s flight reads beside the ship it is about, in the fly
+/// half `pass` ([`Beside`]): its swarm lead, its guard where the half
+/// found it while it keeps formation ([`Goal::Formation`]), and its
+/// leader seen. Every formation escort's leader is the player, whom no
+/// ship fails to see until the player has a cloak
+/// (rdm:phase/cloaking-fidelity/phase-8-cloaking-device, which passes
+/// the player's sight here; an NPC leader's is
+/// rdm:phase/escort-fleet-fidelity/phase-6-npc-formations').
+fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
+    let guard = match npc.goal {
+        Goal::Formation { guard: Some(guard) } => state_of(pass, guard),
+        _ => None,
+    };
+    Beside {
+        swarm: pass.leads.get(&npc.id).copied(),
+        guard,
+        leader_seen: true,
+    }
+}
+
 /// The ship `npc`'s flight is about (the one it docks with, follows,
 /// escorts, fights or inspects), where the fly half `pass` found it, and
 /// whether it was disabled then.
@@ -318,11 +346,7 @@ fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
         ShipRef::Player => pass.player_disabled,
         ShipRef::Npc(id) => pass.disabled.contains(&id),
     });
-    let other = other.and_then(|ship| match ship {
-        ShipRef::Player => pass.player,
-        ShipRef::Npc(id) => pass.states.get(&id).copied(),
-    });
-    (other, disabled)
+    (other.and_then(|ship| state_of(pass, ship)), disabled)
 }
 
 /// `npc`'s flight in the fly half `pass` at `speeds`, in `world`, rolling
@@ -344,12 +368,12 @@ fn fly_one(
     tractor_hold::hold(npc, &pass.holders, world.tractor_step, pass.think);
     ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
     let held = ship_display::held(npc);
-    let swarm = pass.leads.get(&npc.id).copied();
+    let beside = beside_of(pass, npc);
     let outcome = fly_steered(
         npc,
         pass,
         world,
-        (other, other_disabled, swarm),
+        (other, other_disabled, beside),
         speeds,
         &mut *chance,
     );
@@ -359,21 +383,29 @@ fn fly_one(
 
 /// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
 /// dock with a ship it plunders or repairs, or its goal, toward `other`,
-/// disabled as `other_disabled` says, with `swarm` its swarm lead, at
+/// disabled as `other_disabled` says, with `beside` what it reads beside
+/// it (its swarm lead, a formation escort's guard and sight), at
 /// `speeds`, a dock it starts or a repair it completes noted in the
 /// half's docks, rolling on `chance`.
 fn fly_steered(
     npc: &mut Npc,
     pass: &mut FlyPass,
     world: &World,
-    (other, other_disabled, swarm): (Option<ShipState>, bool, Option<SwarmLead>),
+    (other, other_disabled, beside): (Option<ShipState>, bool, Beside),
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think) {
         return outcome;
     }
-    match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance) {
+    match plunder::fly_docking(
+        npc,
+        other.as_ref(),
+        speeds,
+        world.flight,
+        beside.swarm,
+        &mut *chance,
+    ) {
         Some(DockOutcome::Started { victim, .. }) => {
             pass.docks.docked.push((npc.id, victim));
             return Outcome::Flying;
@@ -395,7 +427,7 @@ fn fly_steered(
         world.type_widths,
         other.as_ref(),
         other_disabled,
-        swarm,
+        beside,
         speeds,
         world.flight,
         autopilot::Readings {

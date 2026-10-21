@@ -66,7 +66,7 @@ use crate::inertialess::{
     ADJUST_RATE, BRAKE, InertialDampener, REVERSE, THRUST, adjust_velocity, step_speed,
 };
 use crate::player_turn::{PlayerTurn, turn};
-use crate::rulebook::{RuleKey, RuleValue, Rulebook};
+use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 
 /// The speed, in pixels a tick, at or below which reverse treats a ship as
@@ -90,8 +90,9 @@ pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
 /// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
 /// ([`RuleKey::SpeedCap`]), how the player turns
-/// ([`RuleKey::PlayerTurn`]) and whose inertial dampener counts
-/// ([`RuleKey::InertialDampener`]).
+/// ([`RuleKey::PlayerTurn`]), whose inertial dampener counts
+/// ([`RuleKey::InertialDampener`]) and how an escort keeps formation
+/// ([`RuleKey::FormationFlight`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
@@ -102,6 +103,31 @@ pub struct FlightRules {
     pub player_turn: PlayerTurn,
     /// Whose `ModType` 38 outfits make a ship inertialess.
     pub inertial_dampener: InertialDampener,
+    /// How an escort keeps formation, which its flight and whether it
+    /// flies inertialess both read.
+    pub formation_flight: FormationFlight,
+}
+
+/// How an escort keeps formation, by [`RuleKey::FormationFlight`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FormationFlight {
+    /// The original's goal 0xa and its substates, measured from the
+    /// leader.
+    #[default]
+    Original,
+    /// The port's earlier formation, measured from the slot.
+    Earlier,
+}
+
+impl From<RuleSource> for FormationFlight {
+    /// The engine's reading is the original's flight; the other, the
+    /// port's earlier one.
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Original,
+            RuleSource::Bible => Self::Earlier,
+        }
+    }
 }
 
 impl FlightRules {
@@ -113,6 +139,7 @@ impl FlightRules {
             speed_cap: SpeedCap::from(rules.source_for(RuleKey::SpeedCap)),
             player_turn: PlayerTurn::from(rules.source_for(RuleKey::PlayerTurn)),
             inertial_dampener: InertialDampener::from(rules.source_for(RuleKey::InertialDampener)),
+            formation_flight: FormationFlight::from(rules.source_for(RuleKey::FormationFlight)),
         }
     }
 
@@ -580,6 +607,7 @@ mod tests {
         speed_cap: SpeedCap::Circle,
         player_turn: PlayerTurn::WholeDegrees,
         inertial_dampener: InertialDampener::PlayerOnly,
+        formation_flight: FormationFlight::Original,
     };
 
     fn under(divisor: u32) -> FlightRules {
@@ -1699,6 +1727,21 @@ mod tests {
             )
             .inertial_dampener,
             InertialDampener::AnyShip
+        );
+    }
+
+    #[test]
+    fn the_formation_flight_rule_reads_the_rulebook() {
+        assert_eq!(
+            FlightRules::default().formation_flight,
+            FormationFlight::Original
+        );
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::FormationFlight, RuleSource::Bible)
+            )
+            .formation_flight,
+            FormationFlight::Earlier
         );
     }
 

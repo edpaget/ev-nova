@@ -1803,6 +1803,47 @@ mod tests {
         assert!(cloak.is_cloaked());
     }
 
+    /// By the original's formation flight
+    /// (`RuleKey::FormationFlight`), an escort counter-thrusts onto its
+    /// leader's velocity rather than taking it at once, and keeps within
+    /// 300 of the player, the leader its substate is measured from.
+    #[test]
+    fn escorts_beside_a_weaving_player_converge_on_its_velocity_and_keep_within_300_of_it() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let ids: Vec<NpcId> = session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let off = Vec2::new(1.0, 0.0);
+        for &id in &ids {
+            let player = session.player().velocity;
+            session.space.npc_mut(id).expect("there").state.velocity = player + off;
+        }
+        fly(&mut session, &catalog, weaving(0));
+        for npc in escort_npcs(&session) {
+            assert_ne!(
+                npc.state.velocity,
+                session.player().velocity,
+                "not taken at once"
+            );
+        }
+        let mut worst = 0.0_f32;
+        for tick in 1..300 {
+            fly(&mut session, &catalog, weaving(tick));
+            let at = session.player().position;
+            for npc in escort_npcs(&session) {
+                let off = npc.state.position - at;
+                worst = worst.max(off.x.abs()).max(off.y.abs());
+            }
+        }
+        assert!(worst <= escort::KEEP_FORMATION, "{worst}");
+    }
+
     #[test]
     fn escorts_keep_formation_through_a_second_jump() {
         let mut catalog = fleeted();

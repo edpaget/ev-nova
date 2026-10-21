@@ -157,6 +157,10 @@ pub struct SwarmLead {
     pub aim: Vec2,
     /// Whether its swarm leader is its own leader (+0xc906 == +0x9a).
     pub leads_it: bool,
+    /// Its swarm leader's glow (+0xc8d4), which sub-goal 0xb copies
+    /// (@0x87364-0x873a3, see
+    /// [`plunder_dock::swarm_branch`](crate::traffic::plunder_dock::swarm_branch)).
+    pub glow: i16,
 }
 
 /// `npc`'s swarm lead among `around` (see the module docs): none with no
@@ -168,6 +172,7 @@ pub fn lead(npc: &Npc, around: &Surroundings) -> Option<SwarmLead> {
     Some(SwarmLead {
         aim: leader.state.position + trig::accel(trig::whole(leader.state.heading), ahead),
         leads_it: npc.leader_ref() == Some(ShipRef::Npc(leader.id)),
+        glow: leader.display.glow,
     })
 }
 
@@ -535,6 +540,7 @@ mod tests {
             heading: 90.9,
             ..ShipState::default()
         };
+        leader.display.glow = 17;
         let mut ship = swarmer(1, 2);
         ship.swarm_leader = Some(1);
         let npcs = [leader.clone(), ship.clone()];
@@ -545,7 +551,8 @@ mod tests {
             lead(&ship, &around),
             Some(SwarmLead {
                 aim,
-                leads_it: false
+                leads_it: false,
+                glow: 17,
             })
         );
         // Its own leader too.

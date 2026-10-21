@@ -596,7 +596,7 @@ pub fn step(
         return Pursuit::default();
     };
     // A fight is never close formation: no leader.
-    let inertialess = npc.flies_inertialess(None, rules.inertial_dampener);
+    let inertialess = npc.hull_inertialess(rules.inertial_dampener);
     let looks = Looks::of(
         npc,
         &at,
@@ -1019,7 +1019,7 @@ mod tests {
             },
             &[],
         );
-        assert!(npc.flies_inertialess(None, InertialDampener::PlayerOnly));
+        assert!(npc.hull_inertialess(InertialDampener::PlayerOnly));
         npc
     }
 
@@ -1577,6 +1577,7 @@ mod tests {
         Some(SwarmLead {
             aim,
             leads_it: false,
+            glow: 0,
         })
     }
 
@@ -1650,6 +1651,7 @@ mod tests {
         let led = Some(SwarmLead {
             aim: AT,
             leads_it: true,
+            glow: 0,
         });
         assert_eq!(
             swarm_start(&npc, FAR, led),
@@ -1852,7 +1854,7 @@ mod tests {
             &std::collections::BTreeMap::new(),
             Some(&side.state),
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
             crate::traffic::autopilot::Readings::default(),
@@ -1940,7 +1942,7 @@ mod tests {
             &std::collections::BTreeMap::new(),
             Some(&npcs[1].state),
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             TopSpeeds::own_of(&npc),
             crate::flight::FlightRules::default(),
             autopilot::Readings::default(),
@@ -2026,7 +2028,7 @@ mod tests {
             &std::collections::BTreeMap::new(),
             Some(&npcs[1].state),
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             TopSpeeds::own_of(&npc),
             crate::flight::FlightRules::default(),
             autopilot::Readings::default(),
@@ -2119,7 +2121,7 @@ mod tests {
             &std::collections::BTreeMap::new(),
             Some(&side.state),
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
             crate::traffic::autopilot::Readings::default(),
