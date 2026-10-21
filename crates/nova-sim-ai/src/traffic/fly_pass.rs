@@ -843,6 +843,47 @@ mod tests {
         assert!(braking < flying, "the player: {braking} {flying}");
     }
 
+    /// An escort keeping formation 450 right of the player at the
+    /// centre, facing 250, guarding `guard`, flown one fly half beside
+    /// `others`: its heading after.
+    fn closing_escort_heading(guard: Option<ShipRef>, others: Vec<Npc>) -> f32 {
+        let mut escort = at(5, 450.0, 0.0);
+        escort.state.heading = 250.0;
+        escort.goal = Goal::Formation { guard };
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 3,
+                spacing: 300.0,
+            },
+            order: None,
+        });
+        let mut npcs = others;
+        npcs.push(escort);
+        let mut traffic = Traffic {
+            npcs,
+            ..Traffic::default()
+        };
+        let world = World {
+            player: Some(crate::ai::fixture::player(0.0, 0.0)),
+            ..World::new(&[])
+        };
+        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        let escort = traffic.npcs().iter().find(|npc| npc.id == NpcId(5));
+        escort.expect("there").state.heading
+    }
+
+    #[test]
+    fn a_closing_escort_steers_at_its_guard_where_the_half_found_it_else_at_the_player() {
+        // The player bears 270 from it, a turn to the right; a guard
+        // straight below bears 180, a turn to the left.
+        let below = at(1, 450.0, 1000.0);
+        let guarded = Some(ShipRef::Npc(NpcId(1)));
+        assert_eq!(closing_escort_heading(guarded, vec![below.clone()]), 247.0);
+        assert_eq!(closing_escort_heading(None, vec![below]), 253.0);
+        assert_eq!(closing_escort_heading(guarded, vec![]), 253.0, "gone");
+    }
+
     /// [`busy`] with a ship launched after its fly half began, at
     /// (100, 100) moving by (3, -2) and facing 45, set to jump out, which
     /// a steered flight would turn and thrust for; the half, and the ship.

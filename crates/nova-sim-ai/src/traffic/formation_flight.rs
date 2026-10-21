@@ -686,6 +686,12 @@ mod tests {
         assert_eq!(stepped(0.0, 358.0, 1.0, 3.0), 359.0);
         assert_eq!(stepped(10.4, 10.9, 1.0, 3.0), 10.0, "on its whole degree");
         assert_eq!(stepped(10.0, 34.0, 1.0, 3.0), 11.0, "24 is within 25");
+        assert_eq!(stepped(11.0, 10.0, 1.0, 3.0), 10.0, "a degree above");
+        assert_eq!(stepped(11.5, 10.0, 1.0, 3.0), 10.0);
+        // Half a turn off, with a limit past it (a skill of 0.1): the
+        // degree below its own.
+        assert_eq!(stepped(190.0, 10.0, 0.1, 3.0), 189.0);
+        assert_eq!(stepped(10.0, 190.0, 0.1, 3.0), 9.0);
     }
 
     #[test]
