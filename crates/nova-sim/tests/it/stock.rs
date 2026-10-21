@@ -1495,7 +1495,6 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,

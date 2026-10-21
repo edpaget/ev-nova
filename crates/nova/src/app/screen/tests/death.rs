@@ -16,7 +16,6 @@ impl Behaviour for Firing {
             primary: true,
             secondary: None,
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,

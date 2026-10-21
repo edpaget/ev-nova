@@ -316,7 +316,6 @@ fn trigger(primary: bool) -> Trigger {
         primary,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: false,

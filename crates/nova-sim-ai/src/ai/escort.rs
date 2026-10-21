@@ -18,14 +18,16 @@
 //!   formation.
 //! - **No standing command** ("Formation"), as the rulebook's
 //!   [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) entry says:
-//!   - by the engine, it keeps formation ([`Goal::Formation`]) and fires
-//!     its turrets alone at a guard: the one it guards still while that
-//!     ship is intact and some weapon it carries reaches it, else one
-//!     drawn at random among the ships threatening the player
-//!     (`_AIFightThreatToParent` @0x81de6), at any distance. Its turrets
-//!     fire, and its point defence runs, only while the guard is within
-//!     the 164-pixel box on both axes (@0x8648e-0x864ad,
-//!     @0x86666-0x86689);
+//!   - by the engine, it keeps formation ([`Goal::Formation`]) and guards
+//!     against a ship: the one it guards still while some weapon it
+//!     carries reaches it, disabled or not (`_AIInGunRange` @0x83edb),
+//!     else one drawn at random among the ships threatening the player
+//!     (`_AIFightThreatToParent` @0x81de6), at any distance. Every think
+//!     its low level fires `_AIFireTurret`'s one pick at its guard and
+//!     runs its point defence, at any distance and with no box
+//!     (`_AIEscortFireUnprovoked` from substates 1, 9, 0xb and 0xc,
+//!     [`unprovoked`]); a disabled or gone guard it drops instead, so its
+//!     next think draws again;
 //!   - by the Bible (`shïp` `InherentAI`: "What AI the ship uses when
 //!     it's escorting the player"), it flies as its AI type would: a
 //!     warship or interceptor attacks the best threat to the player at
@@ -134,15 +136,13 @@ impl Behaviour for EscortAi {
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
             Goal::Attack(_) => fire::trigger_holding_fighters(npc, around, self.fire),
-            // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
-            // only while the guard (+0x70) is within the box on both axes
-            // (@0x8648e-0x864ad, @0x86666-0x86689).
-            Goal::Formation { guard: Some(guard) } if near(npc, around, guard) => Trigger {
-                primary: true,
-                turrets_only: true,
-                point_defence: true,
-                ..Trigger::default()
-            },
+            // Keeping formation, `_LowLevelAIHandler`'s substates 1, 9,
+            // 0xb and 0xc call `_AIEscortFireUnprovoked` on the guard the
+            // think left in +0x70 (@0x85633, @0x878f4, @0x87692,
+            // @0x87e01). This tick's `npc.target` is still last tick's.
+            Goal::Formation { guard: Some(guard) } => {
+                unprovoked(npc, Some(guard), around, self.fire).trigger
+            }
             // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
             // no target (@0x83e59-0x83e74, @0x83f4e), which runs its point
             // defence and fires nothing.
@@ -155,10 +155,14 @@ impl Behaviour for EscortAi {
         }
     }
 
-    fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+    /// Keeping formation, its guard, unless [`unprovoked`] drops it
+    /// (+0x70 = -1, @0x80e9d), so its next think draws again.
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Attack(target) => Some(target),
-            Goal::Formation { guard } => guard,
+            Goal::Formation { guard } => {
+                guard.filter(|_| !unprovoked(npc, guard, around, self.fire).drops_target)
+            }
             _ => None,
         }
     }
@@ -184,20 +188,36 @@ impl Behaviour for EscortAi {
 }
 
 /// What `npc`, an escort or fighter (AI type above 4, @0x80e59), holds
-/// waiting in its gate or held at it, among `around`:
-/// `_AIEscortFireUnprovoked` (@0x80e40-0x80e9d). With a target
-/// (@0x80e63) it tail-calls `_AIFireTurret` while the target is active and
-/// intact (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
-/// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence first
-/// unless the shooter is disabled (@0x80afa-0x80b0d), then searches by
-/// `rules` ([`fire::turret_find`]): a find becomes its pick
-/// ([`Trigger::keep`], +0x72 @0x80e3c), but its fire flag (+0xba,
-/// @0x80e40) is never read, as `_HandleShip` skips the fire step while the
-/// wait runs (@0x34a54-0x34a72), so it fires nothing and the pick stays.
-/// With no target it fires nothing.
+/// waiting in its gate or held at it, among `around`: [`unprovoked`] on
+/// its target, as `_LowLevelAIHandler`'s substate 0 calls it
+/// (@0x8521e-0x85236). Its find's fire flag ([`Trigger::only`]) is never
+/// read, as `_HandleShip` skips the fire step while the wait runs
+/// (@0x34a54-0x34a72, [`fire::gated`]), so it fires nothing and the pick
+/// stays.
 #[must_use]
 pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> GateWait {
-    let Some(target) = npc.target else {
+    unprovoked(npc, npc.target, around, rules)
+}
+
+/// What `npc`, an escort or fighter (AI type above 4, @0x80e59), fires
+/// at `target` among `around`: `_AIEscortFireUnprovoked`
+/// (@0x80e4f-0x80ea8), whole. With a target (@0x80e63) it tail-calls
+/// `_AIFireTurret` while the target is active and intact (+0xb8,
+/// `_IsDisabled`, @0x80e98), and drops the target otherwise (+0x70 = -1,
+/// @0x80e9d). It tests no range nor box, and plays no sound.
+/// `_AIFireTurret` runs the point defence first unless the shooter is
+/// disabled (@0x80afa-0x80b0d), then searches by `rules`
+/// ([`fire::turret_find`]) for the single best turret: a find becomes
+/// its pick and its flag ([`Trigger::keep`] and [`Trigger::only`], +0x72
+/// and +0xba, @0x80e3c-0x80e40). With no target it fires nothing.
+#[must_use]
+pub fn unprovoked(
+    npc: &Npc,
+    target: Option<ShipRef>,
+    around: &Surroundings,
+    rules: FireRules,
+) -> GateWait {
+    let Some(target) = target else {
         return GateWait::default();
     };
     if around.condition_of(target) != Some(Condition::Intact) {
@@ -206,10 +226,12 @@ pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> Ga
             drops_target: true,
         };
     }
+    let pick = fire::turret_find(npc, target, around, rules);
     GateWait {
         trigger: Trigger {
             point_defence: npc.condition == Condition::Intact,
-            keep: fire::turret_find(npc, target, around, rules),
+            only: pick,
+            keep: pick,
             ..Trigger::default()
         },
         drops_target: false,
@@ -223,16 +245,6 @@ fn intact(npc: &Npc) -> bool {
     npc.condition == Condition::Intact && npc.arrived()
 }
 
-/// Whether `guard` is within [`DOGFIGHT_BOX`](fire::DOGFIGHT_BOX) of
-/// `npc` on both axes among `around`: `trunc(d) + 164` unsigned at most
-/// 328.
-fn near(npc: &Npc, around: &Surroundings, guard: ShipRef) -> bool {
-    around.state_of(guard).is_some_and(|at| {
-        let off = at.position - npc.state.position;
-        off.x.abs() < fire::DOGFIGHT_BOX && off.y.abs() < fire::DOGFIGHT_BOX
-    })
-}
-
 /// An attack on `threat`, or formation with none.
 fn attack_or_form(threat: Option<NpcId>) -> Goal {
     threat.map_or(Goal::Formation { guard: None }, |id| {
@@ -241,14 +253,17 @@ fn attack_or_form(threat: Option<NpcId>) -> Goal {
 }
 
 /// The ship `npc`, keeping formation, guards against among `around`:
-/// its target still, while that ship is intact and some weapon `npc`
-/// carries reaches it; otherwise one drawn on `chance` among the ships
-/// threatening the player ([`threats`]); none when there is none.
+/// its target still, while some weapon `npc` carries reaches it, disabled
+/// or not (`_AIInGunRange(ship, target, -1)` @0x83eb3-0x83ee4, which
+/// tests reach alone); otherwise one drawn on `chance` among the ships
+/// threatening the player ([`threats`], `_AIFightThreatToParent`
+/// @0x83ef4); none when there is none. The player is never kept
+/// (@0x83f0d-0x83f1a). [`unprovoked`] drops a disabled guard.
 fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<ShipRef> {
     let kept = match npc.target {
         Some(ShipRef::Npc(id)) => around
             .npc(id)
-            .filter(|target| intact(target) && fire::in_reach(npc, &target.state)),
+            .filter(|target| fire::in_reach(npc, &target.state)),
         _ => None,
     };
     if let Some(target) = kept {
@@ -396,16 +411,64 @@ mod tests {
         (ai.trigger(&npcs[0], &around), ai.target(&npcs[0], &around))
     }
 
-    const TURRETS: Trigger = Trigger {
-        primary: true,
+    /// What a formation escort holds firing `weapon`, `_AIFireTurret`'s
+    /// pick: its flag and its pick (+0xba, +0x72, @0x80e3c-0x80e40), with
+    /// its point defence (@0x80b0d).
+    fn turret_pick(weapon: i16) -> Trigger {
+        Trigger {
+            only: Some(WeaponId(weapon)),
+            keep: Some(WeaponId(weapon)),
+            point_defence: true,
+            ..Trigger::default()
+        }
+    }
+
+    /// Point defence alone: `_AIFireTurret` found no turret.
+    const DEFENCE: Trigger = Trigger {
+        primary: false,
         secondary: None,
         only: None,
-        turrets_only: true,
         bays: false,
         bays_after: false,
         point_defence: true,
         keep: None,
     };
+
+    /// A turret `id` reaching 600 pixels (632 with the margin), of
+    /// `energy` and `mass` damage.
+    fn long_turret(id: i16, energy: i16, mass: i16) -> (WeaponSpec, u32) {
+        (
+            WeaponSpec::new(&crate::catalog::WeaponRecord {
+                guidance: 4,
+                speed: 1000,
+                count: 60,
+                energy_dmg: energy,
+                mass_dmg: mass,
+                ..weapon(id)
+            }),
+            1,
+        )
+    }
+
+    /// The escort guarding NPC 2 in formation, armed with a gun and
+    /// `turrets` reaching 632.
+    fn long_guarding(turrets: &[(WeaponSpec, u32)]) -> Npc {
+        let mut npc = having(
+            escort(None),
+            Goal::Formation { guard: Some(n(2)) },
+            Some(n(2)),
+        );
+        let gun = armed().mounts()[1];
+        npc.armament = Armament::new(
+            turrets
+                .iter()
+                .copied()
+                .chain([(gun.spec, gun.count)])
+                .collect::<Vec<_>>(),
+        );
+        npc.hull.stock_reach = Some(632.0);
+        npc
+    }
 
     #[test]
     fn with_no_command_and_no_threat_it_keeps_formation_and_fires_nothing() {
@@ -550,7 +613,8 @@ mod tests {
         );
         assert_eq!(
             command(ENGINE, &[guarding, pirate(2, 100.0, 0.0)]),
-            (TURRETS, Some(n(2)))
+            (turret_pick(140), Some(n(2))),
+            "its turret's pick alone, never its gun"
         );
         for at in [(10.0, 0.0), (300.0, 300.0), (4000.0, 0.0)] {
             let npcs = [escort(None), pirate(2, at.0, at.1)];
@@ -562,52 +626,132 @@ mod tests {
     }
 
     #[test]
-    fn a_formation_escort_fires_turrets_and_defends_only_within_164_of_its_guard() {
-        // `trunc(d) + 164` unsigned at most 328 on both axes
-        // (@0x8648e-0x864ad, @0x86666-0x86689).
+    fn a_formation_escort_fires_its_turret_pick_at_its_guard_at_any_distance_in_reach() {
+        // `_AIEscortFireUnprovoked` (@0x80e4f-0x80ea8) tests no range nor
+        // box: the 164-pixel box is pursuit's (substates 0x10 and 0x11).
+        let guarding = long_guarding(&[long_turret(140, 5, 1)]);
+        for (x, y) in [
+            (500.0, 0.0),
+            (165.0, 0.0),
+            (-165.0, 0.0),
+            (0.0, 165.0),
+            (0.0, -165.0),
+            (164.9, 0.0),
+        ] {
+            let npcs = [guarding.clone(), pirate(2, x, y)];
+            assert_eq!(
+                command(ENGINE, &npcs),
+                (turret_pick(140), Some(n(2))),
+                "{x} {y}"
+            );
+        }
+        // Measured from the escort, wherever it is.
+        let mut away = guarding;
+        away.state.position = crate::geometry::Vec2::new(1000.0, 1000.0);
+        let npcs = [away, pirate(2, 1400.0, 700.0)];
+        assert_eq!(command(ENGINE, &npcs).0, turret_pick(140));
+    }
+
+    #[test]
+    fn a_formation_escort_fires_one_turret_type_the_best_for_its_guards_shield() {
+        // `_AIFireTurret` picks the single best turret: by energy while
+        // the target's shield is at or above none, else by mass
+        // (@0x80e12-0x80e27).
+        let guarding = long_guarding(&[long_turret(140, 5, 1), long_turret(142, 1, 9)]);
+        let npcs = [guarding.clone(), pirate(2, 0.0, -100.0)];
+        assert_eq!(command(ENGINE, &npcs).0, turret_pick(140), "shields up");
+        let mut bare = pirate(2, 0.0, -100.0);
+        bare.reserves.shield.now = -1.0;
+        assert_eq!(
+            command(ENGINE, &[guarding, bare]).0,
+            turret_pick(142),
+            "shields down"
+        );
+    }
+
+    #[test]
+    fn a_formation_escort_with_no_turret_find_runs_its_point_defence_alone() {
+        let guarding = long_guarding(&[long_turret(140, 5, 1)]);
+        let npcs = [guarding.clone(), pirate(2, 900.0, 0.0)];
+        assert_eq!(
+            command(ENGINE, &npcs),
+            (DEFENCE, Some(n(2))),
+            "beyond every turret"
+        );
+        let mut cloaked = pirate(2, 0.0, -100.0);
+        cloaked.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert_eq!(
+            command(ENGINE, &[guarding.clone(), cloaked]),
+            (DEFENCE, Some(n(2))),
+            "cloaked and unseen"
+        );
+        // A disabled shooter searches nothing and runs no point defence
+        // (@0x80afa-0x80b01), its guard kept.
+        let mut down = guarding;
+        down.condition = Condition::Disabled;
+        assert_eq!(
+            command(ENGINE, &[down, pirate(2, 0.0, -100.0)]),
+            (Trigger::default(), Some(n(2)))
+        );
+    }
+
+    #[test]
+    fn a_formation_escort_drops_a_disabled_or_gone_guard() {
+        // `_AIEscortFireUnprovoked`: +0x70 = -1 (@0x80e9d).
+        let guarding = long_guarding(&[long_turret(140, 5, 1)]);
+        let mut down = pirate(2, 0.0, -100.0);
+        down.condition = Condition::Disabled;
+        assert_eq!(
+            command(ENGINE, &[guarding.clone(), down]),
+            (Trigger::default(), None),
+            "disabled"
+        );
+        assert_eq!(
+            command(ENGINE, std::slice::from_ref(&guarding)),
+            (Trigger::default(), None),
+            "gone"
+        );
+    }
+
+    #[test]
+    fn with_no_command_its_think_keeps_a_disabled_guard_in_reach_and_its_fire_drops_it() {
+        // `_EscortAI` keeps +0x70 while `_AIInGunRange` holds, reach alone
+        // (@0x83eb3-0x83ee4); `_AIEscortFireUnprovoked` then drops it.
+        let mut down = pirate(2, 100.0, 0.0);
+        down.condition = Condition::Disabled;
         let guarding = having(
             escort(None),
             Goal::Formation { guard: Some(n(2)) },
             Some(n(2)),
         );
-        for (x, y) in [(164.9, 0.0), (-164.9, 0.0), (0.0, 164.9), (0.0, -164.9)] {
-            let npcs = [guarding.clone(), pirate(2, x, y)];
-            assert_eq!(command(ENGINE, &npcs), (TURRETS, Some(n(2))), "{x} {y}");
-        }
-        for (x, y) in [(165.0, 0.0), (-165.0, 0.0), (0.0, 165.0), (0.0, -165.0)] {
-            let npcs = [guarding.clone(), pirate(2, x, y)];
-            assert_eq!(
-                command(ENGINE, &npcs),
-                (Trigger::default(), Some(n(2))),
-                "{x} {y}"
-            );
-        }
+        let npcs = [guarding, down.clone(), pirate(3, 200.0, 0.0)];
         assert_eq!(
-            command(ENGINE, std::slice::from_ref(&guarding)).0,
-            Trigger::default(),
-            "its guard gone"
+            decide(&npcs, (0.0, 0.0), &[]),
+            (Goal::Formation { guard: Some(n(2)) }, vec![]),
+            "kept, no draw"
         );
-        // Measured from the escort, wherever it is.
-        let mut away = guarding.clone();
-        away.state.position = crate::geometry::Vec2::new(1000.0, 1000.0);
-        let npcs = [away.clone(), pirate(2, 1100.0, 900.0)];
-        assert_eq!(command(ENGINE, &npcs).0, TURRETS);
-        let npcs = [away, pirate(2, 100.0, 100.0)];
-        assert_eq!(command(ENGINE, &npcs).0, Trigger::default());
+        assert_eq!(command(ENGINE, &npcs), (Trigger::default(), None));
+        let dropped = having(escort(None), Goal::Formation { guard: Some(n(2)) }, None);
+        assert_eq!(
+            decide(&[dropped, down, pirate(3, 200.0, 0.0)], (0.0, 0.0), &[0]),
+            (Goal::Formation { guard: Some(n(3)) }, vec![1]),
+            "drawn again among the threats"
+        );
     }
 
     #[test]
-    fn a_disabled_target_is_dropped_under_defend_and_with_no_command() {
-        for order in [None, Some(EscortOrder::Defend)] {
-            let mut down = pirate(2, 100.0, 0.0);
-            down.condition = Condition::Disabled;
-            let npcs = [having(escort(order), Goal::Attack(n(2)), Some(n(2))), down];
-            assert_eq!(
-                decide(&npcs, (0.0, 0.0), &[]).0,
-                Goal::Formation { guard: None },
-                "{order:?}"
-            );
-        }
+    fn a_disabled_target_is_dropped_under_defend() {
+        let mut down = pirate(2, 100.0, 0.0);
+        down.condition = Condition::Disabled;
+        let defend = Some(EscortOrder::Defend);
+        let npcs = [having(escort(defend), Goal::Attack(n(2)), Some(n(2))), down];
+        assert_eq!(
+            decide(&npcs, (0.0, 0.0), &[]).0,
+            Goal::Formation { guard: None }
+        );
     }
 
     #[test]
@@ -748,7 +892,15 @@ mod tests {
             pirate(2, 10.0, 0.0),
         ];
         assert_eq!(decide(&npcs, (0.0, 0.0), &[]), (Goal::Wait, vec![]));
+        // Hit, it holds its attacker as its target (`react::victim`) until
+        // its next think, every frame at full speed (`_aiComplexity` 1,
+        // `_HandleTimeAdjustment` @0x3343f-0x33491), which clears it: its
+        // turret fires nothing at it.
         let holding = having(escort(hold), Goal::Wait, Some(n(2)));
+        assert_eq!(
+            decide(&[holding.clone(), pirate(2, 10.0, 0.0)], (0.0, 0.0), &[]),
+            (Goal::Wait, vec![])
+        );
         assert_eq!(
             command(ENGINE, &[holding, pirate(2, 10.0, 0.0)]),
             (
@@ -811,7 +963,11 @@ mod tests {
             let fighting = having(warship, Goal::Attack(n(3)), Some(n(3)));
             let npcs = [fighting, pirate(3, 0.0, -100.0)];
             assert_eq!(command(BIBLE, &npcs).1, Some(n(3)));
-            assert_ne!(command(BIBLE, &npcs).0, TURRETS, "every weapon");
+            assert_eq!(
+                command(BIBLE, &npcs).0.only,
+                Some(WeaponId(141)),
+                "its gun ahead, as any fighter"
+            );
         }
     }
 
@@ -863,7 +1019,6 @@ mod tests {
             primary: false,
             secondary: None,
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: true,
@@ -900,6 +1055,7 @@ mod tests {
         ];
         let found = GateWait {
             trigger: Trigger {
+                only: Some(WeaponId(140)),
                 keep: Some(WeaponId(140)),
                 ..POINT_DEFENCE.trigger
             },

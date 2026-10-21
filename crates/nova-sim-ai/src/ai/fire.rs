@@ -3392,7 +3392,6 @@ mod tests {
         primary: true,
         secondary: Some(WeaponId(131)),
         only: Some(WeaponId(128)),
-        turrets_only: true,
         bays: true,
         bays_after: true,
         point_defence: true,

@@ -2783,8 +2783,6 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
-        // Within the 164-pixel box of the escort's slot, where its turret
-        // fires (@0x86666-0x86689).
         let raider = pirate(&mut session, 0.0, -120.0, Goal::Attack(ShipRef::Player));
         let ai = sitting_ai();
         fight(&mut session, &catalog, &ai);
@@ -2796,13 +2794,47 @@ mod tests {
             }
         );
         assert_eq!(warship.target, Some(ShipRef::Npc(raider)));
-        assert!(warship.trigger.turrets_only);
+        // `_AIFireTurret`'s pick, kept once the fight fired and cleared
+        // its flag (`fire::after_firing`).
+        assert_eq!(warship.trigger.keep, Some(TURRET));
         for _ in 0..90 {
             fight(&mut session, &catalog, &ai);
             let warship = escort_npcs(&session)[0];
             assert!(matches!(warship.goal, Goal::Formation { .. }));
             let off = slot_of(&session, warship) - warship.state.position;
             assert!(off.length() < 20.0, "in formation: {off:?}");
+        }
+        let shield = session
+            .space
+            .npc(raider)
+            .expect("there")
+            .reserves
+            .shield
+            .now;
+        assert!(shield < 30.0, "{shield}");
+    }
+
+    #[test]
+    fn an_escort_with_no_command_fires_its_turret_at_a_guard_500_pixels_off() {
+        // `_AIEscortFireUnprovoked` tests no box (@0x80e4f-0x80ea8): a
+        // turret reaching 600 fires at a raider 500 off.
+        let mut catalog = fleeted();
+        catalog.weapons[0].count = 60;
+        let mut session = flying(&catalog, RuleSource::Engine);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        let raider = pirate(&mut session, 0.0, -500.0, Goal::Attack(ShipRef::Player));
+        let ai = sitting_ai();
+        fight(&mut session, &catalog, &ai);
+        let warship = escort_npcs(&session)[0];
+        assert_eq!(
+            warship.goal,
+            Goal::Formation {
+                guard: Some(ShipRef::Npc(raider))
+            }
+        );
+        assert_eq!(warship.trigger.keep, Some(TURRET));
+        for _ in 0..120 {
+            fight(&mut session, &catalog, &ai);
         }
         let shield = session
             .space

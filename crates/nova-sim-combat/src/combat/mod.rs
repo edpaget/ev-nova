@@ -573,9 +573,9 @@ pub enum CombatEvent {
     /// (`_FireAIShipWeapon` @0x88dc0-0x88de4), once a call; and each
     /// live beam of one, on every advance-pass tick, for its firer
     /// (`_HandleBeams` @0x30b1f-0x30b37), but a point-defence beam's at a
-    /// missile (@0x309ab-0x309bb). Point defence's firing, an NPC's bay
-    /// launch, an escort's formation trigger and a sub-munition release
-    /// never light it.
+    /// missile (@0x309ab-0x309bb), an escort's formation pick among them.
+    /// Point defence's firing, an NPC's bay launch and a sub-munition
+    /// release never light it.
     WeaponGlow {
         /// The ship.
         ship: ShipRef,
@@ -2067,14 +2067,17 @@ impl Combat {
     /// `targets` while that can be hit: the player as step 1 fires it
     /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
     /// (@0x34ffd, [`Combat::handle_npcs`]).
-    /// An NPC fires an escort's formation trigger through
+    /// An NPC fires a primary or secondary trigger through
     /// [`Armament::fire`], its quadrant turrets testing their blind spots
     /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
-    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
+    /// weapon sounding at [`AI_FIRE_PRIORITY`] (no AI sets one now: an
+    /// escort's formation fire is `_AIFireTurret`'s pick, rdm
+    /// escort-fleet-fidelity phase 1), then fires its pick
     /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
     /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
-    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+    /// [`AI_FIRE_PRIORITY`], lighting its glow; a recoil sets its
+    /// velocity, reported as a [`Shove`]. An escort's formation pick goes
+    /// this way too, glow and recoil alike. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
     /// destroys its firer ([`self_destruct`]).
     fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
         let target = ai_dispatch::standing(fighter.target, targets);
@@ -3831,7 +3834,6 @@ mod tests {
         primary: false,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: true,
@@ -3902,7 +3904,6 @@ mod tests {
                     primary: true,
                     secondary: None,
                     only: None,
-                    turrets_only: false,
                     bays: false,
                     bays_after: false,
                     point_defence: true,
@@ -7140,7 +7141,6 @@ mod tests {
             primary: true,
             secondary: None,
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: true,
@@ -8554,6 +8554,37 @@ mod tests {
             sounds(&combat.take_events()),
             [(WeaponId(130), heard), (WeaponId(131), heard)],
             "once per weapon, its 3 copies firing as one, as _FireAIShipWeapon sounds once a call"
+        );
+    }
+
+    #[test]
+    fn a_formation_escorts_turret_pick_fires_that_one_weapon_sounding_its_first_copy_at_4() {
+        // `_AIEscortFireUnprovoked` → `_AIFireTurret`'s single pick, fired
+        // by `_FireAIShipWeapon` (rdm escort-fleet-fidelity phase 1).
+        let mut combat = Combat::default();
+        let other = WeaponRecord {
+            id: WeaponId(131),
+            ..turret(4)
+        };
+        let mut firer = Ship::at(1, 0.0, 0.0).picking(130).targeting(B);
+        firer.armament = Armament::new([
+            (WeaponSpec::new(&turret(4)), 1),
+            (WeaponSpec::new(&other), 1),
+        ]);
+        let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            sounds(&combat.take_events()),
+            [(WeaponId(130), Some(FireSound::at(AI_FIRE_PRIORITY)))],
+            "its pick alone, once a call"
+        );
+        assert!(
+            combat
+                .shots()
+                .iter()
+                .all(|shot| shot.weapon.id == WeaponId(130)),
+            "{:?}",
+            combat.shots()
         );
     }
 
@@ -13366,15 +13397,13 @@ mod tests {
             blind_front_shots(player, PRIMARY_HELD, RuleSource::Bible),
             0
         );
-        let formation = Trigger {
-            turrets_only: true,
-            ..PRIMARY_HELD
-        };
+        // An NPC's primary trigger (`Armament::fire`); its pick is tested
+        // for blind spots as its AI picks it (`_AIFireTurret` @0x80d0b).
         for reading in RuleSource::ALL {
             assert_eq!(
-                blind_front_shots(A, formation, reading),
+                blind_front_shots(A, PRIMARY_HELD, reading),
                 0,
-                "an escort's formation trigger: {reading:?}"
+                "an NPC's primary trigger: {reading:?}"
             );
         }
         // A full turret holds fire in its blind spot under both readings.
@@ -13412,18 +13441,7 @@ mod tests {
         let npc = Ship::at(1, 0.0, 0.0)
             .armed(self_destructing(blaster()))
             .picking(128);
-        // An escort's formation trigger, its turret at B ahead.
-        let formation = Ship {
-            trigger: Trigger {
-                turrets_only: true,
-                primary: true,
-                ..QUIET
-            },
-            ..Ship::at(1, 0.0, 0.0)
-                .armed(self_destructing(turret(4)))
-                .targeting(B)
-        };
-        for shooter in [player, npc, formation] {
+        for shooter in [player, npc] {
             let id = shooter.id;
             let mut combat = Combat::default();
             let mut ships = [shooter, Ship::at(2, 0.0, -3000.0)];
