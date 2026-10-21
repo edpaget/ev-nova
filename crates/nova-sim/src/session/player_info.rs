@@ -1028,6 +1028,27 @@ mod tests {
         assert_eq!(session.player_info(&catalog).cheat_ids.record, None);
     }
 
+    #[test]
+    fn a_xenophobic_governments_n_a_still_carries_the_record_id() {
+        let mut catalog = governed();
+        for star in &mut catalog.star_map {
+            if star.id.0 == 131 {
+                star.govt = Some(GovtId(129));
+            }
+        }
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        session.pilot.set_system_record(SystemId(131), 50);
+        let info = session.player_info(&catalog);
+        assert_eq!(info.legal_status, "N/A", "129 is xenophobic");
+        assert_eq!(
+            info.cheat_ids.record,
+            Some(50),
+            "the inhabited branch appends the record after the N/A (@0x52a16)"
+        );
+    }
+
     /// `STR#` 2002 with #396 "n/a".
     #[derive(Debug)]
     struct NotAvailable;
