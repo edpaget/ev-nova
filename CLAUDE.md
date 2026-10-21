@@ -90,21 +90,29 @@ the answer. Before disassembling a function, run `rdm search <symbol>
 
 ### When the original and another reading disagree
 
-- If the engine's behaviour has an obvious alternative (the Nova Bible
-  disagrees, the engine has a quirk, or our plan said otherwise), add a
-  `Rulebook` key (`crates/nova-sim-base/src/rulebook.rs`). The engine's reading is
-  the default, and tests cover both readings. Ask the user only when the
-  alternative isn't obvious, the scope grows, or the change alters a control
-  everyone uses.
-- If the engine has a bug that breaks stock missions, crons or storylines,
+The original's behaviour is the default. A deviation from it needs a reason,
+and a deviation with a reason becomes a setting, not a new default. The
+original's bugs and limits are the only exceptions.
+
+- When there's a reason to read a rule another way (the Nova Bible
+  disagrees, our engine already behaves differently, or a plan said
+  otherwise), add a `Rulebook` key (`crates/nova-sim-base/src/rulebook.rs`).
+  The original's reading (`RuleSource::Engine`, named for the original
+  executable) is the default, the other reading is opt-in, and tests cover
+  both. Ask the user only when the alternative isn't obvious, the scope
+  grows, or the change alters a control everyone uses.
+- If the original has a bug that breaks stock missions, crons or storylines,
   make the intended behaviour the default and the bug the opt-in reading.
   Check the stock data before calling something broken.
+- If the original has a resource limit (a cap on shots, beams or
+  explosions kept in memory), default to no limit and make the cap the
+  opt-in reading.
 - Don't replicate integer widths, wraps or overflows (16-bit cargo, 32-bit
   cash). Use wider numbers. Mention the width in the finding, but don't file
   a phase or key for it.
-- If a difference is practically unobservable (sub-second timing, say),
-  offer "record only" beside "build it". Don't assume either answer: the
-  user has chosen each.
+- Build what the original does even when the difference is small: a pixel,
+  sub-second timing, a click that acts on the press. Record without building
+  only what can't be replicated, such as a read of uninitialised memory.
 
 ### Where new findings go
 
