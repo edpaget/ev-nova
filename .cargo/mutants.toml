@@ -58,12 +58,12 @@ exclude_re = [
     # kept in [0, 360), so neither reaches 360, and the turn's way is 0
     # only on the wanted heading itself, which it snaps onto first (no
     # ship's turn rate is below 0).
-    "nova-sim-ai/src/traffic/formation_flight\\.rs:[0-9]+:[0-9]+: replace -= with (\\+=|/=) in turn_to$",
-    "nova-sim-ai/src/traffic/formation_flight\\.rs:[0-9]+:[0-9]+: replace < with <= in turn_to$",
-    "nova-sim-ai/src/traffic/formation_flight\\.rs:291:13: replace -= with (\\+=|/=) in matched_heading$",
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace -= with (\\+=|/=) in turn_to$",
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace < with <= in turn_to$",
+    "nova-sim-ai/src/traffic/formation_flight\\.rs:265:13: replace -= with (\\+=|/=) in matched_heading$",
     # The heading step's wanted 360 taken to 0 (`> 359`): taken to 359 at
     # `>= 359`, it goes below 0 and back to 359, the same.
-    "nova-sim-ai/src/traffic/formation_flight\\.rs:301:15: replace > with >= in matched_heading$",
+    "nova-sim-ai/src/traffic/formation_flight\\.rs:275:15: replace > with >= in matched_heading$",
     # The approach's speed gap is a float widened to a double and tested
     # against the double 0.35 (@0x87538, @0x8755b): no float widens to
     # 0.35 exactly, so `>=` can't be told from `>`.
