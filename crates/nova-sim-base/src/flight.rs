@@ -68,6 +68,7 @@ use crate::inertialess::{
 use crate::player_turn::{PlayerTurn, turn};
 use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
+use crate::trig;
 
 /// The speed, in pixels a tick, at or below which reverse treats a ship as
 /// at rest under the original's thrust ([`at_rest_speed`] of
@@ -490,6 +491,42 @@ pub fn turn_toward(from: f32, to: f32, rate: f32) -> f32 {
     }
 }
 
+/// Half a turn, in degrees, past which `_HandleShip` turns a ship to the
+/// left (the float 180.0 @0xdd688, @0x344ef).
+const HALF_TURN: f32 = 180.0;
+
+/// `_HandleShip`'s turn of an NPC at `state` to the heading its substate
+/// wants (+0x68, `wanted`), turning at `rate` (`_ShipTurnRate`,
+/// @0x34460-0x3458e): more than `rate` off it, in whole degrees
+/// (`_AngularDifference` of the two truncated), it turns by `rate`, to
+/// the left when the way round to it is more than half a turn; otherwise
+/// `state` is put on it, which reads as no turn. The low level wants the
+/// ship's whole heading unless a substate says otherwise (@0x8522d), so
+/// a substate that turns nowhere still has its heading truncated.
+///
+/// The caller skips it while the ship's AI wait runs, but for a count
+/// wait (@0x3443f-0x34454).
+pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
+    let off = trig::angular_difference(wanted, trig::whole(state.heading));
+    // × `_gSpeedMult`, 1.0, in doubles.
+    if f64::from(off) > f64::from(rate) {
+        let mut way = f32::from(wanted) - state.heading;
+        if way >= 360.0 {
+            way -= 360.0;
+        }
+        if way < 0.0 {
+            way += 360.0;
+        }
+        return if way > HALF_TURN {
+            Turn::Left
+        } else {
+            Turn::Right
+        };
+    }
+    state.heading = f32::from(wanted);
+    Turn::None
+}
+
 /// The unit vector a ship heading `heading` degrees faces.
 #[must_use]
 pub fn facing(heading: f32) -> Vec2 {
@@ -680,6 +717,38 @@ mod tests {
         assert_eq!(turn_toward(358.0, 0.0, 3.0), 0.0, "onto 0");
         assert_eq!(turn_toward(90.0, 90.0, 3.0), 90.0, "already there");
         assert_eq!(turn_toward(0.0, 90.0, 0.0), 0.0, "cannot turn");
+    }
+
+    #[test]
+    fn handle_ships_turn_steps_by_the_rate_beyond_it_in_whole_degrees_and_snaps_within() {
+        let turned = |heading: f32, wanted: i16, rate: f32| {
+            let mut state = ShipState {
+                heading,
+                ..ShipState::default()
+            };
+            let turn = turn_to(&mut state, wanted, rate);
+            (turn, state.heading)
+        };
+        assert_eq!(turned(10.0, 20, 3.0), (Turn::Right, 10.0));
+        assert_eq!(turned(20.0, 10, 3.0), (Turn::Left, 20.0));
+        assert_eq!(turned(355.0, 5, 3.0), (Turn::Right, 355.0), "across 0");
+        assert_eq!(turned(5.0, 355, 3.0), (Turn::Left, 5.0));
+        assert_eq!(
+            turned(13.0, 10, 3.0),
+            (Turn::None, 10.0),
+            "one turn: onto it"
+        );
+        assert_eq!(turned(11.5, 14, 3.0), (Turn::None, 14.0));
+        // 10.9 is 4 whole degrees off 14, beyond 3.5, though 3.1 off it.
+        assert_eq!(turned(10.9, 14, 3.5), (Turn::Right, 10.9));
+        assert_eq!(turned(10.0, 190, 3.0), (Turn::Right, 10.0), "180 round");
+        assert_eq!(turned(10.0, 191, 3.0), (Turn::Left, 10.0));
+        assert_eq!(turned(10.0, 11, 0.5), (Turn::Right, 10.0), "slower than 1");
+        assert_eq!(
+            turned(90.6, 90, 3.0),
+            (Turn::None, 90.0),
+            "its own whole heading: truncated"
+        );
     }
 
     #[test]

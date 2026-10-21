@@ -723,6 +723,13 @@ fn dock_in(
 
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
+///
+/// This is the port's turn, not `_HandleShip`'s
+/// ([`flight::turn_to`], @0x34460-0x3458e), which
+/// measures the gap in whole degrees, turns by the rate only while the gap
+/// is more than that, and otherwise puts the ship on the heading it wants.
+/// The substates still turning by this are
+/// rdm:phase/escort-fleet-fidelity-followups/phase-3-substates-turn-as-handle-ship-does's.
 pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     let off = shortest_turn(heading, wanted);
     let half_turn = handling.turn_rate / 2.0;

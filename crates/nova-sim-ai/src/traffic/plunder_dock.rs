@@ -48,8 +48,9 @@
 //!     to the victim's plus it (@0x86c08-0x86cb2). An inertialess ship
 //!     matching instead takes a tick's acceleration off its speed
 //!     ([`Npc::speed`]), down to none and not capped at its top speed, with
-//!     no turn, thrust or damping (@0x86aaa-0x86b38); its velocity follows
-//!     its heading at that speed as it flies.
+//!     no thrust or damping (@0x86aaa-0x86b38), wanting its own whole
+//!     heading (the low level's default +0x68, @0x8522d); its velocity
+//!     follows its heading at that speed as it flies.
 //!   - **Aligned** (@0x86cb7): it wants the victim's heading and takes its
 //!     velocity. Outside [`DOCKED_BOX`] on either axis it creeps a pixel a
 //!     tick towards it, its speed zeroed, inertialess or not
@@ -65,8 +66,15 @@
 //!     (@0x86fa4-0x8700a): the victim boarded, its AI wait [`DOCK_WAIT`] +
 //!     `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the victim's
 //!     ([`DockOutcome::Started`]).
+//! - **The turn**: subs 9, 0xb and 0xf set only the heading they want
+//!   (+0x68), and `_HandleShip` turns the ship to it
+//!   ([`flight::turn_to`], @0x34460-0x3458e): by its turn while it is off
+//!   by more than that, whole degrees, and onto it otherwise. Sub 1's stop
+//!   still turns by [`autopilot::steer`]'s reading, which isn't
+//!   `_HandleShip`'s (see its docs).
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
-//!   (@0x34a54-0x34a72): it moves on at the velocity the substate left it.
+//!   (@0x3443f-0x34454, @0x34a54-0x34a72): it moves on at the velocity
+//!   the substate left it, its heading where it was.
 //!
 //! A ship repairing the player, or an NPC, flies these substates too, by its own high level
 //! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)),
@@ -84,7 +92,7 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
-use crate::traffic::autopilot::{self, steer};
+use crate::traffic::autopilot;
 use crate::traffic::formation_flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
@@ -252,22 +260,23 @@ pub fn fly(
         return DockOutcome::Flying;
     };
     let inertia = Inertia::of(npc, Some(victim), flight);
-    let (controls, flown, outcome) = match docking.sub {
+    let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, true);
-            (controls, flown, DockOutcome::Flying)
+            (controls, flown, None, DockOutcome::Flying)
         }
         DockSub::Dock => {
-            let (controls, outcome) = dock(npc, (docking.ship, victim), handling, inertia, chance);
-            (controls, *handling, outcome)
+            let (controls, wanted, outcome) =
+                dock(npc, (docking.ship, victim), handling, inertia, chance);
+            (controls, *handling, Some(wanted), outcome)
         }
         sub => {
             let close = sub == DockSub::Close;
             if close {
                 swarm_branch(npc, swarm, None, handling);
             }
-            let (controls, flown) = approach(npc, victim, handling, close);
-            (controls, flown, DockOutcome::Flying)
+            let (controls, flown, wanted) = approach(npc, victim, handling, close);
+            (controls, flown, Some(wanted), DockOutcome::Flying)
         }
     };
     if npc.ai_wait > 0 {
@@ -276,6 +285,10 @@ pub fn fly(
             Inertia::Inertialess { .. } => inertialess::drift(npc, &flown),
         }
     } else {
+        let turn = wanted.map_or(controls.turn, |wanted| {
+            flight::turn_to(&mut npc.state, wanted, handling.turn_rate)
+        });
+        let controls = Controls { turn, ..controls };
         autopilot::step(npc, &flown, controls, flight, inertia);
     }
     outcome
@@ -306,14 +319,16 @@ pub(crate) fn swarm_branch(
 }
 
 /// Subs 9 and 0xb (see the module docs) of `npc` steering at a ship at
-/// `victim`: the controls, and the handling they fly by, closing (sub
-/// 0xb) capped within [`CLOSE_CAP_BOX`].
+/// `victim`: the controls but the turn, the handling they fly by,
+/// closing (sub 0xb) capped within [`CLOSE_CAP_BOX`], and the heading it
+/// wants (+0x68), which `_HandleShip` turns it to
+/// ([`flight::turn_to`]).
 pub(crate) fn approach(
     npc: &Npc,
     victim: &ShipState,
     handling: &Handling,
     close: bool,
-) -> (Controls, Handling) {
+) -> (Controls, Handling, i16) {
     let state = &npc.state;
     let bearing = trig::intercept_angle(state.position, victim.position);
     let off = state.position - victim.position;
@@ -345,11 +360,9 @@ pub(crate) fn approach(
     };
     let controls = Controls {
         thrust,
-        turn: steer(state.heading, f32::from(wanted), handling),
-        reverse: false,
         ..Controls::default()
     };
-    (controls, flown)
+    (controls, flown, wanted)
 }
 
 /// The heading against the gap between the velocity of a ship at `state`
@@ -386,15 +399,17 @@ pub(crate) fn mismatched(gap: Vec2) -> bool {
 }
 
 /// Sub 0xf (see the module docs) of a docking with `ship` at `victim`,
-/// flown as `inertia` says: the controls, and what became of the docking,
-/// its velocity, speed and AI wait set as the substate sets them.
+/// flown as `inertia` says: the controls but the turn, the heading it
+/// wants (+0x68, which `_HandleShip` turns it to, [`flight::turn_to`]),
+/// and what became of the docking, its velocity, speed and AI wait set
+/// as the substate sets them.
 fn dock(
     npc: &mut Npc,
     (ship, victim): (ShipRef, &ShipState),
     handling: &Handling,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
-) -> (Controls, DockOutcome) {
+) -> (Controls, i16, DockOutcome) {
     let mismatched = mismatched(npc.state.velocity - victim.velocity);
     if mismatched && matches!(inertia, Inertia::Inertialess { .. }) {
         // A tick's acceleration off its speed, down to none and not capped
@@ -403,25 +418,20 @@ fn dock(
         #[allow(clippy::cast_possible_truncation)]
         let speed = (f64::from(npc.speed) - f64::from(handling.accel)).max(0.0) as f32;
         npc.speed = speed;
-        return (Controls::default(), DockOutcome::Flying);
+        // The low level's own whole heading (@0x8522d).
+        let wanted = trig::whole(npc.state.heading);
+        return (Controls::default(), wanted, DockOutcome::Flying);
     }
     if mismatched {
         let wanted = counter(&mut npc.state, victim.velocity);
         let controls = Controls {
             thrust: off_by(npc.state.heading, wanted) < handling.turn_rate + THRUST_SLACK,
-            turn: steer(npc.state.heading, f32::from(wanted), handling),
-            reverse: false,
             ..Controls::default()
         };
-        return (controls, DockOutcome::Flying);
+        return (controls, wanted, DockOutcome::Flying);
     }
-    let wanted = f32::from(trig::whole(victim.heading));
-    let controls = Controls {
-        thrust: false,
-        turn: steer(npc.state.heading, wanted, handling),
-        reverse: false,
-        ..Controls::default()
-    };
+    let wanted = trig::whole(victim.heading);
+    let controls = Controls::default();
     npc.state.velocity = victim.velocity;
     let off = npc.state.position - victim.position;
     if off.x.abs() > DOCKED_BOX || off.y.abs() > DOCKED_BOX {
@@ -429,7 +439,7 @@ fn dock(
         npc.speed = 0.0;
         let towards = trig::intercept_angle(npc.state.position, victim.position);
         npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * CREEP;
-        return (controls, DockOutcome::Flying);
+        return (controls, wanted, DockOutcome::Flying);
     }
     let outcome = match npc.ai_wait {
         wait if wait > DOCK_WAIT => DockOutcome::Flying,
@@ -443,7 +453,7 @@ fn dock(
             DockOutcome::Started { victim: ship, wait }
         }
     };
-    (controls, outcome)
+    (controls, wanted, outcome)
 }
 
 #[cfg(test)]
@@ -556,7 +566,7 @@ mod tests {
             &victim,
             &[],
         );
-        assert!((ship.state.heading - 0.9).abs() < 1e-5, "turned left");
+        assert_eq!(ship.state.heading, 0.0, "3 whole degrees off: onto it");
         assert!(ship.state.velocity.y < 0.0, "thrust");
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, 0.0, 4.0), DockSub::Approach),
@@ -564,6 +574,26 @@ mod tests {
             &[],
         );
         assert_eq!(ship.state.velocity, Vec2::ZERO, "4 is not below 4");
+        assert_eq!(ship.state.heading, 1.0, "4 off: it turns by 3");
+    }
+
+    #[test]
+    fn approaching_and_closing_it_turns_as_handle_ship_does_onto_a_heading_within_its_turn() {
+        // Bearing 0, 1.4 off it: within half a turn, yet `_HandleShip`
+        // puts it on the bearing.
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        for sub in [DockSub::Approach, DockSub::Close] {
+            let (ship, _) = flown(pirate(at(0.0, 0.0, 0.0, 0.0, 1.4), sub), &victim, &[]);
+            assert_eq!(ship.state.heading, 0.0, "{sub:?}");
+        }
+        // Near it, keeping its heading, it keeps its whole heading.
+        let near = at(0.0, -150.0, 0.0, 0.0, 0.0);
+        let (ship, _) = flown(
+            pirate(at(0.0, 0.0, 0.0, -2.0, 90.6), DockSub::Approach),
+            &near,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 90.0);
     }
 
     #[test]
@@ -718,7 +748,7 @@ mod tests {
             &[],
         );
         assert_eq!(outcome, DockOutcome::Flying);
-        assert_eq!(ship.state.heading, 13.0, "turning to 12");
+        assert_eq!(ship.state.heading, 12.0, "2 off: onto 12");
         assert_eq!(ship.state.velocity, victim.velocity);
         assert_eq!(
             ship.state.position,
@@ -841,6 +871,12 @@ mod tests {
         assert_eq!(ship.state.heading, 90.0);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9));
         assert_eq!(ship.state.position, Vec2::new(50.0, 1.9));
+        // Docked and holding, a fraction off the victim's heading: not
+        // put on it.
+        let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.5), DockSub::Dock);
+        ship.ai_wait = 150;
+        let (ship, _) = flown(ship, &victim, &[]);
+        assert_eq!(ship.state.heading, 0.5);
     }
 
     #[test]
@@ -866,14 +902,15 @@ mod tests {
     #[test]
     fn approaching_it_corrects_by_the_gap_to_its_top_speed_on_one_axis_alone() {
         // The bearing 90; its velocity's direction far off it, short of the
-        // top speed (4, 0) by (3.9, 0.2): it turns to the gap, about 93.
+        // top speed (4, 0) by (3.9, 0.2): it turns to the gap, 92, within
+        // its turn.
         let victim = at(150.0, 0.0, 0.0, 0.0, 0.0);
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.1, -0.2, 90.0), DockSub::Approach),
             &victim,
             &[],
         );
-        assert_eq!(ship.state.heading, 93.0, "turning right to the gap");
+        assert_eq!(ship.state.heading, 92.0, "onto the gap");
     }
 
     #[test]
@@ -933,6 +970,13 @@ mod tests {
             &[],
         );
         assert_eq!(ship.state.heading, 277.0);
+        // 1.4 off it: `_HandleShip` puts it on 270.
+        let (ship, _) = flown(
+            pirate(at(50.0, 0.0, 3.0, 0.0, 271.4), DockSub::Dock),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 270.0);
     }
 
     #[test]
@@ -1006,13 +1050,16 @@ mod tests {
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         // 2 apart going down, facing across: an inertial one would damp
         // the gap and turn to 0.
-        let start = at(50.0, 0.0, 0.0, 2.0, 90.0);
+        let start = at(50.0, 0.0, 0.0, 2.0, 90.6);
         let matched = |speed: f32| {
             let mut ship = inertialess(pirate(start, DockSub::Dock));
             ship.speed = speed;
             let (ship, outcome) = flown(ship, &victim, &[]);
             assert_eq!(outcome, DockOutcome::Flying);
-            assert_eq!(ship.state.heading, 90.0, "no turn");
+            assert_eq!(
+                ship.state.heading, 90.0,
+                "no turn but onto its whole heading"
+            );
             assert_eq!(ship.display.drive.thrust, Thrust::None);
             let velocity = adjust_velocity(
                 start.velocity,

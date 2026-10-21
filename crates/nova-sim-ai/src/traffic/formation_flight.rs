@@ -27,9 +27,13 @@
 //!   thrust at half its top speed within 100 of it. With a swarm leader
 //!   (+0xc906 > 0), sub 0xb first nudges the escort toward its slot
 //!   ([`maintain`]) and copies the swarm leader's glow
-//!   ([`plunder_dock::swarm_branch`], @0x87364-0x873a3).
+//!   ([`plunder_dock::swarm_branch`], @0x87364-0x873a3). `_HandleShip`
+//!   turns it to the heading it wants as in close formation
+//!   ([`flight::turn_to`]).
 //! - **Stop** (sub 1, @0x8536d-0x85633): [`leave_flight::stop`], which
-//!   brakes a moving escort and settles a slow one.
+//!   brakes a moving escort and settles a slow one. Its turn is still the
+//!   port's ([`autopilot::steer`]):
+//!   rdm:phase/escort-fleet-fidelity-followups/phase-3-substates-turn-as-handle-ship-does.
 //! - **Close formation** (sub 0xc, @0x878fc-0x87e01, [`keep`]): Δv is its
 //!   velocity less its leader's. Its own `_ShipIsInertialess` test
 //!   (@0x87962) runs with the substate at 0 (@0x8792b), so it reads the
@@ -53,7 +57,7 @@
 //!     leader's whole heading. Then it is nudged toward its slot
 //!     ([`maintain`], @0x87dbb-0x87dc9) and copies its leader's glow
 //!     (@0x87dce-0x87deb).
-//!   - `_HandleShip` then turns it to the heading it wants ([`turn_to`],
+//!   - `_HandleShip` then turns it to the heading it wants ([`flight::turn_to`],
 //!     @0x34460-0x3458e): by its turn while it is off by more than that,
 //!     whole degrees, and onto it otherwise. So it steps a degree a
 //!     frame while it is close to its leader's heading.
@@ -105,7 +109,7 @@ use crate::ai::fire::off_by;
 #[cfg(doc)]
 use crate::escort::FormationSlot;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
-use crate::flight::{Controls, FlightRules, ShipState, Turn};
+use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::autopilot::{self, Beside};
@@ -131,10 +135,6 @@ pub const HEADING_LIMIT: f32 = 25.0;
 pub const ION_HOLD_ABOVE: f64 = 0.8;
 /// The factor it is held to there (the float 0.8 @0xdda2c, @0x84f87).
 pub const ION_HOLD: f32 = 0.8;
-/// Half a turn, in degrees, past which `_HandleShip` turns a ship to the
-/// left (the float 180.0 @0xdd688, @0x344ef).
-const HALF_TURN: f32 = 180.0;
-
 /// The substate goal 0xa flies (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sub {
@@ -198,32 +198,6 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
     npc.state.position = Vec2::new(towards(at.x, slot.x), towards(at.y, slot.y));
 }
 
-/// `_HandleShip`'s turn to the heading `wanted` (+0x68) for a ship at
-/// `state` turning at `rate` (@0x34460-0x3458e): more than `rate` off it,
-/// in whole degrees (`_AngularDifference`), it turns by `rate`, to the
-/// left when the way round to it is more than half a turn; otherwise
-/// `state` is put on it, which reads as no turn.
-pub(crate) fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
-    let off = trig::angular_difference(wanted, trig::whole(state.heading));
-    // × `_gSpeedMult`, 1.0, in doubles.
-    if f64::from(off) > f64::from(rate) {
-        let mut way = f32::from(wanted) - state.heading;
-        if way >= 360.0 {
-            way -= 360.0;
-        }
-        if way < 0.0 {
-            way += 360.0;
-        }
-        return if way > HALF_TURN {
-            Turn::Left
-        } else {
-            Turn::Right
-        };
-    }
-    state.heading = f32::from(wanted);
-    Turn::None
-}
-
 /// Sub 0xc for `npc` beside its leader at `leader`, its slot at `slot`,
 /// on `handling` under `flight` (see the module docs): the controls, and
 /// the handling they fly by, its velocity, heading, position and glow
@@ -241,7 +215,7 @@ fn keep(
         let wanted = plunder_dock::counter(&mut npc.state, leader.velocity);
         // Off by its heading before `_HandleShip` turns it (@0x87a24).
         let thrust = off_by(npc.state.heading, wanted) < rate + THRUST_SLACK;
-        let turn = turn_to(&mut npc.state, wanted, rate);
+        let turn = flight::turn_to(&mut npc.state, wanted, rate);
         // `_ShipAccelRate` × the double 0.66, back to a float, and +0x34 =
         // 0, its own top speed (@0x87a70-0x87a9d).
         #[allow(clippy::cast_possible_truncation)]
@@ -255,7 +229,7 @@ fn keep(
     }
     npc.state.velocity = leader.velocity;
     let wanted = matched_heading(npc.state.heading, leader.heading, npc.skill);
-    let turn = turn_to(&mut npc.state, wanted, rate);
+    let turn = flight::turn_to(&mut npc.state, wanted, rate);
     maintain(npc, slot, handling, false);
     npc.display.drive.glow = GlowCopy::Leader;
     let controls = Controls {
@@ -337,7 +311,9 @@ pub(crate) fn fly(
                 plunder_dock::swarm_branch(npc, beside.swarm, Some(slot), handling);
             }
             let target = beside.guard.unwrap_or(*leader);
-            plunder_dock::approach(npc, &target, handling, close)
+            let (controls, flown, wanted) = plunder_dock::approach(npc, &target, handling, close);
+            let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+            (Controls { turn, ..controls }, flown)
         }
     };
     autopilot::step(npc, &flown, controls, flight, inertia);
@@ -350,6 +326,7 @@ mod tests {
     use crate::ai::Goal;
     use crate::ai::swarm::SwarmLead;
     use crate::escort::{EscortDuty, FormationSlot};
+    use crate::flight::Turn;
     use crate::handling::ShipFields;
     use crate::stats::{INERTIALESS_HULL, ShipStats};
     use crate::traffic::autopilot::{Outcome, Readings, TopSpeeds};
@@ -542,32 +519,6 @@ mod tests {
         assert_eq!(ship.state.position, Vec2::new(150.0, 120.0));
         maintain(&mut ship, slot, &GENTLE, true);
         assert_eq!(ship.state.position, slot, "even while warping");
-    }
-
-    // `_HandleShip`'s turn.
-
-    #[test]
-    fn the_turn_steps_by_the_rate_beyond_it_in_whole_degrees_and_snaps_within() {
-        let turned = |heading: f32, wanted: i16, rate: f32| {
-            let mut state = at(0.0, 0.0, 0.0, 0.0, heading);
-            let turn = turn_to(&mut state, wanted, rate);
-            (turn, state.heading)
-        };
-        assert_eq!(turned(10.0, 20, 3.0), (Turn::Right, 10.0));
-        assert_eq!(turned(20.0, 10, 3.0), (Turn::Left, 20.0));
-        assert_eq!(turned(355.0, 5, 3.0), (Turn::Right, 355.0), "across 0");
-        assert_eq!(turned(5.0, 355, 3.0), (Turn::Left, 5.0));
-        assert_eq!(
-            turned(13.0, 10, 3.0),
-            (Turn::None, 10.0),
-            "one turn: onto it"
-        );
-        assert_eq!(turned(11.5, 14, 3.0), (Turn::None, 14.0));
-        // 10.9 is 4 whole degrees off 14, beyond 3.5, though 3.1 off it.
-        assert_eq!(turned(10.9, 14, 3.5), (Turn::Right, 10.9));
-        assert_eq!(turned(10.0, 190, 3.0), (Turn::Right, 10.0), "180 round");
-        assert_eq!(turned(10.0, 191, 3.0), (Turn::Left, 10.0));
-        assert_eq!(turned(10.0, 11, 0.5), (Turn::Right, 10.0), "slower than 1");
     }
 
     // Close formation: the counter-thrust.
@@ -831,6 +782,18 @@ mod tests {
         let mut ship = escort_of(FAST, 300.0, start);
         flown(&mut ship, Some(&leader), guarding);
         assert_eq!(ship.state.heading, 247.0, "{:?}", ship.state);
+    }
+
+    #[test]
+    fn closing_in_or_approaching_it_turns_as_handle_ship_does_onto_a_heading_within_its_turn() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // Its leader at 270, 1.4 off: within half a turn, yet
+        // `_HandleShip` puts it on 270.
+        for x in [450.0, 900.0] {
+            let mut ship = escort_of(FAST, 300.0, at(x, 0.0, 0.0, 0.0, 271.4));
+            flown(&mut ship, Some(&leader), Beside::default());
+            assert_eq!(ship.state.heading, 270.0, "{x}");
+        }
     }
 
     #[test]
