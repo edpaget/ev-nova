@@ -586,13 +586,14 @@ impl<
     }
 
     /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog, changing nothing; `None` for a
-    /// session that failed. An opening of the screen is
+    /// gives it from the screen's catalog, marked with the cheats setting,
+    /// changing nothing; `None` for a session that failed. An opening of
+    /// the screen is
     /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
-        Some(session.player_info(&self.catalog))
+        Some(self.marked(session.player_info(&self.catalog)))
     }
 
     /// What the main screen's pilot panel says about the pilot, as
@@ -607,11 +608,22 @@ impl<
     /// The player info dialog opens, as [`Session::open_player_info`] has
     /// it: the session resets first, so the screen it gives shows the
     /// cargo trimmed; none in a jump or while the ship breaks up, when
-    /// nothing opens, or for a session that failed. The router opens the
-    /// screen on it, from flight and from the spaceport alike.
+    /// nothing opens, or for a session that failed. It is marked with the
+    /// cheats setting. The router opens the screen on it, from flight and
+    /// from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
         let session = self.session.as_mut().ok()?;
-        session.open_player_info(&self.catalog)
+        let info = session.open_player_info(&self.catalog)?;
+        Some(self.marked(info))
+    }
+
+    /// `info` marked with the cheats setting ([`FlightOverlays::cheats`]),
+    /// which the session leaves off.
+    fn marked(&self, info: PlayerInfo) -> PlayerInfo {
+        PlayerInfo {
+            cheats: self.overlays.cheats,
+            ..info
+        }
     }
 
     /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) outside a jump, its [`PlayerCommand`]

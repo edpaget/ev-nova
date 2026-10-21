@@ -1014,8 +1014,8 @@ fn the_picture_variants_frames_decode_at_their_sizes() {
 fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
     use nova_sim::PlayerInfo;
     use nova_view::ui::player_info::{
-        BACKGROUND, CAP_HEIGHT, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
-        YES_NO_DIALOG,
+        BACKGROUND, CAP_HEIGHT, MIDDLE_HEIGHT, PLAYER_INFO_DIALOG, PlayerInfoButton,
+        PlayerInfoScreen, Tab, YES_NO_DIALOG,
     };
     for (dir, path) in builds() {
         let ui = interface(&path);
@@ -1061,6 +1061,8 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             honors: None,
             jettisonable: false,
             words: nova_sim::player_info::Words::STOCK,
+            cheat_ids: nova_sim::player_info::CheatIds::default(),
+            cheats: false,
         };
         let screen =
             PlayerInfoScreen::new(Ok((template, mono())), confirm, info, ButtonStyle::STOCK);
@@ -1081,6 +1083,11 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(size(BACKGROUND[1]), (413, 215), "middle");
         assert_eq!(size(BACKGROUND[2]), (413, 40), "lower");
         assert_eq!(CAP_HEIGHT, 40.0);
+        assert_eq!(
+            f32::from(u16::try_from(size(BACKGROUND[1]).1).expect("fits")),
+            MIDDLE_HEIGHT,
+            "the middle crops under its own height"
+        );
     }
 }
 

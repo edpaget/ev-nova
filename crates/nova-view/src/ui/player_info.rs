@@ -10,9 +10,11 @@
 //! Honors tabs (2-5), the content box (6) and Jettison Cargo (7), each
 //! labelled from `STR#` 150 (#5, #36-#39, #61). It is painted black, then
 //! `PICT` 8519 between the upper cap 8518 and the lower cap 8520
-//! ([`BACKGROUND`]); the original crops the middle below its natural
-//! height where this stretches it, as [`DialogFrame`](super::DialogFrame)
-//! does (crons-news-ranks-fidelity phase 28). Every text is Geneva 9
+//! ([`BACKGROUND`], [`draw_background`]): a span between the caps under
+//! the middle's own [`MIDDLE_HEIGHT`] crops it, drawn at its own size and
+//! cut by the dialog under the lower cap, and a taller one stretches it
+//! (@0x52581-0x525a8). The layout reads the stock pictures' heights, not
+//! a plug-in's. Every text is Geneva 9
 //! ([`TEXT_SIZE`]), the labels light grey ([`LABEL_COLOR`]) and the values
 //! white. Every `STR#` 2002 string it draws, the labels, words and
 //! messages, is the info's [`Words`], read with the texts, so a plug-in
@@ -23,7 +25,10 @@
 //!   and a value at +0x50 or +0x118 from the content box's top-left, on
 //!   baselines +0xc to +0x8c, 0x10 apart (@0x527b0-0x53731). Combat
 //!   Rating shows [`PLACEHOLDER`] until rdm:task/combat-rating-readers
-//!   lands ([`PLACEHOLDER_FIELDS`]).
+//!   lands ([`PLACEHOLDER_FIELDS`]). With the info's cheat mode on,
+//!   System, Legal Status (in an inhabited system), Combat Rating and
+//!   Ship Class are followed by their IDs, " (n)", in the value's white
+//!   ([`cheat_suffix`], @0x52951, @0x52a16, @0x52ae3, @0x52c1d).
 //! - **Cargo, Extras and Honors**: the text, wrapped in the content box
 //!   inset by 5 (10 at the bottom), white on a black box (`TETextBox`
 //!   then `InvertRect`, @0x53749-0x539c3); with nothing to show, a light
@@ -66,15 +71,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::PlayerInfo;
-use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words};
+use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::desc::DONE_LABEL;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate};
 use super::scroll_text::ScrollText;
-use super::slice::{Axis, Piece, three_slice};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -95,6 +99,9 @@ pub const BACKGROUND: [ImageKey; 3] = [
 ];
 /// The upper and lower caps' height.
 pub const CAP_HEIGHT: f32 = 40.0;
+/// The middle picture's own height (stock `PICT` 8519): a span between
+/// the caps shorter than this crops it rather than stretching it.
+pub const MIDDLE_HEIGHT: f32 = 215.0;
 /// The Yes/No dialog Jettison asks in (`DLOG` 3002).
 pub const YES_NO_DIALOG: i16 = 3002;
 /// The Yes/No dialog's OK, its yes.
@@ -348,6 +355,11 @@ pub fn general_texts(
     metrics: &dyn TextMetrics,
 ) -> Vec<PlacedText> {
     let words = &info.words;
+    let ids = info.cheat_ids;
+    let with_id = |value: &str, id: Option<i64>| match id.filter(|_| info.cheats) {
+        Some(id) => format!("{value}{}", cheat_suffix(id)),
+        None => value.to_owned(),
+    };
     let rows: [[(&str, String); 2]; 6] = [
         [
             (&words.pilot_name_label, info.pilot_name.clone()),
@@ -355,21 +367,33 @@ pub fn general_texts(
         ],
         [
             (&words.date_label, info.date.clone()),
-            (&words.ship_class_label, info.ship_class.clone()),
+            (
+                &words.ship_class_label,
+                with_id(&info.ship_class, Some(i64::from(ids.class))),
+            ),
         ],
         [
-            (&words.system_label, info.system.clone()),
+            (
+                &words.system_label,
+                with_id(&info.system, Some(i64::from(ids.system))),
+            ),
             (
                 &words.turn_rate_label,
                 format!("{}{}", info.turn_rate, words.degrees_per_second),
             ),
         ],
         [
-            (&words.legal_status_label, info.legal_status.clone()),
+            (
+                &words.legal_status_label,
+                with_id(&info.legal_status, ids.record.map(i64::from)),
+            ),
             (&words.accel_label, info.accel.to_string()),
         ],
         [
-            (&words.combat_rating_label, PLACEHOLDER.to_owned()),
+            (
+                &words.combat_rating_label,
+                with_id(PLACEHOLDER, Some(ids.kills)),
+            ),
             (&words.max_speed_label, info.max_speed.to_string()),
         ],
         [
@@ -401,6 +425,39 @@ pub fn general_texts(
         }
     }
     texts
+}
+
+/// Paints the dialog's background over `bounds` (@0x524a6-0x5271c):
+/// black, then the middle, then the upper cap at the top and the lower
+/// cap at the bottom, the caps [`CAP_HEIGHT`] high and stretched across.
+/// The middle fills the span between the caps; when the span is less than
+/// [`MIDDLE_HEIGHT`] it is drawn at its own height from below the upper
+/// cap, cut by `bounds`, so its bottom runs under the lower cap rather
+/// than being squashed (@0x52581-0x525a8). Otherwise it is stretched over
+/// the span.
+pub fn draw_background(list: &mut DrawList, bounds: Bounds) {
+    fill_rect(list, bounds, Color::BLACK);
+    let width = bounds.width();
+    let middle_at = Point::new(bounds.min.x, bounds.min.y + CAP_HEIGHT);
+    let span = bounds.height() - 2.0 * CAP_HEIGHT;
+    if span < MIDDLE_HEIGHT {
+        list.clipped(
+            bounds,
+            DrawCommand::Picture {
+                image: BACKGROUND[1],
+                top_left: middle_at,
+            },
+        );
+    } else {
+        list.stretched_picture(BACKGROUND[1], middle_at, width, span);
+    }
+    list.stretched_picture(BACKGROUND[0], bounds.min, width, CAP_HEIGHT);
+    list.stretched_picture(
+        BACKGROUND[2],
+        Point::new(bounds.min.x, bounds.max.y - CAP_HEIGHT),
+        width,
+        CAP_HEIGHT,
+    );
 }
 
 /// How much the dialog grows for texts `heights` high in a content box
@@ -761,21 +818,7 @@ impl Screen for PlayerInfoScreen {
                 return;
             }
         };
-        fill_rect(list, laid.bounds, Color::BLACK);
-        let mut pieces = three_slice(laid.bounds, Axis::Vertical, CAP_HEIGHT, CAP_HEIGHT);
-        pieces.sort_by_key(|(piece, _)| match piece {
-            Piece::Middle => 0,
-            Piece::Start => 1,
-            Piece::End => 2,
-        });
-        for (piece, at) in pieces {
-            let image = match piece {
-                Piece::Start => BACKGROUND[0],
-                Piece::Middle => BACKGROUND[1],
-                Piece::End => BACKGROUND[2],
-            };
-            list.stretched_picture(image, at.min, at.width(), at.height());
-        }
+        draw_background(list, laid.bounds);
         for (which, button) in &laid.buttons {
             if *which == PlayerInfoButton::Jettison && !self.jettison_shown() {
                 continue;
@@ -844,7 +887,8 @@ impl PlayerInfoScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use nova_sim::player_info::CheatIds;
+
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -953,6 +997,13 @@ mod tests {
             honors: None,
             jettisonable: true,
             words: Words::STOCK,
+            cheat_ids: CheatIds {
+                system: 130,
+                record: Some(5),
+                kills: 12,
+                class: 128,
+            },
+            cheats: false,
         }
     }
 
@@ -1278,27 +1329,62 @@ mod tests {
         assert_eq!(screen.problem(), None);
     }
 
+    /// The background pictures among `commands`, in order: a clipped one
+    /// as its clip and its picture.
+    fn background(commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+        let ours = |image: &ImageKey| BACKGROUND.contains(image);
+        commands
+            .into_iter()
+            .filter(|command| match command {
+                DrawCommand::StretchedPicture { image, .. }
+                | DrawCommand::Picture { image, .. } => ours(image),
+                DrawCommand::Clipped { command, .. } => matches!(
+                    **command,
+                    DrawCommand::Picture { ref image, .. } if ours(image)
+                ),
+                _ => false,
+            })
+            .collect()
+    }
+
+    fn stretched(id: i16, top_left: Point, width: f32, height: f32) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::picture(id),
+            top_left,
+            width,
+            height,
+        }
+    }
+
+    fn cropped_middle(clip: Bounds, top_left: Point) -> DrawCommand {
+        DrawCommand::Clipped {
+            clip,
+            command: Box::new(DrawCommand::Picture {
+                image: BACKGROUND[1],
+                top_left,
+            }),
+        }
+    }
+
+    fn background_in(bounds: Bounds) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        draw_background(&mut list, bounds);
+        background(list.iter().cloned().collect())
+    }
+
     #[test]
     fn it_paints_black_then_the_middle_then_the_caps() {
-        let pictures: Vec<(i16, Point, f32, f32)> = drawn(&screen())
-            .into_iter()
-            .filter_map(|command| match command {
-                DrawCommand::StretchedPicture {
-                    image,
-                    top_left,
-                    width,
-                    height,
-                } if BACKGROUND.contains(&image) => Some((image.id, top_left, width, height)),
-                _ => None,
-            })
-            .collect();
+        assert_eq!(MIDDLE_HEIGHT, 215.0);
+        let window = Bounds::at(ORIGIN, 413.0, 227.0);
         assert_eq!(
-            pictures,
+            background(drawn(&screen())),
             [
-                (8519, Point::new(305.0, 310.0), 413.0, 147.0),
-                (8518, ORIGIN, 413.0, 40.0),
-                (8520, Point::new(305.0, 457.0), 413.0, 40.0),
-            ]
+                cropped_middle(window, Point::new(305.0, 310.0)),
+                stretched(8518, ORIGIN, 413.0, 40.0),
+                stretched(8520, Point::new(305.0, 457.0), 413.0, 40.0),
+            ],
+            "the stock dialog's span of 147 is under the middle's 215: drawn \
+             at its own size from below the upper cap, cut by the window"
         );
         assert!(
             matches!(
@@ -1310,6 +1396,112 @@ mod tests {
             ),
             "black first"
         );
+    }
+
+    #[test]
+    fn a_dialog_shorter_than_the_middle_crops_it_rather_than_squashing_it() {
+        let short = Bounds::at(Point::new(10.0, 20.0), 413.0, 200.0);
+        assert_eq!(
+            background_in(short),
+            [
+                cropped_middle(short, Point::new(10.0, 60.0)),
+                stretched(8518, Point::new(10.0, 20.0), 413.0, 40.0),
+                stretched(8520, Point::new(10.0, 180.0), 413.0, 40.0),
+            ],
+            "200 rows: the 120-row span still draws the middle 215 high, clipped"
+        );
+    }
+
+    #[test]
+    fn a_dialog_grown_to_the_middles_height_stretches_it() {
+        let tall = PlayerInfo {
+            cargo: Some(vec!["line"; 20].join("\r")),
+            ..info()
+        };
+        let screen = screen_of(tall);
+        let bounds = screen.bounds().expect("laid out");
+        let span = bounds.height() - 80.0;
+        assert!(span > MIDDLE_HEIGHT, "{span}");
+        assert_eq!(
+            background(drawn(&screen))[0],
+            stretched(
+                8519,
+                Point::new(bounds.min.x, bounds.min.y + 40.0),
+                413.0,
+                span
+            )
+        );
+        let at = Point::new(0.0, 0.0);
+        assert_eq!(
+            background_in(Bounds::at(at, 413.0, 295.0))[0],
+            stretched(8519, Point::new(0.0, 40.0), 413.0, 215.0),
+            "a span of exactly 215 stretches 1:1"
+        );
+        let window = Bounds::at(at, 413.0, 294.0);
+        assert_eq!(
+            background_in(window)[0],
+            cropped_middle(window, Point::new(0.0, 40.0)),
+            "a span of 214 crops"
+        );
+    }
+
+    #[test]
+    fn with_cheats_on_system_legal_status_combat_rating_and_ship_class_show_their_ids() {
+        let off = general(&info());
+        let on = general(&PlayerInfo {
+            cheats: true,
+            ..info()
+        });
+        let mut expected = off.clone();
+        for (value, with_id) in [
+            ("Sol", "Sol (130)"),
+            ("Citizen", "Citizen (5)"),
+            (PLACEHOLDER, &format!("{PLACEHOLDER} (12)")),
+            ("Shuttle", "Shuttle (128)"),
+        ] {
+            let placed = expected
+                .iter_mut()
+                .find(|placed| placed.0 == value)
+                .expect("the value is drawn");
+            assert_eq!(placed.3, VALUE_COLOR);
+            with_id.clone_into(&mut placed.0);
+        }
+        assert_eq!(on, expected, "only those four change, in place and white");
+    }
+
+    #[test]
+    fn with_cheats_off_no_value_shows_an_id() {
+        let off = general(&info());
+        assert!(!info().cheats);
+        assert!(
+            off.iter()
+                .all(|placed| !placed.0.contains(" (130)") && !placed.0.contains(" (128)")),
+            "{off:?}"
+        );
+        assert_eq!(
+            off,
+            general(&PlayerInfo {
+                cheat_ids: CheatIds::default(),
+                ..info()
+            }),
+            "the ids are not read"
+        );
+    }
+
+    #[test]
+    fn an_uninhabited_systems_legal_status_gets_no_id() {
+        let uninhabited = PlayerInfo {
+            legal_status: "N/A".to_owned(),
+            cheat_ids: CheatIds {
+                record: None,
+                ..info().cheat_ids
+            },
+            cheats: true,
+            ..info()
+        };
+        let placed = general(&uninhabited);
+        assert_eq!(placed[13].0, "N/A", "{placed:?}");
+        assert_eq!(placed[9].0, "Sol (130)", "the others still do");
     }
 
     #[test]

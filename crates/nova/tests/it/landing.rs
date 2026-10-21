@@ -341,6 +341,7 @@ impl Harness {
             .with_flight_overlays(FlightOverlays {
                 title: true,
                 help: true,
+                cheats: false,
             });
         Self {
             app: App::new(&FakeWindow, data, screen),

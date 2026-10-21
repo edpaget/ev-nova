@@ -1173,6 +1173,7 @@ fn texts(list: &DrawList) -> Vec<String> {
 const TITLED: FlightOverlays = FlightOverlays {
     title: true,
     help: true,
+    cheats: false,
 };
 fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {

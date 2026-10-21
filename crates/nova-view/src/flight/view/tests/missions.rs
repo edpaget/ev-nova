@@ -1924,6 +1924,21 @@ fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
 }
 
 #[test]
+fn open_player_info_carries_the_cheats_setting() {
+    let mut view = flight();
+    assert!(
+        !view.open_player_info().expect("opens").cheats,
+        "off by default"
+    );
+    let mut view = flight().with_overlays(FlightOverlays {
+        cheats: true,
+        ..FlightOverlays::default()
+    });
+    assert!(view.open_player_info().expect("opens").cheats);
+    assert!(view.player_info().expect("reads").cheats, "the getter too");
+}
+
+#[test]
 fn p_with_the_map_open_does_nothing() {
     let mut view = flight();
     tap(&mut view, MAP_KEY);

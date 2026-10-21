@@ -843,6 +843,7 @@ fn the_router_passes_the_overlays_to_each_flight() {
     let on = FlightOverlays {
         title: true,
         help: true,
+        cheats: false,
     };
     let mut screen = with_dialogs(data());
     fly(&mut screen);

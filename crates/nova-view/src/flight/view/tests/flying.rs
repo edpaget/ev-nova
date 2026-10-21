@@ -144,6 +144,7 @@ fn the_unstarted_flight_shows_help_only_when_turned_on() {
     let view = FlightView::new(failed).with_overlays(FlightOverlays {
         title: false,
         help: true,
+        cheats: false,
     });
     let list = drawn(&view);
     let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
@@ -498,7 +499,8 @@ fn the_title_and_help_are_not_drawn_by_default() {
         FlightOverlays::default(),
         FlightOverlays {
             title: false,
-            help: false
+            help: false,
+            cheats: false,
         }
     );
     assert_eq!(flight().overlays(), FlightOverlays::default());
@@ -522,6 +524,7 @@ fn the_title_draws_when_turned_on() {
     let titled = FlightOverlays {
         title: true,
         help: false,
+        cheats: false,
     };
     let list = drawn(&flight().with_overlays(titled));
     let before = before_the_hud(&list);
@@ -538,6 +541,7 @@ fn the_help_line_draws_when_turned_on() {
     let helped = FlightOverlays {
         title: false,
         help: true,
+        cheats: false,
     };
     let list = drawn(&flight().with_overlays(helped));
     let before = before_the_hud(&list);

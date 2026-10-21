@@ -5769,6 +5769,8 @@ mod tests {
             honors: None,
             jettisonable: true,
             words: nova_sim::player_info::Words::STOCK,
+            cheat_ids: nova_sim::player_info::CheatIds::default(),
+            cheats: false,
         }
     }
 
