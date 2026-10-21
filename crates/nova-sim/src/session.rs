@@ -2976,11 +2976,17 @@ impl Session {
     /// chain uses one jump's fuel and the days the stats give one jump;
     /// under [`MultiJumpRule::PerHop`] every hop does, and the chain stops
     /// at a hop the ship has not the fuel for. Each day steps the planetary
-    /// events, rolled on `chance`. A further hop's fuel is taken as it is
-    /// made, but every hop's days, the first's and each further one's,
-    /// pass together after the refresh, so a crön on any of the jump's
-    /// days reads the bits its `OnExplore`s set (the original has no
-    /// per-hop days to place).
+    /// events, rolled on `chance`. The jump's fuel is taken once its
+    /// explorations have run, before the refresh (@0x6be31), so it comes
+    /// off what an `OnExplore`'s change of ship held to the new class's
+    /// most; under `PerHop` a further hop is made only if the fuel, less
+    /// the hops already owed, pays for it, and every hop's fuel is taken
+    /// there together, the original having no per-hop fuel to place. An
+    /// `OnExplore` that holds the fuel below what is owed leaves it short
+    /// of zero, as the original's one take can. Every hop's days, the
+    /// first's and each further one's, pass together after the refresh,
+    /// so a crön on any of the jump's days reads the bits its
+    /// `OnExplore`s set (the original has no per-hop days to place).
     ///
     /// The systems hopped are taken off the course. Those passed through
     /// on the way are not entered; only the last is: explored, its
@@ -3092,10 +3098,9 @@ impl Session {
             self.ship
                 .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
-        // The first hop's fuel (@0x6be31); every hop's days pass after the
-        // refresh (@0x6c144).
-        self.pilot.reserves.fuel.now -= JUMP_FUEL;
-        let mut jumps = 1;
+        // The hops whose fuel the jump takes, once its explorations have
+        // run (@0x6be31), and whose days pass after the refresh (@0x6c144).
+        let mut jumps: u16 = 1;
         let departure = self.pilot.system;
         let (mut from, mut at) = (departure, first);
         let mut hops = 0;
@@ -3111,13 +3116,14 @@ impl Session {
                 let Some(next) = next.and_then(|&hop| self.chart.galaxy.same_place(hop)) else {
                     break;
                 };
-                // By `PerHop` a further hop takes its own fuel here; its
-                // days wait with the first's.
+                // By `PerHop` a further hop is made only if the fuel, less
+                // the hops' already owed, pays for it too; its fuel is taken
+                // with the first's, its days pass with the first's.
                 if self.setup.multi_jump == MultiJumpRule::PerHop {
-                    if self.pilot.reserves.fuel.now < JUMP_FUEL {
+                    let owed = JUMP_FUEL * f32::from(jumps);
+                    if self.pilot.reserves.fuel.now - owed < JUMP_FUEL {
                         break;
                     }
-                    self.pilot.reserves.fuel.now -= JUMP_FUEL;
                     jumps += 1;
                 }
                 hops += 1;
@@ -3138,6 +3144,11 @@ impl Session {
         // shares its stand-in's place, so the same nebulae.
         let arrived = self.chart.jump_explored(&self.setup, written);
         self.explore_now(catalog, &mut &mut *chance, arrived);
+        // The jump's fuel, after its explorations, so it comes off what an
+        // `OnExplore`'s change of ship has held to the new class's most
+        // (@0x6be31): the original's one hop's, or by `PerHop` every
+        // hop's.
+        self.pilot.reserves.fuel.now -= JUMP_FUEL * f32::from(jumps);
         // The galaxy refresh evaluated after the explorations, so it reads
         // the bits their `OnExplore`s set, and before the days, so a bit
         // the days' scripts set waits for the next refresh (@0x6bf3f, days

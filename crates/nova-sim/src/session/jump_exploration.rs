@@ -82,18 +82,22 @@ pub(super) mod tests {
     use super::super::crons::tests::scripted;
     use super::super::nebulae::tests::{around_131, nebulous};
     use super::super::tests::chained;
-    use crate::catalog::{NebulaId, NebulaRecord, StellarId, SystemId, SystemVisibility};
+    use crate::catalog::{NebulaId, NebulaRecord, ShipId, StellarId, SystemId, SystemVisibility};
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp, Test};
+    use crate::handling::ShipFields;
     use crate::hyperspace::MultiJumpRule;
     use crate::outfit_effects::MAP;
     use crate::pilot::Pilot;
+    use crate::reserves::Gauge;
     use crate::session::Session;
     use crate::session::control::SetOpObserver;
     use crate::story::{
         Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
     };
-    use crate::testkit::{FakePilotCatalog, begin_jump_now, fly_out, jump, nebula, outfit};
+    use crate::testkit::{
+        FAST, FakePilotCatalog, begin_jump_now, fly_out, jump, nebula, outfit, ship,
+    };
 
     fn bit(n: u16) -> Bit {
         Bit::new(n).expect("a bit")
@@ -313,6 +317,30 @@ pub(super) mod tests {
         assert_eq!(session.date(), left.next_day().next_day(), "two hops' days");
         assert!(on(&session, 11), "the first day's crön");
         assert!(on(&session, 10), "the second day's crön read b7");
+    }
+
+    #[test]
+    fn a_jumps_fuel_is_taken_after_an_on_explore_holds_it_to_a_smaller_class() {
+        // 300 fuel; 131's OnExplore changes to ship 130, of 200 most. The
+        // original holds the fuel to 200 there (@0x6be12), then takes the
+        // jump's 100 (@0x6be31): 100, where taking it first leaves 200.
+        let mut catalog = nebulous(vec![nebula(128, (500, -100, 200, 200), "", "C130")]);
+        let small = ShipFields { fuel: 200, ..FAST };
+        catalog.ships.push((ShipId(130), Ok(small)));
+        catalog.ship_records.push(ship(130, small));
+        for rule in [MultiJumpRule::Engine, MultiJumpRule::PerHop] {
+            let mut session = flown(&catalog, &[], rule);
+            assert_eq!(session.reserves().fuel, Gauge::full(300.0));
+            jump(&mut session, &catalog, 131).expect("arrives");
+            assert_eq!(
+                session.reserves().fuel,
+                Gauge {
+                    now: 100.0,
+                    max: 200.0
+                },
+                "{rule:?}"
+            );
+        }
     }
 
     #[test]
