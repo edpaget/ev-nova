@@ -1580,6 +1580,47 @@ mod tests {
         assert_eq!(ranks_held(&session), [200, 201]);
     }
 
+    /// Whether `session`'s blessing has government 141 (the overlay's)
+    /// bless landing.
+    fn blessed_by_141(session: &Session) -> bool {
+        session
+            .blessing()
+            .blesses(Some(GovtId(141)), crate::rank::Blessed::Landing)
+    }
+
+    #[test]
+    fn a_rank_lost_to_shooting_a_stellar_down_outlasts_its_on_destroy_reset_by_the_engine() {
+        for (source, after_kill) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            // [`ranked`]'s session, but 200 blesses landing too.
+            let mut catalog = shooting([destroying("b5")]);
+            catalog.ranks = crime_ranks();
+            catalog.ranks[0].flags |= crate::rank::BLESSES_LANDING;
+            let mut session = overlaid(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::BlessingRefresh, source));
+            session
+                .pilot
+                .ranks
+                .extend([crate::catalog::RankId(200), crate::catalog::RankId(201)]);
+            session.reset_precalced();
+            assert!(blessed_by_141(&session), "{source:?}: held and reset");
+            session.shoot_down(
+                StellarId(128),
+                Some(ShipRef::Player),
+                &NovaLaw::default(),
+                &mut NeverFires,
+            );
+            assert!(session.control_bit(bit(5)), "{source:?}: its OnDestroy ran");
+            assert_eq!(ranks_held(&session), [201], "{source:?}");
+            assert_eq!(
+                blessed_by_141(&session),
+                after_kill,
+                "{source:?}: OnDestroy's reset @0x374a9 runs before the slap @0x37518"
+            );
+            session.reset_precalced();
+            assert!(!blessed_by_141(&session), "{source:?}: the next reset");
+        }
+    }
+
     /// [`ranked`]'s session, 128 taken to none by two shots, then shot
     /// down by a third fired from 200 pixels left of it, which a jamming
     /// draw has turned on its firer (`Source::Other`, aimed at the player)
