@@ -840,7 +840,9 @@ impl Session {
     /// ([`swapped_ship_type`]), kept as the slot's type, else of the
     /// slot's type ([`Session::uniform_preset`]), takes the person's place
     /// ([`spawn::swapped_mission_ship`]); the person's NPC is taken out,
-    /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
+    /// every other NPC letting it go, its slot keeping its record as
+    /// @0x62520 clears only +0xb8 ([`Traffic::vacate`](crate::traffic::Traffic::vacate));
+    /// the ship raises [`Fate::Arrived`];
     /// and it becomes the player's target when the person was, its
     /// brackets settled (@0x62538; see the `brackets` module). The
     /// original also marks the target panel for redraw
@@ -949,7 +951,10 @@ impl Session {
         }
         let targeted = self.chart.target == Some(npc);
         self.space.drop_quarry(npc);
-        self.space.traffic.remove(npc);
+        // @0x62520 clears only the person's +0xb8: its slot keeps its
+        // record, which battle help still counts (see the
+        // `vacated_berths` module).
+        self.space.traffic.vacate(npc);
         // The ship brought in above is numbered last.
         let swapped_in = self.space.last_npc();
         if targeted {

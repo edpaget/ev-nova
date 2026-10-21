@@ -291,18 +291,22 @@ pub struct RequestAssistance {
     pub battle_help_target: RuleSource,
     /// Whether a brave trader helps fight for a price.
     pub brave_trader_help: RuleSource,
+    /// Whether a helper's pick counts the vacated berths' last ships.
+    pub battle_help_gone: RuleSource,
 }
 
 impl RequestAssistance {
     /// Request Assistance as `rulebook` chooses: its
-    /// [`RuleKey::QuietHails`], [`RuleKey::BattleHelpTarget`] and
-    /// [`RuleKey::BraveTraderBattleHelp`] entries.
+    /// [`RuleKey::QuietHails`], [`RuleKey::BattleHelpTarget`],
+    /// [`RuleKey::BraveTraderBattleHelp`] and
+    /// [`RuleKey::BattleHelpGoneSlots`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
             quiet_hails: rulebook.source_for(RuleKey::QuietHails),
             battle_help_target: rulebook.source_for(RuleKey::BattleHelpTarget),
             brave_trader_help: rulebook.source_for(RuleKey::BraveTraderBattleHelp),
+            battle_help_gone: rulebook.source_for(RuleKey::BattleHelpGoneSlots),
         }
     }
 }
@@ -343,6 +347,7 @@ impl HailOption for RequestAssistance {
                 hail,
                 self.battle_help_target,
                 self.brave_trader_help,
+                self.battle_help_gone,
                 chance,
             );
         }

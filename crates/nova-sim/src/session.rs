@@ -544,6 +544,8 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod tutorial;
+#[cfg(test)]
+mod vacated_berths;
 mod warp_stage;
 
 use capture::CaptureFuel;

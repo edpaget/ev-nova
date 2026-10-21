@@ -876,9 +876,12 @@ impl Npc {
     /// a ship attacking one the player leads; every other caller, the
     /// radar IFF and the Red Alert among them, asks
     /// [`Npc::threatens_player_among`]. It is kept only for the hail's
-    /// [`threats_to_player`](crate::hail::Hail::threats_to_player), which
-    /// reads `_AIFightEnemyThreatToPlayer`'s inline test (+0x70 == 0, AI
-    /// state 3 or 4, @0x82cda-0x82cef), not `_IsThreatToPlayer`.
+    /// [`threats_to_player`](crate::hail::Hail::threats_to_player) and
+    /// [`vacated_threats`](crate::hail::Hail::vacated_threats), which read
+    /// `_AIFightEnemyThreatToPlayer`'s inline test (+0x70 == 0, AI state 3
+    /// or 4, @0x82cda-0x82cef), not `_IsThreatToPlayer`: the latter on the
+    /// record a vacated berth keeps
+    /// ([`traffic::vacated`](crate::traffic::vacated)).
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
