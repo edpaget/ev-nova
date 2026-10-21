@@ -204,7 +204,15 @@ pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> Ga
 /// (@0x80e4f-0x80ea8), whole. With a target (@0x80e63) it tail-calls
 /// `_AIFireTurret` while the target is active and intact (+0xb8,
 /// `_IsDisabled`, @0x80e98), and drops the target otherwise (+0x70 = -1,
-/// @0x80e9d). It tests no range nor box, and plays no sound.
+/// @0x80e9d). It tests no range nor box, and plays no sound. The active
+/// flag +0xb8 is the slot's, set at the spawn (@0x3c90b) and cleared
+/// only when the ship is gone (its gate entry @0x2c078, its jump out
+/// @0x2dee0), so a ship gliding in, waiting in its gate or bursting out
+/// of it is active: the engine's [`Condition::active`], whatever its
+/// [`Mode`](crate::traffic::npc::Mode). Such a target is kept, and
+/// `_AIFireTurret` runs on it; its search skips one it does not see
+/// (`_ShipVisibleToShip` @0x80b69, which hides a ship waiting in its
+/// gate, goal 0x15, @0x972d).
 /// `_AIFireTurret` runs the point defence first unless the shooter is
 /// disabled (@0x80afa-0x80b0d), then searches by `rules`
 /// ([`fire::turret_find`]) for the single best turret: a find becomes
@@ -254,8 +262,12 @@ fn attack_or_form(threat: Option<NpcId>) -> Goal {
 
 /// The ship `npc`, keeping formation, guards against among `around`:
 /// its target still, while some weapon `npc` carries reaches it, disabled
-/// or not (`_AIInGunRange(ship, target, -1)` @0x83eb3-0x83ee4, which
-/// tests reach alone); otherwise one drawn on `chance` among the ships
+/// or not, and arrived or not (`_AIInGunRange(ship, target, -1)`
+/// @0x83eb3-0x83ee4 reads the two places, +0x18 and +0x1c, and the
+/// weapons' reach alone, @0x7f9d5-0x7faf8: no slot, mode nor
+/// condition). So a ship still gliding in, waiting in its gate or
+/// bursting out of it ([`Npc::arrived`] false) is kept while in reach;
+/// otherwise one drawn on `chance` among the ships
 /// threatening the player ([`threats`], `_AIFightThreatToParent`
 /// @0x83ef4); none when there is none. The player is never kept
 /// (@0x83f0d-0x83f1a). [`unprovoked`] drops a disabled guard.
@@ -740,6 +752,45 @@ mod tests {
             (Goal::Formation { guard: Some(n(3)) }, vec![1]),
             "drawn again among the threats"
         );
+    }
+
+    #[test]
+    fn with_no_command_it_keeps_and_fires_at_a_guard_in_reach_still_arriving() {
+        // `_AIInGunRange` reads the two places alone (+0x18, +0x1c,
+        // @0x7f9e8-0x7fa28), and `_AIEscortFireUnprovoked` the slot
+        // (+0xb8, @0x80e7b) and `_IsDisabled` (@0x80e87): a ship gliding
+        // in, waiting in its gate or bursting out holds its slot from its
+        // spawn (+0xb8 = 1, @0x3c90b), so it is kept, not dropped, and
+        // `_AIFireTurret` runs on it. Its search sees no ship waiting in
+        // its gate (`_ShipVisibleToShip` @0x972d), so only the point
+        // defence runs; what it sees of one gliding in or bursting out is
+        // rdm:phase/escort-fleet-fidelity-followups/phase-1-turret-sight-of-arriving-ships's.
+        for mode in [
+            Mode::JumpingIn { tick: 1 },
+            Mode::Emerging { ticks_left: 5 },
+            Mode::LeavingGate { tick: 1 },
+        ] {
+            let mut arriving = pirate(2, 100.0, 0.0);
+            arriving.mode = mode;
+            assert!(!arriving.arrived(), "{mode:?}");
+            let guarding = having(
+                escort(None),
+                Goal::Formation { guard: Some(n(2)) },
+                Some(n(2)),
+            );
+            let npcs = [guarding, arriving, pirate(3, 200.0, 0.0)];
+            assert_eq!(
+                decide(&npcs, (0.0, 0.0), &[]),
+                (Goal::Formation { guard: Some(n(2)) }, vec![]),
+                "{mode:?}: kept, no draw"
+            );
+            let (trigger, target) = command(ENGINE, &npcs);
+            assert_eq!(target, Some(n(2)), "{mode:?}: not dropped");
+            assert!(trigger.point_defence, "{mode:?}: point defence");
+            if matches!(mode, Mode::Emerging { .. }) {
+                assert_eq!(trigger, DEFENCE, "{mode:?}: unseen, no turret");
+            }
+        }
     }
 
     #[test]
