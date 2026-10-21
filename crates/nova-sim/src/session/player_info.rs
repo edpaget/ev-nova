@@ -411,6 +411,7 @@ mod tests {
     use crate::pilot::Escort;
     use crate::player_info::{CheatIds, EnergyShown, IncomeLine, Reach};
     use crate::reserves::Reserves;
+    use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{alternates, hide, with_alternate};
     use crate::testkit::{
         FAST, FakePilotCatalog, carrying, catalog, govt, mission, outfit, planet, rank, ship,
@@ -1046,6 +1047,28 @@ mod tests {
             info.cheat_ids.record,
             Some(50),
             "the inhabited branch appends the record after the N/A (@0x52a16)"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_the_record_id_is_the_systems_governments_record() {
+        let catalog = governed();
+        let rules = Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists))
+            .with_rules(rules);
+        session.pilot.set_system_record(SystemId(131), -5);
+        session.pilot.set_legal_record(GovtId(128), 50);
+        let info = session.player_info(&catalog);
+        assert_eq!(
+            info.cheat_ids.record,
+            Some(50),
+            "131's government 128, not 131's own record"
+        );
+        assert_eq!(
+            info.legal_status, "status 12",
+            "the Legal Status row reads the same record"
         );
     }
 
