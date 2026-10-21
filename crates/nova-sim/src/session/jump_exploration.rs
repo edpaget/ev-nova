@@ -395,6 +395,51 @@ pub(super) mod tests {
         assert!(on(&session, 20));
     }
 
+    #[test]
+    fn only_the_explorations_raised_since_the_mark_are_dispatched_at_once() {
+        // No script operator raises a story event of another kind, so a
+        // landing and a take-off stand for one raised before the mark and
+        // one raised since, beside the exploration.
+        let catalog = nebulous(vec![around_131("")]);
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        for (record, kind, script) in [
+            (1, StoryEventKind::Landed, "b20"),
+            (2, StoryEventKind::TookOff, "b21"),
+        ] {
+            session
+                .register_story(Subscription::new(
+                    SubscriptionId {
+                        consumer: Consumer::Fixture,
+                        record,
+                        hook: 0,
+                    },
+                    EventFilter::Any(kind),
+                    Script::parse(script),
+                ))
+                .expect("registers");
+        }
+        let (mut session, seen) = watching_explored(session, &[131]);
+        let landed = StoryEvent::Landed {
+            stellar: StellarId(128),
+        };
+        let took_off = StoryEvent::TookOff {
+            stellar: StellarId(128),
+        };
+        session.run.raise(landed);
+        let mark = session.run.story_mark();
+        session.run.raise(took_off);
+        session.run.raise(StoryEvent::Explored {
+            system: SystemId(131),
+        });
+        session.dispatch_explored_since(&catalog, &mut NeverFires, mark);
+        assert_eq!(seen.systems(), [SystemId(131)], "the exploration, now");
+        assert!(on(&session, 7), "its OnExplore ran");
+        assert!(!on(&session, 20) && !on(&session, 21), "the others wait");
+        assert_eq!(session.story_raised(), [landed, took_off], "in order");
+        settle(&mut session, &catalog);
+        assert!(on(&session, 20) && on(&session, 21));
+    }
+
     /// One message, `Go.`, in `STR#` 25048.
     #[derive(Debug)]
     struct Go;
