@@ -172,6 +172,7 @@ pub mod escort_orders;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
 pub mod gate_entry;
@@ -1133,7 +1134,8 @@ impl Traffic {
     /// The think half of a tick in `world` (steps 1 to 5 of the module
     /// docs), `_DoPlayGameWork`'s advance-pass AI after the collision
     /// passes: the arrivals pass (`_EnterMoreShips` @0x44237), the answers
-    /// to the `strikes` left, the fleet leaders' orders
+    /// to the `strikes` left, the NPC formations ([`fleet_formation`]),
+    /// the fleet leaders' orders
     /// ([`escort_orders`]), the decisions as `behaviour` says, rolling
     /// on `chance`, their goals, pursuit, fire commands and targets, the
     /// gate waits, each flying NPC's cloak think and each escape pod's
@@ -1151,6 +1153,7 @@ impl Traffic {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.forget_provocations();
+        self.form_fleets();
         self.issue_escort_orders(&world);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
@@ -2567,6 +2570,7 @@ impl Traffic {
                 // berth's.
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
+                fleet_slot: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,

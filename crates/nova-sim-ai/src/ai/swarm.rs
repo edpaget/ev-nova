@@ -496,6 +496,7 @@ mod tests {
         assert_eq!(formation_parent(&no_target), Some(FormationParent::Player));
         let no_swarm_leader = Npc {
             swarm_leader: None,
+            fleet_slot: None,
             ..npc.clone()
         };
         assert_eq!(

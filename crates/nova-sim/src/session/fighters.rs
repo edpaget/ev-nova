@@ -659,6 +659,7 @@ fn fighter(
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
+        fleet_slot: None,
         order_word: crate::fleet::OrderWord::NONE,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.

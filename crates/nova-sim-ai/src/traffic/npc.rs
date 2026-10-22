@@ -548,6 +548,15 @@ pub struct Npc {
     /// next pass reads its new ship. None at every spawn and launch
     /// (`_AISetup` @0x7f415). Never saved.
     pub swarm_leader: Option<u32>,
+    /// Its place in the formation of its NPC formation parent (its leader,
+    /// or its swarm leader while it attacks with a target;
+    /// [`swarm::formation_parent`](crate::ai::swarm::formation_parent)),
+    /// the original's +0x28/+0x2c as `_AICalcFormationPositions` numbers
+    /// it (@0x85137-0x851cc): none for a ship whose parent is the player
+    /// or none. The formation pass sets it each tick, and a fleet's arrival
+    /// as it jumps in (see
+    /// [`fleet_formation`](crate::traffic::fleet_formation)). Never saved.
+    pub fleet_slot: Option<FormationSlot>,
     /// Its order word, the original's +0xc90a: -1 at every spawn, launch
     /// and placement ([`OrderWord::NONE`]), then the order its leader last
     /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth
@@ -784,6 +793,19 @@ impl Npc {
         self.escort
             .map(|duty| duty.formation)
             .or_else(|| self.mission.and_then(|mark| mark.formation))
+    }
+
+    /// The slot its goal keeps: its place in the player's formation
+    /// ([`Npc::formation`]) while it keeps formation ([`Goal::Formation`]),
+    /// its place in its NPC parent's ([`Npc::fleet_slot`]) while it keeps
+    /// with a lead ([`Goal::Follow`]); none in any other goal.
+    #[must_use]
+    pub fn formation_slot(&self) -> Option<FormationSlot> {
+        match self.goal {
+            Goal::Formation { .. } => self.formation(),
+            Goal::Follow { .. } => self.fleet_slot,
+            _ => None,
+        }
     }
 
     /// Whether it keeps close formation with its leader, at `leader`,
@@ -1591,6 +1613,47 @@ mod tests {
             })
         );
         assert!(!hired.mission_escort());
+    }
+
+    #[test]
+    fn the_slot_a_goal_keeps_is_the_players_in_formation_and_the_fleets_in_follow() {
+        let players = FormationSlot {
+            slot: 2,
+            ships: 4,
+            spacing: 35.0,
+        };
+        let fleets = FormationSlot {
+            slot: 3,
+            ships: 3,
+            spacing: 42.0,
+        };
+        let both = Npc {
+            escort: Some(EscortDuty {
+                formation: players,
+                order: None,
+            }),
+            fleet_slot: Some(fleets),
+            ..crate::traffic::fixture::npc(6, ShipStats::default())
+        };
+        let in_goal = |goal| Npc {
+            goal,
+            ..both.clone()
+        };
+        assert_eq!(
+            in_goal(Goal::Formation { guard: None }).formation_slot(),
+            Some(players)
+        );
+        assert_eq!(
+            in_goal(Goal::Follow {
+                lead: NpcId(1),
+                guard: None
+            })
+            .formation_slot(),
+            Some(fleets)
+        );
+        for goal in [Goal::Hold, Goal::Wait, Goal::Attack(ShipRef::Player)] {
+            assert_eq!(in_goal(goal).formation_slot(), None, "{goal:?}");
+        }
     }
 
     #[test]

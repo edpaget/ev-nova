@@ -539,6 +539,7 @@ impl PlayerShip {
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
+            fleet_slot: None,
             order_word: crate::fleet::OrderWord::NONE,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting

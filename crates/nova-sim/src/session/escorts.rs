@@ -341,6 +341,7 @@ impl Session {
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
+            fleet_slot: None,
             order_word: crate::fleet::OrderWord::NONE,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
