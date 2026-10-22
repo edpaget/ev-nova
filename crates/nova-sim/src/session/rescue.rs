@@ -203,8 +203,11 @@ impl Session {
             return false;
         }
         let save_due = self.out.save_due;
-        let from = self.pilot.system;
         self.end_every_mission_for_rescue(&mut &mut *chance);
+        // The escape search starts from +0x74 as the `OnAbort`s left it
+        // (@0x68f24), before `_ResetPlayer` and the `OnPurchase`, whose
+        // move the search's own write then supersedes (@0x68f7f, @0x68f9e).
+        let from = self.pilot.system;
         self.reset_player_for_rescue();
         self.ship_hook(RESCUE_SHIP, ShipHook::Purchase, &mut &mut *chance);
         let system = self.escape_destination(from, catalog);
@@ -951,6 +954,42 @@ mod tests {
         session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.system(), RESCUE_FALLBACK);
+    }
+
+    #[test]
+    fn the_escape_search_starts_where_the_on_aborts_moved_the_player() {
+        // `_HandlePlayer` reads +0x74 for the search (@0x68f24) after the
+        // abort loop's `OnAbort`s: an `N132` there, applied at its
+        // operator, starts the search from 132, which links nowhere.
+        let mut catalog = rescuing();
+        catalog.missions[0].on_abort = Script::parse("N132");
+        let mut session = due(&catalog);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(130, 0));
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.system(), RESCUE_FALLBACK, "not 130's 131");
+        assert_eq!(session.chart.pending_move, None, "its entry completed");
+    }
+
+    #[test]
+    fn the_escape_search_supersedes_ship_128s_on_purchase_move() {
+        // The search runs after `shïp` 128's `OnPurchase` (@0x68f55) and
+        // writes +0x74 over its move (@0x68f7f, @0x68f9e).
+        let mut catalog = rescuing();
+        for record in &mut catalog.ship_records {
+            if record.id == RESCUE_SHIP {
+                record.on_purchase = Script::parse("b21 M133");
+            }
+        }
+        let mut session = due(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert!(session.control_bit(bit(21)));
+        assert_eq!(session.system(), SystemId(131), "the search's, from 130");
+        assert_eq!(session.chart.pending_move, None);
+        assert_eq!(session.settle_script(&catalog, &mut NeverFires).moved, None);
+        assert_eq!(session.system(), SystemId(131));
     }
 
     #[test]
