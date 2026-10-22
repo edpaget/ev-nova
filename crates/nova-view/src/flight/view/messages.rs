@@ -85,7 +85,7 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 }
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
-/// or too fast, [`LANDING_TICKS`] denied or not landable, and
+/// or too fast, [`LANDING_TICKS`] denied, not landable or cloaked, and
 /// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
 /// one where the land key makes no dock request (jumping, no stellars,
 /// nothing landable), shows no message ([`refusal_message`]), so its
@@ -94,7 +94,9 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
-        LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
+        LandingRefusal::Denied { .. }
+        | LandingRefusal::NotLandable { .. }
+        | LandingRefusal::Cloaked => LANDING_TICKS,
         LandingRefusal::Jumping
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
@@ -840,6 +842,9 @@ pub const LANDING_DENIED: &str = "Landing request denied.";
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
 pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
+/// `STR#` 2002 #73: a cloaked ship's land key
+/// (`_HandlePlayerDockRequest` @0x66a85-0x66ae9).
+pub const DISENGAGE_CLOAK: &str = "Disengage cloaking device first.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1037,6 +1042,7 @@ pub fn refusal_message(
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
         | LandingRefusal::NothingLandable => return None,
+        LandingRefusal::Cloaked => DISENGAGE_CLOAK,
         LandingRefusal::TooFar { station, .. } => by_gate(
             station,
             TOO_FAR_HYPERGATE,
@@ -1114,7 +1120,7 @@ pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
         BoardRefusal::CantBoard => Some(CANT_BOARD),
         BoardRefusal::TooFar => Some(NOT_CLOSE_ENOUGH),
         BoardRefusal::TooFast => Some(TOO_FAST_TO_BOARD),
-        BoardRefusal::NoTarget | BoardRefusal::Misaligned => None,
+        BoardRefusal::NoTarget | BoardRefusal::Misaligned | BoardRefusal::Cloaked => None,
     }
 }
 
@@ -1954,6 +1960,20 @@ mod tests {
              fined 1 credit.",
             "no count"
         );
+    }
+
+    #[test]
+    fn the_cloaked_landing_refusal_says_disengage_cloaking_device_first_for_250_ticks() {
+        // STR# 2002 #73 via `_DisplayComm` for 0xfa ticks (@0x66ade).
+        for gate in [None, Some(GateKind::Hypergate), Some(GateKind::Wormhole)] {
+            assert_eq!(
+                refusal_message(&LandingRefusal::Cloaked, gate, "Earth").as_deref(),
+                Some("Disengage cloaking device first."),
+                "{gate:?}"
+            );
+        }
+        assert_eq!(DISENGAGE_CLOAK, "Disengage cloaking device first.");
+        assert_eq!(landing_refusal_ticks(&LandingRefusal::Cloaked), 250);
     }
 
     #[test]

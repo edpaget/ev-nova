@@ -591,6 +591,58 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     assert_area(&pixels, (26, 14), (28, 18), murked, 0);
 }
 
+/// The original's 16-bit translucent copy with its factors set apart, as
+/// a fully cloaked ship's hull sets them up: per 5-bit channel,
+/// `((src * n) >> 5) | ((dst * m) >> 5)`.
+fn original_translucent_555(src: [u8; 3], dst: [u8; 3], n: u8, m: u8) -> [u8; 3] {
+    let (n, m) = (u16::from(n), u16::from(m));
+    std::array::from_fn(|c| (((u16::from(src[c]) * n) >> 5) | ((u16::from(dst[c]) * m) >> 5)) as u8)
+}
+
+#[test]
+fn a_translucent_sprite_draws_like_the_originals_translucent_copy_with_its_factors_apart() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Hull squares at logical (4..8, 4..8) and (14..18, 4..8), with the OR
+    // sheet drawn over the first at n = 4, m = 30 (a fully cloaked hull)
+    // and over the second at n = 16, m = 8, and over the clear at n = 4,
+    // m = 30, (24..28, 4..8).
+    let translucent_tint = nova_view::draw::translucent_tint;
+    let hull = w555(HULL_555);
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
+        .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[0], translucent_tint(4, 30))
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[1], translucent_tint(16, 8))
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[2], translucent_tint(4, 30));
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A transparent pixel leaves what is beneath exactly.
+    assert_area(&pixels, (4, 4), (5, 8), hull, 0);
+    assert_area(&pixels, (24, 4), (25, 8), BLACK, 0);
+    // An opaque black one scales the hull by m alone.
+    let black = w555(original_translucent_555([0, 0, 0], HULL_555, 4, 30));
+    assert_area(&pixels, (5, 4), (6, 8), black, 0);
+    // A lit one: the source by n, the hull by m, ORed.
+    let faint = w555(original_translucent_555(LIT_555, HULL_555, 4, 30));
+    assert_ne!(
+        faint,
+        w555(original_crossfade_555(LIT_555, HULL_555, 4)),
+        "the crossfade's 32 - n"
+    );
+    assert_area(&pixels, (6, 4), (8, 8), faint, 0);
+    let other = w555(original_translucent_555(LIT_555, HULL_555, 16, 8));
+    assert_area(&pixels, (16, 4), (18, 8), other, 0);
+    let alone = w555(original_translucent_555(LIT_555, [0, 0, 0], 4, 30));
+    assert_area(&pixels, (26, 4), (28, 8), alone, 0);
+}
+
 #[test]
 fn a_colorized_sprite_mixes_each_5_bit_channel_like_the_originals_blit() {
     let Some(mut gpu) = gpu() else {

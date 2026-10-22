@@ -200,6 +200,8 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.script_message, at::SCRIPT_MESSAGE);
             }
             SimSound::RedAlert => self.play(self.table.red_alert, at::RED_ALERT),
+            SimSound::Cloaked => self.play(self.table.cloak, at::CLOAK),
+            SimSound::Uncloaked => self.play(self.table.uncloak, at::CLOAK),
             SimSound::CargoJettisoned => self.play(self.table.jettison, at::JETTISON),
             SimSound::ScanFailedMission => {
                 self.play(self.table.scan_failed, at::SCAN_FAILED);
@@ -913,6 +915,8 @@ mod tests {
             (ARRIVED, at::ARRIVAL),
             (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
             (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
+            (Sound::Sim(SimSound::Cloaked), at::CLOAK),
+            (Sound::Sim(SimSound::Uncloaked), at::CLOAK),
             (Sound::Sim(SimSound::CargoJettisoned), at::JETTISON),
             (Sound::Sim(SimSound::ScanFailedMission), at::SCAN_FAILED),
             (Sound::Sim(SimSound::Smuggling), at::SMUGGLING),
@@ -1549,6 +1553,19 @@ mod tests {
             &[Sound::Sim(SimSound::RedAlert)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_cloak_plays_381_and_the_uncloak_380_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Cloaked)]);
+        assert_eq!(drain(&log), [play(381, 0.5)]);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Uncloaked)],
+        );
+        assert_eq!(drain(&log), [play(380, 0.5)]);
     }
 
     #[test]

@@ -26,7 +26,8 @@
 //! think, which the miner's AI then decides, as the original's next
 //! `_MinerAI` does; the type's fire reads the goal, and a miner's own
 //! goals fire at nothing but an attacker it flees. A mission ship of
-//! `ShipBehav` 0 still hunts the player, miner or not; with the player
+//! `ShipBehav` 0 still hunts the player while it sees it (@0x8d6a8),
+//! miner or not; with the player
 //! disabled and no destroying weapon it gives up and leaves by hyperspace
 //! after its type's think, whatever that decided and whatever its fuel
 //! (`_HighLevelAIHandler` @0x8d6be-0x8d6e9; see [`leave`](crate::ai::leave)).
@@ -276,10 +277,19 @@ impl NovaAi {
     /// [`RuleSource::Bible`] for [`RuleKey::HunterBribe`]
     /// (`_HighLevelAIHandler` @0x8d628 never reads the bribe). Only this
     /// site reads the key: a paid-off ship is a wimpy trader, which never
-    /// asks [`select_target`](crate::ai::target::select_target).
+    /// asks [`select_target`](crate::ai::target::select_target). One that
+    /// doesn't see the player ([`Surroundings::sees`], @0x8d6a8) makes no
+    /// attack call and decides as its type does too; the give-up for a
+    /// disabled player (@0x8d684-0x8d6e9) is tested before the sight, so
+    /// it gives up on a player it can't see all the same.
     fn mission_hunt(&self, npc: &Npc, around: &Surroundings) -> Option<bool> {
         let attacks = crate::ai::target::mission_hunt(npc, around)?;
         if attacks && npc.spared && self.hunter_bribe == RuleSource::Bible {
+            return None;
+        }
+        // The give-up came first (@0x8d684-0x8d6e9); a player it doesn't
+        // see draws no attack call (@0x8d6a8), and the type's think stands.
+        if attacks && !around.sees(npc, ShipRef::Player) {
             return None;
         }
         Some(attacks)
@@ -303,7 +313,8 @@ impl Behaviour for NovaAi {
     /// ran before it. The give-up's +0x50 clamp and +0xa4 stamp are the
     /// warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
     /// Every other NPC decides as its behaviour does, its turn on the
-    /// player with it. Either way `_HighLevelAIHandler`'s lost-sight block
+    /// player with it, and so does a hunter that can't see the player
+    /// (@0x8d6a8, after the give-up). Either way `_HighLevelAIHandler`'s lost-sight block
     /// follows ([`lost_sight::after_think`], @0x8d6ef-0x8d8ae): a ship
     /// that can't see its target searches, gives up, leaves or waits.
     /// Unless that search or give-up ended the handler
@@ -1541,6 +1552,42 @@ mod tests {
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");
+    }
+
+    /// [`with_player`], the player cloaked.
+    fn with_cloaked_player(npcs: &[Npc], condition: Condition) -> Surroundings<'_> {
+        let mut around = with_player(npcs, condition);
+        around.player = around.player.map(crate::ai::fixture::cloaked_player);
+        around
+    }
+
+    #[test]
+    fn a_mission_hunter_that_cannot_see_the_player_makes_no_attack_call_and_decides_as_its_type() {
+        let mark = Marked::new(7);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let npcs = [mission_ship(of(1, AiType::Warship), 0)];
+        let unseen = with_cloaked_player(&npcs, Condition::Intact);
+        let decision = ai.decision(&npcs[0], &unseen, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Attack(mark.ship()), "its type's");
+        assert!(!decision.turns_on_player, "no call (@0x8d6a8)");
+        assert_eq!(ai.target(&npcs[0], &unseen), Some(mark.ship()));
+        let scanning = [crate::ai::fixture::scanning(npcs[0].clone())];
+        let seen = with_cloaked_player(&scanning, Condition::Intact);
+        let decision = ai.decision(&scanning[0], &seen, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Attack(ShipRef::Player), "scanned");
+        assert!(decision.turns_on_player);
+        assert_eq!(ai.target(&scanning[0], &seen), Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_mission_hunter_still_gives_up_on_a_disabled_player_it_cannot_see() {
+        let ai = NovaAi::default().with(AiType::Warship, Marked::new(7));
+        let npcs = [mission_ship(of(1, AiType::Warship), 0)];
+        let unseen = with_cloaked_player(&npcs, Condition::Disabled);
+        let gave_up = ai.decision(&npcs[0], &unseen, &mut Draws::of(&[]));
+        assert_eq!(gave_up.goal, Goal::JumpOut, "@0x8d684-0x8d6e9 comes first");
+        assert!(gave_up.clears_target);
+        assert_eq!(ai.target(&npcs[0], &unseen), None);
     }
 
     #[test]

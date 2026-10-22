@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use nova_sim::ShipRef;
 use nova_sim::combat::ship_frames::Alt;
 
-use crate::{Color, Colorize, ImageKey, Point};
+use crate::{Blend, Color, Colorize, ImageKey, Point};
 
 /// An alt layer as drawn: its frame, its screen place, its tint and its
 /// colorize.
@@ -39,6 +39,9 @@ pub struct AltLayer {
     pub tint: Color,
     /// Its colorize, the hull's, if any.
     pub colorize: Option<Colorize>,
+    /// How it combines with what is beneath: the hull's, plain unless a
+    /// cloak fades it (see [`cloak_fade`](super::cloak_fade)).
+    pub blend: Blend,
 }
 
 /// Each ship's alt layer as last drawn live (see the module docs).
@@ -101,6 +104,7 @@ mod tests {
             at: Point::new(x, 200.0),
             tint: Color::WHITE,
             colorize: None,
+            blend: Blend::Normal,
         }
     }
 

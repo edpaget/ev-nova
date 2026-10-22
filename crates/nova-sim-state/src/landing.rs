@@ -109,13 +109,11 @@
 //!   rdm:task/landing-fee. The engine models no fee, and no stock stellar
 //!   has one.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
-//!   disabled or dying ship (@0x66aee-0x66b14), which the
-//!   `nova_sim::Session` refuses up front with
-//!   [`LandingRefusal::Disabled`]:
-//!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
-//! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
-//!   which beeps `snd ` 153 at the shared tail (@0x67e8f): the engine
-//!   has no player cloak (rdm:task/cloaking-device).
+//!   disabled or dying ship (@0x66aee-0x66b14) are the
+//!   `nova_sim::Session`'s, which refuses them after the press's
+//!   landability with [`LandingRefusal::Cloaked`] (STR# 2002 #73,
+//!   beeping `snd ` 153 at the shared tail @0x67e8f) and
+//!   [`LandingRefusal::Disabled`], the cloak first.
 //! - The fee refusal (@0x669b4-0x66a80), which is silent
 //!   (rdm:task/landing-fee).
 //! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
@@ -243,10 +241,17 @@ pub enum LandingRefusal {
     Jumping,
     /// The ship is disabled, breaking up or destroyed: refused silently,
     /// the dock request's bare epilogue 0x67eef, after the landability
-    /// check (and the fee and cloak, not modelled) for a disabled ship,
-    /// and before anything for a breaking-up or destroyed one (see
-    /// `nova_sim::Session::land`).
+    /// check, the fee (not modelled) and the cloak ([`Self::Cloaked`])
+    /// for a disabled ship, and before anything for a breaking-up or
+    /// destroyed one (see `nova_sim::Session::land`).
     Disabled,
+    /// The ship is cloaked: "Disengage cloaking device first." (STR#
+    /// 2002 #73, `_DisplayComm` for 250 ticks @0x66ade), then the shared
+    /// tail's beep (`_ShipIsCloaked` @0x66a8e → 0x67e67). It comes after
+    /// the landability check (@0x66977-0x669ae) and the fee, and before
+    /// the disabled test (@0x66aee) and the reach, speed, approach and
+    /// clearance (@0x66c23 on).
+    Cloaked,
     /// The system has no stellars, so the land key has nothing to select
     /// and makes no dock request (@0x6a94c): a silent refusal.
     NoStellars,
@@ -293,7 +298,8 @@ impl LandingRefusal {
     /// Whether `_HandlePlayerDockRequest` beeps `_beepSnd[3]` (`snd ` 153)
     /// for this refusal: a stellar that can't be landed on (wrong
     /// government or inactive, @0x66977-0x669ae, `PlaySound` @0x67e8f,
-    /// before `_IsDisabled`, so a disabled ship's beeps too), out of
+    /// before `_IsDisabled`, so a disabled ship's beeps too), a cloaked
+    /// ship (@0x66a8e → 0x67e67), out of
     /// reach (@0x66cfd, @0x676aa), or pressed again before the approach
     /// clears or moving too fast (@0x66c23-0x66c66, @0x676fe). The
     /// others are silent of it: [`Self::Jumping`], [`Self::NoStellars`]
@@ -311,7 +317,7 @@ impl LandingRefusal {
     pub fn beeps(&self) -> bool {
         matches!(
             self,
-            Self::NotLandable { .. } | Self::TooFar { .. } | Self::TooFast { .. }
+            Self::NotLandable { .. } | Self::Cloaked | Self::TooFar { .. } | Self::TooFast { .. }
         )
     }
 }
@@ -2291,5 +2297,12 @@ mod tests {
         for refusal in silent {
             assert!(!refusal.beeps(), "{refusal:?}");
         }
+    }
+
+    #[test]
+    fn a_cloaked_refusal_beeps() {
+        // `_ShipIsCloaked` @0x66a8e jumps to the shared tail 0x67e67,
+        // which plays `_beepSnd[3]` (@0x67e8f).
+        assert!(LandingRefusal::Cloaked.beeps());
     }
 }

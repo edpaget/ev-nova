@@ -380,6 +380,55 @@ mod tests {
         }
     }
 
+    /// A full cloak, which reads cloaked.
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_cloaked_player_boards_nothing_silently() {
+        // `_ShipIsCloaked` @0x6503f → 0x6605a, before the latch
+        // (@0x6504c) and every check.
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.ship.cloak.cloak = CLOAKED;
+        session.ship.player.velocity = Vec2::new(0.3, 0.0);
+        let pilot = session.pilot().clone();
+        let _ = session.take_sounds();
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::Cloaked)
+        );
+        assert_eq!(session.take_sounds(), [], "no beep");
+        assert_eq!(session.take_board_line(), None, "no line");
+        assert_eq!(session.space.strikes, [], "no samaritans");
+        assert_eq!(session.pilot(), &pilot, "no conviction");
+        assert_eq!(session.ship.player.velocity, Vec2::new(0.3, 0.0));
+        assert!(!session.npcs()[0].boarded);
+        session.ship.cloak.cloak = crate::cloak::Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        assert!(
+            board_by(&mut session, &NovaLaw::default()).is_ok(),
+            "still fading in"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_player_with_no_target_is_refused_no_target() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.ship.cloak.cloak = CLOAKED;
+        session.chart.target = None;
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::NoTarget),
+            "@0x65031 first"
+        );
+    }
+
     #[test]
     fn a_pickup_refused_for_room_beeps_the_refusal_once() {
         let catalog = picking_up(2, 1, 0x0001);

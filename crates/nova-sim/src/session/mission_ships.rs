@@ -2128,12 +2128,19 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
+        // Set up cloaked (`_SetupShipsInSystem` @0x43121), then stepped
+        // twice before the first frame by the take-off's two
+        // `_PrepareAllSprites` (@0x6764e, @0x67658).
         assert!(
+            session.npcs().iter().all(|npc| npc.mission.is_some()
+                && npc.cloak.direction == 1
+                && npc.cloak.fade == 2.0 * crate::cloak::FADE_RATE),
+            "fading in: {:?}",
             session
                 .npcs()
                 .iter()
-                .all(|npc| npc.mission.is_some() && npc.cloak.direction == 1),
-            "fading in"
+                .map(|npc| npc.cloak)
+                .collect::<Vec<_>>()
         );
     }
 

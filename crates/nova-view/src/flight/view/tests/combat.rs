@@ -1,4 +1,5 @@
 use super::*;
+use nova_sim::cloak::CloakShown;
 
 // Traffic.
 
@@ -87,7 +88,7 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
 }
 
 #[test]
-fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
+fn a_fully_cloaked_ship_is_hidden_and_one_fading_out_drawn_fading() {
     let (_, chance) = scripted(&placed(850, 650, 90));
     let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
         .with_chance(chance)
@@ -101,8 +102,8 @@ fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
     npc.cloak.fade = 8.0;
     assert_eq!(
         session.cloak_shown(&npc),
-        CloakShown::Opaque,
-        "faded out enough to be seen"
+        CloakShown::Fading(8.0),
+        "still fading"
     );
 }
 

@@ -7,7 +7,8 @@
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
-//! [`cloak`], for setting a ship's cloak directly; [`hide`], for
+//! [`cloak`] and [`set_player_cloak`], for setting a ship's or the
+//! player's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
 //! ship somewhere directly; [`sabotage_kill`], for setting off the
 //! player's kill outfit directly; and
@@ -81,6 +82,12 @@ pub fn set_player_tractor(session: &mut Session, lock: Option<crate::combat::imp
 /// test that boards a ship without flying to it.
 pub fn put_player_over(session: &mut Session, id: NpcId) {
     session.put_player_over(id);
+}
+
+/// Sets the player's cloak in `session` to `to`: for a test that draws
+/// the player's ship cloaked.
+pub fn set_player_cloak(session: &mut Session, to: Cloak) {
+    session.set_player_cloak(to);
 }
 
 /// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:

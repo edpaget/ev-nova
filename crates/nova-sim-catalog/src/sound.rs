@@ -55,6 +55,18 @@ pub enum SimSound {
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
     /// `nova_sim::red_alert`).
     RedAlert,
+    /// The player's ship began to cloak: `cloakSnd[1]`, `snd ` 381
+    /// (`_DoShipCloak` @0xdec0-0xdef3, at priority 8). It plays only for
+    /// the player (+0x86 0) and only when the fade was not already going
+    /// in (`jg` @0xded2): no NPC's cloak ever sounds. The cloak key raises
+    /// it (see `nova_sim_combat::player_cloak`).
+    Cloaked,
+    /// The player's ship began to uncloak: `cloakSnd[0]`, `snd ` 380
+    /// (`_DoShipUncloak` @0xdf9e-0xdfd0, at priority 8). It plays only for
+    /// the player, cloaked, and only when the fade was not already going
+    /// out (`js` @0xdfb0). The cloak key, the upkeep's uncloak and a
+    /// direct hit's decloak raise it (see `nova_sim_combat::player_cloak`).
+    Uncloaked,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
     /// Cargo was jettisoned in flight: `_beepSnd[4]`, `snd ` 154

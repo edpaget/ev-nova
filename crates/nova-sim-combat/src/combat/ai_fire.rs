@@ -12,7 +12,11 @@
 //!   spots and the quadrant turrets within their arc, a front-quadrant
 //!   turret with no target ahead, homing only with a target, guns,
 //!   rockets and beams always;
-//! - the reload it sets ([`reload`]);
+//! - the reload it sets ([`reload`]), stretched when it fires at the
+//!   player ([`PlayerRating::stretch`], @0x88fb3-0x8901b): only when its
+//!   target is slot 0, the player, by the bands of the player's combat
+//!   rating against `shïp` 128's `Strength` (x1.75 to x1.1, the last in
+//!   double), with no draw and no sound;
 //! - and its recoil ([`recoil`], `_AdjustedAccel`).
 //!
 //! A copy counts as spawned whatever `_SpawnShot` or `_SpawnBeam`
@@ -46,9 +50,6 @@
 //! - The frozen game (@0x88799), set only for the priming frame on
 //!   entering the game, which the engine doesn't have; and the nag ship
 //!   (@0x88d40), which the engine doesn't have either.
-//! - The rating stretch of the reload (@0x88fb3-0x8901b): rdm phase
-//!   cloaking-fidelity/phase-6-rating-reload-stretch, between the reload
-//!   and the burst in `Armament::fire_pick`.
 //! - `_SpawnShot`'s exit points and its turret miss and launch speed:
 //!   weapons-fidelity phases 6 and 10.
 //! - The whole pixels of the box's reach (@0x888bf, @0x88a24), the
@@ -192,6 +193,53 @@ pub fn reload(spec: &WeaponSpec, spawned: u32, count: u32) -> f32 {
         spec.reload
     } else {
         spawned as f32 * (spec.reload / count.max(1) as f32)
+    }
+}
+
+/// The stretches of the first three bands, as multiples of the yardstick
+/// the rating must be strictly under, and their factors (@0x88fcc-0x88ff9).
+pub const STRETCH_BANDS: [(i64, f32); 3] = [(100, 1.75), (400, 1.5), (800, 1.25)];
+
+/// The last band's bound, in yardsticks (@0x89005).
+pub const LAST_BAND: i64 = 1600;
+
+/// The last band's stretch, applied in double (@0x8900f-0x8901b).
+pub const LAST_STRETCH: f64 = 1.1;
+
+/// The player's combat rating against the yardstick of `shïp` 128's
+/// `Strength`, which stretches the reload of an NPC firing at the player
+/// ([`PlayerRating::stretch`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerRating {
+    /// The player's combat rating (`_playerKills`, `*0x3b512c`).
+    pub rating: i64,
+    /// The first `shïp` record's `Strength` (`*0x3b5098` + 0xc), 0 with no
+    /// `shïp` 128.
+    pub yardstick: i16,
+}
+
+impl PlayerRating {
+    /// Stretches `reload`, the reload of a pick fired at the player
+    /// (@0x88fb3-0x8901b). With S the yardstick and R the rating, the first
+    /// strict, signed compare that holds wins: R < 100 S gives x1.75,
+    /// R < 400 S x1.5, R < 800 S x1.25, R < 1600 S x1.1 (multiplied in
+    /// double, as the original does), and anything else no stretch. A
+    /// yardstick of 0 stretches only a negative rating. The original
+    /// compares 32-bit products; these are 64-bit. No draw, no sound.
+    #[must_use]
+    pub fn stretch(self, reload: f32) -> f32 {
+        let yardstick = i64::from(self.yardstick);
+        for (bound, factor) in STRETCH_BANDS {
+            if self.rating < bound * yardstick {
+                return reload * factor;
+            }
+        }
+        if self.rating < LAST_BAND * yardstick {
+            // The original widens to double for this band alone.
+            #[allow(clippy::cast_possible_truncation)]
+            return (f64::from(reload) * LAST_STRETCH) as f32;
+        }
+        reload
     }
 }
 
@@ -607,5 +655,55 @@ mod tests {
             None,
             "mass 0"
         );
+    }
+
+    fn rated(rating: i64, yardstick: i16) -> PlayerRating {
+        PlayerRating { rating, yardstick }
+    }
+
+    #[test]
+    fn a_rating_under_100_strengths_stretches_the_reload_by_1_75() {
+        assert_eq!(rated(999, 10).stretch(20.0), 35.0);
+        assert_ne!(rated(1000, 10).stretch(20.0), 35.0);
+    }
+
+    #[test]
+    fn each_band_stretches_by_its_factor_to_its_strict_bound() {
+        let double = (f64::from(20.0f32) * 1.1) as f32;
+        for (rating, want) in [
+            (1000, 30.0),
+            (3999, 30.0),
+            (4000, 25.0),
+            (7999, 25.0),
+            (8000, double),
+            (15999, double),
+            (16000, 20.0),
+            (i64::MAX, 20.0),
+        ] {
+            assert_eq!(rated(rating, 10).stretch(20.0), want, "rating {rating}");
+        }
+    }
+
+    #[test]
+    fn the_1_1_band_multiplies_in_double() {
+        let reload = (1..10_000)
+            .map(|n| n as f32 * 0.37)
+            .find(|&r| (f64::from(r) * 1.1) as f32 != r * 1.1f32)
+            .expect("a reload where double and float differ");
+        let stretched = rated(8000, 10).stretch(reload);
+        assert_eq!(stretched, (f64::from(reload) * 1.1) as f32);
+        assert_ne!(stretched, reload * 1.1f32);
+    }
+
+    #[test]
+    fn a_yardstick_of_none_stretches_only_a_negative_rating() {
+        assert_eq!(rated(-1, 0).stretch(20.0), 35.0);
+        assert_eq!(rated(0, 0).stretch(20.0), 20.0);
+    }
+
+    #[test]
+    fn a_negative_yardstick_follows_the_signed_compares() {
+        assert_eq!(rated(0, -1).stretch(20.0), 20.0);
+        assert_eq!(rated(-101, -1).stretch(20.0), 35.0);
     }
 }

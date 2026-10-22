@@ -505,6 +505,7 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+mod player_cloak;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -516,6 +517,8 @@ mod port;
 mod precalced;
 mod radar;
 mod ranks;
+#[cfg(test)]
+mod rating_stretch;
 mod red_alert;
 mod refuel_dock;
 mod reinforcements;
@@ -605,6 +608,7 @@ use crate::catalog::{
     StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
+use crate::combat::ai_fire::PlayerRating;
 use crate::combat::armament::{
     Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
@@ -683,6 +687,8 @@ pub use crate::combat::hull::ESCAPE_POD_SHIP;
 
 /// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
 /// beyond what the ship carries.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
 struct FightTerms {
     /// Whether it is held disabled.
@@ -712,6 +718,11 @@ struct FightTerms {
     sprite: Option<SpriteRank>,
     /// Which stellar hazards it resists ([`Fighter::resists`]).
     resists: HazardResistance,
+    /// Whether it has a cloak ([`Fighter::has_cloak`], `_HasCloak`): its
+    /// own, or its leader's area cloak it rides
+    /// ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak),
+    /// [`sight::rides_area_cloak`](crate::ai::sight::rides_area_cloak)).
+    has_cloak: bool,
 }
 
 impl FightTerms {
@@ -730,7 +741,6 @@ impl FightTerms {
                 .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
-        let cloak_device = npc.cloak_gear.device;
         // A waiting ship's fire block is skipped (`_HandleShip`
         // @0x34a54-0x34a72).
         let trigger = crate::ai::fire::gated(npc);
@@ -777,7 +787,7 @@ impl FightTerms {
             docked,
             emerging,
             cloak_scanner,
-            has_cloak: cloak_device,
+            has_cloak: self.has_cloak,
             jamming: self.jamming,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
@@ -2051,6 +2061,9 @@ impl Session {
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
+            cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
+            cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
+            area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2131,6 +2144,9 @@ impl Session {
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
+            cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
+            cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
+            area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2189,6 +2205,8 @@ impl Session {
             }),
             boarded: self.ship.fate.player_boarded,
             speed: self.ship.player_speed,
+            cloak: self.ship.cloak.cloak,
+            area_cloak: self.ship.cloak_gear(&self.pilot, &self.statics).area,
         }
     }
 
@@ -2347,7 +2365,7 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
             combat.regenerate_player(fighters, arena);
         });
-        self.player_display_step(pass, rules, start.player_dying(), chance);
+        self.player_display_step(pass, rules, start.player_head(), chance);
         // The traffic tick's work on the line, after `_HandlePlayer`'s
         // lines (the sabotage's, the eject's), as the AI loop's calls
         // follow them (see the `comm_calls` module).
@@ -2400,6 +2418,11 @@ impl Session {
         Field {
             frame: i32::from(self.space.pass_frame),
             interference: self.chart.galaxy.map().interference(self.pilot.system),
+            // Refreshed each tick, so a kill's rating counts from the next.
+            player_rating: PlayerRating {
+                rating: self.pilot.combat_rating,
+                yardstick: self.statics.arsenal.strength(ShipId(128)),
+            },
         }
     }
 
@@ -2448,15 +2471,20 @@ impl Session {
             jamming: self.player_jamming(),
             sprite: sprite(ShipRef::Player),
             resists: self.ship.player_hazard_resistance(&self.setup),
+            // The player's own fighter reads its gear elsewhere.
+            has_cloak: false,
         };
         let led_speed = self.led_speed();
         let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
-        let npcs = self
-            .space
-            .traffic
-            .npcs()
+        let player_side = self.player_side();
+        let all = self.space.traffic.npcs();
+        let npcs = all
             .iter()
             .map(|npc| FightTerms {
+                has_cloak: crate::area_cloak::has_cloak(
+                    npc.cloak_gear.device,
+                    crate::ai::sight::rides_area_cloak(npc, all, Some(&player_side)),
+                ),
                 fleet: npc.fleet_among(self.space.traffic.npcs()),
                 held_disabled: self.held_disabled(npc),
                 shield_regen: npc.shield_recharge(capacity),
@@ -2517,7 +2545,10 @@ impl Session {
         self.punish(&strikes, &losses, was, law);
         self.space
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
-        self.space.cloak_hits(&self.statics, &strikes);
+        let reserves = self.setup.rules.source_for(RuleKey::CloakReserves);
+        self.space.cloak_hits(&self.statics, reserves, &strikes);
+        self.ship
+            .cloak_hits(&self.pilot, &self.statics, &strikes, &mut self.out);
         self.space.strikes.extend(strikes);
     }
 
@@ -3334,6 +3365,11 @@ impl Session {
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
     ///
+    /// A cloaked ship's press goes as far as a disabled ship's, and the
+    /// dock request's `_ShipIsCloaked` (@0x66a8e), before its
+    /// `_IsDisabled`, refuses it [`LandingRefusal::Cloaked`] with a beep,
+    /// disabled or not; a cloak still fading in lands as before.
+    ///
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
     /// @0x676fe), once a press, a disabled ship's not-landable target
@@ -3373,7 +3409,10 @@ impl Session {
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.space.landing_reach(&self.setup, site),
         );
-        if disabled {
+        // The cloak's refusal (@0x66a8e) comes before the disabled one
+        // (@0x66aee), each after the landability (@0x66977-0x669ae).
+        let cloaked = self.ship.cloak.cloak.is_cloaked();
+        if cloaked || disabled {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
                 Err(
@@ -3381,6 +3420,7 @@ impl Session {
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
+                Ok(_) | Err(_) if cloaked => Err(LandingRefusal::Cloaked),
                 Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
             };
         }
@@ -3613,6 +3653,14 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
+        // @0x64743: before the old ships go, so before the escorts' cloaks
+        // are carried. The player's slot always passes the display's
+        // system test (@0x2b7d8-0x2b7e0), so its fade steps first,
+        // whatever the exit.
+        self.ship.step_cloak_fade(&self.pilot, &self.statics);
+        self.space
+            .step_fades_at_gate_entry(system, self.pilot.system);
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
@@ -3648,8 +3696,9 @@ impl Session {
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
-        // out (`_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
-        // @0x64743).
+        // out, and again after the stellars' visibility (@0x67658): every
+        // NPC's fade steps twice.
+        self.prepare_all_sprites();
         self.prepare_all_sprites();
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
@@ -3854,6 +3903,9 @@ impl Session {
         self.run.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
+        // Its second `_PrepareAllSprites` (@0x67658), `populate`'s being
+        // the first (@0x6764e): every NPC's fade steps again.
+        self.prepare_all_sprites();
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
         // `clearance` module), the nav selection let go, the mode kept,
         // then the course cued (@0x674d2-0x674d8; see the `nav` module).
@@ -4835,7 +4887,9 @@ impl Session {
     /// The [`BoardRefusal`] that applies, and nothing changes but the
     /// refusal's beep, [`SimSound::Refused`], for each refusal said (not
     /// for [`BoardRefusal::silent`] ones); [`BoardRefusal::NoTarget`],
-    /// silently, while landed. A jump under way refuses
+    /// silently, while landed; [`BoardRefusal::Cloaked`], silently, for a
+    /// cloaked player with a target, before every check
+    /// (`_ShipIsCloaked` @0x6503f). A jump under way refuses
     /// nothing up front: `_HandlePlayerBoardAttempt` (0x65000-0x66064)
     /// reads no jump state, so the checks run on the ship as it brakes, or
     /// in the hyperspace stage on the session as it was when the jump
@@ -4871,6 +4925,11 @@ impl Session {
             return Err(BoardRefusal::NoTarget);
         }
         let target = self.target().map(|npc| self.statics.board_target(npc));
+        // With a target (@0x65031), a cloaked player is refused before
+        // every check (@0x6503f → 0x6605a).
+        if target.is_some() && self.ship.cloak.cloak.is_cloaked() {
+            return Err(BoardRefusal::Cloaked);
+        }
         let crewless = self.setup.rules.source_for(RuleKey::CrewlessMissionShip);
         check_board(&self.ship.player, self.ship.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
@@ -5324,11 +5383,12 @@ impl Session {
     /// NPC `id`, captured, joins the fleet where it is: no longer its
     /// person, who lives on or is gone for good as
     /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
-    /// intact, its armour at half its most, and then as
-    /// [`Session::fleet_up`] says: a mission's special ship keeps its mark
-    /// and joins as a mission escort (`_DoPlunderDialog`
-    /// @0x9459b-0x947cf; see the `captured_mission_ship` module). Its
-    /// voice's variant is rolled on `chance` (see the `voices` module).
+    /// intact, its armour at half its most, its cloak's fade and direction
+    /// zeroed (@0x946e3, @0x946f9), and then as [`Session::fleet_up`]
+    /// says: a mission's special ship keeps its mark and joins as a
+    /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
+    /// `captured_mission_ship` module). Its voice's variant is rolled on
+    /// `chance` (see the `voices` module).
     fn join_fleet(&mut self, id: NpcId, chance: &mut dyn Chance) {
         self.space.lose_captured(
             &mut self.pilot,
@@ -5347,6 +5407,7 @@ impl Session {
         };
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
+        npc.cloak = crate::cloak::Cloak::default();
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).
@@ -18926,6 +18987,11 @@ pub(super) mod tests {
         decloaks_when_hit: false,
         on_radar: false,
         flags2: 0,
+        shield_usage: 0,
+        fuel_usage: 0,
+        zeroes_shields: false,
+        can_cloak_mod: None,
+        area: false,
         scanner: crate::cloak::Scanner::NONE,
     };
 
@@ -19383,7 +19449,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.space.cloak_hits(&session.statics, &[by_none]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[by_none]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19391,7 +19459,9 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.space.cloak_hits(&session.statics, &[by_none]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[by_none]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
@@ -19450,7 +19520,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.space.cloak_hits(&session.statics, &[shockwave]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19458,7 +19530,9 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.space.cloak_hits(&session.statics, &[shockwave]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, CLOAKED);
     }
 
@@ -23195,6 +23269,7 @@ pub(super) mod tests {
             jamming: Jamming([5, 0, 0, 9]),
             sprite: None,
             resists: HazardResistance::default(),
+            has_cloak: false,
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
@@ -23252,8 +23327,11 @@ pub(super) mod tests {
         assert!(fighter.emerging && fighter.cloak_scanner);
         assert_eq!(fighter.jamming, Jamming([5, 0, 0, 9]));
         assert!(!fighter.has_cloak);
-        npc.cloak_gear.device = true;
-        assert!(terms(false).fighter(&mut npc).has_cloak);
+        let cloaked = FightTerms {
+            has_cloak: true,
+            ..terms(false)
+        };
+        assert!(cloaked.fighter(&mut npc).has_cloak);
     }
 
     #[test]

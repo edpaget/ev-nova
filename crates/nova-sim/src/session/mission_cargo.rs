@@ -223,14 +223,19 @@ impl Session {
     /// mission ship's scan convicts too), sets the scanner attacking the
     /// player, takes the fine, the cash floored at none, tells the player
     /// ([`SimMessage::IllegalJunk`], [`SimMessage::IllegalOutfit`]) with
-    /// [`SimSound::Smuggling`], and clears its latch. The player is always
-    /// visible to the scanner (no cloak).
+    /// [`SimSound::Smuggling`], and clears its latch. A scanner that
+    /// doesn't see the player
+    /// ([`sight::sees_player`](crate::ai::sight::sees_player), @0x7e53f: a
+    /// cloaked player) scans nothing and draws nothing. The player's cloak is as
+    /// its display step left it this pass, which nothing changes between
+    /// the think and the scan.
     pub(super) fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
         let Some(npc) = self.space.traffic.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
         let (scanner, ai_type) = (npc.ship, npc.ai_type);
         let off = self.ship.player.position - npc.state.position;
+        let seen = crate::ai::sight::sees_player(npc, &self.player_side());
         let person = npc
             .person
             .and_then(|person| self.space.traffic.person(person.id))
@@ -241,7 +246,7 @@ impl Session {
         let Some(govt) = self.statics.govts.get(govt_id).cloned() else {
             return;
         };
-        if !scan::goes_on(ai_type, &govt, off, chance)
+        if !scan::goes_on(ai_type, &govt, off, seen, chance)
             || self
                 .ship
                 .warp_holds_scans(&self.pilot, &self.statics, self.mode.jump())
@@ -1906,6 +1911,22 @@ mod tests {
         police(&mut session).ai_type = AiType::Warship;
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.take_messages(), [illegal_junk(500)]);
+    }
+
+    #[test]
+    fn a_cloaked_player_out_of_the_scanners_sight_is_not_scanned() {
+        // `_ShipVisibleToShip(player, scanner)` @0x7e53f, before the draw.
+        let catalog = policed(vec![masked(140, 0x0004, 0)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        session.pilot.cash = 1200;
+        session.ship.cloak.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert!(looked_over(&mut session, &catalog, 0).is_empty(), "no draw");
+        assert_eq!(session.pilot().cash(), 1200, "no fine");
+        assert_eq!(held_missions(&session), [(0, 140)]);
+        assert_eq!(session.take_messages(), []);
     }
 
     #[test]

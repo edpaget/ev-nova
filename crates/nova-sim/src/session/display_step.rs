@@ -18,8 +18,12 @@
 //! 3. The eject check (@0x6f22c, see the `eject` module), reading the
 //!    timer after its tick; then the self-destruct's countdown (block Z
 //!    @0x6fdb4, see the `self_destruct` module), reading whether the
-//!    player was dying at the top of `_HandlePlayer`.
-//! 4. The player's display step ([`Combat::display_player`]): its
+//!    player was dying at the top of `_HandlePlayer`; then the cloak key
+//!    and upkeep (@0x705b7-0x70827, see the `player_cloak` module),
+//!    reading whether it was disabled there.
+//! 4. The player's display step: its cloak's fade steps
+//!    (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or not; see
+//!    the `player_cloak` module), then [`Combat::display_player`]: its
 //!    condition settles from its armour, its breakup's countdown starts,
 //!    or its final explosion goes off, with its shockwave.
 //! 5. The player laid out in the layer its display read
@@ -34,6 +38,7 @@
 //! frame is drawn.
 
 use super::Session;
+use super::game_work::PlayerHead;
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{Combat, GamePass, Rules};
@@ -42,13 +47,13 @@ use crate::sound::SimSound;
 
 impl Session {
     /// The player's step from its death timer to its display on `pass` by
-    /// `rules`, the player `dying_at_head` of the pass or not, drawing on
+    /// `rules`, the player as it was at the `head` of the pass, drawing on
     /// `chance` (see the module docs).
     pub(super) fn player_display_step(
         &mut self,
         pass: GamePass,
         rules: Rules,
-        dying_at_head: bool,
+        head: PlayerHead,
         chance: &mut dyn Chance,
     ) {
         self.ship.condition.count_down();
@@ -62,7 +67,9 @@ impl Session {
             self.out.sounds.push(SimSound::Klaxon);
         }
         self.eject_check(chance);
-        self.self_destruct_tick(dying_at_head);
+        self.self_destruct_tick(head.dying);
+        self.player_cloak_tick(head.disabled);
+        self.ship.step_cloak_fade(&self.pilot, &self.statics);
         let was_destroyed = self.ship.condition == Condition::Destroyed;
         self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
             Combat::display_player(combat, fighters, arena);
