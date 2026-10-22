@@ -92,8 +92,9 @@ pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
 /// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
 /// ([`RuleKey::SpeedCap`]), how the player turns
 /// ([`RuleKey::PlayerTurn`]), whose inertial dampener counts
-/// ([`RuleKey::InertialDampener`]) and how an escort keeps formation
-/// ([`RuleKey::FormationFlight`]).
+/// ([`RuleKey::InertialDampener`]), how an escort keeps formation
+/// ([`RuleKey::FormationFlight`]) and whether an NPC's fleet flies in
+/// formation on it ([`RuleKey::NpcFormation`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
@@ -107,6 +108,9 @@ pub struct FlightRules {
     /// How an escort keeps formation, which its flight and whether it
     /// flies inertialess both read.
     pub formation_flight: FormationFlight,
+    /// Whether a ship led by an NPC holds a slot in its formation, flies
+    /// it as an escort keeps formation and arrives on it.
+    pub npc_formation: NpcFormation,
 }
 
 /// How an escort keeps formation, by [`RuleKey::FormationFlight`].
@@ -131,6 +135,31 @@ impl From<RuleSource> for FormationFlight {
     }
 }
 
+/// Whether a ship led by an NPC keeps formation on it, by
+/// [`RuleKey::NpcFormation`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NpcFormation {
+    /// The original's: it holds a slot in its NPC parent's formation,
+    /// flies goal 0xa's formation flight on it with that NPC's sight, and
+    /// a fleet that jumps in arrives on its slots.
+    #[default]
+    Original,
+    /// The port's earlier follow: it follows within 100 pixels of its
+    /// lead, never in close formation, and a fleet arrives scattered.
+    Earlier,
+}
+
+impl From<RuleSource> for NpcFormation {
+    /// The engine's reading is the original's formation; the other, the
+    /// port's earlier follow.
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Original,
+            RuleSource::Bible => Self::Earlier,
+        }
+    }
+}
+
 impl FlightRules {
     /// The flight rules `rules` sets.
     #[must_use]
@@ -141,6 +170,7 @@ impl FlightRules {
             player_turn: PlayerTurn::from(rules.source_for(RuleKey::PlayerTurn)),
             inertial_dampener: InertialDampener::from(rules.source_for(RuleKey::InertialDampener)),
             formation_flight: FormationFlight::from(rules.source_for(RuleKey::FormationFlight)),
+            npc_formation: NpcFormation::from(rules.source_for(RuleKey::NpcFormation)),
         }
     }
 
@@ -645,6 +675,7 @@ mod tests {
         player_turn: PlayerTurn::WholeDegrees,
         inertial_dampener: InertialDampener::PlayerOnly,
         formation_flight: FormationFlight::Original,
+        npc_formation: NpcFormation::Original,
     };
 
     fn under(divisor: u32) -> FlightRules {
@@ -1811,6 +1842,18 @@ mod tests {
             )
             .formation_flight,
             FormationFlight::Earlier
+        );
+    }
+
+    #[test]
+    fn the_npc_formation_rule_reads_the_rulebook() {
+        assert_eq!(FlightRules::default().npc_formation, NpcFormation::Original);
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible)
+            )
+            .npc_formation,
+            NpcFormation::Earlier
         );
     }
 
