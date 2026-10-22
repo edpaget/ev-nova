@@ -490,6 +490,7 @@ mod tests {
             boarded: false,
             speed: 0.0,
             cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         }
     }
 

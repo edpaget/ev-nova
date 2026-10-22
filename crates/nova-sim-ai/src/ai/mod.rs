@@ -589,6 +589,12 @@ pub struct PlayerSide {
     /// ([`cloak_situation`](crate::traffic::cloak_situation)), and
     /// [`sight::sees_player`] tests it.
     pub cloak: crate::cloak::Cloak,
+    /// Whether it carries an area cloak, `_HasAreaCloak`'s player branch
+    /// over the outfits it owns
+    /// ([`CloakGear::area`](crate::cloak::CloakGear::area)): its escorts in
+    /// close formation ride it while it is cloaked
+    /// ([`area_cloak`](crate::area_cloak)).
+    pub area_cloak: bool,
 }
 
 /// No governments at all.
@@ -2005,6 +2011,7 @@ mod tests {
             boarded: false,
             speed: 0.0,
             cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         };
         around.player = Some(player);
         assert!(around.live(P));

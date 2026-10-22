@@ -2198,6 +2198,7 @@ impl Session {
             boarded: self.ship.fate.player_boarded,
             speed: self.ship.player_speed,
             cloak: self.ship.cloak.cloak,
+            area_cloak: false,
         }
     }
 

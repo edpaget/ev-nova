@@ -114,6 +114,7 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         boarded: false,
         speed: 0.0,
         cloak: crate::cloak::Cloak::default(),
+        area_cloak: false,
     }
 }
 

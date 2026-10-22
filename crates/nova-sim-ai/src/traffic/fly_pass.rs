@@ -1148,6 +1148,59 @@ mod tests {
     }
 
     #[test]
+    fn an_escort_that_falls_out_of_close_formation_from_its_area_cloaked_leader_stays_blind_until_it_uncloaks()
+     {
+        // The escort has no cloak of its own: it sees its cloaked,
+        // area-cloaked player only while its last flight kept close
+        // formation (`_HasCloak` reads the stored sub-goal).
+        let area_cloaked = |cloaked: bool| {
+            let mut world = with_player(cloaked);
+            if let Some(player) = world.player.as_mut() {
+                player.area_cloak = true;
+            }
+            world
+        };
+        let near = Vec2::new(-250.0, 0.0);
+        let mut riding = player_escort(near, false, false);
+        riding.npcs[0].close_form = true;
+        riding.fly_holding(area_cloaked(true), &BTreeSet::new(), &mut NeverFires);
+        assert_eq!(
+            riding.npcs[0].state.velocity,
+            Vec2::new(1.0, 0.0),
+            "it rides, sees and keeps close formation"
+        );
+        assert!(riding.npcs[0].close_form);
+        let mut fallen = player_escort(near, false, false);
+        for _ in 0..3 {
+            fallen.fly_holding(area_cloaked(true), &BTreeSet::new(), &mut NeverFires);
+            assert!(
+                fallen.npcs[0].state.velocity.x < 1.0,
+                "blind, it brakes (sub 1): {:?}",
+                fallen.npcs[0].state.velocity
+            );
+            assert!(!fallen.npcs[0].close_form, "and never re-enters sub 0xc");
+        }
+        let far = Vec2::new(-700.0, 0.0);
+        let approach = |cloaked: bool| {
+            let mut traffic = player_escort(far, false, false);
+            traffic.npcs[0].close_form = true;
+            traffic.fly_holding(area_cloaked(cloaked), &BTreeSet::new(), &mut NeverFires);
+            (traffic.npcs[0].state.velocity, traffic.npcs[0].close_form)
+        };
+        assert_eq!(
+            approach(true),
+            approach(false),
+            "beyond 600 it approaches (sub 9), seen or not"
+        );
+        assert!(!approach(true).1);
+        fallen.fly_holding(area_cloaked(false), &BTreeSet::new(), &mut NeverFires);
+        assert!(
+            fallen.npcs[0].close_form,
+            "its leader uncloaked, it sees again"
+        );
+    }
+
+    #[test]
     fn an_escort_flying_close_formation_is_marked_in_close_formation_and_any_other_flight_clears_it()
      {
         let mut close = player_escort(Vec2::new(-250.0, 0.0), false, false);

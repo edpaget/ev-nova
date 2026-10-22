@@ -5696,6 +5696,7 @@ fn stock_pick_made(
         boarded: false,
         speed: 0.0,
         cloak: nova_sim::cloak::Cloak::default(),
+        area_cloak: false,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

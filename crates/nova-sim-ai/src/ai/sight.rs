@@ -4,11 +4,12 @@
 //!
 //! The rule is [`cloak::visible`](crate::cloak::visible)'s: a ship coming
 //! out of a gate is seen by nobody (@0x972d); an uncloaked one is seen;
-//! a cloaked one is seen by an escort of it that has a cloak itself
-//! (@0x9788-0x97a2), or by a ship with a cloak scanner on screen within
-//! 200 of it on both axes (@0x97a4-0x97f8). The player is seen by the
-//! same rule ([`sees_player`]), its escorts with a cloak of their own
-//! seeing it cloaked. `_ShipVisibleToShip` tests no presence, so a ship
+//! a cloaked one is seen by an escort of it that has a cloak
+//! (@0x9788-0x97a2, `_HasCloak`: its own, or the target's area cloak it
+//! rides in close formation, [`rides_area_cloak`]), or by a ship with a
+//! cloak scanner on screen within 200 of it on both axes (@0x97a4-0x97f8).
+//! The player is seen by the same rule ([`sees_player`]), its escorts with
+//! a cloak of their own, or riding its area cloak, seeing it cloaked. `_ShipVisibleToShip` tests no presence, so a ship
 //! not in the system (or no player in it) reads as seen: the gates that
 //! drop a gone target (`target::dropped`, [`Surroundings::live`]) are not
 //! a search's.
@@ -38,6 +39,7 @@
 //! ship sees everything. The engine has no nag ship.
 
 use crate::ai::{PlayerSide, Surroundings};
+use crate::area_cloak;
 use crate::cloak::{Observer, visible};
 use crate::combat::ShipRef;
 use crate::traffic::npc::Npc;
@@ -55,6 +57,13 @@ impl Surroundings<'_> {
     #[must_use]
     pub fn sees_leader(&self, npc: &Npc) -> bool {
         sees_leader(npc, self.npcs, self.player.as_ref())
+    }
+
+    /// Whether `npc` rides its leader's area cloak: see
+    /// [`rides_area_cloak`].
+    #[must_use]
+    pub fn rides_area_cloak(&self, npc: &Npc) -> bool {
+        rides_area_cloak(npc, self.npcs, self.player.as_ref())
     }
 }
 
@@ -86,10 +95,47 @@ pub fn sees_leader(npc: &Npc, npcs: &[Npc], player: Option<&PlayerSide>) -> bool
         .is_none_or(|lead| sees_among(npc, lead, npcs, player))
 }
 
+/// Whether `npc` rides its leader's area cloak among `npcs` and the
+/// `player` (`None` while it isn't in the system), as `_HasCloak`'s area
+/// branch asks (@0x964c-0x96bf, [`area_cloak::rides`]): the leader its
+/// single parent slot (+0x9a) names ([`Npc::leader_ref`]), cloaked and
+/// carrying an area cloak, with `npc` in close formation by the stored
+/// mark of its last flight ([`Npc::close_form`]). False with no leader or
+/// a gone one. Sight ([`npc_sees`], [`sees_player`]) and the session's
+/// fight terms read the stored mark, as they run before the frame's
+/// flight; the cloak think builds its ride from its own `Around`, and the
+/// hold from the close formation this tick's flight picks
+/// (`Traffic::hold_cloaks`).
+#[must_use]
+pub fn rides_area_cloak(npc: &Npc, npcs: &[Npc], player: Option<&PlayerSide>) -> bool {
+    let (cloaked, area) = match npc.leader_ref() {
+        Some(ShipRef::Player) => match player {
+            Some(player) => (player.cloak.is_cloaked(), player.area_cloak),
+            None => return false,
+        },
+        Some(ShipRef::Npc(id)) => match npcs.iter().find(|other| other.id == id) {
+            Some(lead) => (lead.cloak.is_cloaked(), lead.cloak_gear.area),
+            None => return false,
+        },
+        None => return false,
+    };
+    area_cloak::rides(npc.close_form, cloaked, area)
+}
+
 /// Whether `observer` sees NPC `other`: `_ShipVisibleToShip(other,
-/// observer)` for two NPCs (@0x971c; see the module docs).
+/// observer)` for two NPCs (@0x971c; see the module docs). Its
+/// cloaked-escort term (@0x9788-0x97a2) holds for an observer whose parent
+/// slot (+0x9a, [`Npc::leader_ref`]) names `other` and that has a cloak
+/// ([`area_cloak::has_cloak`]): its own, or `other`'s area cloak it rides
+/// in close formation. A player's escort's parent is the player, whatever
+/// NPC lead it still names.
 #[must_use]
 pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
+    let rides = area_cloak::rides(
+        observer.close_form,
+        other.cloak.is_cloaked(),
+        other.cloak_gear.area,
+    );
     visible(
         other.cloak,
         other.state.position,
@@ -97,7 +143,8 @@ pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
         Observer {
             at: observer.state.position,
             scanner: observer.cloak_gear.scanner.on_screen,
-            cloaked_escort: observer.leader == Some(other.id) && observer.cloak_gear.device,
+            cloaked_escort: observer.leader_ref() == Some(ShipRef::Npc(other.id))
+                && area_cloak::has_cloak(observer.cloak_gear.device, rides),
         },
     )
 }
@@ -105,13 +152,19 @@ pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
 /// Whether `observer` sees the `player`: `_ShipVisibleToShip(player,
 /// observer)` (@0x971c) with the player the target. The player never
 /// emerges from a gate as an NPC does, and a cloaked player is seen by an
-/// escort of it with a cloak itself (@0x9788-0x97a2, the player its
-/// parent) or by a scanner on screen within 200 on both axes.
-/// [`Surroundings::sees`] asks it for [`ShipRef::Player`]; the parent
-/// rule of the player's close-formation escorts (`Traffic::think_cloaks`)
-/// and the session's own sites read it directly.
+/// escort of it (@0x9788-0x97a2, the player its parent) with a cloak of
+/// its own or riding the player's area cloak in close formation
+/// ([`area_cloak::has_cloak`]), or by a scanner on screen within 200 on
+/// both axes. [`Surroundings::sees`] asks it for [`ShipRef::Player`]; the
+/// parent rule of the player's close-formation escorts
+/// (`Traffic::think_cloaks`) and the session's own sites read it directly.
 #[must_use]
 pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
+    let rides = area_cloak::rides(
+        observer.close_form,
+        player.cloak.is_cloaked(),
+        player.area_cloak,
+    );
     visible(
         player.cloak,
         player.state.position,
@@ -119,7 +172,8 @@ pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
         Observer {
             at: observer.state.position,
             scanner: observer.cloak_gear.scanner.on_screen,
-            cloaked_escort: observer.escorts_player() && observer.cloak_gear.device,
+            cloaked_escort: observer.escorts_player()
+                && area_cloak::has_cloak(observer.cloak_gear.device, rides),
         },
     )
 }
@@ -312,5 +366,147 @@ mod tests {
         around.player = None;
         assert!(around.sees(&npcs[0], ShipRef::Player), "no player here");
         assert!(around.sees(&npcs[0], n(9)));
+    }
+
+    /// A fleet escort of NPC 2 with no cloak of its own, in close
+    /// formation as `close_form` says.
+    fn fleet_escort(close_form: bool) -> Npc {
+        let mut escort = warship();
+        escort.leader = Some(NpcId(2));
+        escort.close_form = close_form;
+        escort
+    }
+
+    /// NPC 2, 900 off, fully cloaked, with an area cloak as `area` says.
+    fn cloaked_lead(area: bool) -> Npc {
+        let mut lead = cloaked(other(900.0, 0.0));
+        lead.cloak_gear.area = area;
+        lead
+    }
+
+    /// The player's escort, with no cloak of its own, in close formation
+    /// as `close_form` says.
+    fn players_escort(close_form: bool) -> Npc {
+        use crate::escort::{EscortDuty, FormationSlot};
+        let mut escort = warship();
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        escort.close_form = close_form;
+        escort
+    }
+
+    /// The player 900 off, fully cloaked, with an area cloak as `area`
+    /// says.
+    fn area_cloaked_player(area: bool) -> crate::ai::PlayerSide {
+        use crate::ai::fixture::{cloaked_player, player};
+        crate::ai::PlayerSide {
+            area_cloak: area,
+            ..cloaked_player(player(900.0, 0.0))
+        }
+    }
+
+    #[test]
+    fn an_escort_in_close_formation_sees_its_area_cloaked_npc_leader() {
+        assert!(sees(&fleet_escort(true), cloaked_lead(true)));
+        assert!(super::npc_sees(&fleet_escort(true), &cloaked_lead(true)));
+    }
+
+    #[test]
+    fn an_escort_in_close_formation_sees_the_area_cloaked_player() {
+        assert!(super::sees_player(
+            &players_escort(true),
+            &area_cloaked_player(true)
+        ));
+    }
+
+    #[test]
+    fn an_escort_out_of_close_formation_rides_no_area_cloak() {
+        assert!(!sees(&fleet_escort(false), cloaked_lead(true)));
+        assert!(!super::sees_player(
+            &players_escort(false),
+            &area_cloaked_player(true)
+        ));
+        let npcs = [fleet_escort(false), cloaked_lead(true)];
+        assert!(!super::rides_area_cloak(&npcs[0], &npcs, None));
+    }
+
+    #[test]
+    fn an_escort_of_a_leader_without_an_area_cloak_sees_it_cloaked_only_with_a_cloak_of_its_own() {
+        assert!(!sees(&fleet_escort(true), cloaked_lead(false)));
+        assert!(!super::sees_player(
+            &players_escort(true),
+            &area_cloaked_player(false)
+        ));
+        let mut own = fleet_escort(true);
+        own.cloak_gear.device = true;
+        assert!(sees(&own, cloaked_lead(false)));
+        let mut own = players_escort(true);
+        own.cloak_gear.device = true;
+        assert!(super::sees_player(&own, &area_cloaked_player(false)));
+    }
+
+    #[test]
+    fn a_players_escort_naming_an_npc_lead_is_no_cloaked_escort_of_that_lead() {
+        // `_ShipVisibleToShip` compares the observer's single parent slot
+        // (+0x9a), which is the player for the player's escort.
+        let mut escort = players_escort(true);
+        escort.leader = Some(NpcId(2));
+        escort.cloak_gear.device = true;
+        assert!(!super::npc_sees(&escort, &cloaked_lead(true)));
+        assert!(super::npc_sees(
+            &fleet_escort_with_cloak(),
+            &cloaked_lead(false)
+        ));
+    }
+
+    /// [`fleet_escort`] out of close formation, with a cloak of its own.
+    fn fleet_escort_with_cloak() -> Npc {
+        let mut escort = fleet_escort(false);
+        escort.cloak_gear.device = true;
+        escort
+    }
+
+    #[test]
+    fn an_escort_rides_the_area_cloak_of_the_leader_its_parent_slot_names_and_none_once_it_is_gone()
+    {
+        use super::rides_area_cloak;
+        let npcs = [fleet_escort(true), cloaked_lead(true)];
+        assert!(rides_area_cloak(&npcs[0], &npcs, None), "its NPC lead");
+        assert!(
+            rides_area_cloak(&npcs[0], &npcs, Some(&area_cloaked_player(false))),
+            "the player is not its leader"
+        );
+        let unclouded = [fleet_escort(true), other(900.0, 0.0)];
+        assert!(
+            !rides_area_cloak(&unclouded[0], &unclouded, None),
+            "an uncloaked lead"
+        );
+        let gone = [fleet_escort(true)];
+        assert!(!rides_area_cloak(&gone[0], &gone, None), "its lead gone");
+        let mut lone = warship();
+        lone.close_form = true;
+        let alone = [lone, cloaked_lead(true)];
+        assert!(!rides_area_cloak(&alone[0], &alone, None), "no leader");
+        let mut escort = players_escort(true);
+        escort.leader = Some(NpcId(2));
+        let led = [escort, cloaked_lead(true)];
+        assert!(
+            !rides_area_cloak(&led[0], &led, Some(&area_cloaked_player(false))),
+            "the player is its leader, with no area cloak"
+        );
+        assert!(
+            rides_area_cloak(&led[0], &led, Some(&area_cloaked_player(true))),
+            "the player's area cloak"
+        );
+        assert!(
+            !rides_area_cloak(&led[0], &led, None),
+            "no player in the system"
+        );
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut around = around(&sites, &led, &govts, (900.0, 0.0), 0);
+        around.player = Some(area_cloaked_player(true));
+        assert!(around.rides_area_cloak(&led[0]));
     }
 }

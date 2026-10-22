@@ -78,6 +78,7 @@ fn player() -> PlayerSide {
         boarded: false,
         speed: 0.0,
         cloak: nova_sim::cloak::Cloak::default(),
+        area_cloak: false,
     }
 }
 

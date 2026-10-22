@@ -107,7 +107,7 @@ use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, voice, war
 #[allow(unused_imports)]
 use nova_sim_combat::message::SimMessage;
 #[allow(unused_imports)]
-use nova_sim_combat::{bay, cloak, combat, fleet, self_repair, ship_layer};
+use nova_sim_combat::{area_cloak, bay, cloak, combat, fleet, self_repair, ship_layer};
 #[allow(unused_imports)]
 use nova_sim_state::{govt, landing, legal, market, stats};
 
