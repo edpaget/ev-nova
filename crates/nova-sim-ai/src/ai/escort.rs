@@ -192,12 +192,12 @@ impl Behaviour for EscortAi {
     }
 
     /// Keeping formation, its guard, unless [`unprovoked`] drops it
-    /// (+0x70 = -1, @0x80e9d), so its next think draws again; idle under a
-    /// player breaking up, the target it has, as the lost parent writes
-    /// none.
+    /// (+0x70 = -1, @0x80e9d), so its next think draws again; idle, which
+    /// it decides only under a player breaking up, the target it has, as
+    /// the lost parent writes none.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::Idle if player_breaking_up(around) => npc.target,
+            Goal::Idle => npc.target,
             Goal::Attack(target) => Some(target),
             Goal::Formation { guard } => {
                 guard.filter(|_| !unprovoked(npc, guard, around, self.fire).drops_target)

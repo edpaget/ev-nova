@@ -419,31 +419,37 @@ mod tests {
 
     #[test]
     fn a_lead_disabled_breaking_up_destroyed_jumped_out_or_missing_is_succeeded() {
+        // Each lead holds, which the successor takes over from its record,
+        // there or gone; with no record, its own formation idles.
+        let holding = |condition| {
+            let mut traffic = fleet(FEDS, condition, vec![follower(FEDS, 300)]);
+            of_mut(&mut traffic, 0).goal = Goal::Hold;
+            traffic
+        };
         let dying = Condition::Dying {
             ticks_left: 4,
             starting: false,
         };
-        for condition in [DISABLED, dying] {
-            let mut traffic = fleet(FEDS, condition, vec![follower(FEDS, 300)]);
-            think(&mut traffic);
-            assert_eq!(of(&traffic, 1).leader, None, "{condition:?}");
-        }
-        let mut destroyed = fleet(FEDS, Condition::Destroyed, vec![follower(FEDS, 300)]);
+        let mut destroyed = holding(Condition::Destroyed);
         destroyed.remove_destroyed(LEAD);
-        let mut jumped = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300)]);
+        let mut jumped = holding(Condition::Intact);
         let lead = of(&jumped, 0).clone();
         jumped.remove(LEAD);
         jumped.gone.record(lead, Freed::InDispatch);
-        let mut missing = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300)]);
+        let mut missing = holding(Condition::Intact);
         missing.remove(LEAD);
-        for (name, mut traffic) in [
-            ("destroyed", destroyed),
-            ("jumped", jumped),
-            ("missing", missing),
+        for (name, mut traffic, goal) in [
+            ("disabled", holding(DISABLED), Goal::Hold),
+            ("dying", holding(dying), Goal::Hold),
+            ("destroyed", destroyed, Goal::Hold),
+            ("jumped", jumped, Goal::Hold),
+            ("missing", missing, Goal::Idle),
         ] {
             think(&mut traffic);
-            assert_eq!(of(&traffic, 1).leader, None, "{name}");
-            assert_eq!(of(&traffic, 1).warp.stage, LEFT_STAGE, "{name}");
+            let successor = of(&traffic, 1);
+            assert_eq!(successor.leader, None, "{name}");
+            assert_eq!(successor.goal, goal, "{name}");
+            assert_eq!(successor.warp.stage, LEFT_STAGE, "{name}");
         }
     }
 

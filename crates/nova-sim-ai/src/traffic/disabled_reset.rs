@@ -332,7 +332,9 @@ mod tests {
         led.warp.goal = Some(WarpGoal::Own);
         led.warp.stage = 12.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
-        assert_eq!(of(&traffic, LED).warp.stage, CANCELLED_STAGE);
+        let cancelled = of(&traffic, LED).warp;
+        assert_eq!(cancelled.stage, CANCELLED_STAGE);
+        assert!(!cancelled.under_way(), "it restarts from nothing");
     }
 
     #[test]

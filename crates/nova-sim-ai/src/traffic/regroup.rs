@@ -246,6 +246,26 @@ mod tests {
         assert_eq!(held.target, None, "dropped as its gate wait says");
     }
 
+    #[test]
+    fn a_ship_neither_deciding_nor_paused_keeps_its_pick() {
+        // Its kept trigger's find is no new pick: the pick a fired weapon
+        // cleared stays clear.
+        let mut traffic = Traffic::with_interval(1);
+        let mut down = ship(0.0, 0.0);
+        down.condition = crate::combat::hull::Condition::Disabled;
+        down.trigger = MARKED;
+        down.pick = None;
+        let id = traffic.add_npc(down);
+        traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+            .expect("there")
+            .pick = None;
+        traffic.think_holding(&Recording::default(), World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, id).pick, None);
+    }
+
     // What it flies.
 
     #[test]
