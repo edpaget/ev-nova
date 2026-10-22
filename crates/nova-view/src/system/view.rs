@@ -210,7 +210,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16, size: u32) -> StellarSheet {
         StellarSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,

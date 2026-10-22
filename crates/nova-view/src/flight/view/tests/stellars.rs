@@ -648,9 +648,12 @@ fn moon_drawn_and_clicked(view: &mut View) -> i16 {
         let screen = view.camera().world_to_screen(Point::new(at.x + dx, at.y));
         view.click_in_space(screen);
         let target = view.session().expect("flying").nav_target();
-        assert_eq!(target, picked, "{} at {dx:+}", sheet.image_id);
+        assert_eq!(target, picked, "{:?} at {dx:+}", sheet.image);
     }
-    sheet.image_id
+    let crate::SheetImage::Rled(id) = sheet.image else {
+        panic!("an rlëD sheet: {:?}", sheet.image)
+    };
+    id
 }
 
 /// The Moon's sheet drawn whole, after `Y129` and a frame, after an

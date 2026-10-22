@@ -24,7 +24,7 @@ use nova_view::flight::hud::{Background, bar_origin, interface_id};
 use nova_view::flight::{CombatLooks, FlightView, Looks, StatusBars};
 use nova_view::geometry::Bounds;
 use nova_view::system::catalog::{SystemCatalog, SystemId};
-use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen};
+use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen, SheetImage};
 
 fn open() -> Option<GameData> {
     let dir = common::nova_data()?;
@@ -172,8 +172,8 @@ fn every_explosion_type_reads_with_its_sound_and_sprite() {
             .expect("there")
             .unwrap_or_else(|err| panic!("bööm {boom}: {err}"));
         let sheet = data.spin_sheet(spin).expect("the spïn reads");
-        let image = look.sheet.expect("the sheet reads").image_id;
-        assert_eq!(image, sheet.image_id, "bööm {boom}");
+        let image = look.sheet.expect("the sheet reads").image;
+        assert_eq!(image, SheetImage::Rled(sheet.image_id), "bööm {boom}");
         assert_eq!(look.sound, Some(SoundId(sound)), "bööm {boom}");
     }
     assert_eq!(data.boom_look(BoomId(143)), None, "past the last");
@@ -189,7 +189,11 @@ fn every_cargo_box_graphic_reads_its_spin() {
             .box_sheet(graphic)
             .unwrap_or_else(|err| panic!("box {graphic}: {err}"));
         let spin = data.spin_sheet(500 + graphic.cast_signed()).expect("reads");
-        assert_eq!(sheet.image_id, spin.image_id, "box {graphic}");
+        assert_eq!(
+            sheet.image,
+            SheetImage::Rled(spin.image_id),
+            "box {graphic}"
+        );
     }
 }
 
@@ -200,8 +204,8 @@ fn the_cursors_sheet_is_spin_650s() {
     };
     let sheet = data.cursor_sheet().expect("spïn 650 reads");
     assert_eq!(
-        (sheet.image_id, sheet.frames.get()),
-        (8080, 9),
+        (sheet.image, sheet.frames.get()),
+        (SheetImage::Rled(8080), 9),
         "rlëD 8080, 9 frames"
     );
 }

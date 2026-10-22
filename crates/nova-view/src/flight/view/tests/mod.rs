@@ -361,12 +361,12 @@ fn catalog() -> FakeCatalog {
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
             frame_width: 0,
-            image_id: 500,
+            image: crate::SheetImage::Rled(500),
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
             frame_width: 0,
-            image_id: 651,
+            image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
         asteroid_types: Vec::new(),
@@ -753,7 +753,7 @@ fn stellar(id: i16, name: &str, (x, y): (i16, i16), frames: u16) -> StellarConte
         x,
         y,
         sprite: Ok(StellarSheet {
-            image_id: 1000 + id,
+            image: crate::SheetImage::Rled(1000 + id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 20,
             frame_height: 20,
@@ -777,7 +777,7 @@ const TYPE_ZERO: i16 = 3000;
 fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
     StellarContents {
         dead_sprite: Some(Ok(StellarSheet {
-            image_id: 2000 + id,
+            image: crate::SheetImage::Rled(2000 + id),
             frames: NonZeroU16::MIN,
             frame_width: 30,
             frame_height: 30,
@@ -815,7 +815,7 @@ impl SystemCatalog for FakeCatalog {
         if let Some(moon) = self.moon {
             zero = moon.zero_width;
             let square = |image_id, width, frames| StellarSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(frames).expect("non-zero"),
                 frame_width: width,
                 frame_height: width,
@@ -838,7 +838,7 @@ impl SystemCatalog for FakeCatalog {
             name: name.to_owned(),
             stellars,
             type_zero_sprite: Ok(StellarSheet {
-                image_id: TYPE_ZERO,
+                image: crate::SheetImage::Rled(TYPE_ZERO),
                 frames: NonZeroU16::MIN,
                 frame_width: zero,
                 frame_height: zero,
@@ -980,7 +980,7 @@ impl CombatLooks for FakeCatalog {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 500 + graphic.cast_signed(),
+                image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
             other => Err(format!("no spïn {}", 500 + other)),
@@ -991,7 +991,7 @@ impl CombatLooks for FakeCatalog {
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
             frame_width: 0,
-            image_id: 1800 + i16::from(kind),
+            image: crate::SheetImage::Rled(1800 + i16::from(kind)),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
     }
@@ -1003,7 +1003,7 @@ impl CombatLooks for FakeCatalog {
     /// The escape pods' sheet: `rlëD` 1095, of 36 rotations.
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
-            image_id: 1095,
+            image: crate::SheetImage::Rled(1095),
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 0,
         })
@@ -2396,7 +2396,7 @@ fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
         frame_width: 0,
-        image_id,
+        image: crate::SheetImage::Rled(image_id),
         frames: Frames::new(frames).expect("non-zero"),
     }
 }

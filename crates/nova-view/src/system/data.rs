@@ -9,7 +9,7 @@ use std::num::NonZeroU16;
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::{GameData, Record, StoreEntry, stellar_spin_id};
+use nova_data::{GameData, Record, StellarSprite, StoreEntry, stellar_spin_id};
 use nova_sim::gate::{HYPERGATE, WORMHOLE};
 use nova_sim::landing::StellarFlags;
 
@@ -18,6 +18,7 @@ use super::catalog::{
     SystemId,
 };
 use crate::galaxy::data::display_name;
+use crate::sheet_image::SheetImage;
 
 /// `Flags2`'s "animate only when destroyed" bit.
 const ONLY_WHEN_DESTROYED: u16 = 0x0080;
@@ -58,7 +59,10 @@ impl SystemCatalog for GameData {
 fn type_zero_sprite(data: &GameData) -> Result<StellarSheet, String> {
     let spin = stellar_spin_id(0).expect("graphic type 0 has a spïn");
     data.spin_sheet(spin)
-        .map(|found| sheet(found.image_id, &found.sheet))
+        .map(|found| {
+            let image = SheetImage::of(found.kind, found.spin_id, found.image_id);
+            sheet(image, &found.sheet)
+        })
         .map_err(|err| err.to_string())
 }
 
@@ -90,15 +94,11 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
         y: record.y_pos,
         sprite: data
             .stellar_sprite(id)
-            .map(|sprite| sheet(sprite.image_id, &sprite.sheet))
+            .map(|sprite| stellar_sheet(&sprite))
             .map_err(|err| err.to_string()),
         dead_sprite: data
             .stellar_dead_sprite(id)
-            .map(|sprite| {
-                sprite
-                    .as_ref()
-                    .map(|sprite| sheet(sprite.image_id, &sprite.sheet))
-            })
+            .map(|sprite| sprite.as_ref().map(stellar_sheet))
             .map_err(|err| err.to_string())
             .transpose(),
         animation: AnimationData {
@@ -111,15 +111,22 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
     }
 }
 
-/// `rlëD` `image_id`'s ID, frame count and frame size, decoded as `sheet`.
-fn sheet(image_id: i16, sheet: &SpriteSheet) -> StellarSheet {
-    // An `rlëD` header counts its frames in a u16, and the decoder rejects
-    // a sheet with none (`GraphicsError::NoFrames`).
-    let frames = NonZeroU16::new(sheet.frames().len() as u16)
-        .expect("a decoded rlëD has at least one frame");
+/// A resolved stellar sprite's sheet.
+fn stellar_sheet(sprite: &StellarSprite<'_>) -> StellarSheet {
+    let image = SheetImage::of(sprite.kind, sprite.spin_id, sprite.image_id);
+    sheet(image, &sprite.sheet)
+}
+
+/// The sheet `image`, its frame count and frame size, decoded as `sheet`.
+fn sheet(image: SheetImage, sheet: &SpriteSheet) -> StellarSheet {
+    // Neither decoder makes a sheet with no frames
+    // (`GraphicsError::NoFrames`). An `rlëD` header counts its frames in a
+    // u16, but a `PICT` pair cut into small frames can hold more: the
+    // count saturates.
+    let count = u16::try_from(sheet.frames().len()).unwrap_or(u16::MAX);
     StellarSheet {
-        image_id,
-        frames,
+        image,
+        frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
         frame_width: sheet.frame_width(),
         frame_height: sheet.frame_height(),
     }
@@ -241,7 +248,7 @@ mod tests {
 
     fn sheet_of(image_id: i16, frames: u16, size: u32) -> StellarSheet {
         StellarSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,

@@ -17,6 +17,8 @@ pub mod animation;
 pub mod camera;
 pub mod catalog;
 pub mod data;
+#[cfg(test)]
+mod pict_pair_tests;
 pub mod scene;
 pub mod starfield;
 pub mod view;

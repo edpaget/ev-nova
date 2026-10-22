@@ -105,7 +105,7 @@ use super::pods::{EscapePods, Pod};
 use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 
 /// The ticks of life over which a particle fades out
 /// (`_DrawParticlesOffscreen` @0xc5c26-0xc5c95).
@@ -592,7 +592,7 @@ impl Effects {
     pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
         for explosion in self.explosions.iter().filter(|e| e.delay <= 0.0) {
             if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
-                let frame = ImageKey::sprite(sheet.image_id, explosion.frame as u16);
+                let frame = sheet.image.frame(explosion.frame as u16);
                 list.sprite(frame, camera.world_to_screen(explosion.at), translucent());
             }
         }
@@ -658,6 +658,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::ImageKey;
     use crate::flight::catalog::{BoomLook, EffectSheet, WeaponLook};
     use crate::flight::weapons::LOOPED_SOUND;
 
@@ -698,7 +699,7 @@ mod tests {
         BoomLook {
             sheet: Ok(EffectSheet {
                 frame_width: 0,
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
             advance,
@@ -791,7 +792,7 @@ mod tests {
     fn pod_looks() -> Looks {
         Looks {
             pod: Some(Ok(EffectSheet {
-                image_id: 1095,
+                image: crate::SheetImage::Rled(1095),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
             })),

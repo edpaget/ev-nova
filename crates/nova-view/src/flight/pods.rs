@@ -52,7 +52,7 @@ use nova_sim::{Chance, Vec2};
 
 use super::catalog::Looks;
 use crate::system::camera::Camera;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 
 /// The most pods kept at once under the caps: `_podData`'s 32 entries
 /// (`cmpl $0x20` @0x456bc).
@@ -168,7 +168,7 @@ impl EscapePods {
             let Some(tint) = pod.tint() else {
                 continue;
             };
-            let frame = ImageKey::sprite(sheet.image_id, pod.frame);
+            let frame = sheet.image.frame(pod.frame);
             let at = camera.world_to_screen(pod.at);
             if pod.life >= POD_FADE {
                 list.sprite(frame, at, tint);
@@ -197,6 +197,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::ImageKey;
     use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
@@ -224,7 +225,7 @@ mod tests {
     fn looks() -> Looks {
         Looks {
             pod: Some(Ok(EffectSheet {
-                image_id: 1095,
+                image: crate::SheetImage::Rled(1095),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
             })),

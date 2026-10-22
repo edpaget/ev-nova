@@ -1,11 +1,11 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
-//! sheets, `ppat` pixel patterns and `cicn` colour icons, decoded on
-//! request.
+//! sheets, the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
+//! `ppat` pixel patterns and `cicn` colour icons, decoded on request.
 
-use nova_data::GameData;
 use nova_data::graphics::{
     CICN, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict, decode_ppat, decode_rled,
 };
+use nova_data::{GameData, SpinSpriteError};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -34,7 +34,26 @@ impl ImageSource for GameData {
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
+            ImageKind::SpinSheet => spin_frames(self, id)?,
         })
+    }
+}
+
+/// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): a link
+/// that is not there is [`ImageError::Missing`], a sheet that does not
+/// decode or cut is [`ImageError::Decode`].
+fn spin_frames(data: &GameData, id: i16) -> Result<Vec<Image>, ImageError> {
+    match data.spin_sheet(id) {
+        Ok(spin) => Ok(spin.sheet.into_frames()),
+        Err(SpinSpriteError::Graphics { source, .. } | SpinSpriteError::Picture { source, .. }) => {
+            Err(ImageError::Decode(source))
+        }
+        Err(
+            SpinSpriteError::NoSpin(_)
+            | SpinSpriteError::Decode(_)
+            | SpinSpriteError::NoSheet { .. }
+            | SpinSpriteError::NoMask { .. },
+        ) => Err(ImageError::Missing),
     }
 }
 
@@ -43,8 +62,12 @@ mod tests {
     use std::io;
     use std::path::Path;
 
+    use nova_data::Record;
     use nova_data::graphics::GraphicsError;
-    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder};
+    use nova_data::graphics::fixture::{
+        Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
+    };
+    use nova_data::records::spin::Spin;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
@@ -294,6 +317,85 @@ mod tests {
                 mask_height: 1,
             }))
         );
+    }
+
+    /// A `spïn` naming sprites `sprites` and masks `masks`, 1x1 frames.
+    fn spin(sprites: i16, masks: i16) -> Vec<u8> {
+        [sprites, masks, 1, 1, 3, 1]
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn a_spin_sheet_is_the_frames_its_pict_pair_cuts() {
+        let data = store(&[
+            (Spin::TYPE, 3000, spin(2000, 2100)),
+            (PICT, 2000, picture()),
+            (PICT, 2100, rgb888_pict(3, 2, &[[255; 3]; 6])),
+            (Spin::TYPE, 3001, spin(2001, 2100)),
+            (Spin::TYPE, 3002, spin(2000, 2101)),
+            (Spin::TYPE, 3003, spin(2003, 2003)),
+            (PICT, 2003, rgb888_pict(2, 1, &[[0; 3]; 2])),
+            (Spin::TYPE, 3004, spin(2000, -1)),
+            (Spin::TYPE, 3005, vec![0; 3]),
+        ]);
+        let frames = data.frames(ImageKind::SpinSheet, 3000).unwrap();
+        assert_eq!(frames.len(), 6, "3x2 1x1 frames");
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[5].pixel(0, 0), Some([132, 132, 132, 255]));
+        // The same spïn read as an rlëD is missing.
+        assert_eq!(data.frames(ImageKind::Rled, 3000), Err(ImageError::Missing));
+        for (spin, why) in [
+            (3001, "no sheet"),
+            (3002, "no mask"),
+            (3004, "a mask of -1"),
+            (3005, "a spïn that does not decode"),
+            (3006, "no spïn"),
+        ] {
+            assert_eq!(
+                data.frames(ImageKind::SpinSheet, spin),
+                Err(ImageError::Missing),
+                "{why}"
+            );
+        }
+        // A sheet that cuts to no whole grid of 1x1 frames cannot happen;
+        // 2x1 frames of a 3-wide picture can.
+        let partial = store(&[
+            (Spin::TYPE, 3000, {
+                let mut bytes = spin(2000, 2000);
+                bytes[4..6].copy_from_slice(&2i16.to_be_bytes());
+                bytes
+            }),
+            (PICT, 2000, picture()),
+        ]);
+        assert_eq!(
+            partial.frames(ImageKind::SpinSheet, 3000),
+            Err(ImageError::Decode(GraphicsError::PartialGrid {
+                width: 3,
+                height: 2,
+                frame_width: 2,
+                frame_height: 1,
+            }))
+        );
+        assert_eq!(
+            data.frames(ImageKind::SpinSheet, 3003).map(|f| f.len()),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn a_spin_sheet_of_an_rled_is_its_rled() {
+        let data = store(&[(Spin::TYPE, 3000, spin(200, -1)), (RLED, 200, sheet())]);
+        assert_eq!(
+            data.frames(ImageKind::SpinSheet, 3000),
+            data.frames(ImageKind::Rled, 200)
+        );
+        let bad = store(&[(Spin::TYPE, 3000, spin(200, -1)), (RLED, 200, vec![0; 3])]);
+        assert!(matches!(
+            bad.frames(ImageKind::SpinSheet, 3000),
+            Err(ImageError::Decode(_))
+        ));
     }
 
     #[test]

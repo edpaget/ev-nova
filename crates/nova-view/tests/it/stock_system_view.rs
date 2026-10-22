@@ -76,7 +76,8 @@ fn every_stock_systems_scene_matches_its_records() {
                 .expect("present")
                 .expect("decodes");
             match &placed.sprite {
-                Ok(sheet) if sheet.image_id == spin.record.sprites_id => {}
+                Ok(sheet) if sheet.image == nova_view::SheetImage::Rled(spin.record.sprites_id) => {
+                }
                 other => problems.push(format!(
                     "spöb {}: {other:?}, not rlëD {}",
                     placed.id.0, spin.record.sprites_id

@@ -23,6 +23,10 @@ pub enum ImageKind {
     Pattern,
     /// A `cicn` colour icon: one frame, its mask as alpha.
     Icon,
+    /// The frames `GameData::spin_sheet` resolves `spïn` `id` to, used for
+    /// a `spïn` drawn from a `PICT` pair, which has no `rlëD` to key it
+    /// by (see [`SheetImage`](crate::SheetImage)).
+    SpinSheet,
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -82,6 +86,17 @@ impl ImageKey {
     pub const fn sprite(id: i16, frame: u16) -> Self {
         Self {
             kind: ImageKind::Rled,
+            id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of the sheet `spïn` `id` resolves to
+    /// ([`ImageKind::SpinSheet`]).
+    #[must_use]
+    pub const fn spin_sheet(id: i16, frame: u16) -> Self {
+        Self {
+            kind: ImageKind::SpinSheet,
             id,
             frame,
         }

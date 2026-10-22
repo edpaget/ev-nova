@@ -16,7 +16,7 @@ use super::catalog::{
 };
 use crate::draw::crossed_box;
 use crate::geometry::Bounds;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
 pub const PLACEHOLDER_SIZE: f32 = 64.0;
@@ -333,7 +333,7 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
                     || stellar.frames.shown(),
                     |frame| frame % sheet.frames.get(),
                 );
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                list.sprite(sheet.image.frame(frame), at, Color::WHITE);
                 (sheet.frame_width as f32, sheet.frame_height as f32)
             }
             Err(message) => {
@@ -366,6 +366,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::ImageKey;
     use crate::system::catalog::SystemContents;
 
     /// Canned systems; records every system asked for.
@@ -396,7 +397,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> StellarSheet {
         StellarSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 8,
             frame_height: 8,

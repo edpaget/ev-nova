@@ -1238,7 +1238,7 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
     // `w` x `h` frames: the radar reads the width, never the height.
     let sized = |id, at, (w, h): (u32, u32), square| StellarContents {
         sprite: Ok(StellarSheet {
-            image_id: 1000 + id,
+            image: crate::SheetImage::Rled(1000 + id),
             frames: NonZeroU16::MIN,
             frame_width: w,
             frame_height: h,

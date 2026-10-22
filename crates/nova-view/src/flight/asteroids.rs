@@ -18,7 +18,7 @@ use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 
 /// An asteroid to draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,11 +38,7 @@ pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &
         match looks.asteroid_sheet(shown.kind) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                list.sprite(
-                    ImageKey::sprite(sheet.image_id, frame),
-                    shown.at,
-                    Color::WHITE,
-                );
+                list.sprite(sheet.image.frame(frame), shown.at, Color::WHITE);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -55,6 +51,7 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
+    use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
 
     fn at(x: f32, y: f32) -> Point {
@@ -64,7 +61,7 @@ mod tests {
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
             frame_width: 0,
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
     }

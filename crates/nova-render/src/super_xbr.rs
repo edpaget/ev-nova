@@ -1083,6 +1083,7 @@ mod tests {
             ImageKind::Pict,
             ImageKind::MaskedPict { mask: 3 },
             ImageKind::Icon,
+            ImageKind::SpinSheet,
         ] {
             assert_eq!(
                 SuperXbr.enlarge(kind, &frame).into_owned(),

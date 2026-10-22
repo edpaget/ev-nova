@@ -30,6 +30,7 @@ use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::sheet_image::SheetImage;
 
 /// Decodes the sheet and its layers on every call; the flight screen asks
 /// once, when it opens and when a ship is bought.
@@ -258,7 +259,7 @@ impl CombatLooks for GameData {
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
         Ok(EffectSheet {
-            image_id: sheet.image_id,
+            image: SheetImage::Rled(sheet.image_id),
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
         })
@@ -295,11 +296,11 @@ const MAX_SMOKE_SET: u16 = 7;
 /// read.
 fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
     let spin = data.spin_sheet(id).map_err(|err| err.to_string())?;
-    // The decoder refuses a sheet without frames.
+    // The decoders refuse a sheet without frames.
     let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
     let frames = NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN);
     Ok(EffectSheet {
-        image_id: spin.image_id,
+        image: SheetImage::of(spin.kind, spin.spin_id, spin.image_id),
         frames,
         frame_width: spin.sheet.frame_width(),
     })
@@ -859,7 +860,7 @@ mod tests {
     /// A sheet of `frames` frames 3 pixels wide, as [`sheet`] builds them.
     fn sheet_of(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
         }

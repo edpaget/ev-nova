@@ -203,7 +203,7 @@ mod tests {
                     x: 0,
                     y: 0,
                     sprite: Ok(StellarSheet {
-                        image_id: 1000,
+                        image: crate::SheetImage::Rled(1000),
                         frames: NonZeroU16::MIN,
                         frame_width: 8,
                         frame_height: 8,
@@ -220,7 +220,7 @@ mod tests {
                 name: format!("System {}", id.0),
                 stellars,
                 type_zero_sprite: Ok(StellarSheet {
-                    image_id: 1000,
+                    image: crate::SheetImage::Rled(1000),
                     frames: NonZeroU16::MIN,
                     frame_width: 8,
                     frame_height: 8,
