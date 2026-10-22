@@ -85,6 +85,21 @@
 //! system has no counterpart in the original, where every escort is a ship
 //! in a slot: it is dropped with the rest.
 //!
+//! The walk writes +0x9a alone, so a launched fighter is still AI type 5
+//! as it leaves. Its think that same frame (`_DoPlayGameWork` runs
+//! `_AIDispatch` @0x4429d after `_HandlePlayer` @0x43e19, and the AI
+//! timer's interval is 1) dispatches it to `_EscortAI` (AI type above 4,
+//! @0x90011-0x90016), whose lost-parent branch, with +0x9a -1
+//! (@0x83917-0x8391b), writes goal 0 and its class's `InherentAI` as its
+//! AI type (@0x8394b-0x8397b, @0x83c4a); the branch's early returns for
+//! goals 0x16, 9 and 0xf (@0x838e4-0x83911) hold no escort. From then on
+//! `_ShipShieldCapacity`, `_ShipArmorCapacity` and
+//! `_ShipShieldRechargeRate` scale nothing (AI type 5 alone,
+//! @0x2a91, @0x2cbc, @0x2b96). The engine takes the release and that
+//! think as one step before the frame is drawn: the fighter leaves its
+//! carrier ([`Npc::leave_carrier`]), its shield and armour holding and
+//! recharging as its class's, what they hold now kept.
+//!
 //! The walk's second half, a threat whose +0x6c is 0 pointed at the hulk
 //! (@0x6f6ff-0x6f70d), is left out. For a ship +0x6c is the destination
 //! the AI flies to: a stellar for the landing states (`_WarshipAI`
@@ -380,7 +395,8 @@ impl Session {
 
     /// NPC `id`, a ship the player leads, is released as the pod releases
     /// it (+0x9a = -1): out of the fleet or the formation, with no
-    /// carrier, deciding afresh.
+    /// carrier ([`Npc::leave_carrier`]: no longer a fighter, see the
+    /// module docs), deciding afresh.
     fn release_for_the_pod(&mut self, id: NpcId) {
         self.unfleet(id);
         let inherent = self
@@ -395,7 +411,7 @@ impl Session {
             {
                 npc.ai_type = ai_type;
             }
-            npc.carrier = None;
+            npc.leave_carrier();
             npc.goal = Goal::Idle;
         }
         self.reform();
@@ -1616,6 +1632,52 @@ mod tests {
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
         assert_eq!(session.space.escorts.fleet, []);
+    }
+
+    #[test]
+    fn the_pods_released_fighter_holds_and_recharges_its_classs_by_either_capacity_reading() {
+        // The pod writes +0x9a = -1 alone (@0x6f732), and the fighter's
+        // think that frame (`_AIDispatch` @0x4429d, after `_HandlePlayer`)
+        // takes `_EscortAI`'s lost-parent branch, its AI type its class's
+        // `InherentAI` (@0x83917-0x8397b, @0x83c4a): no longer 5, so
+        // neither its capacities nor its shield recharge are scaled.
+        let catalog = ejecting(100);
+        for reading in RuleSource::ALL {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::FighterCapacity, reading);
+            let mut session = flying(&catalog, &[POD]).with_rules(rules);
+            let mut stats = ShipStats::new(crate::testkit::FAST, &[]);
+            stats.shield_regen = 0.125;
+            let mut fighter = Npc {
+                escort: Some(EscortDuty {
+                    formation: FormationSlot::default(),
+                    order: None,
+                }),
+                goal: Goal::Formation { guard: None },
+                ..npc(0, stats)
+            };
+            fighter.take_carrier(session.player_carrier(30), reading);
+            fighter.reserves.armor.now = 50.0;
+            let id = session.space.traffic.add_npc(fighter);
+            session.pilot.escorts.push(Escort {
+                carried: true,
+                ..hired()
+            });
+            session.space.escorts.fleet.push(Some(id));
+            session.ship.condition = Condition::Disabled;
+            fight(&mut session, true);
+            assert!(in_the_pod(&session), "{reading:?}");
+            let fighter = session.space.npc(id).expect("here");
+            assert_eq!(fighter.carrier, None, "{reading:?}");
+            let reserves = fighter.reserves;
+            assert_eq!(
+                (reserves.shield.max, reserves.armor.max),
+                (30.0, 45.0),
+                "{reading:?}: its class's"
+            );
+            assert_eq!(reserves.armor.now, 50.0, "{reading:?}: what it holds kept");
+            assert_eq!(fighter.shield_recharge(reading), 0.125, "{reading:?}");
+        }
     }
 
     #[test]

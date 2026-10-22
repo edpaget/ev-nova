@@ -193,3 +193,36 @@ fn a_lost_fighter_repairing_itself_reaches_its_share_of_its_scaled_armour() {
         assert_eq!(gauges(npc)[1].1, armor, "{capacity:?}");
     }
 }
+
+#[test]
+fn a_fighter_rejoining_with_no_carrier_holds_its_scaled_capacities_again() {
+    // Rejoining as a fighter, it is carried by the player again (AI type 5),
+    // so its capacities and its recharge are a fighter's together.
+    let mut catalog = recharging();
+    catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(437), 1)];
+    catalog.outfits.push(crate::testkit::outfit(
+        437,
+        &[(crate::self_repair::MOD_REPAIR, 0)],
+    ));
+    for (capacity, (shield, armor)) in [(RuleSource::Engine, SCALED), (RuleSource::Bible, CLASS)] {
+        let mut session = players_launched(&catalog, capacity);
+        let id = fleet_npcs(&session)[0].id;
+        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(session.pilot().escorts().is_empty(), "lost");
+        session.space.npc_mut(id).expect("out").leave_carrier();
+        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        let npc = session.space.npc(id).expect("there");
+        assert!(npc.carrier.is_some(), "{capacity:?}: carried again");
+        assert_eq!(
+            (gauges(npc)[0].1, gauges(npc)[1].1),
+            (shield, armor),
+            "{capacity:?}"
+        );
+        assert_eq!(
+            npc.shield_recharge(capacity),
+            fighter_capacity(0.125, capacity),
+            "{capacity:?}"
+        );
+    }
+}

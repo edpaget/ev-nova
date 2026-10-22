@@ -11,15 +11,18 @@
 //! [`stats`](Npc::stats) keep its class's values; the most its shield and
 //! armour gauges hold ([`Npc::reserves`]) is what every reader of the
 //! capacities reads (the disable threshold, the self-repair, damage, the
-//! target panel, the odds, capture and plunder), so
-//! [`Npc::hold_capacities`] sets it wherever a ship becomes a fighter or
-//! stops being one. The original works the capacity out at each read
+//! target panel, the odds, capture and plunder), while its shield
+//! recharge ([`Npc::shield_recharge`]) reads the carrier each tick. So
+//! the carrier and the gauges' most change together: a ship becomes a
+//! fighter only through [`Npc::take_carrier`] and stops being one only
+//! through [`Npc::leave_carrier`], each holding the capacities
+//! ([`Npc::hold_capacities`]). The original works the capacity out at each read
 //! and keeps the shield and armour it holds (+0x54, +0x58) as they are, so
 //! a change keeps what the gauges hold now: a fighter that leaves its
 //! carrier may hold more than its class's until it is hit, as only the
 //! regeneration caps at the capacity. Its armour recharge takes no factor.
 
-use crate::bay::fighter_capacity;
+use crate::bay::{Carrier, fighter_capacity};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -32,6 +35,14 @@ impl Npc {
         let reading = self.capacity_reading(reading);
         self.reserves.shield.max = fighter_capacity(self.stats.shield, reading);
         self.reserves.armor.max = fighter_capacity(self.stats.armor, reading);
+    }
+
+    /// It becomes a fighter of `carrier`, its gauges' most a fighter's by
+    /// `reading` of [`RuleKey::FighterCapacity`](crate::RuleKey::FighterCapacity),
+    /// what they hold now kept (see the module docs).
+    pub fn take_carrier(&mut self, carrier: Carrier, reading: RuleSource) {
+        self.carrier = Some(carrier);
+        self.hold_capacities(reading);
     }
 
     /// It is no longer a fighter: it has no carrier, and its gauges' most
@@ -65,7 +76,6 @@ impl Npc {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::bay::Carrier;
     use crate::combat::ShipRef;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
@@ -128,6 +138,25 @@ mod tests {
             ship.reserves.shield.now = 39.0;
             ship.hold_capacities(reading);
             assert_eq!(gauges(&ship), [(39.0, 30.0), (20.0, 45.0)], "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn taking_a_carrier_a_ship_holds_a_fighters_by_the_reading_keeping_what_it_has() {
+        let carrier = fighter().carrier.expect("carried");
+        for (reading, held, recharge) in [
+            (
+                RuleSource::Engine,
+                [(10.0, 39.99), (20.0, 59.985)],
+                0.166_625,
+            ),
+            (RuleSource::Bible, [(10.0, 30.0), (20.0, 45.0)], 0.125),
+        ] {
+            let mut ship = ship();
+            ship.take_carrier(carrier, reading);
+            assert_eq!(ship.carrier, Some(carrier), "{reading:?}");
+            assert_eq!(gauges(&ship), held, "{reading:?}");
+            assert_eq!(ship.shield_recharge(reading), recharge, "{reading:?}");
         }
     }
 

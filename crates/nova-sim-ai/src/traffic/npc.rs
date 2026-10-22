@@ -345,7 +345,10 @@ pub struct Npc {
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
-    /// ship.
+    /// ship. Built `None` and changed only through [`Npc::take_carrier`]
+    /// and [`Npc::leave_carrier`], which hold its shield and armour
+    /// capacities to it (see
+    /// [`fighter_capacity`](crate::traffic::fighter_capacity)).
     pub carrier: Option<Carrier>,
     /// The person flying it, if any.
     pub person: Option<NpcPerson>,

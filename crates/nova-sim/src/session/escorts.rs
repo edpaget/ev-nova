@@ -313,7 +313,7 @@ impl Session {
             info_types: 0,
             cargo: NpcHold::default(),
             spared: false,
-            carrier,
+            carrier: None,
             person,
             mission: None,
             aux: None,
@@ -369,8 +369,11 @@ impl Session {
         // A carried fighter holds a fighter's capacities, keeping what its
         // record holds (`_ShipShieldCapacity`, `_ShipArmorCapacity` for AI
         // type 5, @0x2a91-0x2aa7, @0x2cb9-0x2cd2).
-        if npc.carrier.is_some() {
-            npc.hold_capacities(self.setup.rules.source_for(RuleKey::FighterCapacity));
+        if let Some(carrier) = carrier {
+            npc.take_carrier(
+                carrier,
+                self.setup.rules.source_for(RuleKey::FighterCapacity),
+            );
         }
         Some(match berth {
             Some(berth) => self.space.traffic.add_npc_at(npc, berth),
@@ -394,7 +397,8 @@ impl Session {
     /// type its ship type's `InherentAI`, led by the player alone,
     /// keeping formation by `record`'s standing order with no target of
     /// its own, carried by the player when `record` is a carried
-    /// fighter, and no longer a former escort. Its record joins the
+    /// fighter (holding a fighter's capacities, [`Npc::take_carrier`](crate::traffic::npc::Npc::take_carrier)),
+    /// and no longer a former escort. Its record joins the
     /// pilot's, the formation re-forms, and a save is due.
     pub(super) fn enlist(&mut self, id: NpcId, record: Escort) {
         let ship = self
@@ -415,8 +419,11 @@ impl Session {
             formation: FormationSlot::default(),
             order: record.order,
         });
-        if carrier.is_some() {
-            npc.carrier = carrier;
+        if let Some(carrier) = carrier {
+            npc.take_carrier(
+                carrier,
+                self.setup.rules.source_for(RuleKey::FighterCapacity),
+            );
         }
         self.pilot.escorts.push(record);
         self.space

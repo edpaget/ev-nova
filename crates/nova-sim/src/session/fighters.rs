@@ -585,7 +585,7 @@ impl Space {
 /// `speed` along its heading, launched by `carrier`: its shield and armour
 /// full at a fighter's capacities by `capacity`'s reading of
 /// [`RuleKey::FighterCapacity`] (`_LaunchFighter` @0x3d9e7, @0x3d9f7,
-/// [`Npc::hold_capacities`]), carrying its class's stock weapons and
+/// [`Npc::take_carrier`]), carrying its class's stock weapons and
 /// rounds, its AI type its `InherentAI`, idle.
 fn fighter(
     kind: &ShipKind,
@@ -631,7 +631,7 @@ fn fighter(
         info_types: 0,
         cargo: NpcHold::default(),
         spared: false,
-        carrier: Some(carrier),
+        carrier: None,
         person: None,
         mission: None,
         aux: None,
@@ -679,7 +679,7 @@ fn fighter(
         no_ai: false,
     };
     fighter.independent();
-    fighter.hold_capacities(capacity);
+    fighter.take_carrier(carrier, capacity);
     let reserves = &mut fighter.reserves;
     reserves.shield.now = reserves.shield.max;
     reserves.armor.now = reserves.armor.max;
