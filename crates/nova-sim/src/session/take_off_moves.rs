@@ -105,6 +105,7 @@
 //! [`ScriptEffectRules::out_of_range_move`]: super::ScriptEffectRules::out_of_range_move
 //! [`ScriptEffectRules::arrival`]: super::ScriptEffectRules::arrival
 //! [`StoryEvent::EnteredSystem`]: crate::story::StoryEvent::EnteredSystem
+//! [`StoryEvent::Explored`]: crate::story::StoryEvent::Explored
 
 use super::entry::Dock;
 use super::script_effects::{ScriptMove, move_placement};
