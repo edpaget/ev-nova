@@ -91,7 +91,7 @@ use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::HiddenMove;
 
-use super::{Chart, Setup};
+use super::{Chart, Outbox, SessionEvent, Setup, story};
 
 impl Chart {
     /// Where entering `asked` takes the player, after any refresh the
@@ -102,6 +102,27 @@ impl Chart {
             RuleSource::Engine => self.galaxy.entered(asked),
             RuleSource::Bible => self.galaxy.arrival(asked),
         }
+    }
+
+    /// Resolves entering `asked` ([`Chart::entry_resolution`]) and shows
+    /// the system it takes the player to in `pilot`'s overlay, a chain
+    /// head made visible (@0x999a4) making a save due and telling
+    /// [`SessionEvent::GalaxyChanged`] through `out`. Gives the system
+    /// the player is taken to, leaving `pilot`'s system for the caller to
+    /// write: what an entry and a jump's refresh move share.
+    pub(super) fn show_entry(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+        asked: SystemId,
+    ) -> SystemId {
+        let resolved = self.entry_resolution(setup, asked);
+        if story::show(pilot, &mut self.galaxy, resolved) {
+            out.save_due = true;
+            out.emit(SessionEvent::GalaxyChanged);
+        }
+        resolved.to
     }
 
     /// The raw Con target of the slot the mode-3 selection stands in, in

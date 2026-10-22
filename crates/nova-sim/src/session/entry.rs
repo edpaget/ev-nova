@@ -78,7 +78,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
+use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -688,12 +688,9 @@ impl Session {
             sites,
             placement,
         } = arrival;
-        let resolved = self.chart.entry_resolution(&self.setup, asked);
-        if story::show(&mut self.pilot, &mut self.chart.galaxy, resolved) {
-            self.out.save_due = true;
-            self.out.emit(SessionEvent::GalaxyChanged);
-        }
-        let system = resolved.to;
+        let system = self
+            .chart
+            .show_entry(&mut self.pilot, &self.setup, &mut self.out, asked);
         let left = self.pilot.system;
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,

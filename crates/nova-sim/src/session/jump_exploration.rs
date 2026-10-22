@@ -49,8 +49,8 @@
 //! move takes it out of a system the refresh hid (@0x99918) before the
 //! days. So every `OnExplore` and every day script reads the hop or the
 //! arrival as the player's system: a map's reveal origin, an `S`'s
-//! whereabouts, a crön's `OnStart`. [`Session::write_jump_system`] and
-//! [`Session::jump_refresh_move`] make the same writes. The owner words
+//! whereabouts, a crön's `OnStart`. [`Chart::write_jump_system`] and
+//! [`Chart::jump_refresh_move`] make the same writes. The owner words
 //! don't change with them, so the galaxy awaits its rebuild from the
 //! first write (see the `owners_unset` module). The stellars shown stay
 //! the departure's until the entry: nothing is drawn before the
@@ -80,9 +80,10 @@
 
 use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
+use crate::pilot::Pilot;
 use crate::story::{Entrance, StoryEvent, StoryEventKind};
 
-use super::{Session, SessionEvent, story};
+use super::{Chart, Outbox, Session, Setup};
 
 impl Session {
     /// Explores `system`'s nebulae at once (`_ExploreNebulaeFromSystem`;
@@ -96,20 +97,6 @@ impl Session {
         let mark = self.run.story_mark();
         self.run.raise(StoryEvent::Explored { system });
         self.dispatch_explored_since(catalog, chance, mark);
-    }
-
-    /// Writes `system` as the player's system during a jump, before it is
-    /// explored: a hop's stand-in (@0x6bdd4) or the system the jump writes
-    /// (@0x6be0b; see the module docs' "The player's system"). The owner
-    /// words don't change with it, so the galaxy awaits its rebuild from
-    /// the first write, as [`RuleKey::RescueUntilRefresh`] reads (see the
-    /// `owners_unset` module): the holder derives no rescue for the hop
-    /// or the arrival, and keeps the departure's.
-    ///
-    /// [`RuleKey::RescueUntilRefresh`]: crate::RuleKey::RescueUntilRefresh
-    pub(super) fn write_jump_system(&mut self, system: SystemId) {
-        self.pilot.system = system;
-        self.chart.leave_owners_unset(&self.setup);
     }
 
     /// Raises the jump's [`StoryEvent::EnteredSystem`] for the player's
@@ -140,22 +127,41 @@ impl Session {
             self.check_ship_goals(slot, false, chance);
         }
     }
+}
 
-    /// The jump's refresh's move (@0x99918): the player is moved out of
+impl Chart {
+    /// Writes `system` as `pilot`'s system during a jump, before it is
+    /// explored: a hop's stand-in (@0x6bdd4) or the system the jump writes
+    /// (@0x6be0b; see the module docs' "The player's system"). The owner
+    /// words don't change with it, so the galaxy awaits its rebuild from
+    /// the first write, as [`RuleKey::RescueUntilRefresh`] reads in
+    /// `setup` (see the `owners_unset` module): the holder derives no
+    /// rescue for the hop or the arrival, and keeps the departure's.
+    ///
+    /// [`RuleKey::RescueUntilRefresh`]: crate::RuleKey::RescueUntilRefresh
+    pub(super) fn write_jump_system(&mut self, pilot: &mut Pilot, setup: &Setup, system: SystemId) {
+        pilot.system = system;
+        self.leave_owners_unset(setup);
+    }
+
+    /// The jump's refresh's move (@0x99918): `pilot` is moved out of
     /// `written` when the refresh hid it, as the entry will resolve it
-    /// ([`Chart::entry_resolution`](super::Chart::entry_resolution)), a
-    /// chain head it moves to made visible (@0x999a4), which makes a save
-    /// due and tells [`SessionEvent::GalaxyChanged`]. Gives the system the
-    /// player is left in, the player's system through the days, the
-    /// enter-system hook, the re-explore and the population.
-    pub(super) fn jump_refresh_move(&mut self, written: SystemId) -> SystemId {
-        let moved = self.chart.entry_resolution(&self.setup, written);
-        if story::show(&mut self.pilot, &mut self.chart.galaxy, moved) {
-            self.out.save_due = true;
-            self.out.emit(SessionEvent::GalaxyChanged);
-        }
-        self.pilot.system = moved.to;
-        moved.to
+    /// ([`Chart::show_entry`]), a chain head it moves to made visible
+    /// (@0x999a4), which makes a save due and tells
+    /// [`SessionEvent::GalaxyChanged`](super::SessionEvent::GalaxyChanged)
+    /// through `out`. Gives the system the player is left in, the
+    /// player's system through the days, the enter-system hook, the
+    /// re-explore and the population.
+    pub(super) fn jump_refresh_move(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+        written: SystemId,
+    ) -> SystemId {
+        let moved_to = self.show_entry(pilot, setup, out, written);
+        pilot.system = moved_to;
+        moved_to
     }
 }
 
