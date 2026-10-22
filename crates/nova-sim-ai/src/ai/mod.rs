@@ -44,6 +44,7 @@ pub mod brave;
 pub mod call_for_help;
 pub mod candidates;
 pub mod carried;
+pub mod dispatch_gate;
 pub mod escort;
 pub mod escort_orders;
 pub mod fire;
@@ -64,6 +65,7 @@ pub mod plunder_contents;
 pub mod plunder_target;
 pub mod pursuit;
 pub mod react;
+pub mod regroup;
 pub mod reinforcements;
 pub mod sight;
 pub mod stand_off;
@@ -367,6 +369,16 @@ pub enum Goal {
     /// nothing, fires nothing, and moves on at its velocity 0.7 pixels a
     /// tick further along its heading, until its wait reads none.
     Drift,
+    /// The regroup pause, the original's goal 0x13: a ship of a fleet
+    /// whose lead was lost waits to take up its new lead's orders, deciding
+    /// nothing and running no high level, flying and firing the substate
+    /// it kept, until a 1-in-100 draw each tick releases it (see
+    /// [`regroup`]). Every reader of the goal but the escort orders leaves
+    /// it to its default: no attack, no fight, not in form, not spared.
+    Regroup {
+        /// The substate it keeps flying.
+        kept: regroup::Kept,
+    },
 }
 
 impl Goal {
@@ -445,7 +457,8 @@ impl Goal {
             | Self::Mine
             | Self::Plunder { .. }
             | Self::CountWait
-            | Self::Drift => false,
+            | Self::Drift
+            | Self::Regroup { .. } => false,
         }
     }
 
@@ -499,7 +512,8 @@ impl Goal {
             | Self::Mine
             | Self::Plunder { .. }
             | Self::CountWait
-            | Self::Drift => false,
+            | Self::Drift
+            | Self::Regroup { .. } => false,
         }
     }
 }

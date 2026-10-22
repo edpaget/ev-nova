@@ -75,9 +75,9 @@
 //!   [`FLEE_REACH`](crate::ai::pursuit::FLEE_REACH) of its attacker, sub
 //!   5) gives fighters and medium ships Defend. A leader waiting in its
 //!   gate ([`Mode::Emerging`], or bursting out on its first tick) is goal
-//!   0x15: all Return. Goal 0x13, `_AICheckParentExists`'s regroup pause,
-//!   has no engine goal yet
-//!   (rdm:phase/escort-fleet-fidelity/phase-7-leader-succession's).
+//!   0x15: all Return. Goal 0x13 is `_AICheckParentExists`'s regroup
+//!   pause ([`Goal::Regroup`]), so a led carrier whose fleet changed lead
+//!   gives its fighters orders by the bands while it pauses.
 //!
 //! The shield's tests are in doubles, as the original's (0.66 @0xdd5b8,
 //! 0.33 @0xdd568); the odds band in floats (0.0 @0xdd054, 0.5 @0xdd694).
@@ -86,7 +86,7 @@
 use crate::ai::leave::{self, Leg};
 use crate::ai::odds::cached_odds;
 use crate::ai::pursuit::{self, Start};
-use crate::ai::{Goal, Surroundings, fire};
+use crate::ai::{Goal, Surroundings, dispatch_gate, fire};
 use crate::catalog::{EscortClass, WeaponId};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
@@ -94,7 +94,6 @@ use crate::fleet::OrderWord;
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Mode, Npc};
-use crate::traffic::pod_flight;
 
 /// How many frames apart a leader issues its orders (`% 8` @0x8fdd4).
 pub const ISSUE_PERIOD: i32 = 8;
@@ -133,16 +132,10 @@ pub fn issues_on(frame: i16, berth: u32) -> bool {
 }
 
 /// Whether `leader` reaches the call past `_AIDispatch`'s gates (see the
-/// module docs).
+/// module docs, and [`dispatch_gate`]).
 #[must_use]
 pub fn issues(leader: &Npc) -> bool {
-    !pod_flight::is_pod(leader)
-        && !leader.no_ai
-        && !matches!(
-            leader.mode,
-            Mode::JumpingIn { .. } | Mode::LeavingGate { tick: 1.. }
-        )
-        && leader.warp.goal.is_none()
+    dispatch_gate::reaches_think(leader)
 }
 
 /// The order words `leader` issues among `around`, one per
@@ -314,7 +307,7 @@ fn overridden(leader: &Npc, around: &Surroundings, banded: [i16; 4]) -> [i16; 4]
         return [RETURN; 4];
     }
     match leader.goal {
-        Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } => banded,
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } | Goal::Regroup { .. } => banded,
         Goal::Flee(attacker) if braking(leader, attacker, around) => [RETURN; 4],
         Goal::Flee(_) => [DEFEND, DEFEND, banded[2], banded[3]],
         _ => [RETURN; 4],
@@ -617,6 +610,24 @@ mod tests {
         let mut chaser = attacker(2, 0.0);
         chaser.state.position = Vec2::new(from.0, from.1);
         [aiming(runner, n(2)), chaser]
+    }
+
+    #[test]
+    fn a_leader_in_the_regroup_pause_issues_its_banded_table_not_all_return() {
+        // Goal 0x13 is exempt from the override (@0x89aa9-0x89aad).
+        use crate::ai::regroup::Kept;
+        for kept in [Kept::Coast, Kept::Stop, Kept::Formation { guard: None }] {
+            let paused = leader(Goal::Regroup { kept }, 100.0);
+            for reach in RuleSource::ALL {
+                assert_eq!(
+                    issued_by(std::slice::from_ref(&paused), reach),
+                    [2, 2, 0, 0],
+                    "{kept:?} {reach:?}"
+                );
+            }
+            let low = leader(Goal::Regroup { kept }, 20.0);
+            assert_eq!(issued(&[low]), [1, 1, 1, 0], "{kept:?}");
+        }
     }
 
     #[test]

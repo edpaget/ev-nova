@@ -374,8 +374,21 @@ fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
 }
 
 /// `npc`'s flight in the fly half `pass` at `speeds`, in `world`, rolling
-/// on `chance`: what became of it.
+/// on `chance`: what became of it. Every read of its goal finds the goal
+/// it flies ([`Npc::fly_as_flown`]): a ship in the regroup pause flies its
+/// kept substate's.
 fn fly_one(
+    pass: &mut FlyPass,
+    npc: &mut Npc,
+    speeds: TopSpeeds,
+    world: &World,
+    chance: &mut (impl Chance + ?Sized),
+) -> Outcome {
+    npc.fly_as_flown(|npc| fly_flown(pass, npc, speeds, world, chance))
+}
+
+/// [`fly_one`] with `npc`'s goal the one it flies.
+fn fly_flown(
     pass: &mut FlyPass,
     npc: &mut Npc,
     speeds: TopSpeeds,

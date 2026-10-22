@@ -548,8 +548,12 @@ fn fly_mobile(
             Err(outcome) => return outcome,
         },
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
-        // is a wait (state 6, @0x8f101).
-        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait => brake(&state, &handling, inertia),
+        // is a wait (state 6, @0x8f101). The regroup pause flies its kept
+        // substate's goal in its place (`Npc::fly_as_flown`, which the fly
+        // pass runs), so it reaches here only flown by itself: a stop.
+        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait | Goal::Regroup { .. } => {
+            brake(&state, &handling, inertia)
+        }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
         // does nothing (@0x87345-0x87351).

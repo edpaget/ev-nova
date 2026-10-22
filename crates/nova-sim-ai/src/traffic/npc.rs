@@ -798,10 +798,12 @@ impl Npc {
     /// The slot its goal keeps: its place in the player's formation
     /// ([`Npc::formation`]) while it keeps formation ([`Goal::Formation`]),
     /// its place in its NPC parent's ([`Npc::fleet_slot`]) while it keeps
-    /// with a lead ([`Goal::Follow`]); none in any other goal.
+    /// with a lead ([`Goal::Follow`]); none in any other goal. The goal is
+    /// the one it flies ([`Npc::flown_goal`]): the regroup pause keeps its
+    /// kept formation's.
     #[must_use]
     pub fn formation_slot(&self) -> Option<FormationSlot> {
-        match self.goal {
+        match self.flown_goal() {
             Goal::Formation { .. } => self.formation(),
             Goal::Follow { .. } => self.fleet_slot,
             _ => None,
@@ -811,7 +813,7 @@ impl Npc {
     /// Whether it keeps close formation with its leader, at `leader` and
     /// seen as `leader_seen` says, under `flight`: the original's substate
     /// 0xc, which `_IsShipInCloseForm` tests (@0x82f54-0x82f69). It keeps
-    /// the slot its goal keeps ([`Npc::formation_slot`]): the player's
+    /// the slot the goal it flies keeps ([`Npc::formation_slot`]): the player's
     /// escort in formation ([`Goal::Formation`]), or, by the engine's
     /// reading of [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation),
     /// a fleet escort keeping with its lead ([`Goal::Follow`]); by the
@@ -829,7 +831,7 @@ impl Npc {
         leader_seen: bool,
         flight: FlightRules,
     ) -> bool {
-        let keeps = match self.goal {
+        let keeps = match self.flown_goal() {
             Goal::Formation { .. } => true,
             Goal::Follow { .. } => flight.npc_formation == NpcFormation::Original,
             _ => false,

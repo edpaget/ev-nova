@@ -558,7 +558,22 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 /// one-tick lag the player cannot see.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
-    let bays = launches(npc, around);
+    fight_trigger(npc, around, rules, launches(npc, around))
+}
+
+/// The weapon `npc` fires among `around` from its fight's substate alone,
+/// as `_LowLevelAIHandler` runs it with no `_HighLevelAIHandler` before it
+/// (the regroup pause, [`regroup`](crate::ai::regroup)): [`trigger`]
+/// without the high level's fighter launch (@0x8e6fa), so its passes and
+/// a snipe's own launch after them (@0x8732f) as a goal-4 ship whose high
+/// level launched nothing.
+#[must_use]
+pub fn low_level_trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
+    fight_trigger(npc, around, rules, false)
+}
+
+/// [`trigger`], launching its fighters first as `bays` says.
+fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool) -> Trigger {
     let second = second_bay(npc, around, bays);
     let after = launches_after_passes(npc, around, second);
     let (only, keep) = pick(npc, around, rules, (bays, second.filter(|_| after)));

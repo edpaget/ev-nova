@@ -206,6 +206,7 @@ mod re_pick_tests;
 pub mod refuel_dock;
 #[cfg(test)]
 mod refuel_dock_tests;
+pub mod regroup;
 mod reinforcing;
 pub mod repair_dock;
 #[cfg(test)]
@@ -1158,6 +1159,7 @@ impl Traffic {
         self.forget_provocations();
         self.form_fleets();
         self.issue_escort_orders(&world);
+        self.release_regroups(chance);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
         self.launch_room = Some(left);
@@ -1193,6 +1195,7 @@ impl Traffic {
                     && !npc.no_ai
                     && !pod_flight::is_pod(npc)
                     && !assist_think::type_think_returns(npc)
+                    && !regroup::paused(npc)
                     && decision_due(self.ticks, npc.id, self.interval)
             })
             .collect();
@@ -1238,7 +1241,7 @@ impl Traffic {
         // the last tick. The tick's lag after a retarget crosses no
         // boundary the player sees.
         swarm::pass(&mut self.npcs, |npc| {
-            thinks(npc) && decision_due(self.ticks, npc.id, self.interval)
+            thinks(npc) && !regroup::paused(npc) && decision_due(self.ticks, npc.id, self.interval)
         });
         let high_levels: Vec<bool> = self
             .high_levels_due(&due)
@@ -1270,15 +1273,19 @@ impl Traffic {
                     behaviour.trigger(npc, &around),
                     Some(behaviour.target(npc, &around)),
                 )
+            } else if regroup::paused(npc) {
+                let wait = behaviour.gate_wait(npc, &around);
+                (wait.trigger, wait.drops_target.then_some(None))
             } else {
                 (npc.trigger, None)
             };
             commands[index] = (room.settle(npc, trigger), target);
         }
-        for ((npc, (trigger, target)), &due) in self.npcs.iter_mut().zip(commands).zip(&due) {
+        let fresh = regroup::fresh(&self.npcs, &due, &picked);
+        for ((npc, (trigger, target)), &fresh) in self.npcs.iter_mut().zip(commands).zip(&fresh) {
             // No pass clears the pick (+0x72): passes that keep none,
             // or none run, leave it as it was.
-            if due && trigger.keep.is_some() {
+            if fresh && trigger.keep.is_some() {
                 npc.pick = trigger.keep;
                 self.berth_picks.write(npc.berth, npc.pick);
             }
