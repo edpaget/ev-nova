@@ -1111,6 +1111,30 @@ mod tests {
     }
 
     #[test]
+    fn the_name_is_cut_to_one_less_than_its_items_width() {
+        // Item 5 made 268 wide: the name is cut to 267, so 27 Times 18
+        // characters (267.3) no longer fit, though they fit 268.
+        let mut narrow = template();
+        narrow.items[NAME_ITEM - 1].bounds.max.x -= 1.0;
+        let raw = "abcdefghijklmnopqrstuvwxyz0";
+        let mut screen = MissionComputerScreen::new(
+            Ok((narrow, Rc::new(MonoMetrics))),
+            MissionComputer {
+                rows: vec![row(130, raw, "Go.")],
+                ..computer()
+            },
+            ButtonStyle::STOCK,
+        );
+        let names = FakeNames::default();
+        let _ = screen.take_text_request();
+        screen.show_row(&row(130, raw, "Go."), &names);
+        assert_eq!(
+            *names.asked.borrow(),
+            [(MissionId(130), "abcdefghijklmnopqrstuvwxy…".to_owned())]
+        );
+    }
+
+    #[test]
     fn a_name_the_session_cannot_fill_stays_blank() {
         let mut screen = screen();
         let names = FakeNames {

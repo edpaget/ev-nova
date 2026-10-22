@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # Widening a 5-bit channel, (c5 << 3) | (c5 >> 2): the two halves
+    # never share a bit (the first's low 3 bits are 0, the second is at
+    # most 7), so OR and XOR give the same byte.
+    'replace \| with \^ in widen5',
     # The ship loop splits an NPC's step from its display only when its
     # pods or escape may run (`escape_may_run`); splitting every NPC's is
     # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
