@@ -1088,6 +1088,25 @@ mod tests {
             (Goal::Formation { guard: None }, true),
             "with the player gone, formation"
         );
+        // Return to Hangar with no carrier acts as no standing command:
+        // formation, its wait ended.
+        let mut uncarried = escort(Some(EscortOrder::Dock));
+        uncarried.ai_wait = 30;
+        let npcs = [uncarried];
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        for ai in [ENGINE, BIBLE] {
+            let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+            assert_eq!(
+                (decision.goal, decision.ends_wait),
+                (Goal::Formation { guard: None }, true),
+                "{:?}: Return to Hangar with no carrier",
+                ai.escort_ai
+            );
+        }
     }
 
     #[test]
