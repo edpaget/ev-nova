@@ -248,7 +248,17 @@ pub fn blast(shot: &Shot, at: Vec2) -> Option<Blast> {
 /// 0 breaks it, so holding it there never changes the outcome.
 #[must_use]
 pub fn damaged(strength: i16, weapon: &WeaponSpec) -> i16 {
-    let left = i32::from(strength) - weapon.asteroid_damage();
+    damaged_by(strength, weapon, 1)
+}
+
+/// What is left of an asteroid's `strength` after a hit of `weapon` of
+/// `times` its [`WeaponSpec::asteroid_damage`], held within an `i16`: a
+/// shot's once ([`damaged`]), a beam's twice on double time's advance
+/// pass (`_HandleBeams` @0x31a23-0x31a3d, see
+/// [`asteroid_beam`](super::asteroid_beam)).
+#[must_use]
+pub fn damaged_by(strength: i16, weapon: &WeaponSpec, times: i32) -> i16 {
+    let left = i32::from(strength) - weapon.asteroid_damage() * times;
     // Clamped into the `i16` range first.
     #[allow(clippy::cast_possible_truncation)]
     {
@@ -503,6 +513,14 @@ mod tests {
         assert_eq!(damaged(40, &mining(7, 0)), 33);
         assert_eq!(damaged(40, &mining(7, 0x8000)), -30);
         assert_eq!(damaged(40, &mining(0, 0)), 40, "energy damage alone");
+    }
+
+    #[test]
+    fn a_beams_hit_in_double_time_takes_twice_its_damage_mining_or_not() {
+        assert_eq!(damaged_by(40, &mining(7, 0), 2), 26);
+        assert_eq!(damaged_by(400, &mining(7, 0x8000), 2), 260);
+        assert_eq!(damaged_by(40, &mining(7, 0), 1), damaged(40, &mining(7, 0)));
+        assert_eq!(damaged_by(-32_000, &mining(i16::MAX, 0x8000), 2), i16::MIN);
     }
 
     #[test]

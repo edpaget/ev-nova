@@ -75,9 +75,8 @@
 //! itself, a later class being hit (@0x30dd2-0x30dd8). Nor does it hit any
 //! ship while its firer, an NPC, mines ([`Ties::mining`]): `_HandleBeams`
 //! skips the ship it found and goes on to its asteroid pass
-//! (@0x30f4c-0x30f8c → @0x316c2), which is
-//! rdm:phase/asteroids/phase-6-beams-on-asteroids's, so for now a mining
-//! beam hits nothing.
+//! (@0x30f4c-0x30f8c → @0x316c2), so a mining beam cuts the asteroid
+//! behind a ship ([`asteroid_beam`](super::asteroid_beam)).
 //!
 //! The flag rules (6g-6j, 9 and the beam's pairs) count the player as the
 //! fight's [`PassThrough`] says: the original's whole player side, or the

@@ -48,9 +48,10 @@
 //!   never wrap round.
 //!
 //! - **The destruction** ([`Asteroids::destroy`], `_DestroyAsteroid`
-//!   @0xadc9-0xb028): a shot that leaves an asteroid's strength below 0
-//!   destroys it at once (`_HandleAsteroidHit` @0x3691a, see
-//!   [`asteroid_hit`](crate::combat::asteroid_hit)). It drops scoopable
+//!   @0xadc9-0xb028): a shot or a beam that leaves an asteroid's strength
+//!   below 0 destroys it at once (`_HandleAsteroidHit` @0x3691a, see
+//!   [`asteroid_hit`](crate::combat::asteroid_hit); `_HandleBeams`
+//!   @0x31a69, see [`asteroid_beam`](crate::combat::asteroid_beam)). It drops scoopable
 //!   boxes, throws off its particles, explodes and breaks into fragments
 //!   ([`Asteroids::spawn_fragment`], `_SpawnSubAsteroid`
 //!   @0x3fbc7-0x3fd21), and its slot is freed ([`Remains`]).
@@ -255,6 +256,20 @@ impl AsteroidType {
             NO_SPRITE_RADIUS
         } else {
             width.max(height) / 2.0
+        }
+    }
+
+    /// Its sprite's frame height, in pixels, which a beam's cone takes for
+    /// r (`_GetSpriteYSize`, `_HandleBeams` @0x3176b-0x317f0, see
+    /// [`asteroid_beam`](crate::combat::asteroid_beam)): [`NO_SPRITE_SIZE`]
+    /// with no sprite, as `_DestroyAsteroid` reads a missing sheet.
+    #[must_use]
+    pub fn height(&self) -> f32 {
+        let (width, height) = self.size;
+        if width <= 0.0 && height <= 0.0 {
+            NO_SPRITE_SIZE
+        } else {
+            height
         }
     }
 
@@ -992,6 +1007,18 @@ mod tests {
         assert_eq!(sized((0.0, 30.0)).radius(), 15.0);
         assert_eq!(AsteroidType::MISSING.radius(), NO_SPRITE_RADIUS);
         assert_eq!(NO_SPRITE_RADIUS, 16.0);
+    }
+
+    #[test]
+    fn a_types_height_is_its_frames_or_32_without_a_sprite() {
+        let sized = |size| AsteroidType {
+            size,
+            ..AsteroidType::MISSING
+        };
+        assert_eq!(sized((40.0, 30.0)).height(), 30.0);
+        assert_eq!(sized((40.0, 0.0)).height(), 0.0, "a side is a sprite");
+        assert_eq!(sized((0.0, 0.0)).height(), NO_SPRITE_SIZE);
+        assert_eq!(AsteroidType::MISSING.height(), 32.0);
     }
 
     #[test]

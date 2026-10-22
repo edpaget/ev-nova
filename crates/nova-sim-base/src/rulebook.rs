@@ -193,8 +193,8 @@
 //! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see `nova_sim::combat::armament::Armament::fire_pick`) | only a copy that spawns spends\* |
 //! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see `nova_sim::combat::exits`) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
 //! | [`PdExitStep`](RuleKey::PdExitStep) | `pd_exit_step` | each point-defence shot moves its cursor on two exits, one in `_SpawnShot` and one as it is set back to the centre and placed again, so a ship's point defence fires from every other exit (`_HandleShipPointDefense` @0x396e5, @0x39707-0x3976c; see `nova_sim::combat::Combat`) | one exit a shot, each in turn\* |
-//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see `nova_sim::combat::beam`) | the first ship whose hit circle its segment meets, ending where it meets it\* |
-//! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; asteroids phase 6) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
+//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see `nova_sim::combat::beam`), and with no ship hit the nearest asteroid in its cone (`nova_sim::combat::asteroid_beam`) | the first ship whose hit circle its segment meets, ending where it meets it, or else the first such asteroid\* |
+//! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; see `nova_sim::combat::asteroid_beam`) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
 //! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see `nova_sim::combat::projectile::BombLaunch`) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
 //! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see `nova_sim::combat::defence`) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
 //! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see `nova_sim::combat::jamming`) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
@@ -2667,7 +2667,10 @@ rule_keys! {
     /// × its sprite's width), and within trunc(10r / 32) degrees of the
     /// beam's heading, the hit ending trunc(dist − 0.2 × width) along the
     /// beam. By the other reading, the beam's segment against each ship's
-    /// hit circle, the first it meets, ending where it meets it. The
+    /// hit circle, the first it meets, ending where it meets it; a beam
+    /// that hits no ship finds its asteroid the same way, the first whose
+    /// hit circle its segment meets (`nova_sim::combat::asteroid_beam`),
+    /// where by the engine it takes the asteroid pass's cone. The
     /// Bible says nothing of it, so the other reading is the engine's
     /// earlier choice, not anything the Bible says.
     BeamHitTest => "beam_hit_test",
@@ -2678,10 +2681,10 @@ rule_keys! {
     /// (@0x30ec4-0x30edd), so a beam at 2 degrees, or at -2 after its
     /// jitter, misses a ship at 358; and the asteroid pass takes its
     /// "nearest" asteroid by the distance of the ship of the same index
-    /// (@0x317f2-0x3180c), which asteroids phase 6 reads from this key.
-    /// By the other reading, the angle wraps and the nearest asteroid is
-    /// by its own distance. The other reading is the default (see the
-    /// module docs).
+    /// (@0x317f2-0x3180c; `nova_sim::combat::asteroid_beam`, its angle
+    /// test read the same way). By the other reading, the angle wraps and
+    /// the nearest asteroid is by its own distance. The other reading is
+    /// the default (see the module docs).
     BeamConeQuirks => "beam_cone_quirks",
     /// How a ship's freefall bombs (guidance 5) and rockets (6) leave it
     /// (see `nova_sim::combat::projectile::BombLaunch`). By the

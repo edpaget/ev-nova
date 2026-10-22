@@ -6,6 +6,7 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
+use super::asteroid_beam::BeamField;
 use super::ion::IonLockout;
 use super::lineup::reread;
 use super::stellar_hazards::StellarHazards;
@@ -313,10 +314,28 @@ impl Combat {
     /// been displayed already, at its own step ([`Combat::display_player`],
     /// [`Combat::handle_npcs`]): a breakup a beam begins starts at the
     /// ship's next display step.
+    ///
+    /// It lends the beams no asteroid field: it is [`Combat::close_tick_in`]
+    /// with none.
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.close_tick_in(fighters, arena, None, chance);
+    }
+
+    /// [`Combat::close_tick`] with `field` lent to the beams: each beam
+    /// whose ship pass hit nothing runs `_HandleBeams`' asteroid pass on
+    /// it as its turn comes, before the next beam is tested
+    /// ([`asteroid_beam`](super::asteroid_beam)), so a later beam meets
+    /// what an earlier one left, its fragments included.
+    pub fn close_tick_in(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        mut field: Option<BeamField<'_>>,
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -347,6 +366,9 @@ impl Combat {
                     pass_through: self.pass_through,
                 };
                 let Some(hit) = self.beam_hit(index, fighters, &sides, pass.beam_damage()) else {
+                    if let Some(field) = field.as_mut() {
+                        self.cut_asteroids(index, fighters, field, pass, chance);
+                    }
                     continue;
                 };
                 let ship = hit.ship;

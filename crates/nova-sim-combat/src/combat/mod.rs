@@ -253,7 +253,11 @@
 //! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
 //!    meets, as the fight's rules say ([`beam`]), every tick until its
-//!    life is over, and ends where it hit.
+//!    life is over, and ends where it hit. A beam that hits no ship, or a
+//!    mining NPC's, which passes every ship, goes on to the asteroids the
+//!    session lends ([`Combat::close_tick_in`]): it cuts, wears down,
+//!    breaks, pushes or tractors the one it reaches before the next beam
+//!    is tested ([`asteroid_beam`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -374,6 +378,7 @@ mod ai_dispatch;
 pub mod ai_fire;
 pub mod aim;
 pub mod armament;
+pub mod asteroid_beam;
 pub mod asteroid_hit;
 pub mod beam;
 mod collision;
@@ -1142,9 +1147,15 @@ impl GamePass {
 
     /// What a beam's damage is multiplied by on this pass.
     fn beam_damage(self) -> f32 {
+        f32::from(self.beam_times())
+    }
+
+    /// [`GamePass::beam_damage`], whole, as an asteroid's strength takes
+    /// it ([`asteroid_beam`]).
+    fn beam_times(self) -> i16 {
         match self {
-            Self::Advance { double_time: true } => 2.0,
-            _ => 1.0,
+            Self::Advance { double_time: true } => 2,
+            _ => 1,
         }
     }
 }
@@ -1233,6 +1244,10 @@ pub struct Combat {
     /// The slots of the asteroids broken since they were last taken, in
     /// the order they broke.
     broken_asteroids: Vec<usize>,
+    /// What the asteroids the beams destroyed left, since it was last
+    /// taken, in the order they were destroyed
+    /// ([`Combat::take_asteroid_remains`]).
+    asteroid_remains: Vec<crate::asteroid::Remains>,
     /// Whether the player's quadrant turrets test their blind spots
     /// ([`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)).
     quadrant_blind: RuleSource,
@@ -1342,7 +1357,9 @@ impl Combat {
     }
 
     /// Advances the fight a tick as [`Combat::tick`] does, on `pass`,
-    /// which the beams' step reads (see [`GamePass`]).
+    /// which the beams' step reads (see [`GamePass`]). It lends the beams
+    /// no asteroid field ([`Combat::close_tick`]): the session runs the
+    /// phases itself and lends it ([`Combat::close_tick_in`]).
     #[allow(clippy::too_many_arguments)]
     pub fn tick_on(
         &mut self,
@@ -3809,6 +3826,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod ai_dispatch;
+    mod asteroid_beams;
     mod collision_walk;
     mod display_step;
     mod escort_lost_in_place;
