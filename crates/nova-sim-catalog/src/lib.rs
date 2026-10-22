@@ -53,6 +53,8 @@ pub mod fixture;
 mod pict_sheet_sites;
 pub mod sound;
 pub mod strings;
+#[cfg(test)]
+mod test_store;
 pub mod voice;
 pub mod warp;
 

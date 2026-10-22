@@ -1477,24 +1477,7 @@ mod tests {
         StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::control::{Script, Test, TestExpr};
-
-    /// One data file, `/data/Nova Data`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
+    use crate::test_store::{put_i16s, store, store_named};
 
     /// Whether two tests are the one parse, shared.
     fn shared(a: &Test, b: &Test) -> bool {
@@ -1504,33 +1487,6 @@ mod tests {
     /// Whether two scripts are the one parse, shared.
     fn shared_script(a: &Script, b: &Script) -> bool {
         std::sync::Arc::ptr_eq(&a.0, &b.0)
-    }
-
-    fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let named: Vec<_> = resources
-            .iter()
-            .map(|(ty, id, data)| (*ty, *id, None, data.clone()))
-            .collect();
-        store_named(&named)
-    }
-
-    /// The store of these resources, each with its name, if any.
-    fn store_named(resources: &[(ResType, i16, Option<&str>, Vec<u8>)]) -> GameData {
-        let fork = resources
-            .iter()
-            .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
-                fork.resource(*ty, *id, name.map(str::as_bytes), data)
-            })
-            .build()
-            .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
-    }
-
-    fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
-        for (i, value) in values.iter().enumerate() {
-            bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
-        }
     }
 
     /// A `chär` starting in `ship` in these systems, with no cash and no

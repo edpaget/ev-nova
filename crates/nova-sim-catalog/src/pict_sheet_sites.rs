@@ -3,56 +3,15 @@
 //! `GameData::spin_sheet` like an `rlëD`'s, so a stellar whose `Type` or
 //! `DeadType` names one draws it.
 
-use std::io;
-use std::path::Path;
-
+use nova_data::Record;
 use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
-use nova_data::{GameData, Record};
-use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 
 use crate::catalog::{PilotCatalog, SystemId};
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-    let fork = resources
-        .iter()
-        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
-            fork.resource(*ty, *id, None, data)
-        })
-        .build()
-        .bytes;
-    let file = OneFile(fork);
-    GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
-}
-
-fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
-    for (i, value) in values.iter().enumerate() {
-        bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
-    }
-}
+use crate::test_store::{put_i16s, store};
 
 /// A `sÿst` whose navigation defaults are `stellars`.
 fn system(stellars: &[i16]) -> Vec<u8> {
