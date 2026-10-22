@@ -44,9 +44,12 @@ pub const CAMERA_SPEED: f32 = 960.0;
 /// How far past the system's outermost stellars the camera may go, in
 /// world units.
 pub const CAMERA_MARGIN: f32 = 1024.0;
-/// The status bar's width `_SetupWind` takes from the screen's to find the
-/// play area's centre (0xc2, @0x1b720-0x1b78a): the stock bars' width.
-pub const PLAY_AREA_BAR_WIDTH: f32 = 194.0;
+/// The status bar's width (0xc2): the stock bars'. `_SetupWind` takes it
+/// from the screen's to find the play area's centre (@0x1b720-0x1b78a);
+/// flight takes it for the play area's right edge, the strip at the right
+/// that takes no clicks, and the bar's width when its background cannot be
+/// read. The one definition, so the anchor and the play area agree.
+pub const STATUS_BAR_WIDTH: f32 = 194.0;
 
 /// The screen point a [`Camera`] draws its centre at.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -78,7 +81,7 @@ impl Anchor {
         match self {
             Self::ViewCentre => Point::new((view.0 / 2.0).floor(), view.1 / 2.0),
             Self::PlayAreaCentre => Point::new(
-                ((view.0 - PLAY_AREA_BAR_WIDTH) * 0.5).trunc(),
+                ((view.0 - STATUS_BAR_WIDTH) * 0.5).trunc(),
                 (view.1 * 0.5).trunc(),
             ),
         }

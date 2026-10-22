@@ -161,6 +161,18 @@ fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
 }
 
 #[test]
+fn the_play_area_anchor_centres_the_ship_in_the_play_area() {
+    let anchor = crate::system::camera::Anchor::PlayAreaCentre;
+    for width in [800.0, 1024.0, 1280.0, 1366.0] {
+        let view = (width, 768.0);
+        let area = play_area(view, anchor);
+        let screen_mid = (area.right - area.left) * 0.5;
+        assert_eq!(screen_mid, anchor.point(view).x, "width {width}");
+        assert_eq!(area.left + area.right, 0.0, "width {width}");
+    }
+}
+
+#[test]
 fn an_npc_is_a_dim_blip_on_the_radar() {
     let (_, chance) = scripted(&placed(850, 650, 90));
     let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))

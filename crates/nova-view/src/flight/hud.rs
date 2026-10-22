@@ -83,8 +83,9 @@ use crate::{Color, DrawList, Font, ImageKey};
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
 /// below it means.
 pub const DEFAULT_INTERFACE: i16 = 128;
-/// The bar's width when its background cannot be read: the stock bars'.
-pub const STATUS_BAR_WIDTH: f32 = 194.0;
+/// The bar's width when its background cannot be read: the stock bars',
+/// the camera's, which the play area's anchor shares.
+pub use crate::system::camera::STATUS_BAR_WIDTH;
 /// Fuel for one jump (the Bible: "100 is one jump"): the simulation's
 /// [`JUMP_FUEL`](nova_sim::hyperspace::JUMP_FUEL).
 pub const FUEL_PER_JUMP: f32 = nova_sim::hyperspace::JUMP_FUEL;
