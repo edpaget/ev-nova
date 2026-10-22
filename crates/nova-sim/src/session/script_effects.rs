@@ -548,9 +548,10 @@ impl Session {
 
 /// Where a move puts the ship (see the module docs), the system's first
 /// stellar at `first`, with the stellar to dock at landed, if any, kept
-/// when `keep` (`N`), `landed` or not, by `rules`: `M` puts it at rest
-/// there landed, and in flight stops it there, its speed along its
-/// heading kept (`_EvalSetExp` @0x157a6-0x157da); with no stellar it
+/// when `keep` (`N`), `landed` or not, by `rules`: `M` stops it there,
+/// its speed along its heading kept (`_EvalSetExp` @0x157a6-0x157da),
+/// which landed is none already (`_PlayerLandOnStellar` @0x63409, and
+/// nothing writes it while docked); with no stellar it
 /// stays as it is in flight, unless [`ScriptEffectRules::starless`] stops
 /// it at the centre, and landed it rests at the centre. `N` keeps the
 /// ship, and holds the next take-off's landing position landed, or in
@@ -563,7 +564,6 @@ pub(super) fn move_placement(
 ) -> Placement {
     let ship = match first.map(|(position, _)| position) {
         _ if keep => ShipPlacement::Keep,
-        Some(position) if landed => ShipPlacement::AtRest(position),
         Some(position) => ShipPlacement::Stopped(position),
         None if landed => ShipPlacement::AtRest(Vec2::ZERO),
         None if rules.starless == RuleSource::Bible => ShipPlacement::Stopped(Vec2::ZERO),

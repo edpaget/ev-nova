@@ -820,6 +820,7 @@ mod tests {
             warp_sound: Some(sound(1)),
             warp_sound_double_time: Some(sound(2)),
             warp_out_sound: Some(sound(3)),
+            boom_sounds: vec![(BoomId(130), SoundId(302))],
             dudes: vec![(DudeId(140), dude.clone())],
             ..catalog()
         };
@@ -832,6 +833,7 @@ mod tests {
         assert_eq!(fake.warp_sound(), Some(sound(1)));
         assert_eq!(fake.warp_sound_double_time(), Some(sound(2)));
         assert_eq!(fake.warp_out_sound(), Some(sound(3)));
+        assert_eq!(fake.boom_sounds(), [(BoomId(130), SoundId(302))]);
         assert_eq!(fake.mission_dude(DudeId(140)), Some(dude));
         assert_eq!(fake.mission_dude(DudeId(141)), None);
     }

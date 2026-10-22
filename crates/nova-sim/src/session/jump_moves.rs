@@ -441,6 +441,25 @@ mod tests {
     }
 
     #[test]
+    fn by_the_at_rest_arrival_a_move_in_the_jump_keeps_its_placement() {
+        // The other reading of `jump_arrival` places the ship at the entry,
+        // but not over a move's placement.
+        let rules = Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible);
+        let catalog = moving(Vec::new(), vec![scripted(128, 1, "M133", "")]);
+        let mut session = flown(&catalog, rules);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(133)));
+        assert_eq!(session.player().position, FIRST_150);
+        let catalog = moving(Vec::new(), Vec::new());
+        let mut session = flown(&catalog, rules);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_eq!(
+            session.player().position,
+            Vec2::new(-1001.0, 0.0),
+            "with no move, at rest outside the zone"
+        );
+    }
+
+    #[test]
     fn a_hops_on_explore_move_is_written_over_but_keeps_its_placement() {
         // 130 to 132 by 131, whose nebula's `OnExplore` moves to 133: the
         // hop loop then writes 132 (@0x6be0b), but the ship stays where the

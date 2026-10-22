@@ -123,3 +123,43 @@ impl Session {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use crate::catalog::SystemId;
+    use crate::chance::NeverFires;
+    use crate::hyperspace::{JUMP_FUEL, MultiJumpRule};
+    use crate::session::tests::{bound_for_134, chained};
+    use crate::testkit::{begin_jump_now, catalog};
+
+    #[test]
+    fn by_per_hop_each_hop_made_owes_its_own_fuel_and_days() {
+        // Along 131, 132, 134 with a multi-jump of 2: by `PerHop` every
+        // hop the fuel pays for, each with its fuel and days; by the
+        // engine two hops for one jump's.
+        for (rule, to, owed) in [
+            (MultiJumpRule::PerHop, 134, 3_u16),
+            (MultiJumpRule::Engine, 132, 1),
+        ] {
+            let catalog = chained(catalog(), 2);
+            let mut session = bound_for_134(&catalog, rule);
+            let (fuel, mut date) = (session.reserves().fuel.now, session.date());
+            begin_jump_now(&mut session).expect("jumps");
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(to)),
+                "{rule:?}"
+            );
+            assert_eq!(
+                session.reserves().fuel.now,
+                fuel - f32::from(owed) * JUMP_FUEL,
+                "{rule:?}"
+            );
+            for _ in 0..owed {
+                date = date.next_day();
+            }
+            assert_eq!(session.date(), date, "{rule:?}");
+        }
+    }
+}

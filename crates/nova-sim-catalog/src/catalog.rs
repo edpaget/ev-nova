@@ -2858,6 +2858,10 @@ mod tests {
             })
         }
 
+        fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+            vec![(BoomId(130), SoundId(302))]
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -2911,6 +2915,7 @@ mod tests {
             format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
+            format!("{:?}", catalog.boom_sounds()),
         ]
     }
 
@@ -3115,6 +3120,10 @@ mod tests {
         assert_eq!(
             direct[35], "[(SystemId(130), StellarId(129))]",
             "forwarded, not the default's 128"
+        );
+        assert_eq!(
+            direct[36], "[(BoomId(130), SoundId(302))]",
+            "forwarded, not a default"
         );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);

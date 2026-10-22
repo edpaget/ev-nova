@@ -378,13 +378,11 @@ impl Session {
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                // A jump's hook, and a move's during the jump, run before
-                // the setup, so their first check waits for the setup
-                // (`Session::arrive`; see the `jump_moves` module).
-                if self.mode.landed().is_none()
-                    && how != Entrance::Jump
-                    && !self.chart.in_jump_window()
-                {
+                // A jump's hook, and a move's during the jump, run in the
+                // jump's window, before the setup, so their first check
+                // waits for the setup (`Session::arrive`; see the
+                // `jump_moves` module).
+                if self.mode.landed().is_none() && !self.chart.in_jump_window() {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
