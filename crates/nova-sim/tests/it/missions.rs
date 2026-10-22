@@ -148,6 +148,7 @@ impl PilotCatalog for Courier {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }

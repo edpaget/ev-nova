@@ -539,6 +539,7 @@ mod stellars;
 mod story;
 mod stray_words;
 mod swarm_formation;
+mod system_background;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]

@@ -289,6 +289,7 @@ impl PilotCatalog for GameData {
                     interference: system.interference,
                     murk: system.murk,
                     message: system.message,
+                    background: system.bkgnd_color,
                     stellars: system
                         .nav_def
                         .iter()
@@ -3034,6 +3035,7 @@ mod tests {
                     interference: 0,
                     murk: 0,
                     message: -1,
+                    background: 0,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -3044,6 +3046,7 @@ mod tests {
                     interference: 45,
                     murk: 5,
                     message: 7,
+                    background: 0,
                 },
             ]
         );
@@ -3062,6 +3065,24 @@ mod tests {
         ]);
         let murk: Vec<i16> = data.star_map().iter().map(|system| system.murk).collect();
         assert_eq!(murk, [45, 0]);
+    }
+
+    #[test]
+    fn a_systems_background_is_its_sÿsts_bkgnd_color_raw() {
+        // `BkgndColor` is `sÿst` +0x8e, `00RRGGBB`; `_LoadObjectData`
+        // builds its `RGBColor` from it (@0x77d85-0x77dc5).
+        let mut coloured = linked(0, 0, &[]);
+        coloured[0x8E..0x92].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
+        let data = store(&[
+            (System::TYPE, 130, coloured),
+            (System::TYPE, 131, linked(0, 0, &[])),
+        ]);
+        let backgrounds: Vec<u32> = data
+            .star_map()
+            .iter()
+            .map(|system| system.background)
+            .collect();
+        assert_eq!(backgrounds, [0x0012_3456, 0]);
     }
 
     #[test]

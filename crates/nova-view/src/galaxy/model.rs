@@ -79,6 +79,7 @@ pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
         interference: 0,
         murk: 0,
         message: -1,
+        background: 0,
     }
 }
 

@@ -13,6 +13,7 @@ use nova_sim::{
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
 use crate::draw::crossed_box;
+use crate::draw::fill_command;
 use crate::draw::lights_tint;
 use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
 use crate::flight::catalog::{
@@ -113,6 +114,8 @@ struct FakeCatalog {
     sol_interference: i16,
     /// System 130's `Murk`: none, by default.
     sol_murk: i16,
+    /// System 130's `BkgndColor`: black, by default.
+    sol_background: u32,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The stellars Sol lists after Earth and the Moon: none, by
@@ -362,6 +365,7 @@ fn catalog() -> FakeCatalog {
         sol_navs: Vec::new(),
         sol_interference: 0,
         sol_murk: 0,
+        sol_background: 0,
         alpha_buoy: -1,
         sol_more: Vec::new(),
         gates: Vec::new(),
@@ -489,6 +493,7 @@ impl PilotCatalog for FakeCatalog {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
         let sol = self.sol_links();
@@ -497,6 +502,7 @@ impl PilotCatalog for FakeCatalog {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
                 murk: self.sol_murk,
+                background: self.sol_background,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {

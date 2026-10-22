@@ -98,6 +98,11 @@ pub struct StarSystem {
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
+    /// Its `BkgndColor`, raw `00RRGGBB`: the colour the original erases
+    /// the flight message's box in while the player is here
+    /// (`_SetSystemBackgroundBackColor` @0x6e06-0x6e46, reading the
+    /// `RGBColor` `_LoadObjectData` builds from it @0x77d85-0x77dc5).
+    pub background: u32,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -2642,6 +2647,7 @@ mod tests {
                 interference: 0,
                 murk: 0,
                 message: -1,
+                background: 0,
             }]
         }
 

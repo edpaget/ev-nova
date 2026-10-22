@@ -295,6 +295,8 @@ struct Node {
     murk: i16,
     /// Its `Message`, raw: the message buoy, −1 for none.
     message: i16,
+    /// Its `BkgndColor`, raw `00RRGGBB`.
+    background: u32,
 }
 
 impl Node {
@@ -534,6 +536,7 @@ impl StarMap {
                 interference: system.interference,
                 murk: system.murk,
                 message: system.message,
+                background: system.background,
             };
             nodes.insert(from, node);
         }
@@ -709,6 +712,13 @@ impl StarMap {
     #[must_use]
     pub fn murk(&self, id: SystemId) -> i16 {
         self.nodes.get(&id).map_or(0, |node| node.murk)
+    }
+
+    /// System `id`'s `BkgndColor`, raw `00RRGGBB`: `None` when it is not
+    /// on the map.
+    #[must_use]
+    pub fn background(&self, id: SystemId) -> Option<u32> {
+        self.nodes.get(&id).map(|node| node.background)
     }
 
     /// System `id`'s message buoy, its `Message`: the index a hyperspace
@@ -919,6 +929,7 @@ mod tests {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         }
     }
 
@@ -1530,6 +1541,7 @@ mod tests {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -1654,6 +1666,20 @@ mod tests {
         assert_eq!(map.murk(SystemId(128)), 40);
         assert_eq!(map.murk(SystemId(129)), -3);
         assert_eq!(map.murk(SystemId(130)), 0, "not on the map");
+    }
+
+    #[test]
+    fn a_systems_background_is_its_records_raw_and_none_off_the_map() {
+        let map = StarMap::new(vec![
+            StarSystem {
+                background: 0x0012_3456,
+                ..system(128, &[])
+            },
+            system(129, &[]),
+        ]);
+        assert_eq!(map.background(SystemId(128)), Some(0x0012_3456));
+        assert_eq!(map.background(SystemId(129)), Some(0), "black is a colour");
+        assert_eq!(map.background(SystemId(130)), None, "not on the map");
     }
 
     #[test]
