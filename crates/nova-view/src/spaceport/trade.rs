@@ -1330,10 +1330,13 @@ mod tests {
         let mut words = TradeWords::STOCK;
         words.commodity = "Ware:".into();
         words.lower = "Down".into();
+        words.free_cargo_space = "Room".into();
         let commands = drawn(&screen_of(Market { words, ..market() }));
         assert!(drawn_at(&commands, "Ware:").is_some());
         assert!(drawn_at(&commands, "Down").is_some());
         assert_eq!(drawn_at(&commands, "Commodity:"), None);
+        assert!(drawn_at(&commands, "Room: 7 tons").is_some(), "item 12");
+        assert_eq!(drawn_at(&commands, "Free cargo space: 7 tons"), None);
     }
 
     #[test]

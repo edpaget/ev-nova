@@ -637,6 +637,28 @@ mod tests {
     }
 
     #[test]
+    fn the_summary_is_told_in_the_given_words() {
+        let list: Vec<String> = (1..=392).map(|n| format!("#{n}")).collect();
+        let words = TradeWords::from_list(&list);
+        let alone = cargo_summary(&[load(0, 2)], [3], 10, 10, 9);
+        assert_eq!(
+            alone.text(&words),
+            "#363 5 #2 #391 #367 #392 #368\r\r#364: 1 #1"
+        );
+        let misc = cargo_summary(&[], [1], 10, 10, 1);
+        assert_eq!(misc.text(&words), "#363 1 #1 #391 #368\r\r#364: 9 #2");
+        // Ship 20, fleet 50, 1 ton of missions, 40 aboard: 9 tons spill
+        // into the ship, leaving 10 there and 10 in the fleet.
+        let fleet = cargo_summary(&[load(0, 1)], [], 20, 50, 40);
+        assert_eq!(
+            fleet.text(&words),
+            "#363 1 #1 #391 #367\r\r#364 #365: 10 #2\r#364 #366: 10 #2"
+        );
+        let one = cargo_summary(&[], [], 20, 50, 49);
+        assert_eq!(one.text(&words), "#364 #365: 1 #1\r#364 #366: 1 #1");
+    }
+
+    #[test]
     fn free_space_never_below_zero_and_one_ton_is_singular() {
         assert_eq!(alone(&[], &[], 12), "Free cargo space: 0 tons");
         assert_eq!(alone(&[], &[], 9), "Free cargo space: 1 ton");
