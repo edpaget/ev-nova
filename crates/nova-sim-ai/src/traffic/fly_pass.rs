@@ -105,7 +105,8 @@ pub struct FlyPass {
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
     leads: BTreeMap<NpcId, SwarmLead>,
-    /// The NPCs that don't see their NPC leader, as the half began.
+    /// The NPCs that don't see their leader, an NPC or the player, as the
+    /// half began.
     unseen: BTreeSet<NpcId>,
     /// The NPCs in the regroup pause as the half began, whose flight
     /// flies another goal ([`Npc::fly_as_flown`]) but whose warp-out reads
@@ -191,13 +192,19 @@ impl Traffic {
         let unseen = self
             .npcs
             .iter()
-            .filter(|npc| {
-                npc.leader.is_some_and(|lead| {
-                    self.npcs
-                        .iter()
-                        .find(|other| other.id == lead)
-                        .is_some_and(|leader| !sight::npc_sees(npc, leader))
-                })
+            .filter(|npc| match npc.leader {
+                Some(lead) => self
+                    .npcs
+                    .iter()
+                    .find(|other| other.id == lead)
+                    .is_some_and(|leader| !sight::npc_sees(npc, leader)),
+                // The player leads a ship with no NPC leader that escorts it.
+                None => {
+                    npc.escorts_player()
+                        && world
+                            .player
+                            .is_some_and(|player| !sight::sees_player(npc, &player))
+                }
             })
             .map(|npc| npc.id)
             .collect();
@@ -349,22 +356,21 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 /// What `npc`'s flight reads beside the ship it is about, in the fly
 /// half `pass` ([`Beside`]): its swarm lead, its guard where the half
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
-/// a lead ([`Goal::Follow`]), and whether it sees its leader. A fleet
-/// escort sees its NPC lead as the half began (`_ShipVisibleToShip(leader,
-/// ship)` @0x8ed5f, [`sight::npc_sees`]); the player can cloak, but this
-/// site reads it as seen until
-/// rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player, which
-/// passes the player's sight
-/// ([`sight::sees_player`](crate::ai::sight::sees_player)) here.
+/// a lead ([`Goal::Follow`]), and whether it sees its leader as the half
+/// began (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): a fleet escort
+/// its NPC lead ([`sight::npc_sees`]), the player's escort the player
+/// ([`sight::sees_player`]). The coast and the inertia
+/// ([`Inertia::of`]) read the same sight.
 ///
 /// The original reads the sight in the escort's own high level, so a
-/// cloak its lead changed earlier in the same think half shows here a
-/// tick later than there: a one-tick lag settled before the frame is
+/// cloak its lead (or the player) changed earlier in the same think half
+/// shows here a tick later than there: a one-tick lag settled before the frame is
 /// drawn, crossing no boundary.
 fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
     let (guard, leader_seen) = match npc.goal {
-        Goal::Formation { guard } => (guard, true),
-        Goal::Follow { guard, .. } => (guard, !pass.unseen.contains(&npc.id)),
+        Goal::Formation { guard } | Goal::Follow { guard, .. } => {
+            (guard, !pass.unseen.contains(&npc.id))
+        }
         _ => (None, true),
     };
     Beside {
@@ -1032,6 +1038,107 @@ mod tests {
         seen.npcs[1].cloak_gear.device = true;
         seen.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
         assert_eq!(escort(&seen), Vec2::new(1.0, 0.0), "matched with it");
+    }
+
+    /// The player's escort (NPC 1) in formation slot 0, `off` from the
+    /// player, both moving right at 1, the escort facing left: with a cloak
+    /// of its own when `device`, and a cloak scanner on screen when
+    /// `scanner`.
+    fn player_escort(off: Vec2, device: bool, scanner: bool) -> Traffic {
+        let mut escort = at(1, off.x, off.y);
+        escort.state.velocity = Vec2::new(1.0, 0.0);
+        escort.state.heading = 270.0;
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        escort.goal = Goal::Formation { guard: None };
+        escort.cloak_gear.device = device;
+        escort.cloak_gear.scanner.on_screen = scanner;
+        Traffic {
+            npcs: vec![escort],
+            ..Traffic::default()
+        }
+    }
+
+    /// A world of no stellars with the player at the centre moving right
+    /// at 1, cloaked when `cloaked`.
+    fn with_player(cloaked: bool) -> World<'static> {
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.state.velocity = Vec2::new(1.0, 0.0);
+        if cloaked {
+            player = crate::ai::fixture::cloaked_player(player);
+        }
+        World {
+            player: Some(player),
+            ..World::new(&[])
+        }
+    }
+
+    #[test]
+    fn a_player_escort_reads_its_sight_of_the_player_as_the_half_began() {
+        let seen = |traffic: &mut Traffic, cloaked: bool| {
+            let pass = traffic.begin_fly(&with_player(cloaked), &BTreeSet::new(), FlyHalf::Advance);
+            beside_of(&pass, &traffic.npcs[0]).leader_seen
+        };
+        let near = Vec2::new(-250.0, 0.0);
+        assert!(
+            !seen(&mut player_escort(near, false, false), true),
+            "cloaked"
+        );
+        assert!(
+            seen(&mut player_escort(near, true, false), true),
+            "a cloak of its own"
+        );
+        assert!(
+            seen(
+                &mut player_escort(Vec2::new(-150.0, 0.0), false, true),
+                true
+            ),
+            "scanned within 200"
+        );
+        assert!(
+            !seen(&mut player_escort(near, false, true), true),
+            "scanner out of reach"
+        );
+        assert!(
+            seen(&mut player_escort(near, false, false), false),
+            "uncloaked"
+        );
+    }
+
+    #[test]
+    fn a_player_escort_that_cannot_see_its_cloaked_player_brakes_within_300_and_approaches_beyond()
+    {
+        let velocity = |off: Vec2, cloaked: bool| {
+            let mut traffic = player_escort(off, false, false);
+            traffic.fly_holding(with_player(cloaked), &BTreeSet::new(), &mut NeverFires);
+            traffic.npcs[0].state.velocity
+        };
+        let near = Vec2::new(-250.0, 0.0);
+        let unseen = velocity(near, true);
+        assert!(unseen.x < 1.0, "braking (sub 1): {unseen:?}");
+        let far = Vec2::new(-700.0, 0.0);
+        assert_eq!(
+            velocity(far, true),
+            velocity(far, false),
+            "approaching (sub 9) as a seen escort does"
+        );
+    }
+
+    #[test]
+    fn a_player_escort_that_sees_its_cloaked_player_keeps_close_formation() {
+        let mut traffic = player_escort(Vec2::new(-250.0, 0.0), true, false);
+        traffic.fly_holding(with_player(true), &BTreeSet::new(), &mut NeverFires);
+        assert_eq!(
+            traffic.npcs[0].state.velocity,
+            Vec2::new(1.0, 0.0),
+            "matched with it (sub 0xc)"
+        );
     }
 
     /// [`fleet`]'s escort's glow after a fly half under `rules`, its lead
