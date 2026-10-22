@@ -124,6 +124,7 @@ use super::damage::Hit;
 use super::hull::DisableRule;
 use super::ion::Dose;
 use super::lineup::Lineup;
+use super::planet_type::BlastKind;
 use super::projectile::{Shot, ShotLayer};
 use super::{Arsenal, Combat, Fighter, Landed, Push, ShipRef, blasted};
 use crate::chance::Chance;
@@ -435,7 +436,8 @@ impl Combat {
         self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
         let mut hits = vec![direct];
         // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
-        hits.extend(blasted(shot, &blast, hit, 0.0, &lineup.stood));
+        let planet = (BlastKind::OnHit, self.planet_blasts);
+        hits.extend(blasted(shot, &blast, (hit, 0.0), &lineup.stood, planet));
         let hit: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         self.land(fighters, hits, rule);
         lineup.refresh(fighters, &hit, rule);

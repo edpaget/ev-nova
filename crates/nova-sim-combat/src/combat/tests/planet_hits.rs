@@ -1,8 +1,10 @@
 //! The fight's planet-type rules (stellar-fidelity phase 2, see the
 //! [`planet_type`](crate::combat::planet_type) module): a planet-type
-//! weapon's shots against planet-type and ordinary ships.
+//! weapon's shots and blasts against planet-type and ordinary ships.
 
 use super::*;
+use crate::combat::planet_type::PlanetBlasts;
+use crate::combat::weapon::DETONATES;
 
 /// `ship`, its class planet-type.
 fn planet(ship: Ship) -> Ship {
@@ -140,4 +142,160 @@ fn a_planet_type_shot_turned_on_its_ordinary_firer_passes_through_it() {
         "rule 8 holds for a shot no ship fired"
     );
     assert!(struck(planet), "a planet-type firer is hit");
+}
+
+// Blasts.
+
+/// Ionizing flak of `flags2`, detonating with a 40-pixel blast where its
+/// third move ends, at (30, 0).
+fn flak(flags2: u16) -> WeaponRecord {
+    WeaponRecord {
+        count: 3,
+        speed: 1000,
+        explod_type: 2,
+        blast_radius: 40,
+        flags: DETONATES,
+        flags2,
+        ..ionizing(blaster(), 80, GREEN)
+    }
+}
+
+/// A fires `record` once to the right among `others`, by `reading` of
+/// [`PlanetBlasts`], for `ticks` ticks. The ships, and the events.
+fn fired_among(
+    record: WeaponRecord,
+    others: Vec<Ship>,
+    reading: RuleSource,
+    ticks: u32,
+) -> (Vec<Ship>, Vec<CombatEvent>) {
+    let mut combat = Combat::default();
+    combat.set_planet_blasts(PlanetBlasts::from(reading));
+    let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+    ships.extend(others);
+    let mut events = Vec::new();
+    for _ in 0..ticks {
+        tick(&mut combat, &mut ships, &NovaDisable);
+        events.extend(combat.take_events());
+        ships[0].trigger = QUIET;
+    }
+    (ships, events)
+}
+
+/// Whether the expiry of [`flak`] of `flags2`, by `reading`, blasts an
+/// ordinary ship and a planet-type one beside where it ends: each
+/// whether it was hurt and whether it was ionized.
+fn expiry_blasts(flags2: u16, reading: RuleSource) -> [(bool, bool); 2] {
+    let others = vec![Ship::at(3, 30.0, 35.0), planet(Ship::at(4, 30.0, -35.0))];
+    let (ships, events) = fired_among(flak(flags2), others, reading, 6);
+    assert_eq!(explosions(&events).len(), 1, "it explodes: {events:?}");
+    [
+        (hurt(&ships[1]), ships[1].ion.charge > 0.0),
+        (hurt(&ships[2]), ships[2].ion.charge > 0.0),
+    ]
+}
+
+#[test]
+fn a_planet_type_shots_expiry_explodes_but_blasts_and_ionizes_no_ship() {
+    assert_eq!(
+        expiry_blasts(PLANET_TYPE, RuleSource::Engine),
+        [(false, false); 2],
+        "@0x35fb9"
+    );
+}
+
+#[test]
+fn an_ordinary_shots_expiry_blasts_the_ordinary_ships_but_not_a_planet_type_one() {
+    assert_eq!(
+        expiry_blasts(0, RuleSource::Engine),
+        [(true, true), (false, false)],
+        "@0x3602e"
+    );
+}
+
+/// Whether a 30-pixel blast shell of `flags2` hitting B at (100, 0), of
+/// `b`, blasts C, ordinary, at (100, 25), and D, planet-type, at
+/// (100, -25), by `reading`.
+fn on_hit_blasts(flags2: u16, b: fn(Ship) -> Ship, reading: RuleSource) -> (bool, bool, bool) {
+    let shell = WeaponRecord {
+        explod_type: 0,
+        blast_radius: 30,
+        flags2,
+        ..blaster()
+    };
+    let others = vec![
+        b(Ship::at(2, 100.0, 0.0)),
+        Ship::at(3, 100.0, 25.0),
+        planet(Ship::at(4, 100.0, -25.0)),
+    ];
+    let (ships, _) = fired_among(shell, others, reading, 8);
+    (hurt(&ships[1]), hurt(&ships[2]), hurt(&ships[3]))
+}
+
+#[test]
+fn a_planet_type_shot_hitting_a_planet_type_ship_blasts_the_ordinary_ship_beside_it() {
+    assert_eq!(
+        on_hit_blasts(PLANET_TYPE, planet, RuleSource::Engine),
+        (true, true, true),
+        "`_HandleShipHit` tests neither bit"
+    );
+}
+
+#[test]
+fn an_ordinary_shots_hit_blast_reaches_a_planet_type_ship_beside_its_victim() {
+    assert_eq!(
+        on_hit_blasts(0, |ship| ship, RuleSource::Engine),
+        (true, true, true)
+    );
+}
+
+/// The ships struck when the player shoots `weapon` of `flags2`'s blast
+/// at an asteroid at (100, 0), by `reading`, with B, ordinary, and D,
+/// planet-type, in the blast's square.
+fn asteroid_blasts(flags2: u16, reading: RuleSource) -> Vec<ShipRef> {
+    let mut combat = Combat::default();
+    combat.set_planet_blasts(PlanetBlasts::from(reading));
+    let mut rocks = [rock(0, 100.0, 0.0)];
+    let others = vec![Ship::at(2, 110.0, 20.0), planet(Ship::at(4, 100.0, -25.0))];
+    shoot_rocks(
+        &mut combat,
+        ShipRef::Player,
+        blasting(0, flags2),
+        others,
+        &mut rocks,
+        8,
+    );
+    combat
+        .take_strikes()
+        .iter()
+        .map(|strike| strike.ship)
+        .collect()
+}
+
+#[test]
+fn by_the_engine_an_asteroid_hits_blast_spares_planet_type_ships_and_weapons() {
+    assert_eq!(asteroid_blasts(0, RuleSource::Engine), [B]);
+    assert_eq!(asteroid_blasts(PLANET_TYPE, RuleSource::Engine), []);
+}
+
+#[test]
+fn by_the_bible_every_blast_reaches_the_ships_of_its_weapons_planet_type() {
+    let d = ShipRef::Npc(NpcId(4));
+    assert_eq!(
+        expiry_blasts(PLANET_TYPE, RuleSource::Bible),
+        [(false, false), (true, true)]
+    );
+    assert_eq!(
+        expiry_blasts(0, RuleSource::Bible),
+        [(true, true), (false, false)]
+    );
+    assert_eq!(
+        on_hit_blasts(PLANET_TYPE, planet, RuleSource::Bible),
+        (true, false, true)
+    );
+    assert_eq!(
+        on_hit_blasts(0, |ship| ship, RuleSource::Bible),
+        (true, true, false)
+    );
+    assert_eq!(asteroid_blasts(0, RuleSource::Bible), [B]);
+    assert_eq!(asteroid_blasts(PLANET_TYPE, RuleSource::Bible), [d]);
 }

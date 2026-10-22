@@ -435,6 +435,7 @@ use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use lineup::Lineup;
 pub use phases::Arena;
+use planet_type::{BlastKind, PlanetBlasts};
 use plunder::Plunderer;
 use projectile::{
     BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
@@ -1174,6 +1175,8 @@ pub struct Combat {
     breakup: Breakup,
     /// Who counts as the player for the pass-through flags.
     pass_through: PassThrough,
+    /// Which ships a blast reaches by their planet type.
+    planet_blasts: PlanetBlasts,
     /// How often a decaying shot takes a step.
     decay: DecayStep,
     /// Whether an NPC's pick spends on a copy that spawns nothing
@@ -1558,6 +1561,12 @@ impl Combat {
     /// says (see [`sides`]): by default, [`PassThrough::PlayerSide`].
     pub fn set_pass_through(&mut self, pass_through: PassThrough) {
         self.pass_through = pass_through;
+    }
+
+    /// Has a blast reach ships by their planet type as `reading` says
+    /// (see [`planet_type`]): by default, [`PlanetBlasts::Original`].
+    pub fn set_planet_blasts(&mut self, reading: PlanetBlasts) {
+        self.planet_blasts = reading;
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -2952,10 +2961,20 @@ impl Combat {
             });
         }
         self.spray(weapon, at, asteroid_hit::HIT_PART_VARIATION);
-        if let Some(blast) = asteroid_hit::blast(shot, at) {
+        if let Some(blast) = asteroid_hit::blast(shot, at, self.planet_blasts) {
+            let reaches = |fighter: &&Fighter| {
+                let (kind, reading) = (BlastKind::AsteroidHit, self.planet_blasts);
+                planet_type::blast_reaches(
+                    kind,
+                    reading,
+                    weapon.planet_type(),
+                    fighter.hull.planet_type,
+                )
+            };
             let ships = fighters
                 .iter()
-                .filter(|fighter| fighter.condition.active() && !fighter.hull.planet_type)
+                .filter(|fighter| fighter.condition.active())
+                .filter(reaches)
                 .map(|fighter| (fighter.ship, fighter.state.position));
             let hit = Hit {
                 cant_kill: shot.disable_only,
@@ -3691,11 +3710,27 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
 }
 
 /// The hits `shot`'s `blast` lands, each of `hit` and `weight`
-/// ([`Strike::weight`]), on the ships among `targets` it [`reached`]: by
-/// the shot's attacker, neither direct nor intended, pushing from the
-/// blast's centre and ionizing over its circle.
-fn blasted(shot: &Shot, blast: &Blast, hit: Hit, weight: f32, targets: &[Target]) -> Vec<Landed> {
-    reached(blast, targets)
+/// ([`Strike::weight`]), on the ships among `targets` it [`reached`] whose
+/// planet type a blast of `kind` reaches by `reading`
+/// ([`planet_type::blast_reaches`]): by the shot's attacker, neither
+/// direct nor intended, pushing from the blast's centre and ionizing over
+/// its circle.
+fn blasted(
+    shot: &Shot,
+    blast: &Blast,
+    (hit, weight): (Hit, f32),
+    targets: &[Target],
+    (kind, reading): (BlastKind, PlanetBlasts),
+) -> Vec<Landed> {
+    let planet_weapon = shot.weapon.planet_type();
+    let reachable: Vec<Target> = targets
+        .iter()
+        .filter(|target| {
+            planet_type::blast_reaches(kind, reading, planet_weapon, target.ties.planet_type)
+        })
+        .copied()
+        .collect();
+    reached(blast, &reachable)
         .into_iter()
         .map(|ship| Landed {
             ship,

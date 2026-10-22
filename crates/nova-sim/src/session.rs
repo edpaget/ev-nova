@@ -505,6 +505,8 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+#[cfg(test)]
+mod planet_weapons;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -614,6 +616,7 @@ use crate::combat::hull::{Breakup, Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::combat::jamming::{Halving, Jamming};
+use crate::combat::planet_type::PlanetBlasts;
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::SimDiagnostic;
 use crate::combat::sides::PassThrough;
@@ -1273,6 +1276,9 @@ impl Session {
         self.space.combat.set_pass_through(PassThrough::from(
             rules.source_for(RuleKey::PlayerPassThrough),
         ));
+        self.space
+            .combat
+            .set_planet_blasts(PlanetBlasts::from(rules.source_for(RuleKey::PlanetBlasts)));
         self.space
             .combat
             .set_decay(DecayStep::from(rules.source_for(RuleKey::ShotDecay)));

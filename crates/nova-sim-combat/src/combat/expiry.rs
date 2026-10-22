@@ -32,6 +32,7 @@
 //! blast and each lock at its visit.
 
 use super::lineup::Lineup;
+use super::planet_type::BlastKind;
 use super::projectile::{Guide, Target};
 use super::{Combat, Fighter, Landed, ShipRef, Sides, blasted, lock};
 use crate::chance::Chance;
@@ -200,7 +201,8 @@ impl Combat {
             let blast = shot.blast(None);
             self.explode_shot(shot, &blast);
             let weight = shot.weapon.reload;
-            return blasted(shot, &blast, hit, weight, sides.targets);
+            let planet = (BlastKind::Expiry, self.planet_blasts);
+            return blasted(shot, &blast, (hit, weight), sides.targets, planet);
         }
         if shot.weapon.fizzles {
             self.events.push(CombatEvent::Fizzled { at: shot.position });
