@@ -26,7 +26,9 @@
 //!    [`LandingRefusal::NoStellars`]. Both are silent: the land key makes
 //!    no dock request (@0x6a94c).
 //! 2. **Not landable** (@0x6695c-0x669ae): a stellar that cannot be landed
-//!    on refuses with
+//!    on (`_StellarIsLandable` @0x66977), or that the player's system
+//!    does not hold (its owner word, +0x14, is not the player's +0x74,
+//!    @0x6699a-0x669a4), refuses with
 //!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
 //!    #84/#88/#90, "Your ship is unable to land on ... The planet's
 //!    environment is too hostile."). The request is kept.
@@ -557,17 +559,22 @@ pub struct DockPress {
 
 /// What the land key does with the navigation target `target` and the
 /// dock request `dock`, for the ship `player` among the system's
-/// stellars `sites` (in navigation order), where `cleared` says whether
+/// stellars `sites` (in navigation order), where `held` says whether the
+/// player's system holds a stellar (its owner word, +0x14, is the
+/// player's system), `cleared` says whether
 /// traffic control clears the pilot to request docking at an inhabited
 /// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`],
 /// the speed read by `speed`
 /// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)): see the
 /// module docs.
+// One argument per thing the original's dock request reads.
+#[allow(clippy::too_many_arguments)]
 pub fn land_or_select(
     target: Option<StellarId>,
     dock: Option<DockRequest>,
     player: &ShipState,
     sites: &[LandingSite],
+    held: impl Fn(&LandingSite) -> bool,
     cleared: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
     speed: RuleSource,
@@ -587,7 +594,7 @@ pub fn land_or_select(
             None => return refused(LandingRefusal::NothingLandable),
         },
     };
-    if !is_landable(site) {
+    if !is_landable(site) || !held(site) {
         return DockPress {
             selected,
             dock,
@@ -1024,6 +1031,7 @@ mod tests {
             }),
             player,
             std::slice::from_ref(site),
+            |_| true,
             |_| panic!("traffic control is asked"),
             engine_reach,
             reading,
@@ -1049,6 +1057,7 @@ mod tests {
             None,
             &parked(),
             std::slice::from_ref(site),
+            |_| true,
             |site| landing_record(site, system_govt, &record) >= site.min_status,
             engine_reach,
             RuleSource::Engine,
@@ -1056,6 +1065,61 @@ mod tests {
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
         })
+    }
+
+    #[test]
+    fn a_stellar_the_players_system_does_not_hold_is_not_landable_before_any_reach() {
+        // Over it, at rest and cleared: only the owner test refuses
+        // (@0x6699a-0x669a4), before the uninhabited, request, speed and
+        // reach tests.
+        let sites = system();
+        let uninhabited = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..sites[1]
+        };
+        for site in [sites[1], uninhabited] {
+            let press = land_or_select(
+                Some(site.id),
+                request(128, CLEARED),
+                &parked(),
+                std::slice::from_ref(&site),
+                |_| false,
+                |_| panic!("traffic control is asked"),
+                |_| panic!("the reach is read"),
+                RuleSource::Engine,
+            );
+            assert_eq!(
+                press,
+                DockPress {
+                    selected: None,
+                    dock: request(128, CLEARED),
+                    said: None,
+                    outcome: Err(LandingRefusal::NotLandable {
+                        stellar: StellarId(128),
+                        station: false,
+                    }),
+                }
+            );
+        }
+        let picked = land_or_select(
+            None,
+            None,
+            &parked(),
+            &sites,
+            |site| site.id != StellarId(128),
+            |_| true,
+            engine_reach,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            picked.selected,
+            Some(StellarId(128)),
+            "selected all the same"
+        );
+        assert!(matches!(
+            picked.outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
     }
 
     #[test]
@@ -1991,6 +2055,7 @@ mod tests {
             dock,
             player,
             sites,
+            |_| true,
             |_| clear,
             engine_reach,
             RuleSource::Engine,

@@ -3389,6 +3389,7 @@ impl Session {
             self.port.dock,
             &self.ship.player,
             &self.chart.sites,
+            |site| self.chart.held_here(&self.pilot, &self.statics, site.id),
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| {
                 let held = self.chart.held_here(&self.pilot, &self.statics, site.id);

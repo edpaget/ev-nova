@@ -3487,4 +3487,19 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn the_land_press_refuses_a_stellar_another_system_owns_as_not_landable_before_any_reach() {
+        let catalog = twice_listed_60();
+        let (refused, sounds) = land_on_200(&catalog, 131, Vec2::ZERO);
+        assert_eq!(
+            refused,
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(200),
+                station: false,
+            }),
+            "@0x6699a-0x669a4, though cleared, over it and at rest"
+        );
+        assert_eq!(sounds, [crate::SimSound::Refused], "snd 153 @0x67e8f");
+    }
 }
