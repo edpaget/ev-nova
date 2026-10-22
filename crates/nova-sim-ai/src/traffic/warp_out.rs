@@ -12,8 +12,12 @@
 //!
 //! **The high level's hold** ([`hold_stage`], `_HighLevelAIHandler`
 //! @0x8d513-0x8d56b): on each advance pass a ship whose goal has left
-//! its jump ends its stage, and a ship the player leads with its stage
-//! under way is held to the player's jump.
+//! its jump ends its stage (the regroup pause keeping its sub-goal), a
+//! ship the player leads with its stage under way is held to the player's
+//! jump, and an NPC's follower whose stage is under way takes goal 2, or
+//! 3 with a target, and its own leave ([`leave_flight`](crate::traffic::leave_flight)),
+//! on its own clock along its leader's +0x68. It is skipped while the
+//! high level's AI wait runs ([`Npc::high_level_waits`]).
 //!
 //! **Sub-goal 4, its own jump** (`_LowLevelAIHandler` @0x8585b-0x859c5;
 //! [`own_jump`]), each advance pass (`_AIDispatch` runs on it alone):
@@ -44,10 +48,17 @@
 //! the player, it follows (sub-goal 0xd) while the player's +0x50 is
 //! above 0, else it gives up (goal 0); led by an NPC, the leader is put
 //! on goal 2, and it follows while the leader's sub-goal is 1 or 4, else
-//! gives up. `_MakeEscortsHyperWithParent` (@0x3fd54-0x3fdea) puts the
-//! ships the player leads on it each warp-stage frame of the player
-//! ([`Npc::follow_player_jump`]); the NPC escorts' entry, `_EscortAI`
-//! (@0x839fd-0x83a92), is rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
+//! gives up (goal 0, its target dropped). The NPC-parent test reads the
+//! leader's substate ([`jump_with_leader::leaves_by_substate`]): its own
+//! jump or goal 2's brake. The push of the leader onto goal 2
+//! ([`send_leaders_out`]) skips a follower whose high level waits and a
+//! leader the player leads. `_MakeEscortsHyperWithParent`
+//! (@0x3fd54-0x3fdea) puts the ships the player leads on it each
+//! warp-stage frame of the player ([`Npc::follow_player_jump`]); before
+//! that, from the player's brake on, `_EscortAI`'s entry does, and it puts
+//! an NPC's escorts on their lead's jump (@0x839fd-0x83a92;
+//! [`jump_with_leader`]). A paused ship (goal 0x13) runs no goal 0xb
+//! check, and its warp-out zeroes any stage its sub 0xd starts.
 //!
 //! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]): its
 //! +0x68 is its leader's whole-degree heading. While the leader's +0x50
@@ -93,13 +104,21 @@
 //! the leader's +0x50 is 1.0 or below (@0x85a2d-0x85a4a); see
 //! [`ship_display`](crate::traffic::ship_display).
 //!
+//! The detach past 30.0 takes the class's AI type with leaving its fleet
+//! ([`Npc::detach_for_own_jump`]).
+//!
 //! **Left out.**
 //!
 //! - Sub-goal 0xd's nav copy, +0x6c (@0x85bf1-0x85bf6), and goal 0xb's
 //!   (@0x8de9d-0x8deb0, @0x8df18-0x8df22): the engine's NPCs keep no
-//!   travel stellar for a jump; the system they jump to is never read.
-//! - The detach's AI type, +0x88 = class +0x12 (@0x85ada-0x85af1): the
-//!   engine keeps one AI type a ship; its own jump flies the same.
+//!   travel stellar for a jump
+//!   (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-4-escort-travel-stellar-into-pirate-think).
+//! - The hold's 2/3 swap by target for a ship already in goal 2 or 3
+//!   (@0x8d557-0x8d56b), the push on a leader the player leads
+//!   (@0x8def0), goal 0xb's sub-1 test for sub-1 holders other than goal
+//!   2's brake (@0x8defc-0x8df13), and a ship entering goal 0xb while its
+//!   AI wait runs keeping its old substate
+//!   (rdm:phase/escort-fleet-fidelity-followups/phase-10-left-out-of-jump-with-leader).
 //! - Sub-goal 0xd's frame after the detach reads its leader as ship −1
 //!   (@0x85af8-0x85b10, +0x9a just cleared), out of the ship table; the
 //!   engine ends the frame at the detach.

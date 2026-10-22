@@ -12,7 +12,12 @@
 //! or, by the other reading of `npc_formation`, follows within 100 of it.
 //! Its lead disabled, the heaviest escort leads in its place and the other
 //! pauses, keeping formation on it, until a draw releases it to its kept
-//! order (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13).
+//! order (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13). Its lead
+//! leaving by hyperspace draws it onto the lead's jump (`_EscortAI`
+//! @0x839fd-0x83a92): it follows (sub 0xd), takes its own leave once its
+//! stage starts, and departs; a lead turning to attack cancels an early
+//! follow (`_AIDispatch` @0x900d5-0x901a3); an inertialess escort leaves
+//! its fleet to jump on its own.
 
 use std::collections::BTreeSet;
 
@@ -397,4 +402,157 @@ fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_
         },
         "released, it forms on its new lead under its word"
     );
+}
+
+// Jumping with the lead (`_EscortAI` @0x839fd-0x83a92, goal 0xb, sub 0xd,
+// `_AIDispatch`'s cancels @0x900d5-0x901a3).
+
+/// Keeps every goal and target: the lead's jump, or its attack.
+#[derive(Debug)]
+struct Keep;
+
+impl Behaviour for Keep {
+    fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+        npc.goal
+    }
+
+    fn target(&self, npc: &Npc, _: &Surroundings) -> Option<ShipRef> {
+        npc.target
+    }
+}
+
+/// Nova's AI, the lead (an interceptor) keeping its goal.
+fn jumping_ai() -> NovaAi {
+    NovaAi::default().with(AiType::Interceptor, std::rc::Rc::new(Keep))
+}
+
+/// A lead 3000 out east leaving (goal 2), moving east at 2 so it brakes
+/// first, and its medium escort 40 below it, inertialess when
+/// `inertialess`.
+fn leaving_fleet(inertialess: bool) -> Traffic {
+    let mut lead = ship(128, AiType::Interceptor, (3000.0, 0.0), Goal::JumpOut);
+    lead.state.velocity = Vec2::new(2.0, 0.0);
+    lead.state.heading = 90.0;
+    let mut escort = ship(128, AiType::Warship, (3000.0, 40.0), Goal::Idle);
+    escort.leader = Some(LEAD);
+    escort.class = EscortClass::Medium;
+    escort.state.velocity = Vec2::new(2.0, 0.0);
+    escort.state.heading = 90.0;
+    escort.stats.inertialess_hull = inertialess;
+    let mut traffic = Traffic::with_interval(1);
+    traffic.add_npc(lead);
+    traffic.add_npc(escort);
+    traffic
+}
+
+/// `traffic` a tick on by [`jumping_ai`], the warp sound 364 Mac ticks.
+fn jump_tick(traffic: &mut Traffic) {
+    let govts = govts();
+    let mut world = World {
+        govts: &govts,
+        frame: 1,
+        ..World::new(&[])
+    };
+    world.warp.durations = [364, 252];
+    traffic.tick_in(&jumping_ai(), world, &[], &mut Draws::of(&[0; 64]));
+}
+
+#[test]
+fn a_fleet_escort_follows_its_leads_jump_takes_its_own_leave_once_under_way_and_both_depart() {
+    use nova_sim::traffic::autopilot::Outcome;
+    use nova_sim::traffic::warp_out::WarpGoal;
+    let mut traffic = leaving_fleet(false);
+    let mut entered = None;
+    let mut started = None;
+    let mut departed = Vec::new();
+    for tick in 0..2000 {
+        jump_tick(&mut traffic);
+        departed.extend(traffic.departed().iter().copied());
+        let Some(escort) = traffic.npcs().iter().find(|npc| npc.id == ESCORT) else {
+            break;
+        };
+        if entered.is_none() && escort.warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(LEAD))) {
+            entered = Some(tick);
+            assert_eq!(escort.target, None, "target -1");
+            let lead = npc(&traffic, LEAD);
+            assert_eq!(
+                lead.goal,
+                Goal::JumpOut,
+                "drawn as its lead brakes or jumps"
+            );
+        }
+        if started.is_none() && escort.warp.stage > 0.0 {
+            started = Some(tick);
+            assert_eq!(
+                escort.warp.goal,
+                Some(WarpGoal::Follow(ShipRef::Npc(LEAD))),
+                "sub 0xd started its stage: tick {tick}"
+            );
+            assert!(npc(&traffic, LEAD).warp.stage > 1.0, "its lead warps");
+        } else if let Some(at) = started
+            && tick == at + 1
+        {
+            assert_eq!(escort.goal, Goal::JumpOut, "goal 2 at its next high level");
+            assert_eq!(
+                escort.warp.goal,
+                Some(WarpGoal::Own),
+                "its own leave's sub 4"
+            );
+        }
+    }
+    assert_eq!(entered, Some(0), "the lead brakes from the first tick");
+    assert!(started.is_some(), "its stage started");
+    let mut gone: Vec<(NpcId, Outcome)> = departed;
+    gone.sort_by_key(|(id, _)| *id);
+    assert_eq!(
+        gone,
+        [(LEAD, Outcome::JumpedOut), (ESCORT, Outcome::JumpedOut)]
+    );
+}
+
+#[test]
+fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
+    use nova_sim::traffic::warp_out::WarpGoal;
+    let mut traffic = leaving_fleet(false);
+    jump_tick(&mut traffic);
+    assert_eq!(
+        npc(&traffic, ESCORT).warp.goal,
+        Some(WarpGoal::Follow(ShipRef::Npc(LEAD)))
+    );
+    let lead = traffic
+        .npcs_mut()
+        .iter_mut()
+        .find(|npc| npc.id == LEAD)
+        .expect("there");
+    lead.goal = Goal::Attack(ShipRef::Player);
+    lead.target = Some(ShipRef::Player);
+    let govts = govts();
+    let world = World {
+        govts: &govts,
+        frame: 1,
+        ..World::new(&[])
+    };
+    traffic.think_holding(&jumping_ai(), world, &[], &mut Draws::of(&[0; 64]));
+    let escort = npc(&traffic, ESCORT);
+    assert_eq!(escort.warp.goal, None, "cancelled (@0x90125-0x9019c)");
+    assert!(escort.warp.stage < 0.0, "given up: {}", escort.warp.stage);
+}
+
+#[test]
+fn an_inertialess_fleet_escort_leaves_its_fleet_to_jump_on_its_own() {
+    use nova_sim::traffic::warp_out::WarpGoal;
+    let mut traffic = leaving_fleet(true);
+    // Out of close formation, which no ship flies inertialess.
+    traffic
+        .npcs_mut()
+        .iter_mut()
+        .find(|npc| npc.id == ESCORT)
+        .expect("there")
+        .state
+        .position = Vec2::new(3000.0, 600.0);
+    jump_tick(&mut traffic);
+    let escort = npc(&traffic, ESCORT);
+    assert_eq!(escort.leader, None, "+0x9a -1 (@0x83c11)");
+    assert_eq!(escort.goal, Goal::JumpOut);
+    assert_eq!(escort.warp.goal, Some(WarpGoal::Own));
 }

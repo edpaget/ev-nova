@@ -1260,7 +1260,10 @@ impl Traffic {
         // the last tick. The tick's lag after a retarget crosses no
         // boundary the player sees.
         swarm::pass(&mut self.npcs, |npc| {
-            thinks(npc) && !regroup::paused(npc) && decision_due(self.ticks, npc.id, self.interval)
+            thinks(npc)
+                && !regroup::paused(npc)
+                && npc.warp.goal.is_none()
+                && decision_due(self.ticks, npc.id, self.interval)
         });
         let high_levels: Vec<bool> = self
             .high_levels_due(&due)

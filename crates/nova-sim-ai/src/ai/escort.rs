@@ -47,6 +47,13 @@
 //! through `_EscortAI` as AI type 6, and the player's commands reach it
 //! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
+//! From the player's brake on (its +0x50 above 0), every ship the player
+//! leads takes its jump instead (`_EscortAI` @0x83a41-0x83a5f, goal 0xb
+//! @0x83be3): it drops its target and keeps formation, following the
+//! jump ([`Decision::follows_jump`]), whatever its order. Defend, Attack
+//! and formation write +0x50 = -1.0 with their +0x4c
+//! ([`Decision::ends_wait`]), as under an NPC parent.
+//!
 //! While the player breaks up (`_IsDying`), `_EscortAI`'s lost parent
 //! frees every ship it leads at that ship's think (@0x83917-0x8397b): the
 //! session frees its hired and captured escorts and launched fighters

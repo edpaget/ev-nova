@@ -26,8 +26,8 @@
 //!    none, so this meets only a ship with no leader: one the disabled
 //!    reset left ([`traffic::disabled_reset`](crate::traffic::disabled_reset)),
 //!    whole again, such as a former fighter, whose AI type 5 lasts until
-//!    this think. Its +0x50 write (-1.0) is
-//!    rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
+//!    this think. It writes +0x50 = -1.0 (@0x83974; the traffic gives up
+//!    the stage, see [`jump_with_leader`](crate::traffic::jump_with_leader)).
 //! 3. **Target validity** (@0x83a9b-0x83ad2,
 //!    [`valid_target`](escort::valid_target)): a target gone is dropped,
 //!    and a disabled one unless its stored word ([`Npc::order_word`],
@@ -92,9 +92,18 @@
 //! only (@0x8289f-0x828bb). Keeping the hit's attacker by order is
 //! rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
 //!
+//! **Jumping with the parent** (@0x839fd-0x83a92, @0x83be3-0x83c51):
+//! after the lost parent, a lead that draws its followers
+//! ([`jump_with_leader::draws_followers`](crate::traffic::jump_with_leader::draws_followers):
+//! sub 4 or 0xd, goal 2's brake, or +0x50 above 0) puts it on goal 0xb:
+//! its target dropped, following the lead's jump
+//! ([`Decision::follows_jump`]), or leaving its fleet when it flies
+//! inertialess. The order word is still written under a lead that is the
+//! player's escort; no order block runs, so its AI wait is kept.
+//! Defend, Attack and formation write +0x50 = -1.0 beside +0x4c,
+//! whoever the parent ([`Decision::ends_wait`]).
+//!
 //! **Not built here**, each a later phase's:
-//! - jumping with the parent (@0x839fd-0x83a92) and goal 0xb
-//!   (@0x83be3-0x83c51), with every +0x50 write: phase 8's;
 //! - out of ammunition (@0x83b88-0x83bda): phase 9's;
 //! - formation flight on slots, steering at the guard: phase 6's; until
 //!   then [`Goal::Follow`] flies within the follow distance of the lead;

@@ -35,9 +35,9 @@
 //!   (@0x8fe73-0x8febb, [`regroup`](crate::ai::regroup); the traffic
 //!   leaves it out). It also skips a ship in
 //!   substate 4 (its warp out) or 0xd (an escort jumping with its
-//!   leader, @0x8fd83-0x8fd9a), which here is no ship: one departs as it
-//!   reaches sub 4, and sub 0xd is rdm
-//!   phase escort-fleet-fidelity/phase-8-jump-with-leader's.
+//!   leader, @0x8fd83-0x8fd9a), which takes the jump path before it: one
+//!   with a warp goal (see
+//!   [`jump_with_leader`](crate::traffic::jump_with_leader)).
 //! - **The swarm lead** ([`lead`]): where a swarmer aims, its swarm
 //!   leader's position plus [`SWARM_AHEAD`] times its own `_ShipMaxSpeed`
 //!   along the leader's whole-degree heading (`_Accel`, @0x8526e-0x852c4),

@@ -13,7 +13,9 @@
 //! and +0x50 -1.0: a follower of the player's jump while the player is
 //! disabled, and a follower of an NPC's whose lead, there and not
 //! disabled, attacks while the follower's stage is 1.0 or below. The
-//! think half runs them after the disabled reset. No sound, no draw.
+//! think half runs them after the disabled reset. The swarm check comes
+//! after the jump path too, so a ship on a jump runs none. No sound, no
+//! draw.
 //!
 //! **Goal 0xb** is a ship following its leader's jump
 //! ([`Npc::follows_leaders_jump`]): sub 0xd's warp goal
@@ -96,9 +98,9 @@ impl Npc {
                 || !(self.goal.flies_in_form() || self.goal == Goal::Drift))
     }
 
-    /// It follows `leader`'s jump, sub 0xd: the one writer of
-    /// [`WarpGoal::Follow`], letting go of its target (`_EscortAI`
-    /// @0x83a71, `_MakeEscortsHyperWithParent` @0x3fd89-0x3fdd0).
+    /// It follows `leader`'s jump, sub 0xd ([`WarpGoal::Follow`]), letting
+    /// go of its target (`_EscortAI` @0x83a71, `_MakeEscortsHyperWithParent`
+    /// @0x3fd89-0x3fdd0): the entry's write and the player's warp stage's.
     pub fn follow_leaders_jump(&mut self, leader: ShipRef) {
         self.warp.goal = Some(WarpGoal::Follow(leader));
         self.target = None;
@@ -982,6 +984,29 @@ mod tests {
     }
 
     // The jump path skips the type think.
+
+    #[test]
+    fn a_ship_on_a_jump_runs_no_swarm_check() {
+        // The jump path (@0x8fd83-0x8fd9a) comes before the swarm check
+        // (@0x8ff26-0x8ff35).
+        let swarmer = |goal: Option<WarpGoal>| {
+            let mut ship = far(0);
+            ship.hull.swarms = true;
+            ship.swarm_leader = Some(9);
+            ship.warp.goal = goal;
+            let mut traffic = Traffic::with_interval(1);
+            let id = traffic.add_npc_at(ship, 5);
+            traffic.think_holding(&Keep, jumping_world(1.0), &[], &mut NeverFires);
+            of(&traffic, id).swarm_leader
+        };
+        assert_eq!(swarmer(Some(WarpGoal::Own)), Some(9), "sub 4");
+        assert_eq!(
+            swarmer(Some(WarpGoal::Follow(ShipRef::Player))),
+            Some(9),
+            "sub 0xd"
+        );
+        assert_eq!(swarmer(None), None, "it checks: none above its berth");
+    }
 
     #[test]
     fn a_ship_on_a_jump_makes_no_type_think_and_one_off_it_does() {
