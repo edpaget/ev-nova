@@ -420,6 +420,8 @@ mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
 mod asteroid_beams;
+#[cfg(test)]
+mod asteroid_seekers;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -2361,8 +2363,9 @@ impl Session {
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_npcs(fighters, arena, None, false, chance);
         });
+        let spots = self.space.asteroid_spots();
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots(fighters, arena, chance);
+            combat.fly_shots_in(fighters, arena, &spots, chance);
         });
         // `_HandleShip`'s escape check reads each NPC as its step finds
         // it (see the `npc_escape` module).

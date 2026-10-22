@@ -287,9 +287,11 @@ impl Session {
         } else {
             None
         };
-        // `_HandleShot` (@0x44385).
+        // `_HandleShot` (@0x44385), its guidance reading the field
+        // before `_HandleAsteroids` moves it.
+        let spots = self.space.asteroid_spots();
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots(fighters, arena, chance);
+            combat.fly_shots_in(fighters, arena, &spots, chance);
         });
         self.answer_strikes(behaviour);
         // The ship loop: `_HandleShip` (@0x44483) and `_HandleShipDisplay`

@@ -1345,7 +1345,6 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
 use std::collections::{BTreeMap, BTreeSet};
 
 use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
-use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::impact::TractorLock;
 use nova_sim::combat::ion::Ion;
 use nova_sim::combat::jamming::{Halving, Jamming};
@@ -3285,14 +3284,10 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
     }
 }
 
-/// Stock weapons, and the unimplemented flags each reports.
-type Row = (&'static [i16], &'static [(FlagField, u16)]);
-
 /// Every stock guided weapon and turret, fired again and again at a ship
-/// ahead, reports exactly its unimplemented flags, each once.
+/// ahead, reports no unimplemented flag.
 #[test]
-fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
-    use FlagField::Seeker;
+fn every_stock_guided_weapon_and_turret_reports_no_unimplemented_flag() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -3327,26 +3322,10 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     // The sensor-interference `Seeker` 0x0008 (135, 137, 160, 230, 234) is
     // ported (see `projectile`), so it reports nothing either. `Seeker`
     // 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through asteroids
-    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. What is
-    // left is `Seeker` 0x0002, the asteroid lock.
-    let rows: [Row; 1] = [(&[134, 135, 136, 160, 230, 234], &[(Seeker, 0x2)])];
-    let expected: BTreeSet<SimDiagnostic> = rows
-        .iter()
-        .flat_map(|(weapons, flags)| {
-            weapons.iter().flat_map(move |&weapon| {
-                flags.iter().map(
-                    move |&(field, bit)| SimDiagnostic::UnimplementedWeaponFlag {
-                        weapon: WeaponId(weapon),
-                        field,
-                        bit,
-                    },
-                )
-            })
-        })
-        .collect();
-    assert_eq!(expected.len(), 6);
-    assert_eq!(diagnostics.len(), 6, "each once: {diagnostics:?}");
-    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. The last
+    // left, `Seeker` 0x0002, the asteroid lock of 134, 135, 136, 160, 230
+    // and 234, is ported too (see `asteroid_seek`).
+    assert_eq!(diagnostics, []);
 }
 
 /// Every stock `shïp` has a `shän` whose weapon exit points reach its

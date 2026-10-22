@@ -68,11 +68,12 @@
 use std::collections::BTreeMap;
 
 use super::{Session, Setup, Space, Statics};
-use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
+use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring, SLOTS};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
 use crate::combat::GamePass;
 use crate::combat::asteroid_hit::AsteroidTarget;
+use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// Each system's field, by system, from `records`.
@@ -208,6 +209,19 @@ impl Space {
     /// [`asteroid`](crate::asteroid)).
     fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
         self.asteroids.iter()
+    }
+
+    /// Where each of the field's slots has its asteroid, none for a free
+    /// slot: what the shots' guidance reads at `_HandleShot`
+    /// ([`Combat::fly_shots_in`](crate::combat::Combat::fly_shots_in)), the
+    /// field as the collision passes left it and before `_HandleAsteroids`
+    /// moves it (see the `game_work` module).
+    pub(super) fn asteroid_spots(&self) -> [Option<Vec2>; SLOTS] {
+        let mut spots = [None; SLOTS];
+        for (slot, asteroid) in self.asteroids.indexed() {
+            spots[slot] = Some(asteroid.position);
+        }
+        spots
     }
 
     /// Kills the field, through the rest of the pass frame, as
