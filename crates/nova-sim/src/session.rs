@@ -542,6 +542,8 @@ mod stale_sprites;
 mod statics;
 mod status_cargo;
 mod steering;
+#[cfg(test)]
+mod stellar_attackers;
 mod stellars;
 mod story;
 mod stray_words;

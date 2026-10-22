@@ -1241,10 +1241,13 @@
 //!   collides, and explodes the shot at its own position, where the
 //!   engine takes the point its path entered the disc.
 //! - **When.** In a pass after the ship hits and the expiries
-//!   (combat's step 7b), so a shot that would meet a ship and a stellar
-//!   the same tick hits the ship, and one at the end of its life hits
-//!   nothing. Only past its `ProxSafety`: its age above it. Any ship's
-//!   shot, the player's or an NPC's. Beams never hit a stellar.
+//!   (combat's step 7b), so a shot that would meet a planet-type ship and
+//!   a stellar the same tick hits the ship (it passes through an ordinary
+//!   one, see "Built by stellar-fidelity phase 2"), and one at the end of
+//!   its life hits nothing. Only past its `ProxSafety`: its age above it.
+//!   Any ship's shot, the player's or an NPC's. Beams never hit a stellar
+//!   by the engine's reading of
+//!   [`beam_stellars`](crate::RuleKey::BeamStellars).
 //! - **The hit.** It takes `MassDmg` + `EnergyDmg` off the current
 //!   strength, explodes where it hit with its `ExplodType`, and is gone,
 //!   with no blast and no sub-munitions.
@@ -1287,10 +1290,10 @@
 //! stellar or shots passing through one, which the Bible's `Strength`
 //! ("0 or -1 for an invincible stellar") agrees with, nor for the
 //! countdown. The Bible's planet-type weapon "can only hit planet-type
-//! ships or destroyable stellars", but its ship side, a planet-type blast
-//! sparing ships, the AI firing at stellars and whether beams hit
-//! stellars are story-runtime phase 13 "planet-type-weapons-and-ships";
-//! `Flags2` 0x0400 is still reported as unimplemented for them.
+//! ships or destroyable stellars"; its ship side, the blasts, the AI
+//! firing at stellars and whether beams hit stellars are stellar-fidelity
+//! phase 2's (see "Built by stellar-fidelity phase 2"), and `Flags2`
+//! 0x0400 is no longer reported as unimplemented.
 //!
 //! ## Checked for phase 8
 //!
@@ -1794,6 +1797,60 @@
 //!   sets 0 otherwise (@0xac504-0xac532). The rebuild sets each slot to
 //!   the current frame (@0x33096), and a slot it fills with graphic type
 //!   0 to frame 0 (@0x332d0).
+//!
+//! ## Built by stellar-fidelity phase 2
+//!
+//! The ship side of planet-type weapons (`nova_sim::combat::planet_type`),
+//! beams on stellars by the Bible, and the stellar-attacking AI
+//! (`nova_sim::ai::death_star`), by the findings of "Checked for
+//! stellar-fidelity phase 2".
+//!
+//! - **Shots** (rule 8). A shot hits a ship only when its weapon's
+//!   `Flags2` 0x0400 matches the ship class's `Flags` 0x0400: in the
+//!   contact passes, the proximity fuse, a seeking sub-munition's pick and
+//!   point defence's shots at ships, a shot no ship fired included
+//!   (`nova_sim::combat::sides`). So a planet-type shot passes through
+//!   ordinary ships to the stellars behind them.
+//! - **Blasts.** By the engine's reading of
+//!   [`planet_blasts`](crate::RuleKey::PlanetBlasts), an expiry's and an
+//!   asteroid hit's blast from a planet-type weapon reach no ship, neither
+//!   reaches a planet-type ship, and a shot's on-hit blast reaches every
+//!   ship. By the Bible's every blast reaches only the ships of its
+//!   weapon's planet type.
+//! - **Beams.** By the engine's reading of
+//!   [`beam_planet_flag`](crate::RuleKey::BeamPlanetFlag) a beam is
+//!   planet-type by its weapon's `Flags` 0x0400, by the Bible's by its
+//!   `Flags2` 0x0400, and hits only ships of its planet type. By the
+//!   engine's reading of [`beam_stellars`](crate::RuleKey::BeamStellars) a
+//!   beam never hits a stellar; by the Bible's a planet-type beam is
+//!   stopped by a stellar nearer along it than the ship it hits, takes its
+//!   `MassDmg` + `EnergyDmg` times the pass's beam factor off it each
+//!   tick, explodes there, and shoots it down below 0 as a shot does, the
+//!   session running its `OnDestroy` after the beams' hits settle.
+//! - **Sub-munitions** on their release tick are not tested against the
+//!   stellars: one a fuse releases strikes on the next tick, one an end of
+//!   life seats in a slot `_HandleShot` has passed a tick later still.
+//! - **The stellar attacker.** `nova_sim::ai::Goal::AttackStellar` is
+//!   goal 0x12: spared as a threat, busy to a hail, fighting nothing.
+//!   `_DeathStarAI` (`DeathStar`) takes the first enemy stellar shots can
+//!   shoot down and, with a planet gun of its class's stock, attacks it;
+//!   otherwise the warship's think runs, a kept landing or gate entry
+//!   going to the enemy stellar. It flies by its band from the stellar
+//!   (`nova_sim::traffic::stellar_attack`: sub 2 by
+//!   `nova_sim::traffic::approach_flight`, the run out from the centre,
+//!   the brake, or the aim, the in-band 0.98 drag on its velocity and its
+//!   speed along its heading) and, aiming within its turn and 15 degrees,
+//!   fires `_AIFirePlanetGun`'s pick, the highest ready weapon, planet-type
+//!   or not.
+//! - **Routing.** A ship of a `ShipBehav` 2 mission, by its mark alone,
+//!   thinks as `DeathStar` before the miners and every type, the escorts'
+//!   included, so a captured one kept as a mission escort attacks too; its
+//!   gate wait and reactions stay its own behaviour's.
+//! - **Sounds.** None of these plays one, and no `SimSound` is added: a
+//!   planet gun's shot sounds as any NPC's fire does.
+//! - **Recorded, not built**: the readers of +0x70 as a ship slot in goal
+//!   0x12 and a sub-munition of negative `ProxSafety` (see "Checked for
+//!   stellar-fidelity phase 2").
 //!
 //! ## Checked for stellar-fidelity phase 2
 //!
