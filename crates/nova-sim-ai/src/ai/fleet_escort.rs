@@ -516,6 +516,25 @@ mod tests {
         assert_eq!(decided(&npcs, defend, &[]), (Goal::Attack(n(3)), vec![]));
         let npcs = [lead(Goal::Idle), fighting.clone(), bystander(3, 0.0, 640.0)];
         assert_eq!(decided(&npcs, defend, &[]), (follow(None), vec![]));
+        let npcs = [lead(Goal::Idle), fighting.clone(), bystander(3, 640.0, 0.0)];
+        assert_eq!(
+            decided(&npcs, defend, &[]),
+            (follow(None), vec![]),
+            "across too"
+        );
+        // 451² x 2 = 406802 is within, and 452² x 2 = 408608 is not.
+        let npcs = [
+            lead(Goal::Idle),
+            fighting.clone(),
+            bystander(3, 451.0, 451.0),
+        ];
+        assert_eq!(decided(&npcs, defend, &[]), (Goal::Attack(n(3)), vec![]));
+        let npcs = [
+            lead(Goal::Idle),
+            fighting.clone(),
+            bystander(3, 452.0, -452.0),
+        ];
+        assert_eq!(decided(&npcs, defend, &[]), (follow(None), vec![]));
         let mut moved = lead(Goal::Idle);
         moved.state.position = crate::geometry::Vec2::new(1000.0, 0.0);
         let npcs = [moved, fighting, bystander(3, 1000.0, 639.0)];
