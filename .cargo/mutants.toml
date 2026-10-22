@@ -16,6 +16,17 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A formation slot's side push turns by trunc(heading + 90) % 360:
+    # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
+    # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same
+    # bits for every heading.
+    "nova-sim-ai/src/escort\\.rs:[0-9]+:[0-9]+: replace % with \\+ in slot_position$",
+    # The fly pass's NPC-lead glow copy is gated on `npc_formation`'s engine
+    # reading, but only close formation asks for a copy (`GlowCopy::Leader`,
+    # `formation_flight::keep` and `autopilot::keep_formation`), and by the
+    # other reading a `Goal::Follow` ship flies `autopilot::follow`, which
+    # never does, so the guard can't change what a ship shows.
+    "nova-sim-ai/src/traffic/fly_pass\\.rs:[0-9]+:[0-9]+: replace match guard world\\.flight\\.npc_formation == NpcFormation::Original with true in leader_glow$",
     # The ship loop splits an NPC's step from its display only when its
     # pods or escape may run (`escape_may_run`); splitting every NPC's is
     # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
