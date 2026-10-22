@@ -92,8 +92,9 @@
 //! "Standard Weapons:", or "No standard weapons" with none, in white at
 //! its left on baseline 12, then each weapon's line joined by ", " into
 //! one sentence ([`weapons_sentence`]), set in a box from 16 below item
-//! 8's top to its bottom, wrapped at word breaks and clipped to it, in
-//! white on black (`TETextBox`, then `InvertRect`). With none listed
+//! 8's top to its bottom, wrapped at word breaks, a line straddling the
+//! bottom showing its top clipped to the box, in white on black
+//! (`TETextBox`, then `InvertRect`). With none listed
 //! there is no box. Without an item 8 (`DLOG` 1005 over `PICT` 8507,
 //! where the original's rect is undefined), neither is drawn.
 //!
@@ -156,6 +157,7 @@ use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
+use crate::ui::text_box::TextBox;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
 /// The "Shipyard" dialog's `DLOG` (and `DITL`) ID.
@@ -822,9 +824,10 @@ impl Panel {
 /// [`WEAPONS_HEADING_ROW`] (@0x5061c-0x5069b); then, with a `sentence`
 /// (a weapon is listed), the box below [`WEAPONS_BOX_DROP`] (@0x5066d)
 /// holding it, set by `TETextBox` and inverted (@0x50c73-0x50ce0): white
-/// on black, wrapped at word breaks to its width, a line drawn only when
-/// its top is inside the box, as `TETextBox` clips. With none listed
-/// there is no box (@0x50602).
+/// on black, wrapped at word breaks to its width through a [`TextBox`]:
+/// every line whose top is inside the box, the one straddling its bottom
+/// showing its top, clipped to the box. With none listed there is no box
+/// (@0x50602).
 fn draw_weapons(
     list: &mut DrawList,
     metrics: &dyn TextMetrics,
@@ -842,15 +845,7 @@ fn draw_weapons(
         max: area.max,
     };
     fill_rect(list, boxed, Color::BLACK);
-    let step = metrics.line_height(TEXT_FONT, TEXT_SIZE);
-    let mut top = boxed.min.y;
-    for line in crate::text::wrap(&metrics, TEXT_FONT, TEXT_SIZE, sentence, boxed.width()) {
-        if top >= boxed.max.y {
-            break;
-        }
-        text(list, &line, Point::new(boxed.min.x, top), TEXT_COLOR);
-        top += step;
-    }
+    TextBox::new(sentence, TEXT_FONT, TEXT_SIZE, TEXT_COLOR, boxed, &metrics).draw(list);
 }
 
 /// The info panel on a class named `name`, of `specs`, whose description
@@ -3628,7 +3623,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_weapons_sentence_is_cut_at_item_8s_bottom() {
+    fn the_weapons_sentence_clips_its_straddling_line_to_the_box() {
         let weapons: Vec<StockLine> = (0..30)
             .map(|n| stock(1, &format!("Gun{n:02}"), None))
             .collect();
@@ -3642,17 +3637,36 @@ mod tests {
         assert_eq!(lines.len(), 5, "{lines:?}");
         let screen = picture_panel(weapons);
         let boxed = weapons_box(&screen);
-        let drawn = texts(&drawn(&screen));
-        let top = |line: &str| {
-            drawn
-                .iter()
-                .find(|(text, _, _)| text == line)
-                .map(|(_, at, _)| at.y - boxed.min.y)
+        let commands = drawn(&screen);
+        let line = |n: usize| DrawCommand::Text {
+            text: lines[n].clone(),
+            font: Font::Geneva,
+            origin: Point::new(boxed.min.x, boxed.min.y + 12.0 * n as f32),
+            size: TEXT_SIZE,
+            wrap_width: None,
+            color: Color::WHITE,
         };
-        for (n, line) in lines[..4].iter().enumerate() {
-            assert_eq!(top(line), Some(12.0 * n as f32), "{line}");
+        for (n, text) in lines[..3].iter().enumerate() {
+            assert!(commands.contains(&line(n)), "{text}: {commands:?}");
         }
-        assert_eq!(top(&lines[4]), None, "its top is 48, below the box's 43");
+        assert!(
+            commands.contains(&DrawCommand::Clipped {
+                clip: boxed,
+                command: Box::new(line(3)),
+            }),
+            "its top is 36 and its bottom 48, past the box's 43: {commands:?}"
+        );
+        assert!(!commands.contains(&line(3)), "not drawn unclipped");
+        let anywhere = |text: &str| {
+            commands.iter().any(|c| match c {
+                DrawCommand::Text { text: t, .. } => t == text,
+                DrawCommand::Clipped { command, .. } => {
+                    matches!(&**command, DrawCommand::Text { text: t, .. } if t == text)
+                }
+                _ => false,
+            })
+        };
+        assert!(!anywhere(&lines[4]), "its top is 48, below the box's 43");
     }
 
     #[test]
