@@ -95,7 +95,8 @@ impl Kept {
             | Goal::Dock(_)
             | Goal::Mine
             | Goal::Plunder { .. }
-            | Goal::CountWait => Self::Stop,
+            | Goal::CountWait
+            | Goal::AttackStellar(_) => Self::Stop,
         }
     }
 }

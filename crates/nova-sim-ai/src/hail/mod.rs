@@ -274,7 +274,7 @@ impl<'a> Hail<'a> {
     /// formation (goals 10 and 12), stops and waits (goal 6, which
     /// `_AIIsShipBusy` @0x82fac-0x82fe4 finds busy as it finds every goal
     /// but 0, 1, 2, 7 and 0x14), waits or drifts as a pirate (goals 0x16
-    /// and 0xe), or an
+    /// and 0xe), attacks a stellar (goal 0x12), or an
     /// NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
     /// player is threatened while any NPC threatens it.
@@ -330,6 +330,7 @@ impl<'a> Hail<'a> {
                         | Goal::Wait
                         | Goal::CountWait
                         | Goal::Drift
+                        | Goal::AttackStellar(_)
                 )
                 || attacked,
             assisting_player,
@@ -993,6 +994,17 @@ mod tests {
     #[test]
     fn a_held_ship_is_busy() {
         let npcs = [flying(1, Goal::Hold)];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
+    }
+
+    #[test]
+    fn a_stellar_attacker_is_busy() {
+        // Goal 0x12 is none of `_AIIsShipBusy`'s 0, 1, 2, 7 and 0x14
+        // (@0x82fac-0x82fe4).
+        let npcs = [flying(
+            1,
+            Goal::AttackStellar(crate::catalog::StellarId(131)),
+        )];
         assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
     }
 

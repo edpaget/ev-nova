@@ -382,6 +382,15 @@ pub enum Goal {
         /// The substate it keeps flying.
         kept: regroup::Kept,
     },
+    /// Shoot this stellar down: the original's goal 0x12, which only
+    /// `_DeathStarAI` sets (@0x8c25a-0x8c280), with +0x6c and +0x70 both
+    /// the stellar. Until its flight is built it brakes. Its quarry is
+    /// none, so it fights
+    /// nothing; it is spared as a threat to the player, as goal 0x12 is in
+    /// the threat tests' list (@0x7f567, @0x81c24), a hail finds it busy
+    /// (`_AIIsShipBusy` @0x82fac-0x82fe4), it is not in form and it
+    /// scoops nothing.
+    AttackStellar(StellarId),
 }
 
 impl Goal {
@@ -461,7 +470,8 @@ impl Goal {
             | Self::Plunder { .. }
             | Self::CountWait
             | Self::Drift
-            | Self::Regroup { .. } => false,
+            | Self::Regroup { .. }
+            | Self::AttackStellar(_) => false,
         }
     }
 
@@ -491,7 +501,7 @@ impl Goal {
     /// | 0xa (escort fly in form) | `_AIMakeEscortFlyInForm` @0x89bb2, `_EscortAI` @0x83da3, @0x83e40, @0x83f00 | [`Goal::Follow`], [`Goal::Formation`], [`Goal::Hold`] |
     /// | 0xb (jump with parent) | `_AIMakeShipJumpWithParent` @0x82bc7 | none: an escort follows its lead out |
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
-    /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
+    /// | 0x12 | `_DeathStarAI` @0x8c26f | [`Goal::AttackStellar`] |
     ///
     /// A plunder (goal 0xd), a drift (0xe) and a count wait (0x16) are
     /// none of them.
@@ -503,7 +513,8 @@ impl Goal {
             | Self::Dock(_)
             | Self::Follow { .. }
             | Self::Formation { .. }
-            | Self::Hold => true,
+            | Self::Hold
+            | Self::AttackStellar(_) => true,
             Self::Idle
             | Self::Wait
             | Self::Land(_)
@@ -1311,6 +1322,29 @@ mod tests {
         assert_eq!(Goal::Mine.quarry(), None);
         assert!(!Goal::Mine.fights());
         assert!(!Goal::Mine.spares_player_threat(), "16 isn't in the list");
+    }
+
+    #[test]
+    fn a_stellar_attacker_fights_nothing_and_is_spared_as_a_threat() {
+        let goal = Goal::AttackStellar(StellarId(131));
+        assert_eq!(goal.quarry(), None);
+        assert_eq!(goal.attacking(), None);
+        assert!(!goal.fights());
+        assert!(!goal.flies_in_form());
+        assert!(!goal.scooping());
+        assert!(goal.spares_player_threat(), "0x12, @0x7f567, @0x81c24");
+        let mut attacker = npc(1, AiType::Warship);
+        attacker.goal = goal;
+        attacker.target = Some(ShipRef::Player);
+        assert!(!attacker.threatens_player());
+        let ships = [attacker.clone()];
+        assert!(!attacker.threatens_player_extended(&ships, true));
+        let mut fighting = attacker.clone();
+        fighting.goal = Goal::Attack(ShipRef::Player);
+        assert!(
+            fighting.threatens_player_extended(&[fighting.clone()], true),
+            "the same ship attacking"
+        );
     }
 
     #[test]
