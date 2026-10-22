@@ -139,11 +139,16 @@ impl Rled8 {
 /// The byte `_BlitPixieMemSet` stores at `i` of an `n`-byte run of `word`
 /// (as read big-endian from the file): the little-endian word repeated in
 /// 4-byte chunks, then a 2-byte tail of its low half and a 1-byte tail of
-/// its low byte. Past the chunks, byte `i` is the low half's byte `i % 2`.
+/// its low byte.
+///
+/// So byte `i` is the word's byte `i % 4`, but for the 1-byte tail after a
+/// 2-byte one: the run's last byte when `i % 4` is 2, which is the low
+/// byte again. (Tails start on a multiple of 4, so every other tail byte
+/// already has `i % 4` equal to `i % 2`.)
 fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
     let le = word.to_le_bytes();
-    let chunks = n / 4 * 4;
-    let k = if i < chunks { i % 4 } else { i % 2 };
+    let one_byte_tail = i % 4 == 2 && i + 1 == n;
+    let k = if one_byte_tail { 0 } else { i % 4 };
     le[k as usize]
 }
 
