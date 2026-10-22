@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
+use nova_data::graphics::{CICN, PICT, decode_cicn};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -128,9 +128,7 @@ impl StatusBars for GameData {
     }
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-        let found = self.resource(PICT, id)?;
-        let picture = decode_pict(found.resource.data()).ok()?;
-        Some((picture.width(), picture.height()))
+        crate::ui::PictureSizes::picture_size(self, id)
     }
 
     fn icon_size(&self, id: i16) -> Option<(u32, u32)> {

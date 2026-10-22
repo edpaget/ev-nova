@@ -93,7 +93,7 @@ pub mod volume;
 pub mod yes_no;
 
 pub use button::{Button, ButtonImages, ButtonSkin, ButtonStyle, ButtonTracker};
-pub use catalog::{DescriptionSource, DialogResources};
+pub use catalog::{DescriptionSource, DialogResources, PictureSizes};
 pub use comm::{CommDialog, CommPress, HaggleDialog};
 pub use desc::DescDialog;
 pub use dialog::{
