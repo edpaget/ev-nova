@@ -858,6 +858,30 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_already_in_goal_2_or_3_keeps_it_whatever_its_target() {
+        // The 2/3 swap by target for these (@0x8d557-0x8d56b) is left out;
+        // only goal 0xb takes it.
+        let target = ShipRef::Npc(NpcId(9));
+        let mut leaving = ship();
+        leaving.goal = Goal::JumpOut;
+        leaving.target = Some(target);
+        leaving.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(5))));
+        leaving.warp.stage = 3.0;
+        hold_stage(&mut leaving);
+        assert_eq!((leaving.goal, leaving.warp.goal), (Goal::JumpOut, None));
+        let mut released = ship();
+        released.goal = Goal::Formation { guard: None };
+        released.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        released.warp.stage = 3.0;
+        hold_stage(&mut released);
+        assert_eq!(
+            released.goal,
+            Goal::Formation { guard: None },
+            "the player's jump: not an NPC's follower"
+        );
+    }
+
+    #[test]
     fn a_leader_sent_out_drops_its_own_follow_and_the_pause_keeps_its_warp_goal() {
         let mut sent = ship();
         sent.goal = Goal::JumpOut;

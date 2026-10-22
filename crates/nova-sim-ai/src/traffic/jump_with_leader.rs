@@ -812,6 +812,20 @@ mod tests {
         assert_eq!(ship.warp.stage, 0.0, "started, then zeroed");
     }
 
+    #[test]
+    fn the_second_pass_ends_the_stage_of_a_ship_no_longer_jumping() {
+        // No hold runs on double time's second pass; the warp-out's
+        // not-jumping test (@0x34a27) ends the stage of a ship off its
+        // jump that faces its aim.
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.warp.stage = 3.0;
+        ship.warp.aim = 90;
+        let id = traffic.add_npc(ship);
+        traffic.move_in(jumping_world(0.0), &mut NeverFires);
+        assert_eq!(of(&traffic, id).warp.stage, 0.0);
+    }
+
     // The cancels.
 
     /// A follower of `leader`'s jump at `stage`, and its NPC lead, NPC 0,
