@@ -31,6 +31,7 @@
 use core::num::NonZeroU32;
 use nova_audio::SettingsStore;
 
+use nova_data::graphics::EightBitReading;
 use nova_sim::{RuleKey, RuleSource, RuleValue, Rulebook};
 use serde_json::{Map, Value};
 
@@ -148,11 +149,43 @@ fn sorted(map: &Map<String, Value>) -> Vec<(&String, &Value)> {
     entries
 }
 
+/// How `rulebook` has the game's images decode an 8-bit `rlëD`
+/// ([`RuleKey::EightBitSheet`]): as the original's 16-bit world draws it,
+/// or through the Mac's standard palette.
+#[must_use]
+pub fn eight_bit_reading(rulebook: &Rulebook) -> EightBitReading {
+    match rulebook.source_for(RuleKey::EightBitSheet) {
+        RuleSource::Engine => EightBitReading::AsDrawn,
+        RuleSource::Bible => EightBitReading::SystemPalette,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nova_audio::recording::MemorySettings;
 
     use super::*;
+
+    #[test]
+    fn the_eight_bit_reading_follows_the_rulebook() {
+        assert_eq!(
+            eight_bit_reading(&Rulebook::default()),
+            EightBitReading::AsDrawn
+        );
+        assert_eq!(
+            eight_bit_reading(
+                &Rulebook::default().with_override(RuleKey::EightBitSheet, RuleSource::Bible)
+            ),
+            EightBitReading::SystemPalette
+        );
+        assert_eq!(
+            eight_bit_reading(
+                &Rulebook::new(RuleSource::Bible)
+                    .with_override(RuleKey::EightBitSheet, RuleSource::Engine)
+            ),
+            EightBitReading::AsDrawn
+        );
+    }
 
     fn rulebook_of(text: &str) -> (Rulebook, Vec<String>) {
         game_rulebook(Some(&mut MemorySettings::holding(text)))
