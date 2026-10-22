@@ -1289,6 +1289,61 @@ mod tests {
     }
 
     #[test]
+    fn a_player_breaking_up_in_its_jump_leaves_every_escort_idle_and_out_of_it() {
+        // `_EscortAI`'s lost parent (@0x83917-0x8397b) runs before the
+        // jump's entry (@0x83a41-0x83a5f): goal 0, its target kept, no
+        // jump taken, whatever the player's +0x50.
+        let govts = govts(0, 0);
+        let dying = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        let mut armourless = player(0.0, 0.0);
+        armourless.reserves.armor.now = 0.0;
+        for order in [
+            None,
+            Some(EscortOrder::Defend),
+            Some(EscortOrder::Attack),
+            Some(EscortOrder::Hold),
+            Some(EscortOrder::Dock),
+        ] {
+            for side in [
+                PlayerSide {
+                    condition: dying,
+                    ..player(0.0, 0.0)
+                },
+                PlayerSide {
+                    condition: Condition::Destroyed,
+                    ..player(0.0, 0.0)
+                },
+                armourless,
+            ] {
+                let mut fighting = escort(order);
+                fighting.target = Some(ShipRef::Npc(NpcId(2)));
+                let npcs = [fighting, pirate(2, 0.0, 100.0)];
+                let around = Surroundings {
+                    player: Some(side),
+                    govts: &govts,
+                    player_warp_stage: 1.0,
+                    ..Surroundings::new(&[], &npcs)
+                };
+                let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+                let at = format!("{order:?} {:?}", side.condition);
+                assert_eq!(decision.goal, Goal::Idle, "{at}");
+                assert!(!decision.follows_jump, "{at}");
+                assert!(!decision.clears_target, "{at}");
+                let mut idle = npcs[0].clone();
+                idle.goal = decision.goal;
+                assert_eq!(
+                    ENGINE.target(&idle, &around),
+                    Some(ShipRef::Npc(NpcId(2))),
+                    "{at}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_holding_escort_waits_and_runs_its_point_defence() {
         // `_EscortAI`'s hold writes target and +0x6c -1 and goal 6, then
         // tail-calls `_AIFireTurret` with no target (@0x83e59-0x83e74,
