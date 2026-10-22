@@ -218,6 +218,8 @@ struct FakeCatalog {
     place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
     crons: Vec<nova_sim::catalog::CronRecord>,
+    /// Each `bööm`'s sound, as the session reads it: none, by default.
+    boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
     /// Each system's government, in the session's map and the course
     /// map's catalog: none, by default.
     governed: Vec<(i16, i16)>,
@@ -376,6 +378,7 @@ fn catalog() -> FakeCatalog {
         visibility: Vec::new(),
         place_names: nova_sim::catalog::PlaceNames::default(),
         crons: Vec::new(),
+        boom_sounds: Vec::new(),
         governed: Vec::new(),
         lived: Vec::new(),
     }
@@ -622,6 +625,10 @@ impl PilotCatalog for FakeCatalog {
 
     fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
         self.crons.clone()
+    }
+
+    fn boom_sounds(&self) -> Vec<(nova_sim::BoomId, nova_sim::SoundId)> {
+        self.boom_sounds.clone()
     }
 
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {

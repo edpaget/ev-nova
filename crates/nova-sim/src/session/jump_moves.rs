@@ -130,7 +130,8 @@ impl Session {
     /// reading `catalog` and drawing on `chance` to populate (see the
     /// module docs): the ship placed by the entry only by the other
     /// reading of `jump_arrival`, and then only when no move ran. The
-    /// window closes once it has entered.
+    /// window closes once it has entered, and the explosions the jump made
+    /// are killed when a move ran in it.
     pub(super) fn enter_jump_system<C>(
         &mut self,
         how: Entry,

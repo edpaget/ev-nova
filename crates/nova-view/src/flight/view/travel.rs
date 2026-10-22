@@ -804,6 +804,7 @@ impl<
     /// replaces the arrival line's suffix too.
     fn arrived(&mut self) {
         self.catch_up();
+        self.show_arrival_explosions();
         // Every arrival sets `_mapScroll` to the system arrived in: a
         // jump's (`_HandlePlayer` @0x6c073), a hypergate's
         // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
@@ -964,6 +965,29 @@ impl<
         self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
+    }
+
+    /// Shows the explosions the jump left pending, a crön's `Y` on its
+    /// days among them, in the scene just laid out, so they are on the
+    /// arrival's first frame: the original keeps its explod table through
+    /// the arrival (only `_ResetPlayer` empties it, @0x1d7fb), and its
+    /// `_PrepareAllSprites` advances them once (@0x6c59c, `_HandleExplods`
+    /// @0x3a7ce) before the frame's own pass, which the steps' order from
+    /// spawn to draw stands for. A `Y`'s carries no sound of its own (see
+    /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
+    fn show_arrival_explosions(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let scene = effects_scene(session);
+        let chance = &mut self.effects_chance;
+        let events = session.take_combat_events();
+        for event in &events {
+            self.effects.apply(event, &scene, &self.looks, chance);
+        }
+        if !events.is_empty() {
+            self.effects.step(&[], &scene, &self.looks, chance);
+        }
     }
 
     /// The pilot flying, as the developer tools' desk: its edits reach
