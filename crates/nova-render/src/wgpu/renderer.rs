@@ -98,7 +98,8 @@ struct Pass {
 ///
 /// Every frame is drawn into an offscreen scene texture in
 /// [`SCENE_FORMAT`], then copied to the target by one blit. An OR batch
-/// ([`Blend::Or`]) or an OR crossfade batch ([`Blend::OrCrossfade`])
+/// ([`Blend::Or`]), an OR crossfade batch ([`Blend::OrCrossfade`]) or a
+/// translucent OR batch ([`Blend::OrTranslucent`])
 /// reads what is beneath it ([`Blend::reads_backdrop`]), which a pass
 /// cannot do with its own attachment, so each one ends the pass: the
 /// rectangle the core says it covers ([`Frame::pixels_covered`]) is copied
@@ -117,6 +118,7 @@ pub struct WgpuRenderer {
     additive_pipeline: wgpu::RenderPipeline,
     or_pipeline: wgpu::RenderPipeline,
     crossfade_pipeline: wgpu::RenderPipeline,
+    translucent_pipeline: wgpu::RenderPipeline,
     max_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
@@ -178,20 +180,7 @@ impl WgpuRenderer {
         let globals_layout = globals_layout(device);
         let page_layout = page_layout(device);
         let texture_layout = unfiltered_texture_layout(device);
-        let globals = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nova globals"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let globals_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("nova globals"),
-            layout: &globals_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals.as_entire_binding(),
-            }],
-        });
+        let (globals, globals_group) = globals_buffer(device, &globals_layout);
         let sprite_layout =
             pipeline_layout(device, "nova sprites", &[&globals_layout, &page_layout]);
         let or_layout = pipeline_layout(
@@ -220,6 +209,8 @@ impl WgpuRenderer {
         let additive_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Additive);
         let or_pipeline = sprite_pipeline_with(&or_layout, "or_fs", Blend::Or);
         let fade_pipeline = sprite_pipeline_with(&or_layout, "crossfade_fs", Blend::OrCrossfade);
+        let translucent_pipeline =
+            sprite_pipeline_with(&or_layout, "translucent_fs", Blend::OrTranslucent);
         let max_pipeline = sprite_pipeline_with(&sprite_layout, "max_fs", Blend::Max);
         let solid_pipeline = pipeline(
             device,
@@ -252,6 +243,7 @@ impl WgpuRenderer {
             additive_pipeline,
             or_pipeline,
             crossfade_pipeline: fade_pipeline,
+            translucent_pipeline,
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
@@ -536,6 +528,7 @@ impl WgpuRenderer {
                         Blend::Or => &self.or_pipeline,
                         Blend::Max => &self.max_pipeline,
                         Blend::OrCrossfade => &self.crossfade_pipeline,
+                        Blend::OrTranslucent => &self.translucent_pipeline,
                     });
                     pass.set_bind_group(0, &self.globals_group, &[]);
                     pass.set_bind_group(1, &page.bind_group, &[]);
@@ -1049,6 +1042,29 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
     );
 }
 
+/// The globals' uniform buffer, made on `device`, and its bind group in
+/// `layout`.
+fn globals_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let globals = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("nova globals"),
+        size: 16,
+        usage: wgpu::BufferUsages::UNIFORM.union(wgpu::BufferUsages::COPY_DST),
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("nova globals"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: globals.as_entire_binding(),
+        }],
+    });
+    (globals, group)
+}
+
 /// How `blend` combines a fragment with the target. The fragment shaders
 /// output straight (unpremultiplied) alpha, so additive is destination +
 /// source x source alpha, keeping the destination's alpha. An OR batch's
@@ -1059,7 +1075,7 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
 fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
     match blend {
         Blend::Normal => Some(wgpu::BlendState::ALPHA_BLENDING),
-        Blend::Or | Blend::OrCrossfade => None,
+        Blend::Or | Blend::OrCrossfade | Blend::OrTranslucent => None,
         Blend::Additive => Some(wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -1751,6 +1767,7 @@ mod tests {
             None,
             "its shader combines it with the backdrop"
         );
+        assert_eq!(blend_state(Blend::OrTranslucent), None);
         assert_eq!(
             blend_state(Blend::Additive),
             Some(wgpu::BlendState {

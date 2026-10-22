@@ -129,7 +129,7 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
     if let Some(lead) = npc.leader
         && around.npc(lead).is_some()
     {
-        return Goal::Follow(lead);
+        return Goal::Follow { lead, guard: None };
     }
     if visited_here(npc, around) || travel::is_set(npc) {
         return leave_or_wait(npc, around);
@@ -323,7 +323,10 @@ mod tests {
         let mut chance = Draws::of(&[]);
         assert_eq!(
             patrol(&escort, &around, &mut chance, true),
-            Goal::Follow(NpcId(2))
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None
+            }
         );
         for goal in [Goal::Land(StellarId(129)), Goal::Wait, Goal::Hold] {
             let kept = Npc { goal, ..ship() };
@@ -447,7 +450,10 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         assert_eq!(
             pirate_idle(&escort, &around, &mut Draws::of(&[])),
-            Goal::Follow(NpcId(2))
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None
+            }
         );
         let alone = Surroundings::new(&[], &[]);
         assert_eq!(

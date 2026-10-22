@@ -9,6 +9,7 @@ use crate::flight::murk::{murk_tint, sprite_murk};
 use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
 use crate::flight::weapon_glow::npc_glow_level;
 use nova_sim::catalog::{ShipDisplay, ShipExits};
+use nova_sim::cloak::CloakShown;
 use nova_sim::combat::ship_frames::{ANIMATED, BANKS};
 
 /// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`,
@@ -574,9 +575,104 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
     let session = view.session().expect("flying");
     let shown = session.cloak_shown(&npc);
     assert_eq!(shown, CloakShown::Translucent(0x1e));
-    let cloaked = cloak_alpha(shown).expect("seen");
-    assert_ne!(cloaked, base);
-    assert_eq!(npc_hull(&view, &npc).map(|tint| tint.a), Some(cloaked));
+    assert_eq!(
+        npc_hull(&view, &npc),
+        Some(crate::draw::translucent_tint(4, 30)),
+        "at 4 over 30, not its BaseTransp"
+    );
+}
+
+#[test]
+fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothing() {
+    let view = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let mut npc = npc_of(&view);
+    npc.cloak = nova_sim::cloak::Cloak {
+        fade: 25.0,
+        direction: 1,
+    };
+    let session = view.session().expect("flying");
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    let hull = list.iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend,
+        } if image.id == 2001 => Some((center, tint, blend)),
+        _ => None,
+    });
+    let (center, tint, blend) = hull.expect("drawn");
+    assert_eq!((tint, blend), (lights_tint(7), crate::draw::Blend::Or));
+    assert!(
+        (center.x - VIEW_CENTER.x).abs() <= 2.0 && (center.y - VIEW_CENTER.y).abs() <= 2.0,
+        "{center:?}"
+    );
+    // A hidden full fade draws no hull, glow or lights.
+    npc.cloak = CLOAKED;
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    assert_eq!(list.iter().count(), 0, "no weapon glow lit");
+}
+
+#[test]
+fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_nothing() {
+    let mut view = flying_with(
+        shown(
+            display(0, 1, 0),
+            display(0, 1, 0),
+            Some(ShipSheet {
+                weapon: Some(layer(2301, 72)),
+                ..npc_sheet()
+            }),
+        ),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let mut npc = npc_of(&view);
+    view.glows
+        .step(&[(ShipRef::Npc(npc.id), false)], |_| Some(1.0));
+    let level = view.glows.drawn(ShipRef::Npc(npc.id)).expect("lit");
+    npc.cloak = CLOAKED;
+    let session = view.session().expect("flying");
+    assert_eq!(session.cloak_shown(&npc), CloakShown::Hidden);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    let drawn: Vec<_> = list
+        .iter()
+        .map(|command| match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            } => Some((image.id, center, tint, blend)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        [Some((
+            2301,
+            VIEW_CENTER,
+            lights_tint(level.min(8)),
+            crate::draw::Blend::Or
+        ))],
+        "the weapon glow alone, unjittered"
+    );
+    // Waiting at its gate, uncloaked, it draws nothing, lit glow or not.
+    npc.cloak = nova_sim::cloak::Cloak::default();
+    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 100 };
+    assert_eq!(npc_tint(&npc), None);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    assert_eq!(list.iter().count(), 0, "hidden at its gate");
 }
 
 /// Each colorized sprite of `image` drawn: its tint, whether it is OR-ed
@@ -1021,6 +1117,50 @@ fn a_weapon_glow_whose_sheet_holds_no_runs_draws_no_overlay() {
     let drawn = commands_of(&list, 1930);
     assert_eq!(drawn.len(), 1, "{drawn:?}");
     assert_eq!(drawn[0].1, crate::ImageKind::Rled);
+}
+
+/// The player's hull drawn now: where, its tint and its blend.
+fn player_hull(view: &View) -> Option<(Point, Color, crate::draw::Blend)> {
+    drawn(view).iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend,
+        } if image.id == 2000 => Some((center, tint, blend)),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_players_ship_is_drawn_faint_at_a_full_fade_and_jittered_while_fading() {
+    // `_HandleShipDisplay` draws the player's full fade at 0x1e
+    // (+0x86 0, @0x2d199-0x2d1a1 → 0x2d1be), and its fade jittered and
+    // faint (@0x2d2c0-0x2d648), as an NPC's.
+    let mut view = flight();
+    let (centre, _, _) = player_hull(&view).expect("drawn");
+    let set = |view: &mut View, cloak| {
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_cloak(session, cloak);
+    };
+    set(&mut view, CLOAKED);
+    let (_, tint, _) = player_hull(&view).expect("drawn faint");
+    assert_eq!(tint, crate::draw::translucent_tint(4, 30), "at 4 over 30");
+    set(
+        &mut view,
+        nova_sim::cloak::Cloak {
+            fade: 25.0,
+            direction: 1,
+        },
+    );
+    let (at, tint, blend) = player_hull(&view).expect("drawn fading");
+    assert_eq!((tint, blend), (lights_tint(7), crate::draw::Blend::Or));
+    assert!(
+        (at.x - centre.x).abs() <= 2.0 && (at.y - centre.y).abs() <= 2.0,
+        "{at:?} by {centre:?}"
+    );
 }
 
 #[test]

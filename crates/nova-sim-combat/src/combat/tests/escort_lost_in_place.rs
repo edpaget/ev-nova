@@ -470,7 +470,7 @@ fn beamed_from_both_sides(e: Ship) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<Esco
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.close_tick(&mut fighters, arena, &mut NeverFires);
-    let (strikes, losses) = combat.take_landed();
+    let (strikes, losses, _) = combat.take_landed();
     let struck = strikes
         .iter()
         .map(|strike| (strike.ship, strike.by))
@@ -521,5 +521,5 @@ fn taking_the_strikes_alone_drops_the_escort_losses_with_them() {
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.close_tick(&mut fighters, arena, &mut NeverFires);
     assert_eq!(combat.take_strikes().len(), 1);
-    assert_eq!(combat.take_landed(), (Vec::new(), Vec::new()));
+    assert_eq!(combat.take_landed(), (Vec::new(), Vec::new(), Vec::new()));
 }

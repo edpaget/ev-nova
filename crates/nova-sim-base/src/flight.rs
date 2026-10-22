@@ -66,8 +66,9 @@ use crate::inertialess::{
     ADJUST_RATE, BRAKE, InertialDampener, REVERSE, THRUST, adjust_velocity, step_speed,
 };
 use crate::player_turn::{PlayerTurn, turn};
-use crate::rulebook::{RuleKey, RuleValue, Rulebook};
+use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
+use crate::trig;
 
 /// The speed, in pixels a tick, at or below which reverse treats a ship as
 /// at rest under the original's thrust ([`at_rest_speed`] of
@@ -90,8 +91,10 @@ pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
 /// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
 /// ([`RuleKey::SpeedCap`]), how the player turns
-/// ([`RuleKey::PlayerTurn`]) and whose inertial dampener counts
-/// ([`RuleKey::InertialDampener`]).
+/// ([`RuleKey::PlayerTurn`]), whose inertial dampener counts
+/// ([`RuleKey::InertialDampener`]), how an escort keeps formation
+/// ([`RuleKey::FormationFlight`]) and whether an NPC's fleet flies in
+/// formation on it ([`RuleKey::NpcFormation`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
@@ -102,6 +105,59 @@ pub struct FlightRules {
     pub player_turn: PlayerTurn,
     /// Whose `ModType` 38 outfits make a ship inertialess.
     pub inertial_dampener: InertialDampener,
+    /// How an escort keeps formation, which its flight and whether it
+    /// flies inertialess both read.
+    pub formation_flight: FormationFlight,
+    /// Whether a ship led by an NPC holds a slot in its formation, flies
+    /// it as an escort keeps formation and arrives on it.
+    pub npc_formation: NpcFormation,
+}
+
+/// How an escort keeps formation, by [`RuleKey::FormationFlight`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FormationFlight {
+    /// The original's goal 0xa and its substates, measured from the
+    /// leader.
+    #[default]
+    Original,
+    /// The port's earlier formation, measured from the slot.
+    Earlier,
+}
+
+impl From<RuleSource> for FormationFlight {
+    /// The engine's reading is the original's flight; the other, the
+    /// port's earlier one.
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Original,
+            RuleSource::Bible => Self::Earlier,
+        }
+    }
+}
+
+/// Whether a ship led by an NPC keeps formation on it, by
+/// [`RuleKey::NpcFormation`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NpcFormation {
+    /// The original's: it holds a slot in its NPC parent's formation,
+    /// flies goal 0xa's formation flight on it with that NPC's sight, and
+    /// a fleet that jumps in arrives on its slots.
+    #[default]
+    Original,
+    /// The port's earlier follow: it follows within 100 pixels of its
+    /// lead, never in close formation, and a fleet arrives scattered.
+    Earlier,
+}
+
+impl From<RuleSource> for NpcFormation {
+    /// The engine's reading is the original's formation; the other, the
+    /// port's earlier follow.
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Original,
+            RuleSource::Bible => Self::Earlier,
+        }
+    }
 }
 
 impl FlightRules {
@@ -113,6 +169,8 @@ impl FlightRules {
             speed_cap: SpeedCap::from(rules.source_for(RuleKey::SpeedCap)),
             player_turn: PlayerTurn::from(rules.source_for(RuleKey::PlayerTurn)),
             inertial_dampener: InertialDampener::from(rules.source_for(RuleKey::InertialDampener)),
+            formation_flight: FormationFlight::from(rules.source_for(RuleKey::FormationFlight)),
+            npc_formation: NpcFormation::from(rules.source_for(RuleKey::NpcFormation)),
         }
     }
 
@@ -268,15 +326,30 @@ pub fn step(
     rules: FlightRules,
     flyer: Flyer,
 ) {
+    state.heading = npc_turn(state, handling, controls, rules);
+    let caps = Caps::top(handling.max_speed);
+    advance(state, handling, controls.thrust, caps, rules, flyer);
+}
+
+/// The heading an inertial NPC at `state` turns to this tick under
+/// `controls`, as `handling` allows under `rules`: [`step`]'s turn. The
+/// turn keys turn it ([`turned`]); with neither held, reverse turns it
+/// toward its retro heading while it moves faster than
+/// [`FlightRules::at_rest_speed`] ([`turn_toward`]).
+#[must_use]
+pub fn npc_turn(
+    state: &ShipState,
+    handling: &Handling,
+    controls: Controls,
+    rules: FlightRules,
+) -> f32 {
     let rate = handling.turn_rate;
-    state.heading = match controls.turn {
+    match controls.turn {
         Turn::None if controls.reverse && state.velocity.length() > rules.at_rest_speed() => {
             turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
         }
         turn => turned(state.heading, turn, rate),
-    };
-    let caps = Caps::top(handling.max_speed);
-    advance(state, handling, controls.thrust, caps, rules, flyer);
+    }
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying
@@ -463,6 +536,42 @@ pub fn turn_toward(from: f32, to: f32, rate: f32) -> f32 {
     }
 }
 
+/// Half a turn, in degrees, past which `_HandleShip` turns a ship to the
+/// left (the float 180.0 @0xdd688, @0x344ef).
+const HALF_TURN: f32 = 180.0;
+
+/// `_HandleShip`'s turn of an NPC at `state` to the heading its substate
+/// wants (+0x68, `wanted`), turning at `rate` (`_ShipTurnRate`,
+/// @0x34460-0x3458e): more than `rate` off it, in whole degrees
+/// (`_AngularDifference` of the two truncated), it turns by `rate`, to
+/// the left when the way round to it is more than half a turn; otherwise
+/// `state` is put on it, which reads as no turn. The low level wants the
+/// ship's whole heading unless a substate says otherwise (@0x8522d), so
+/// a substate that turns nowhere still has its heading truncated.
+///
+/// The caller skips it while the ship's AI wait runs, but for a count
+/// wait (@0x3443f-0x34454).
+pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
+    let off = trig::angular_difference(wanted, trig::whole(state.heading));
+    // × `_gSpeedMult`, 1.0, in doubles.
+    if f64::from(off) > f64::from(rate) {
+        let mut way = f32::from(wanted) - state.heading;
+        if way >= 360.0 {
+            way -= 360.0;
+        }
+        if way < 0.0 {
+            way += 360.0;
+        }
+        return if way > HALF_TURN {
+            Turn::Left
+        } else {
+            Turn::Right
+        };
+    }
+    state.heading = f32::from(wanted);
+    Turn::None
+}
+
 /// The unit vector a ship heading `heading` degrees faces.
 #[must_use]
 pub fn facing(heading: f32) -> Vec2 {
@@ -580,6 +689,8 @@ mod tests {
         speed_cap: SpeedCap::Circle,
         player_turn: PlayerTurn::WholeDegrees,
         inertial_dampener: InertialDampener::PlayerOnly,
+        formation_flight: FormationFlight::Original,
+        npc_formation: NpcFormation::Original,
     };
 
     fn under(divisor: u32) -> FlightRules {
@@ -652,6 +763,38 @@ mod tests {
         assert_eq!(turn_toward(358.0, 0.0, 3.0), 0.0, "onto 0");
         assert_eq!(turn_toward(90.0, 90.0, 3.0), 90.0, "already there");
         assert_eq!(turn_toward(0.0, 90.0, 0.0), 0.0, "cannot turn");
+    }
+
+    #[test]
+    fn handle_ships_turn_steps_by_the_rate_beyond_it_in_whole_degrees_and_snaps_within() {
+        let turned = |heading: f32, wanted: i16, rate: f32| {
+            let mut state = ShipState {
+                heading,
+                ..ShipState::default()
+            };
+            let turn = turn_to(&mut state, wanted, rate);
+            (turn, state.heading)
+        };
+        assert_eq!(turned(10.0, 20, 3.0), (Turn::Right, 10.0));
+        assert_eq!(turned(20.0, 10, 3.0), (Turn::Left, 20.0));
+        assert_eq!(turned(355.0, 5, 3.0), (Turn::Right, 355.0), "across 0");
+        assert_eq!(turned(5.0, 355, 3.0), (Turn::Left, 5.0));
+        assert_eq!(
+            turned(13.0, 10, 3.0),
+            (Turn::None, 10.0),
+            "one turn: onto it"
+        );
+        assert_eq!(turned(11.5, 14, 3.0), (Turn::None, 14.0));
+        // 10.9 is 4 whole degrees off 14, beyond 3.5, though 3.1 off it.
+        assert_eq!(turned(10.9, 14, 3.5), (Turn::Right, 10.9));
+        assert_eq!(turned(10.0, 190, 3.0), (Turn::Right, 10.0), "180 round");
+        assert_eq!(turned(10.0, 191, 3.0), (Turn::Left, 10.0));
+        assert_eq!(turned(10.0, 11, 0.5), (Turn::Right, 10.0), "slower than 1");
+        assert_eq!(
+            turned(90.6, 90, 3.0),
+            (Turn::None, 90.0),
+            "its own whole heading: truncated"
+        );
     }
 
     #[test]
@@ -1699,6 +1842,33 @@ mod tests {
             )
             .inertial_dampener,
             InertialDampener::AnyShip
+        );
+    }
+
+    #[test]
+    fn the_formation_flight_rule_reads_the_rulebook() {
+        assert_eq!(
+            FlightRules::default().formation_flight,
+            FormationFlight::Original
+        );
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::FormationFlight, RuleSource::Bible)
+            )
+            .formation_flight,
+            FormationFlight::Earlier
+        );
+    }
+
+    #[test]
+    fn the_npc_formation_rule_reads_the_rulebook() {
+        assert_eq!(FlightRules::default().npc_formation, NpcFormation::Original);
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible)
+            )
+            .npc_formation,
+            NpcFormation::Earlier
         );
     }
 

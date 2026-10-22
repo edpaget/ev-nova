@@ -67,6 +67,9 @@ pub const ESCORT_REPAIRED: Priority = Priority::new(8);
 pub const PROPULSION_REPAIRED: Priority = Priority::new(1);
 /// The Red Alert, `_redAlertSnd`: `_HandlePlayer` @0x68cff.
 pub const RED_ALERT: Priority = Priority::new(5);
+/// The player cloaking or uncloaking, `cloakSnd[1]` / `cloakSnd[0]`:
+/// `_DoShipCloak` @0xdef3, `_DoShipUncloak` @0xdfd0.
+pub const CLOAK: Priority = Priority::new(8);
 /// Cargo jettisoned, `_beepSnd[4]`: `_JettisonCargo` @0x3e33d.
 pub const JETTISON: Priority = Priority::new(1);
 /// A scan failing a mission, `_beepSnd[1]`: `_ScanPlayer`'s
@@ -152,11 +155,17 @@ pub const MISSION_SHIP_BOARDED: Priority = Priority::new(8);
 pub const TRAFFIC_CONTROL: Priority = Priority::new(1);
 /// The klaxon, `_klaxxonSnd`: `_HandlePlayer` @0x6f227.
 pub const KLAXON: Priority = Priority::new(15);
+/// An escort's voice clip: `_HandleVoiceSound`'s `PlaySound(handle, 15,
+/// …)` @0x31f7a.
+pub const VOICE: Priority = Priority::new(15);
 /// The eject, `_escapePodSnd`: `_HandlePlayer` @0x6f920.
 pub const EJECT: Priority = Priority::new(50);
 /// A sabotage outfit going off, `_explodSnd[0]`: `_HandlePlayer`
 /// @0x69375.
 pub const ONBOARD_EXPLOSION: Priority = Priority::new(100);
+/// The fighters' "Wait for me!", `_beepSnd[4]`: `_HandlePlayer`'s
+/// `PlaySound(.., 50, ..)` @0x6b542-0x6b565.
+pub const WAIT_FOR_ME: Priority = Priority::new(50);
 /// A collapsed pre-jump, `_beepSnd[1]`: `_HandlePlayer` @0x68aaf.
 pub const JUMP_COLLAPSED: Priority = Priority::new(50);
 /// The shared refusal beep, `_beepSnd[3]`. Most of the sites the event
@@ -226,6 +235,7 @@ mod tests {
             (ESCORT_REPAIRED, 8, "escort repaired"),
             (PROPULSION_REPAIRED, 1, "propulsion repaired"),
             (RED_ALERT, 5, "red alert"),
+            (CLOAK, 8, "cloak"),
             (JETTISON, 1, "jettison"),
             (SCAN_FAILED, 1, "scan failed"),
             (SMUGGLING, 1, "smuggling"),

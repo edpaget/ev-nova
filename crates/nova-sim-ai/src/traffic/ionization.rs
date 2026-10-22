@@ -332,7 +332,7 @@ mod tests {
                 &std::collections::BTreeMap::new(),
                 None,
                 false,
-                None,
+                crate::traffic::autopilot::Beside::default(),
                 speeds,
                 FlightRules::default(),
                 crate::traffic::autopilot::Readings::default(),
@@ -361,6 +361,7 @@ mod tests {
                 Some(&victim),
                 speeds,
                 FlightRules::default(),
+                None,
                 &mut nova_sim_base::fixture::Draws::of(&[]),
             );
             assert!(flown.is_some());

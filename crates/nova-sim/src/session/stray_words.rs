@@ -24,6 +24,14 @@
 //!   `Session::pod` (none for -1 or 0) and the 0 outside the pod as
 //!   `Session::pod_zeroed` ([`PodWord`]).
 //!
+//! A beam of `ExitType` 6 steps +0xc90a the same way: the order word of a
+//! ship an NPC leads, or of an unled NPC ([`Npc::order_word`](crate::Npc::order_word), -1 from its
+//! spawn). A ship the player leads has its word restored from its class's
+//! order by `_EscortAI` before it reads it (@0x83ae4-0x83b2b), so it, and
+//! the player, step nothing here (weapons-fidelity phase 31 records them).
+//! A fighter of the player's escort is stepped: its own think rewrites the
+//! word, but its target check reads it first.
+//!
 //! The original steps at the beam's spawn; the engine settles after the
 //! pass's fight, in the same tick, before the frame is drawn, which no
 //! boundary the player can see lies between. No sound plays (phase 18).
@@ -72,8 +80,9 @@ impl PodWord {
 impl Session {
     /// Steps each word the fight's stray beams raised
     /// (`Combat::take_stray_steps`), drawing on `chance`: an NPC's crew
-    /// pods left, skipped if it is gone, or the player's pod countdown
-    /// (see the module docs).
+    /// pods left, skipped if it is gone, or the player's pod countdown;
+    /// or the order word of an NPC the player doesn't lead (see the module
+    /// docs).
     pub(super) fn step_stray_words(&mut self, chance: &mut dyn Chance) {
         for (ship, word) in self.space.combat.take_stray_steps() {
             match (ship, word) {
@@ -83,8 +92,16 @@ impl Session {
                     }
                 }
                 (ShipRef::Player, StrayWord::Pods) => self.step_pod_word(chance),
-                // Stepped within the fight.
-                (_, StrayWord::FoldSet) => {}
+                (ShipRef::Npc(id), StrayWord::Order) => {
+                    if let Some(npc) = self.space.npc_mut(id)
+                        && !npc.escorts_player()
+                    {
+                        npc.order_word.0 = step_word(npc.order_word.0, chance);
+                    }
+                }
+                // The player's order word, and a word stepped within the
+                // fight.
+                (ShipRef::Player, StrayWord::Order) | (_, StrayWord::FoldSet) => {}
             }
         }
     }
@@ -296,5 +313,91 @@ mod tests {
                 "{reading:?}: {held}"
             );
         }
+    }
+
+    /// A beam of `ExitType` 6 that fires every tick.
+    fn order_beam() -> WeaponRecord {
+        WeaponRecord {
+            exit_type: 6,
+            ..pod_beam()
+        }
+    }
+
+    /// [`armed`] with [`order_beam`] for its weapon, its NPC firing one too.
+    fn ordered() -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![order_beam()],
+            ..armed()
+        }
+    }
+
+    /// The order word of `catalog`'s NPC holding `held` and set up by
+    /// `setup`, after it fires a tick of its beam by `reading`, drawing on
+    /// `chance`; and the bounds of the draws asked.
+    fn stepped_order(
+        catalog: &FakePilotCatalog,
+        reading: RuleSource,
+        held: i16,
+        setup: impl Fn(&mut crate::Npc),
+        draws: &[(u32, u32)],
+    ) -> (Option<i16>, Vec<u32>) {
+        let mut session = session(catalog, reading);
+        let id = session.npcs()[0].id;
+        if let Some(npc) = session.space.npc_mut(id) {
+            npc.order_word = crate::fleet::OrderWord(held);
+            setup(npc);
+        }
+        session.tick_traffic(catalog, &super::super::tests::Firing, &mut NeverFires);
+        let mut chance = Ranged::of(draws);
+        session.tick_combat(Rules::default(), &mut chance);
+        (
+            session.space.npc(id).map(|npc| npc.order_word.0),
+            chance.asked,
+        )
+    }
+
+    #[test]
+    fn an_npc_firing_a_beam_of_exit_type_6_steps_its_order_word_by_the_engine() {
+        // +0xc90a, stepped as a cursor (@0x450fa-0x4523d).
+        let catalog = ordered();
+        let unled = |_: &mut crate::Npc| {};
+        for (reading, held, draws, stepped) in [
+            (RuleSource::Engine, -1, vec![(4, 1)], 2),
+            (RuleSource::Engine, 2, vec![], 3),
+            (RuleSource::Engine, 3, vec![], 0),
+            (RuleSource::Bible, 2, vec![], 2),
+            (RuleSource::Bible, -1, vec![], -1),
+        ] {
+            let (word, asked) = stepped_order(&catalog, reading, held, unled, &draws);
+            assert_eq!(word, Some(stepped), "{reading:?}: {held}");
+            assert_eq!(asked.len(), draws.len(), "{reading:?}: {held}");
+        }
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_steps_no_order_word() {
+        // `_EscortAI` restores a player-led ship's word from its class
+        // order before reading it (@0x83ae4-0x83b2b): recorded only.
+        let catalog = ordered();
+        let escorting = |npc: &mut crate::Npc| {
+            npc.escort = Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            });
+        };
+        assert_eq!(
+            stepped_order(&catalog, RuleSource::Engine, 2, escorting, &[]),
+            (Some(2), vec![])
+        );
+    }
+
+    #[test]
+    fn the_players_beam_of_exit_type_6_steps_nothing() {
+        let catalog = ordered();
+        let mut session = session(&catalog, RuleSource::Engine);
+        let held = session.npcs()[0].order_word;
+        fire(&mut session, &mut Ranged::of(&[(4, 2)]));
+        assert_eq!(session.npcs()[0].order_word, held);
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
     }
 }

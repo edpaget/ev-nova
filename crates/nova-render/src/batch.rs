@@ -640,6 +640,13 @@ fn crossfade_opacity(tint: Color) -> u8 {
     ((u32::from(tint.a) * 32 + 127) / 255) as u8
 }
 
+/// The source factors (red, green, blue) and the destination factor, in
+/// 32nds, that `tint` asks a [`Blend::OrTranslucent`] sprite to be drawn
+/// with: `round(c × 32 / 255)` of each channel `c`, alpha last.
+fn translucent_factors(tint: Color) -> [u8; 4] {
+    [tint.r, tint.g, tint.b, tint.a].map(|c| ((u32::from(c) * 32 + 127) / 255) as u8)
+}
+
 /// Whether `a` and `b` share any area; rectangles that only touch along
 /// an edge do not.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -670,6 +677,7 @@ fn push_quad(
             let [r, g, b, _] = rgba(tint);
             [r, g, b, f32::from(crossfade_opacity(tint)) / 32.0]
         }
+        Blend::OrTranslucent => translucent_factors(tint).map(|n| f32::from(n) / 32.0),
         Blend::Normal | Blend::Additive | Blend::Max => rgba(tint),
     };
     let quad = QuadInstance {
@@ -1461,6 +1469,23 @@ mod tests {
                 [[200.0 / 255.0, 1.0, 1.0, f32::from(k) / 32.0]],
                 "k {k}"
             );
+        }
+    }
+
+    #[test]
+    fn a_translucent_quads_tint_is_its_source_and_destination_factors_in_exact_32nds() {
+        for (source, destination) in [(4, 30), (0, 32), (32, 0), (17, 9)] {
+            let tint = nova_view::draw::translucent_tint(source, destination);
+            assert_eq!(
+                translucent_factors(tint),
+                [source, source, source, destination]
+            );
+            let mut list = DrawList::new();
+            list.translucent_sprite(ImageKey::sprite(200, 0), at(10.0, 10.0), tint);
+            let frame = render_one(&list, &viewport());
+            assert_eq!(sprite_blends(&frame), [(Blend::OrTranslucent, 1)]);
+            let n = f32::from(source) / 32.0;
+            assert_eq!(tints(&frame), [[n, n, n, f32::from(destination) / 32.0]]);
         }
     }
 

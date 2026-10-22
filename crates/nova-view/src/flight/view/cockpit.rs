@@ -14,6 +14,7 @@ use crate::flight::alert;
 use crate::flight::asteroids::AsteroidShown;
 use crate::flight::boxes::BoxShown;
 use crate::flight::brackets;
+use crate::flight::cloak_fade::{CloakDraw, cloak_rolls, player_cloak_rolls};
 use crate::flight::effects::Effects;
 use crate::flight::escorts::{
     EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
@@ -48,8 +49,8 @@ use super::{
     HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
     OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
-    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint,
-    shown_heading, shown_position,
+    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading,
+    shown_position,
 };
 
 impl<C> FlightView<C> {
@@ -208,8 +209,10 @@ impl<C> FlightView<C> {
     }
 
     /// Draws `npc` at `at` facing `heading` with its own ship's sheet, or
-    /// a crossed box when its sheet cannot be read, at the alpha its cloak
-    /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
+    /// a crossed box when its sheet cannot be read, as its cloak leaves it
+    /// ([`CloakDraw`], see [`cloak_fade`](crate::flight::cloak_fade)):
+    /// jittered and faint while fading, faint or, but for a lit weapon
+    /// glow, not at all at a full fade. One
     /// waiting at the gate it comes out of is hidden, then fades in over
     /// its last ticks there ([`npc_tint`]), washed white by the gate, as
     /// one entering a gate is ([`gate_colorize`]); with neither, its hull is as
@@ -228,63 +231,44 @@ impl<C> FlightView<C> {
         at: Point,
         heading: f32,
     ) {
-        let shown = session.cloak_shown(npc);
         let ship_ref = ShipRef::Npc(npc.id);
+        let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+        let cloak = CloakDraw::of(session.cloak_shown(npc), tick, &cloak_rolls(npc.id));
+        let hull = cloak.is_none_or(|cloak| cloak.hull.is_some());
         // Fully faded, a cloak's or a gate's: its held alt is forgotten.
-        let Some(cloak) = cloak_alpha(shown) else {
+        let Some(tint) = npc_tint(npc).filter(|_| hull) else {
             self.held_alts.borrow_mut().forget(ship_ref);
+            // A cloak's full fade still draws the weapon glow (@0x2d287).
+            // Its glow, lights and shield are hidden with it.
+            if !hull && let Some(Ok(sheet)) = self.npc_sheets.get(&npc.ship) {
+                let ship = self.npc_ship(session, npc, sheet, heading, (Color::WHITE, cloak));
+                ShipDraw {
+                    hull: false,
+                    ..ship
+                }
+                .draw(list, at, None);
+            }
             return;
         };
-        let Some(tint) = npc_tint(npc) else {
-            self.held_alts.borrow_mut().forget(ship_ref);
-            return;
-        };
-        let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
         let gating = matches!(
             npc.mode,
             nova_sim::traffic::npc::Mode::Emerging { .. }
                 | nova_sim::traffic::npc::Mode::EnteringGate { .. }
         );
-        let faded = shown != nova_sim::cloak::CloakShown::Opaque || gating;
         match self.npc_sheets.get(&npc.ship) {
             Some(Ok(sheet)) => {
-                let alpha = if faded {
-                    u8::try_from(alpha).unwrap_or(u8::MAX)
+                let alpha = if gating {
+                    tint.a
                 } else {
                     base_alpha(sheet.base_transp)
                 };
-                let viewer = session.player().position;
-                let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
-                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let glow_rolls = npc_glow_rolls(npc.id);
-                // A gate writes the hull's colorize after the ion tint, so
-                // while it fades the gate's white shows in place of the
-                // tint and the murk ([`gate_colorize`],
-                // `_HandleShipDisplay` @0x2bfa5-0x2c17b).
-                let colorize = if gating {
-                    gate_colorize(&npc.mode)
-                } else {
-                    hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
-                };
-                let base = nova_sim::glow::drawn_base(npc.display.glow);
-                let ship = ShipDraw {
+                let ship = self.npc_ship(
+                    session,
+                    npc,
                     sheet,
-                    spec: &npc.hull.frames,
-                    drawn: npc.display.drawn,
                     heading,
-                    tint: Color { a: alpha, ..tint },
-                    hull: true,
-                    murk,
-                    held: true,
-                    glow: glow_level(base, tick, &glow_rolls),
-                    lights: npc.display.drawn.lights,
-                    weapon: self
-                        .glows
-                        .drawn(ShipRef::Npc(npc.id))
-                        .filter(|_| self.weapon_effects),
-                    shield: self.shield_drawn(ShipRef::Npc(npc.id)),
-                    colorize,
-                };
+                    (Color { a: alpha, ..tint }, cloak),
+                );
                 let live = ship.live_alt(at);
                 let alt =
                     self.held_alts
@@ -293,6 +277,55 @@ impl<C> FlightView<C> {
                 ship.draw(list, at, alt);
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
+        }
+    }
+
+    /// NPC `npc` as drawn with `sheet` facing `heading`, its hull at
+    /// `tint` changed by `cloak` (see [`FlightView::draw_npc`]).
+    fn npc_ship<'a>(
+        &self,
+        session: &Session,
+        npc: &'a Npc,
+        sheet: &'a crate::flight::catalog::ShipSheet,
+        heading: f32,
+        (tint, cloak): (Color, Option<CloakDraw>),
+    ) -> ShipDraw<'a> {
+        let viewer = session.player().position;
+        let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
+        let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+        let gating = matches!(
+            npc.mode,
+            nova_sim::traffic::npc::Mode::Emerging { .. }
+                | nova_sim::traffic::npc::Mode::EnteringGate { .. }
+        );
+        let glow_rolls = npc_glow_rolls(npc.id);
+        // A gate writes the hull's colorize after the ion tint, so while
+        // it fades the gate's white shows in place of the tint and the
+        // murk ([`gate_colorize`], `_HandleShipDisplay` @0x2bfa5-0x2c17b).
+        let colorize = if gating {
+            gate_colorize(&npc.mode)
+        } else {
+            hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
+        };
+        let base = nova_sim::glow::drawn_base(npc.display.glow);
+        ShipDraw {
+            sheet,
+            spec: &npc.hull.frames,
+            drawn: npc.display.drawn,
+            heading,
+            tint,
+            cloak,
+            hull: true,
+            murk,
+            held: true,
+            glow: glow_level(base, tick, &glow_rolls),
+            lights: npc.display.drawn.lights,
+            weapon: self
+                .glows
+                .drawn(ShipRef::Npc(npc.id))
+                .filter(|_| self.weapon_effects),
+            shield: self.shield_drawn(ShipRef::Npc(npc.id)),
+            colorize,
         }
     }
 
@@ -906,12 +939,15 @@ impl<C> FlightView<C> {
     }
 
     /// Gives the escorts `command`, through the session, as the menu says
-    /// which; says what it changed, and keeps the menu open for it.
+    /// which, drawing its speaker on the flight's chance; says what it
+    /// changed, and keeps the menu open for it.
     fn command_escorts(&mut self, command: EscortCommand) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        if let Some(commanded) = session.command_escorts(self.escort_menu.group(), command) {
+        let commanded =
+            session.command_escorts(self.escort_menu.group(), command, &mut self.chance);
+        if let Some(commanded) = commanded {
             self.escort_menu.touch(self.elapsed);
             self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
@@ -1164,6 +1200,11 @@ impl<C> FlightView<C> {
                         a: base_alpha(sheet.base_transp),
                         ..Color::WHITE
                     },
+                    // Its cloak drawn as an NPC's, its full fade always
+                    // faint (see `Session::player_cloak_shown`).
+                    cloak: session.and_then(|session| {
+                        CloakDraw::of(session.player_cloak_shown(), tick, &player_cloak_rolls())
+                    }),
                     hull: drawn == ShipDrawn::Full,
                     murk: 0,
                     held: false,

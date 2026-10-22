@@ -316,7 +316,7 @@ mod tests {
     fn the_refuel_box_is_the_same_for_an_inertialess_ship() {
         let mut ship = refueller(105.0, 0.0, 0.0, 0.0);
         ship.stats.inertialess_hull = true;
-        assert!(ship.flies_inertialess(None, crate::inertialess::InertialDampener::PlayerOnly));
+        assert!(ship.hull_inertialess(crate::inertialess::InertialDampener::PlayerOnly));
         assert_eq!(high_level(&ship, &at_centre()), RefuelStep::Refuel);
         ship.state.position.x = 106.0;
         assert_eq!(high_level(&ship, &at_centre()), RefuelStep::Close, "no ×4");

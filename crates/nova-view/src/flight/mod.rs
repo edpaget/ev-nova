@@ -56,6 +56,7 @@ pub mod boxes;
 pub mod brackets;
 pub mod cadence;
 pub mod catalog;
+pub mod cloak_fade;
 pub mod cursor;
 pub mod data;
 pub mod effects;

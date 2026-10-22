@@ -80,6 +80,9 @@ pub(super) struct PlayerShip {
     pub(super) fate: Fate,
     /// The player's warp and double time.
     pub(super) warp: Warp,
+    /// The player's cloak, its key and its latch (see the `player_cloak`
+    /// module). Unsaved.
+    pub(super) cloak: super::player_cloak::PlayerCloak,
 }
 
 /// What the player's ship's class and outfits give it, rewritten only by
@@ -203,6 +206,10 @@ pub(super) struct Warp {
     pub(super) double_time: bool,
     /// Whether the double-time key is on, as its caller last said.
     pub(super) double_time_key: bool,
+    /// Whether a new jump was accepted since the player part last took
+    /// it, for the fighters' warning (see the `wait_for_me` module); not
+    /// saved.
+    pub(super) jump_accepted: bool,
 }
 
 impl PlayerShip {
@@ -269,7 +276,9 @@ impl PlayerShip {
                 gate: None,
                 double_time: false,
                 double_time_key: false,
+                jump_accepted: false,
             },
+            cloak: super::player_cloak::PlayerCloak::default(),
         }
     }
 }

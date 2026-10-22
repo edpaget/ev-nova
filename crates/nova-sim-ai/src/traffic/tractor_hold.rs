@@ -372,7 +372,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
-                None,
+                crate::traffic::autopilot::Beside::default(),
                 speeds,
                 FlightRules::default(),
                 crate::traffic::autopilot::Readings::default(),

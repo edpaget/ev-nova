@@ -25,7 +25,8 @@
 //!   `_AIFireTurret` picks them (@0x80d0b) and the Bible has it ("Turreted
 //!   weapon has a blind spot"), as 3 and 4 do. The fight passes the key's
 //!   reading for the player's trigger, and the testing reading for an
-//!   escort's formation trigger, whose turrets the original's AI picks.
+//!   NPC's primary trigger (which no AI sets now: an escort's formation
+//!   fire is its AI's pick, tested as `_AIFireTurret` picks it).
 //! - What each guidance fires ([`aim`]):
 //!   - -1, 0, 5 and 6 fire along the ship's heading, at nothing.
 //!   - 1 fires along the heading at the target, when there is one, and

@@ -15,7 +15,7 @@
 //!   spending, its burst counting one a call, and an exclusive weapon
 //!   (`Flags3` 0x0020) holding the others by its shot's reload, before its
 //!   burst.
-//! - On an escort's formation trigger ([`Armament::fire`]), a ship
+//! - On an NPC's primary or secondary trigger ([`Armament::fire`]), a ship
 //!   carrying n of a weapon fires one shot
 //!   once its reload timer has run out, and sets the timer to `Reload / n`
 //!   ticks; a timer counts down a tick at a time ([`Armament::reload`]),
@@ -128,6 +128,10 @@
 
 mod ai_launch;
 mod burst_reload;
+mod idle_bays;
+#[cfg(test)]
+mod rating_stretch;
+mod reloading;
 
 use std::collections::BTreeMap;
 
@@ -228,9 +232,6 @@ pub struct Trigger {
     /// This weapon alone, primary or secondary, whatever the triggers
     /// say: an NPC's pick. The player's trigger never sets it.
     pub only: Option<WeaponId>,
-    /// Only the turrets (guidance 3, 4, 7 and 8) of what the rest of the
-    /// trigger fires: an escort keeping formation.
-    pub turrets_only: bool,
     /// The fighter bays too, whatever `only` says: an NPC attacking or
     /// sniping launches its fighters, its high level's `_AILaunchFighter`
     /// (@0x8e6fa), before its point defence (see the module docs). The
@@ -259,8 +260,7 @@ impl Trigger {
     /// secondary trigger, or as `only`, never on the primary nor for
     /// `bays` or `bays_after`, which [`Armament::launch_bay`] answers;
     /// otherwise `only` that weapon when set, or the secondary on the
-    /// secondary trigger and the rest on the primary, only the turrets
-    /// among them when `turrets_only`.
+    /// secondary trigger and the rest on the primary.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
         if weapon.is_bay() {
@@ -268,9 +268,6 @@ impl Trigger {
         }
         if let Some(only) = self.only {
             return weapon.id == only;
-        }
-        if self.turrets_only && !weapon.guidance.turret() {
-            return false;
         }
         if weapon.secondary() {
             self.secondary == Some(weapon.id)
@@ -814,9 +811,10 @@ impl Armament {
     /// has the ammunition for ([`Armament::has_ammo`]) and that `aim`
     /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
     /// inaccuracy drawn on `chance`, and gives what it launched; what it
-    /// reports goes to `reports` (see the module docs): an escort's
-    /// formation trigger, whose owner (`_AIEscortFireUnprovoked`) is rdm
-    /// phase escort-fleet-fidelity/phase-1; the player fires through
+    /// reports goes to `reports` (see the module docs): an NPC trigger on
+    /// the primary or secondary, which no AI sets since an escort's
+    /// formation fire became `_AIFireTurret`'s pick (rdm
+    /// escort-fleet-fidelity phase 1); the player fires through
     /// [`Armament::fire_player`], an NPC's pick through
     /// [`Armament::fire_pick`] and its bay launch through
     /// [`Armament::launch_bay`].
@@ -891,13 +889,17 @@ impl Armament {
     ///    spawned, and by the other reading only when it did, as `spend`
     ///    says ([`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
     /// 3. With nothing spawned, nothing else changes (@0x88dc0).
-    /// 4. Otherwise it reloads by [`ai_fire::reload`]; a burst counts one a
-    ///    call, spends at a multiple of its `BurstCount` when it spends at
+    /// 4. Otherwise it reloads by [`ai_fire::reload`], stretched by the
+    ///    player's rating when `at_player` says the ship fires at the
+    ///    player ([`PlayerRating::stretch`](ai_fire::PlayerRating::stretch),
+    ///    @0x88fb3-0x8901b); a burst counts one a call, spends at a multiple of its `BurstCount` when it spends at
     ///    the burst's end ([`burst_end`]), and past its interval
     ///    (`BurstCount`, times the count unless its copies fire together)
-    ///    starts again on its `BurstReload` (@0x8901f-0x891ad); an
-    ///    exclusive weapon ([`EXCLUSIVE`]) holds every other weapon's
-    ///    reload at its own plus [`EXCLUSIVE_HOLD`] (@0x891c8-0x8922a); and
+    ///    starts again on its `BurstReload`, which replaces the stretched
+    ///    reload unstretched (@0x8901f-0x891ad); an exclusive weapon
+    ///    ([`EXCLUSIVE`]) holds every other weapon's reload at its own
+    ///    stored reload, stretched or not, plus [`EXCLUSIVE_HOLD`]
+    ///    (@0x891c8-0x8922a); and
     ///    an unguided gun or rocket becomes the last gun
     ///    ([`Armament::last_gun`], @0x89230-0x89258).
     // Each is a separate borrow the fight holds, as for `fire`, and the
@@ -914,6 +916,7 @@ impl Armament {
         reports: &mut Reports,
         spend: RuleSource,
         spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
+        at_player: Option<ai_fire::PlayerRating>,
     ) -> Option<Volley> {
         if condition != Condition::Intact {
             return None;
@@ -958,6 +961,9 @@ impl Armament {
         }
         let spawned = u32::try_from(launches.len()).unwrap_or(u32::MAX);
         let mut held = ai_fire::reload(&spec, spawned, count);
+        if let Some(rating) = at_player {
+            held = rating.stretch(held);
+        }
         // The NPC's burst end spends its own slot while it holds any
         // (@0x890a5).
         let own = (spec.guidance_99() || rounds.held(spec.id) > 0).then_some(spec.id);
@@ -1626,10 +1632,7 @@ impl Arsenal {
             .filter(|&(_, (count, _))| count > 0)
             .filter_map(|(weapon, _)| self.weapon(weapon))
             .filter(|spec| in_gun_range_walk(spec))
-            .map(|spec| match spec.guidance {
-                Guidance::Beam | Guidance::TurretBeam => spec.beam_length + GUN_RANGE_MARGIN,
-                _ => (spec.range() + GUN_RANGE_MARGIN).trunc(),
-            })
+            .map(WeaponSpec::gun_reach)
             .reduce(f32::max)
     }
 
@@ -2012,7 +2015,6 @@ mod tests {
         primary: true,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: false,
@@ -2385,7 +2387,6 @@ mod tests {
             primary: false,
             secondary: Some(WeaponId(140)),
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,
@@ -2396,7 +2397,6 @@ mod tests {
             primary: true,
             secondary: Some(WeaponId(138)),
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,
@@ -2407,7 +2407,6 @@ mod tests {
             primary: false,
             secondary: Some(WeaponId(128)),
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,
@@ -2434,56 +2433,6 @@ mod tests {
             ..both
         };
         assert_eq!(fired(&mut armament, missing), Vec::<i16>::new());
-    }
-
-    #[test]
-    fn turrets_only_fires_the_turrets_alone() {
-        let guided = |id: i16, guidance: i16| WeaponRecord {
-            guidance,
-            ..blaster(id, 0)
-        };
-        let records = [
-            blaster(128, 0),
-            guided(129, 4),
-            guided(130, 7),
-            guided(131, 3),
-            guided(132, 8),
-            guided(133, 0),
-            WeaponRecord {
-                guidance: 4,
-                flags: super::super::weapon::SECONDARY,
-                ..blaster(140, 0)
-            },
-        ];
-        let armament = Armament::new(records.iter().map(|record| (WeaponSpec::new(record), 1)));
-        let fires = |trigger: Trigger| -> Vec<i16> {
-            armament
-                .mounts()
-                .iter()
-                .filter(|mount| trigger.fires(&mount.spec))
-                .map(|mount| mount.spec.id.0)
-                .collect()
-        };
-        let turrets = Trigger {
-            primary: true,
-            turrets_only: true,
-            ..Trigger::default()
-        };
-        assert_eq!(
-            fires(turrets),
-            [129, 130, 131, 132],
-            "no gun, beam or secondary"
-        );
-        assert_eq!(
-            fires(Trigger {
-                secondary: Some(WeaponId(140)),
-                ..turrets
-            }),
-            [129, 130, 131, 132, 140],
-            "a secondary turret on its own trigger"
-        );
-        assert_eq!(fires(PRIMARY), [128, 129, 130, 131, 132, 133]);
-        assert!(!Trigger::default().turrets_only);
     }
 
     /// Every weapon fires at 100 degrees, at NPC 7.
@@ -2576,6 +2525,7 @@ mod tests {
                 &mut Reports::default(),
                 RuleSource::Engine,
                 &mut at_seven,
+                None,
             )
             .expect("a volley");
         assert_eq!(volley.launches[0].inaccuracy, 8.0);
@@ -2637,6 +2587,7 @@ mod tests {
                 &mut self.reports,
                 spend,
                 spawn,
+                None,
             );
             armament.reload();
             volley
@@ -2762,6 +2713,7 @@ mod tests {
             &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
+            None,
         );
         assert_eq!(volley, None);
         assert_eq!(supplies.rounds.slot(WeaponId(130)), 8, "not intact");
@@ -3169,6 +3121,7 @@ mod tests {
             &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
+            None,
         );
         assert_eq!(disabled, None);
         assert_eq!(

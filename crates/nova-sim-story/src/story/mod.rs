@@ -1856,8 +1856,9 @@
 //! - `_ShipVisibleToShip` (@0x971c) holds a ship invisible while it is
 //!   emerging from a hypergate (`_AIShipIsEmergingFromHypergate`
 //!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
-//!   an escort of it that has a cloak itself (its parent +0x9a the
-//!   target, `_HasCloak` @0x979b; never the player) or to an observer
+//!   an escort of it that has a cloak, its own or the target's area cloak
+//!   it rides in close formation (its parent +0x9a the target, `_HasCloak`
+//!   @0x979b; never the player) or to an observer
 //!   with a cloak scanner (+0xc91c) within 200 on both axes
 //!   (@0x97a4-0x97f8); every other ship is visible. No stock outfit is a
 //!   cloak scanner, so the stock player sees a cloaked ship only once it

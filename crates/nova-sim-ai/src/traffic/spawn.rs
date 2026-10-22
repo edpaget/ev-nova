@@ -72,8 +72,13 @@
 //!   [`strength`](crate::traffic::strength)), and `Min + Rand(Max - Min + 1)` of each
 //!   escort type, each at the lead's place plus `Rand(300) - 150` each way,
 //!   with its heading and velocity, its own ship's `InherentAI`, escorting
-//!   the lead. Fleets always arrive, at setup too: by hyperspace, or out
-//!   of a gate. An announced fleet's lead carries its `flët`'s `Quote`
+//!   the lead. Those places are where the other reading of
+//!   [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation) leaves the
+//!   escorts; by the engine's, the traffic puts each escort that jumps in
+//!   on its slot beside the lead once the fleet is placed
+//!   ([`fleet_formation::snap`](crate::traffic::fleet_formation::snap)).
+//!   Fleets always arrive, at setup too: by hyperspace, or out of a
+//!   gate. An announced fleet's lead carries its `flët`'s `Quote`
 //!   ([`NewShip::quote`], see [`quote`](crate::traffic::quote)): every
 //!   arriving fleet is announced, setup's fleets never
 //!   ([`FleetCall::announced`]). A `flët` with `Flags` 0x0001
@@ -1155,9 +1160,11 @@ pub fn link_fleet(
 
 /// Fleet `id` coming in, added to `out`: its lead, out of one of
 /// `stellars` or by hyperspace, then its escorts whose ship type's
-/// `AppearOn` holds by `gate`, each near the lead by hyperspace or at the
-/// lead's gate; nothing, and no draw, when the fleet's own `AppearOn`
-/// does not. The lead flies as the `call`'s AI type when it gives one,
+/// `AppearOn` holds by `gate`, each near the lead by hyperspace (the other
+/// reading of [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation)'s
+/// places: by the engine's, the traffic snaps them onto their slots as
+/// it places them) or at the lead's gate; nothing, and no draw, when the
+/// fleet's own `AppearOn` does not. The lead flies as the `call`'s AI type when it gives one,
 /// and carries the fleet's `Quote` when the `call` announces it (see
 /// [`FleetCall`]).
 ///

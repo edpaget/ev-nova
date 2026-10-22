@@ -383,6 +383,7 @@ mod display;
 mod escort_loss;
 pub mod exits;
 mod expiry;
+pub mod finishing_hit;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flags;
@@ -394,6 +395,7 @@ pub mod ion_tint;
 pub mod jamming;
 mod lineup;
 pub mod phases;
+mod player_berths;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
@@ -424,6 +426,7 @@ use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 pub use escort_loss::EscortLoss;
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord};
+pub use finishing_hit::FinishingHit;
 use hull::{
     Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
 };
@@ -584,9 +587,9 @@ pub enum CombatEvent {
     /// (`_FireAIShipWeapon` @0x88dc0-0x88de4), once a call; and each
     /// live beam of one, on every advance-pass tick, for its firer
     /// (`_HandleBeams` @0x30b1f-0x30b37), but a point-defence beam's at a
-    /// missile (@0x309ab-0x309bb). Point defence's firing, an NPC's bay
-    /// launch, an escort's formation trigger and a sub-munition release
-    /// never light it.
+    /// missile (@0x309ab-0x309bb), an escort's formation pick among them.
+    /// Point defence's firing, an NPC's bay launch and a sub-munition
+    /// release never light it.
     WeaponGlow {
         /// The ship.
         ship: ShipRef,
@@ -913,8 +916,10 @@ pub struct Fighter<'a> {
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
     /// Whether it is cloaked: it fires only its weapons that fire while
-    /// cloaked ([`Armament::has_ammo`]), and point defence sees it only
-    /// with a cloak scanner ([`defence::choose_ship`]). The player never is.
+    /// cloaked ([`Armament::has_ammo`]; the player's fire,
+    /// `_FirePlayerWeapon` @0x627f5-0x62814, and its point defence
+    /// @0x3931c-0x3932f, too), and point defence sees it only with a cloak
+    /// scanner ([`defence::choose_ship`]).
     pub cloaked: bool,
     /// The ship it attacks or snipes at, which point defence reads as
     /// fighting that ship (`_IsShipFightingMe` @0x827fa: the original's
@@ -948,7 +953,11 @@ pub struct Fighter<'a> {
     pub cloak_scanner: bool,
     /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
     /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
-    /// [`Sight::has_cloak`]). The player never has.
+    /// [`Sight::has_cloak`]). An NPC's is its own cloak, or the area branch
+    /// (@0x964c-0x96bf): its leader's area cloak it rides in close
+    /// formation ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak)).
+    /// The player's reads the outfits it owns; it has no leader, so nothing
+    /// reads it yet.
     pub has_cloak: bool,
     /// How strongly it jams each jamming type (`_ShipECM`, see
     /// [`jamming`]), whatever its condition: a disabled ship jams nothing.
@@ -1060,6 +1069,11 @@ pub struct Field {
     /// against as it is launched, whoever fires it (`_SpawnShot`
     /// @0x3eab2-0x3eb66).
     pub interference: i16,
+    /// The player's combat rating against `shïp` 128's `Strength`: what
+    /// stretches the reload of an NPC's pick fired at the player
+    /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
+    /// @0x88fb3-0x8901b). The default stretches nothing.
+    pub player_rating: ai_fire::PlayerRating,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -1162,6 +1176,9 @@ pub struct Combat {
     /// The ships of the player's fleet lost as the strikes landed, each
     /// with its strike's index ([`Combat::take_landed`]).
     escort_losses: Vec<EscortLoss>,
+    /// The hits that started their ships dying as the strikes landed,
+    /// each with its strike's index ([`Combat::take_landed`]).
+    finished: Vec<FinishingHit>,
     stellar_strikes: Vec<StellarStrike>,
     /// The words outside the fight that stray beams stepped this tick,
     /// with their firers ([`Combat::take_stray_steps`]).
@@ -1183,6 +1200,9 @@ pub struct Combat {
     /// Whether an NPC's pick spends on a copy that spawns nothing
     /// ([`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
     ai_spend: RuleSource,
+    /// The ship berths free for the player's fighters this tick
+    /// ([`Combat::set_player_berths`]).
+    player_berths: player_berths::PlayerBerths,
     /// How an NPC's quadrant turret measures its arc
     /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
     quadrant_arc: RuleSource,
@@ -1972,7 +1992,8 @@ impl Combat {
     /// [`exits::step_stray`]), the beam starting at the centre
     /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
     /// +0xc908, outside the fight (the crew pods left, or the player's pod
-    /// countdown): by the engine it is returned for the caller to raise
+    /// countdown), and one of 6 on +0xc90a (the order word): by the engine
+    /// each is returned for the caller to raise
     /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
     /// the centre ([`StrayWord`]).
     fn beam_exit(
@@ -2078,14 +2099,17 @@ impl Combat {
     /// `targets` while that can be hit: the player as step 1 fires it
     /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
     /// (@0x34ffd, [`Combat::handle_npcs`]).
-    /// An NPC fires an escort's formation trigger through
+    /// An NPC fires a primary or secondary trigger through
     /// [`Armament::fire`], its quadrant turrets testing their blind spots
     /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
-    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
+    /// weapon sounding at [`AI_FIRE_PRIORITY`] (no AI sets one now: an
+    /// escort's formation fire is `_AIFireTurret`'s pick, rdm
+    /// escort-fleet-fidelity phase 1), then fires its pick
     /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
     /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
-    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+    /// [`AI_FIRE_PRIORITY`], lighting its glow; a recoil sets its
+    /// velocity, reported as a [`Shove`]. An escort's formation pick goes
+    /// this way too, glow and recoil alike. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
     /// destroys its firer ([`self_destruct`]).
     fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
         let target = ai_dispatch::standing(fighter.target, targets);
@@ -2126,6 +2150,9 @@ impl Combat {
             &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            // Only a ship whose target is slot 0, the player, is stretched
+            // (@0x88fb3).
+            (fighter.target == Some(ShipRef::Player)).then_some(self.field.player_rating),
         );
         let Some(volley) = volley else {
             return;
@@ -2152,7 +2179,9 @@ impl Combat {
     ///   [`PLAYER_FIRE_PRIORITY`] otherwise (@0x62d8d-0x62e9d); its later
     ///   copies carry no sound.
     /// - Each copy launches in turn, a copy finding no free slot failing
-    ///   quietly ([`Combat::launch`]) though it was spent and counted.
+    ///   quietly ([`Combat::launch`]) though it was spent and counted; but
+    ///   a fighter bay's copy is attempted only into a free ship berth
+    ///   (see the `player_berths` module).
     /// - A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys the
     ///   player ([`self_destruct`]).
     /// - A glow weapon lights the player's weapon glow ([`Combat::glow`]),
@@ -2176,6 +2205,7 @@ impl Combat {
         chance: &mut dyn Chance,
     ) {
         let blind = self.quadrant_blind;
+        let mut berths = self.player_berths;
         for weapon in fighter.armament.player_picks(fighter.trigger) {
             let (state, hull) = (fighter.state, fighter.hull);
             let volley = fighter.armament.fire_player(
@@ -2186,8 +2216,15 @@ impl Combat {
                 &mut fighter.reserves.fuel,
                 chance,
                 &mut self.reports,
-                &mut |spec| aim::aim(spec, &state, &hull, target, blind),
+                &mut |spec| {
+                    if berths.take(spec) {
+                        aim::aim(spec, &state, &hull, target, blind)
+                    } else {
+                        None
+                    }
+                },
             );
+            self.player_berths = berths;
             let Some(volley) = volley else {
                 continue;
             };
@@ -2822,7 +2859,22 @@ impl Combat {
             }
             let before = taken(fighter.reserves);
             let was_disabled = fighter.disabled_now(rule);
+            let was_dying = fighter.condition.dying_or_destroyed(fighter.reserves.armor);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
+            // `_HandleShipHit`'s victory voice (@0x36c7f-0x36d45): a
+            // shot's direct hit that starts its ship dying. A beam's hit is
+            // direct too, but `_HandleBeams` speaks none; a lock takes no
+            // armour, so it never starts one dying.
+            if landed.direct
+                && !beam
+                && !was_dying
+                && fighter.condition.dying_or_destroyed(fighter.reserves.armor)
+            {
+                self.finished.push(FinishingHit {
+                    ship: landed.ship,
+                    strike: self.strikes.len(),
+                });
+            }
             if escort_loss::leave_fleet_if_disabled(fighter, rule) {
                 self.escort_losses.push(EscortLoss {
                     ship: landed.ship,
@@ -3184,20 +3236,23 @@ impl Combat {
     }
 
     /// The strikes made since they were last taken, in order; taking them
-    /// empties the list, and drops the escort losses noted with them
-    /// ([`Combat::take_landed`]).
+    /// empties the list, and drops the escort losses and finishing hits
+    /// noted with them ([`Combat::take_landed`]).
     pub fn take_strikes(&mut self) -> Vec<Strike> {
         self.take_landed().0
     }
 
-    /// The strikes made since they were last taken, in order, and the
-    /// ships of the player's fleet they lost, each with the index of the
-    /// strike that lost it, in order ([`EscortLoss`]); taking them empties
-    /// both lists.
-    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>) {
+    /// The strikes made since they were last taken, in order; the ships
+    /// of the player's fleet they lost, each with the index of the strike
+    /// that lost it, in order ([`EscortLoss`]); and the hits that started
+    /// their ships dying, each with its strike's index, in order
+    /// ([`FinishingHit`]), which `_HandleShipHit`'s victory voice reads.
+    /// Taking them empties the three lists.
+    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>, Vec<FinishingHit>) {
         (
             std::mem::take(&mut self.strikes),
             std::mem::take(&mut self.escort_losses),
+            std::mem::take(&mut self.finished),
         )
     }
 
@@ -3777,11 +3832,14 @@ mod tests {
     mod display_step;
     mod escort_lost_in_place;
     mod exit_steps;
+    mod finishing_hits;
     mod fold_stamp;
     mod hidden_shots;
+    mod idle_bays;
     mod ion_lockout_tick;
     mod lineup;
     mod plunder_fire;
+    mod rating_stretch;
     mod shot_slots;
     mod shot_visits;
     mod stellar_hazards;
@@ -3842,7 +3900,6 @@ mod tests {
         primary: false,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: true,
@@ -3913,7 +3970,6 @@ mod tests {
                     primary: true,
                     secondary: None,
                     only: None,
-                    turrets_only: false,
                     bays: false,
                     bays_after: false,
                     point_defence: true,
@@ -7151,7 +7207,6 @@ mod tests {
             primary: true,
             secondary: None,
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: true,
@@ -8565,6 +8620,37 @@ mod tests {
             sounds(&combat.take_events()),
             [(WeaponId(130), heard), (WeaponId(131), heard)],
             "once per weapon, its 3 copies firing as one, as _FireAIShipWeapon sounds once a call"
+        );
+    }
+
+    #[test]
+    fn a_formation_escorts_turret_pick_fires_that_one_weapon_sounding_its_first_copy_at_4() {
+        // `_AIEscortFireUnprovoked` → `_AIFireTurret`'s single pick, fired
+        // by `_FireAIShipWeapon` (rdm escort-fleet-fidelity phase 1).
+        let mut combat = Combat::default();
+        let other = WeaponRecord {
+            id: WeaponId(131),
+            ..turret(4)
+        };
+        let mut firer = Ship::at(1, 0.0, 0.0).picking(130).targeting(B);
+        firer.armament = Armament::new([
+            (WeaponSpec::new(&turret(4)), 1),
+            (WeaponSpec::new(&other), 1),
+        ]);
+        let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            sounds(&combat.take_events()),
+            [(WeaponId(130), Some(FireSound::at(AI_FIRE_PRIORITY)))],
+            "its pick alone, once a call"
+        );
+        assert!(
+            combat
+                .shots()
+                .iter()
+                .all(|shot| shot.weapon.id == WeaponId(130)),
+            "{:?}",
+            combat.shots()
         );
     }
 
@@ -11993,6 +12079,7 @@ mod tests {
         let field = |frame| Field {
             frame,
             interference: 100,
+            ..Field::default()
         };
         // Fired on frame 0, it moves on frames 1 to 15.
         for frame in 0..16 {
@@ -13377,15 +13464,13 @@ mod tests {
             blind_front_shots(player, PRIMARY_HELD, RuleSource::Bible),
             0
         );
-        let formation = Trigger {
-            turrets_only: true,
-            ..PRIMARY_HELD
-        };
+        // An NPC's primary trigger (`Armament::fire`); its pick is tested
+        // for blind spots as its AI picks it (`_AIFireTurret` @0x80d0b).
         for reading in RuleSource::ALL {
             assert_eq!(
-                blind_front_shots(A, formation, reading),
+                blind_front_shots(A, PRIMARY_HELD, reading),
                 0,
-                "an escort's formation trigger: {reading:?}"
+                "an NPC's primary trigger: {reading:?}"
             );
         }
         // A full turret holds fire in its blind spot under both readings.
@@ -13423,18 +13508,7 @@ mod tests {
         let npc = Ship::at(1, 0.0, 0.0)
             .armed(self_destructing(blaster()))
             .picking(128);
-        // An escort's formation trigger, its turret at B ahead.
-        let formation = Ship {
-            trigger: Trigger {
-                turrets_only: true,
-                primary: true,
-                ..QUIET
-            },
-            ..Ship::at(1, 0.0, 0.0)
-                .armed(self_destructing(turret(4)))
-                .targeting(B)
-        };
-        for shooter in [player, npc, formation] {
+        for shooter in [player, npc] {
             let id = shooter.id;
             let mut combat = Combat::default();
             let mut ships = [shooter, Ship::at(2, 0.0, -3000.0)];

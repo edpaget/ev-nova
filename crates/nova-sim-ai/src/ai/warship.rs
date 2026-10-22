@@ -15,7 +15,10 @@
 //!   [`pirate`](super::pirate)), which has no word.
 //!   - **0x0004**: unless it already threatens the player or a ship the
 //!     player leads ([`Npc::threatens_player_among`], the original's
-//!     `_IsThreatToPlayer` @0x8b7b7, @0x8cb66), it turns on the player
+//!     `_IsThreatToPlayer` @0x8b7b7, @0x8cb66) and while it sees the
+//!     player ([`Surroundings::sees`], @0x8b7ce, @0x8cb80: a cloaked
+//!     player it can't see gets no word, nor does the 0x0040 test run), it
+//!     turns on the player
 //!     (`_AIMakeShipAttackPlayer`) and its provocation is set to 1
 //!     (@0x8b7e5, @0x8cb9d; [`Hunt::provokes`]). When [`dropped`] would let the player
 //!     go (disabled while the ship has no destroying weapons, or breaking
@@ -42,8 +45,7 @@
 //!   keeps a ship with a target in state 4 (@0x8bb0c-0x8bb44); here a
 //!   hunt always attacks the target it holds. The -900 bound of the gate
 //!   marks a ship still jumping in (@0x8fcf5), the 0 bound one warping
-//!   out, which the engine has no stage for. The player is always visible
-//!   to NPCs here (its cloak is cloaking-fidelity's).
+//!   out, which the engine has no stage for.
 //!
 //!   The 0x0004 word turns the ship on the player through
 //!   `_AIMakeShipAttackPlayer` (@0x8b7da, @0x8cb8f), whose gate says a
@@ -367,6 +369,11 @@ impl Hunt {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            ends_wait: false,
+            order_word: None,
+            leaves_fleet: false,
+            follows_jump: false,
+            voice: None,
         }
     }
 }
@@ -397,7 +404,8 @@ enum Word {
 /// The word `npc`'s government has on the player among `around`, if any
 /// (`_WarshipAI` @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3; see
 /// the module docs): none without a government, in hyperspace
-/// ([`Npc::in_hyperspace`]), or with no player in the system; and by the
+/// ([`Npc::in_hyperspace`]), or with no player in the system; no 0x0004
+/// word for a player it doesn't see (@0x8b7ce, @0x8cb80); and by the
 /// Bible's `always_attacks`, no 0x0004 word for a blessed player.
 fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource) -> Option<Word> {
     if npc.govt.is_none() || npc.in_hyperspace() || around.player.is_none() {
@@ -407,7 +415,7 @@ fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource)
     let threat = npc.threatens_player_among(around.npcs);
     if govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER) {
         let held = always_attacks == RuleSource::Bible && around.blessed(npc.govt);
-        (!threat && !held).then_some(Word::TakePlayer)
+        (!threat && !held && around.sees(npc, ShipRef::Player)).then_some(Word::TakePlayer)
     } else if govts.flag(npc.govt, NEVER_ATTACKS_PLAYER) {
         threat.then_some(Word::DropTarget)
     } else {
@@ -1332,6 +1340,11 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             }
         );
         assert!(
@@ -1819,6 +1832,29 @@ mod tests {
         Warship::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]))
     }
 
+    #[test]
+    fn a_0x0004_word_turns_no_ship_on_a_cloaked_player_it_cannot_see() {
+        let decide = |npcs: &[Npc]| {
+            let govts = govts(0, ALWAYS);
+            let sites = sites();
+            let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+            seen.player = seen.player.map(crate::ai::fixture::cloaked_player);
+            Warship::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]))
+        };
+        assert_eq!(
+            decide(&[attacking(n(2)), pirate()]),
+            turning(Goal::Attack(n(2)), false),
+            "it keeps its NPC fight"
+        );
+        assert_eq!(decide(&[police()]), turning(IDLE, false), "nothing");
+        let scanned = [crate::ai::fixture::scanning(attacking(n(2))), pirate()];
+        assert_eq!(
+            decide(&scanned),
+            turning(Goal::Attack(P), true),
+            "scanned within 200"
+        );
+    }
+
     /// A decision of `goal` that turns on the player by the 0x0004 word,
     /// provoking the ship, or not, as `turns` says, dropping no target
     /// first.
@@ -1839,6 +1875,11 @@ mod tests {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            ends_wait: false,
+            order_word: None,
+            leaves_fleet: false,
+            follows_jump: false,
+            voice: None,
         }
     }
 
@@ -1924,6 +1965,11 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             }
         );
         let mut calm = grudger;
@@ -1949,6 +1995,11 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             },
             "no grudge: dropped, and nothing picked"
         );

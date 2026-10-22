@@ -384,6 +384,46 @@ fn e_with_no_escorts_beeps_no_escorts() {
 }
 
 #[test]
+fn a_command_is_acknowledged_in_the_escorts_voice_at_the_next_pass() {
+    // `_IssueNewEscortCommand` queues the message (@0x6667a) and
+    // `_HandleVoiceSound` plays it in the next advance pass (@0x44219).
+    // Ship 130 has no attributes government, so it speaks set 0.
+    let clip = nova_sim::SoundId(1000);
+    let second = nova_sim::warp::SoundLength {
+        frames: 22_050,
+        rate: 22_050,
+    };
+    let mut catalog = boardable();
+    for record in &mut catalog.ships {
+        if record.id == ShipId(130) {
+            record.escort_type = 2;
+            record.inherent_ai = 3;
+        }
+    }
+    catalog.voices = nova_sim::voice::Voices::read(&[(clip, Some(second))], &[]);
+    let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
+    let (_, chance) = scripted(&placed(750, 650, 0));
+    let mut view = FlightView::with_pilot(catalog, pilot)
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still));
+    view.tick(TICK);
+    view.take_sounds();
+    tap(&mut view, ESCORT_HOLD_KEY);
+    assert_eq!(
+        view.take_sounds(),
+        [Sound::Sim(SimSound::EscortsCommanded)],
+        "the beep at once"
+    );
+    view.tick(TICK);
+    let voiced: Vec<Sound> = view
+        .take_sounds()
+        .into_iter()
+        .filter(|sound| matches!(sound, Sound::Sim(SimSound::Voice { .. })))
+        .collect();
+    assert_eq!(voiced, [Sound::Sim(SimSound::Voice { sound: clip })]);
+}
+
+#[test]
 fn a_command_that_changes_nothing_says_nothing() {
     let mut view = escorted();
     tap(&mut view, ESCORT_RECALL_KEY);

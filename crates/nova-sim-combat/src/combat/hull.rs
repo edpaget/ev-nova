@@ -139,6 +139,14 @@ pub const STANDS_OFF: u16 = 0x0002;
 /// bit 0, `_AIVerifySwarmLeader` @0x7e316, `_AIFindSwarmLeader` @0x7e400,
 /// `_HighLevelAIHandler` @0x8e64b; see `nova_sim::ai::swarm`).
 pub const SWARMS: u16 = 0x0001;
+/// The `shïp` `Flags2` bit of a ship that speaks no voice, the Bible's
+/// "Don't use fighter voices" (class +0x9ea, raw +0x62 @0x7a1f6): it
+/// neither acknowledges a command (`_IssueNewEscortCommand` @0x661e3,
+/// @0x66212), calls a new target (`_EscortAI` @0x83df9-0x83e34) nor a
+/// victory (`_HandleShipHit` @0x36c7f-0x36d45). Stock: ships 130 and 393, the Cargo
+/// Drones, and 173-175 and 381-383, the Vell-os Darts, Arrows and
+/// Javelins (see `nova_sim::escort_voice`).
+pub const MUTE: u16 = 0x0010;
 /// The `shïp` `Flags3` bit of a ship whose turret shots (4) are drawn
 /// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
 /// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
@@ -256,6 +264,9 @@ pub struct HullSpec {
     /// Whether it swarms, its `Flags2` [`SWARMS`] (see
     /// `nova_sim::ai::swarm`).
     pub swarms: bool,
+    /// Whether it speaks no voice, its `Flags2` [`MUTE`] (see
+    /// `nova_sim::escort_voice`).
+    pub mute: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -368,6 +379,7 @@ impl Default for HullSpec {
             retreats_dry: false,
             stands_off: false,
             swarms: false,
+            mute: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
@@ -420,6 +432,7 @@ impl HullSpec {
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
             stands_off: record.flags2 & STANDS_OFF != 0,
             swarms: record.flags2 & SWARMS != 0,
+            mute: record.flags2 & MUTE != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
@@ -583,6 +596,18 @@ impl Condition {
     pub fn is_dying(self, armor: Gauge) -> bool {
         matches!(self, Self::Dying { .. }) || self.breaking_up(armor).is_some()
     }
+
+    /// Whether a ship in this condition with `armor` is dying
+    /// ([`is_dying`](Self::is_dying)) or destroyed: `_EscortAI`'s lost
+    /// parent (@0x83917-0x8397b) as the engine reads it of the player,
+    /// which frees every ship the player leads while it breaks up or once
+    /// it is destroyed. The session's release of the player's escorts
+    /// (`nova_sim::Session::free_dying_players_escorts`) and the escort AI's
+    /// mission escort (`nova_sim_ai::ai::escort`) both read it.
+    #[must_use]
+    pub fn dying_or_destroyed(self, armor: Gauge) -> bool {
+        self == Self::Destroyed || self.is_dying(armor)
+    }
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -738,6 +763,25 @@ mod tests {
             );
         }
         assert!(!Condition::Destroyed.is_dying(armor(-1.0, 100.0)), "gone");
+    }
+
+    #[test]
+    fn dying_or_destroyed_reads_is_dying_or_a_destroyed_ship() {
+        // The lost parent's test, which a destroyed ship passes too.
+        let left = armor(5.0, 100.0);
+        assert!(Condition::Destroyed.dying_or_destroyed(left), "gone");
+        assert!(UNSET.dying_or_destroyed(left), "breaking up");
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert!(
+                condition.dying_or_destroyed(armor(0.0, 100.0)),
+                "{condition:?}"
+            );
+            assert!(!condition.dying_or_destroyed(left), "{condition:?}");
+            assert!(
+                !condition.dying_or_destroyed(armor(0.0, 0.0)),
+                "{condition:?} holds no armour to lose"
+            );
+        }
     }
 
     #[test]
@@ -1172,6 +1216,28 @@ mod tests {
         assert!(!flags.stands_off, "its Flags never");
         assert!(!HullSpec::default().stands_off);
         assert_eq!(STANDS_OFF, 0x0002);
+    }
+
+    #[test]
+    fn a_mute_hull_has_its_flags2_0x0010() {
+        let mute = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .mute
+        };
+        assert!(mute(0x0010));
+        assert!(mute(0x0093), "with other bits");
+        assert!(!mute(0xffef), "every other bit");
+        assert!(!mute(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0010,
+            ..hull(167)
+        });
+        assert!(!flags.mute, "its Flags never");
+        assert!(!HullSpec::default().mute);
+        assert_eq!(MUTE, 0x0010);
     }
 
     #[test]

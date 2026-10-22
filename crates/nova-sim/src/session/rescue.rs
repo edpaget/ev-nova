@@ -308,6 +308,10 @@ impl Session {
         self.ship.fate.pod_zeroed = false;
         self.chart.target = None;
         self.ship.fate.self_destruct.reset();
+        // The cloak's fade and direction (@0x1d457-0x1d462); the key and
+        // its latch are globals `_ResetPlayer` leaves (see the
+        // `player_cloak` module).
+        self.ship.cloak.cloak = crate::cloak::Cloak::default();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
@@ -787,6 +791,40 @@ mod tests {
         session.ship.fate.pod_zeroed = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
+    }
+
+    #[test]
+    fn a_player_ejecting_cloaked_keeps_its_cloak_in_the_pod_until_the_rescue_clears_it() {
+        // The pod's frames return before the key and the upkeep
+        // (@0x68ddd), and a full fade with no direction holds; the rescue's
+        // `_ResetPlayer` clears it (@0x1d457-0x1d462).
+        use crate::cloak::{Cloak, FADE_FULL};
+        let full = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.ship.fate.rescue_due = false;
+        session.pod = Some(300);
+        session.ship.cloak.cloak = full;
+        session.pilot.reserves.fuel.now = 0.0;
+        session.hold_cloak(true);
+        let _ = session.take_sounds();
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert_eq!(session.player_cloak(), full, "kept in the pod");
+        assert!(
+            !session.take_sounds().iter().any(|sound| matches!(
+                sound,
+                crate::sound::SimSound::Uncloaked | crate::sound::SimSound::Refused
+            )),
+            "no key and no upkeep"
+        );
+        session.pod = Some(0);
+        session.ship.fate.rescue_due = true;
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.player_cloak(), Cloak::default(), "_ResetPlayer");
+        assert!(session.ship.cloak.held, "the key is the view's");
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! independent system).
 //!
 //! **Hostility to the player** ([`hostile_to_player`], the legal table
-//! @0x8a61a-0x8a90d), the player being in the system and not breaking up
-//! (@0x8a6f8):
+//! @0x8a61a-0x8a90d), the player being in the system, not breaking up
+//! (@0x8a6f8) and seen by the ship (@0x8a6df, @0x8a748):
 //!
 //! - A G that blesses the player (rank `Flags` 0x0100,
 //!   [`Surroundings::blessed`]): never (@0x8a6a8-0x8a701).
@@ -36,14 +36,20 @@
 //!
 //! **The target** ([`select_target`], and [`pick_target`] with whether
 //! the pick turns the ship on the player): these steps in order. A ship
-//! still jumping in is never one, nor one destroyed; the player is always
-//! seen here (its cloak, and NPCs', are cloaking-fidelity's).
+//! still jumping in is never one, nor one destroyed. An NPC is one only
+//! when the ship sees it ([`Surroundings::sees`], @0x8a0d2, @0x8a538,
+//! @0x8aa7b, @0x8ad92), and the player too: a cloaked player is seen
+//! only by a cloak scanner within 200 or by its escort with a cloak of its
+//! own ([`sight::sees_player`](crate::ai::sight::sees_player)).
+//! Step 1's keep asks no sight (@0x89e85-0x89eb6): the lost-sight search
+//! ([`lost_sight`](crate::ai::lost_sight)) drops a target the ship can't see.
 //!
 //! 1. **Keep** the live ship it attacks or flees from.
 //! 2. **A grudge** (`_SelectWarshipTarget` @0x89ebc-0x89f20): a person
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
 //!    (see `nova_sim::person`) picks the player, while it is in
-//!    the system and not breaking up, unless it spares it. It reads no
+//!    the system, not breaking up and seen (@0x89f04; an unseen player
+//!    leaves the search to step 3), unless it spares it. It reads no
 //!    blessing: a blessing government's person with a grudge still takes
 //!    the player. It turns on the player through `_AIMakeShipAttackPlayer`
 //!    (the tail call @0x89f20), so its person may say its attack quote
@@ -52,7 +58,9 @@
 //!    [`mission_hunt`]): while the player is in the system, the player,
 //!    or none when it is disabled or breaking up and the ship has no
 //!    destroying weapons (as `_WarshipAI` drops such a target in the same think,
-//!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
+//!    @0x8bc8b-0x8bca9). A player it doesn't see (@0x89f7d) makes it fall
+//!    through to step 4 whatever the player's condition. Otherwise no
+//!    later step runs, so such a hunter never turns
 //!    on another ship while the player is here, and a paid-off one takes
 //!    the player again. It reads no blessing either. It reaches the same
 //!    `_AIMakeShipAttackPlayer` call (@0x89f20), whose quote gate a
@@ -69,7 +77,8 @@
 //!    candidate pass ([`candidates`](crate::ai::candidates), the strength filter and the
 //!    nearest, no heaviest) over the player and its NPC enemies. None of
 //!    them is breaking up, disabled, or in the escape pod (class 0x2ff,
-//!    [`ESCAPE_POD_SHIP`]; @0x8a094-0x8a0f1). The player is one unless
+//!    [`ESCAPE_POD_SHIP`]; @0x8a094-0x8a0f1), and each is seen (@0x8a0d2,
+//!    @0x8a140 for the player). The player is one unless
 //!    `Flags` 0x0040 (@0x8a123), S is G and L is above none
 //!    (@0x8a189-0x8a19a), or G blesses it (@0x8a1ae); `Flags` 0x0004 isn't
 //!    read. An NPC is one when it is not one the ship leads (@0x8a204), not
@@ -104,7 +113,8 @@
 //!    the government the player's ship type fights as
 //!    ([`PlayerSide::combat_govt`](crate::ai::PlayerSide::combat_govt)) is
 //!    at war with G, a draw below 50 (`Rand(50)` @0x8a993) of 0 with the
-//!    player not breaking up. A xenophobe's candidate is step 5's instead.
+//!    player not breaking up and seen (@0x8a9ba, after the draw). A
+//!    xenophobe's candidate is step 5's instead.
 //!    Then a G that an IFF scrambler marked ([`Surroundings::iff_marked`],
 //!    @0x8aa13), or one that blesses the player (@0x8aa35), clears it.
 //!    Every NPC enemy that is seen is a candidate (@0x8aa5e-0x8aade), one
@@ -158,10 +168,7 @@
 //! own-fleet sparing is also wider than the original's fleet drops
 //! (@0x8e2e9-0x8e399), which need the attacker to have a leader.
 //!
-//! **Left out.** `_ShipVisibleToShip` for an NPC's cloak in steps 5-8
-//! (@0x8a0d2, @0x8a140, @0x8a538, @0x8a6df, @0x8a748, @0x8a9ba, @0x8aa7b,
-//! @0x8ad92) is rdm:phase/cloaking-fidelity/phase-4-npc-cloak-visibility's:
-//! here an NPC is seen once it has arrived. Stellar defenders (+0x8c,
+//! **Left out.** Stellar defenders (+0x8c,
 //! @0x8a21e) are rdm:task/planet-domination's, and the nag ship
 //! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system
 //! test (@0x8a214) and the +0x88 ≤ 4 gate of step 6 (@0x8a41e) always
@@ -220,6 +227,9 @@ pub fn hostile_to_player(npc: &Npc, around: &Surroundings) -> bool {
     if around.blessed(own) || govts.flag(own, NEVER_ATTACKS_PLAYER) {
         return false;
     }
+    if !around.sees(npc, ShipRef::Player) {
+        return false;
+    }
     let reach = HUNT_REACH * f32::from(npc.aggression);
     let off = player.state.position - npc.state.position;
     if off.x.abs() > reach || off.y.abs() > reach {
@@ -252,6 +262,7 @@ fn xenophobe_hunts_player(npc: &Npc, around: &Surroundings) -> bool {
         && !around.govts.flag(npc.govt, NEVER_ATTACKS_PLAYER)
         && !(around.system_govt == npc.govt && around.record > 0)
         && !around.blessed(npc.govt)
+        && around.sees(npc, ShipRef::Player)
 }
 
 /// Whether the enemy-class roll makes the player `npc`'s candidate among
@@ -267,19 +278,24 @@ fn enemy_class_roll(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -
         && npc.aux.is_none()
         && player.combat_govt.is_some()
         && around.govts.enemies(npc.govt, player.combat_govt);
-    gated && chance.below(ENEMY_CLASS_SIDES) == 0 && around.live(ShipRef::Player)
+    gated
+        && chance.below(ENEMY_CLASS_SIDES) == 0
+        && around.live(ShipRef::Player)
+        && around.sees(npc, ShipRef::Player)
 }
 
-/// Whether `ship` is in the system to be seen as a candidate: there,
-/// not destroyed and not still jumping in (`_ShipVisibleToShip`, the
-/// active slot +0xb8). The player always is while it is there.
-fn present(ship: ShipRef, around: &Surroundings) -> bool {
-    match ship {
+/// Whether `npc` can take `ship` as a candidate: `ship` is there, not
+/// destroyed and not still jumping in (the active slot +0xb8), and `npc`
+/// sees it ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8a0d2,
+/// @0x8a538, @0x8aa7b, @0x8ad92), the player by its cloak.
+fn seen(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
+    let present = match ship {
         ShipRef::Player => around.player.is_some(),
         ShipRef::Npc(id) => around
             .npc(id)
             .is_some_and(|npc| npc.arrived() && npc.condition.active()),
-    }
+    };
+    present && around.sees(npc, ship)
 }
 
 /// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks the
@@ -306,8 +322,10 @@ fn present(ship: ShipRef, around: &Surroundings) -> bool {
 /// think. That is the engine's default; [`RuleKey::HunterBribe`] can
 /// honour the bribe instead, and only `NovaAi`'s dispatch reads it: a
 /// paid-off ship is a wimpy trader, which never asks [`select_target`],
-/// so this rule needs no key. A cloaked or gate-emerging player is no
-/// matter: the engine has neither, so the player is always visible to it.
+/// so this rule needs no key. It asks no sight: its callers test it in
+/// their own order, the hunt step before the give-up (an unseen player
+/// falls through, @0x89f7d) and the handler after it (`_HighLevelAIHandler`
+/// @0x8d6a8, see [`NovaAi`](crate::ai::nova::NovaAi)).
 #[must_use]
 pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
     npc.mission
@@ -431,10 +449,13 @@ fn pick_by_steps(
     let grudging = npc
         .person
         .is_some_and(|person| person.grudge && person.flags & GRUDGE != 0);
-    if grudging && !npc.spared && around.live(ShipRef::Player) {
+    if grudging && !npc.spared && around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player)
+    {
         return Some(called(ShipRef::Player));
     }
-    if let Some(attacks) = mission_hunt(npc, around) {
+    // An unseen player makes the hunter fall through to the later steps
+    // (@0x89f7d → @0x89f86 → @0x89ff4), whatever its condition.
+    if let Some(attacks) = mission_hunt(npc, around).filter(|_| around.sees(npc, ShipRef::Player)) {
         return attacks.then_some(called(ShipRef::Player));
     }
     if fire::ammo_left(npc) == AmmoLeft::Dry || npc.govt.is_none() {
@@ -446,7 +467,7 @@ fn pick_by_steps(
         around
             .by_slot()
             .into_iter()
-            .filter(move |other| other.id != npc.id && present(ShipRef::Npc(other.id), around))
+            .filter(move |other| other.id != npc.id && seen(npc, ShipRef::Npc(other.id), around))
     };
     let player = ShipRef::Player;
     let (mut player_candidate, xenophobe_pick) = if govts.xenophobic(npc.govt) {
@@ -563,7 +584,7 @@ fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRe
                 return None;
             }
             (foe != me
-                && present(foe, around)
+                && seen(npc, foe, around)
                 && !spares(npc, foe, around, rules)
                 && own >= friend_strength(foe, around, carry))
             .then_some(foe)
@@ -580,14 +601,17 @@ fn leads_or_is_player(ship: ShipRef, around: &Surroundings) -> bool {
 }
 
 /// Whether `npc` spares `ship` among `around` by `rules`: the player once
-/// it has paid to be spared, or an NPC of its own fleet or an ally it
-/// spares (see the module docs).
+/// it has paid to be spared, or an NPC of its own fleet (the root of its
+/// chain of leads, [`Npc::fleet_among`], so a carrier's fighter and its
+/// carrier's lead's other escorts spare each other) or an ally it spares
+/// (see the module docs).
 #[must_use]
 pub fn spares(npc: &Npc, ship: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
     match ship {
         ShipRef::Player => npc.spared,
         ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            other.fleet() == npc.fleet() || spares_ally(npc, other, around, rules.led_ally)
+            other.fleet_among(around.npcs) == npc.fleet_among(around.npcs)
+                || spares_ally(npc, other, around, rules.led_ally)
         }),
     }
 }
@@ -650,7 +674,7 @@ mod tests {
     fn drops(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
         dropped(npc, target, around, TargetRules::default())
     }
-    use crate::ai::fixture::blessing_of;
+    use crate::ai::fixture::{blessing_of, cloaked, scanning};
     use crate::ai::{Goal, PlayerSide};
     use crate::catalog::{GovtId, GovtRecord, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -748,6 +772,8 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         }
     }
 
@@ -1447,6 +1473,297 @@ mod tests {
         idle[1].goal = Goal::Idle;
         idle[2].goal = Goal::Idle;
         assert_eq!(chosen(0, &idle, None, 0, NEAR), None);
+    }
+
+    #[test]
+    fn the_hunt_passes_over_a_cloaked_enemy_it_cant_see_and_takes_it_once_seen() {
+        let npcs = [
+            me(),
+            cloaked(ship(2, ENEMY, 150.0, 0.0)),
+            ship(3, RIVAL, 900.0, 0.0),
+        ];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+        assert_eq!(chosen(0, &npcs[..2], None, 0, NEAR), None, "alone");
+        let mut seen = npcs[..2].to_vec();
+        seen[0] = scanning(me());
+        assert_eq!(chosen(0, &seen, None, 0, NEAR), Some(n(2)), "scanned");
+        seen[1].state.position = Vec2::new(250.0, 0.0);
+        assert_eq!(chosen(0, &seen, None, 0, NEAR), None, "past 200");
+    }
+
+    #[test]
+    fn a_xenophobe_passes_over_a_cloaked_enemy_it_cant_see() {
+        let mut xeno = [
+            me(),
+            cloaked(ship(2, ALLY, 50.0, 0.0)),
+            ship(3, ENEMY, 150.0, 0.0),
+            ship(4, ME, 20.0, 0.0),
+        ];
+        xeno[0].govt = Some(XENO);
+        assert_eq!(
+            chosen(0, &xeno, None, 0, (0.0, -1000.0)),
+            Some(n(3)),
+            "the next enemy"
+        );
+        assert_eq!(
+            chosen(0, &xeno, None, 0, (0.0, -100.0)),
+            Some(P),
+            "the player nearer"
+        );
+        xeno[0] = scanning(xeno[0].clone());
+        assert_eq!(
+            chosen(0, &xeno, None, 0, (0.0, -1000.0)),
+            Some(n(2)),
+            "seen"
+        );
+    }
+
+    #[test]
+    fn help_never_takes_up_a_quarry_it_cant_see_and_goes_on_to_the_next_ally() {
+        let mut trader = ship(2, ALLY, 1000.0, 0.0);
+        trader.goal = Goal::Flee(n(4));
+        let mut kin = ship(3, ME, 2000.0, 0.0);
+        kin.goal = Goal::Attack(n(5));
+        let pirate = cloaked(ship(4, NEUTRAL, 150.0, 0.0));
+        let npcs = [me(), trader, kin, pirate, ship(5, NEUTRAL, 4000.0, 0.0)];
+        assert_eq!(
+            chosen(0, &npcs, None, 0, NEAR),
+            Some(n(5)),
+            "the next ally's"
+        );
+        let mut seen = npcs.clone();
+        seen[0] = scanning(me());
+        assert_eq!(chosen(0, &seen, None, 0, NEAR), Some(n(4)), "the first");
+    }
+
+    #[test]
+    fn a_ship_never_turns_on_a_threat_it_cant_see() {
+        let mut far = ship(2, NEUTRAL, 900.0, 0.0);
+        far.goal = Goal::Flee(n(1));
+        let mut near = ship(3, NEUTRAL, 150.0, 0.0);
+        near.goal = Goal::Attack(n(1));
+        let npcs = [me(), far, cloaked(near)];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(2)));
+        let mut both = npcs.clone();
+        both[1] = cloaked(both[1].clone());
+        assert_eq!(chosen(0, &both, None, 0, NEAR), None);
+        both[0] = scanning(me());
+        assert_eq!(chosen(0, &both, None, 0, NEAR), Some(n(3)), "seen");
+    }
+
+    #[test]
+    fn a_cloaked_target_already_held_is_kept_for_the_lost_sight_search() {
+        let npcs = [me(), cloaked(ship(2, ENEMY, 150.0, 0.0))];
+        assert_eq!(
+            chosen_pick(0, &npcs, Some(n(2)), 0, NEAR),
+            Some(Pick {
+                ship: n(2),
+                turns_on_player: false,
+                attacks: false,
+            })
+        );
+    }
+
+    // A cloaked player (`_ShipVisibleToShip` with the player the target).
+
+    /// What ship 1 (`npcs[0]`) picks among `npcs` and a cloaked player at
+    /// `at`, with `record` at home, drawing `draws`.
+    fn picked_by_cloaked_player(
+        flags: u16,
+        npcs: &[Npc],
+        at: (f32, f32),
+        record: i16,
+        draws: &[u32],
+    ) -> Option<Pick> {
+        let govts = govts(flags);
+        let around = Surroundings {
+            player: Some(crate::ai::fixture::cloaked_player(PlayerSide {
+                combat_govt: Some(ENEMY),
+                ..player(at.0, at.1)
+            })),
+            govts: &govts,
+            system_govt: Some(ME),
+            record,
+            ..Surroundings::new(&[], npcs)
+        };
+        pick_target(
+            &npcs[0],
+            None,
+            &around,
+            TargetRules::default(),
+            &mut Draws::of(draws),
+        )
+    }
+
+    fn grudger() -> Npc {
+        let mut grudger = me();
+        grudger.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(510),
+            flags: crate::traffic::GRUDGE,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: true,
+            quoted: false,
+            quoted_at: None,
+            zero_fuel: false,
+        });
+        grudger
+    }
+
+    #[test]
+    fn a_grudge_takes_no_cloaked_player_it_cannot_see_and_the_steps_go_on() {
+        let npcs = [grudger(), ship(2, ENEMY, 0.0, 50.0)];
+        let unseen = picked_by_cloaked_player(0, &npcs, (0.0, -1000.0), 0, &[]);
+        assert_eq!(unseen.map(|pick| pick.ship), Some(n(2)), "step 7");
+        assert!(!unseen.is_some_and(|pick| pick.turns_on_player));
+        let scanned = [scanning(grudger()), ship(2, ENEMY, 0.0, 50.0)];
+        assert_eq!(
+            picked_by_cloaked_player(0, &scanned, (0.0, -150.0), 0, &[]),
+            Some(Pick {
+                ship: P,
+                turns_on_player: true,
+                attacks: true,
+            }),
+            "scanned within 200"
+        );
+    }
+
+    fn hunter() -> Npc {
+        let mut hunter = me();
+        hunter.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::traffic::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        hunter
+    }
+
+    #[test]
+    fn a_shipbehav_0_hunter_that_cannot_see_the_player_takes_the_later_steps() {
+        let npcs = [hunter(), ship(2, ENEMY, 0.0, 50.0)];
+        let pick = |npcs: &[Npc], at, condition| {
+            let govts = govts(0);
+            let around = Surroundings {
+                player: Some(crate::ai::fixture::cloaked_player(PlayerSide {
+                    condition,
+                    ..player(0.0, at)
+                })),
+                govts: &govts,
+                system_govt: Some(ME),
+                record: 30,
+                ..Surroundings::new(&[], npcs)
+            };
+            select(&npcs[0], None, &around)
+        };
+        assert_eq!(pick(&npcs, -1000.0, Condition::Intact), Some(n(2)));
+        assert_eq!(
+            pick(&npcs, -1000.0, Condition::Disabled),
+            Some(n(2)),
+            "the sight test comes before the give-up"
+        );
+        let scanned = [scanning(hunter()), ship(2, ENEMY, 0.0, 50.0)];
+        assert_eq!(pick(&scanned, -150.0, Condition::Intact), Some(P));
+        assert_eq!(pick(&scanned, -150.0, Condition::Disabled), None);
+    }
+
+    #[test]
+    fn a_xenophobe_takes_no_cloaked_player_it_cannot_see() {
+        let xeno = || Npc {
+            govt: Some(XENO),
+            ..me()
+        };
+        let npcs = [xeno(), ship(2, ALLY, 150.0, 0.0)];
+        let unseen = picked_by_cloaked_player(0, &npcs, (0.0, -10.0), 0, &[]);
+        assert_eq!(
+            unseen,
+            Some(Pick {
+                ship: n(2),
+                turns_on_player: false,
+                attacks: false,
+            }),
+            "the nearest NPC enemy"
+        );
+        assert_eq!(
+            picked_by_cloaked_player(0, &npcs[..1], (0.0, -10.0), 0, &[]),
+            None,
+            "alone"
+        );
+        let scanned = [scanning(xeno()), ship(2, ALLY, 150.0, 0.0)];
+        assert_eq!(
+            picked_by_cloaked_player(0, &scanned, (0.0, -10.0), 0, &[]),
+            Some(Pick {
+                ship: P,
+                turns_on_player: true,
+                attacks: true,
+            }),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn the_legal_table_finds_a_cloaked_player_it_cannot_see_no_threat() {
+        let govts = govts(0);
+        let hostile = |npc: Npc, cloak: bool| {
+            let npcs = [npc];
+            let at = player(0.0, -150.0);
+            let around = Surroundings {
+                player: Some(if cloak {
+                    crate::ai::fixture::cloaked_player(at)
+                } else {
+                    at
+                }),
+                govts: &govts,
+                system_govt: Some(ME),
+                record: -7,
+                ..Surroundings::new(&[], &npcs)
+            };
+            hostile_to_player(&npcs[0], &around)
+        };
+        assert!(hostile(me(), false), "uncloaked");
+        assert!(!hostile(me(), true), "cloaked");
+        assert!(hostile(scanning(me()), true), "scanned within 200");
+    }
+
+    #[test]
+    fn the_enemy_class_roll_takes_no_cloaked_player_it_cannot_see() {
+        let npcs = [me()];
+        assert_eq!(
+            picked_by_cloaked_player(0, &npcs, (0.0, -150.0), 30, &[0]),
+            None
+        );
+        let scanned = [scanning(me())];
+        assert_eq!(
+            picked_by_cloaked_player(0, &scanned, (0.0, -150.0), 30, &[0]).map(|pick| pick.ship),
+            Some(P),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn help_never_takes_up_a_cloaked_player_it_cannot_see_and_goes_on_to_the_next_ally() {
+        let mut kin = ship(2, ME, 2000.0, 0.0);
+        kin.goal = Goal::Attack(P);
+        let mut trader = ship(3, ALLY, 1000.0, 0.0);
+        trader.goal = Goal::Flee(n(4));
+        let pirate = ship(4, NEUTRAL, 4000.0, 0.0);
+        let npcs = [me(), kin, trader, pirate];
+        assert_eq!(
+            picked_by_cloaked_player(0, &npcs, (0.0, -150.0), 0, &[]).map(|pick| pick.ship),
+            Some(n(4)),
+            "the next ally's"
+        );
+        let mut scanned = npcs.clone();
+        scanned[0] = scanning(me());
+        assert_eq!(
+            picked_by_cloaked_player(0, &scanned, (0.0, -150.0), 0, &[]).map(|pick| pick.ship),
+            Some(P),
+            "the first"
+        );
     }
 
     #[test]
@@ -2496,6 +2813,38 @@ mod tests {
         escort.leader = Some(NpcId(1));
         let npcs = [me(), escort, ship(3, RIVAL, 900.0, 0.0)];
         assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+    }
+
+    #[test]
+    fn a_carriers_fighter_spares_its_fleet_leads_other_escorts_and_they_it() {
+        // Ship 1 leads carrier 2 and escort 3; carrier 2 leads fighter 4.
+        // The fighter's government (145) is allied with none of the others'
+        // (140, 142), so only the fleet spares. The fleet is the root of
+        // the leads (`_ShipsShareParent`).
+        let mut carrier = ship(2, ENEMY, 100.0, 0.0);
+        carrier.leader = Some(NpcId(1));
+        let mut escort = ship(3, ENEMY, 200.0, 0.0);
+        escort.leader = Some(NpcId(1));
+        let mut fighter = ship(4, RIVAL, 300.0, 0.0);
+        fighter.leader = Some(NpcId(2));
+        let npcs = [me(), carrier, escort, fighter, ship(5, ENEMY, 400.0, 0.0)];
+        let govts = govts(0);
+        let around = Surroundings {
+            player: Some(player(0.0, -100.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let rules = TargetRules::default();
+        assert!(
+            spares(&npcs[3], n(3), &around, rules),
+            "the fighter, escort 3"
+        );
+        assert!(
+            spares(&npcs[2], n(4), &around, rules),
+            "escort 3, the fighter"
+        );
+        assert!(spares(&npcs[3], n(1), &around, rules), "its fleet's lead");
+        assert!(!spares(&npcs[3], n(5), &around, rules), "a stranger");
     }
 
     #[test]

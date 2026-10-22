@@ -1167,7 +1167,7 @@ mod tests {
         assert_eq!(session.select_target(TargetPick::Nearest), Some(quarry));
         assert!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
                 .is_some()
         );
         assert_eq!(placed(&session).target, Some(ShipRef::Npc(quarry)));

@@ -209,6 +209,7 @@ fn a_person_rolls_its_ships_skill_and_takes_its_governments_factor() {
         None,
         None,
         &govts,
+        crate::flight::NpcFormation::Original,
         &mut chance,
     );
     assert_eq!(skills(&traffic), [(skill(74), 1.5)]);

@@ -96,6 +96,13 @@ fn a_misaligned_or_missing_target_says_nothing() {
 }
 
 #[test]
+fn a_cloaked_board_says_nothing() {
+    // `_HandlePlayerBoardAttempt` returns at `_ShipIsCloaked` (@0x6503f)
+    // with no line.
+    assert_eq!(board_refusal_message(BoardRefusal::Cloaked), None);
+}
+
+#[test]
 fn boarding_keeps_the_message() {
     let mut view = beside(750, 750, 0, false);
     view.say_for(MISSION_FAILED, 240);

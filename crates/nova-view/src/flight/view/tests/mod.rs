@@ -61,6 +61,7 @@ use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
+mod cloak;
 mod combat;
 mod comm_line;
 mod controls;
@@ -118,6 +119,8 @@ struct FakeCatalog {
     sol_background: u32,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
+    /// The escorts' voices: none, by default.
+    voices: nova_sim::voice::Voices,
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     sol_more: Vec<StellarContents>,
@@ -369,6 +372,7 @@ fn catalog() -> FakeCatalog {
         sol_murk: 0,
         sol_background: 0,
         alpha_buoy: -1,
+        voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
         gates: Vec::new(),
         gate_listers: Vec::new(),
@@ -444,6 +448,10 @@ fn layout() -> StatusBarLayout {
 impl PilotCatalog for FakeCatalog {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         self.character.clone()
+    }
+
+    fn voices(&self) -> nova_sim::voice::Voices {
+        self.voices.clone()
     }
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
@@ -2174,7 +2182,6 @@ impl Behaviour for Firing {
             primary: true,
             secondary: None,
             only: None,
-            turrets_only: false,
             bays: false,
             bays_after: false,
             point_defence: false,

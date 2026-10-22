@@ -313,6 +313,57 @@ mod tests {
         }
     }
 
+    // The cloak.
+
+    /// A cloak still fading out: a ship disabled while cloaked.
+    const FADING_OUT: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: 12.0,
+        direction: -1,
+    };
+
+    /// [`aboard`] `catalog`'s trader, its cloak still fading out.
+    fn aboard_fading(catalog: &FakePilotCatalog) -> Session {
+        let mut session = aboard(catalog);
+        session.space.npc_mut(ON_BOARD.npc).expect("here").cloak = FADING_OUT;
+        session
+    }
+
+    /// The trader's cloak once it has joined the fleet.
+    fn joined_cloak(session: &Session) -> crate::cloak::Cloak {
+        assert!(session.is_escort(ON_BOARD.npc), "joined");
+        session.space.npc(ON_BOARD.npc).expect("here").cloak
+    }
+
+    /// `_DoPlunderDialog`'s escort path zeroes the captured ship's fade
+    /// direction (+0xc8d8 @0x946e3) and fade (+0x64 @0x946f9), whichever
+    /// way it joins: at once for a crewless player's ship, or once the
+    /// assignment dialog asks it to be an escort.
+    #[test]
+    fn a_ship_captured_while_its_cloak_still_fades_joins_at_fade_0_with_no_direction() {
+        let catalog = boardable();
+        let mut session = aboard_fading(&catalog);
+        for record in &mut session.statics_mut().ships {
+            if record.id == ShipId(128) {
+                record.crew = 0;
+            }
+        }
+        assert_eq!(
+            take(&mut session, Take::Capture, &[0, 1]).0,
+            Taken::Escorted
+        );
+        assert_eq!(joined_cloak(&session), crate::cloak::Cloak::default());
+        let mut session = aboard_fading(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[0, 1]).0,
+            Taken::Captured
+        );
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(joined_cloak(&session), crate::cloak::Cloak::default());
+    }
+
     // The escorts counted.
 
     #[test]
@@ -542,13 +593,14 @@ mod tests {
                     Taken::Captured
                 );
                 session.ship.fuel_cap_cached = cached;
-                let mut chance = Draws::of(&[7]);
+                let mut chance = Draws::default().keyed(bound, 7);
                 assert_eq!(
                     session.assign(Assignment::MyShip, &mut chance),
                     Some(Assigned::MyShip)
                 );
-                assert_eq!(chance.asked, [bound], "{why}, {order:?}");
+                assert_eq!(chance.times_asked(bound), 1, "{why}, {order:?}");
                 assert_eq!(session.reserves().fuel.now, 7.0, "{why}");
+                assert!(old_ship_voiced(&session), "{why}, {order:?}");
             }
         }
     }
@@ -568,9 +620,22 @@ mod tests {
             take(&mut session, Take::Capture, &[99, 43, 1]).0,
             Taken::Captured
         );
-        let mut chance = Draws::of(&[7]);
+        let mut chance = Draws::default().keyed(350, 7);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(chance.asked, [350], "the trader's 300 and the tank's 50");
+        assert_eq!(
+            chance.times_asked(350),
+            1,
+            "the trader's 300 and the tank's 50"
+        );
+        assert!(old_ship_voiced(&session));
+    }
+
+    /// Whether the old ship a Use As My Ship kept has rolled its voice
+    /// (see the `voices` module).
+    fn old_ship_voiced(session: &Session) -> bool {
+        let old = session.space.escorts.fleet.iter().flatten().next();
+        let old = *old.expect("the old ship kept");
+        session.space.npc(old).expect("there").voice.is_some()
     }
 
     #[test]

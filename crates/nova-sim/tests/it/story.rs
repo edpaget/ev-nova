@@ -345,7 +345,6 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_its_moves_hook_sees() {
         primary: true,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: false,

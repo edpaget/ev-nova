@@ -53,6 +53,10 @@ pub struct SoundTable {
     pub propulsion_repaired: Option<SoundId>,
     /// Plays as the player becomes threatened: the Red Alert.
     pub red_alert: Option<SoundId>,
+    /// Plays as the player's ship begins to cloak.
+    pub cloak: Option<SoundId>,
+    /// Plays as the player's ship begins to uncloak.
+    pub uncloak: Option<SoundId>,
     /// Plays as cargo is jettisoned in flight.
     pub jettison: Option<SoundId>,
     /// Plays as a scan fails a mission whose cargo it found.
@@ -73,6 +77,8 @@ pub struct SoundTable {
     pub call_for_help: Option<SoundId>,
     /// Plays as an interceptor hails the player before its scan.
     pub scan_hail: Option<SoundId>,
+    /// Plays as the player's jump leaves fighters behind that can't jump.
+    pub wait_for_me: Option<SoundId>,
     /// Plays as the sensors detect a reinforcement fleet approaching.
     pub reinforcements: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
@@ -228,6 +234,11 @@ impl SoundTable {
     /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
     ///   (@0x68cff), at priority 5.
+    /// - `cloak`: 381, which `_LoadSounds` loads into `cloakSnd[1]`
+    ///   (@0x1c254-0x1c274) and `_DoShipCloak` plays (@0xdef3), at
+    ///   priority 8.
+    /// - `uncloak`: 380, `cloakSnd[0]` (@0x1c254-0x1c274), which
+    ///   `_DoShipUncloak` plays (@0xdfd0), at priority 8.
     /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
     ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
     ///   priority 1.
@@ -253,6 +264,8 @@ impl SoundTable {
     ///   plays with a ship's distress call (@0x830e0-0x83109).
     /// - `scan_hail`: 154, `_beepSnd[4]`, which `_InterceptorAI` plays
     ///   with its pre-scan hail (@0x8cf9d-0x8cfbc).
+    /// - `wait_for_me`: 154, `_beepSnd[4]`, which `_HandlePlayer` plays
+    ///   with its fighters' "Wait for me!" (@0x6b542-0x6b565).
     /// - `reinforcements`: 154, `_beepSnd[4]`, which
     ///   `_HandleReinforcements` plays with "Sensors detect …
     ///   reinforcement fleet approaching." (@0x3924b).
@@ -394,6 +407,8 @@ impl SoundTable {
         escort_repaired: Some(SoundId(154)),
         propulsion_repaired: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
+        cloak: Some(SoundId(381)),
+        uncloak: Some(SoundId(380)),
         jettison: Some(SoundId(154)),
         scan_failed: Some(SoundId(151)),
         smuggling: Some(SoundId(154)),
@@ -403,6 +418,7 @@ impl SoundTable {
         fleet_quote: Some(SoundId(154)),
         call_for_help: Some(SoundId(154)),
         scan_hail: Some(SoundId(154)),
+        wait_for_me: Some(SoundId(154)),
         reinforcements: Some(SoundId(154)),
         hail_offer: Some(SoundId(154)),
         hail_quote: Some(SoundId(154)),
@@ -484,6 +500,8 @@ mod tests {
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.propulsion_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
+        assert_eq!(table.cloak, Some(SoundId(381)), "cloakSnd[1]");
+        assert_eq!(table.uncloak, Some(SoundId(380)), "cloakSnd[0]");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.scan_failed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
@@ -493,6 +511,7 @@ mod tests {
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.call_for_help, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.scan_hail, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.wait_for_me, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.reinforcements, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");

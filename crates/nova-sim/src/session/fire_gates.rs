@@ -31,7 +31,6 @@ const PICKED: Trigger = Trigger {
     primary: false,
     secondary: None,
     only: Some(WeaponId(128)),
-    turrets_only: false,
     bays: false,
     bays_after: false,
     point_defence: false,
@@ -101,6 +100,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_held_gate_burst() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::HeldGateBurst, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().held_burst, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.held_burst));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {
@@ -110,6 +122,58 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
         let mut flown = None;
         session.step_traffic(|_, world| flown = Some(world.npc_jump_fuel));
         assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_escort_order_reach() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::EscortOrderReach, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().escort_order_reach, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.escort_order_reach));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_escort_ai() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().npc_escort_ai, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.npc_escort_ai));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_successor_repairer() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::SuccessorRepairer, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().successor_repairer, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.successor_repairer));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_pass_frame() {
+    let catalog = armed();
+    let mut session = Session::start(&catalog).expect("starts");
+    for frame in [-15, 0, 9, 1024] {
+        session.space.pass_frame = frame;
+        assert_eq!(session.world().frame, frame);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.frame));
+        assert_eq!(flown, Some(frame));
     }
 }
 

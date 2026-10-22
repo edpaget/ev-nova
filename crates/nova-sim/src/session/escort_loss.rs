@@ -281,50 +281,71 @@ fn only_an_enlisted_escort_fights_as_a_ship_of_the_fleet() {
     );
 }
 
-/// [`escorted`], its bystander NPC 1 a ship one point of armour from
-/// breaking up, and two shots set on a move for the next pass's collision
-/// passes to land: the escort's, aimed at NPC 1, and one of no ship's into
-/// the escort, that disables it. The escort's lands first when
-/// `kill_first` (it is in the shot layer, walked before the homing layer
-/// the other is in), else last. The player's combat rating after the
-/// pass.
-fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
-    use crate::combat::shot_layer::ShotLayer;
+/// [`escorted`] (in `catalog`), its bystander NPC 1 with its shield down
+/// and `armour` left, and the player's first two shots in flight: the
+/// first re-owned by the escort NPC 0, as a shot of the player's fleet
+/// would be, aimed at NPC 1 and set on a move into it for the next
+/// pass's collision passes to land; the second still the player's, where
+/// it was. No pass has run since.
+pub(super) fn an_escorts_shot_into_the_bystander(
+    catalog: &FakePilotCatalog,
+    armour: f32,
+) -> Session {
     use crate::combat::sides::Ties;
-    let catalog = armed();
-    let mut session = escorted(&catalog);
+    let mut session = escorted(catalog);
     let victim = session.space.npc_mut(NpcId(1)).expect("there");
     victim.reserves.shield.now = 0.0;
-    victim.reserves.armor.now = 1.0;
-    fire_until_two_shots(&mut session, &catalog);
+    victim.reserves.armor.now = armour;
+    fire_until_two_shots(&mut session, catalog);
+    let victim_at = session.space.npc(NpcId(1)).expect("there").state.position;
+    let shot = session
+        .space
+        .combat
+        .shots_mut()
+        .iter_mut()
+        .find(|shot| shot.firer == ShipRef::Player)
+        .expect("a first shot");
+    shot.firer = ShipRef::Npc(NpcId(0));
+    shot.fleet = ShipRef::Player;
+    shot.source = Source::Ship(Ties {
+        leader: Some(ShipRef::Player),
+        govt: None,
+        booty: None,
+    });
+    shot.aimed_at = Some(ShipRef::Npc(NpcId(1)));
+    shot.target = Some(ShipRef::Npc(NpcId(1)));
+    shot.moved_from = Some(victim_at + Vec2::new(0.0, 20.0));
+    shot.position = victim_at;
+    session
+}
+
+/// [`an_escorts_shot_into_the_bystander`] with NPC 1 one point of armour
+/// from breaking up, and the player's second shot made no ship's and set
+/// on a move into the escort, that disables it. The escort's lands first
+/// when `kill_first` (it is in the shot layer, walked before the homing
+/// layer the other is in), else last. The player's combat rating after
+/// the pass.
+fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
+    use crate::combat::shot_layer::ShotLayer;
+    let catalog = armed();
+    let mut session = an_escorts_shot_into_the_bystander(&catalog, 1.0);
     assert_eq!(session.pilot.combat_rating, 0);
     let escort_at = session.space.npc(NpcId(0)).expect("there").state.position;
-    let victim_at = session.space.npc(NpcId(1)).expect("there").state.position;
     let (kill_layer, loss_layer) = if kill_first {
         (ShotLayer::Shots, ShotLayer::Homing)
     } else {
         (ShotLayer::Homing, ShotLayer::Shots)
     };
-    let mut shots = session
-        .space
-        .combat
-        .shots_mut()
+    let shots = session.space.combat.shots_mut();
+    let kill = shots
         .iter_mut()
-        .filter(|shot| shot.firer == ShipRef::Player);
-    let kill = shots.next().expect("a first shot");
-    kill.firer = ShipRef::Npc(NpcId(0));
-    kill.fleet = ShipRef::Player;
-    kill.source = Source::Ship(Ties {
-        leader: Some(ShipRef::Player),
-        govt: None,
-        booty: None,
-    });
-    kill.aimed_at = Some(ShipRef::Npc(NpcId(1)));
-    kill.target = Some(ShipRef::Npc(NpcId(1)));
+        .find(|shot| shot.firer == ShipRef::Npc(NpcId(0)))
+        .expect("the escort's shot");
     kill.layer = kill_layer;
-    kill.moved_from = Some(victim_at + Vec2::new(0.0, 20.0));
-    kill.position = victim_at;
-    let loss = shots.next().expect("a second shot");
+    let loss = shots
+        .iter_mut()
+        .find(|shot| shot.firer == ShipRef::Player)
+        .expect("a second shot");
     loss.source = Source::Other;
     loss.aimed_at = None;
     loss.layer = loss_layer;
