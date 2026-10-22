@@ -10,9 +10,13 @@
 //! formation. Keeping formation, it holds its slot in its lead's
 //! formation as the lead cruises (`_AICalcFormationPositions`, goal 0xa),
 //! or, by the other reading of `npc_formation`, follows within 100 of it.
+//! Its lead disabled, the heaviest escort leads in its place and the other
+//! pauses, keeping formation on it, until a draw releases it to its kept
+//! order (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13).
 
 use std::collections::BTreeSet;
 
+use nova_sim::ai::regroup::Kept;
 use nova_sim::ai::{Behaviour, Decision, FleetEscortAi, Surroundings};
 use nova_sim::catalog::{EscortClass, GovtId, GovtRecord, WeaponId, WeaponRecord};
 use nova_sim::chance::Chance;
@@ -26,6 +30,7 @@ use nova_sim::geometry::Vec2;
 use nova_sim::stats::ShipStats;
 use nova_sim::traffic::autopilot::FOLLOW_DISTANCE;
 use nova_sim::traffic::npc::AiType;
+use nova_sim::traffic::regroup::RELEASE_DRAW;
 use nova_sim::{Goal, Governments, NovaAi, Npc, NpcId, Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::{govt, weapon};
@@ -270,5 +275,116 @@ fn by_the_earlier_follow_a_fleet_escort_keeps_within_100_of_its_cruising_lead() 
         offs.iter()
             .any(|(off_slot, _)| off_slot.x.abs() > slack || off_slot.y.abs() > slack),
         "not on its slot"
+    );
+}
+
+/// The heavy escort, the second ship.
+const HEAVY: NpcId = NpcId(1);
+/// The light escort, the third.
+const LIGHT: NpcId = NpcId(2);
+
+/// A lead cruising right at 2 a tick holding its course, and a heavy and
+/// a light medium escort keeping formation on it, cruising with it, the
+/// light one holding the word its lead last gave it, Return.
+fn cruising_fleet() -> Traffic {
+    let cruise = |x: f32, y: f32, goal: Goal| {
+        let mut npc = ship(128, AiType::Warship, (x, y), goal);
+        npc.state.velocity = Vec2::new(2.0, 0.0);
+        npc.state.heading = 90.0;
+        npc.class = EscortClass::Medium;
+        npc
+    };
+    let follow = Goal::Follow {
+        lead: LEAD,
+        guard: None,
+    };
+    let mut heavy = cruise(-60.0, 50.0, follow);
+    heavy.leader = Some(LEAD);
+    heavy.hull.signed_mass = 300;
+    let mut light = cruise(-60.0, -50.0, follow);
+    light.leader = Some(LEAD);
+    light.hull.signed_mass = 100;
+    light.order_word = OrderWord(3);
+    let mut traffic = Traffic::with_interval(1);
+    traffic.add_npc(cruise(0.0, 0.0, Goal::Hold));
+    traffic.add_npc(heavy);
+    traffic.add_npc(light);
+    traffic
+}
+
+fn npc(traffic: &Traffic, id: NpcId) -> &Npc {
+    traffic
+        .npcs()
+        .iter()
+        .find(|npc| npc.id == id)
+        .expect("in the system")
+}
+
+#[test]
+fn a_disabled_leads_heaviest_escort_leads_and_the_other_pauses_in_formation_then_takes_up_its_order()
+ {
+    let mut traffic = cruising_fleet();
+    let govts = govts();
+    // Off the order frames, so no lead issues a word.
+    let world = World {
+        govts: &govts,
+        frame: 1,
+        ..World::new(&[])
+    };
+    for _ in 0..20 {
+        traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[0; 64]));
+    }
+    traffic
+        .npcs_mut()
+        .iter_mut()
+        .find(|npc| npc.id == LEAD)
+        .expect("there")
+        .condition = nova_sim::combat::hull::Condition::Disabled;
+    let held = || Draws::of(&[0; 64]).keyed(RELEASE_DRAW, 99);
+    traffic.tick_in(&NovaAi::default(), world, &[], &mut held());
+    let heavy = npc(&traffic, HEAVY);
+    assert_eq!(heavy.leader, None, "it leads");
+    assert_eq!(heavy.goal, Goal::Hold, "its lead's hold, taken over");
+    let light = npc(&traffic, LIGHT);
+    assert_eq!(light.leader, Some(HEAVY));
+    assert_eq!(
+        light.goal,
+        Goal::Regroup {
+            kept: Kept::Formation { guard: None }
+        }
+    );
+    let flight = FlightRules::default();
+    let thrust = flight.handling(ShipStats::new(FAST, &[]).handling).accel;
+    let slack = FORMATION_SLACK + FORMATION_NUDGE * thrust;
+    for tick in 0..150 {
+        traffic.tick_in(&NovaAi::default(), world, &[], &mut held());
+        let light = npc(&traffic, LIGHT);
+        assert!(
+            matches!(light.goal, Goal::Regroup { .. }),
+            "tick {tick}: still paused"
+        );
+        if tick >= 100 {
+            let slot = light
+                .fleet_slot
+                .expect("a slot in its new lead's formation")
+                .position(&npc(&traffic, HEAVY).state);
+            let off = light.state.position - slot;
+            assert!(
+                off.x.abs() <= slack && off.y.abs() <= slack,
+                "tick {tick}: {off:?} off its slot on the heavy escort"
+            );
+        }
+    }
+    let mut releasing = Draws::of(&[0; 64]).keyed(RELEASE_DRAW, 0);
+    traffic.tick_in(&NovaAi::default(), world, &[], &mut releasing);
+    let light = npc(&traffic, LIGHT);
+    assert_eq!(light.order_word, OrderWord(3), "the word it kept");
+    assert_eq!(
+        light.goal,
+        Goal::Follow {
+            lead: HEAVY,
+            guard: None
+        },
+        "released, it forms on its new lead under its word"
     );
 }
