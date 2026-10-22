@@ -77,6 +77,7 @@ use crate::geometry::{Bounds, Point};
 use crate::oval::oval_frame_pixels;
 use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
+use crate::ui::text_box::TextBox;
 use crate::{Color, DrawList, Font, ImageKey};
 
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
@@ -477,36 +478,33 @@ pub fn draw_message(
     draw_message_in(list, text, message_box(view), metrics);
 }
 
-/// Draws the flight message `text` in `area`: with `metrics`, each line
-/// it wraps to as a text of its own down from the area's top-left, up to
-/// the last whose bottom is inside the area; without, one text wrapped by
-/// the renderer at the area's width.
+/// Draws the flight message `text` in `area`: with `metrics`, through a
+/// [`TextBox`] as `TETextBox` draws it, each line it wraps to as a text
+/// of its own down from the area's top-left, every line whose top is
+/// inside the area; without, one text wrapped by the renderer at the
+/// area's width.
 ///
-/// `TETextBox` clips to the rect, so a line partly inside shows its top.
-/// A draw list cannot clip, so such a line is left out whole: in the
-/// stock window the box holds two lines, and a third shows none of its
-/// top 10 pixels.
+/// `TETextBox` clips to the rect, so a line partly inside shows its top,
+/// clipped to the box. In the stock 1024 x 768 window [`message_box`] is
+/// 39 pixels tall: two whole lines of Charcoal 12 fit, and a third shows
+/// its top 10 pixels.
+///
+/// `_DisplayComm` erases the rect in the system background colour
+/// before `TETextBox` (`SetSystemBackgroundBackColor` @0x902cf: the
+/// current system's `BkgndColor`, or black without one, @0x6e06). This
+/// paints nothing behind the text, so the starfield shows through it.
 pub fn draw_message_in(
     list: &mut DrawList,
     text: &str,
     area: Bounds,
     metrics: Option<&dyn TextMetrics>,
 ) {
-    let (font, size, width) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE, area.width());
+    let (font, size) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE);
     let Some(metrics) = metrics else {
-        list.text_in(font, text, area.min, size, Some(width), Color::WHITE);
+        list.text_in(font, text, area.min, size, Some(area.width()), Color::WHITE);
         return;
     };
-    let line_height = metrics.line_height(font, size);
-    let mut top = area.min.y;
-    for line in crate::text::wrap(&metrics, font, size, text, width) {
-        if top + line_height > area.max.y {
-            break;
-        }
-        let origin = Point::new(area.min.x, top);
-        list.text_in(font, line, origin, size, None, Color::WHITE);
-        top += line_height;
-    }
+    TextBox::new(text, font, size, Color::WHITE, area, &metrics).draw(list);
 }
 
 /// Draws `cargo` in the layout's cargo area, at the bar's `origin`, as
@@ -2291,39 +2289,38 @@ mod tests {
         let text = vec!["abcd"; 60].join(" ");
         let mut list = DrawList::new();
         draw_message(&mut list, &text, VIEW_SIZE, Some(&MonoMetrics));
-        let lines: Vec<(String, Point)> = list
-            .iter()
-            .map(|c| match c {
-                DrawCommand::Text {
-                    text,
-                    origin,
-                    font,
-                    size,
-                    color,
-                    wrap_width,
-                } => {
-                    assert_eq!(
-                        (*font, *size, *color, *wrap_width),
-                        (MESSAGE_FONT, 12.0, Color::WHITE, None)
-                    );
-                    (text.clone(), *origin)
-                }
-                other => panic!("{other:?}"),
-            })
-            .collect();
         let all = crate::text::wrap(&MonoMetrics, Font::Charcoal, 12.0, &text, 755.0);
         assert_eq!(all.len(), 3, "a third line to clip");
+        let drawn: Vec<&DrawCommand> = list.iter().collect();
         assert_eq!(
-            lines,
+            drawn,
             [
-                (all[0].clone(), at(25.0, 724.0)),
-                (all[1].clone(), at(25.0, 724.0 + 14.4)),
+                &message_text(&all[0], at(25.0, 724.0), None),
+                &message_text(&all[1], at(25.0, 724.0 + 14.4), None),
+                &DrawCommand::Clipped {
+                    clip: message_box(VIEW_SIZE),
+                    command: Box::new(message_text(&all[2], at(25.0, 724.0 + 28.8), None)),
+                },
             ],
-            "the third line's bottom, 767.2, passes 763"
+            "the third line's bottom, 767.2, passes 763: it shows its top"
         );
-        for (line, _) in &lines {
+        for line in &all {
             assert!(MonoMetrics.width(Font::Charcoal, 12.0, line) <= 755.0);
         }
+    }
+
+    #[test]
+    fn no_line_below_the_box_is_drawn() {
+        let line = MonoMetrics.line_height(MESSAGE_FONT, MESSAGE_TEXT_SIZE);
+        let area = Bounds::at(at(0.0, 0.0), 755.0, 1.5 * line);
+        let text = vec!["abcd"; 100].join(" ");
+        let mut list = DrawList::new();
+        draw_message_in(&mut list, &text, area, Some(&MonoMetrics));
+        let kinds: Vec<bool> = list
+            .iter()
+            .map(|c| matches!(c, DrawCommand::Clipped { .. }))
+            .collect();
+        assert_eq!(kinds, [false, true], "one whole line, one clipped, no more");
     }
 
     #[test]

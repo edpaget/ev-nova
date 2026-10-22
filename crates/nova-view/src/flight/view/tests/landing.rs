@@ -463,8 +463,8 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
         .position(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
         .expect("the message");
     let expected: Vec<&DrawCommand> = expected.iter().collect();
-    assert_eq!(expected.len(), 2);
-    assert_eq!(commands[first..first + 2], expected[..]);
+    assert_eq!(expected.len(), 3, "two whole lines and a clipped third");
+    assert_eq!(commands[first..first + 3], expected[..]);
 }
 
 #[test]
