@@ -1871,7 +1871,7 @@
 //!      (@0x8c286), before any weapon test.
 //!   3. Whether or not a stellar was found, it walks weapon indices 0-255
 //!      and takes the lowest with `Flags2` 0x0400 (@0x8c1f2), the
-//!      **class's** stock count above 0 (class +0x5e8[i], @0x8c20e), ammo
+//!      **class's** stock count above 0 (class `+0x5e8[i]`, @0x8c20e), ammo
 //!      (`_WeaponHasAmmo` @0x8c21f) and guidance not 0, not 3 and at most
 //!      7 signed (-1, 1, 2, 4, 5, 6, 7; @0x8c230-0x8c244).
 //!   4. With both: goal (+0xc8c8) 0x12 and +0x6c = +0x70 = the stellar
@@ -1945,10 +1945,11 @@
 //! - **Recorded, not built** (memory-layout accidents). In goal 0x12,
 //!   +0x70 holds a stellar index (@0x8c278), and readers that take it for
 //!   a ship slot are not copied: `_HighLevelAIHandler`'s target check reads
-//!   ship slot [stellar index]'s active byte, past the 64-slot table for
-//!   an index of 64 or more, and may clear it (@0x8d4e4-0x8d50d);
-//!   `_FireAIShipWeapon` aims a turret (4) or homing (1) pick at ship slot
-//!   [stellar index]; and stellar index 0 reads as "targeting the player"
+//!   the active byte of the ship slot numbered by the stellar index, past
+//!   the 64-slot table for an index of 64 or more, and may clear it
+//!   (@0x8d4e4-0x8d50d); `_FireAIShipWeapon` aims a turret (4) or homing
+//!   (1) pick at the ship slot numbered by the stellar index; and stellar
+//!   index 0 reads as "targeting the player"
 //!   wherever +0x70 == 0 is tested without the goal. A sub-munition of
 //!   negative `ProxSafety` released by a fuse into a later slot would be
 //!   tested against stellars in the same loop by a stale sprite rectangle

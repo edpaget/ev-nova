@@ -8,6 +8,7 @@
 
 use super::ion::IonLockout;
 use super::lineup::reread;
+use super::stellar::StellarTarget;
 use super::stellar_hazards::StellarHazards;
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
@@ -312,11 +313,16 @@ impl Combat {
     /// ([`Ion::shed`](super::ion::Ion::shed)). Every ship has regenerated and
     /// been displayed already, at its own step ([`Combat::display_player`],
     /// [`Combat::handle_npcs`]): a breakup a beam begins starts at the
-    /// ship's next display step.
+    /// ship's next display step. A planet-type beam strikes `stellars`
+    /// only by the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)
+    /// ([`beam_stellar`](super::beam_stellar)); their strikes are taken
+    /// with [`Combat::take_stellar_strikes`].
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        stellars: &mut [StellarTarget],
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -348,7 +354,8 @@ impl Combat {
                     pass_through,
                     beam_planet_flag,
                 };
-                let Some(hit) = self.beam_hit(index, fighters, &sides, pass.beam_damage()) else {
+                let among = (&*fighters, &mut *stellars);
+                let Some(hit) = self.beam_hit(index, among, &sides, pass.beam_damage()) else {
                     continue;
                 };
                 let ship = hit.ship;

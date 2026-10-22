@@ -9,7 +9,13 @@
 //! shot's sprite against the stellar's, pixel by pixel, and the engine
 //! takes the disc the player sees instead. A hit takes `MassDmg` plus
 //! `EnergyDmg` off its strength, with no shield and no kind of damage.
-//! Beams never hit a stellar.
+//! Beams never hit a stellar by the engine's reading of
+//! [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars); the Bible's
+//! is [`beam_stellar`](super::beam_stellar)'s.
+//!
+//! A planet-type shot hits only planet-type ships on its way
+//! ([`planet_type`](super::planet_type)), so it passes through ordinary
+//! ships to the stellars behind them.
 
 use super::ShipRef;
 use super::projectile::{Shot, contact};

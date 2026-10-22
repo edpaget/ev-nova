@@ -470,3 +470,122 @@ fn a_sub_munition_an_expiry_seats_in_an_earlier_slot_strikes_a_tick_later_than_o
     let strikes = strikes_each_tick(&mut combat, &mut [], &arsenal, 4);
     assert_eq!(strikes, [0, 1, 1, 0]);
 }
+
+// Beams on stellars.
+
+/// A planet-type [`laser`] of 2 mass and 5 energy damage, exploding in
+/// `bööm` 130: 200 pixels long, held 3 ticks.
+fn planet_laser() -> WeaponRecord {
+    WeaponRecord {
+        flags2: PLANET_TYPE,
+        mass_dmg: 2,
+        explod_type: 2,
+        ..laser()
+    }
+}
+
+/// A fires `record` once to the right among `others` and `stellars`, by
+/// `reading` of [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars),
+/// for 5 ticks. The ships, the events, and the strikes on stellars.
+fn beamed(
+    record: WeaponRecord,
+    others: Vec<Ship>,
+    stellars: &mut [StellarTarget],
+    reading: RuleSource,
+) -> (Vec<Ship>, Vec<CombatEvent>, Vec<StellarStrike>) {
+    let mut combat = Combat::default();
+    combat.set_beam_stellars(reading);
+    let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+    ships.extend(others);
+    let (mut events, mut strikes) = (Vec::new(), Vec::new());
+    for _ in 0..5 {
+        tick_by(&mut combat, &mut ships, &Arsenal::default(), stellars);
+        ships[0].trigger = QUIET;
+        events.extend(combat.take_events());
+        strikes.extend(combat.take_stellar_strikes());
+    }
+    (ships, events, strikes)
+}
+
+/// Whether each of `seen` is `explosion` at (`x`, 0).
+fn all_at(seen: &[(Vec2, Explosion)], x: f32) -> bool {
+    seen.iter().all(|(at, explosion)| {
+        (*at - Vec2::new(x, 0.0)).length() < 1e-3 && Some(*explosion) == Explosion::decode(2)
+    })
+}
+
+#[test]
+fn by_the_engine_a_planet_type_beam_held_across_a_stellar_never_damages_it() {
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+    let (_, events, strikes) = beamed(
+        planet_laser(),
+        Vec::new(),
+        &mut stellars,
+        RuleSource::Engine,
+    );
+    assert_eq!(strikes, []);
+    assert_eq!(stellars[0].strength, 100);
+    assert_eq!(explosions(&events), [], "it hit nothing");
+}
+
+#[test]
+fn by_the_bible_a_planet_type_beam_strikes_a_stellar_each_tick_it_is_held() {
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+    let (_, events, strikes) = beamed(planet_laser(), Vec::new(), &mut stellars, RuleSource::Bible);
+    assert_eq!(strikes, [strike(7, false); 3], "2 mass and 5 energy a tick");
+    assert_eq!(stellars[0].strength, 79);
+    let seen = explosions(&events);
+    assert_eq!(seen.len(), 3);
+    assert!(all_at(&seen, 80.0), "on its edge: {seen:?}");
+}
+
+#[test]
+fn by_the_bible_a_beam_shoots_a_stellar_down_below_none_and_passes_it_after() {
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 10)];
+    let behind = Ship::at(2, 150.0, 0.0);
+    let (ships, _, strikes) = beamed(
+        planet_laser(),
+        vec![behind],
+        &mut stellars,
+        RuleSource::Bible,
+    );
+    assert_eq!(strikes, [strike(7, false), strike(7, true)]);
+    assert_eq!(stellars[0].strength, -4);
+    assert!(hurt(&ships[1]), "its third tick reaches the ship behind");
+}
+
+#[test]
+fn by_the_bible_a_beam_stops_at_whichever_of_a_ship_and_a_stellar_is_nearer() {
+    // A beam of `Flags2` 0x0400 alone is ordinary to ships by the
+    // engine's `beam_planet_flag`, so it may hit an ordinary ship.
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+    let (ships, _, strikes) = beamed(
+        planet_laser(),
+        vec![Ship::at(2, 50.0, 0.0)],
+        &mut stellars,
+        RuleSource::Bible,
+    );
+    assert_eq!(strikes, [], "the ship is nearer");
+    assert!(hurt(&ships[1]));
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+    let (ships, _, strikes) = beamed(
+        planet_laser(),
+        vec![Ship::at(2, 150.0, 0.0)],
+        &mut stellars,
+        RuleSource::Bible,
+    );
+    assert_eq!(strikes.len(), 3, "the stellar is nearer");
+    assert!(!hurt(&ships[1]));
+}
+
+#[test]
+fn by_the_bible_an_ordinary_beam_never_hits_a_stellar() {
+    let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+    let ordinary = WeaponRecord {
+        flags2: 0,
+        ..planet_laser()
+    };
+    let (_, _, strikes) = beamed(ordinary, Vec::new(), &mut stellars, RuleSource::Bible);
+    assert_eq!(strikes, []);
+    assert_eq!(stellars[0].strength, 100);
+}

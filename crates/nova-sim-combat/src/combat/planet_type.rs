@@ -38,13 +38,15 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 impl Combat {
     /// Has the fight read the planet-type rules as `rules` says:
-    /// [`RuleKey::PlanetBlasts`] ([`Combat::set_planet_blasts`]) and
-    /// [`RuleKey::BeamPlanetFlag`] ([`Combat::set_beam_planet_flag`]).
+    /// [`RuleKey::PlanetBlasts`] ([`Combat::set_planet_blasts`]),
+    /// [`RuleKey::BeamPlanetFlag`] ([`Combat::set_beam_planet_flag`]) and
+    /// [`RuleKey::BeamStellars`] ([`Combat::set_beam_stellars`]).
     pub fn set_planet_type_rules(&mut self, rules: &Rulebook) {
         self.set_planet_blasts(PlanetBlasts::from(rules.source_for(RuleKey::PlanetBlasts)));
         self.set_beam_planet_flag(BeamPlanetFlag::from(
             rules.source_for(RuleKey::BeamPlanetFlag),
         ));
+        self.set_beam_stellars(rules.source_for(RuleKey::BeamStellars));
     }
 }
 

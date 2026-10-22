@@ -167,7 +167,9 @@
 //!    skipped by the later shots. This comes after the ship hits, as the
 //!    original's stellar check (`_CheckShotProximities`
 //!    @0x44015) comes after its ship collision passes; beams never hit a
-//!    stellar. The session takes each hit as a [`StellarStrike`]
+//!    stellar by the engine's reading of
+//!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars) (step 8).
+//!    The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
 //!    destroyed.
 //! 3. Each of the pass's hits lands as the walk finds it (`Combat::land`),
@@ -253,7 +255,11 @@
 //! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
 //!    meets, as the fight's rules say ([`beam`]), every tick until its
-//!    life is over, and ends where it hit.
+//!    life is over, and ends where it hit. It never hits a stellar by the
+//!    engine's reading of
+//!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars); by the
+//!    Bible's, a planet-type beam meeting a stellar nearer than its ship
+//!    strikes the stellar instead ([`beam_stellar`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -376,6 +382,7 @@ pub mod aim;
 pub mod armament;
 pub mod asteroid_hit;
 pub mod beam;
+pub mod beam_stellar;
 mod collision;
 pub mod damage;
 pub mod defence;
@@ -1179,6 +1186,9 @@ pub struct Combat {
     planet_blasts: PlanetBlasts,
     /// Which of its weapon's bits makes a beam planet-type.
     beam_planet_flag: BeamPlanetFlag,
+    /// Whether a planet-type beam hits a stellar
+    /// ([`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)).
+    beam_stellars: RuleSource,
     /// How often a decaying shot takes a step.
     decay: DecayStep,
     /// Whether an NPC's pick spends on a copy that spawns nothing
@@ -1375,14 +1385,24 @@ impl Combat {
             fighter.condition.count_down();
         }
         self.display_player(fighters, arena);
-        self.test_hits(fighters, arena, scenery, chance);
+        let Scenery {
+            stellars,
+            asteroids,
+            hazards: _,
+        } = scenery;
+        let collided = Scenery {
+            stellars: &mut *stellars,
+            asteroids,
+            hazards,
+        };
+        self.test_hits(fighters, arena, collided, chance);
         self.defend_npcs(fighters, arena, None, false, chance);
         self.fly_shots(fighters, arena, chance);
         self.handle_npcs(fighters, arena, chance);
         if let Some(hazards) = hazards {
             self.hazards(fighters, hazards);
         }
-        self.close_tick(fighters, arena, chance);
+        self.close_tick(fighters, arena, stellars, chance);
     }
 
     /// Marks the last strike on `ship` since `first_strike`, but a missile
@@ -1575,6 +1595,12 @@ impl Combat {
     /// [`planet_type`]): by default, [`BeamPlanetFlag::Flags`].
     pub fn set_beam_planet_flag(&mut self, reading: BeamPlanetFlag) {
         self.beam_planet_flag = reading;
+    }
+
+    /// Has a planet-type beam hit a stellar as `reading` says (see
+    /// [`beam_stellar`]): by default, the engine's, which never does.
+    pub fn set_beam_stellars(&mut self, reading: RuleSource) {
+        self.beam_stellars = reading;
     }
 
     /// The readings the hit rules take ([`Sides`]): who counts as the
@@ -2712,17 +2738,27 @@ impl Combat {
     /// multiplied by `factor` ([`GamePass`]), cone hits and segment hits
     /// alike; its `Impact` and `Ionization` never are. The caller lands it
     /// before the next beam is tested, as `_HandleBeams` damages the ship
-    /// in its beam loop (@0x316a1).
+    /// in its beam loop (@0x316a1). By the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars), a
+    /// planet-type beam meeting one of `stellars` nearer than the ship it
+    /// hits strikes the stellar instead, and hits no ship ([`beam_stellar`]);
+    /// by the engine's it never does.
     fn beam_hit(
         &mut self,
         index: usize,
-        fighters: &[Fighter],
+        (fighters, stellars): (&[Fighter], &mut [StellarTarget]),
         sides: &Sides,
         factor: f32,
     ) -> Option<Landed> {
         let beam_rules = self.beam_rules;
+        let hit = self.beams[index].hit(sides, beam_rules);
+        if self.beam_stellars == RuleSource::Bible
+            && self.beam_strikes_stellar(index, hit.map(|(_, at)| at), stellars, factor)
+        {
+            return None;
+        }
+        let (ship, at) = hit?;
         let beam = &mut self.beams[index];
-        let (ship, at) = beam.hit(sides, beam_rules)?;
         beam.end = at;
         let beam = *beam;
         let meant = beam.aimed_at.or_else(|| {

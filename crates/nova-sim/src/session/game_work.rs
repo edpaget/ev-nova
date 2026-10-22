@@ -561,16 +561,23 @@ impl Session {
     /// deadly stellar kills is out of the beams. The kills' hold starts
     /// before the beams' hits settle (see the `deadly_stellars` module),
     /// as a phase that lands hits settles ([`Session::settle_landed`]).
+    /// The beams meet the stellars shown that shots can hit, which only
+    /// the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
+    /// lets them strike; each a beam shoots down runs its `OnDestroy` (see
+    /// the `stellars` module) once the hits have settled.
     pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         let hazards = self.stellar_hazards();
+        let mut stellars = self.stellar_targets();
         let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.hazards(fighters, &hazards);
-            combat.close_tick(fighters, arena, chance);
+            combat.close_tick(fighters, arena, &mut stellars, chance);
         });
         let killed = self.hold_stellar_kills();
         self.settle_landed(&was, (player_was, killed), rules, chance);
+        self.strike_stellars(&stellars, rules.law, chance);
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
