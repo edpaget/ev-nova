@@ -607,3 +607,52 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
         ended.state.velocity
     );
 }
+
+#[test]
+fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
+    // As its burst ends an inertialess ship's velocity is zeroed
+    // (@0x34d37-0x34d59), then it waits Rand(30) + 30 (@0x34d5c-0x34d8b).
+    let mut sniper = held(
+        Goal::Snipe(ShipRef::Player),
+        at(0.0, 0.0, 2.0, 0.0, 90.0),
+        1,
+    );
+    sniper.stats = ShipStats::new(
+        crate::handling::ShipFields {
+            flags2: INERTIALESS_HULL,
+            ..FAST
+        },
+        &[],
+    );
+    sniper.speed = 2.0;
+    sniper.govt = Some(GovtId(128));
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![sniper];
+    let world = World {
+        player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
+        ..World::new(&[])
+    };
+    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    assert_eq!(traffic.npcs[0].owed_burst, Some(30.0));
+    let mut ticks = 0;
+    while traffic.npcs[0].owed_burst.is_some() {
+        assert_eq!(traffic.npcs[0].goal, Goal::Snipe(ShipRef::Player));
+        assert!(
+            traffic.npcs[0].state.velocity.length() > 1.0,
+            "tick {ticks}: {:?}",
+            traffic.npcs[0].state
+        );
+        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        ticks += 1;
+        assert!(ticks < 50_000, "never ended");
+    }
+    let ended = &traffic.npcs[0];
+    assert!(ticks > 1, "it burst out: {ticks}");
+    assert_eq!(ended.goal, Goal::Idle);
+    assert_eq!(ended.state.velocity, Vec2::ZERO, "stopped dead");
+    assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59 });
+    for left in (1..59).rev() {
+        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        assert_eq!(traffic.npcs[0].mode, Mode::Coasting { ticks_left: left });
+    }
+}
