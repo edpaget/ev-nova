@@ -302,6 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn an_in_flight_move_that_keeps_the_course_draws_it_from_its_start() {
+        // `_DrawMap` pairs `_hyperRoute` from slot 0 (@0xe661-0xe7a2),
+        // never from the player's system.
+        let catalog = alternates();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::MoveArrival, source));
+            session.plot_course(SystemId(132)).expect("a route");
+            settle(&mut session, &catalog, "M131");
+            assert_eq!(session.system(), SystemId(131), "{source:?}");
+            let drawn = session
+                .map_drawing(None, &[], crate::galaxy_map::MapMarks::NONE)
+                .course;
+            let kept = [(130, 131), (131, 132)].map(|(a, b)| (SystemId(a), SystemId(b)));
+            assert_eq!(drawn, by(source, kept.to_vec(), vec![]), "{source:?}");
+        }
+    }
+
+    #[test]
     fn an_arrival_along_the_course_starts_it_at_the_last_hop_made() {
         let catalog = chained(catalog(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
