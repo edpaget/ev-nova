@@ -82,21 +82,27 @@ impl<
     /// flight's chance: for a pilot just created, before its first save.
     /// The
     /// ship, which the beginning puts at (50, 50), is drawn there from the
-    /// first frame, not on its way from where the view was read. A
-    /// session that failed begins nothing.
+    /// first frame, not on its way from where the view was read, and the
+    /// stars are scattered afresh about it when the flight is next caught
+    /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
+    /// that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.place_ship();
+            self.stars_due = true;
         }
     }
 
     /// Enters play from the main screen as [`Session::enter_game`] does:
-    /// the refresh a later new pilot reads is taken afresh. A session that
+    /// the refresh a later new pilot reads is taken afresh, and the stars
+    /// are scattered afresh when the flight is next caught up with, as
+    /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
     /// failed enters nothing.
     pub fn enter_game(&mut self) {
         if let Ok(session) = &mut self.session {
             session.enter_game();
+            self.stars_due = true;
         }
     }
 

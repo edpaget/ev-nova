@@ -6,9 +6,11 @@
 //! The view drives the original's as `_PlayGame` does:
 //!
 //! - **Scattering.** The stars are scattered, then placed once, as
-//!   `_PrepareAllSprites` places them (@0x3a7e2), when the flight is first
-//!   caught up with (`_EnterGameFromMainScreen` @0x19f7c, `_ResetGameData`
-//!   @0x1df5e) and at each [`SessionEvent::StarfieldReset`]: a jump's
+//!   `_PrepareAllSprites` places them (@0x3a7e2), at the first catch-up
+//!   after the flight is built, play is entered from the main screen
+//!   (`_EnterGameFromMainScreen` @0x19f7c) or a new game begins
+//!   (`_ResetGameData` @0x1df5e), and at each
+//!   [`SessionEvent::StarfieldReset`]: a jump's
 //!   arrival, a gate's exit and the escape pod's rescue. The negative
 //!   murk's clears after the scattering (`_EnterGameFromMainScreen`
 //!   @0x19f86-0x19fa5, the gates') are the scattering's own hiding. No

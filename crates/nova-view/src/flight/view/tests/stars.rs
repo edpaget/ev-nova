@@ -216,3 +216,22 @@ fn the_frame_draws_the_first_passs_placement_in_double_time() {
         }
     }
 }
+
+#[test]
+fn entering_play_and_beginning_a_game_scatter_the_stars_afresh() {
+    for enter in [true, false] {
+        let mut view = counted(starry());
+        let before = frames(&view);
+        if enter {
+            view.enter_game();
+        } else {
+            view.begin();
+        }
+        view.tick(Duration::ZERO);
+        assert_ne!(frames(&view), before, "{enter}");
+        let ship = player(&view).position;
+        for star in stars_of(&view) {
+            assert_eq!((star.x, star.y), (ship.x, ship.y), "{enter}: on the ship");
+        }
+    }
+}

@@ -1175,8 +1175,9 @@ pub struct FlightView<C> {
     /// The original's starfield (see the `stars` module), rolled on the
     /// effects' chance.
     stars: Starfield,
-    /// Whether the stars are yet to be scattered: until the flight is
-    /// first caught up with, when its chance and view are set.
+    /// Whether the stars are to be scattered at the next catch-up: once
+    /// the flight is built, play entered or a game begun, when its chance
+    /// and view are set.
     stars_due: bool,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
