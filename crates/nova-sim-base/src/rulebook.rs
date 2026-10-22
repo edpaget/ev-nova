@@ -857,8 +857,9 @@ rule_keys! {
     /// `nova_sim::story` module's "Built by phase 8").
     YOnDestroy => "y_on_destroy",
     /// What a destroyed stellar whose `DeadType` has no readable sheet
-    /// (-1, outside 0 to 255, no `spïn`, or an `rlëD` that cannot be
-    /// read) draws: by the engine, from the next rebuild point until a
+    /// (-1, outside 0 to 255, no `spïn`, or a sheet, `rlëD` or `PICT`
+    /// pair, that cannot be read) draws: by the engine, from the next
+    /// rebuild point until a
     /// flight frame sees it whole, graphic type 0 (`spïn` 1000), the
     /// sheet the original's rebuild means an empty sprite slot to get
     /// (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, its fill
@@ -900,7 +901,8 @@ rule_keys! {
     /// `nova_sim::story` module's "Built by stellar-fidelity phase 1").
     StellarFrameCount => "stellar_frame_count",
     /// What a whole stellar whose `Type` has no readable sheet (no
-    /// `spïn`, an `rlëD` that cannot be read, or outside 0 to 255) draws,
+    /// `spïn`, a sheet, `rlëD` or `PICT` pair, that cannot be read, or
+    /// outside 0 to 255) draws,
     /// is clicked by and is shot by: by the engine, from the first rebuild
     /// point that shows it, what its sprite slot holds, which is graphic
     /// type 0 (`spïn` 1000), the sheet the original's rebuild means an

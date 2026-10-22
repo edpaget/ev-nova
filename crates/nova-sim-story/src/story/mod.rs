@@ -1382,7 +1382,8 @@
 //! ## Built by phase 9
 //!
 //! A destroyed stellar whose `DeadType` has no sheet that can be read (-1,
-//! outside 0 to 255, no `spïn`, or an `rlëD` the engine cannot read) draws
+//! outside 0 to 255, no `spïn`, an `rlëD` the engine cannot read, or a
+//! `PICT` pair the engine cannot read) draws
 //! graphic type 0, `spïn` 1000, from the next rebuild point until a
 //! flight frame finds it whole, as the original's rebuild means to fill
 //! the sprite slot it left empty (its own code faults first; see
@@ -1497,18 +1498,19 @@
 //!   without the `spïn` (`_GetSpriteInfo` @0x1ebb9). At 16 bits it reads
 //!   the `rlëD` (@0x1ebd7-0x1ebee); with no `rlëD` it builds the sprite
 //!   from the `spïn`'s `PICT` pair instead (`_SWCreateSpriteFromSinglePictXY`
-//!   @0x1ece3), which the engine does not read (story-runtime phase 15).
-//!   `_SWCreateSpriteFromRLEResource` (@0xa9990) clears the master first
-//!   (@0xa99e3) and writes it only on success (@0xa9be7), so a failure
-//!   leaves the slot empty, and graphic type 0 after a rebuild; each
-//!   failure is reported in a stop alert (`_ReportSpriteLoadError`
+//!   @0x1ece3), which the engine reads as the original cuts it since
+//!   stellar-fidelity phase 4 (see "Checked for stellar-fidelity phase
+//!   4"). `_SWCreateSpriteFromRLEResource` (@0xa9990) clears the master
+//!   first (@0xa99e3) and writes it only on success (@0xa9be7), so a
+//!   failure leaves the slot empty, and graphic type 0 after a rebuild;
+//!   each failure is reported in a stop alert (`_ReportSpriteLoadError`
 //!   @0x1eb62) and play goes on. It reads only the `rlëD`'s header (the
 //!   frame size, the depth at +4, the frame count at +8) and makes each
-//!   frame at the header's depth (`_SWCreateFrame`, `NewGWorld`
-//!   @0xad6b7), decoding no token at load: an `rlëD` whose tokens are
-//!   corrupt loads, and one whose header says 8 bits loads as 8-bit
-//!   frames. The engine reads either as no sheet (it cannot draw them)
-//!   and reports it; story-runtime phase 15 owns the 8-bit sheet.
+//!   frame at the header's depth with no pixel buffer (`_SWCreateFrame`
+//!   @0xad62c → @0xad6f2), decoding no token at load: an `rlëD` whose
+//!   tokens are corrupt loads, and one whose header says 8 bits loads and
+//!   draws garbled (see "Checked for stellar-fidelity phase 4"). Only a
+//!   corrupt `rlëD` reads as no sheet in the engine, which reports it.
 //! - **Stock data**: no stock `spöb` has a `DeadType` in 0 to 255 whose
 //!   sheet cannot be read, and `spïn` 1000 reads, so the stock scenes
 //!   report no new problem (`stock_system_view`).
@@ -2027,7 +2029,7 @@
 //! ## Built by stellar-fidelity phase 3
 //!
 //! A whole stellar whose `Type` has no sheet that can be read (no `spïn`,
-//! an `rlëD` the engine cannot read, or a `Type` outside 0 to 255; the
+//! a sheet the engine cannot read, or a `Type` outside 0 to 255; the
 //! catalog's `LandingSite::frame_size` is `None`) draws, is clicked by
 //! and is shot by what its sprite slot holds, from the first rebuild point
 //! that shows it: graphic type 0, as the rebuild means an empty slot to
@@ -2157,14 +2159,239 @@
 //!     (`_masterStellarSprite` @0x2e7c7): a memory-layout accident; the
 //!     engine reads it as no sheet, so it draws graphic type 0.
 //! - **Left out, depending on unlanded work.**
-//!   - `Type` sheets the original loads but the engine cannot read yet: a
+//!   - `Type` sheets the original loads that the engine could not read: a
 //!     `spïn` with no `rlëD` (the `PICT` pair,
-//!     `_SWCreateSpriteFromSinglePictXY` @0x1ece3) and an 8-bit `rlëD`
-//!     (stellar-fidelity phase 4). Until it lands, such a `Type` reads as
-//!     no sheet and draws graphic type 0 where the original draws the
-//!     sheet. Stock has none.
+//!     `_SWCreateSpriteFromSinglePictXY` @0x1ece3) and an 8-bit `rlëD`.
+//!     Read since stellar-fidelity phase 4: such a `Type` draws its own
+//!     sheet.
 //!   - A `spïn` whose tiles multiply to 0 or less (stellar-fidelity phase
 //!     8). Such a `Type` reads, so it is outside this phase's rule.
+//!
+//! ## Built by stellar-fidelity phase 4
+//!
+//! A `spïn` with no `rlëD` reads from its `PICT` pair, and an `rlëD` whose
+//! header says 8 bits reads, both as the original loads and draws them.
+//! Stellars, shots and explosions share the lookup
+//! (`nova_data::GameData::spin_sheet`), so all of them draw such sheets;
+//! a stellar whose `Type` or `DeadType` is one now draws it, not graphic
+//! type 0 or its `Type`.
+//!
+//! - **The `PICT` pair** (`nova_data::graphics::cut_pict_sheet`): the
+//!   sprites `PICT` is cut into `xSize` x `ySize` frames, as many columns
+//!   as its width holds, row by row, each colour kept to its top five bits;
+//!   the mask shows the sprite only where it is white at five bits, or,
+//!   when `MasksID` is `SpritesID`, the sprite hides its own white. The
+//!   sheet's kind (`nova_data::SheetKind::PictPair`) has the views key its
+//!   frames by the `spïn` (`nova_view::ImageKind::SpinSheet`), since there
+//!   is no `rlëD` ID to key them by.
+//! - **The 8-bit `rlëD`** (`nova_data::graphics::decode_rled_as`): by the
+//!   engine's reading, its bytes as they fall into the 16-bit world; by the
+//!   other, each byte a colour of the Mac's standard 256-colour table.
+//! - **16-bit runs** now fill as `_BlitPixieMemSet` does: the run word's
+//!   low half on the run's even pixels, its high half on the odd ones,
+//!   where the engine took the high half everywhere. Stock runs are all
+//!   `0x7FFF7FFF`, so stock draws the same.
+//! - **Problems.** A `spïn` with neither an `rlëD` nor a `PICT`, a `PICT`
+//!   pair with no mask, and a pair that does not decode or cut are each
+//!   reported with their reason, and the fallbacks of phases 9 and 3 apply
+//!   as to any sheet that cannot be read.
+//!
+//! **Readings.** The Rulebook key
+//! [`eight_bit_sheet`](crate::RuleKey::EightBitSheet) defaults to the
+//! engine: an 8-bit sheet drawn garbled, as the original draws it. The
+//! other reading, the intended alternative since the Bible says only
+//! "rleD/rle8 resources", draws each byte through the standard palette.
+//! The `PICT` cut gets no key: it is a well-defined cut, not garbled, and
+//! the Bible gives no rule for it. The 16-bit runs get no key either: the
+//! high-half reading was a stand-in taken from an editor, not a reading of
+//! the Bible or a choice the engine made for a reason, and stock cannot
+//! tell the two apart. No sound: none of these routines calls `PlaySound`
+//! or `_beepSnd`; the stop alerts and `_SWAssertFail`'s `SysBeep` belong to
+//! the quit paths left out.
+//!
+//! ## Checked for stellar-fidelity phase 4
+//!
+//! - **The world is 16-bit.** `_main` clears `_useLegacyRenderingPipeline`
+//!   (0x30faa0, through 0x3b5030) at @0xccab8-0xccabe, setting it only when
+//!   `_meetsMinimumRequirements` fails (@0xccac1-0xccaca). With it clear,
+//!   `_SWCreateSpriteWorld` makes the world 16-bit (@0xb6be2), as
+//!   `_SWCreateFrame` and `_SWCreateGWorldFromPict` make their `GWorld`s
+//!   (@0xad68d-0xad6a9, @0xa7e81-0xa7e9d). So `_LoadMasterStellarSprite`'s
+//!   depth test (@0x1ebd7-0x1ebe8) always picks `rlëD`, never `rlë8`, as
+//!   `_LoadSprites` does for every other `spïn` (@0x205bf-0x205d5).
+//! - **F1. Loading a `spïn`** (`_LoadMasterStellarSprite` @0x1eb72;
+//!   `_LoadSprites` repeats it, e.g. @0x20659-0x20752). `_GetSpriteInfo`
+//!   (@0x1bf80) reads `SpritesID`, `MasksID`, `xSize`, `ySize`, `xTiles`
+//!   and `yTiles` (+0 to +0xa). If `ResourceExists('rlëD', SpritesID)`
+//!   (@0x1ebee), the sheet comes from the `rlëD`
+//!   (`_SWCreateSpriteFromRLEResource` @0x1ec30); an `rlëD` that exists
+//!   but fails is not followed by the `PICT`. Otherwise the game calls
+//!   `_SWCreateSpriteFromSinglePictXY(world, &master, NULL, SpritesID,
+//!   MasksID, xSize, ySize, border 0, 0, maxFrames 0, maskType 1)`
+//!   (@0x1ece3), then `_SWLockSprite` (@0x1ed2f) and `_ConvertSpriteToRLE`
+//!   (@0x1ed3a). On either path the master's count (+0x54) is then
+//!   overwritten with `xTiles` × `yTiles` (@0x1ed8c-0x1ed97), phases 1 and
+//!   8's count, unchanged here. `xTiles` and `yTiles` play no part in
+//!   cutting a `PICT`.
+//! - **F2. Cutting the `PICT` pair** (`_SWCreateSpriteFromSinglePictXY`
+//!   @0xa9bee).
+//!   - Each `PICT` is drawn into its own `GWorld` (`_SWCreateGWorldFromPict`
+//!     @0xa7dc7) of its `picFrame` moved to (0, 0) (@0xa7e16-0xa7e34),
+//!     erased to white first (`EraseRect` @0xa7ee5), then drawn
+//!     (`_DrawPicHandle` @0xa7ef4, through `AmbrosiaTools`' `DT_ImageFileLoad`
+//!     and `DT_DrawImage`, which ends in `CopyBits`, `AmbrosiaTools`
+//!     @0x4780c, or `DrawPicture` @0x8637 if that load fails). Pixels the
+//!     picture does not cover stay white, and colours land as RGB555, each
+//!     channel's top five bits.
+//!   - The mask `PICT` (`maskType` 1) gets a `GWorld` the same way
+//!     (@0xa9e00-0xa9e15), which is inverted (`_SWInvertGWorld` @0xa9c9c →
+//!     `InvertRect` @0xa6ff8).
+//!   - With maxFrames 0 the frame count is (width / `xSize`) × (height /
+//!     `ySize`), integer divisions over the port rect (@0xa9ce7-0xa9d25).
+//!     Frames are cut row by row, left to right (@0xa9f3c-0xaa045), each an
+//!     `xSize` x `ySize` rect (`_SWCreateFrameFromGWorldAndRectPartial`
+//!     @0xa9fb5) whose pixel mask is the inverted mask `GWorld` at the same
+//!     rect (+0x40/+0x48, @0xad8c2-0xad908); the cut moves down a row when
+//!     the next rect passes the picture's width, so the columns are width /
+//!     `xSize`, not `xTiles`.
+//!   - When `MasksID == SpritesID` the mask comes from the sprite itself
+//!     (@0xa9cd0 → @0xa9e30 `_SWCreatePixelMaskFromGWorld`): with the
+//!     transparent colour white (`_gSWTransparentColor` @0xdf020 =
+//!     ffff ffff ffff), `_SWCreateMaskAndFixImage` (@0xa8848) makes a pixel
+//!     whose `& 0x7FFF` is `0x7FFF` transparent and zeroes it, every other
+//!     pixel opaque (@0xa8671-0xa86b4).
+//!   - The extra mask inversions for a world of 8 bits or fewer
+//!     (@0xa9e54-0xa9e7b, @0xa9ece-0xa9edf) are not reached at 16 bits.
+//! - **F3. Turning the cut into RLE** (`_ConvertSpriteToRLE` @0x1e489;
+//!   `_SWCreateRLEData` @0xaec89; `_BlitPixieRLEParsePixels` @0xc2875).
+//!   - The picture's area must equal frame width × height × frames
+//!     (@0x1e4a0-0x1e4e4), true only for a whole grid. Otherwise it logs
+//!     (@0x1e4e6), returns -1, and the loader raises
+//!     `_ReportSpriteLoadError` kind 4 (@0x1ed7b); the master keeps frames
+//!     with no RLE data (+0xd4 null, each frame's +0x68 null).
+//!   - `_SWCreateRLEData(sprite, 0)` takes frame 0's depth (16), needs each
+//!     frame's mask (@0xaee0d → error 0x6a), and calls
+//!     `_BlitPixieRLEParsePixels`, which keeps a pixel exactly where its
+//!     mask pixel is 0 (@0xc2958-0xc297e). After the inversion that is
+//!     where the mask `PICT` was white at RGB555: white in the mask shows
+//!     the sprite, black, grey and every other colour hide it, and the
+//!     mask's uncovered pixels, erased white, show. Shown pixels keep their
+//!     RGB555 value, black included. The mask is stepped by the sprites'
+//!     rowBytes (@0xc2b88-0xc2b8e). No fill token (op 4) is emitted: state
+//!     3 is never entered. The `GWorld`s are disposed (@0x1e518-0x1e5ba).
+//! - **F4. An `rlëD` of depth 8** (`_SWCreateSpriteFromRLEResource`
+//!   @0xa9990; `_SWCreateFrame` @0xad556; `_BlitPixieRLETranslucentDrawProc`
+//!   @0xbb3fc; `_BlitPixieRLE` @0xbddd0).
+//!   - The loader reads the header (@0xa99e9-0xa99fb) and makes min(count,
+//!     `xTiles` × `yTiles` when that is above 0) frames at the header's
+//!     depth (@0xa9a28-0xa9a41, @0xa9ac7). The frame-making flag is
+//!     `maskType & 7` = 0, so `_SWCreateFrame` makes no `GWorld` (@0xad62c →
+//!     @0xad6f2): each frame holds only its depth (+0x20 = 8) and shift
+//!     (+0x5e = 0). `GetPixDepth` (@0xad64b) is in the `GWorld` branch,
+//!     reached only by the legacy pipeline. No CLUT is read on this path.
+//!   - The resource flipper `_FlipRle8` (@0xa5cd6, installed for `rlë8`
+//!     and `rlëD`, @0xa58a7, @0xa58cf) swaps the header words;
+//!     `_BlitPixieRLESwap` (@0xbe3a8) byte-swaps each token and run word
+//!     (@0xbe440), 16-bit pixels (@0xbe44d) and 32-bit pixels (@0xbe46e),
+//!     and leaves 8-bit pixel bytes as they are (@0xbe3f0-0xbe3f7).
+//!   - Every stellar slot's draw proc is `_BlitPixieRLETranslucentDrawProc`
+//!     (`_HandleStellarSystemVisibility` @0x33052 sets it from 0x3b532c).
+//!     For a depth-8 frame with no translucency (+0xa8 ≤ 0) and no bias
+//!     (+0xb0 ≤ 0) it calls plain `_BlitPixieRLE` (@0xbb792 → @0xbb8b6 →
+//!     @0xbb9fb → @0xbb9c3; clipped, `_BlitPixieRLEClipped` @0xbb89f →
+//!     @0xbb751), with the destination addressed by the 16-bit world's
+//!     shift (@0xbb53c-0xbb555).
+//!   - `_BlitPixieRLE` works in bytes: op 1 moves to the next row, op 2
+//!     copies *count* bytes (`_BlitPixieMemCopy`) and aligns the stream to
+//!     4, op 3 skips *count* bytes, and op 4 calls
+//!     `_BlitPixieMemSet(dst, run word, count)` (@0xc0452), which stores
+//!     the swapped word in 4-byte chunks, then a 2-byte tail of its low
+//!     half and a 1-byte tail of its low byte (@0xc0452-0xc049a): the file
+//!     word `b0 b1 b2 b3` lands as `b3 b2 b1 b0` repeating.
+//!   - So row *y*'s bytes land at the frame's left edge in the 16-bit
+//!     little-endian world: pixel *k* is `byte[2k] | byte[2k + 1] << 8`,
+//!     RGB555 with its top bit ignored. The picture fills the left half of
+//!     its frame box, each pair of colour indexes one meaningless colour,
+//!     and a pixel only one of whose bytes is written keeps the
+//!     background's other byte.
+//!   - The same store makes a 16-bit run's pixel *k*, counted from the
+//!     run's start, the word's low half when *k* is even and its high half
+//!     when *k* is odd. The game's own encoder never emits a run (its dead
+//!     run code would repeat the pixel into both halves, @0xc29d7-0xc29f4),
+//!     so only a sheet from another encoder can tell the readings apart.
+//!   - The frame rect (+0x22), used for clicks, collision and the slot
+//!     rect, is the header's width × height whatever the depth, so the
+//!     catalog's frame sizes are unchanged by the reading.
+//! - **F5. What happens when loading fails.** Every `SpriteWorld` assert on
+//!   these paths quits the game: `_SWAssertFail` (@0xa7a50) shows a stop
+//!   alert (@0xa7b04), beeps (`SysBeep` @0xa7b15) and calls `ExitToShell`
+//!   (@0xa7b2d).
+//!   - A missing `PICT` or mask fails `_SWCreateSpriteFromSinglePictXY`
+//!     (@0xa9c5a; mask @0xa9c83-0xa9c90), leaving the master null; the
+//!     loader raises alert kind 3, then `_SWLockSprite(NULL)` asserts
+//!     (@0xaa96e-0xaa973 → @0xaaaad-0xaaabc). (`_LoadSprites` would also
+//!     write +0x54 through null, @0x2074d.)
+//!   - An `xSize` or `ySize` of 0 divides by zero (@0xa9cff, @0xa9d1d); a
+//!     negative one fails the rect assert in `…Partial` (@0xad818-0xad844).
+//!   - A picture smaller than one frame cuts no frames, and
+//!     `_SWSetCurrentFrameIndex(0)` (@0xa9f12) divides by a count of 0
+//!     (@0xa90e7).
+//!   - A picture that is not a whole grid raises alert kind 4 (F3), and the
+//!     first draw asserts on the frame's null RLE pointer (@0xbb43c-0xbb441
+//!     → @0xbb66d).
+//!   - A mask of another width is read sheared, and a shorter one past its
+//!     end, as it is stepped by the sprites' rowBytes.
+//!   - `_SWLockSprite`'s frame walk (@0xaaa10-0xaaa5b) asserts when an
+//!     `rlëD`'s line-start counts do not chain to another line start or
+//!     the end.
+//! - **Sounds.** None of these routines calls `PlaySound` or `_beepSnd`.
+//! - **Left out.**
+//!   - The quit and crash paths of a `PICT` pair (F5): the original's bugs,
+//!     each ending the game, and a crash is not a reading. The engine reads
+//!     each as no sheet with a reason (`NoSheet`, `NoMask`, `Picture` with
+//!     `BadDimensions`, `NoFrames` or `PartialGrid`), so phase 9's and
+//!     phase 3's fallbacks apply. No key.
+//!   - The stop alerts of `_ReportSpriteLoadError` (kinds 3 and 4, @0x1ed24,
+//!     @0x1ed7b; alert through 0x3b6257 @0x1eb62): each precedes a quit,
+//!     and the engine lists the reason among the scene's problems.
+//!   - A mask of another width than its sprites, or shorter
+//!     (@0xc2b88-0xc2b8e): a memory-layout accident, read by the engine as
+//!     `MaskSizeMismatch`.
+//!   - An `rlëD` whose line-start counts do not chain (@0xaaa1f-0xaaa2e,
+//!     @0xaaa4c-0xaaa5b): the original's bug; the engine ignores the
+//!     counts, as it always has.
+//!   - A 16-bit pixel of an 8-bit sheet only one of whose bytes is written
+//!     keeps the background's other byte (F4): a straight-alpha texture
+//!     cannot replicate it, so it is drawn clear.
+//!   - The legacy pipeline: a world at the device's depth, `rlë8`
+//!     (`0x726c9138`, @0x1ebd7-0x1ebe8, @0xa99b4-0xa99bd), `_SWCreateFrame`'s
+//!     `GWorld` branch with `GetPixDepth` @0xad64b, and the 8-bit-world mask
+//!     inversions (@0xa9e54-0xa9e7b, @0xa9ece-0xa9edf). It runs only when
+//!     `_meetsMinimumRequirements` fails (@0xccac1-0xccaca); the engine
+//!     models the 16-bit world every supported machine runs.
+//!   - An `rlëD` of depth 32, or of any depth other than 8 or 16, loads
+//!     (@0xa9a28-0xa9ac7). At 32 bits `_BlitPixieRLESwap` swaps each pixel
+//!     (@0xbe46e) and `_BlitPixieRLE`'s byte copy draws it at twice its
+//!     width, past its frame box; other depths misparse in the swap
+//!     (@0xbe3f0-0xbe401), and the draw proc asserts on a depth of 7 or
+//!     less (@0xbb612). The engine keeps `UnsupportedDepth`, so such a
+//!     sheet falls back to graphic type 0.
+//!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
+//!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
+//!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`
+//!     now decodes as drawn through the shared decoder, matching the plain
+//!     blit.)
+//!   - Main-screen `spïn`s 600 to 610 from a `PICT` pair: `_LoadSprites`
+//!     reads them the same way (@0x206b0); the main screen reads their
+//!     `rlëD` only.
+//!   - An 8-bit sheet drawn translucent: `_BlitPixieRLETranslucentDrawProc`'s
+//!     depth-8 branches, `_BlitPixieRLETranslucent8`,
+//!     `_BlitPixieRLETranslucentClipped8`, `_BlitPixieRLEAddOver8` and
+//!     `_BlitPixieRLEAddOverClipped8` (@0xbb7ed-0xbb890, @0xbb8b6-0xbb9ec),
+//!     where levels 0x20 and up that are not the plain add-over case draw
+//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). A stellar reaches them
+//!     only when murk gives it translucency (+0xa8 > 0), which the engine
+//!     does not model yet; a ship reaches them under cloak or fade.
 
 //! # Mission lifecycle
 //!
