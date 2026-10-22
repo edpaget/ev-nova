@@ -226,6 +226,7 @@
 //! a gate or a stellar without the can-land flag leaves it on none.
 
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
+use super::script_move::{MoveTarget, resolve_move};
 use super::{MissionRun, Outbox, Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
@@ -390,19 +391,14 @@ impl Session {
         settled: &mut Settled,
     ) {
         for step in std::mem::take(&mut self.run.queued.moves) {
-            let (system, keep) = match step {
-                ScriptMove::To(system) => (system, false),
-                ScriptMove::KeepPosition(system) => (system, true),
-                ScriptMove::Stay => {
-                    self.stay(catalog, chance);
-                    continue;
+            let rules = self.setup.script_effect_rules();
+            match resolve_move(step, |system| catalog.system_exists(system), rules) {
+                MoveTarget::To { system, keep } => {
+                    self.move_to(system, keep, catalog, chance);
+                    settled.moved = Some(self.pilot.system);
                 }
-            };
-            if catalog.system_exists(system) {
-                self.move_to(system, keep, catalog, chance);
-                settled.moved = Some(self.pilot.system);
-            } else if self.setup.script_effect_rules().missing_system_move == RuleSource::Engine {
-                self.stay(catalog, chance);
+                MoveTarget::Stay => self.stay(catalog, chance),
+                MoveTarget::Nothing => {}
             }
         }
     }

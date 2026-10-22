@@ -89,12 +89,11 @@
 
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use super::script_effects::{ScriptMove, move_placement};
+use super::script_move::{MoveTarget, resolve_move};
 use super::story::NoCatalog;
 use super::{Chart, Session};
 use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::pilot::ExploredLevel;
-use crate::rulebook::RuleSource;
 use crate::story::{Entrance, StoryEvent, StoryEventKind};
 
 /// A jump's window, from its end to its entry (see the module docs).
@@ -197,44 +196,24 @@ impl Session {
     /// module docs).
     fn move_in_jump(&mut self, step: ScriptMove, chance: &mut dyn Chance) {
         let rules = self.setup.script_effect_rules();
-        let to = match step {
-            ScriptMove::To(system) | ScriptMove::KeepPosition(system)
-                if self.chart.galaxy.exists(system) =>
-            {
-                Some((system, matches!(step, ScriptMove::KeepPosition(_))))
-            }
-            ScriptMove::To(_) | ScriptMove::KeepPosition(_)
-                if rules.missing_system_move != RuleSource::Engine =>
-            {
-                return;
-            }
-            ScriptMove::To(_) | ScriptMove::KeepPosition(_) | ScriptMove::Stay => None,
+        let to = match resolve_move(step, |system| self.chart.galaxy.exists(system), rules) {
+            MoveTarget::To { system, keep } => Some((system, keep)),
+            MoveTarget::Stay => None,
+            MoveTarget::Nothing => return,
         };
         let mut placed = false;
         if let Some((system, keep)) = to {
             self.pilot.system = system;
             self.chart.deselect();
-            let first = self
-                .statics
-                .first_stellars
-                .get(&system)
-                .map(|&stellar| (self.statics.stellar_position(stellar), None));
+            let first = self.statics.first_stellar(system);
             let placement = move_placement(first, keep, false, rules);
             placed = placement.ship != ShipPlacement::Keep;
             self.place(placement);
         }
         self.chart
             .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
-        if to.is_some() && rules.arrival == RuleSource::Bible {
-            let system = self.pilot.system;
-            self.chart.explore_place(
-                &mut self.pilot,
-                &self.setup,
-                system,
-                ExploredLevel::Explored,
-            );
-            self.pilot.clear_course();
-            self.run.raise(StoryEvent::Explored { system });
+        if to.is_some() {
+            self.arrive_by_move(self.pilot.system, rules);
         }
         if let Some(window) = &mut self.chart.jump_window {
             window.placed |= placed;

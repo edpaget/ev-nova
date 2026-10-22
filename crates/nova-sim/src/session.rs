@@ -524,6 +524,7 @@ mod repair_dock;
 mod rescue;
 mod sabotage;
 mod script_effects;
+mod script_move;
 mod self_destruct;
 mod self_repair;
 mod setup;

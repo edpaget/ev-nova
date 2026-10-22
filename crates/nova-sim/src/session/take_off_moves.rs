@@ -108,12 +108,11 @@
 
 use super::entry::Dock;
 use super::script_effects::{ScriptMove, move_placement};
+use super::script_move::{MoveTarget, resolve_move};
 use super::{Chart, Session, SessionEvent};
 use crate::catalog::{PilotCatalog, SystemId};
 use crate::landing::is_dockable_destroyed_or_not;
-use crate::pilot::ExploredLevel;
 use crate::rulebook::RuleSource;
-use crate::story::StoryEvent;
 
 /// The last move a take-off's window absorbed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,18 +162,10 @@ impl Session {
     /// tail, at its operator, with no catalog (see the module docs).
     pub(super) fn move_at_take_off(&mut self, step: ScriptMove) {
         let rules = self.setup.script_effect_rules();
-        let to = match step {
-            ScriptMove::To(system) | ScriptMove::KeepPosition(system)
-                if self.chart.galaxy.exists(system) =>
-            {
-                Some((system, matches!(step, ScriptMove::KeepPosition(_))))
-            }
-            ScriptMove::To(_) | ScriptMove::KeepPosition(_)
-                if rules.missing_system_move != RuleSource::Engine =>
-            {
-                return;
-            }
-            ScriptMove::To(_) | ScriptMove::KeepPosition(_) | ScriptMove::Stay => None,
+        let to = match resolve_move(step, |system| self.chart.galaxy.exists(system), rules) {
+            MoveTarget::To { system, keep } => Some((system, keep)),
+            MoveTarget::Stay => None,
+            MoveTarget::Nothing => return,
         };
         // `_dockedPortMissions` filled with -1 (@0x1584b, @0x15949).
         self.run.empty_offers();
@@ -196,23 +187,10 @@ impl Session {
                 self.port.hold_position = true;
             }
         } else {
-            let first = self
-                .statics
-                .first_stellars
-                .get(&system)
-                .map(|&stellar| (self.statics.stellar_position(stellar), None));
+            let first = self.statics.first_stellar(system);
             self.place(move_placement(first, keep, true, rules));
         }
-        if rules.arrival == RuleSource::Bible {
-            self.chart.explore_place(
-                &mut self.pilot,
-                &self.setup,
-                system,
-                ExploredLevel::Explored,
-            );
-            self.pilot.clear_course();
-            self.run.raise(StoryEvent::Explored { system });
-        }
+        self.arrive_by_move(system, rules);
         if let Some(window) = &mut self.chart.take_off_window {
             window.moved = Some(TakeOffMove { system, keep });
         }
