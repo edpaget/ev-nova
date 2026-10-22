@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::catalog::{
-    CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, StellarId,
+    BoomId, CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
+    NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId, StellarId,
     StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
@@ -102,6 +102,10 @@ pub(super) struct Statics {
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     pub(super) stellar_marks: StellarMarks,
+    /// Each `bööm` with a sound, and the `snd ` its explosion plays, read
+    /// when the session starts: what a `Y`'s explosion sounds (see the
+    /// `y_explosion` module).
+    pub(super) boom_sounds: BTreeMap<BoomId, SoundId>,
 }
 
 impl Statics {

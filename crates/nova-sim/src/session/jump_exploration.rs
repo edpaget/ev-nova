@@ -541,7 +541,7 @@ pub(super) mod tests {
     /// lister, 128, is `_FindSystemFromStellar`'s. 150 is kept rescued in
     /// the departure 130 by [`rescued_in_130`]. The `OnExplore` of the
     /// nebula around 131 starts 141, to 160, and 142, to 150.
-    fn unowned_160() -> FakePilotCatalog {
+    pub(in crate::session) fn unowned_160() -> FakePilotCatalog {
         let mut catalog = shared();
         catalog.star_map.push(star(127, (-600.0, 600.0), &[]));
         catalog.star_map.push(star(128, (-600.0, 600.0), &[]));

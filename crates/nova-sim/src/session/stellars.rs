@@ -11,9 +11,10 @@
 //!   [`RuleKey::DestroyInvincible`]'s engine reading an invincible stellar
 //!   (`Strength` 0 or -1) is left as it was. A stellar with no record, or
 //!   outside the original's slots, 128 to 2175, is left alone. When the
-//!   stellar is among those shown in flight and was not destroyed before,
-//!   it makes the stellar's explosion at its centre, invincible or not
-//!   (@0x15a59-0x15ab4). By [`RuleKey::YOnDestroy`]'s engine reading it
+//!   stellar is the player's system's and was not destroyed before, it
+//!   makes the stellar's explosion at its own position, invincible or
+//!   not, heard at once, docked or not, and drawn only in flight
+//!   (@0x15a59-0x15ab4; see the `y_explosion` module). By [`RuleKey::YOnDestroy`]'s engine reading it
 //!   runs no `OnDestroy`; by the Bible's it runs it once it has destroyed
 //!   a whole stellar, unless that stellar's `OnDestroy` is running
 //!   already, which is reported as a `ScriptNote` instead.
@@ -217,18 +218,9 @@ impl Session {
             return;
         };
         let destroyed_before = self.chart.galaxy.destroyed(stellar);
-        let site = self
-            .chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .copied();
-        let shown = site.is_some() && self.mode.landed().is_none();
-        if let Some(site) = site
-            && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
-        {
-            self.space.combat.explode(site.position, explosion);
-        }
+        // The explosion, heard at once, before the countdown
+        // (@0x15a59-0x15ab4; see the `y_explosion` module).
+        self.explode_on_y(stellar, &life, destroyed_before);
         self.space.strength.remove(&stellar);
         if wreck::destroys(
             &life,
@@ -1346,7 +1338,7 @@ mod tests {
     }
 
     /// The explosions among `events` of `bööm` `kind`, where each was and
-    /// its size.
+    /// its size: a `Y`'s, heard already, of size 0.
     fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
@@ -1356,6 +1348,11 @@ mod tests {
                     explosion,
                     size,
                 } if Some(explosion) == Explosion::decode(kind) => Some((at, size)),
+                CombatEvent::ExplodedHeard { at, explosion }
+                    if Some(explosion) == Explosion::decode(kind) =>
+                {
+                    Some((at, 0.0))
+                }
                 _ => None,
             })
             .collect()

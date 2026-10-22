@@ -355,6 +355,10 @@ impl Effects {
             } => {
                 self.explode(explosion, point(at), size, scene, looks, chance);
             }
+            // A `Y`'s: the session raised its sound as it went off.
+            CombatEvent::ExplodedHeard { at, explosion } => {
+                self.go_off(explosion, point(at), 0.0, scene, looks, chance);
+            }
             CombatEvent::Destroyed {
                 at,
                 velocity,
@@ -500,6 +504,25 @@ impl Effects {
         looks: &Looks,
         chance: &mut dyn Chance,
     ) {
+        self.go_off(explosion, at, size, scene, looks, chance);
+        // Heard whether or not the pool had room for it (`_CreateExplosion`
+        // @0x3f91a).
+        if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
+            self.sounds.push(explosion_heard(sound, at, scene.player));
+        }
+    }
+
+    /// Sets off `explosion` at `at` with `size` as [`Effects::explode`]
+    /// does, unheard.
+    fn go_off(
+        &mut self,
+        explosion: Blast,
+        at: Point,
+        size: f32,
+        scene: &Scene,
+        looks: &Looks,
+        chance: &mut dyn Chance,
+    ) {
         let caps = scene.caps;
         if explosion.extra {
             let size = f64::from(size);
@@ -522,12 +545,7 @@ impl Effects {
                 self.spawn(LARGE_EXTRA, offset(at, x, y), delay as f32, looks, caps);
             }
         }
-        // Heard whether or not the pool had room for it (`_CreateExplosion`
-        // @0x3f91a).
         self.spawn(explosion.boom, at, 0.0, looks, caps);
-        if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
-            self.sounds.push(explosion_heard(sound, at, scene.player));
-        }
     }
 
     /// Advances the explosions and debris a step, and the looped sounds
@@ -1674,6 +1692,20 @@ mod tests {
         assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
         assert_eq!(effects.take_sounds(), [explosion_sound(302, (30, 40))]);
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+    }
+
+    #[test]
+    fn a_ys_explosion_goes_off_unheard_its_sound_the_sessions() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let event = CombatEvent::ExplodedHeard {
+            at: Vec2::new(30.0, 40.0),
+            explosion: blast(130, true),
+        };
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        assert_eq!(effects.explosions().len(), 1, "of size 0, no extras");
+        assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
+        assert_eq!(effects.take_sounds(), [], "the session sounded it");
     }
 
     /// Weapon explosion `explosion` of `size` at (30, 40), applied: the

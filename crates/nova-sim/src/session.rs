@@ -554,6 +554,7 @@ mod tutorial;
 #[cfg(test)]
 mod vacated_berths;
 mod warp_stage;
+mod y_explosion;
 
 use capture::CaptureFuel;
 pub use hooks::HookRules;
@@ -1146,6 +1147,7 @@ impl Session {
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
+            boom_sounds: catalog.boom_sounds().into_iter().collect(),
         };
         let mut session = Self {
             mode: Mode::Flying,

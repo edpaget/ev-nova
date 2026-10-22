@@ -285,6 +285,20 @@ pub const BOOM_TYPES: i16 = 64;
 /// What an explosion type is offset by to add extra small explosions.
 pub const EXTRA_EXPLOSIONS: i16 = 1000;
 
+/// The first explosion sound, `snd ` 300: `_LoadSounds` loads 300-363
+/// into the explosion handles (0x3b5428, from @0x1c200).
+pub const FIRST_EXPLOSION_SOUND: i16 = 300;
+
+/// The `snd ` an explosion of a `bööm` whose `SoundIndex` is `index`
+/// plays, `snd ` 300 + `index`: none outside 0-63, as `_CreateExplosion`
+/// plays only those (@0x3f8dc-0x3f8e5).
+#[must_use]
+pub fn explosion_sound(index: i16) -> Option<SoundId> {
+    (0..BOOM_TYPES)
+        .contains(&index)
+        .then(|| SoundId(FIRST_EXPLOSION_SOUND + index))
+}
+
 /// An explosion: its `bööm`, and whether extra type-0 explosions go off
 /// around it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2024,6 +2038,13 @@ pub trait PilotCatalog {
     fn warp_out_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// Each `bööm` that can be read and has a sound, by ascending ID, with
+    /// the `snd ` its explosion plays ([`explosion_sound`]): what a `Y`'s
+    /// explosion sounds (see `nova_sim`'s `y_explosion` module). None by
+    /// default.
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        Vec::new()
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// `nova_sim::mission::SpecialShips::uniform_type`).
@@ -2172,6 +2193,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_out_sound()
     }
 
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        (**self).boom_sounds()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -2302,6 +2327,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         (**self).warp_out_sound()
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        (**self).boom_sounds()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -3397,6 +3426,17 @@ mod tests {
             assert_eq!(Explosion::decode(none), None, "{none}");
         }
         assert_eq!((FIRST_BOOM, BOOM_TYPES, EXTRA_EXPLOSIONS), (128, 64, 1000));
+    }
+
+    #[test]
+    fn an_explosion_sounds_snd_300_on_for_a_sound_index_of_0_to_63_only() {
+        assert_eq!(explosion_sound(0), Some(SoundId(300)));
+        assert_eq!(explosion_sound(5), Some(SoundId(305)));
+        assert_eq!(explosion_sound(63), Some(SoundId(363)));
+        for none in [-1, 64, i16::MIN, i16::MAX] {
+            assert_eq!(explosion_sound(none), None, "{none}");
+        }
+        assert_eq!(Mapped.boom_sounds(), [], "none by default");
     }
 
     #[test]

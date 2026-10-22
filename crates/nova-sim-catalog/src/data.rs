@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_data::records::boom::Boom;
 use nova_data::records::character::Character;
 use nova_data::records::cron::Cron;
 use nova_data::records::desc::Desc;
@@ -35,17 +36,17 @@ use nova_rsrc::ResType;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS, BoomId,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
     DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
-    WeaponRecord, loaded_mod_val,
+    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
+    TrafficCatalog, WeaponId, WeaponRecord, explosion_sound, loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -721,6 +722,15 @@ impl PilotCatalog for GameData {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         sound_length(self, WARP_OUT_SOUND)
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        self.records::<Boom>()
+            .filter_map(|(id, boom)| {
+                let sound = explosion_sound(boom.ok()?.record.sound_index)?;
+                Some((BoomId(id), sound))
+            })
+            .collect()
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -3692,6 +3702,29 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    /// A `bööm` of `sound_index`, its frame advance 100 and its graphic 0.
+    fn boom(sound_index: i16) -> Vec<u8> {
+        [100_i16, sound_index, 0]
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn boom_sounds_list_each_readable_bööm_by_id_with_a_sound_of_0_to_63() {
+        use nova_data::records::boom::Boom;
+        let data = store(&[
+            (Boom::TYPE, 130, boom(63)),
+            (Boom::TYPE, 128, boom(2)),
+            (Boom::TYPE, 129, boom(-1)),
+            (Boom::TYPE, 131, boom(64)),
+        ]);
+        assert_eq!(
+            data.boom_sounds(),
+            [(BoomId(128), SoundId(302)), (BoomId(130), SoundId(363))]
+        );
     }
 
     #[test]

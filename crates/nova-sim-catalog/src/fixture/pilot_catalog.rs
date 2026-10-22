@@ -8,12 +8,12 @@ use nova_sim_base::fixture::FAST;
 
 use super::{planet, star};
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, CharacterStart,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
     DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
-    PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
+    PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
     SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::handling::ShipFields;
@@ -129,6 +129,8 @@ pub struct FakePilotCatalog {
     /// The warp-out sound's length: none, by default, so an arrival's
     /// warp-out never plays on and every jump arrival plays it.
     pub warp_out_sound: Option<SoundLength>,
+    /// Each `bööm` with the `snd ` its explosion plays.
+    pub boom_sounds: Vec<(BoomId, SoundId)>,
 }
 
 impl FakePilotCatalog {
@@ -221,6 +223,7 @@ pub fn catalog() -> FakePilotCatalog {
         asteroid_fields: Vec::new(),
         box_frames: [None; BOX_GRAPHICS],
         warp_out_sound: None,
+        boom_sounds: Vec::new(),
     }
 }
 
@@ -421,6 +424,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         self.warp_out_sound
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        self.boom_sounds.clone()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
