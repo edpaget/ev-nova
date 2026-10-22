@@ -204,6 +204,7 @@ mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
 mod lost_sight_tests;
+pub mod mine_flight;
 pub mod npc;
 pub mod odds_cache;
 #[cfg(test)]

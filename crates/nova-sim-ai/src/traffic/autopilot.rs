@@ -138,8 +138,12 @@
 //!   the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
 //!   its top speed).
+//! - [`Goal::Mine`] and [`Goal::Scoop`], as [`mine_flight`] flies them:
+//!   order 0x13's chase or 0x14's hold by asteroid slot 0
+//!   ([`Beside::rock`]), and 0x15's steer to the nearest scoopable box
+//!   ([`Beside::scoop_box`]); with slot 0 empty a mining ship flies order
+//!   1 and brakes to a stop (@0x8f879).
 //! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
-//!   [`Goal::Mine`] (order 1 for now, see its docs),
 //!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
 //!   or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
@@ -250,11 +254,13 @@ use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::held_burst::{self, Flight, Word};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
+use crate::traffic::mine_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
+use nova_sim_combat::asteroid::Asteroid;
 use std::collections::BTreeMap;
 
 /// How far from its lead, in pixels, a fleet escort keeps by the port's
@@ -303,8 +309,9 @@ pub struct Readings {
     pub held_burst: RuleSource,
 }
 
-/// What a flight reads beside the ship its goal is about: its swarm lead,
-/// and, keeping formation, its guard and whether it sees its leader.
+/// What a flight reads beside the ship its goal is about: its swarm lead;
+/// keeping formation, its guard and whether it sees its leader; and, for
+/// a miner, asteroid slot 0 and the box it would scoop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Beside {
     /// Its swarm lead ([`swarm::lead`](crate::ai::swarm::lead)), for a
@@ -320,15 +327,25 @@ pub struct Beside {
     /// leader unseen it brakes near it ([`formation_flight`]) and is not
     /// in close formation ([`Npc::keeps_close_formation`]).
     pub leader_seen: bool,
+    /// Asteroid slot 0, while it is live, which a [`Goal::Mine`] miner
+    /// chases and holds by ([`mine_flight`]).
+    pub rock: Option<Asteroid>,
+    /// Where the box a [`Goal::Scoop`] miner steers to is, the nearest
+    /// scoopable one with life left
+    /// ([`mine_orders::nearest_box`](crate::ai::mine_orders::nearest_box)),
+    /// if any ([`mine_flight`]).
+    pub scoop_box: Option<Vec2>,
 }
 
-/// No swarm lead, no guard, and its leader seen.
+/// No swarm lead, no guard, its leader seen, and no asteroid or box.
 impl Default for Beside {
     fn default() -> Self {
         Self {
             swarm: None,
             guard: None,
             leader_seen: true,
+            rock: None,
+            scoop_box: None,
         }
     }
 }
@@ -560,12 +577,14 @@ fn fly_mobile(
         // is a wait (state 6, @0x8f101). The regroup pause flies its kept
         // substate's goal in its place (`Npc::fly_as_flown`, which the fly
         // pass runs), so it reaches here only flown by itself: a stop.
-        Goal::Idle
-        | Goal::Wait
-        | Goal::Mine
-        | Goal::Scoop
-        | Goal::CountWait
-        | Goal::Regroup { .. } => braking(&state, &handling, inertia),
+        // State 16 flies order 1, a stop, with slot 0 empty, else order
+        // 0x13 or 0x14; state 17 flies order 0x15.
+        Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
+            .unwrap_or_else(|| braking(&state, &handling, inertia)),
+        Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
+        Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
+            braking(&state, &handling, inertia)
+        }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
         // does nothing (@0x87345-0x87351).
