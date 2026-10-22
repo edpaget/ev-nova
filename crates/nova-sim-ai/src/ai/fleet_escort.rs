@@ -44,7 +44,8 @@
 //!    [`escort_orders`](crate::ai::escort_orders)), -1 (formation) until
 //!    the first:
 //!    - **Defend** (@0x83c56-0x83d4e): it keeps its target within
-//!      [`DEFEND_KEEP_SQ`] of its lead, inclusive (@0x83cbc), else attacks
+//!      [`DEFEND_KEEP_SQ`](crate::escort::DEFEND_KEEP_SQ) of its lead,
+//!      inclusive (@0x83cbc; [`escort::kept_by_order`]), else attacks
 //!      the nearest threat to the lead within [`DEFEND_RADIUS`] of it
 //!      (`_FindNearestThreatToParent(ship, 550)` @0x83ce7,
 //!      [`nearest_threat`]); with none it keeps formation (goal 0xa).
@@ -121,9 +122,7 @@ use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
-use crate::escort::{
-    DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, Parent, fight_threats, nearest_threat,
-};
+use crate::escort::{DEFEND_RADIUS, EscortOrder, Parent, fight_threats, nearest_threat};
 use crate::fleet::OrderWord;
 use crate::traffic::jump_with_leader;
 use crate::traffic::npc::Npc;
@@ -209,20 +208,10 @@ pub fn decide_by(
     let attack_or_follow =
         |threat: Option<ShipRef>| threat.map_or_else(|| follow(None), Goal::Attack);
     match (order, npc.carrier) {
-        (Some(EscortOrder::Defend), _) => {
-            let near = |ship: &ShipRef| {
-                around.state_of(*ship).is_some_and(|at| {
-                    let off = at.position - lead.state.position;
-                    off.x * off.x + off.y * off.y <= DEFEND_KEEP_SQ
-                })
-            };
-            let kept = target
-                .filter(near)
-                .or_else(|| nearest_threat(npc, Parent::Npc(lead), around, Some(DEFEND_RADIUS)));
-            goal(attack_or_follow(kept), true)
-        }
-        (Some(EscortOrder::Attack), _) => {
-            let kept = target.or_else(|| nearest_threat(npc, Parent::Npc(lead), around, None));
+        (Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)), _) => {
+            let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
+            let kept = escort::kept_by_order(order, target, lead.state.position, around)
+                .or_else(|| nearest_threat(npc, Parent::Npc(lead), around, radius));
             goal(attack_or_follow(kept), true)
         }
         (Some(EscortOrder::Hold), _) => goal(Goal::Wait, false),

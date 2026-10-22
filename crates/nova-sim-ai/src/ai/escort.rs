@@ -7,15 +7,17 @@
 //!   targets nothing and fires nothing; its point defence runs on each of
 //!   its decisions, as `_EscortAI`'s hold tail-calls `_AIFireTurret`
 //!   (@0x83e59-0x83e74, @0x83f4e).
-//! - **Defend**: it keeps its target while the target is intact and
-//!   within [`DEFEND_KEEP_SQ`] (distance squared) of the player;
-//!   otherwise it takes the best threat to the player within
-//!   [`DEFEND_RADIUS`] of the player ([`best_threat`]), and attacks it
-//!   with every weapon. With none, it keeps formation.
-//! - **Attack**: it keeps its target while it is in the system, even
-//!   disabled; with none, it takes the best threat to the player at any
-//!   distance, and attacks it with every weapon. With none, it keeps
-//!   formation.
+//! - **Defend**: once its think's validity step has dropped a gone or
+//!   disabled target ([`valid_target`]), it keeps its target while within
+//!   [`DEFEND_KEEP_SQ`] (distance squared) of the player
+//!   ([`kept_by_order`]), arrived or not; otherwise it takes the best
+//!   threat to the player within [`DEFEND_RADIUS`] of the player
+//!   ([`best_threat`]), and attacks it with every weapon. With none, it
+//!   keeps formation.
+//! - **Attack**: it keeps any target the validity step leaves, disabled
+//!   or still arriving ([`kept_by_order`]); with none, it takes the best
+//!   threat to the player at any distance, and attacks it with every
+//!   weapon. With none, it keeps formation.
 //! - **No standing command** ("Formation"), as the rulebook's
 //!   [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) entry says:
 //!   - by the engine, it keeps formation ([`Goal::Formation`]) and guards
@@ -79,6 +81,7 @@ use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -132,30 +135,14 @@ impl Behaviour for EscortAi {
         let Some(player) = around.player.map(|player| player.state) else {
             return Goal::Formation { guard: None };
         };
-        let kept = npc.target.filter(|&target| target != ShipRef::Player);
-        let npc_of = |ship: ShipRef| match ship {
-            ShipRef::Npc(id) => around.npc(id),
-            ShipRef::Player => None,
-        };
         match order {
-            Some(EscortOrder::Attack) => {
-                let kept = kept.filter(|&target| around.live(target));
-                kept.map_or_else(
-                    || attack_or_form(best_threat(npc, around, &player, None)),
+            Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)) => {
+                let target =
+                    valid_target(npc, order, around).filter(|&target| target != ShipRef::Player);
+                let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
+                kept_by_order(order, target, player.position, around).map_or_else(
+                    || attack_or_form(best_threat(npc, around, &player, radius)),
                     Goal::Attack,
-                )
-            }
-            Some(EscortOrder::Defend) => {
-                let near = |target: &Npc| {
-                    let off = target.state.position - player.position;
-                    off.x * off.x + off.y * off.y <= DEFEND_KEEP_SQ
-                };
-                let kept = kept
-                    .and_then(npc_of)
-                    .filter(|target| intact(target) && near(target));
-                kept.map_or_else(
-                    || attack_or_form(best_threat(npc, around, &player, Some(DEFEND_RADIUS))),
-                    |target| Goal::Attack(ShipRef::Npc(target.id)),
                 )
             }
             _ => self.no_command(npc, around, &player, chance),
@@ -353,11 +340,31 @@ pub fn valid_target(
     Some(target)
 }
 
-/// Whether `npc` is intact and flying in the system, or holding its
-/// course after its glide or burst ([`Npc::arrived`]), where it is seen
-/// and fought: one an escort may keep fighting.
-fn intact(npc: &Npc) -> bool {
-    npc.condition == Condition::Intact && npc.arrived()
+/// The target an escort or fighter following `order` keeps after its
+/// think's validity step ([`valid_target`]) left it `target`, its parent
+/// at `parent_at`, among `around` (`_EscortAI`, for every parent): on
+/// Defend while within [`DEFEND_KEEP_SQ`] (distance squared, inclusive)
+/// of its parent (@0x83c67-0x83cd6, @0x83cbc-0x83cbe); on Attack whatever
+/// it is (@0x83d5d-0x83d6d); under any other order none, as Hold, Return
+/// and formation keep theirs their own way. It reads no arrival, sight
+/// nor type: a ship bursting out of its gate is kept.
+#[must_use]
+pub fn kept_by_order(
+    order: Option<EscortOrder>,
+    target: Option<ShipRef>,
+    parent_at: Vec2,
+    around: &Surroundings,
+) -> Option<ShipRef> {
+    match order {
+        Some(EscortOrder::Attack) => target,
+        Some(EscortOrder::Defend) => target.filter(|&ship| {
+            around.state_of(ship).is_some_and(|at| {
+                let off = at.position - parent_at;
+                off.x * off.x + off.y * off.y <= DEFEND_KEEP_SQ
+            })
+        }),
+        _ => None,
+    }
 }
 
 /// An attack on `threat`, or formation with none.
@@ -1072,6 +1079,25 @@ mod tests {
             decide(&npcs, (0.0, 0.0), &[]).0,
             Goal::Formation { guard: None }
         );
+    }
+
+    #[test]
+    fn defending_or_attacking_it_keeps_an_active_target_bursting_out_of_its_gate() {
+        // The validity step tests the slot (+0xb8) and `_IsDisabled` alone
+        // (@0x83a9b-0x83ad2), and Defend the distance (@0x83c67-0x83cd6):
+        // no arrival test, so a ship bursting out of its gate is kept.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let fighting = having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2)));
+            let mut bursting = bystander(2, 0.0, 300.0);
+            bursting.mode = Mode::LeavingGate { tick: 3 };
+            assert!(!bursting.arrived());
+            let npcs = [fighting, bursting, pirate(3, 0.0, 100.0)];
+            assert_eq!(
+                decide(&npcs, (0.0, 0.0), &[]).0,
+                Goal::Attack(n(2)),
+                "{order:?}"
+            );
+        }
     }
 
     #[test]
