@@ -47,14 +47,43 @@ impl Surroundings<'_> {
     /// observer)` (@0x971c; see the module docs).
     #[must_use]
     pub fn sees(&self, observer: &Npc, ship: ShipRef) -> bool {
-        match ship {
-            ShipRef::Npc(id) => self.npc(id).is_none_or(|other| npc_sees(observer, other)),
-            ShipRef::Player => self
-                .player
-                .as_ref()
-                .is_none_or(|player| sees_player(observer, player)),
-        }
+        sees_among(observer, ship, self.npcs, self.player.as_ref())
     }
+
+    /// Whether `npc` sees its leader, `_ShipVisibleToShip(leader, npc)`
+    /// (@0x8ed5f): see [`sees_leader`].
+    #[must_use]
+    pub fn sees_leader(&self, npc: &Npc) -> bool {
+        sees_leader(npc, self.npcs, self.player.as_ref())
+    }
+}
+
+/// Whether `observer` sees `ship` among `npcs` and the `player` (`None`
+/// while it isn't in the system): [`Surroundings::sees`].
+fn sees_among(observer: &Npc, ship: ShipRef, npcs: &[Npc], player: Option<&PlayerSide>) -> bool {
+    match ship {
+        ShipRef::Npc(id) => npcs
+            .iter()
+            .find(|other| other.id == id)
+            .is_none_or(|other| npc_sees(observer, other)),
+        ShipRef::Player => player.is_none_or(|player| sees_player(observer, player)),
+    }
+}
+
+/// Whether `npc` sees its leader among `npcs` and the `player` (`None`
+/// while it isn't in the system), `_ShipVisibleToShip(leader, npc)`
+/// (@0x8ed5f): the leader its single parent slot (+0x9a) names,
+/// [`Npc::leader_ref`], so the player for an escort of the player even
+/// if it still names an NPC lead. A ship with no leader, or whose leader
+/// is gone, reads as seeing it. The formation flight
+/// ([`fly_pass`](crate::traffic::fly_pass)), the cloak's parent rule
+/// (`Traffic::think_cloaks`) and the session's gravity check
+/// (`nova_sim::Session`) all read it, so they agree on one leader and one
+/// sight.
+#[must_use]
+pub fn sees_leader(npc: &Npc, npcs: &[Npc], player: Option<&PlayerSide>) -> bool {
+    npc.leader_ref()
+        .is_none_or(|lead| sees_among(npc, lead, npcs, player))
 }
 
 /// Whether `observer` sees NPC `other`: `_ShipVisibleToShip(other,
@@ -184,6 +213,64 @@ mod tests {
             ..cloaked_player
         };
         assert!(super::sees_player(&stranger, &near), "scanned within 200");
+    }
+
+    #[test]
+    fn an_npc_sees_its_leader_by_its_leader_ref_the_player_before_an_npc_lead() {
+        use crate::ai::fixture::{cloaked_player, player};
+        use crate::escort::{EscortDuty, FormationSlot};
+        let (sites, govts) = (sites(), govts(0, 0));
+        let sees_leader = |observer: Npc, lead: Npc, cloaked: bool| {
+            let npcs = [observer, lead];
+            let mut around = around(&sites, &npcs, &govts, (900.0, 0.0), 0);
+            if cloaked {
+                around.player = Some(cloaked_player(player(900.0, 0.0)));
+            }
+            around.sees_leader(&npcs[0])
+        };
+        assert!(
+            sees_leader(warship(), cloaked(other(900.0, 0.0)), true),
+            "no leader"
+        );
+        let mut follower = warship();
+        follower.leader = Some(NpcId(2));
+        assert!(
+            !sees_leader(follower.clone(), cloaked(other(900.0, 0.0)), false),
+            "its cloaked lead"
+        );
+        assert!(
+            sees_leader(follower.clone(), other(900.0, 0.0), true),
+            "its uncloaked lead"
+        );
+        follower.leader = Some(NpcId(9));
+        assert!(
+            sees_leader(follower, cloaked(other(900.0, 0.0)), true),
+            "a lead not here"
+        );
+        let mut escort = warship();
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        assert!(
+            !sees_leader(escort.clone(), other(900.0, 0.0), true),
+            "its cloaked player"
+        );
+        assert!(
+            sees_leader(escort.clone(), cloaked(other(900.0, 0.0)), false),
+            "its uncloaked player"
+        );
+        // An escort of the player follows the player (+0x9a 0), whatever
+        // NPC lead it still names.
+        escort.leader = Some(NpcId(2));
+        assert!(
+            !sees_leader(escort.clone(), other(900.0, 0.0), true),
+            "the player first"
+        );
+        let npcs = [escort];
+        let mut around = around(&sites, &npcs, &govts, (0.0, 0.0), 0);
+        around.player = None;
+        assert!(around.sees_leader(&npcs[0]), "no player here");
     }
 
     #[test]

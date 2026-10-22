@@ -57,20 +57,12 @@ impl Session {
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
     /// hull or its inertialess flight, never its outfits. Whether it keeps
     /// close formation reads its leader's place and its sight of it
-    /// (`_ShipVisibleToShip` @0x8ed5f): an NPC leader by
-    /// [`sight::npc_sees`], the player by [`sight::sees_player`]: an escort
-    /// that can't see its cloaked player stops (sub 1) and so keeps no
-    /// close formation.
+    /// (`_ShipVisibleToShip` @0x8ed5f, [`sight::sees_leader`], as the
+    /// formation flight reads it): an escort that can't see its cloaked
+    /// player stops (sub 1) and so keeps no close formation.
     fn npc_resists_gravity(&self, npc: &Npc) -> bool {
         let leader = self.leader_state(npc);
-        let seen = match npc.leader_ref() {
-            Some(ShipRef::Npc(id)) => self
-                .space
-                .npc(id)
-                .is_none_or(|leader| sight::npc_sees(npc, leader)),
-            Some(ShipRef::Player) => sight::sees_player(npc, &self.player_side()),
-            None => true,
-        };
+        let seen = sight::sees_leader(npc, self.npcs(), Some(&self.player_side()));
         resists_gravity(
             npc.hull.stellar_immune,
             npc.flies_inertialess(leader.as_ref(), seen, self.setup.flight_rules()),

@@ -1717,12 +1717,12 @@ impl Traffic {
     /// (`_AIHandleCloaking`, see [`cloak`]), in the
     /// [situation](cloak_situation::situation) it reads in `world`: where
     /// the ship it attacks is, among the NPCs and the player, its leader
-    /// and that leader's cloak, and the asteroid in slot 0. A ship with no
-    /// NPC leader that escorts the player takes the player as its leader,
-    /// with the cloak the player's display step left it this pass and its
-    /// sight of it ([`sight::sees_player`](crate::ai::sight::sees_player)),
+    /// and that leader's cloak, and the asteroid in slot 0. Its leader is
+    /// [`Npc::leader_ref`]'s, so a ship that escorts the player takes the
+    /// player, with the cloak the player's display step left it this pass,
     /// as the parent rule reads the player's slot (+0x9a 0,
-    /// @0x83633-0x8366d). The original thinks a glide and a burst too
+    /// @0x83633-0x8366d); its sight of it is
+    /// [`Surroundings::sees_leader`](crate::ai::Surroundings::sees_leader). The original thinks a glide and a burst too
     /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
     /// emerging, held at its gate, coasting, entering a gate or adrift
     /// waits out +0x4c, so its cloak doesn't think.
@@ -1734,23 +1734,13 @@ impl Traffic {
             .map(|npc| (npc.id, npc.state, npc.cloak))
             .collect();
         let npc_at = |id: NpcId| ships.iter().find(|(other, ..)| *other == id);
-        // The player leads a ship with no NPC leader that escorts it.
-        let led_by_player = |npc: &Npc| {
-            world
-                .player
-                .filter(|_| npc.leader.is_none() && npc.escorts_player())
+        let leaders_seen: Vec<bool> = {
+            let around = world.around(&self.npcs);
+            self.npcs
+                .iter()
+                .map(|npc| around.sees_leader(npc))
+                .collect()
         };
-        let leaders_seen: Vec<bool> = self
-            .npcs
-            .iter()
-            .map(|npc| match led_by_player(npc) {
-                Some(player) => crate::ai::sight::sees_player(npc, &player),
-                None => npc
-                    .leader
-                    .and_then(|id| self.npcs.iter().find(|other| other.id == id))
-                    .is_some_and(|leader| crate::ai::sight::npc_sees(npc, leader)),
-            })
-            .collect();
         for ((npc, _), leader_seen) in
             self.npcs
                 .iter_mut()
@@ -1768,12 +1758,10 @@ impl Traffic {
                 ShipRef::Player => player,
                 ShipRef::Npc(id) => npc_at(id).map(|&(_, state, _)| state),
             });
-            let leader = match led_by_player(npc) {
-                Some(player) => Some((player.state, player.cloak)),
-                None => npc
-                    .leader
-                    .and_then(npc_at)
-                    .map(|&(_, state, cloak)| (state, cloak)),
+            let leader = match npc.leader_ref() {
+                Some(ShipRef::Player) => world.player.map(|player| (player.state, player.cloak)),
+                Some(ShipRef::Npc(id)) => npc_at(id).map(|&(_, state, cloak)| (state, cloak)),
+                None => None,
             };
             let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),

@@ -18,7 +18,8 @@
 //!   the others: every ship's state before any moves, the player's, the
 //!   top speeds, the disabled ships, the leaders' warps (sending each
 //!   leader out on the advance pass), the tractors' holders, each
-//!   swarmer's lead and the ships that don't see their NPC leader. The original's steering reads come from
+//!   swarmer's lead and the ships that don't see their leader. The
+//!   original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
 //!   so every flight reads the others where the last tick left them.
 //! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
@@ -55,8 +56,8 @@ use super::{
     DockNotes, Traffic, World, ionization, jump_with_leader, plunder, regroup, repair_dock,
     ship_display, tractor_hold, warp_out,
 };
+use crate::ai::Goal;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::ai::{Goal, sight};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -192,20 +193,7 @@ impl Traffic {
         let unseen = self
             .npcs
             .iter()
-            .filter(|npc| match npc.leader {
-                Some(lead) => self
-                    .npcs
-                    .iter()
-                    .find(|other| other.id == lead)
-                    .is_some_and(|leader| !sight::npc_sees(npc, leader)),
-                // The player leads a ship with no NPC leader that escorts it.
-                None => {
-                    npc.escorts_player()
-                        && world
-                            .player
-                            .is_some_and(|player| !sight::sees_player(npc, &player))
-                }
-            })
+            .filter(|npc| !around.sees_leader(npc))
             .map(|npc| npc.id)
             .collect();
         let paused = self
@@ -358,8 +346,9 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
 /// a lead ([`Goal::Follow`]), and whether it sees its leader as the half
 /// began (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): a fleet escort
-/// its NPC lead ([`sight::npc_sees`]), the player's escort the player
-/// ([`sight::sees_player`]). The coast and the inertia
+/// its NPC lead, the player's escort the player
+/// ([`Surroundings::sees_leader`](crate::ai::Surroundings::sees_leader)).
+/// The coast and the inertia
 /// ([`Inertia::of`]) read the same sight.
 ///
 /// The original reads the sight in the escort's own high level, so a
@@ -1108,6 +1097,20 @@ mod tests {
         assert!(
             seen(&mut player_escort(near, false, false), false),
             "uncloaked"
+        );
+    }
+
+    #[test]
+    fn a_player_escort_that_still_names_an_npc_lead_reads_its_sight_of_the_player() {
+        let mut traffic = player_escort(Vec2::new(-250.0, 0.0), false, false);
+        let mut lead = at(2, -260.0, 0.0);
+        lead.state.velocity = Vec2::new(1.0, 0.0);
+        traffic.npcs[0].leader = Some(lead.id);
+        traffic.npcs.push(lead);
+        let pass = traffic.begin_fly(&with_player(true), &BTreeSet::new(), FlyHalf::Advance);
+        assert!(
+            !beside_of(&pass, &traffic.npcs[0]).leader_seen,
+            "it follows the player (+0x9a 0), whom it can't see"
         );
     }
 

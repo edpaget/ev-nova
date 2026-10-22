@@ -232,13 +232,14 @@ fn leader_npc(cloak: Cloak) -> Npc {
 }
 
 #[test]
-fn the_players_escort_with_an_npc_leader_reads_that_leader_not_the_player() {
-    // The parent rule reads the ship's parent, +0x9a (@0x83633-0x8366d):
-    // the player only when it has no NPC leader.
+fn the_players_escort_reads_the_player_even_if_it_names_an_npc_leader() {
+    // The parent rule reads the ship's parent, +0x9a (@0x83633-0x8366d),
+    // its single leader slot: the player (0) while it escorts the player
+    // ([`Npc::leader_ref`]), as its formation flight flies at the player.
     assert_eq!(
         led_thought(leader_npc(Cloak::default()), true, true),
-        Cloak::default(),
-        "its NPC leader uncloaked"
+        CLOAKING,
+        "the cloaked player, not its uncloaked NPC leader"
     );
     assert_eq!(
         led_thought(leader_npc(Cloak::default()), false, true),
