@@ -27,12 +27,15 @@
 //!
 //! *Ordering against the original.* The flag is derived live as the
 //! asteroid step runs ([`Session::tick_asteroids`]), not set by this
-//! pass's thinks and kept. Between the two only the fly half runs, so the
-//! one difference is a miner that leaves the system in this pass's fly
-//! half: the original's flag still counts its think, and the engine's
-//! doesn't. Slot 0 then isn't refilled that pass; no asteroid moves or
-//! changes, only which slot holds one, which no frame shows. The flag
-//! settles before any frame is drawn.
+//! pass's thinks and kept. Between the two only the shots and the ship
+//! loop run, before the beams and what the pass leaves, as
+//! `_HandleAsteroids` (@0x444f5) runs there, so a miner destroyed this
+//! pass is still in the traffic as the step reads the flag. The one
+//! difference is a miner that leaves the system in this pass's fly half:
+//! the original's flag still counts its think, and the engine's doesn't.
+//! Slot 0 then isn't refilled that pass; no asteroid moves or changes,
+//! only which slot holds one, which no frame shows. The flag settles
+//! before any frame is drawn.
 
 use super::Space;
 use crate::ai::dispatch_gate::reaches_think;

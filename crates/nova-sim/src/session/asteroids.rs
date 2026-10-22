@@ -6,20 +6,24 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). [`Session::game_work`] and [`Session::tick_combat`] run
-//! it after the fight, landed or jumping, so it steps the field through a
-//! jump's lead-in, and [`Session::tick_again`] runs it after the second
-//! pass's fight without the spawn: `_DoPlayGameWork(0)` jumps past it
-//! with the AI (@0x4402a to @0x44350), and `_HandleAsteroids` runs on
-//! both passes. The
-//! original spawns and steps the field after the collision passes, which
-//! test the shots' last moves, as the fight's hit pass does here (see
+//! (@0x444f5). [`Session::game_work`] runs it after the ship loop and
+//! before the beams (`_HandleBeams` @0x4453d), jumping too, so it steps
+//! the field through a jump's lead-in, and [`Session::tick_again`]
+//! runs it in the same place of the second pass without the spawn:
+//! `_DoPlayGameWork(0)` jumps past it with the AI (@0x4402a to
+//! @0x44350), and `_HandleAsteroids` runs on both passes. The original
+//! spawns and steps the field after the collision passes, which test the
+//! shots' last moves, as the fight's hit pass does here (see
 //! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where
 //! the last pass's step left it, where the frame before drew it, and a
-//! hit's push moves the asteroid in this pass's step. The spawn comes
+//! hit's push moves the asteroid in this pass's step. The beams come
+//! after the step, so a beam meets an asteroid where this pass's step
+//! has just moved it (see the `asteroid_beams` module). The spawn comes
 //! before the AI and the ships' fire in the original and after them
 //! here; a new asteroid is met by no shot until the next pass either way,
-//! so that crosses no boundary the player sees.
+//! so that crosses no boundary the player sees. The separate parts'
+//! [`Session::tick_combat`], no game path, runs it after the whole fight
+//! (see the `game_work` module).
 //!
 //! *The refill against the spawn.* The collision passes
 //! (@0x43e70-0x44015, `_CheckShotProximities` @0x44015) break asteroids
@@ -249,9 +253,11 @@ impl Space {
     /// (`_HandleAsteroidHit` @0x3691a), so its booms and particles come
     /// before the rest of the frame's collisions, and a fragment is in the
     /// field for the shots after it. Here they come after the fight's own
-    /// events, and its fragments are hit from the next pass on. Both
-    /// settle before the frame is drawn, which is no boundary the player
-    /// sees.
+    /// events, and its fragments are hit from the next pass on, so a later
+    /// shot of the pass that would meet a fragment flies on into the next
+    /// frame: a divergence, filed as
+    /// rdm:phase/asteroids/phase-10-shots-break-asteroids-inline. The
+    /// beams destroy theirs at once (see the `asteroid_beams` module).
     pub(super) fn settle_asteroid_hits(
         &mut self,
         statics: &Statics,
@@ -271,10 +277,7 @@ impl Space {
             else {
                 continue;
             };
-            for _ in 0..remains.boxes {
-                self.boxes
-                    .spawn_scoopable(remains.at, remains.contents, remains.graphic, chance);
-            }
+            self.spawn_asteroid_boxes(&remains, chance);
             if let Some(particles) = remains.particles {
                 self.combat.particles(particles);
             }

@@ -419,6 +419,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
+mod asteroid_beams;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
