@@ -1,3 +1,6 @@
+# Build mutants with the `mutants` profile (Cargo.toml): the test profile
+# without debug info, which makes each mutant's build and link cheaper.
+profile = "mutants"
 # Run each mutant's tests with nextest, like `mise run test`.
 test_tool = "nextest"
 # Crates with no tests yet must not fail the unmutated baseline run.
@@ -9,72 +12,323 @@ additional_cargo_test_args = ["--no-tests=pass"]
 # nova/dev-tools` is rejected for any package but nova, which cargo-mutants
 # then marks unviable and never tests (checked on a scratch two-member
 # workspace). The other features (`fixture`, `recording`) only expose test
-# helpers that the packages' own tests turn on anyway. With `dev-tools` on,
-# `tests/default_build_links_no_egui.rs` is compiled out and its positive
-# control runs instead.
+# helpers that the packages' own tests turn on anyway.
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A formation slot's side push turns by trunc(heading + 90) % 360:
+    # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
+    # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same
+    # bits for every heading.
+    "nova-sim-ai/src/escort\\.rs:[0-9]+:[0-9]+: replace % with \\+ in slot_position$",
+    # The fly pass's NPC-lead glow copy is gated on `npc_formation`'s engine
+    # reading, but only close formation asks for a copy (`GlowCopy::Leader`,
+    # `formation_flight::keep` and `autopilot::keep_formation`), and by the
+    # other reading a `Goal::Follow` ship flies `autopilot::follow`, which
+    # never does, so the guard can't change what a ship shows.
+    "nova-sim-ai/src/traffic/fly_pass\\.rs:[0-9]+:[0-9]+: replace match guard world\\.flight\\.npc_formation == NpcFormation::Original with true in leader_glow$",
+    # The ship loop splits an NPC's step from its display only when its
+    # pods or escape may run (`escape_may_run`); splitting every NPC's is
+    # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
+    # its `npc_escape` runs nothing for a ship not dying, and the stray
+    # words it steps early are only another ship's or the player's, which
+    # nothing reads before the frame.
+    "nova-sim/src/session/npc_escape\\.rs:[0-9]+:[0-9]+: replace escape_may_run -> bool with true$",
+    # The jump arrival's reverse bearing, (bearing + 180) mod 360: `_Accel`
+    # reads it through `_TableSin` and `_TableCos`, which take any whole
+    # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
+    # bearing - 180 place the ship at the same bits for every bearing.
+    "nova-sim-ai/src/jump_arrival\\.rs:[0-9]+:[0-9]+: replace (% with \\+|\\+ with -) in top_speed_arrival$",
+    # The board check's reverse heading, (theirs + 180) mod 360: for whole
+    # degrees in 0..=360, theirs - 180 is the same reverse less 360, and
+    # `_AngularDifference`'s two folds give the same distance from it for
+    # every player heading (checked over all 361 x 361 pairs).
+    "board\\.rs:[0-9]+:[0-9]+: replace \\+ with - in check_board",
+    # `_RandomSkillLevel`'s side count, 2 x SkillVar + 1, is odd, so never
+    # 0: `> 0` and `>= 0` split the signed `_Rand` the same way.
+    "nova-sim-base/src/skill\\.rs:49:26: replace > with >= in random_skill_level$",
+    # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
+    # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
+    "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
+    # The Turn Rate row floors the player's turn (`turn_shown`), whose floor
+    # reads only whether the class turns above none: the class's `Maneuver`
+    # / 10 and * 10 (column 50) have the same sign.
+    "player_info.rs:[0-9]+:50: replace / with \\* in turn_shown",
+    # Matching (a docking's sub 0xf, close formation's sub 0xc) turns
+    # against its velocity gap: the gap's table angle + 180 taken mod 360
+    # (`_LowLevelAIHandler` @0x86b77-0x86ba0, @0x879f9-0x87a17); - 180 mod
+    # 360 (`rem_euclid`) is the same angle.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:[0-9]+:[0-9]+: replace \\+ with - in counter$",
+    # `_AIMaintainFormation`'s ion cut: a charge of 0 gives a factor of 0,
+    # whose cut (1 - 0) changes nothing, so `>= 0` can't be told from
+    # `> 0`; and no f32 widens to the double 0.8 exactly (@0x84f7d).
+    "nova-sim-ai/src/traffic/formation_flight\\.rs:[0-9]+:[0-9]+: replace > with >= in maintain$",
+    # `_HandleShip`'s turn and close formation's heading step bring
+    # `wanted - heading` and `heading - theirs` round once each way, as
+    # the original does (@0x3446d-0x34487, @0x87bf8-0x87c19). Headings are
+    # kept in [0, 360), so neither reaches 360, and the turn's way is 0
+    # only on the wanted heading itself, which it snaps onto first (no
+    # ship's turn rate is below 0).
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace -= with (\\+=|/=) in turn_to$",
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace < with <= in turn_to$",
+    "nova-sim-ai/src/traffic/formation_flight\\.rs:265:13: replace -= with (\\+=|/=) in matched_heading$",
+    # The heading step's wanted 360 taken to 0 (`> 359`): taken to 359 at
+    # `>= 359`, it goes below 0 and back to 359, the same.
+    "nova-sim-ai/src/traffic/formation_flight\\.rs:275:15: replace > with >= in matched_heading$",
+    # The approach's speed gap is a float widened to a double and tested
+    # against the double 0.35 (@0x87538, @0x8755b): no float widens to
+    # 0.35 exactly, so `>=` can't be told from `>`.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:250:.*replace > with >= in approach$",
+    # A class item of count 0 multiplies its marines by 0, so counting it
+    # (`>=`) adds nothing, as skipping it (`>`, @0x84129) does.
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:156:.*replace > with >= in ClassMarines::of$",
+    # A take that lands exactly on the victim's holds is cut to holds less
+    # what was stolen, which is the take itself (@0x844ab-0x844b2).
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:248:26: replace > with >= in steal$",
+    # The joust's reverse bearing (`_LowLevelAIHandler` @0x86279-0x862a0)
+    # is the bearing + 180 taken mod 360; - 180 mod 360 is the same angle.
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace \\+ with - in joust$",
+    # The break heading's first wrap (@0x86328-0x86331): a 0 raised to 360
+    # by `<= 0` is taken back to 0 by the second wrap (`> 359`).
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace < with <= in break_heading$",
+    # `_AIShipFriendStrength` doubles only a weight above 0 (@0x8279b);
+    # doubling a weight of 0 still adds 0, and the threat test it skips
+    # changes nothing, so `>=` can't be told from `>`.
+    "odds.rs:.*replace > with >= in friend_strength",
+    # `_AICallForHelp`'s threat gate (`_ExtendedIsThreatToShip(ship,
+    # player)` @0x830b1) asks whether the player is intact: a ship that
+    # threatens the player fails the like gate before it
+    # (`_AIDoesShipLikePlayer` asks the threat first), so the session
+    # can't tell the player's condition here from the result. The pure
+    # gate's own tests pin it (`threatens_player`).
+    "comm_calls.rs:.*replace == with != in Session::distress_facts",
+    # `_AngularDifference`'s first fold (from 360 when the two lie either
+    # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
+    # 360 above 180) for every pair whose difference fits in 16 bits
+    # (checked exhaustively), so any mutant of its three comparisons
+    # (`!=` at column 18, `a > 179` at 11, `b > 179` at 24) gives the same
+    # answer; the port keeps the fold as the original has it. The second
+    # fold's `> 180` loosened to `>= 180` folds 180 to 180, the same; its
+    # `<` and `==` mutants are not equivalent and stay in.
+    "nova-sim-base/src/trig\\.rs:140:(11|24): replace > with (==|<|>=) in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:140:18: replace != with == in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:143:19: replace > with >= in angular_difference$",
+    # `_TableArcTan`'s `180 + c` for a point below and left of the origin
+    # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
+    # lands on the same heading.
+    "trig.rs:[0-9]+:[0-9]+: replace \\+= with -= in table_arctan",
+    # `open_audio` (nova's `main.rs`) opens the default audio device
+    # through cpal and reads the soundtrack from disk: the program's edge,
+    # which no hermetic test may run. Its decisions are tested on their
+    # own (`music_warning`, `voice_limit`, `game_audio`).
+    "nova/src/main.rs:.*replace open_audio -> ",
+    # `run_seed` reads the clock for a different seed each run: no test
+    # can tell one seed from another.
+    "main.rs:.*replace run_seed -> u64 with",
+    # `fitted` scales a movie box down only when the window is smaller
+    # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
+    # `<=` gives the same size.
+    "movie.rs:.*replace < with <= in fitted",
+    # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
+    # which is `StringPatch::default()`: the same value.
+    "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # `Screen::view_shape`'s default is `ViewShape::Classic`, which is
+    # `ViewShape::default()`; `Screen::set_widened_size`'s default ignores
+    # its size, which `()` does too.
+    "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
+    "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
+    # The native upscaler draws the world at `WorldResolution::Native`,
+    # which is `WorldResolution::default()`: the same value.
+    "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
+    # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
+    # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
+    # `+ 360` in place of `mod 360` lands on the same heading.
+    "galaxy_map.rs:[0-9]+:[0-9]+: replace % with \\+ in arrow_head",
+    # The player's recoil gate by the engine (`Combat::fire_player`): a
+    # `Recoil` of exactly 0 pushes nothing whichever way `> 0.0` or
+    # `>= 0.0` reads it, as `ai_fire::recoil` gives no push for a weapon
+    # that does not recoil (`WeaponSpec::recoils`).
+    "combat/mod.rs:[0-9]+:[0-9]+: replace > with >= in Combat::fire_player",
+    # A burst's end spends one copy's worth unless its copies fire together
+    # (`Armament::burst_step`): copies that don't are one a call
+    # (`ai_fire::copies`), so `spawned` is 1 whichever branch `flags &
+    # SIMULTANEOUS == 0` (or its `|` mutant, always false) takes.
+    "combat/armament.rs:[0-9]+:[0-9]+: replace & with \\| in Armament::burst_step",
+    # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
+    # none adds none whichever branch it takes, so `push < 0.0` and
+    # `push <= 0.0` (the first operand, column 24) cannot be told apart.
+    # The top speed's own test beside it is caught.
+    "bay.rs:[0-9]+:24: replace < with <= in launch_velocity",
+    # The same tests where `launch_velocity`'s body now lives, as
+    # `speed_cap::adjusted_accel`: a push of exactly none adds none whichever
+    # branch it takes, so `push > 0.0` / `>=` (column 28) and `push < 0.0` /
+    # `<=` (column 24) can't be told apart.
+    "speed_cap.rs:[0-9]+:28: replace > with >= in adjusted_accel",
+    "speed_cap.rs:[0-9]+:24: replace < with <= in adjusted_accel",
+    # `whole_degree`'s slack test: no f32 heading in 0..360 lies exactly
+    # 0.001 (as an f32) from a whole degree (checked over 1..=360, where
+    # `heading - heading.round()` is exact), so `<` and `<=` agree.
+    "speed_cap.rs:[0-9]+:[0-9]+: replace < with <= in whole_degree",
+    # `RuleValue::index` with the one value there is so far, the thrust
+    # divisor, whose index is 0: replacing it with 0 changes nothing until
+    # a second value is declared, whose tests will catch it.
+    "rule_values.rs:[0-9]+:[0-9]+: replace RuleValue::index -> usize with 0",
+    # The galaxy map's star map is built only for its links and places;
+    # nothing reads a buoy from it, so the `Message` it gives its systems
+    # (-1, none) cannot be observed.
+    "galaxy/model.rs:.*delete - in star_system",
+    # `_SpawnBox` turns a box round with `(heading + 180) mod 360`, and
+    # `accel` takes every angle mod 360 (`rem_euclid`): `- 180` lands on
+    # the same heading as `+ 180`, so no push can tell them apart.
+    "cargo_box.rs:.*replace \\+ with - in reversed",
+    # `_TableArcTan`'s quadrant tests are strict (`x < 0`, `y < 0`). At
+    # x == 0 the entry is always 90 (the ratio is 0, then 90 − 0), and
+    # 180 − 90, 180 + 90 and −90 land on the same heading as 90 once taken
+    # 90 back and wrapped; at y == 0 it is 0, and 180 ± 0 and −0 are the
+    # same. So `<` and `<=` give the same heading at every zero.
+    "flight/radar.rs:.*replace < with <= in table_arctan",
+    # `OopsFacts` is a `Context` only because `Value::of` needs one; its
+    # one value, `news::oops_pool`, is plain and never asks the rule set,
+    # so a default rule set in its place cannot be observed.
+    "replace <impl Context for OopsFacts<'_>>::rulebook",
+    # `Cloak::cloak` stops a fade going out by setting its direction to 0:
+    # for a direction already 0, `< 0` and `<= 0` leave it the same.
+    "replace < with <= in Cloak::cloak",
     # The exchange's single-float quotient holds a price past 16 bits at
-    # i16::MIN when it is below 0 and i16::MAX otherwise. `Market::quotient`
+    # i16::MIN when it is below 0 and i16::MAX otherwise. `engine_quotient`
     # has already returned for a price of 0, so `price < 0` and
     # `price <= 0` choose the same.
-    "replace < with <= in Market::quotient",
-    # Cleaning a legal record raises one below none to none: with `<=` a
-    # record of none is set to none too, which changes nothing.
-    "replace < with <= in clean_records",
+    "replace < with <= in engine_quotient",
     # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
     "replace \\| with \\^ in trade_in",
+    # The system catalog draws a stellar as a radar square for `Flags2`
+    # hypergate (0x1000) or wormhole (0x2000): two distinct bits, so `|`
+    # and `^` combine them the same.
+    "system/data.rs:.*replace \\| with \\^ in contents",
+    # A crime of violence takes a rank of `Flags` 0x0040 or 0x0004: two
+    # distinct bits, so `|` and `^` combine them the same.
+    "replace \\| with \\^ in flags_taken",
+    # The sim's `table_arctan` has the same strict quadrant tests as the
+    # radar's copy above: at x == 0 (y not 0) the entry is 90, and
+    # 180 ± 90 lands where 90 and -90 do once taken 90 back and wrapped;
+    # at y == 0 it is 0, and 180 ± 0 and -0 are the same. So `<` and `<=`
+    # give the same heading at every zero.
+    "nova-sim-base/src/trig\\.rs:.*replace < with <= in table_arctan",
+    # `npc_warp_out_speed` caps the speed with `if v > WARP_OUT_CAP { cap }
+    # else { v }`: at v == the cap both branches give the cap, and a NaN
+    # fails `>` and `>=` alike, so `>=` returns the same speed every time.
+    "nova-sim-catalog/src/warp\\.rs:.*replace > with >= in npc_warp_out_speed",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
     "no_resource_fork",
     # nova's `main` only wires the real adapters together and runs the event
-    # loop, which needs a display; `cli::data_dir` and the app it starts are
+    # loop, which needs a display; `startup::run` (the startup sequence it
+    # hands the adapters to), `cli::data_dir` and the app it starts are
     # tested on their own.
     "replace main -> ExitCode",
     # The winit event-loop glue: opening the window and its surface (or
-    # recording why it could not), and forwarding each event to
-    # `App::handle` (including acting on its `Control`). It needs a real
-    # window and display. The decisions it forwards to (`translate`,
-    # `App::handle`, `gpu_failure`, `exit::exit`) are mutated and tested.
-    "impl ApplicationHandler for Runner<S>>::(resumed|window_event)",
+    # recording why it could not), installing the macOS menu bar, and
+    # forwarding each window event and menu pick to `App::handle`
+    # (including acting on its `Control`) and the screen's offers to the
+    # menu bar, and starting the startup warnings' sheet once the loop
+    # waits. It needs a real window, display and, for the menu bar and the
+    # sheet, `NSApplication` on the main thread. The decisions it forwards
+    # to (`translate`, `App::handle`, `MenuSync`, `gpu_failure`,
+    # `exit::exit`, `Report::take_alert`) are mutated and tested, and
+    # `MenuBar::install` / `set_enabled` run on the main thread in
+    # nova-appkit's `tests/it`.
+    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait)",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu) with \\(\\)$",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Option<String> with ",
+    # The startup dialogs (`platform/dialogs.rs`): rfd's open panel, error
+    # alert and warnings sheet, which need a display and `NSApplication`
+    # (and a person to dismiss them). The decisions around them (when to
+    # ask, what a pick resolves to, when to alert, the alert's text) are
+    # the startup core's, mutated and tested over mock ports. The
+    # non-macOS no-ops are never built on the macOS development host.
+    "nova/src/platform/dialogs\\.rs:.*replace (<impl NovaFilesDialog for Dialogs>::pick|<impl FatalAlert for Dialogs>::show_fatal|show_warnings)",
+    # `StdTerminal` reads whether the process's real stderr is a terminal:
+    # a hermetic test can't choose that (nextest pipes it, `--no-capture`
+    # doesn't). `Report` decides through the `Terminal` port and is tested
+    # with both answers.
+    "nova/src/startup/report\\.rs:.*replace <impl Terminal for StdTerminal>::stderr_is_terminal -> bool with ",
+    "nova/src/platform/menu_bar\\.rs:.*replace <impl MenuPort for MenuBar>::set_enabled with \\(\\)$",
     # The developer tools' window glue (the `dev-tools` feature): egui-winit's
     # input state over a real winit window, which tests cannot build. Each
     # forwards to tested parts: the panel (`DevPanel`), the painter
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
-    # The window port over a real winit window: one-line reads of its size
-    # and scale factor and a redraw request, observable only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw)",
+    # The window port over a real winit window: one-line reads of its size,
+    # scale factor and fullscreen state, a redraw request, showing or hiding
+    # the system pointer, the fullscreen and size requests, and its
+    # monitor's modes and name, observable only with a window. The
+    # decisions in them are the tested `deepest` and `offers_exclusive`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
+    # The port's defaults for a window with no pointer of its own, that
+    # cannot go fullscreen or be sized, do nothing already.
+    "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
+    # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
+    # builds the same empty list, so it cannot be observed.
+    "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
     "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
-    # The surface adapter's raw calls, as whole bodies only: pages and
-    # uploads delegate to `WgpuRenderer` (tested offscreen), and `submit`
+    # The surface adapter's raw calls, as whole bodies only: pages,
+    # uploads and clearing the pages delegate to `WgpuRenderer` (tested
+    # offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
     # surface. `OffscreenGpu`'s twin of each is mutated and tested.
     "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
+    # The surface adapter's upscaler bodies delegate to `WgpuRenderer` as
+    # `OffscreenGpu`'s twins do (mutated and tested offscreen): how it
+    # draws the world, setting the upscaler, and which upscalers its
+    # device can use, each observable only with a window.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
+    # So does handing out the warnings its frames raised.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::take_warnings -> Vec<String> with ",
+    # Whether MetalFX runs on a device: `true` on every GPU the macOS
+    # development host has (Apple silicon on Metal), so answering `true`
+    # can't be told apart there. Only a non-Metal device or a GPU MetalFX
+    # doesn't support (a CI VM's paravirtual Metal) says no, and neither
+    # can be opened here; the probe test checks the two agree wherever it
+    # runs.
+    "nova-metalfx/src/scaler\\.rs:.*replace supported -> bool with true$",
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx_spatial -> bool with true$",
+    # The off-macOS twins of `metal_fx_spatial` and `metal_fx` are
+    # compiled only on other targets, so on the macOS development host a
+    # mutated body is never built into the tests. One answers `false`, the
+    # other is never reached (`effective` maps MetalFX away first).
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx -> Box<dyn Upscale> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
     # on to is mutated and tested on kira's device-free `MockBackend`.
     "KiraAudio::open",
+    # The trait's default `menu_enabled` is `true` already: replacing it
+    # with `true` changes nothing.
+    "nova-view/src/screen\\.rs:.*replace Screen::menu_enabled -> bool with true$",
     # The trait's default `take_warnings` and `take_diagnostics` are
     # `Vec::new()`; replacing either with `vec![]` builds the same empty
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
+    # The trait's default `offer_display` ignores its arguments already:
+    # replacing it with `()` changes nothing. So does `offer_upscalers`.
+    "replace Screen::offer_display with \\(\\)",
+    "replace Screen::offer_upscalers with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.
@@ -87,6 +341,11 @@ exclude_re = [
     # answer"; replacing it with `Default::default()` builds the same
     # value, so it cannot be observed.
     "replace Behaviour::react -> Reaction with Default::default\\(\\)",
+    # `Behaviour::gate_wait`'s default body is `GateWait::default()`,
+    # "fires nothing, keeps its target"; replacing it with
+    # `Default::default()` builds the same value, so it cannot be
+    # observed.
+    "replace Behaviour::gate_wait -> GateWait with Default::default\\(\\)",
     # A hail's mood is an f32 compared as an f64 against 0.8 and 1.2,
     # neither of which any f32 widens to exactly, so `<` and `<=` (and `>`
     # and `>=`) give the same answer for every mood.
@@ -103,8 +362,20 @@ exclude_re = [
     "replace > with >= in close_on",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour. `ensure_scene`
-    # combines the scene's and the backdrop's texture usages.
-    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene))",
+    # combines the scene's and the backdrop's texture usages; `canvas`
+    # (which it now calls) the canvas's. MetalFX's output texture's wgpu
+    # usage (`COPY_SRC | TEXTURE_BINDING | RENDER_ATTACHMENT`, the `|`s at
+    # column 25) is disjoint bits too.
+    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene|canvas))",
+    "nova-metalfx/src/scaler\\.rs:\\d+:25: replace \\| with \\^ in SpatialScaler::output_texture$",
+    # Its Metal usage is MetalFX's ask `| ShaderRead | RenderTarget`, and
+    # MetalFX asks for both bits itself on every GPU the macOS host has
+    # (the phase 7 spike), so dropping either added bit (`&` for the first
+    # `|`, column 35; `^` or `&` for the second, column 65, which binds
+    # `ShaderRead ^ RenderTarget` first) leaves the same usage. `^` at
+    # column 35 clears `ShaderRead` and is caught.
+    "nova-metalfx/src/scaler\\.rs:\\d+:35: replace \\| with & in SpatialScaler::output_texture$",
+    "nova-metalfx/src/scaler\\.rs:\\d+:65: replace \\| with (\\^|&) in SpatialScaler::output_texture$",
     # The glow ramp's thrust step raises the base only below cruise (24).
     # With `<=` a thrusting base of 24 steps to 25, and the next step, the
     # decay above cruise, takes it straight back to 24: the same result for
@@ -125,7 +396,7 @@ exclude_re = [
     # `9999 - 1` and `9999 * 1` round up to the same 157 words, so the
     # set's size and every bit's word are unchanged. (A mutant outside a
     # function is named by its line alone, hence no `in`.)
-    "nova-sim/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
+    "nova-sim-catalog/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
     # A fresh pilot is male, which is `Gender`'s default, so its body and
     # `Default::default()` are the same.
     "replace <impl PilotFacts for FreshPilot>::gender -> (crate::pilot::)?Gender with Default::default\\(\\)",
@@ -136,11 +407,11 @@ exclude_re = [
     # `H`'s engine mask is the persistent bit (0x0004) and the mission
     # persistent bit (0x0020): two distinct bits, so `|` and `^` combine
     # them the same. (A constant, named by its line alone.)
-    "nova-sim/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
-    # The ship-change clamp lowers a count to its `Max` when it is above
-    # it; with `<=` a count already at its `Max` is set to it again, which
+    "nova-sim-port/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
+    # The ship-change clamp lowers a count to its limit when it is above
+    # it; with `<=` a count already at its limit is set to it again, which
     # changes nothing.
-    "replace < with <= in carried_outfits",
+    "replace < with <= in hold$",
     # The session's default string lists hold none: the body already
     # returns an empty list.
     "replace <impl CommCatalog for NoStrings>::string_list -> Vec<String> with vec!\\[\\]",
@@ -148,11 +419,160 @@ exclude_re = [
     # row resets the traffic without reading a catalog, so no row ever
     # calls any of these bodies.
     "<impl TrafficCatalog for NoTraffic>::",
-    # The story dispatcher's consumer effects: every consumer's arm is
-    # empty until its own phase fills it, so the body is already `()`.
-    "replace <impl Stage for SessionStage<'_, C>>::effect with \\(\\)$",
+    # `<PAY>` of a charging pay, below -50000, shows `-50000 - pay`: at
+    # -50000 itself that is 0, which the catch-all arm shows too, so `<`
+    # and `<=` show the same.
+    "replace < with <= in pay_shown",
+    # A row list scrolls up to a selected row above the first shown by
+    # making it the first: with `<=`, selecting the first row shown makes
+    # it the first, which it is already.
+    "replace < with <= in RowList::select",
+    # A shield or armour gauge past its capacity (`max < now`) fills all of
+    # its area: with `<=`, a gauge exactly full takes that branch too, and
+    # its `now / max` would be exactly 1.0 anyway.
+    "replace < with <= in shield_share",
+    # A hypergate's held wait on its open frame is `Frame0Bias` x
+    # `AnimDelay` for a bias above 1: with `>=`, a bias of exactly 1 takes
+    # that branch too, and 1 x `AnimDelay` is `AnimDelay` anyway.
+    "gate_sprite.rs:.*replace > with >= in GateAnimation::threshold",
+    # `_AIShipIsScooping` (goal 0x11): no goal the engine has scoops until
+    # rdm:phase/asteroids/phase-5-ai-mining adds the miner's, so both
+    # answer false for every NPC already. Phase 5 removes these two.
+    "ai/mod.rs:.*replace Goal::scooping -> bool with false",
+    "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
+    # A shockwave's flash is late on a ship before its wreck in the table:
+    # the wreck is destroyed, so its own shockwave never reaches it, and a
+    # victim's index never equals the wreck's.
+    "combat/mod.rs:.*replace < with <= in Combat::shock",
+    # A run-out shield flash is dropped from the view's map: with `>=` it
+    # is kept at none, which `FlightView::shield_flash` reads as no flash
+    # all the same, and the next hit sets it afresh either way.
+    "flight/view/mod.rs:.*replace > with >= in step_flashes",
+    # A simultaneous fuel weapon's copies at its burst end: with no fuel
+    # (`fuel.now` exactly 0) the whole shots paid are `trunc(0 / cost)`,
+    # none, the same as the `else` branch's none.
+    "combat/ai_fire.rs:.*replace > with >= in copies",
+    # The recoil's push runs along `(heading + 180) mod 360`: `heading -
+    # 180` and `heading + 180 + 360` name the same angle, and `facing`
+    # reads any angle, so the push differs at most by sin and cos rounding,
+    # far below what a frame shows.
+    "combat/ai_fire.rs:.*replace \\+ with - in recoil",
+    "combat/ai_fire.rs:.*replace % with \\+ in recoil",
+    # Damage at or below none is skipped (`apply`): with `>=`, a damage of
+    # exactly none is taken, which takes nothing off.
+    "combat/damage.rs:.*replace > with >= in apply",
+    # An exit turned onto the screen's centre line (`turned.y` exactly 0)
+    # would take either compression: no whole-degree angle of the trig
+    # table turns an exit off the centre onto it (checked over every angle
+    # for every point within 300 pixels), and one on the centre has none
+    # to compress.
+    "combat/exits.rs:.*replace < with <= in ExitPoints::offset",
+    # A negative `Impact` is gated by its firer's centre; an `Impact` of
+    # exactly none pushes nothing anyway (`impact == 0.0`), gated or not.
+    "combat/impact.rs:.*replace < with <= in push",
+    # A homing shot turns `turn` toward `off`'s side: `off.signum()` is 1 or
+    # -1 there (`off` is past `turn`, so not none), and dividing by it is
+    # multiplying by it.
+    "combat/projectile.rs:[0-9]+:63: replace \\* with / in Shot::home",
+    # A jammed shot's turn is turned away or stopped only when it is
+    # positive: with `>=`, a turn of none becomes -0.0 or 0.0, which turns
+    # nothing either way.
+    "combat/projectile.rs:.*replace > with >= in Shot::jammed",
+    # `Sides::root` steps to a leader not the ship itself: a ship that leads
+    # itself stepping to itself stays where it is, and the walk is bounded.
+    "combat/sides.rs:.*replace match guard leader != at with true in Sides<'_>::root",
+    # A self sub-munition adds `SubLimit` more flights when that is above
+    # none: with `>=`, a limit of none adds none of them.
+    "combat/weapon.rs:.*replace > with >= in chain_range",
+    # A point-defence shot at a ship is aimed at none (`_SpawnShot(.., -1,
+    # ..)`); aimed at the ship, it is aimed at none again as it first moves
+    # (`Shot::lose_a_gone_ship`), later that same tick, before anything
+    # reads it.
+    "combat/mod.rs:.*replace match guard launch.weapon.is_beam\\(\\) with true in Combat::defend",
+    # A mission ship code of 2176-9998 is nowhere, drawing nothing. Without
+    # its own arm it falls to the last, where `GovtCode::of` names only
+    # 9999-31999 and so gives `None` for every code of 2176-9998, which is
+    # nowhere with no draw too. The arm states the original's reading.
+    "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The afterburner's boundaries where both sides give the same: a heading
+    # share of exactly the snap's slack (1e-6) is none either way to well
+    # within f32; an inertialess speed pushed to exactly the afterburner's
+    # top is the top either way; fuel drained to exactly none is none
+    # either way; a box exactly at the top speed bled by a step is raised
+    # back to it, and one raised to the top speed it already holds is
+    # unchanged. The snap's pattern pins its line and column, so the
+    # axis's `v < b` in the same function, which is not equivalent, still
+    # runs.
+    "nova-sim-base/src/afterburner.rs:102:44: replace < with <= in push_velocity",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
+    "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
+    # The lightning rolls' seed joins a high word shifted past 32 bits and
+    # a low word below 2^32, and a trail colour joins channels shifted to
+    # their own 8 bits: their bits never overlap, so `|` and `^` give the
+    # same word.
+    "nova-view/src/flight/lightning\\.rs:188:30: replace \\| with \\^ in StepRolls::draw$",
+    "nova-view/src/flight/trails\\.rs:90:16: replace \\| with \\^ in scaled_colour$",
+    # A trail's tail angle is taken `% 360` as the original takes it, but
+    # the table trig it feeds (`table_sin`, `table_cos`) takes every angle
+    # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
+    # same tail.
+    "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
+    # Super-xBR computes every texel the same way whichever thread computes
+    # it, so how its work is split changes how fast it runs, never a byte
+    # (pinned by `any_number_of_threads_enlarges_to_the_same_bytes`): the
+    # threads the machine has (1 or 0, which `max(1)` makes 1), each
+    # frame's share of them, a band's length (any length tiles the plane,
+    # as each texel's index is `band * band_len + n`), and whether one band
+    # is computed on the calling thread.
+    "nova-render/src/super_xbr\\.rs:.*replace threads -> usize with (0|1)$",
+    "nova-render/src/super_xbr\\.rs:.*replace / with (%|\\*) in enlarge_all$",
+    "nova-render/src/super_xbr\\.rs:189:30: replace \\* with (\\+|/) in Plane::from_fn$",
+    "nova-render/src/super_xbr\\.rs:196:25: replace <= with > in Plane::from_fn$",
+    # The shaders add 0.000001 to the edge strength only so a strength of
+    # 0 divides by something; the preset's is 3, where 3.000001 and
+    # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
+    # texel shows.
+    "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
+    # A shot's slot is distinct among the shots in flight (it is the
+    # first not taken), so `insert_seated`'s insertion point never meets
+    # an equal slot, and `<` and `<=` find the same place.
+    "nova-sim-combat/src/combat/shot_slots\\.rs:.*replace < with <= in Combat::insert_seated$",
+    # `_HandleShot`'s walk: one visit past the last slot held or holding a
+    # shot finds neither, and a sub-munition never takes the visited slot,
+    # which its parent still holds as it releases.
+    "nova-sim-combat/src/combat/expiry\\.rs:.*replace < with <= in Combat::visit_slots$",
+    # A berth holds one ship, so a fighter just put in the system never
+    # shares its carrier's: `>` and `>=` pick the same fighters above it.
+    "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
+    # The fold steps only with a direction (`fold.dir == 0` is the other
+    # arm), so its tests of `dir > 0` and `dir < 0` read the same as
+    # `>= 0` and `<= 0` there.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:429:29: replace > with >= in ShipFrames::fold$",
+    "nova-sim-combat/src/combat/ship_frames\\.rs:432:36: replace < with <= in ShipFrames::fold$",
+    # A shield layer of exactly a turn's frames gives the hull's frame mod a
+    # turn, its rotation, either way; and one of a single frame gives 0
+    # either way.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:(308:37|310:32): replace > with >= in FrameSpec::shield_frame$",
+    # A frame-angle entry at exactly 270 points along x, so the up or down
+    # compression's y factor changes nothing and the x factor not its
+    # angle.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:162:41: replace > with >= in FrameTable::angle$",
+    # The reverse turn's sign is read only off a turn already beyond the
+    # turn rate, never 0.
+    "nova-sim-ai/src/traffic/ship_display\\.rs:243:27: replace > with >= in record$",
+    # The warp-out's glow at 32 raised by 3 is capped back to 32.
+    "nova-sim-ai/src/traffic/ship_display\\.rs:362:14: replace < with <= in warp_glow$",
+    # An f32 widened to a double is never exactly 0.7 or 0.33, which no
+    # f32 holds, so the ionization factor's tests against them (@0xdd0d0,
+    # @0xdd568) read the same with or without equality.
+    "nova-sim-base/src/ionization\\.rs:62:26: replace > with >= in slowdown$",
+    "nova-sim-combat/src/combat/ion_tint\\.rs:54:26: replace < with <= in tint_level$",
+    # `PilotCatalog::voices`' default body is `Voices::default()`, so
+    # replacing it with `Default::default()` is the same body.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::voices -> Voices with Default::default\\(\\)$",
     # A stellar's frame 0 shows `AnimDelay` x `Frame0Bias` ticks only when
     # the bias is above 1; a bias of exactly 1 gives `AnimDelay` x 1, the
     # same threshold as `AnimDelay`, so `>` and `>=` choose the same.
-    "replace > with >= in Frames::step",
+    "system/animation\\.rs:.*replace > with >= in Frames::step",
 ]

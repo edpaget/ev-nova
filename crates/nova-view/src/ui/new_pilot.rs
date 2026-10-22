@@ -1,14 +1,17 @@
 //! The New Pilot dialog (`DLOG` 3102, "Create a new pilot:"): the new
-//! pilot's name and gender.
+//! pilot's name, gender and Strict Play.
 //!
 //! The stock dialog asks for a full name, a nickname, Strict Play and a
-//! gender. The full name and the gender are used: the name's field (item
-//! 8) takes the typed text, the gender control (item 11) switches between
+//! gender. The full name, Strict Play and the gender are used: the name's
+//! field (item 8) takes the typed text, the Strict Play check box (item 4)
+//! starts clear and flips at each click, as `_DoNewPilotNameDialog` flips
+//! it (@0x16a1c-0x16a8f), the gender control (item 11) switches between
 //! Male and Female at each click, OK (item 1, and Return) creates the
-//! pilot, and Cancel (item 2, and Escape) goes back. Strict Play is drawn
-//! greyed, and the nickname and the pictures are inert. Without the
-//! interface file, [`NewPilotDialog::fallback`] lays out the same live
-//! items itself.
+//! pilot, and Cancel (item 2, and Escape) goes back. The nickname and the
+//! pictures are inert. Without the interface file,
+//! [`NewPilotDialog::fallback`] lays out the name, the gender, OK and
+//! Cancel itself; it has no Strict Play box, so its pilots do not play
+//! Strict Play.
 //!
 //! The stock gender control is `CNTL` 500, a pop-up menu titled "Gender:"
 //! (a 95-unit title) over `MENU` 500, whose items are "Male" and
@@ -31,7 +34,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -52,6 +54,8 @@ pub const CANCEL_ITEM: usize = 2;
 pub const NAME_ITEM: usize = 8;
 /// The gender control's item.
 pub const GENDER_ITEM: usize = 11;
+/// The Strict Play check box's item.
+pub const STRICT_PLAY_ITEM: usize = 4;
 /// The gender control's title: stock `CNTL` 500's.
 pub const GENDER_TITLE: &str = "Gender:";
 /// The gender menu's first item, stock `MENU` 500 #1.
@@ -75,8 +79,8 @@ const REFUSAL_GAP: f32 = 4.0;
 const REFUSAL_SIZE: f32 = 10.0;
 
 /// The items that are drawn but do nothing: the Nickname field (9) is
-/// blank, and Strict Play (4) a greyed check box.
-const INERT_ITEMS: [usize; 2] = [4, 9];
+/// blank.
+const INERT_ITEMS: [usize; 1] = [9];
 
 /// What the player chose.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +91,8 @@ pub enum NewPilotOutcome {
         name: String,
         /// The gender chosen.
         gender: Gender,
+        /// Whether Strict Play was ticked.
+        strict_play: bool,
     },
     /// Go back without one.
     Cancel,
@@ -142,8 +148,8 @@ impl GenderControl {
 pub struct NewPilotDialog {
     dialog: Dialog,
     field: TextField,
-    /// The greyed check boxes, drawn and never changed.
-    inert: Vec<Toggle>,
+    /// The Strict Play check box, when the template shows it.
+    strict_play: Option<Toggle>,
     /// The gender control, when the template shows it.
     gender_control: Option<GenderControl>,
     /// The gender chosen.
@@ -159,6 +165,7 @@ impl std::fmt::Debug for NewPilotDialog {
         f.debug_struct("NewPilotDialog")
             .field("name", &self.name())
             .field("gender", &self.gender)
+            .field("strict_play", &self.strict_play())
             .field("outcome", &self.outcome)
             .field("refusal", &self.refusal)
             .finish_non_exhaustive()
@@ -191,17 +198,17 @@ impl NewPilotDialog {
             .with_default(Some(OK_ITEM))
             .with_cancel(Some(CANCEL_ITEM));
         let field_rect = dialog.item_bounds(NAME_ITEM).expect("checked above");
-        let inert = INERT_ITEMS
-            .iter()
-            .filter(|&&item| dialog.item_shown(item))
-            .filter_map(|&item| match &template.items[item - 1].kind {
-                ItemSpec::CheckBox(title) => Some(Toggle::greyed(
-                    dialog.item_bounds(item).expect("an item"),
+        let strict_play = dialog
+            .item_shown(STRICT_PLAY_ITEM)
+            .then(|| match &template.items[STRICT_PLAY_ITEM - 1].kind {
+                ItemSpec::CheckBox(title) => Some(Toggle::new(
+                    dialog.item_bounds(STRICT_PLAY_ITEM).expect("an item"),
                     title.clone(),
+                    false,
                 )),
                 _ => None,
             })
-            .collect();
+            .flatten();
         let gender_control = dialog
             .item_shown(GENDER_ITEM)
             .then(|| dialog.item_bounds(GENDER_ITEM))
@@ -210,7 +217,7 @@ impl NewPilotDialog {
         Ok(Self {
             dialog,
             field: TextField::new(field_rect, NAME_LENGTH),
-            inert,
+            strict_play,
             gender_control,
             gender: Gender::default(),
             metrics,
@@ -236,6 +243,13 @@ impl NewPilotDialog {
     #[must_use]
     pub fn gender(&self) -> Gender {
         self.gender
+    }
+
+    /// Whether Strict Play is ticked so far: clear until a click ticks
+    /// it, and always clear without the box.
+    #[must_use]
+    pub fn strict_play(&self) -> bool {
+        self.strict_play.as_ref().is_some_and(Toggle::on)
     }
 
     /// The name field.
@@ -320,8 +334,8 @@ fn fallback_template() -> DialogTemplate {
 impl Screen for NewPilotDialog {
     /// Typed characters and Backspace go to the name field, and change of
     /// the name clears a refusal. Space only types a space. Everything else
-    /// goes to the dialog: a click on the gender control switches the
-    /// gender, OK (or Return) creates the pilot when the name is not
+    /// goes to the dialog: a click on Strict Play ticks or clears it, a
+    /// click on the gender control switches the gender, OK (or Return) creates the pilot when the name is not
     /// blank, and Cancel (or Escape) cancels. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         let typing = matches!(
@@ -345,7 +359,13 @@ impl Screen for NewPilotDialog {
                     self.outcome = Some(NewPilotOutcome::Create {
                         name: name.to_owned(),
                         gender: self.gender,
+                        strict_play: self.strict_play(),
                     });
+                }
+            }
+            Some(DialogEvent::Item(STRICT_PLAY_ITEM)) => {
+                if let Some(toggle) = &mut self.strict_play {
+                    *toggle = Toggle::new(toggle.rect(), toggle.label(), !toggle.on());
                 }
             }
             Some(DialogEvent::Item(GENDER_ITEM)) => {
@@ -363,15 +383,15 @@ impl Screen for NewPilotDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The backdrop and its outline, the dialog, the greyed check boxes,
-    /// the name field, the gender control, and the refusal under the name
+    /// The backdrop and its outline, the dialog, the Strict Play check
+    /// box, the name field, the gender control, and the refusal under the name
     /// in the error colour.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
         fill_rect(list, bounds, BACKDROP);
         outline(list, bounds, BORDER);
         self.dialog.draw(list);
-        for toggle in &self.inert {
+        if let Some(toggle) = &self.strict_play {
             toggle.draw(false, &self.metrics, list);
         }
         self.field.draw(&*self.metrics, list);
@@ -393,15 +413,6 @@ impl Screen for NewPilotDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// OK's and Cancel's sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -410,7 +421,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::Point;
     use crate::input::MouseButton;
-    use crate::sound::{Sound, UiSound};
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -484,6 +495,7 @@ mod tests {
         NewPilotOutcome::Create {
             name: name.to_owned(),
             gender,
+            strict_play: false,
         }
     }
 
@@ -574,10 +586,7 @@ mod tests {
         let mut dialog = self::dialog();
         typed(&mut dialog, "Bob");
         let ok = center(&dialog, OK_ITEM);
-        assert_eq!(
-            click(&mut dialog, ok),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, ok), []);
         assert_eq!(dialog.take_outcome(), Some(created("Bob", Gender::Male)));
     }
 
@@ -602,6 +611,22 @@ mod tests {
         let cancel = center(&dialog, CANCEL_ITEM);
         click(&mut dialog, cancel);
         assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
+    }
+
+    /// Return and Escape play nothing in the original:
+    /// `_DoNewPilotNameDialog` runs `ModalDialog` (@0x16956) with the
+    /// standard filter, which only flashes the button.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog();
+        typed(&mut dialog, "Ada");
+        assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
     }
 
     #[test]
@@ -648,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_a_backdrop_the_dialog_strict_play_greyed_and_the_field() {
+    fn it_draws_a_backdrop_the_dialog_strict_play_and_the_field() {
         let mut dialog = dialog();
         typed(&mut dialog, "Ada");
         let commands = drawn(&dialog);
@@ -657,7 +682,7 @@ mod tests {
         fill_rect(&mut expected, bounds, BACKDROP);
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
-        Toggle::greyed(rect(59.0, 122.0, 95.0, 17.0), "Strict Play").draw(
+        Toggle::new(rect(59.0, 122.0, 95.0, 17.0), "Strict Play", false).draw(
             false,
             &MonoMetrics,
             &mut expected,
@@ -688,12 +713,67 @@ mod tests {
     #[test]
     fn the_inert_items_do_nothing() {
         let mut dialog = dialog();
-        for item in [4, 9] {
-            let at = center(&dialog, item);
-            click(&mut dialog, at);
-            assert_eq!(dialog.take_outcome(), None, "{item}");
-        }
+        let at = center(&dialog, 9);
+        click(&mut dialog, at);
+        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(INERT_ITEMS, [9], "the nickname");
         assert_eq!(dialog.name(), "");
+    }
+
+    #[test]
+    fn strict_play_starts_clear_and_a_click_ticks_it_and_another_clears_it() {
+        let mut dialog = dialog();
+        assert!(!dialog.strict_play());
+        assert_eq!(STRICT_PLAY_ITEM, 4);
+        let at = center(&dialog, STRICT_PLAY_ITEM);
+        assert!(
+            click(&mut dialog, at).is_empty(),
+            "a check box clicks silently"
+        );
+        assert!(dialog.strict_play());
+        assert_eq!(dialog.take_outcome(), None);
+        let mut expected = DrawList::new();
+        Toggle::new(rect(59.0, 122.0, 95.0, 17.0), "Strict Play", true).draw(
+            false,
+            &MonoMetrics,
+            &mut expected,
+        );
+        let ticked: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert!(
+            drawn(&dialog)
+                .windows(ticked.len())
+                .any(|window| window == ticked),
+            "drawn ticked"
+        );
+        click(&mut dialog, at);
+        assert!(!dialog.strict_play());
+    }
+
+    #[test]
+    fn ok_creates_the_pilot_with_strict_play_as_ticked() {
+        let mut dialog = dialog();
+        let at = center(&dialog, STRICT_PLAY_ITEM);
+        click(&mut dialog, at);
+        typed(&mut dialog, "Ada");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Ada".to_owned(),
+                gender: Gender::Male,
+                strict_play: true,
+            })
+        );
+    }
+
+    #[test]
+    fn the_fallback_creates_a_pilot_without_strict_play() {
+        let mut dialog = NewPilotDialog::fallback(ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        assert!(!dialog.dialog().item_shown(STRICT_PLAY_ITEM), "parked");
+        assert!(!dialog.strict_play());
+        typed(&mut dialog, "Ada");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
     }
 
     #[test]
@@ -848,7 +928,7 @@ mod tests {
         assert_eq!(
             format!("{dialog:?}"),
             format!(
-                "NewPilotDialog {{ name: \"Ada\", gender: Male, outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
+                "NewPilotDialog {{ name: \"Ada\", gender: Male, strict_play: false, outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
             )
         );
     }

@@ -79,6 +79,7 @@ mod tests {
     use nova_view::text::fixture::check_contract;
 
     use super::*;
+    use crate::fonts::FALLBACK_FONT;
 
     /// The bundled fallback for Geneva, and the block font for Charcoal:
     /// every character a 1-em advance.
@@ -94,7 +95,7 @@ mod tests {
     #[test]
     fn empty_text_is_zero_wide() {
         let metrics = both();
-        for font in [Font::Geneva, Font::Charcoal] {
+        for font in [Font::Geneva, Font::Charcoal, Font::Times] {
             assert_eq!(metrics.width(font, 10.0, ""), 0.0, "{font:?}");
         }
     }
@@ -102,7 +103,7 @@ mod tests {
     #[test]
     fn width_grows_strictly_with_the_text_in_both_fonts() {
         let metrics = both();
-        for font in [Font::Geneva, Font::Charcoal] {
+        for font in [Font::Geneva, Font::Charcoal, Font::Times] {
             let widths: Vec<f32> = (1..=6)
                 .map(|n| metrics.width(font, 10.0, &"Kestrel".repeat(n)))
                 .collect();
@@ -117,7 +118,7 @@ mod tests {
     #[test]
     fn the_line_height_is_the_shared_rule_and_stable() {
         let metrics = both();
-        for font in [Font::Geneva, Font::Charcoal] {
+        for font in [Font::Geneva, Font::Charcoal, Font::Times] {
             for size in [9.0, 10.0, 12.0, 18.0] {
                 let line = metrics.line_height(font, size);
                 assert_eq!(line, LINE_HEIGHT * size, "{font:?} at {size}");
@@ -129,7 +130,7 @@ mod tests {
     #[test]
     fn doubling_the_size_doubles_width_and_line_height() {
         let metrics = both();
-        for font in [Font::Geneva, Font::Charcoal] {
+        for font in [Font::Geneva, Font::Charcoal, Font::Times] {
             let (one, two) = (
                 metrics.width(font, 10.0, "The quick brown fox"),
                 metrics.width(font, 20.0, "The quick brown fox"),
@@ -167,7 +168,7 @@ mod tests {
     #[test]
     fn with_no_face_at_all_text_is_zero_wide() {
         let metrics = GlyphonMetrics::new(&FontFaces::new(&b"not a font"[..]));
-        for font in [Font::Geneva, Font::Charcoal] {
+        for font in [Font::Geneva, Font::Charcoal, Font::Times] {
             assert_eq!(metrics.width(font, 10.0, "Kestrel"), 0.0, "{font:?}");
             assert_eq!(metrics.line_height(font, 10.0), 12.0);
         }
@@ -179,6 +180,21 @@ mod tests {
         for size in [0.0, -10.0, f32::NAN, f32::INFINITY, f32::MAX] {
             assert_eq!(metrics.width(Font::Geneva, size, "Kestrel"), 0.0, "{size}");
         }
+    }
+
+    #[test]
+    fn times_measures_in_the_bundled_serif() {
+        let metrics = GlyphonMetrics::new(&FontFaces::bundled());
+        let times = metrics.width(Font::Times, 18.0, "Kestrel MMM iii");
+        let geneva = metrics.width(Font::Geneva, 18.0, "Kestrel MMM iii");
+        assert!(times > 0.0, "{times}");
+        assert_ne!(times, geneva);
+        let without = GlyphonMetrics::new(&FontFaces::new(FALLBACK_FONT));
+        assert_eq!(
+            without.width(Font::Times, 18.0, "Kestrel MMM iii"),
+            geneva,
+            "with no serif, Times measures as Geneva"
+        );
     }
 
     #[test]

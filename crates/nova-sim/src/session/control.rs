@@ -18,25 +18,23 @@
 //! session (see [`control::execute`](crate::control::execute)): it writes
 //! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
 //! hands every other operator to [`Session::apply_op`], one match over the
-//! set operators, which other roadmaps extend with a match arm. It applies
+//! set operators. It applies
 //! Nova's `G`, `D` and `X` (see the `outfits` module), the ship changes
 //! `C`, `E`, `H` and `T` (see the `ship_change` module), and the moves `M` and `N`, the
 //! leave `Q`, which apply when [`Session::settle_script`] settles them,
-//! the sound `P` (see the `script_effects` module), and the stellars
-//! destroyed and regenerated, `Y` and `U` (see the `stellars` module).
-//! Any change to the pilot makes a save due. An operator nothing handles is skipped, and its kind told
-//! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
-//! which kinds were told is never saved.
+//! the sound `P` (see the `script_effects` module), the stellars
+//! destroyed and regenerated, `Y` and `U` (see the `stellars` module), and
+//! the missions started, aborted and failed, `S`, `A` and `F` (see the
+//! `missions` module), and the ranks activated and deactivated, `K` and
+//! `L` (see the `ranks` module).
+//! Any change to the pilot makes a save due.
 //!
 //! **The nested runner.** The story dispatcher runs its subscriptions'
 //! scripts through the same runner, `Session::run_ops`, which calls it
 //! back after each operator handed to `apply_op`, that operator applied:
 //! where it settles the moves and dispatches the events raised before the
 //! next operator (see the [`story`](crate::story) module's "Dispatch").
-//! A script run inside another is one more run like it: an unhandled
-//! kind is told the first time it is met, outer or nested. The operators
-//! still unhandled are those of the missions (`A`, `F`, `S`) and ranks
-//! (`K`, `L`), whose arms other work adds.
+//! A script run inside another is one more run like it.
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
@@ -45,8 +43,9 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
+use super::{MissionRun, Outbox, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
@@ -54,6 +53,7 @@ use crate::control::{
     Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind, execute,
 };
 use crate::pilot::{Gender, Pilot};
+use crate::rulebook::RuleSource;
 use crate::ship_change::OutfitCarry;
 
 /// What a control-bit test reads about the session's pilot (see the module
@@ -68,6 +68,10 @@ pub(crate) struct Facts<'a> {
     pub(crate) armament: &'a Armament,
 }
 
+/// Whether a `P` test passes: always, the engine taking the game as
+/// registered.
+pub(super) const REGISTERED: bool = true;
+
 impl Facts<'_> {
     /// The outfit a carried fighter of ship type `ship` docks back into:
     /// the first bay launching it, that bay's ammunition outfit of lowest
@@ -75,6 +79,24 @@ impl Facts<'_> {
     fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
         let bay = self.armament.bay_of(ship)?;
         lowest_ammo_outfit(self.ammo_outfits, bay)
+    }
+
+    /// The outfits an `o` test counts: each the pilot owns one of or
+    /// more, and each carried fighter's dock outfit
+    /// ([`Facts::docks_into`]).
+    pub(super) fn counted_outfits(&self) -> impl Iterator<Item = OutfitId> + '_ {
+        let owned = self
+            .pilot
+            .outfits()
+            .filter(|&(_, count)| count > 0)
+            .map(|(id, _)| id);
+        let docked = self
+            .pilot
+            .escorts()
+            .iter()
+            .filter(|escort| escort.carried)
+            .filter_map(|escort| self.docks_into(escort.ship));
+        owned.chain(docked)
     }
 }
 
@@ -87,19 +109,13 @@ impl PilotFacts for Facts<'_> {
         self.pilot.gender()
     }
 
-    /// Always: the engine takes the game as registered.
+    /// [`REGISTERED`].
     fn paid(&self, _days: u16) -> bool {
-        true
+        REGISTERED
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.pilot.owned(outfit) > 0
-            || self
-                .pilot
-                .escorts()
-                .iter()
-                .filter(|escort| escort.carried)
-                .any(|escort| self.docks_into(escort.ship) == Some(outfit))
+        self.counted_outfits().any(|counted| counted == outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
@@ -110,23 +126,25 @@ impl PilotFacts for Facts<'_> {
 /// The session's pilot, as its `Facts` read it.
 impl PilotFacts for Session {
     fn bit(&self, bit: Bit) -> bool {
-        self.facts().bit(bit)
+        self.ship.facts(&self.pilot, &self.statics).bit(bit)
     }
 
     fn gender(&self) -> Gender {
-        self.facts().gender()
+        self.ship.facts(&self.pilot, &self.statics).gender()
     }
 
     fn paid(&self, days: u16) -> bool {
-        self.facts().paid(days)
+        self.ship.facts(&self.pilot, &self.statics).paid(days)
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.facts().has_outfit(outfit)
+        self.ship
+            .facts(&self.pilot, &self.statics)
+            .has_outfit(outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
-        self.facts().explored(system)
+        self.ship.facts(&self.pilot, &self.statics).explored(system)
     }
 }
 
@@ -151,57 +169,72 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_set_op_observer(mut self, observer: std::rc::Rc<dyn SetOpObserver>) -> Self {
-        self.op_observer = Some(super::hire::Shared(observer));
+        self.setup.op_observer = Some(super::hire::Shared(observer));
         self
     }
 
-    /// Applies one set operator beyond the bit writes and `R(...)`; gives
-    /// back its kind when nothing here applies it yet (another roadmap's
-    /// operator).
-    pub(crate) fn apply_op(
-        &mut self,
-        op: &SetOp,
-        chance: &mut dyn Chance,
-    ) -> Result<(), SetOpKind> {
+    /// Applies one set operator beyond the bit writes and `R(...)`.
+    pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
-            SetOp::RemoveOutfit(outfit) => self.script_remove(*outfit),
-            SetOp::Explore(system) => self.explore_system(*system),
+            SetOp::RemoveOutfit(outfit) => {
+                self.ship
+                    .script_remove(&mut self.pilot, &self.statics, &self.setup, *outfit);
+            }
+            SetOp::Explore(system) => self.chart.explore_system(&mut self.pilot, *system),
             SetOp::ChangeShip(ship) => self.change_ship(*ship, OutfitCarry::Keep, false),
             SetOp::ChangeShipWithDefaults(ship) => {
-                let clamp = self.ship_change_rules().clamps();
+                let clamp = self.setup.ship_change_rules().clamps();
                 self.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
             }
             SetOp::ReplaceShip(ship) => {
-                let rules = self.ship_change_rules();
+                let rules = self.setup.ship_change_rules();
                 let carry = OutfitCarry::Persistent {
                     mask: rules.persistent(),
                 };
                 self.change_ship(*ship, carry, rules.clamps());
             }
             SetOp::RenameShip(list) => self.rename_ship(list.0, chance),
-            SetOp::MoveTo(system) => self.queued.moves.push(ScriptMove::To(*system)),
+            SetOp::MoveTo(system) => {
+                self.chart
+                    .select_for_landed_move(&self.statics, self.mode.landed(), *system, true);
+                self.run.queued.moves.push(ScriptMove::To(*system));
+            }
             SetOp::MoveKeepPosition(system) => {
-                self.queued.moves.push(ScriptMove::KeepPosition(*system));
+                self.chart.select_for_landed_move(
+                    &self.statics,
+                    self.mode.landed(),
+                    *system,
+                    false,
+                );
+                self.run
+                    .queued
+                    .moves
+                    .push(ScriptMove::KeepPosition(*system));
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
-            SetOp::PlaySound(sound) => self.play_script_sound(*sound),
+            SetOp::PlaySound(sound) => {
+                self.run
+                    .play_script_sound(&self.setup, &mut self.out, *sound);
+            }
             SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar, chance),
             SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
-            // Missions and ranks: other roadmaps add their arms here.
-            SetOp::AbortMission(_)
-            | SetOp::FailMission(_)
-            | SetOp::StartMission(_)
-            | SetOp::ActivateRank(_)
-            | SetOp::DeactivateRank(_)
+            SetOp::AbortMission(mission) => self.script_abort(*mission, chance),
+            SetOp::FailMission(mission) => self.script_fail(*mission),
+            SetOp::StartMission(mission) => self.script_start(*mission, chance),
+            SetOp::ActivateRank(rank) => {
+                self.run
+                    .activate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::DeactivateRank(rank) => {
+                self.run
+                    .deactivate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::OutOfRange { op, .. } => self.run.out_of_range(&self.setup, *op),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
-            | SetOp::Set(_)
-            | SetOp::Clear(_)
-            | SetOp::Toggle(_)
-            | SetOp::Random(..) => return Err(op.kind()),
+            SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
         }
-        Ok(())
     }
 
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
@@ -213,54 +246,57 @@ impl Session {
     /// Runs `expr` as [`Session::run_set`] does, calling `between` after
     /// each operator handed to `apply_op`, with that operator applied:
     /// where the story dispatcher nests. A script run inside `between`
-    /// runs as any other: each unhandled kind is noted the first time it
-    /// is met, here or nested, so none is noted twice or lost.
+    /// runs as any other. Unless `expr` came from empty text
+    /// ([`SetExpr::is_empty_text`]), the session then resets
+    /// ([`Session::reset_precalced`]), as each of the original's
+    /// set-string wrappers does once `_EvalSetExp` returns.
     pub(super) fn run_ops(
         &mut self,
         expr: &SetExpr,
         chance: &mut dyn Chance,
         between: &mut dyn FnMut(&mut Session, &mut dyn Chance),
     ) {
-        let observer = self.op_observer.clone();
+        let observer = self.setup.op_observer.clone();
         let before = self.pilot.clone();
         let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
             if let Some(observer) = &observer {
                 observer.0.saw(op, session);
             }
-            if let Err(kind) = session.apply_op(op, chance)
-                && session.unhandled_ops.insert(kind)
-            {
-                session.script_notes.push(ScriptNote::Unhandled(kind));
-            }
+            session.apply_op(op, chance);
             between(session, chance);
             Ok(())
         };
         execute(expr, self, &mut apply, chance, &mut BTreeSet::new());
+        // The set-string wrappers' tail into the reset, skipped only for
+        // empty text (`_EvalCurrentMissionBitSetString` @0x99a58, @0x99a85;
+        // `_EvalMissionBitSetString` @0x99dd1, @0x99dea; see the
+        // `precalced` module). The original also resets inside `G`, `D`,
+        // `C`, `E` and `H`, each through `_SystemInfoToShipStats`
+        // (@0x15489, @0x154ef, @0x1566a); the engine resets once, here.
+        // No frame is drawn, no dialog opens and nothing is saved between
+        // the two, so the difference crosses no boundary the player sees.
+        if !expr.is_empty_text() {
+            self.reset_precalced_for(ResetCause::SetExpr);
+        }
         if self.pilot != before {
-            self.save_due = true;
+            self.out.save_due = true;
+            // What a `Visibility` test reads is the pilot's: one left as
+            // it was cannot change the galaxy.
+            self.chart.galaxy_stale = true;
         }
     }
 
     /// What running set expressions had to tell since this was last taken,
     /// in order; taking it empties the list.
     pub fn take_script_notes(&mut self) -> Vec<ScriptNote> {
-        std::mem::take(&mut self.script_notes)
-    }
-
-    /// What a control-bit test reads about the pilot.
-    pub(crate) fn facts(&self) -> Facts<'_> {
-        Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
-            armament: &self.armament,
-        }
+        self.out.take_script_notes()
     }
 
     /// The session's control bits ([`Session::with_control_bits`]) and its
     /// pilot, as the rules that test a record's control bits ask them.
     pub(crate) fn gate(&self) -> Gate<'_> {
         Gate {
-            control_bits: &*self.control_bits.0,
+            control_bits: &*self.setup.control_bits.0,
             pilot: self,
         }
     }
@@ -280,7 +316,60 @@ impl Session {
         } else {
             bits.clear(bit);
         }
-        self.save_due = true;
+        self.out.save_due = true;
+    }
+}
+
+impl Outbox {
+    /// What running set expressions had to tell since this was last taken,
+    /// in order; taking it empties the list.
+    fn take_script_notes(&mut self) -> Vec<ScriptNote> {
+        std::mem::take(&mut self.script_notes)
+    }
+}
+
+impl PlayerShip {
+    /// What a control-bit test reads about the pilot.
+    pub(super) fn facts<'a>(&'a self, pilot: &'a Pilot, statics: &'a Statics) -> Facts<'a> {
+        Facts {
+            pilot,
+            ammo_outfits: &statics.ammo_outfits,
+            armament: &self.fit.armament,
+        }
+    }
+}
+
+impl MissionRun {
+    /// An operator whose number is out of range (see
+    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
+    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
+    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
+    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
+    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
+    /// and does nothing by the other.
+    ///
+    /// `P`, `T` and `Q` have no check, and a number past 32767, the
+    /// engine's widest ID, names no resource, so each does what the
+    /// original does with a missing one: `T` nothing (an empty pick
+    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
+    /// leaves the message empty, @0x15c02); `P` a sound that does not
+    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
+    /// replaces a held one with none (@0x15a30; `_PlayGame`
+    /// @0x4631b-0x46348).
+    ///
+    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
+    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
+    fn out_of_range(&mut self, setup: &Setup, op: SetOpKind) {
+        match op {
+            SetOpKind::MoveKeepPosition
+                if setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+            {
+                self.queued.moves.push(ScriptMove::Stay);
+            }
+            SetOpKind::PlaySound => self.drop_script_sound(setup),
+            SetOpKind::LeaveStellar => self.leave_on_no_list(setup),
+            _ => {}
+        }
     }
 }
 
@@ -290,7 +379,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::control::{SetExpr, SetOp, SetOpKind};
+    use crate::control::{SetExpr, SetOp};
     use crate::save;
     use crate::testkit::Scripted;
     use crate::testkit::catalog;
@@ -335,7 +424,7 @@ mod tests {
     fn the_pilot_view_reads_the_bits_gender_and_explored_systems() {
         let mut session = session();
         session.set_control_bit(bit(12), true);
-        let facts = session.facts();
+        let facts = session.ship.facts(&session.pilot, &session.statics);
         assert!(facts.bit(bit(12)));
         assert!(!facts.bit(bit(13)));
         assert_eq!(facts.gender(), Gender::Male);
@@ -347,7 +436,13 @@ mod tests {
             .expect("starts")
             .with_gender(Gender::Female);
         let session = Session::fly(&catalog, female).expect("flies");
-        assert_eq!(session.facts().gender(), Gender::Female);
+        assert_eq!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .gender(),
+            Gender::Female
+        );
     }
 
     #[test]
@@ -377,7 +472,13 @@ mod tests {
     fn the_pilot_view_always_counts_the_game_as_paid() {
         let session = session();
         for days in [0, 30, u16::MAX] {
-            assert!(session.facts().paid(days), "{days}");
+            assert!(
+                session
+                    .ship
+                    .facts(&session.pilot, &session.statics)
+                    .paid(days),
+                "{days}"
+            );
         }
     }
 
@@ -387,8 +488,18 @@ mod tests {
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.outfits.insert(OutfitId(300), 1);
         let session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.facts().has_outfit(OutfitId(300)));
-        assert!(!session.facts().has_outfit(OutfitId(301)));
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(300))
+        );
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(301))
+        );
     }
 
     fn set(text: &str) -> SetExpr {
@@ -432,43 +543,15 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_applies_novas_thirteen_and_gives_back_the_rest() {
+    fn apply_op_leaves_the_bit_writes_and_r_to_execute() {
         let mut session = session();
-        let expr = set(
-            "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
-              T128 Q128 X131 b1 !b1 ^b1 R(b1 b2)",
-        );
-        let given_back: Vec<_> = expr
-            .ops
-            .iter()
-            .filter_map(|op| {
-                session
-                    .apply_op(op, &mut Scripted::default())
-                    .err()
-                    .map(|kind| (kind, op.kind()))
-            })
-            .collect();
-        assert!(
-            given_back.iter().all(|(kind, own)| kind == own),
-            "{given_back:?}"
-        );
-        assert_eq!(
-            given_back
-                .into_iter()
-                .map(|(kind, _)| kind)
-                .collect::<Vec<_>>(),
-            [
-                SetOpKind::AbortMission,
-                SetOpKind::FailMission,
-                SetOpKind::StartMission,
-                SetOpKind::ActivateRank,
-                SetOpKind::DeactivateRank,
-                SetOpKind::Set,
-                SetOpKind::Clear,
-                SetOpKind::Toggle,
-                SetOpKind::Random,
-            ]
-        );
+        for op in &set("b1 ^b2 R(b3 b4)").ops {
+            session.apply_op(op, &mut Scripted::default());
+        }
+        for n in 1..=4 {
+            assert!(!session.control_bit(bit(n)), "b{n}");
+        }
+        assert!(!session.take_save_due());
     }
 
     /// Records whether system 131 is explored each time it sees an
@@ -491,54 +574,6 @@ mod tests {
         session.run_set(&set("X131"), &mut Scripted::default());
         assert_eq!(*explored.0.borrow(), [false], "seen before X applied");
         assert!(session.pilot().has_explored(SystemId(131)), "then applied");
-    }
-
-    #[test]
-    fn an_unhandled_operator_is_noted_once_and_the_next_still_applies() {
-        let mut session = session();
-        session.run_set(&set("S300 b4"), &mut Scripted::default());
-        assert!(session.control_bit(bit(4)));
-        session.run_set(&set("S301 b5"), &mut Scripted::default());
-        assert!(session.control_bit(bit(5)));
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::StartMission)]
-        );
-        assert_eq!(session.take_script_notes(), [], "taken");
-        session.run_set(&set("K128"), &mut Scripted::default());
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
-        );
-    }
-
-    #[test]
-    fn an_unhandled_kind_met_in_a_nested_script_too_is_noted_once() {
-        let mut session = session();
-        let mut nested = false;
-        session.run_ops(
-            &set("S300 K128 F130 b4"),
-            &mut Scripted::default(),
-            &mut |session, chance| {
-                if !std::mem::replace(&mut nested, true) {
-                    session.run_ops(&set("S301 A130 b5"), chance, &mut |_, _| {});
-                }
-            },
-        );
-        assert!(session.control_bit(bit(4)));
-        assert!(session.control_bit(bit(5)), "nested");
-        assert_eq!(
-            session.take_script_notes(),
-            [
-                ScriptNote::Unhandled(SetOpKind::StartMission),
-                ScriptNote::Unhandled(SetOpKind::AbortMission),
-                ScriptNote::Unhandled(SetOpKind::ActivateRank),
-                ScriptNote::Unhandled(SetOpKind::FailMission),
-            ],
-            "each once, in the order met"
-        );
-        session.run_set(&set("A131 S302 K129 F131"), &mut Scripted::default());
-        assert_eq!(session.take_script_notes(), [], "told already");
     }
 
     #[test]
@@ -581,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn the_operators_still_unhandled_are_those_of_other_roadmaps() {
+    fn every_set_operator_applies() {
         let catalog = catalog();
         let mut session = session().with_strings(Rc::new(Told));
         crate::testkit::land_now(&mut session).expect("lands");
@@ -593,25 +628,12 @@ mod tests {
             ),
             &mut Scripted::default(),
         );
-        assert_eq!(
-            session.take_script_notes(),
-            [
-                SetOpKind::AbortMission,
-                SetOpKind::FailMission,
-                SetOpKind::StartMission,
-                SetOpKind::ActivateRank,
-                SetOpKind::DeactivateRank,
-            ]
-            .map(ScriptNote::Unhandled)
-        );
+        assert_eq!(session.take_script_notes(), []);
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
-        assert_eq!(
-            settled.took_off,
-            Some(crate::catalog::StellarId(128)),
-            "Q queued"
-        );
+        assert!(session.leave_due(), "Q held");
+        let _ = session.take_off(&catalog, &mut Scripted::default());
         session.tick(crate::flight::Controls::default());
         assert!(
             session

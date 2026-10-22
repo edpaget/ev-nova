@@ -1,51 +1,70 @@
-//! The hyperspace jump's effect: the stars streak, the screen fades to
-//! white, and the new system fades in from white.
+//! The hyperspace jump's effect: the screen fades to white as the ship
+//! warps away, and the new system fades in from white.
 //!
-//! The effect runs on display time, in three phases:
+//! The session flies the warp (see `nova_sim`'s `warp_stage` module): the
+//! ship moves off along its bearing, up to 50 pixels a tick, so the
+//! camera and the starfield show the rush. The effect plays on top, on
+//! display time, in the phases [`JumpPhase`] names:
 //!
-//! 1. [`JumpPhase::Streak`], for [`STREAK_FOR`]: the stars stretch into
-//!    lines trailing away from the jump's direction, growing to
-//!    [`STREAK_LENGTH`] (times each star layer's parallax factor).
-//! 2. [`JumpPhase::FadeOut`], for [`FADE_OUT_FOR`]: the streaked scene
-//!    fades to white ([`FADE_COLOR`]).
-//! 3. [`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]: the new system fades in
+//! 1. [`JumpPhase::Warp`]: from the jump's start nothing shows, until the
+//!    session's `_hyperGamma` goes above 0 (`Session::hyper_gamma`).
+//! 2. [`JumpPhase::FadeOut`], for [`FADE_OUT_FOR`]: the scene fades to
+//!    white ([`FADE_COLOR`]), from the first tick it is lit
+//!    ([`JumpEffect::light`]), then [`JumpPhase::White`] holds it white.
+//! 3. The ship arrives when the session says the warp has ended
+//!    (`Session::warp_end_due`), whether or not the fade has finished
+//!    ([`JumpEffect::arrive`]).
+//! 4. [`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]: the new system fades in
 //!    from white.
 //!
-//! The ship arrives between the fade-out and the fade-in, the instant
-//! [`JumpEffect::advance`] reports.
+//! # A jump given up
+//!
+//! A jump given up before it arrives (the session's jump collapsed under a
+//! disabled player, or cut by a sabotage kill outfit) ends the effect
+//! there ([`JumpEffect::given_up`]). `_HandlePlayer` @0x6840b-0x6841f
+//! calls `_FadeWhiteOut` on its first pass with +0x50 no longer above 0
+//! and `_hyperGamma` at 0 or more, which a given-up warp leaves as an
+//! arrival does: a screen lit fades back from white over [`FADE_IN_FOR`],
+//! as `CGDisplayFade` starts from solid white (blend 1.0) wherever the fade
+//! to white had got. An unlit one shows nothing: `_FadeWhiteIn` never
+//! acquired a fade reservation (@0x548c), so `_FadeWhiteOut`'s
+//! `CGDisplayFade` @0x550c runs on a token already released, or never
+//! issued, and does nothing.
 //!
 //! # Without the fades
 //!
-//! When the Hyperspace Effects preference is off ([`JumpEffect::with_fades`]
-//! false), the stars still streak for [`STREAK_FOR`], the ship arrives as
-//! the streak ends, and the screen shows solid white for one frame,
-//! [`JumpPhase::Flash`] for [`ARRIVAL_FLASH_FOR`]; there is no fade-out or
-//! fade-in.
+//! When the Hyperspace Effects preference is off ([`JumpEffect::warp`]'s
+//! `fades` false), the session lights no `_hyperGamma`, so the scene
+//! never fades out, and the arrival frame shows solid white once,
+//! [`JumpPhase::Flash`] for [`ARRIVAL_FLASH_FOR`]; there is no fade-in.
 //!
 //! # The original's effect
 //!
 //! Checked against the original Mac executable (`EV Nova.app`, i386, read
 //! with its symbols):
 //!
-//! - `_HandlePlayer` @0x6d29c-0x6d2bf: once the jump begins the ship
-//!   accelerates away along its bearing, and `_hyperGamma` rises from its
-//!   warp speed past a threshold (`(speed - 55) * 5`). The stars rush past
-//!   because the ship itself moves; `_HandleStars` and `_ScrollStarfield`
-//!   draw no streak lines. The ship is frozen while our effect plays, so
-//!   the streak stands in for that motion.
+//! - `_HandlePlayer` @0x6d1c1-0x6d318: once it faces the bearing the
+//!   ship's position moves along it by the warp speed, and `_hyperGamma`
+//!   is `(speed - 55) * 5` (@0x6d29c-0x6d2bf). The stars rush past because
+//!   the ship itself moves; `_HandleStars` and `_ScrollStarfield` draw no
+//!   streak lines, so neither does the engine.
 //! - `_HandlePlayer` @0x683a4-0x68409: once `_hyperGamma` is positive it
 //!   calls `_FadeWhiteIn` @0x546f, a `CGDisplayFade` of the whole display
-//!   to white (rgb 1,1,1) over 1.5 s. It is a display fade, so the HUD
-//!   whites out too; the flight view draws the fade over everything.
-//! - @0x6be44-0x6bf3a: the arrival frame is painted solid white.
+//!   to white (rgb 1,1,1) over 1.5 s, not synchronous, so the game runs on
+//!   under it, which [`FADE_OUT_FOR`] matches. It is a display fade, so
+//!   the HUD whites out too; the flight view draws the fade over
+//!   everything.
+//! - @0x6bb5e-0x6c70b: the warp ends on the warp clock, the session's to
+//!   decide; @0x6be44-0x6bf3a: the arrival frame is painted solid white.
 //! - `_HandlePlayer` @0x6840b-0x6841f: on the next frame `_FadeWhiteOut`
 //!   @0x54d1 fades the display back from white over 1.5 s, which
 //!   [`FADE_IN_FOR`] matches.
 //!
 //! # Input
 //!
-//! Only the streak and the fade-out hold flight; the player steers, fires
-//! and jumps again under the fade-in, as in the original:
+//! The session takes no steering, thrust or firing through the warp (its
+//! own gates); the player steers, fires and jumps again under the
+//! fade-in, as in the original:
 //!
 //! - `_FadeWhiteOut` @0x54d1-0x5527 calls `CGDisplayFade` with
 //!   `synchronous = 0`, so it returns at once, and clears `_screenFaded`
@@ -69,12 +88,12 @@
 //! (settings+0x14) means "skip the effects", and a fresh install has them
 //! on. All three engine tests of it skip only the white display fades:
 //! `_HandlePlayer` @0x6d2a1 (`_hyperGamma` is not raised, though the ship
-//! still accelerates away, so our streak stays), `_HandlePlayer` @0x683af
-//! (no `_FadeWhiteIn`) and `_PlayerEnterHypergate` @0x63c30 (no
-//! `_FadeWhiteOut`). The arrival frame @0x6be44 is painted white without
-//! testing it, which [`JumpPhase::Flash`] stands for. The phase text's
-//! other reading, no streak and arrival at once, is recorded in task
-//! `bible-vs-engine-settings`.
+//! still accelerates away), `_HandlePlayer` @0x683af (no `_FadeWhiteIn`)
+//! and `_PlayerEnterHypergate` @0x63c30 (no `_FadeWhiteOut`). The session
+//! holds the preference for the first two (`Session::set_hyperspace_effects`).
+//! The arrival frame @0x6be44 is painted white without testing it, which
+//! [`JumpPhase::Flash`] stands for. The phase text's other reading,
+//! arrival at once, is recorded in task `bible-vs-engine-settings`.
 //!
 //! # Gates
 //!
@@ -87,31 +106,21 @@
 //! and never fades, whatever the preference: [`JumpEffect::flash`].
 //!
 //! The black fades (`_FadeScreenOut`, `_FadeScreenIn`) serve death, the
-//! intro and dialogs, never the jump. The streak and fade-out durations
-//! are ours: the original's fade-out starts from a warp speed we do not
-//! simulate, and the roadmap does not aim to match its timing. The Help
-//! Book and the Bible do not describe the effect.
+//! intro and dialogs, never the jump. The Help Book and the Bible do not
+//! describe the effect.
 
 use std::time::Duration;
 
-use nova_sim::Vec2;
-
 use crate::draw::fill_rect;
-use crate::geometry::Bounds;
-use crate::system::camera::VIEW_SIZE;
-use crate::{Color, DrawList, Point};
+use crate::fade::whole_view;
+use crate::{Color, DrawList};
 
-/// How long the stars streak.
-pub const STREAK_FOR: Duration = Duration::from_secs(1);
-/// How long the screen takes to fade out.
-pub const FADE_OUT_FOR: Duration = Duration::from_millis(500);
+/// How long the screen takes to fade to white: the original's 1.5 s, as
+/// its `_FadeWhiteIn` fades the display.
+pub const FADE_OUT_FOR: Duration = Duration::from_millis(1500);
 /// How long the new system takes to fade in: the original's 1.5 s, as its
 /// `_FadeWhiteOut` fades the display back from white.
 pub const FADE_IN_FOR: Duration = Duration::from_millis(1500);
-/// How long a streak is at the end of the streak phase, for a star layer
-/// that moves with the camera; each layer's is this times its factor, so
-/// near stars streak longer.
-pub const STREAK_LENGTH: f32 = 512.0;
 /// How long the arrival frame shows solid white when the jump plays
 /// without its fades: one frame of the original's 30 a second, ours, as
 /// its arrival frame is painted white whatever the preference.
@@ -120,29 +129,16 @@ pub const ARRIVAL_FLASH_FOR: Duration = Duration::from_millis(33);
 /// `_FadeWhiteIn` and `_FadeWhiteOut` fade the display.
 pub const FADE_COLOR: Color = Color::WHITE;
 
-/// The whole screen, which the fade covers.
-const SCREEN: Bounds = Bounds {
-    min: Point::new(0.0, 0.0),
-    max: Point::new(VIEW_SIZE.0, VIEW_SIZE.1),
-};
-
-/// How far into a jump's effect the ship arrives: the end of the fade-out,
-/// or of the streak without fades.
-fn arrival_at(fades: bool) -> Duration {
-    if fades {
-        STREAK_FOR + FADE_OUT_FOR
-    } else {
-        STREAK_FOR
-    }
-}
-
-/// Where the effect is, each phase with how far through it, in `[0, 1)`.
+/// Where the effect is, each timed phase with how far through it, in
+/// `[0, 1)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JumpPhase {
-    /// The stars streak.
-    Streak(f32),
-    /// The old system fades out.
+    /// The ship warps, the screen not yet lit.
+    Warp,
+    /// The old system fades to white.
     FadeOut(f32),
+    /// The screen is white, until the ship arrives.
+    White,
     /// The new system fades in.
     FadeIn(f32),
     /// The arrival frame shows solid white, when the jump plays without
@@ -155,105 +151,108 @@ pub enum JumpPhase {
 /// A hyperspace jump's effect, as it plays.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JumpEffect {
-    /// Which way the ship jumps, on screen: a unit vector.
-    direction: Point,
-    /// How long it has played.
-    elapsed: Duration,
-    /// Whether it fades out to white and back in, as the Hyperspace Effects
-    /// preference asks; without, the ship arrives as the streak ends.
+    /// Whether it fades in from white on arrival, as the Hyperspace
+    /// Effects preference asks; without, the arrival flashes white once.
     fades: bool,
+    /// How long it has faded to white, once lit.
+    white: Option<Duration>,
+    /// How long since the ship arrived, once it has.
+    arrived: Option<Duration>,
 }
 
 impl JumpEffect {
-    /// The effect of a jump from the system at map position `from` to the
-    /// one at `to`: along the bearing between them, or up when they share
-    /// a position.
+    /// The effect of a jump under way, with its fades or without, as the
+    /// Hyperspace Effects preference is on or off: nothing shows yet.
     #[must_use]
-    pub fn toward(from: Vec2, to: Vec2) -> Self {
-        let bearing = to - from;
-        let length = bearing.length();
-        let direction = if length > 0.0 {
-            Point::new(bearing.x / length, bearing.y / length)
-        } else {
-            Point::new(0.0, -1.0)
-        };
+    pub fn warp(fades: bool) -> Self {
         Self {
-            direction,
-            elapsed: Duration::ZERO,
-            fades: true,
+            fades,
+            white: None,
+            arrived: None,
         }
     }
 
     /// The effect of coming out of a hypergate: the new system fades in
     /// from white ([`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]) when `fades`,
     /// as the Hyperspace Effects preference is on, and otherwise the screen
-    /// shows solid white once ([`JumpPhase::Flash`]). There is no streak
-    /// and no fade-out, and it never reports an arrival: the ship has
-    /// arrived already. See "Gates" in the module docs.
+    /// shows solid white once ([`JumpPhase::Flash`]): the arrival's half,
+    /// the ship having arrived already. See "Gates" in the module docs.
     #[must_use]
     pub fn emerging(fades: bool) -> Self {
         Self {
-            // No streak shows it.
-            direction: Point::new(0.0, -1.0),
-            elapsed: arrival_at(fades),
             fades,
+            white: None,
+            arrived: Some(Duration::ZERO),
         }
     }
 
     /// The effect of passing through a wormhole: the screen shows solid
-    /// white once ([`JumpPhase::Flash`]), whatever the preference, and it
-    /// never reports an arrival.
+    /// white once ([`JumpPhase::Flash`]), whatever the preference.
     #[must_use]
     pub fn flash() -> Self {
         Self::emerging(false)
     }
 
-    /// This effect, with its white fades (the default) or without them, as
-    /// the Hyperspace Effects preference is on or off.
-    #[must_use]
-    pub fn with_fades(self, fades: bool) -> Self {
-        Self { fades, ..self }
+    /// Starts the fade to white, as `_FadeWhiteIn` does once `_hyperGamma`
+    /// is above 0, unless it has started or the ship has arrived.
+    pub fn light(&mut self) {
+        if self.white.is_none() && self.arrived.is_none() {
+            self.white = Some(Duration::ZERO);
+        }
     }
 
-    /// Which way the ship jumps, on screen: a unit vector.
+    /// The jump is given up before the ship arrives: once lit, the screen
+    /// fades back from white ([`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]),
+    /// whatever the fade to white had reached; unlit, nothing more shows.
+    /// See "A jump given up" in the module docs.
     #[must_use]
-    pub fn direction(&self) -> Point {
-        self.direction
+    pub fn given_up(self) -> Option<Self> {
+        self.white.map(|_| Self {
+            fades: true,
+            white: None,
+            arrived: Some(Duration::ZERO),
+        })
     }
 
-    /// Plays `dt` more of the effect, and says whether that crossed the
-    /// instant the ship arrives, the end of the fade-out (or of the streak,
-    /// without fades): true exactly once, however long `dt` is.
-    pub fn advance(&mut self, dt: Duration) -> bool {
-        let arrival = arrival_at(self.fades);
-        let before = self.elapsed;
-        self.elapsed = self.elapsed.saturating_add(dt);
-        before < arrival && self.elapsed >= arrival
+    /// The ship arrives: the arrival's half plays from now, unless it is
+    /// playing already.
+    pub fn arrive(&mut self) {
+        self.arrived.get_or_insert(Duration::ZERO);
+    }
+
+    /// Plays `dt` more of the effect: of its arrival's half once the ship
+    /// has arrived, else of its fade to white once lit.
+    pub fn advance(&mut self, dt: Duration) {
+        if let Some(arrived) = &mut self.arrived {
+            *arrived = arrived.saturating_add(dt);
+        } else if let Some(white) = &mut self.white {
+            *white = white.saturating_add(dt);
+        }
     }
 
     /// Where the effect is.
     #[must_use]
     pub fn phase(&self) -> JumpPhase {
         let fraction = |into: Duration, of: Duration| into.as_secs_f32() / of.as_secs_f32();
-        let mut at = self.elapsed;
-        if at < STREAK_FOR {
-            return JumpPhase::Streak(fraction(at, STREAK_FOR));
-        }
-        at -= STREAK_FOR;
-        if !self.fades {
-            if at < ARRIVAL_FLASH_FOR {
-                return JumpPhase::Flash(fraction(at, ARRIVAL_FLASH_FOR));
+        match (self.arrived, self.white) {
+            (Some(at), _) if self.fades => {
+                if at < FADE_IN_FOR {
+                    JumpPhase::FadeIn(fraction(at, FADE_IN_FOR))
+                } else {
+                    JumpPhase::Done
+                }
             }
-            return JumpPhase::Done;
+            (Some(at), _) => {
+                if at < ARRIVAL_FLASH_FOR {
+                    JumpPhase::Flash(fraction(at, ARRIVAL_FLASH_FOR))
+                } else {
+                    JumpPhase::Done
+                }
+            }
+            (None, None) => JumpPhase::Warp,
+            (None, Some(at)) if at < FADE_OUT_FOR => JumpPhase::FadeOut(fraction(at, FADE_OUT_FOR)),
+            (None, Some(_)) => JumpPhase::White,
         }
-        if at < FADE_OUT_FOR {
-            return JumpPhase::FadeOut(fraction(at, FADE_OUT_FOR));
-        }
-        at -= FADE_OUT_FOR;
-        if at < FADE_IN_FOR {
-            return JumpPhase::FadeIn(fraction(at, FADE_IN_FOR));
-        }
-        JumpPhase::Done
     }
 
     /// Whether the effect is over.
@@ -262,39 +261,30 @@ impl JumpEffect {
         self.phase() == JumpPhase::Done
     }
 
-    /// How long the near stars' streaks are: growing through the streak
-    /// phase, full through the fade-out, and none after.
-    #[must_use]
-    pub fn streak_length(&self) -> f32 {
-        match self.phase() {
-            JumpPhase::Streak(p) => STREAK_LENGTH * p,
-            JumpPhase::FadeOut(_) => STREAK_LENGTH,
-            JumpPhase::FadeIn(_) | JumpPhase::Flash(_) | JumpPhase::Done => 0.0,
-        }
-    }
-
-    /// The fade's alpha: none while the stars streak, rising to opaque
-    /// through the fade-out, and falling back to none through the fade-in;
-    /// opaque through the arrival flash.
+    /// The fade's alpha: none while the ship warps unlit, rising to
+    /// opaque through the fade-out, opaque until and at the arrival, and
+    /// falling back to none through the fade-in.
     #[must_use]
     pub fn fade_alpha(&self) -> u8 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha = |p: f32| (p * 255.0).round() as u8;
         match self.phase() {
-            JumpPhase::Streak(_) | JumpPhase::Done => 0,
+            JumpPhase::Warp | JumpPhase::Done => 0,
             JumpPhase::FadeOut(p) => alpha(p),
             JumpPhase::FadeIn(p) => alpha(1.0 - p),
-            JumpPhase::Flash(_) => u8::MAX,
+            JumpPhase::White | JumpPhase::Flash(_) => u8::MAX,
         }
     }
 
-    /// Covers the whole screen in [`FADE_COLOR`] at the fade's alpha, if it
-    /// shows at all.
-    pub fn draw_fade(&self, list: &mut DrawList) {
+    /// Covers the whole of flight's view, `view` in size, in
+    /// [`FADE_COLOR`] at the fade's alpha, if it shows at all, as the
+    /// original's white fades cover the whole display.
+    pub fn draw_fade(&self, list: &mut DrawList, view: (f32, f32)) {
         let alpha = self.fade_alpha();
         if alpha > 0 {
             fill_rect(
                 list,
-                SCREEN,
+                whole_view(view),
                 Color {
                     a: alpha,
                     ..FADE_COLOR
@@ -308,237 +298,146 @@ impl JumpEffect {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::DrawCommand;
-
-    fn effect() -> JumpEffect {
-        JumpEffect::toward(Vec2::new(0.0, 0.0), Vec2::new(600.0, 0.0))
-    }
-
-    fn after(dt: Duration) -> JumpEffect {
-        let mut effect = effect();
-        effect.advance(dt);
-        effect
-    }
+    use crate::system::camera::VIEW_SIZE as CLASSIC;
+    use crate::{DrawCommand, Point};
 
     fn ms(millis: u64) -> Duration {
         Duration::from_millis(millis)
     }
 
-    #[test]
-    fn the_direction_is_the_map_bearing_between_the_systems_or_up() {
-        assert_eq!(effect().direction(), Point::new(1.0, 0.0));
-        let diagonal = JumpEffect::toward(Vec2::new(100.0, 100.0), Vec2::new(-200.0, 500.0));
-        assert_eq!(diagonal.direction(), Point::new(-0.6, 0.8));
-        let same = JumpEffect::toward(Vec2::new(5.0, 5.0), Vec2::new(5.0, 5.0));
-        assert_eq!(same.direction(), Point::new(0.0, -1.0));
-    }
-
-    #[test]
-    fn the_phases_follow_each_other_at_their_boundaries() {
-        assert_eq!(effect().phase(), JumpPhase::Streak(0.0));
-        assert_eq!(after(ms(500)).phase(), JumpPhase::Streak(0.5));
-        assert_eq!(after(ms(1000)).phase(), JumpPhase::FadeOut(0.0));
-        assert_eq!(after(ms(1250)).phase(), JumpPhase::FadeOut(0.5));
-        assert_eq!(after(ms(1500)).phase(), JumpPhase::FadeIn(0.0));
-        assert_eq!(after(ms(2250)).phase(), JumpPhase::FadeIn(0.5));
-        assert_eq!(after(ms(3000)).phase(), JumpPhase::Done);
-        assert_eq!(after(Duration::MAX).phase(), JumpPhase::Done);
-        assert!(!after(ms(2999)).done());
-        assert!(after(ms(3000)).done());
-        assert_eq!(
-            (STREAK_FOR, FADE_OUT_FOR, FADE_IN_FOR),
-            (ms(1000), ms(500), ms(1500))
-        );
-    }
-
-    #[test]
-    fn advancing_reports_the_arrival_exactly_once() {
-        let mut effect = effect();
-        let mut arrivals = Vec::new();
-        for frame in 1..=150 {
-            if effect.advance(Duration::from_millis(16)) {
-                arrivals.push(frame);
-            }
-        }
-        // 1.5 s is crossed in the 94th frame of 16 ms.
-        assert_eq!(arrivals, [94]);
-
-        let mut exact = effect_at(ms(1499));
-        assert!(!exact.advance(Duration::ZERO));
-        assert!(exact.advance(ms(1)), "reaching it exactly");
-        assert!(!exact.advance(ms(1)));
-
-        let mut long = self::effect();
-        assert!(long.advance(ms(5000)), "across the whole effect at once");
-        assert!(!long.advance(ms(5000)));
-        assert!(!long.advance(Duration::MAX), "nor past the end of time");
-    }
-
-    fn effect_at(at: Duration) -> JumpEffect {
-        after(at)
-    }
-
-    #[test]
-    fn the_streaks_grow_then_hold_then_vanish() {
-        assert_eq!(effect().streak_length(), 0.0);
-        assert_eq!(after(ms(250)).streak_length(), 128.0);
-        assert!((after(ms(999)).streak_length() - 511.488).abs() < 1e-3);
-        assert_eq!(after(ms(1200)).streak_length(), STREAK_LENGTH);
-        assert_eq!(after(ms(1600)).streak_length(), 0.0);
-        assert_eq!(after(ms(3000)).streak_length(), 0.0);
-        assert_eq!(STREAK_LENGTH, 512.0);
-    }
-
-    #[test]
-    fn the_fade_rises_from_nothing_to_opaque_and_falls_back() {
-        let alphas: Vec<u8> = [0, 999, 1000, 1250, 1499, 1500, 2250, 2994, 3000]
-            .into_iter()
-            .map(|at| after(ms(at)).fade_alpha())
-            .collect();
-        assert_eq!(alphas, [0, 0, 0, 128, 254, 255, 128, 1, 0]);
-    }
-
-    #[test]
-    fn the_fade_covers_the_screen_in_white() {
-        let mut list = DrawList::new();
-        after(ms(1250)).draw_fade(&mut list);
-        assert_eq!(
-            list.iter().cloned().collect::<Vec<_>>(),
-            [DrawCommand::Line {
-                from: Point::new(0.0, 384.0),
-                to: Point::new(1024.0, 384.0),
-                width: 768.0,
-                color: Color::rgba(255, 255, 255, 128),
-            }]
-        );
-        assert_eq!(FADE_COLOR, Color::WHITE);
-        for at in [500, 3000] {
-            let mut none = DrawList::new();
-            after(ms(at)).draw_fade(&mut none);
-            assert!(none.is_empty(), "{at}");
-        }
-    }
-
-    fn plain(at: Duration) -> JumpEffect {
-        let mut effect = effect().with_fades(false);
+    /// A jump lit and played `at`.
+    fn lit(at: Duration) -> JumpEffect {
+        let mut effect = JumpEffect::warp(true);
+        effect.light();
         effect.advance(at);
         effect
     }
 
     #[test]
-    fn with_fades_true_is_the_default_effect() {
-        assert_eq!(effect().with_fades(true), effect());
-        assert_ne!(effect().with_fades(false), effect());
+    fn a_warp_shows_nothing_until_it_is_lit_then_fades_to_white_and_holds() {
+        let mut effect = JumpEffect::warp(true);
+        effect.advance(ms(5000));
+        assert_eq!(effect.phase(), JumpPhase::Warp, "unlit, time does not run");
+        assert_eq!(effect.fade_alpha(), 0);
+        assert_eq!(lit(Duration::ZERO).phase(), JumpPhase::FadeOut(0.0));
+        assert_eq!(lit(ms(750)).phase(), JumpPhase::FadeOut(0.5));
+        assert_eq!(lit(ms(1500)).phase(), JumpPhase::White);
+        assert_eq!(lit(ms(60_000)).phase(), JumpPhase::White, "until arrival");
+        assert_eq!((FADE_OUT_FOR, FADE_IN_FOR), (ms(1500), ms(1500)));
     }
 
     #[test]
-    fn without_fades_the_ship_arrives_as_the_streak_ends() {
-        let mut stepped = plain(ms(999));
-        assert!(!stepped.advance(Duration::ZERO));
-        assert!(stepped.advance(ms(1)), "reaching the streak's end");
-        assert!(!stepped.advance(ms(1)));
-        assert!(!stepped.advance(ms(5000)));
-
-        let mut long = effect().with_fades(false);
-        assert!(long.advance(ms(5000)), "across the whole effect at once");
-        assert!(!long.advance(Duration::MAX));
-
-        let mut frames = effect().with_fades(false);
-        let arrivals: Vec<u32> = (1..=100).filter(|_| frames.advance(ms(16))).collect();
-        // 1 s is crossed in the 63rd frame of 16 ms.
-        assert_eq!(arrivals, [63]);
+    fn lighting_again_does_not_restart_the_fade() {
+        let mut effect = lit(ms(750));
+        effect.light();
+        assert_eq!(effect.phase(), JumpPhase::FadeOut(0.5));
     }
 
     #[test]
-    fn without_fades_the_phases_are_streak_flash_done() {
+    fn the_arrival_fades_in_from_white_whether_or_not_the_fade_out_ended() {
+        for at in [Duration::ZERO, ms(300), ms(3000)] {
+            let mut effect = lit(at);
+            effect.arrive();
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.0), "{at:?}");
+            assert_eq!(effect.fade_alpha(), 255);
+            effect.advance(ms(750));
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.5));
+            effect.advance(ms(750));
+            assert!(effect.done());
+        }
+        let mut unlit = JumpEffect::warp(true);
+        unlit.arrive();
+        assert_eq!(unlit.phase(), JumpPhase::FadeIn(0.0), "white at arrival");
+        unlit.light();
+        assert_eq!(unlit.phase(), JumpPhase::FadeIn(0.0), "lit too late");
+    }
+
+    #[test]
+    fn a_jump_given_up_lit_fades_back_from_white_and_unlit_shows_nothing() {
+        for at in [Duration::ZERO, ms(300), ms(3000)] {
+            let mut effect = lit(at).given_up().expect("lit");
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.0), "{at:?}");
+            assert_eq!(effect.fade_alpha(), 255, "from white");
+            effect.advance(ms(750));
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.5));
+            effect.advance(ms(750));
+            assert!(effect.done());
+        }
+        assert_eq!(JumpEffect::warp(true).given_up(), None);
+        assert_eq!(JumpEffect::warp(false).given_up(), None);
+    }
+
+    #[test]
+    fn the_fade_rises_from_nothing_to_opaque_and_falls_back() {
+        let alphas: Vec<u8> = [0, 750, 1499, 1500, 9000]
+            .into_iter()
+            .map(|at| lit(ms(at)).fade_alpha())
+            .collect();
+        assert_eq!(alphas, [0, 128, 255, 255, 255]);
+        let mut arriving = lit(ms(9000));
+        arriving.arrive();
+        arriving.advance(ms(750));
+        assert_eq!(arriving.fade_alpha(), 128);
+        arriving.advance(ms(744));
+        assert_eq!(arriving.fade_alpha(), 1);
+        arriving.advance(ms(6));
+        assert_eq!(arriving.fade_alpha(), 0);
+    }
+
+    #[test]
+    fn the_fade_covers_the_screen_in_white() {
+        let mut list = DrawList::new();
+        lit(ms(750)).draw_fade(&mut list, CLASSIC);
+        lit(ms(750)).draw_fade(&mut list, (1365.0, 768.0));
+        let line = |width| DrawCommand::Line {
+            from: Point::new(0.0, 384.0),
+            to: Point::new(width, 384.0),
+            width: 768.0,
+            color: Color::rgba(255, 255, 255, 128),
+        };
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [line(1024.0), line(1365.0)],
+            "the whole view, widened or not"
+        );
+        assert_eq!(FADE_COLOR, Color::WHITE);
+        let mut none = DrawList::new();
+        JumpEffect::warp(true).draw_fade(&mut none, CLASSIC);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn without_fades_the_arrival_flashes_white_once() {
+        let mut effect = JumpEffect::warp(false);
+        assert_eq!(effect.phase(), JumpPhase::Warp);
+        effect.arrive();
+        assert_eq!(effect.phase(), JumpPhase::Flash(0.0));
+        assert_eq!(effect.fade_alpha(), 255);
+        effect.advance(ms(32));
+        assert!(!effect.done());
+        effect.advance(ms(1));
+        assert!(effect.done());
         assert_eq!(ARRIVAL_FLASH_FOR, ms(33));
-        assert_eq!(plain(ms(500)).phase(), JumpPhase::Streak(0.5));
-        assert_eq!(plain(STREAK_FOR).phase(), JumpPhase::Flash(0.0));
-        let half = plain(STREAK_FOR + ARRIVAL_FLASH_FOR / 2).phase();
-        assert!(
-            matches!(half, JumpPhase::Flash(p) if (p - 0.5).abs() < 0.02),
-            "{half:?}"
-        );
-        assert_eq!(
-            plain(STREAK_FOR + ARRIVAL_FLASH_FOR).phase(),
-            JumpPhase::Done
-        );
-        assert!(!plain(ms(1032)).done());
-        assert!(plain(STREAK_FOR + ARRIVAL_FLASH_FOR).done());
-        for at in (0..2000).step_by(10) {
-            let phase = plain(ms(at)).phase();
-            assert!(
-                !matches!(phase, JumpPhase::FadeOut(_) | JumpPhase::FadeIn(_)),
-                "{at}: {phase:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn without_fades_only_the_arrival_flash_is_white() {
-        for at in [0, 500, 999] {
-            let streak = plain(ms(at));
-            assert_eq!(streak.fade_alpha(), 0, "{at}");
-            let mut none = DrawList::new();
-            streak.draw_fade(&mut none);
-            assert!(none.is_empty(), "{at}");
-        }
-        assert_eq!(
-            plain(ms(999)).streak_length(),
-            after(ms(999)).streak_length()
-        );
-        for at in [1000, 1020, 1032] {
-            let flash = plain(ms(at));
-            assert_eq!(flash.fade_alpha(), 255, "{at}");
-            assert_eq!(flash.streak_length(), 0.0, "{at}");
-            let mut list = DrawList::new();
-            flash.draw_fade(&mut list);
-            assert_eq!(
-                list.iter().cloned().collect::<Vec<_>>(),
-                [DrawCommand::Line {
-                    from: Point::new(0.0, 384.0),
-                    to: Point::new(1024.0, 384.0),
-                    width: 768.0,
-                    color: FADE_COLOR,
-                }],
-                "{at}"
-            );
-        }
-        assert_eq!(plain(ms(1033)).fade_alpha(), 0);
-    }
-
-    /// `effect` after `at` more, and whether that reported an arrival.
-    fn played(mut effect: JumpEffect, at: Duration) -> (JumpEffect, bool) {
-        let arrived = effect.advance(at);
-        (effect, arrived)
     }
 
     #[test]
     fn out_of_a_hypergate_the_new_system_fades_in_from_white() {
-        let gate = JumpEffect::emerging(true);
+        let mut gate = JumpEffect::emerging(true);
         assert_eq!(gate.phase(), JumpPhase::FadeIn(0.0));
-        assert_eq!(gate.direction(), Point::new(0.0, -1.0), "up, unused");
         assert_eq!(gate.fade_alpha(), 255);
-        assert_eq!(gate.streak_length(), 0.0);
-        assert_eq!(played(gate, ms(750)).0.phase(), JumpPhase::FadeIn(0.5));
-        assert!(!played(gate, ms(1499)).0.done());
-        assert!(played(gate, FADE_IN_FOR).0.done());
-        for at in [Duration::ZERO, ms(16), FADE_IN_FOR, Duration::MAX] {
-            assert!(!played(gate, at).1, "never an arrival: {at:?}");
-        }
+        gate.advance(ms(750));
+        assert_eq!(gate.phase(), JumpPhase::FadeIn(0.5));
+        gate.advance(ms(750));
+        assert!(gate.done());
     }
 
     #[test]
     fn out_of_a_hypergate_without_fades_and_out_of_a_wormhole_the_screen_flashes_white() {
-        for effect in [JumpEffect::emerging(false), JumpEffect::flash()] {
+        for mut effect in [JumpEffect::emerging(false), JumpEffect::flash()] {
             assert_eq!(effect.phase(), JumpPhase::Flash(0.0));
             assert_eq!(effect.fade_alpha(), 255);
-            assert_eq!(effect.streak_length(), 0.0);
-            assert!(!played(effect, ms(32)).0.done());
-            assert!(played(effect, ARRIVAL_FLASH_FOR).0.done());
-            for at in [Duration::ZERO, ms(16), ARRIVAL_FLASH_FOR, Duration::MAX] {
-                assert!(!played(effect, at).1, "never an arrival: {at:?}");
-            }
+            effect.advance(ARRIVAL_FLASH_FOR);
+            assert!(effect.done());
         }
     }
 }

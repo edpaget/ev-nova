@@ -1,0 +1,43 @@
+[package]
+name = "nova-sim-port"
+description = "The port layer of nova-sim's layered crates: the outfitter, the shipyard, hiring, boarding and grants, recharging, the escape pod, the radar's IFF, the gate sprite, the order loop and the player info screen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: chance, flight, fuel, geometry, handling,
+# reserves, the rulebook and the rules.
+nova-sim-base.workspace = true
+# The catalog below it: the typed records the shops list and sell
+# (outfits, ships, stellars, persons) and the control bits.
+nova-sim-catalog.workspace = true
+# The state below it: clearance, crons, landing, the market, outfit
+# effects and a ship's stats.
+nova-sim-state.workspace = true
+# Combat below it: fighter bays, combat and the player's fleet.
+nova-sim-combat.workspace = true
+# The ai and traffic layer below it: NPCs (the gate sprite and the IFF
+# read them), NPC goals, escorts, gates and the system's ship limit.
+nova-sim-ai.workspace = true
+# The story layer below it: the `Pilot` every shop settles on, ranks and
+# their price multipliers, the text tags, exploration and mission venue
+# offers. Nothing else of the nova-sim stack: `deny.toml` bans the way
+# back up.
+nova-sim-story.workspace = true
+
+[dev-dependencies]
+# The scripted `Chance`s and draws (`Scripted`, `Draws`) and the handling
+# (`FAST`) the moved tests use.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog record builders, the control-bit mocks (`AllowAll`,
+# `RefuseBits`) and `FakePilotCatalog` the moved tests build from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+# `traffic::fixture::npc`, the NPC builder the gate sprite and IFF tests
+# use.
+nova-sim-ai = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

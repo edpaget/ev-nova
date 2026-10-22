@@ -1,15 +1,28 @@
 //! The winit adapter: translates winit's events into the app's, puts a
-//! [`WindowPort`] over a real window and runs the event loop.
+//! [`WindowPort`] over a real window and runs the event loop. Beside it,
+//! [`dialogs`] holds the startup dialogs: the open panel and the alerts.
 //!
 //! Translation is pure and unit-tested; the window and the runner only
 //! forward to the app. A key press that types a character becomes two
 //! events: the key ([`key_event`]), then its text ([`text_event`]).
+//!
+//! The system can make the window fullscreen, or a window again, without
+//! the app asking, and winit sends no event for it. So [`window_events`]
+//! reports the window's state, [`WindowEvent::FullscreenChanged`], ahead
+//! of every resize, occlusion and redraw, and the app acts only on a
+//! change.
 
+pub mod dialogs;
+#[cfg(target_os = "macos")]
+mod menu_bar;
 mod runner;
 mod window;
 
-pub use runner::Runner;
+pub use dialogs::Dialogs;
+pub use runner::{Runner, event_loop};
 pub use window::WinitWindow;
+
+use std::time::Duration;
 
 use winit::event::{ElementState, WindowEvent as WinitEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -37,14 +50,44 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
+        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
         WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
         },
         WinitEvent::Focused(false) => WindowEvent::FocusLost,
+        WinitEvent::Focused(true) => WindowEvent::FocusGained,
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
+}
+
+/// The app's events for winit's `event`, in the order the app takes them,
+/// with a redraw at `elapsed`, the time since the app started.
+///
+/// A resize, an occlusion and a redraw are led by the window's fullscreen
+/// state as the system now reports it: the app must know it is fullscreen
+/// before it takes the display's size, or it would keep that as the
+/// window's own. The redraw's report is there because macOS clears the
+/// state only once its exit animation ends, after that animation's
+/// resizes; every frame reports it, so an exit is always seen.
+pub fn window_events(
+    event: &WinitEvent,
+    window: &impl WindowPort,
+    elapsed: Duration,
+) -> impl Iterator<Item = WindowEvent> {
+    let fullscreen = matches!(
+        event,
+        WinitEvent::Resized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
+    )
+    .then(|| WindowEvent::FullscreenChanged {
+        fullscreen: window.is_fullscreen(),
+    });
+    let event = match event {
+        WinitEvent::RedrawRequested => Some(WindowEvent::Redraw { elapsed }),
+        other => translate(other, window),
+    };
+    fullscreen.into_iter().chain(event)
 }
 
 /// A key going down or up; `repeat` is winit's flag for a press the OS
@@ -96,11 +139,17 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
         // The system view's movement keys, by position: W, A, S and D on a
         // US-layout keyboard, wherever another layout puts those letters.
+        // S is also the spaceport's Shipyard key.
         PhysicalKey::Code(KeyCode::KeyW) => Key::Char('w'),
         PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
         PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
         PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
-        // Flight's key, by position: F on a US-layout keyboard.
+        // E, by position: flight's escort menu key, the comm dialog's
+        // close key, and the main menu's E, which waits for this key's
+        // release as `_QuickKeyCheck(0x0e)` does.
+        PhysicalKey::Code(KeyCode::KeyE) => Key::Char('e'),
+        // Flight's key and the spaceport's other Recharge key, by
+        // position: F on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
         // The About text's key, by position: I on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyI) => Key::Char('i'),
@@ -110,23 +159,54 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
         // The jump key, by position: J on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        // Flight's Hyperspace Mode key and the bar's hire key, by position:
+        // H on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyH) => Key::Char('h'),
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
         PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
-        // The Preferences dialog's key, by position: P on a US-layout
+        // The player info key in flight and the spaceport, and the
+        // Preferences dialog's elsewhere, by position: P on a US-layout
         // keyboard.
         PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
-        // The Trade Center's buy key, by position: B on a US-layout
-        // keyboard. Its sell key is S, above.
+        // Command+comma opens the Preferences, by position: the comma on a
+        // US-layout keyboard.
+        PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
+        // The Trade Center's buy key and the spaceport's Bar key, by
+        // position: B on a US-layout keyboard. Its sell key is S, above.
         PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
-        // Flight's nearest target key, by position: R on a US-layout
-        // keyboard.
+        // Flight's nearest target key and the spaceport's Recharge key,
+        // by position: R on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyR) => Key::Char('r'),
+        // The spaceport's letter keys, by position, as `_PortFilter` reads
+        // the Mac key code: C (also flight's escort recall key) and T the
+        // Trade Center, O the Outfitter, and N the Mission BBS (also the
+        // bar's news key and an offer's refuse key).
+        PhysicalKey::Code(KeyCode::KeyC) => Key::Char('c'),
+        PhysicalKey::Code(KeyCode::KeyT) => Key::Char('t'),
+        PhysicalKey::Code(KeyCode::KeyO) => Key::Char('o'),
+        PhysicalKey::Code(KeyCode::KeyN) => Key::Char('n'),
         // Either Alt (Option on a Mac), which makes a trade the most
         // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
+        // Either Shift, which turns flight's target select key back while
+        // held, and the player info's Tab to the previous tab.
+        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
+        // Either Command (Super, the Windows key, off a Mac): what flight's
+        // jettison and eject keys need held.
+        PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
+        // Flight's jettison key, by position: K on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
+        // Flight's eject key, by position: X on a US-layout keyboard, the
+        // original's default (keycode 0x07).
+        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
+        // Double time's key: each press toggles it, an accepted difference
+        // from the original's following the lock state. winit 0.30.13
+        // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
+        // Control, Super and Shift alone), so there it never arrives.
+        PhysicalKey::Code(KeyCode::CapsLock) => Key::CapsLock,
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches
         // flight as Nav Off, the original's default.
@@ -144,6 +224,8 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::F3) => Key::Function(3),
         PhysicalKey::Code(KeyCode::F4) => Key::Function(4),
         PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
+        // The fullscreen shortcut off a Mac.
+        PhysicalKey::Code(KeyCode::F11) => Key::Function(11),
         _ => Key::Other,
     }
 }
@@ -161,12 +243,19 @@ pub fn map_button(button: winit::event::MouseButton) -> MouseButton {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
+
     use winit::event::{DeviceId, MouseButton as WinitButton};
 
     use super::*;
 
-    struct Window;
+    /// An 800x600-pixel window at two pixels a point, fullscreen or not.
+    struct Window {
+        fullscreen: bool,
+    }
+
+    const WINDOWED: Window = Window { fullscreen: false };
 
     impl WindowPort for Window {
         fn size_px(&self) -> (u32, u32) {
@@ -178,6 +267,10 @@ mod tests {
         }
 
         fn request_redraw(&mut self) {}
+
+        fn is_fullscreen(&self) -> bool {
+            self.fullscreen
+        }
     }
 
     #[test]
@@ -206,13 +299,26 @@ mod tests {
             (KeyCode::KeyL, Key::Char('l')),
             (KeyCode::KeyM, Key::Char('m')),
             (KeyCode::KeyJ, Key::Char('j')),
+            (KeyCode::KeyH, Key::Char('h')),
             (KeyCode::KeyP, Key::Char('p')),
             (KeyCode::KeyB, Key::Char('b')),
             (KeyCode::AltLeft, Key::Alt),
             (KeyCode::AltRight, Key::Alt),
             (KeyCode::ControlLeft, Key::Control),
             (KeyCode::ControlRight, Key::Control),
+            (KeyCode::ShiftLeft, Key::Shift),
+            (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
+            (KeyCode::KeyK, Key::Char('k')),
+            (KeyCode::KeyX, Key::Char('x')),
+            (KeyCode::KeyE, Key::Char('e')),
+            (KeyCode::KeyC, Key::Char('c')),
+            (KeyCode::KeyT, Key::Char('t')),
+            (KeyCode::KeyO, Key::Char('o')),
+            (KeyCode::KeyN, Key::Char('n')),
+            (KeyCode::SuperLeft, Key::Command),
+            (KeyCode::SuperRight, Key::Command),
+            (KeyCode::CapsLock, Key::CapsLock),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::Backslash, Key::Char('\\')),
             (KeyCode::Digit1, Key::Char('1')),
@@ -224,6 +330,7 @@ mod tests {
             (KeyCode::F3, Key::Function(3)),
             (KeyCode::F4, Key::Function(4)),
             (KeyCode::F5, Key::Function(5)),
+            (KeyCode::F11, Key::Function(11)),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::Digit5, Key::Other),
             (KeyCode::F6, Key::Other),
@@ -239,17 +346,22 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 28] = [
+    const GAME_CHARACTER_KEYS: [Key; 44] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
+        nova_view::ui::player_info::PLAYER_INFO_KEY,
+        crate::app::screen::PREFERENCES_KEY,
         nova_view::flight::view::LAND_KEY,
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
         nova_view::flight::view::SELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
+        nova_view::flight::view::HYPERSPACE_MODE_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
+        nova_view::flight::view::JETTISON_KEY,
+        nova_view::flight::view::EJECT_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
@@ -267,7 +379,18 @@ mod tests {
         nova_view::spaceport::outfitter::BUY_KEY,
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
-        nova_view::spaceport::shipyard::INFO_KEY,
+        nova_view::ui::mission_info::MISSION_INFO_KEY,
+        nova_view::flight::escorts::MENU_KEY,
+        nova_view::flight::view::ESCORT_RECALL_KEY,
+        nova_view::spaceport::bar::NEWS_KEYS[0],
+        nova_view::spaceport::PORT_KEYS[0].0,
+        nova_view::spaceport::PORT_KEYS[1].0,
+        nova_view::spaceport::PORT_KEYS[2].0,
+        nova_view::spaceport::PORT_KEYS[3].0,
+        nova_view::spaceport::PORT_KEYS[4].0,
+        nova_view::spaceport::PORT_KEYS[5].0,
+        nova_view::spaceport::PORT_KEYS[6].0,
+        nova_view::spaceport::PORT_KEYS[7].0,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
@@ -275,16 +398,24 @@ mod tests {
         match c {
             'a' => KeyCode::KeyA,
             'b' => KeyCode::KeyB,
+            'c' => KeyCode::KeyC,
             'd' => KeyCode::KeyD,
+            'e' => KeyCode::KeyE,
             'f' => KeyCode::KeyF,
+            'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
             'j' => KeyCode::KeyJ,
+            'k' => KeyCode::KeyK,
             'l' => KeyCode::KeyL,
             'm' => KeyCode::KeyM,
+            'n' => KeyCode::KeyN,
+            'o' => KeyCode::KeyO,
             'p' => KeyCode::KeyP,
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
+            't' => KeyCode::KeyT,
             'w' => KeyCode::KeyW,
+            'x' => KeyCode::KeyX,
             '1' => KeyCode::Digit1,
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,
@@ -294,6 +425,7 @@ mod tests {
             '-' => KeyCode::Minus,
             '`' => KeyCode::Backquote,
             '\\' => KeyCode::Backslash,
+            ',' => KeyCode::Comma,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
@@ -311,8 +443,9 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 17] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
+        (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
         // The outfitter's grid selection.
@@ -338,6 +471,18 @@ mod tests {
             KeyCode::F4,
         ),
         (nova_view::flight::view::NEAREST_STELLAR_KEY, KeyCode::F5),
+        // Flight's jettison key's modifier.
+        (Key::Command, KeyCode::SuperLeft),
+        (Key::Command, KeyCode::SuperRight),
+        // The player info's Tab goes back with Shift held.
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftLeft,
+        ),
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftRight,
+        ),
     ];
 
     #[test]
@@ -428,7 +573,7 @@ mod tests {
     fn a_resize_carries_the_windows_scale_factor() {
         let event = WinitEvent::Resized(PhysicalSize::new(1280, 960));
         assert_eq!(
-            translate(&event, &Window),
+            translate(&event, &WINDOWED),
             Some(WindowEvent::Resized {
                 size_px: (1280, 960),
                 scale_factor: 2.0
@@ -443,16 +588,20 @@ mod tests {
             position: PhysicalPosition::new(12.5, 40.0),
         };
         assert_eq!(
-            translate(&moved, &Window),
+            translate(&moved, &WINDOWED),
             Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
         );
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(translate(&left, &WINDOWED), Some(WindowEvent::PointerLeft));
         let pressed = WinitEvent::MouseInput {
             device_id: DeviceId::dummy(),
             state: ElementState::Pressed,
             button: WinitButton::Right,
         };
         assert_eq!(
-            translate(&pressed, &Window),
+            translate(&pressed, &WINDOWED),
             Some(WindowEvent::PointerButton {
                 button: MouseButton::Right,
                 pressed: true
@@ -464,7 +613,7 @@ mod tests {
             button: WinitButton::Left,
         };
         assert_eq!(
-            translate(&released, &Window),
+            translate(&released, &WINDOWED),
             Some(WindowEvent::PointerButton {
                 button: MouseButton::Left,
                 pressed: false
@@ -475,24 +624,98 @@ mod tests {
     #[test]
     fn closing_is_close_requested() {
         assert_eq!(
-            translate(&WinitEvent::CloseRequested, &Window),
+            translate(&WinitEvent::CloseRequested, &WINDOWED),
             Some(WindowEvent::CloseRequested)
         );
     }
 
     #[test]
-    fn losing_focus_is_focus_lost_and_gaining_it_is_nothing() {
+    fn losing_focus_is_focus_lost_and_gaining_it_focus_gained() {
         assert_eq!(
-            translate(&WinitEvent::Focused(false), &Window),
+            translate(&WinitEvent::Focused(false), &WINDOWED),
             Some(WindowEvent::FocusLost)
         );
-        assert_eq!(translate(&WinitEvent::Focused(true), &Window), None);
+        assert_eq!(
+            translate(&WinitEvent::Focused(true), &WINDOWED),
+            Some(WindowEvent::FocusGained)
+        );
     }
 
     #[test]
     fn redraws_and_other_events_are_not_translated() {
         // The runner adds the elapsed time to redraws itself.
-        assert_eq!(translate(&WinitEvent::RedrawRequested, &Window), None);
-        assert_eq!(translate(&WinitEvent::Focused(true), &Window), None);
+        assert_eq!(translate(&WinitEvent::RedrawRequested, &WINDOWED), None);
+        assert_eq!(translate(&WinitEvent::Occluded(true), &WINDOWED), None);
+    }
+
+    const AT: Duration = Duration::from_millis(250);
+
+    fn events(raw: &WinitEvent, fullscreen: bool) -> Vec<WindowEvent> {
+        window_events(raw, &Window { fullscreen }, AT).collect()
+    }
+
+    #[test]
+    fn a_resize_reports_the_windows_fullscreen_state_before_the_new_size() {
+        let raw = WinitEvent::Resized(PhysicalSize::new(3024, 1964));
+        for fullscreen in [true, false] {
+            assert_eq!(
+                events(&raw, fullscreen),
+                [
+                    WindowEvent::FullscreenChanged { fullscreen },
+                    WindowEvent::Resized {
+                        size_px: (3024, 1964),
+                        scale_factor: 2.0
+                    }
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn an_occlusion_reports_the_windows_fullscreen_state_alone() {
+        for fullscreen in [true, false] {
+            for occluded in [true, false] {
+                assert_eq!(
+                    events(&WinitEvent::Occluded(occluded), fullscreen),
+                    [WindowEvent::FullscreenChanged { fullscreen }]
+                );
+            }
+        }
+    }
+
+    /// macOS clears the state only once its exit animation ends, after
+    /// that animation's resizes; every frame reports it, so the exit is
+    /// seen.
+    #[test]
+    fn every_redraw_reports_the_fullscreen_state_first_then_the_time() {
+        for fullscreen in [true, false] {
+            assert_eq!(
+                events(&WinitEvent::RedrawRequested, fullscreen),
+                [
+                    WindowEvent::FullscreenChanged { fullscreen },
+                    WindowEvent::Redraw { elapsed: AT }
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn other_events_report_no_fullscreen_state() {
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        assert_eq!(
+            events(&WinitEvent::Focused(false), true),
+            [WindowEvent::FocusLost]
+        );
+        assert_eq!(
+            events(&WinitEvent::Focused(true), true),
+            [WindowEvent::FocusGained]
+        );
+        assert_eq!(
+            events(&WinitEvent::CloseRequested, true),
+            [WindowEvent::CloseRequested]
+        );
     }
 }

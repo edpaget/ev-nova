@@ -25,7 +25,7 @@
 //!   with no new layout.
 //!   That is how a destroyed stellar's `DeadType` sheet shows from the
 //!   next frame (story-runtime phase 7), so every writer of the destroyed
-//!   state goes through `Session::set_stellar_state`, which raises this
+//!   state goes through `Chart::set_stellar_state`, which raises this
 //!   event: `Y`, `U`, the daily step, a new pilot and the shots that
 //!   shoot a stellar down (story-runtime phase 8).
 //! - [`SessionEvent::StellarsRebuilt`]: a rebuild point changed which
@@ -39,7 +39,7 @@
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
 //! folded into this one; doing so is a possible follow-up.
 
-use super::Session;
+use super::{Outbox, Session};
 
 /// A change to what a view draws of the session (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +60,14 @@ pub enum SessionEvent {
 }
 
 impl Session {
+    /// The events since they were last taken, in order; taking them
+    /// empties the list.
+    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+        self.out.take_events()
+    }
+}
+
+impl Outbox {
     /// Tells `event` to whoever takes the events next.
     pub(super) fn emit(&mut self, event: SessionEvent) {
         self.events.push(event);
@@ -67,7 +75,7 @@ impl Session {
 
     /// The events since they were last taken, in order; taking them
     /// empties the list.
-    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+    fn take_events(&mut self) -> Vec<SessionEvent> {
         std::mem::take(&mut self.events)
     }
 }
@@ -86,8 +94,8 @@ mod tests {
     #[test]
     fn the_events_are_taken_in_order_once() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.emit(SessionEvent::SystemChanged);
-        session.emit(SessionEvent::ShipChanged);
+        session.out.emit(SessionEvent::SystemChanged);
+        session.out.emit(SessionEvent::ShipChanged);
         assert_eq!(
             session.take_events(),
             [SessionEvent::SystemChanged, SessionEvent::ShipChanged]

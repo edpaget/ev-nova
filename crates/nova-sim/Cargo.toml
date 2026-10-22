@@ -15,15 +15,68 @@ nova-data.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The foundation of the layered nova-sim crates, re-exported at its old
+# paths (`nova_sim::rulebook`, `nova_sim::Vec2`, ...).
+nova-sim-base.workspace = true
+# The catalog layer, on the foundation: the typed view of the game data and its
+# GameData adapter, control bits, sounds, strings and the warp clock,
+# re-exported at their old paths (`nova_sim::catalog`, ...).
+nova-sim-catalog.workspace = true
+# The state layer, on the catalog: the date, governments, legal record,
+# market, crons, landing and clearance, outfit effects and ship stats,
+# re-exported at their old paths (`nova_sim::market`, ...).
+nova-sim-state.workspace = true
+# The combat layer, on the state: combat, the asteroid field, fighter bays,
+# cloaking, the fleet, messages, the player's fate, sabotage, self-repair,
+# ship layers and the tutorial, re-exported at their old paths
+# (`nova_sim::combat`, ...).
+nova-sim-combat.workspace = true
+# The ai and traffic layer, on combat: NPC decisions, traffic and persons,
+# escorts, hails, gates, hyperspace routes, navigation, targeting, the hover
+# test, brackets, cargo boxes, scans and scooping, re-exported at their old
+# paths (`nova_sim::traffic`, ...).
+nova-sim-ai.workspace = true
+# The story layer, on the ai: missions and their offers, the story runtime,
+# persons, ranks, news, nebulae, exploration, the text tags and the pilot,
+# re-exported at their old paths (`nova_sim::mission`, ...).
+nova-sim-story.workspace = true
+# The port layer, on the story: the outfitter, the shipyard, hiring,
+# boarding and grants, recharging, the escape pod, the radar's IFF, the
+# gate sprite, the order loop and the player info screen, re-exported at
+# their old paths (`nova_sim::shipyard`, ...).
+nova-sim-port.workspace = true
 
 [dev-dependencies]
-# Synthetic resource forks for the GameData adapter tests.
+# Synthetic resource forks for the GameData adapter tests under `tests/`.
 nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The `Chance` mocks (`Scripted`, `Draws`, `Ranged`) the unit tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog's record builders and control-bit mocks, which `testkit`
+# re-exports.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+# The combat layer's test setters the session tests call:
+# `SabotageClock::set_counter` and `Combat::shots_mut`.
+nova-sim-combat = { workspace = true, features = ["fixture"] }
+# The ai and traffic layer's test support: `traffic::fixture::npc`, which
+# `testkit` re-exports, and the `Traffic` setters the session tests call:
+# `strength_armed`, `berths_taken` and `set_berth_person`.
+nova-sim-ai = { workspace = true, features = ["fixture"] }
+# The story layer's test support: `mission::fixture::carrying`, which
+# `testkit` re-exports.
+nova-sim-story = { workspace = true, features = ["fixture"] }
+# This crate's own `fixture` module, for its integration tests under
+# `tests/`, which build the library without `cfg(test)`: the storyline
+# walker the stock tests drive.
+nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the in-memory pilot store to other crates' tests.
-fixture = []
+# Exposes the test support in `fixture` (the in-memory pilot store and the
+# storyline walker) to other crates' tests and this crate's `tests/`. It
+# re-exports the catalog's `listed_stellars`, `list_also` and
+# `bits_allowing`, so it turns on the catalog's `fixture` too, and the
+# AI's, whose `Traffic` setters build the berths a traffic hands on.
+fixture = ["nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
 
 [lints]
 workspace = true

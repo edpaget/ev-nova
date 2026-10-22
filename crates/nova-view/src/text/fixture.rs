@@ -8,9 +8,9 @@
 use super::{LINE_HEIGHT, TextMetrics};
 use crate::font::Font;
 
-/// Monospaced metrics: every character is half the size wide in Geneva and
-/// six tenths of it in Charcoal, and lines are [`LINE_HEIGHT`] times the
-/// size apart.
+/// Monospaced metrics: every character is half the size wide in Geneva,
+/// six tenths of it in Charcoal and 0.55 of it in Times, and lines are
+/// [`LINE_HEIGHT`] times the size apart.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MonoMetrics;
 
@@ -21,6 +21,7 @@ impl MonoMetrics {
         match font {
             Font::Geneva => 0.5 * size,
             Font::Charcoal => 0.6 * size,
+            Font::Times => 0.55 * size,
         }
     }
 }
@@ -42,7 +43,7 @@ const SIZE: f32 = 10.0;
 const SAMPLE: &str = "Kestrel MMM iii";
 
 /// Checks the port's contract, which [`MonoMetrics`] encodes, against
-/// `metrics`, in both fonts:
+/// `metrics`, in every font:
 ///
 /// - the empty string is 0 wide;
 /// - width grows strictly as characters are added (`""` < `"a"` < `"aa"` <
@@ -56,7 +57,7 @@ const SAMPLE: &str = "Kestrel MMM iii";
 ///
 /// The error says which clause failed.
 pub fn check_contract(metrics: &impl TextMetrics) -> Result<(), String> {
-    for font in [Font::Geneva, Font::Charcoal] {
+    for font in [Font::Geneva, Font::Charcoal, Font::Times] {
         let empty = metrics.width(font, SIZE, "");
         if empty != 0.0 {
             return Err(format!("{font:?}: the empty string is {empty} wide, not 0"));
@@ -127,6 +128,7 @@ mod tests {
         assert_eq!(MonoMetrics.width(Font::Geneva, 10.0, ""), 0.0);
         assert_eq!(MonoMetrics.line_height(Font::Charcoal, 10.0), 12.0);
         assert_eq!(MonoMetrics::advance(Font::Charcoal, 20.0), 12.0);
+        assert_eq!(MonoMetrics.width(Font::Times, 10.0, "abc"), 16.5);
     }
 
     #[test]

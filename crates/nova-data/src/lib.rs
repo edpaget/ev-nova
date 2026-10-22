@@ -175,7 +175,7 @@ pub use store::{
     OpenError, Origin, ParsedSet, ParsedTest, Provenance, ShipLayer, ShipLayers, ShipSprite,
     SourceFile, SpinSheet, SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError,
     StoreEntry, StoreResource, interface_path_candidates, load_interface, open_interface,
-    ship_desc_id, stellar_spin_id,
+    ship_desc_id, shot_spin_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};

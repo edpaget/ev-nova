@@ -1,8 +1,11 @@
-//! The map's view: which part of the galaxy the map area shows, and at
-//! what scale.
+//! The viewer's view: which part of the galaxy its map area shows, and at
+//! what scale; and the [`Transform`] every map draws through. The
+//! in-flight maps look where their dialog's place says instead
+//! ([`place`](super::place)).
 //!
-//! The map area is the logical rectangle (0, 0) to ([`MAP_WIDTH`],
-//! [`MAP_HEIGHT`]); the info panel fills the rest of the screen below it.
+//! The viewer's map area is the logical rectangle (0, 0) to
+//! ([`MAP_WIDTH`], [`MAP_HEIGHT`]); its info panel fills the rest of the
+//! screen below it.
 //! The view keeps the map (world) point drawn at the map area's centre and
 //! one of Nova's seven map scales:
 //!
@@ -35,6 +38,49 @@ const ACTUAL_SIZE: usize = 3;
 pub const FIT_MARGIN: f32 = 24.0;
 /// How far one arrow-key press pans the view, in logical units.
 pub const PAN_STEP: f32 = 64.0;
+
+/// Where a map draws a world point: `screen + (p - world) x scale`. The
+/// viewer's is its view's ([`MapView::transform`]), an in-flight map's
+/// its place's ([`MapPlace::transform`](super::place::MapPlace::transform));
+/// the floating map centres its own
+/// on the current system.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    /// Where `world` is drawn.
+    pub screen: Point,
+    /// The world point drawn at `screen`.
+    pub world: Point,
+    /// Logical units per map unit.
+    pub scale: f32,
+}
+
+impl Transform {
+    /// Where the world point `p` is drawn.
+    #[must_use]
+    pub fn world_to_screen(&self, p: Point) -> Point {
+        Point::new(
+            self.screen.x + (p.x - self.world.x) * self.scale,
+            self.screen.y + (p.y - self.world.y) * self.scale,
+        )
+    }
+
+    /// Where `p` is drawn in whole pixels: its screen point truncated
+    /// toward zero, as `_DrawMap` takes trunc(centre + pos/zoom −
+    /// scroll/zoom) for each point (@0xe5e9-0xe662).
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // Screen pixels.
+    pub fn pixel(&self, p: Point) -> (i32, i32) {
+        let at = self.world_to_screen(p);
+        (at.x.trunc() as i32, at.y.trunc() as i32)
+    }
+
+    /// The original's zoom at this scale, its inverse, as `_mapZoom`
+    /// divides each position by it: 1 / scale.
+    #[must_use]
+    pub fn zoom(&self) -> f64 {
+        1.0 / f64::from(self.scale)
+    }
+}
 
 /// What the map area shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,11 +147,17 @@ impl MapView {
     /// Where the world point `p` is drawn.
     #[must_use]
     pub fn world_to_screen(&self, p: Point) -> Point {
-        let scale = self.scale();
-        Point::new(
-            MAP_CENTER.x + (p.x - self.center.x) * scale,
-            MAP_CENTER.y + (p.y - self.center.y) * scale,
-        )
+        self.transform().world_to_screen(p)
+    }
+
+    /// The view as a [`Transform`]: `center` drawn at [`MAP_CENTER`].
+    #[must_use]
+    pub fn transform(&self) -> Transform {
+        Transform {
+            screen: MAP_CENTER,
+            world: self.center,
+            scale: self.scale(),
+        }
     }
 
     /// The world point drawn at screen point `s`.
@@ -136,6 +188,15 @@ impl MapView {
         let scale = self.scale();
         let moved = Point::new(self.center.x + dx / scale, self.center.y + dy / scale);
         self.center = self.limits.clamp(moved);
+    }
+
+    /// Centres the view on the world point `at`, stopping at the edge of
+    /// the galaxy's bounds and keeping the zoom, as Space and Find set the
+    /// original's `_mapScroll` to a system's position (`_MapFilter`
+    /// @0x1411e-0x14153, `_DoSystemSearch` @0x12080-0x120aa). A system is
+    /// always inside the bounds.
+    pub fn centre_on(&mut self, at: Point) {
+        self.center = self.limits.clamp(at);
     }
 }
 
@@ -241,6 +302,20 @@ mod tests {
     }
 
     #[test]
+    fn a_transform_draws_its_world_point_at_its_screen_point_scaled() {
+        let transform = Transform {
+            screen: at(686.0, 278.0),
+            world: at(10.0, -20.0),
+            scale: 0.75,
+        };
+        assert_eq!(transform.world_to_screen(at(10.0, -20.0)), at(686.0, 278.0));
+        assert_eq!(
+            transform.world_to_screen(at(50.0, -40.0)),
+            at(686.0 + 30.0, 278.0 - 15.0)
+        );
+    }
+
+    #[test]
     fn screen_and_world_round_trip_at_every_zoom() {
         let mut view = MapView::fit(Some(stock()));
         for _ in 0..SCALES.len() {
@@ -302,6 +377,17 @@ mod tests {
             assert!(close(view.world_to_screen(p), before), "zoom {zoom}");
             view.zoom_in();
         }
+    }
+
+    #[test]
+    fn centring_on_a_point_keeps_the_zoom_and_stops_at_the_galaxys_edges() {
+        let mut view = MapView::fit(Some(stock()));
+        view.zoom_in();
+        let zoom = view.zoom();
+        view.centre_on(at(-100.0, 250.0));
+        assert_eq!((view.center(), view.zoom()), (at(-100.0, 250.0), zoom));
+        view.centre_on(at(1000.0, -1000.0));
+        assert_eq!(view.center(), at(587.0, -330.0), "clamped");
     }
 
     #[test]

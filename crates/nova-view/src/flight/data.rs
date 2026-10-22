@@ -6,22 +6,25 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{PICT, decode_pict};
+use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite};
+use nova_data::{GameData, LayerError, LayerSprite, shot_spin_id};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
-use nova_sim::data::ship_blink;
+use nova_sim::combat::weapon::loaded_falloff;
+use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
-    BoomId, BoomLook, CombatLooks, EffectSheet, GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites,
-    SoundId, StatusBarLayout, StatusBars, TargetCard, WeaponId, WeaponLook,
+    BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StatusBarLayout, StatusBars,
+    TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
@@ -39,12 +42,19 @@ impl ShipSprites for GameData {
             .expect("a sheet layout has at least one column");
         // A layer that cannot be resolved is drawn as no layer; the ship
         // browser is where its error is shown.
-        let (glow, lights) = self.ship_layers(id).map_or((None, None), |layers| {
-            (
-                layers.glow.and_then(layer_sheet),
-                layers.lights.and_then(layer_sheet),
-            )
-        });
+        let [glow, lights, weapon, alt, shield] =
+            self.ship_layers(id).map_or([None; 5], |layers| {
+                [
+                    layers.glow,
+                    layers.lights,
+                    layers.weapon,
+                    layers.alt,
+                    layers.shield,
+                ]
+                .map(|layer| layer.and_then(layer_sheet))
+            });
+        let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
+        let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
@@ -52,12 +62,18 @@ impl ShipSprites for GameData {
             frame_height: sheet.frame_height(),
             glow,
             lights,
-            blink: ship_blink(self, id.0),
+            weapon,
+            weap_decay: field(|anim| anim.weap_decay),
+            alt,
+            shield,
+            base_transp: field(|anim| anim.base_transp),
+            solid: sheet.solid_frames().is_some(),
         })
     }
 }
 
-/// A resolved layer's ID and frame count; `None` for one that failed.
+/// A resolved layer's ID, frame count and whether it holds solid runs;
+/// `None` for one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // An `rlëD` header counts its frames in a u16, and the decoder rejects
@@ -67,16 +83,17 @@ fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet>
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
+        solid: layer.sheet.solid_frames().is_some(),
     })
 }
 
 /// Decodes on every call; the flight screen asks once, when it opens.
 impl StatusBars for GameData {
-    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
         match self.get::<Govt>(id.0) {
-            Some(Ok(govt)) => Ok(govt.record.interface),
+            Some(Ok(govt)) => Ok(Some(govt.record.interface)),
             Some(Err(err)) => Err(err.to_string()),
-            None => Err(format!("no gövt {}", id.0)),
+            None => Ok(None),
         }
     }
 
@@ -115,14 +132,24 @@ impl StatusBars for GameData {
         let picture = decode_pict(found.resource.data()).ok()?;
         Some((picture.width(), picture.height()))
     }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        let found = self.resource(CICN, id)?;
+        let icon = decode_cicn(found.resource.data()).ok()?;
+        Some((icon.width(), icon.height()))
+    }
 }
 
-/// The first `spïn` of the shots' graphics (the Bible: 3000-3255).
-pub const FIRST_SHOT_SPIN: i16 = 3000;
 /// The first `snd ` of the weapons' sounds (the loader's 200-455).
 pub const FIRST_WEAPON_SOUND: i16 = 200;
 /// The first `spïn` of the explosions' graphics (`_LoadObjectData`).
 pub const FIRST_BOOM_SPIN: i16 = 400;
+/// The first `spïn` of the cargo boxes' graphics, the box masters
+/// `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
+/// The mouse cursor's `spïn`, which `_InitSprites` loads with
+/// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
+pub const CURSOR_SPIN: i16 = 650;
 /// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
 pub const FIRST_BOOM_SOUND: i16 = 300;
 /// The first target picture, `PICT` 3000 for `shïp` 128
@@ -144,9 +171,9 @@ impl CombatLooks for GameData {
             None => return Err(format!("no wëap {}", id.0)),
         };
         let weapon = entry.record;
-        let sheet = (weapon.graphic >= 0)
-            .then(|| effect_sheet(self, FIRST_SHOT_SPIN.saturating_add(weapon.graphic)));
+        let sheet = shot_spin_id(weapon.graphic).map(|spin| effect_sheet(self, spin));
         let sound = offset_sound(FIRST_WEAPON_SOUND, weapon.sound);
+        let falloff = loaded_falloff(weapon.beam_length, weapon.falloff, weapon.li_density);
         Ok(WeaponLook {
             name: resource_name(entry.name.unwrap_or_default()),
             sheet,
@@ -156,7 +183,28 @@ impl CombatLooks for GameData {
             flags2: weapon.flags2.bits(),
             flags3: weapon.flags3.bits(),
             beam_width: weapon.beam_width,
-            falloff: weapon.falloff,
+            falloff,
+            shot_falloff: if matches!(weapon.guidance, BEAM | TURRET_BEAM | PD_BEAM) {
+                0
+            } else {
+                falloff
+            },
+            li_density: if weapon.li_density == 1 {
+                LOADED_LI_DENSITY
+            } else {
+                weapon.li_density
+            },
+            li_amplitude: weapon.li_amplitude.max(1),
+            count: weapon.count,
+            particles: weapon.particles,
+            part_vel: weapon.part_vel,
+            part_life: (weapon.part_life_min, weapon.part_life_max),
+            part_color: weapon.part_color,
+            smoke_set: if weapon.smoke_set.cast_unsigned() > MAX_SMOKE_SET {
+                0
+            } else {
+                weapon.smoke_set
+            },
             beam_color: weapon.beam_color,
             corona_color: weapon.corona_color,
             prox_safety: weapon.prox_safety,
@@ -193,7 +241,55 @@ impl CombatLooks for GameData {
         let code = entry.record.target_code.as_str();
         (!code.is_empty()).then(|| code.to_owned())
     }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        let graphic = i16::try_from(graphic).unwrap_or(i16::MAX);
+        effect_sheet(self, FIRST_BOX_SPIN.saturating_add(graphic))
+    }
+
+    fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
+        effect_sheet(self, FIRST_ASTEROID_SPIN.saturating_add(i16::from(kind)))
+    }
+
+    fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+        effect_sheet(self, CURSOR_SPIN)
+    }
+
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
+        Ok(EffectSheet {
+            image_id: sheet.image_id,
+            frames: sheet.rotations,
+            frame_width: sheet.frame_width,
+        })
+    }
+
+    fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
+        if set >= SMOKE_SETS {
+            return None;
+        }
+        let first_icon = FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set);
+        let decodes = |id: i16| {
+            self.resource(CICN, id)
+                .is_some_and(|found| decode_cicn(found.resource.data()).is_ok())
+        };
+        (first_icon..first_icon + SMOKE_FRAMES)
+            .all(decodes)
+            .then_some(SmokeSheet { first_icon })
+    }
 }
+
+/// The beams' guidances, whose shot fade `_LoadObjectData` zeroes
+/// (@0x796fa-0x79722): a beam (0), a turreted beam (3) and a
+/// point-defence beam (10).
+const BEAM: i16 = 0;
+const TURRET_BEAM: i16 = 3;
+const PD_BEAM: i16 = 10;
+/// The `LiDensity` 1 loads as (@0x79625-0x7967c).
+const LOADED_LI_DENSITY: i16 = 2;
+/// The highest `SmokeSet`, read unsigned, that loads as itself
+/// (@0x79b8d-0x79b94).
+const MAX_SMOKE_SET: u16 = 7;
 
 /// `spïn` `id`'s sheet in `data`, as an effect's, or why it cannot be
 /// read.
@@ -205,6 +301,7 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
     Ok(EffectSheet {
         image_id: spin.image_id,
         frames,
+        frame_width: spin.sheet.frame_width(),
     })
 }
 
@@ -262,13 +359,12 @@ mod tests {
 
     use nova_data::Record;
     use nova_data::graphics::RLED;
-    use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
-    use nova_sim::Blink;
 
     use super::*;
 
@@ -328,6 +424,7 @@ mod tests {
         LayerSheet {
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
+            solid: false,
         }
     }
 
@@ -361,34 +458,105 @@ mod tests {
                 frame_height: 2,
                 glow: None,
                 lights: None,
-                blink: Blink::STEADY,
+                weapon: None,
+                weap_decay: 0,
+                alt: None,
+                shield: None,
+                base_transp: 0,
+                solid: false,
             })
         );
     }
 
     #[test]
-    fn a_ships_sheet_carries_its_shans_blink() {
-        // The Shuttle's: mode 1, A=4 B=1 C=2 D=20.
-        let mut shan = layered(1000, 1, 8, 0, 1200);
-        for (at, value) in [(0x36, 1), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
-            put_i16(&mut shan, at, value);
-        }
+    fn a_ships_sheet_carries_its_weapon_layer_and_decay() {
+        // `shän` 141's: `WeapImageID` 1826, `WeapDecay` 5.
+        let mut shan = anim(1000, 1, 8);
+        put_i16(&mut shan, 0x26, 1826);
+        put_i16(&mut shan, 0x32, 5);
         let data = store(&[
             (Ship::TYPE, 128, ship()),
             (ShipAnim::TYPE, 128, shan),
             (RLED, 1000, sheet(8)),
-            (RLED, 1200, sheet(8)),
+            (RLED, 1826, sheet(8)),
         ]);
-        assert_eq!(
-            data.ship_sheet(ShipId(128)).map(|sheet| sheet.blink),
-            Ok(Blink {
-                mode: 1,
-                a: 4,
-                b: 1,
-                c: 2,
-                d: 20,
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!(found.weapon, Some(layer(1826, 8)));
+        assert_eq!(found.weap_decay, 5);
+        assert_eq!(found.weapon_decay(), (5.0_f64 * 0.333) as f32);
+        let mut broken = anim(1000, 1, 8);
+        put_i16(&mut broken, 0x26, 1900);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, broken),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert_eq!(data.ship_sheet(ShipId(128)).expect("a sheet").weapon, None);
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames, each with a white run.
+    fn with_runs(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2), |b, _| {
+                b.frame(|f| f.line().run(3, 0x7FFF, 0x7FFF).line().pixels(&[0x7C00; 3]))
             })
-        );
+            .build()
+    }
+
+    #[test]
+    fn a_ships_sheet_marks_the_hull_and_layers_whose_sheets_hold_solid_runs() {
+        let mut shan = layered(1000, 1, 8, 1100, 1200);
+        put_i16(&mut shan, 0x26, 1930);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, with_runs(8)),
+            (RLED, 1100, sheet(8)),
+            (RLED, 1200, sheet(8)),
+            (RLED, 1930, with_runs(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert!(found.solid, "the hull");
+        assert_eq!(found.weapon.map(|layer| layer.solid), Some(true));
+        assert_eq!(found.glow.map(|layer| layer.solid), Some(false));
+        assert_eq!(found.lights.map(|layer| layer.solid), Some(false));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").solid);
+    }
+
+    #[test]
+    fn a_ships_sheet_carries_its_alt_and_shield_layers_and_translucency() {
+        // The Thunderforge's: `Flags` 0x58, alt 1330 of 6 sets; and a
+        // plug-in shield 1500, `BaseTransp` 10.
+        let mut shan = anim(1000, 1, 8);
+        put_i16(&mut shan, 0x0A, 10);
+        put_i16(&mut shan, 0x0C, 1330);
+        put_i16(&mut shan, 0x10, 6);
+        put_i16(&mut shan, 0x2E, 0x58);
+        put_i16(&mut shan, 0x40, 1500);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, sheet(8)),
+            (RLED, 1330, sheet(48)),
+            (RLED, 1500, sheet(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!(found.alt, Some(layer(1330, 48)));
+        assert_eq!(found.shield, Some(layer(1500, 8)));
+        assert_eq!(found.base_transp, 10);
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        let found = plain.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!((found.alt, found.shield), (None, None));
+        assert_eq!(found.base_transp, 0);
     }
 
     #[test]
@@ -581,16 +749,30 @@ mod tests {
             (Govt::TYPE, 129, govt(-1)),
             (Govt::TYPE, 131, short),
         ]);
-        assert_eq!(data.government_interface(GovtId(128)), Ok(130));
-        assert_eq!(data.government_interface(GovtId(129)), Ok(-1));
-        assert_eq!(
-            data.government_interface(GovtId(130)),
-            Err("no gövt 130".to_owned())
-        );
+        assert_eq!(data.government_interface(GovtId(128)), Ok(Some(130)));
+        assert_eq!(data.government_interface(GovtId(129)), Ok(Some(-1)));
+        assert_eq!(data.government_interface(GovtId(130)), Ok(None), "none");
         let Err(message) = data.government_interface(GovtId(131)) else {
             panic!("an error")
         };
         assert!(message.contains("131"), "{message}");
+    }
+
+    fn icon(width: u16, height: u16) -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0, 0, 0])],
+        };
+        let count = usize::from(width) * usize::from(height);
+        Cicn::new(width, height, 8, &ctab, &vec![0; count], &vec![true; count]).bytes()
+    }
+
+    #[test]
+    fn an_icons_size_is_its_decoded_width_and_height() {
+        let data = store(&[(CICN, 18000, icon(24, 20)), (CICN, 18001, vec![0; 4])]);
+        assert_eq!(data.icon_size(18000), Some((24, 20)));
+        assert_eq!(data.icon_size(18001), None, "undecodable");
+        assert_eq!(data.icon_size(18002), None, "missing");
     }
 
     #[test]
@@ -608,7 +790,9 @@ mod tests {
     use nova_data::records::weapon::Weapon;
     use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
 
-    use super::super::catalog::{BoomId, CombatLooks, EffectSheet, SoundId, TargetCard, WeaponId};
+    use super::super::catalog::{
+        BoomId, CombatLooks, EffectSheet, SmokeSheet, SoundId, TargetCard, WeaponId,
+    };
 
     /// The store of these resources, each with its name, if any.
     fn named_store(resources: &[(ResType, i16, Option<&str>, Vec<u8>)]) -> GameData {
@@ -627,13 +811,23 @@ mod tests {
         bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
     }
 
-    /// A `wëap` of `graphic` and `sound`, with distinct presentation
-    /// fields.
+    /// An unguided `wëap` of `graphic` and `sound`, with distinct
+    /// presentation fields: `Count` 110, a trail of 2 particles a tick at
+    /// 300, living 10 to 24 ticks, in 0x1040ff, smoke set 1, and no
+    /// `LiAmplitude`.
     fn weapon(graphic: i16, sound: i16) -> Vec<u8> {
         let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
+        put_i16(&mut bytes, 0x02, 110);
+        put_i16(&mut bytes, 0x08, -1);
         put_i16(&mut bytes, 0x0E, graphic);
         put_i16(&mut bytes, 0x12, sound);
         put_u16(&mut bytes, 0x1C, 0x0011);
+        put_i16(&mut bytes, 0x20, 1);
+        put_i16(&mut bytes, 0x24, 2);
+        put_i16(&mut bytes, 0x26, 300);
+        put_i16(&mut bytes, 0x28, 10);
+        put_i16(&mut bytes, 0x2A, 24);
+        put_u32(&mut bytes, 0x2C, 0x0010_40FF);
         put_i16(&mut bytes, 0x32, 3);
         put_i16(&mut bytes, 0x34, 8);
         put_u32(&mut bytes, 0x36, 0x00FF_8000);
@@ -662,10 +856,12 @@ mod tests {
         bytes
     }
 
+    /// A sheet of `frames` frames 3 pixels wide, as [`sheet`] builds them.
     fn sheet_of(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
+            frame_width: 3,
         }
     }
 
@@ -692,12 +888,100 @@ mod tests {
                 flags3: 0x0002,
                 beam_width: 3,
                 falloff: 8,
+                shot_falloff: 8,
+                li_density: 0,
+                li_amplitude: 1,
+                count: 110,
+                particles: 2,
+                part_vel: 300,
+                part_life: (10, 24),
+                part_color: 0x0010_40FF,
+                smoke_set: 1,
                 beam_color: 0x00FF_8000,
                 corona_color: 0x0000_80FF,
                 prox_safety: 6,
                 sound_ticks: None,
             })
         );
+    }
+
+    #[test]
+    fn a_beams_look_takes_its_falloff_as_the_original_loads_it() {
+        let beam = |falloff, li_density| {
+            let mut bytes = weapon(-1, -1);
+            put_i16(&mut bytes, 0x30, 300);
+            put_i16(&mut bytes, 0x34, falloff);
+            put_i16(&mut bytes, 0x6E, li_density);
+            let data = named_store(&[(Weapon::TYPE, 146, Some("Laser"), bytes)]);
+            let look = data.weapon_look(WeaponId(146)).expect("reads");
+            (look.falloff, look.li_density)
+        };
+        assert_eq!(beam(8, 0), (8, 0));
+        assert_eq!(beam(0, 0), (16, 0), "none loads 16");
+        assert_eq!(beam(8, 3), (0, 3), "a lightning beam has none");
+    }
+
+    /// The look of a `wëap` built by [`weapon`] and then `edit`.
+    fn look_of(edit: impl FnOnce(&mut Vec<u8>)) -> WeaponLook {
+        let mut bytes = weapon(-1, -1);
+        edit(&mut bytes);
+        let data = named_store(&[(Weapon::TYPE, 150, Some("Edited"), bytes)]);
+        data.weapon_look(WeaponId(150)).expect("reads")
+    }
+
+    #[test]
+    fn a_shots_fade_takes_the_loaded_falloff_but_for_a_beams_guidance() {
+        for (guidance, fade) in [(-1, 8), (1, 8), (4, 8), (9, 8), (0, 0), (3, 0), (10, 0)] {
+            let look = look_of(|bytes| put_i16(bytes, 0x08, guidance));
+            assert_eq!((look.falloff, look.shot_falloff), (8, fade), "{guidance}");
+        }
+        let lightning = look_of(|bytes| put_i16(bytes, 0x6E, 2));
+        assert_eq!(lightning.shot_falloff, 0, "a lightning shot loads none");
+        let fading_in = look_of(|bytes| put_i16(bytes, 0x34, -3));
+        assert_eq!(fading_in.shot_falloff, -3);
+    }
+
+    #[test]
+    fn a_smoke_set_above_7_unsigned_loads_as_0() {
+        for (raw, loaded) in [(0, 0), (1, 1), (7, 7), (8, 0), (-1, 0), (i16::MAX, 0)] {
+            let look = look_of(|bytes| put_i16(bytes, 0x20, raw));
+            assert_eq!(look.smoke_set, loaded, "{raw}");
+        }
+    }
+
+    #[test]
+    fn lightning_loads_a_density_of_1_as_2_and_an_amplitude_of_none_or_less_as_1() {
+        for (density, loaded) in [(0, 0), (1, 2), (2, 2), (10, 10), (-1, -1)] {
+            let look = look_of(|bytes| put_i16(bytes, 0x6E, density));
+            assert_eq!(look.li_density, loaded, "{density}");
+        }
+        for (amplitude, loaded) in [(-4, 1), (0, 1), (1, 1), (5, 5)] {
+            let look = look_of(|bytes| put_i16(bytes, 0x70, amplitude));
+            assert_eq!(look.li_amplitude, loaded, "{amplitude}");
+        }
+    }
+
+    #[test]
+    fn a_smoke_sets_sheet_is_its_eight_cicns_from_1000_for_sets_0_and_1() {
+        let icons = |first: i16| (first..first + 8).map(|id| (CICN, id, None, icon(4, 4)));
+        let mut resources: Vec<_> = icons(1000).chain(icons(1008)).collect();
+        resources.extend(icons(1016));
+        let data = named_store(&resources);
+        assert_eq!(data.smoke_sheet(0), Some(SmokeSheet { first_icon: 1000 }));
+        assert_eq!(data.smoke_sheet(1), Some(SmokeSheet { first_icon: 1008 }));
+        assert_eq!(data.smoke_sheet(2), None, "only sets 0 and 1");
+        let mut gap: Vec<_> = icons(1000).collect();
+        gap.remove(7);
+        gap.push((CICN, 1007, None, vec![0; 4]));
+        assert_eq!(
+            named_store(&gap).smoke_sheet(0),
+            None,
+            "an undecodable cicn"
+        );
+        let mut short: Vec<_> = icons(1008).collect();
+        short.remove(3);
+        assert_eq!(named_store(&short).smoke_sheet(1), None, "a missing cicn");
+        assert_eq!(named_store(&[]).smoke_sheet(0), None);
     }
 
     /// A `snd ` of `frames` 8-bit mono frames at 22,050 Hz.
@@ -794,6 +1078,45 @@ mod tests {
             data.weapon_look(WeaponId(130)),
             Err("no wëap 130".to_owned())
         );
+    }
+
+    #[test]
+    fn the_cursors_sheet_is_spin_650() {
+        let data = named_store(&[
+            (Spin::TYPE, 650, None, spin(651)),
+            (RLED, 651, None, sheet(8)),
+        ]);
+        assert_eq!(data.cursor_sheet(), Ok(sheet_of(651, 8)));
+        assert_eq!(
+            named_store(&[]).cursor_sheet(),
+            Err("no spïn 650".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_cargo_boxs_sheet_is_spin_500_and_its_graphic() {
+        let data = named_store(&[
+            (Spin::TYPE, 500, None, spin(600)),
+            (RLED, 600, None, sheet(36)),
+            (Spin::TYPE, 502, None, spin(602)),
+            (RLED, 602, None, sheet(12)),
+        ]);
+        assert_eq!(data.box_sheet(0), Ok(sheet_of(600, 36)));
+        assert_eq!(data.box_sheet(2), Ok(sheet_of(602, 12)));
+        assert_eq!(data.box_sheet(1), Err("no spïn 501".to_owned()));
+    }
+
+    #[test]
+    fn an_asteroids_sheet_is_spin_800_and_its_type() {
+        let data = named_store(&[
+            (Spin::TYPE, 800, None, spin(1800)),
+            (RLED, 1800, None, sheet(36)),
+            (Spin::TYPE, 815, None, spin(1815)),
+            (RLED, 1815, None, sheet(10)),
+        ]);
+        assert_eq!(data.asteroid_sheet(0), Ok(sheet_of(1800, 36)));
+        assert_eq!(data.asteroid_sheet(15), Ok(sheet_of(1815, 10)));
+        assert_eq!(data.asteroid_sheet(4), Err("no spïn 804".to_owned()));
     }
 
     #[test]

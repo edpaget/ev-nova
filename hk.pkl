@@ -1,6 +1,6 @@
 amends "package://github.com/jdx/hk/releases/download/v2.4.0/hk@2.4.0#/Config.pkl"
 
-// One step: the same gate CI runs, defined once in mise.toml's `ci` task.
+// The full gate CI runs, defined once in mise.toml's `ci` task.
 local ci = new Mapping<String, Step> {
     ["mise_ci"] {
         glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml")
@@ -9,10 +9,59 @@ local ci = new Mapping<String, Step> {
     }
 }
 
-// Check-only: the hook reports problems but never rewrites staged files.
+// Every crate under crates/, each directory named after its package. hk's
+// built-in Pkl evaluator has no `read*`, so a new crate is added here by hand.
+local crates = List(
+    "nova",
+    "nova-audio",
+    "nova-bundle",
+    "nova-data",
+    "nova-dump",
+    "nova-render",
+    "nova-rsrc",
+    "nova-sim",
+    "nova-sim-ai",
+    "nova-sim-base",
+    "nova-sim-catalog",
+    "nova-sim-combat",
+    "nova-sim-port",
+    "nova-sim-state",
+    "nova-sim-story",
+    "nova-view",
+)
+
+// The pre-commit gate: fmt, then clippy and nextest over each crate with
+// staged changes, one `-p` at a time. A single `-p <crate>` keeps one
+// feature-resolved build of each crate warm; a combined `-p a -p b` would
+// build a new variant for every combination. `exclusive` runs the crates
+// one after another rather than contending for the target-dir lock.
+// Dependent crates, the dev-tools legs and doctests are left to the full
+// gate (`hk check`, `mise run ci`), run before review and on landing.
+local changed = new Mapping<String, Step> {
+    ["fmt"] {
+        glob = List("**/*.rs")
+        check = "cargo fmt --all --check"
+        exclusive = true
+    }
+    for (c in crates) {
+        [c] {
+            glob = List("crates/\(c)/**")
+            check = "cargo clippy -p \(c) --all-targets --locked -- -D warnings && cargo nextest run -p \(c) --locked --no-tests=pass"
+            exclusive = true
+        }
+    }
+    // Files that can change every crate's build or tests.
+    ["workspace"] {
+        glob = List("Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml", ".cargo/**")
+        check = "mise run lint && mise run test"
+        exclusive = true
+    }
+}
+
+// Check-only: the hooks report problems but never rewrite staged files.
 hooks {
     ["pre-commit"] {
-        steps = ci
+        steps = changed
     }
     ["check"] {
         steps = ci

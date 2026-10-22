@@ -1,7 +1,10 @@
 //! The player's settings, all of them, kept in one settings file.
 //!
-//! - [`GameSettings`]: the sound settings ([`AudioSettings`]) and whether
-//!   hyperspace jumps play their white fades.
+//! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
+//!   hyperspace jumps play their white fades, whether `dësc` movies play,
+//!   whether shots trail and smoke, whether ships show their weapon glow,
+//!   whether the game runs fullscreen, and how ([`FullscreenSetting`]),
+//!   and the Scaling chosen ([`ScalingSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -10,67 +13,294 @@
 //!   somewhere to save.
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
-//! `music_volume` and `hyperspace_effects`; files saved before the last
-//! one existed load unchanged, with the hyperspace effects on.
+//! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
+//! `smoke_trails`, `weapon_effects`, `show_map_borders`, `fullscreen`,
+//! `fullscreen_kind`, `frame_upscaler` and `nova_files`; files saved
+//! before the last nine existed load unchanged, with the hyperspace
+//! effects, the movies, the smoke trails, the weapon effects and the map's
+//! borders on, the game windowed and, when fullscreen, borderless, the
+//! world drawn natively, and no `Nova Files` remembered.
+//!
+//! `smoke_trails` is true when trails are drawn, the Preferences box's
+//! sense. The original's own `SmokeTrails` key is inverted, an "off"
+//! switch its `Keys.nib` box negates; both default to trails drawn.
+//!
+//! `nova_files` is the `Nova Files` directory the player picked when the
+//! game found none (`crate::startup`), a string, absent (or `null`) when
+//! none is remembered. A path whose name is not UTF-8 is never saved.
+//!
+//! `frame_upscaler` holds the player's Scaling, under the key phase 6 named
+//! when it held only the per-frame upscaler: `"native"`,
+//! `"sharp_bilinear"`, `"metalfx_spatial"` (macOS's MetalFX, which a
+//! device without it doesn't offer: the app then draws natively and says
+//! so once at startup) or `"super_xbr"` (sprites enlarged as they load).
+//! Files phase 6 saved load unchanged, their per-frame choice kept. A name
+//! this game does not have is kept as it is and saved back unchanged; the
+//! app draws natively and says so once at startup.
+//!
+//! `fullscreen_kind` is `"borderless"`, or an exclusive mode with the
+//! monitor it was chosen on: `{"exclusive": {"width": 1920, "height":
+//! 1080, "refresh_millihertz": 60000, "monitor": "DELL U2720Q"}}`, the
+//! monitor `null` when the platform names none. It is kept while the game
+//! is windowed, so the fullscreen shortcut goes back to it.
+//!
+//! `show_map_borders` is the original's `ShowMapBorders`: whether the
+//! galaxy map shades government borders, on when absent (`_LoadPrefs`
+//! @0xced57-0xced93). The Preferences dialog never carries it, as
+//! `_SavePrefs` never writes it: the map's close saves it
+//! (`nova_view::flight::FlightView::take_map_borders_save`).
+
+use std::path::PathBuf;
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
-use nova_view::Prefs;
+use nova_view::{FullscreenKind, Prefs, Scaling, VideoMode};
 use serde::{Deserialize, Serialize};
 
+/// The Scaling chosen, as saved: its name, kept as it was read even when
+/// this game has no scaling of that name, so a choice made by another
+/// build, or on a device that has it, is never overwritten by loading it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScalingSetting(String);
+
+impl ScalingSetting {
+    /// The name saved.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
+    /// The scaling the name names, if this game has it.
+    #[must_use]
+    pub fn known(&self) -> Option<Scaling> {
+        match self.0.as_str() {
+            "native" => Some(Scaling::Native),
+            "sharp_bilinear" => Some(Scaling::SharpBilinear),
+            "metalfx_spatial" => Some(Scaling::MetalFxSpatial),
+            "super_xbr" => Some(Scaling::SuperXbr),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ScalingSetting {
+    /// Native.
+    fn default() -> Self {
+        Self::from(Scaling::Native)
+    }
+}
+
+impl From<Scaling> for ScalingSetting {
+    /// The scaling's name: a stable key of the settings file. The
+    /// per-frame ones keep the names phase 6 gave them.
+    fn from(scaling: Scaling) -> Self {
+        let name = match scaling {
+            Scaling::Native => "native",
+            Scaling::SharpBilinear => "sharp_bilinear",
+            Scaling::MetalFxSpatial => "metalfx_spatial",
+            Scaling::SuperXbr => "super_xbr",
+        };
+        Self(name.to_owned())
+    }
+}
+
+impl From<String> for ScalingSetting {
+    /// The setting `name` is saved as, known or not.
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
+/// How the game runs fullscreen, as saved.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FullscreenSetting {
+    /// Borderless, at the desktop's own mode.
+    #[default]
+    Borderless,
+    /// In `mode`, exclusively, on the monitor named `monitor` (`None` when
+    /// the platform named none).
+    Exclusive {
+        /// The display mode.
+        mode: VideoMode,
+        /// The monitor's name, as the platform gave it.
+        monitor: Option<String>,
+    },
+}
+
+impl FullscreenSetting {
+    /// The kind, without the monitor.
+    #[must_use]
+    pub fn kind(&self) -> FullscreenKind {
+        match self {
+            Self::Borderless => FullscreenKind::Borderless,
+            Self::Exclusive { mode, .. } => FullscreenKind::Exclusive(*mode),
+        }
+    }
+}
+
 /// Every setting the player can change.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // One field per on-off setting.
 pub struct GameSettings {
     /// Whether sound effects and music play, and how loud.
     pub audio: AudioSettings,
     /// Whether hyperspace jumps fade to white and back: the original's
     /// Hyperspace Effects preference.
     pub hyperspace_effects: bool,
+    /// Whether the game runs fullscreen rather than in a window.
+    pub fullscreen: bool,
+    /// How the game runs fullscreen when it does, kept while it is
+    /// windowed.
+    pub fullscreen_kind: FullscreenSetting,
+    /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
+    /// preference.
+    pub quicktime_movies: bool,
+    /// Whether shots leave their particle trails and smoke: the original's
+    /// Smoke Trails preference, as its box shows it.
+    pub smoke_trails: bool,
+    /// Whether ships show their weapon glow: the original's Weapon Effects
+    /// preference.
+    pub weapon_effects: bool,
+    /// Whether the galaxy map shades government borders: the original's
+    /// `ShowMapBorders`.
+    pub map_borders: bool,
+    /// The Scaling the player chose, as saved, under the key phase 6
+    /// named for the frame upscaler it then held.
+    pub frame_upscaler: ScalingSetting,
+    /// The `Nova Files` directory the player picked when the game found
+    /// none, tried before the usual places on the next launch.
+    pub nova_files: Option<PathBuf>,
 }
 
 impl Default for GameSettings {
-    /// The default sound settings, with the hyperspace effects on.
+    /// The default sound settings, with the hyperspace effects, the
+    /// movies, the smoke trails, the weapon effects and the map's borders
+    /// on, in a window, the world drawn natively.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
+            fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
+            quicktime_movies: true,
+            smoke_trails: true,
+            weapon_effects: true,
+            map_borders: true,
+            frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         }
     }
 }
 
 impl GameSettings {
-    /// The settings as the Preferences dialog shows them.
+    /// The settings as the Preferences dialog shows them, the fullscreen
+    /// kind without its monitor, and the Scaling stored, or native when
+    /// this game has none of its name.
     #[must_use]
-    pub fn prefs(self) -> Prefs {
+    pub fn prefs(&self) -> Prefs {
         Prefs {
             sound: self.audio.prefs(),
             hyperspace_effects: self.hyperspace_effects,
+            quicktime_movies: self.quicktime_movies,
+            smoke_trails: self.smoke_trails,
+            weapon_effects: self.weapon_effects,
+            fullscreen: self.fullscreen_kind.kind(),
+            scaling: self.frame_upscaler.known().unwrap_or_default(),
         }
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
-    /// at its chosen level as [`AudioSettings::with_prefs`] does.
+    /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
+    /// settings the prefs don't set: the map's borders, fullscreen, both
+    /// whether and how, the Scaling and the remembered `Nova Files`. A fullscreen kind or a scaling
+    /// the dialog chooses is the app's to apply and save, as it applies
+    /// it, so a change of another preference never overwrites a stored
+    /// scaling this device could not use.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
+            quicktime_movies: prefs.quicktime_movies,
+            smoke_trails: prefs.smoke_trails,
+            weapon_effects: prefs.weapon_effects,
+            ..self
         }
     }
 }
 
 /// The settings as saved: JSON, every field optional (a missing one takes
-/// its default). Other fields, such as the rules' `rules` and
-/// `rule_overrides`, are kept and saved back as they were.
+/// its default). Other fields, such as the rules' `rules`,
+/// `rule_overrides` and `rule_values`, are kept and saved back as they
+/// were.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // One field per key of the file.
 struct Saved {
     sound: bool,
     music: bool,
     effects_volume: f32,
     music_volume: f32,
     hyperspace_effects: bool,
+    fullscreen: bool,
+    fullscreen_kind: SavedKind,
+    quicktime_movies: bool,
+    smoke_trails: bool,
+    weapon_effects: bool,
+    show_map_borders: bool,
+    frame_upscaler: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nova_files: Option<String>,
     #[serde(flatten)]
     others: Others,
+}
+
+/// A [`FullscreenSetting`] as saved.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedKind {
+    #[default]
+    Borderless,
+    Exclusive {
+        width: u32,
+        height: u32,
+        refresh_millihertz: u32,
+        monitor: Option<String>,
+    },
+}
+
+impl From<FullscreenSetting> for SavedKind {
+    fn from(setting: FullscreenSetting) -> Self {
+        match setting {
+            FullscreenSetting::Borderless => Self::Borderless,
+            FullscreenSetting::Exclusive { mode, monitor } => Self::Exclusive {
+                width: mode.width,
+                height: mode.height,
+                refresh_millihertz: mode.refresh_millihertz,
+                monitor,
+            },
+        }
+    }
+}
+
+impl From<SavedKind> for FullscreenSetting {
+    fn from(saved: SavedKind) -> Self {
+        match saved {
+            SavedKind::Borderless => Self::Borderless,
+            SavedKind::Exclusive {
+                width,
+                height,
+                refresh_millihertz,
+                monitor,
+            } => Self::Exclusive {
+                mode: VideoMode {
+                    width,
+                    height,
+                    refresh_millihertz,
+                },
+                monitor,
+            },
+        }
+    }
 }
 
 /// The fields of the settings file that are not the keeper's own.
@@ -91,13 +321,27 @@ impl From<GameSettings> for Saved {
             effects_volume: audio.effects_volume.amplitude(),
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
+            fullscreen: settings.fullscreen,
+            fullscreen_kind: settings.fullscreen_kind.into(),
+            quicktime_movies: settings.quicktime_movies,
+            smoke_trails: settings.smoke_trails,
+            weapon_effects: settings.weapon_effects,
+            show_map_borders: settings.map_borders,
+            frame_upscaler: settings.frame_upscaler.0,
+            // A name that isn't UTF-8 can't be a JSON string: it is left
+            // out, and the next launch looks again.
+            nova_files: settings
+                .nova_files
+                .and_then(|dir| dir.into_os_string().into_string().ok()),
             others: Others::new(),
         }
     }
 }
 
 impl From<Saved> for GameSettings {
-    /// Volumes out of range are clamped.
+    /// Volumes are clamped to what the levels reach: silent through full,
+    /// and the effects no louder than their top level's
+    /// ([`AudioSettings::capped`]).
     fn from(saved: Saved) -> Self {
         Self {
             audio: AudioSettings {
@@ -105,8 +349,17 @@ impl From<Saved> for GameSettings {
                 music: saved.music,
                 effects_volume: Volume::new(saved.effects_volume),
                 music_volume: Volume::new(saved.music_volume),
-            },
+            }
+            .capped(),
             hyperspace_effects: saved.hyperspace_effects,
+            fullscreen: saved.fullscreen,
+            fullscreen_kind: saved.fullscreen_kind.into(),
+            quicktime_movies: saved.quicktime_movies,
+            smoke_trails: saved.smoke_trails,
+            weapon_effects: saved.weapon_effects,
+            map_borders: saved.show_map_borders,
+            frame_upscaler: ScalingSetting(saved.frame_upscaler),
+            nova_files: saved.nova_files.map(PathBuf::from),
         }
     }
 }
@@ -131,8 +384,8 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// Nothing saved gives the defaults, silently. Text that cannot be
     /// read, or is not settings (not JSON, or a field of the wrong type),
     /// gives the defaults and a warning naming the store's location. A
-    /// missing field takes its default, and volumes are clamped to silent
-    /// through full. Other fields, the game's other settings, are saved
+    /// missing field takes its default, and volumes are clamped to what
+    /// the levels reach. Other fields, the game's other settings, are saved
     /// back with each change.
     pub fn open(mut store: S) -> (Self, Option<String>) {
         let mut others = Others::new();
@@ -173,7 +426,7 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// The settings.
     #[must_use]
     pub fn settings(&self) -> GameSettings {
-        self.settings
+        self.settings.clone()
     }
 
     /// The store they are saved in.
@@ -193,7 +446,7 @@ impl<S: SettingsStore> SettingsKeeper<S> {
         if settings == self.settings {
             return Ok(());
         }
-        self.settings = settings;
+        self.settings = settings.clone();
         let saved = Saved {
             others: self.others.clone(),
             ..Saved::from(settings)
@@ -231,9 +484,9 @@ pub fn game_settings(
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_audio::recording::MemorySettings;
-    use nova_audio::settings::level_volume;
+    use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
-    use nova_view::SoundPrefs;
+    use nova_view::{FullscreenKind, Scaling, SoundPrefs, VideoMode};
 
     use super::*;
 
@@ -250,6 +503,14 @@ mod tests {
         GameSettings {
             audio,
             hyperspace_effects: false,
+            fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
+            quicktime_movies: true,
+            map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
+            frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         }
     }
 
@@ -264,6 +525,14 @@ mod tests {
             GameSettings {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
+                fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
+                quicktime_movies: true,
+                map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
+                frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
     }
@@ -284,6 +553,7 @@ mod tests {
             r#"{"sound": "yes"}"#,
             r#"{"music_volume": "loud"}"#,
             r#"{"hyperspace_effects": "no"}"#,
+            r#"{"fullscreen": "yes"}"#,
             r#"{"sound": false"#,
         ] {
             let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
@@ -327,6 +597,14 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
+                quicktime_movies: true,
+                map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
+                frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -346,16 +624,590 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
+                quicktime_movies: true,
+                map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
+                frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
+    }
+
+    #[test]
+    fn the_game_starts_windowed() {
+        assert!(!GameSettings::default().fullscreen);
+    }
+
+    #[test]
+    fn a_file_without_the_fullscreen_field_loads_windowed() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().fullscreen);
+    }
+
+    #[test]
+    fn fullscreen_is_saved_and_read_back_after_a_restart_both_ways() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let fullscreen = GameSettings {
+            fullscreen: true,
+            ..GameSettings::default()
+        };
+        keeper.change(fullscreen.clone()).expect("saves");
+        assert_eq!(json(&store)["fullscreen"], true);
+        let (mut restarted, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!((restarted.settings(), warning), (fullscreen, None));
+        restarted.change(GameSettings::default()).expect("saves");
+        let (restarted, _) = SettingsKeeper::open(store.clone());
+        assert!(!restarted.settings().fullscreen);
+        assert_eq!(store.writes(), 2);
+    }
+
+    #[test]
+    fn choosing_preferences_keeps_fullscreen() {
+        let settings = GameSettings {
+            fullscreen: true,
+            ..plain(quiet())
+        };
+        assert!(settings.with_prefs(Prefs::default()).fullscreen);
+        let exclusive = GameSettings {
+            fullscreen: true,
+            fullscreen_kind: exclusive_on(Some("DELL U2720Q")),
+            ..plain(quiet())
+        };
+        for kind in [FullscreenKind::Borderless, FullscreenKind::Exclusive(qhd())] {
+            let chosen = exclusive.clone().with_prefs(Prefs {
+                fullscreen: kind,
+                ..Prefs::default()
+            });
+            assert!(chosen.fullscreen, "{kind:?}");
+            assert_eq!(
+                chosen.fullscreen_kind, exclusive.fullscreen_kind,
+                "{kind:?}"
+            );
+        }
+    }
+
+    fn fhd() -> VideoMode {
+        VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 59_940,
+        }
+    }
+
+    fn qhd() -> VideoMode {
+        VideoMode {
+            width: 2560,
+            height: 1440,
+            refresh_millihertz: 144_000,
+        }
+    }
+
+    fn exclusive_on(monitor: Option<&str>) -> FullscreenSetting {
+        FullscreenSetting::Exclusive {
+            mode: fhd(),
+            monitor: monitor.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_phase_one_file_loads_fullscreen_and_borderless() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"fullscreen": true}"#));
+        assert_eq!(warning, None);
+        assert!(keeper.settings().fullscreen);
+        assert_eq!(
+            keeper.settings().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding("{}"));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().fullscreen);
+        assert_eq!(
+            keeper.settings().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+        assert_eq!(
+            GameSettings::default().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+    }
+
+    #[test]
+    fn an_exclusive_kind_is_saved_and_read_back_after_a_restart() {
+        for monitor in [Some("DELL U2720Q"), None] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                fullscreen: true,
+                fullscreen_kind: exclusive_on(monitor),
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(
+                json(&store)["fullscreen_kind"],
+                serde_json::json!({
+                    "exclusive": {
+                        "width": 1920,
+                        "height": 1080,
+                        "refresh_millihertz": 59_940,
+                        "monitor": monitor,
+                    }
+                })
+            );
+            let (restarted, warning) = SettingsKeeper::open(store.clone());
+            assert_eq!((restarted.settings(), warning), (settings, None));
+        }
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                fullscreen: true,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["fullscreen_kind"], "borderless");
+    }
+
+    #[test]
+    fn a_fullscreen_kind_of_the_wrong_shape_is_not_usable() {
+        for text in [
+            r#"{"fullscreen_kind": 7}"#,
+            r#"{"fullscreen_kind": "sideways"}"#,
+            r#"{"fullscreen_kind": {"exclusive": {"width": 1920}}}"#,
+        ] {
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+            assert_eq!(keeper.settings(), GameSettings::default(), "{text}");
+            assert!(
+                warning.is_some_and(|warning| warning.contains("are not usable")),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prefs_show_the_stored_kind_without_its_monitor() {
+        let settings = GameSettings {
+            fullscreen_kind: exclusive_on(Some("DELL U2720Q")),
+            ..GameSettings::default()
+        };
+        assert_eq!(
+            settings.prefs().fullscreen,
+            FullscreenKind::Exclusive(fhd())
+        );
+        assert_eq!(
+            GameSettings::default().prefs().fullscreen,
+            FullscreenKind::Borderless
+        );
+        assert_eq!(exclusive_on(None).kind(), FullscreenKind::Exclusive(fhd()));
+        assert_eq!(
+            FullscreenSetting::Borderless.kind(),
+            FullscreenKind::Borderless
+        );
+    }
+
+    #[test]
+    fn the_movies_flag_is_saved_and_a_file_without_it_has_them_on() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(keeper.settings().quicktime_movies, "an old file");
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                quicktime_movies: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["quicktime_movies"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().quicktime_movies);
+        assert!(!restarted.settings().prefs().quicktime_movies);
+        let movies_on = GameSettings::default().with_prefs(Prefs {
+            quicktime_movies: false,
+            ..Prefs::default()
+        });
+        assert!(!movies_on.quicktime_movies, "the prefs choose it");
+    }
+
+    #[test]
+    fn smoke_trails_and_weapon_effects_start_on_and_a_file_without_them_has_them_on() {
+        let defaults = GameSettings::default();
+        assert!(defaults.smoke_trails && defaults.weapon_effects);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().smoke_trails,
+            "SmokeTrails' default, NO, negated"
+        );
+        assert!(
+            keeper.settings().weapon_effects,
+            "WeaponEffects' default, YES"
+        );
+    }
+
+    #[test]
+    fn smoke_trails_and_weapon_effects_off_are_saved_and_read_back() {
+        for (smoke_trails, weapon_effects) in [(false, true), (true, false), (false, false)] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                smoke_trails,
+                weapon_effects,
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(json(&store)["smoke_trails"], smoke_trails);
+            assert_eq!(json(&store)["weapon_effects"], weapon_effects);
+            let (restarted, warning) = SettingsKeeper::open(store);
+            assert_eq!((restarted.settings(), warning), (settings, None));
+        }
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(
+            r#"{"smoke_trails": false, "weapon_effects": false}"#,
+        ));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().smoke_trails && !keeper.settings().weapon_effects);
+    }
+
+    #[test]
+    fn the_prefs_carry_smoke_trails_and_weapon_effects_both_ways() {
+        let off = GameSettings {
+            smoke_trails: false,
+            weapon_effects: false,
+            ..GameSettings::default()
+        };
+        assert!(!off.prefs().smoke_trails && !off.prefs().weapon_effects);
+        for (smoke_trails, weapon_effects) in [(false, true), (true, false)] {
+            let chosen = off.clone().with_prefs(Prefs {
+                smoke_trails,
+                weapon_effects,
+                ..Prefs::default()
+            });
+            assert_eq!(
+                (chosen.smoke_trails, chosen.weapon_effects),
+                (smoke_trails, weapon_effects)
+            );
+        }
+    }
+
+    #[test]
+    fn saving_an_audio_change_keeps_smoke_trails_and_weapon_effects_and_back() {
+        let store = MemorySettings::holding(r#"{"smoke_trails": false, "weapon_effects": false}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                audio: quiet(),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["smoke_trails"], false);
+        assert_eq!(json(&store)["weapon_effects"], false);
+        assert_eq!(json(&store)["sound"], false);
+        keeper
+            .change(GameSettings {
+                smoke_trails: true,
+                ..keeper.settings()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["sound"], false, "the audio kept");
+        assert_eq!(json(&store)["smoke_trails"], true);
+    }
+
+    #[test]
+    fn the_map_borders_start_on_and_a_file_without_them_has_them_on() {
+        assert!(GameSettings::default().map_borders);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().map_borders,
+            "ShowMapBorders' default, YES"
+        );
+    }
+
+    #[test]
+    fn the_map_borders_off_are_saved_and_read_back() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                map_borders: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["show_map_borders"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().map_borders);
+    }
+
+    #[test]
+    fn the_prefs_keep_the_map_borders() {
+        let off = GameSettings {
+            map_borders: false,
+            ..GameSettings::default()
+        };
+        let changed = off.with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        assert!(!changed.map_borders, "the Preferences dialog never has it");
+        assert!(!changed.hyperspace_effects);
+    }
+
+    fn remembering(dir: &str) -> GameSettings {
+        GameSettings {
+            nova_files: Some(PathBuf::from(dir)),
+            ..GameSettings::default()
+        }
+    }
+
+    #[test]
+    fn no_nova_files_are_remembered_at_first_or_in_a_file_without_them() {
+        assert_eq!(GameSettings::default().nova_files, None);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().nova_files, None);
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(
+            r#"{"sound": false, "nova_files": null}"#,
+        ));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().nova_files, None);
+    }
+
+    #[test]
+    fn remembered_nova_files_are_saved_as_a_string_and_read_back() {
+        let store = MemorySettings::holding(r#"{"rules": "bible", "music": false}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                nova_files: Some(PathBuf::from("/Games/EV Nova/Nova Files")),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved["nova_files"], "/Games/EV Nova/Nova Files");
+        assert_eq!(saved["rules"], "bible", "the other keys survive");
+        assert_eq!(saved["music"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert_eq!(
+            restarted.settings().nova_files,
+            Some(PathBuf::from("/Games/EV Nova/Nova Files"))
+        );
+    }
+
+    #[test]
+    fn forgotten_nova_files_leave_the_key_out() {
+        let store = MemorySettings::holding(r#"{"nova_files": "/gone", "rules": "bible"}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        assert_eq!(keeper.settings().nova_files, Some(PathBuf::from("/gone")));
+        keeper
+            .change(GameSettings {
+                nova_files: None,
+                ..keeper.settings()
+            })
+            .expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved.get("nova_files"), None);
+        assert_eq!(saved["rules"], "bible");
+    }
+
+    #[test]
+    fn remembered_nova_files_of_the_wrong_type_are_not_usable() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"nova_files": 3}"#));
+        assert!(warning.is_some());
+        assert_eq!(keeper.settings().nova_files, None);
+    }
+
+    #[test]
+    fn the_prefs_keep_the_remembered_nova_files() {
+        let changed = remembering("/Nova Files").with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        assert_eq!(changed.nova_files, Some(PathBuf::from("/Nova Files")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_utf8_is_never_saved() {
+        use std::os::unix::ffi::OsStrExt;
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let dir = PathBuf::from(std::ffi::OsStr::from_bytes(b"/Nova \xff Files"));
+        keeper
+            .change(GameSettings {
+                nova_files: Some(dir),
+                map_borders: false,
+                ..GameSettings::default()
+            })
+            .expect("saves without panicking");
+        assert_eq!(json(&store).get("nova_files"), None);
+    }
+
+    fn upscaler_named(name: &str) -> ScalingSetting {
+        ScalingSetting::from(name.to_owned())
+    }
+
+    #[test]
+    fn each_scaling_is_saved_under_the_frame_upscaler_key_by_its_name_and_read_back() {
+        for (scaling, name) in [
+            (Scaling::Native, "native"),
+            (Scaling::SharpBilinear, "sharp_bilinear"),
+            (Scaling::MetalFxSpatial, "metalfx_spatial"),
+            (Scaling::SuperXbr, "super_xbr"),
+        ] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                frame_upscaler: ScalingSetting::from(scaling),
+                hyperspace_effects: false,
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(json(&store)["frame_upscaler"], name);
+            let (restarted, warning) = SettingsKeeper::open(store);
+            assert_eq!((restarted.settings(), warning), (settings, None));
+            assert_eq!(restarted.settings().frame_upscaler.known(), Some(scaling));
+            assert_eq!(restarted.settings().frame_upscaler.name(), name);
+        }
+        assert_eq!(
+            Scaling::ALL.map(|scaling| ScalingSetting::from(scaling).known()),
+            Scaling::ALL.map(Some),
+            "every scaling has a name"
+        );
+    }
+
+    #[test]
+    fn a_file_phase_6_saved_loads_its_per_frame_choice_unchanged() {
+        for (name, scaling) in [
+            ("native", Scaling::Native),
+            ("sharp_bilinear", Scaling::SharpBilinear),
+            ("metalfx_spatial", Scaling::MetalFxSpatial),
+        ] {
+            let text = format!(r#"{{"music": true, "frame_upscaler": "{name}"}}"#);
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(&text));
+            assert_eq!(warning, None, "{name}");
+            assert_eq!(keeper.settings().frame_upscaler.known(), Some(scaling));
+            assert_eq!(keeper.settings().prefs().scaling, scaling);
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_frame_upscaler_draws_natively() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().frame_upscaler.name(), "native");
+        assert_eq!(
+            keeper.settings().frame_upscaler.known(),
+            Some(Scaling::Native)
+        );
+        assert_eq!(
+            GameSettings::default().frame_upscaler,
+            upscaler_named("native")
+        );
+        assert_eq!(ScalingSetting::default(), upscaler_named("native"));
+    }
+
+    #[test]
+    fn an_unknown_frame_upscaler_loads_and_is_saved_back_as_it_was() {
+        for name in ["warp_drive", "hd_pack_v9"] {
+            let text = format!(r#"{{"frame_upscaler": "{name}"}}"#);
+            let store = MemorySettings::holding(&text);
+            let (mut keeper, warning) = SettingsKeeper::open(store.clone());
+            assert_eq!(warning, None, "the app warns, not the keeper");
+            let settings = keeper.settings();
+            assert_eq!(settings.frame_upscaler, upscaler_named(name));
+            assert_eq!(settings.frame_upscaler.known(), None);
+            assert_eq!(settings.prefs().scaling, Scaling::Native);
+            keeper
+                .change(settings.with_prefs(Prefs {
+                    sound: SoundPrefs {
+                        music: false,
+                        ..Prefs::default().sound
+                    },
+                    ..Prefs::default()
+                }))
+                .expect("saves");
+            assert_eq!(json(&store)["music"], false);
+            assert_eq!(json(&store)["frame_upscaler"], name);
+        }
+    }
+
+    #[test]
+    fn a_frame_upscaler_of_the_wrong_type_is_not_usable() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"frame_upscaler": 2}"#));
+        assert_eq!(keeper.settings(), GameSettings::default());
+        assert!(warning.is_some_and(|warning| warning.contains("are not usable")));
+    }
+
+    #[test]
+    fn the_prefs_never_set_the_stored_frame_upscaler() {
+        for stored in [
+            "native",
+            "sharp_bilinear",
+            "metalfx_spatial",
+            "super_xbr",
+            "warp_drive",
+        ] {
+            let settings = GameSettings {
+                frame_upscaler: upscaler_named(stored),
+                ..GameSettings::default()
+            };
+            for scaling in Scaling::ALL {
+                let chosen = settings.clone().with_prefs(Prefs {
+                    scaling,
+                    ..Prefs::default()
+                });
+                assert_eq!(chosen.frame_upscaler, upscaler_named(stored), "{scaling:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_prefs_show_the_stored_frame_upscaler_when_known_and_native_otherwise() {
+        let shown = |name: &str| {
+            GameSettings {
+                frame_upscaler: upscaler_named(name),
+                ..GameSettings::default()
+            }
+            .prefs()
+            .scaling
+        };
+        assert_eq!(shown("sharp_bilinear"), Scaling::SharpBilinear);
+        assert_eq!(shown("metalfx_spatial"), Scaling::MetalFxSpatial);
+        assert_eq!(shown("super_xbr"), Scaling::SuperXbr);
+        assert_eq!(shown("native"), Scaling::Native);
+        assert_eq!(shown("warp_drive"), Scaling::Native);
+        assert_eq!(shown(""), Scaling::Native);
     }
 
     #[test]
     fn volumes_out_of_range_are_clamped() {
         let text = r#"{"effects_volume": 3.5, "music_volume": -1}"#;
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding(text));
-        assert_eq!(keeper.settings().audio.effects_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
         assert_eq!(keeper.settings().audio.music_volume, Volume::SILENT);
+    }
+
+    #[test]
+    fn an_effects_volume_above_the_top_level_loads_at_the_top_level() {
+        let text = r#"{"effects_volume": 1.0, "music_volume": 1.0}"#;
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
+        assert_eq!(keeper.settings().audio.music_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.prefs().effects_level, 8);
     }
 
     #[test]
@@ -376,6 +1228,13 @@ mod tests {
                 "effects_volume": 0.25,
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
+                "fullscreen": false,
+                "fullscreen_kind": "borderless",
+                "quicktime_movies": true,
+                "smoke_trails": true,
+                "weapon_effects": true,
+                "show_map_borders": true,
+                "frame_upscaler": "native",
             })
         );
     }
@@ -399,11 +1258,16 @@ mod tests {
     #[test]
     fn a_change_keeps_the_other_settings_saved_beside_these() {
         let text = r#"{"music": false, "rules": "bible",
-            "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}}}"#;
+            "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}},
+            "rule_values": {"thrust_divisor": 3000}}"#;
         let store = MemorySettings::holding(text);
         let (mut keeper, _) = SettingsKeeper::open(store.clone());
         keeper.change(plain(quiet())).expect("saves");
         assert_eq!(json(&store)["rules"], "bible");
+        assert_eq!(
+            json(&store)["rule_values"],
+            serde_json::json!({"thrust_divisor": 3000})
+        );
         assert_eq!(
             json(&store)["rule_overrides"],
             serde_json::json!({"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}})
@@ -427,11 +1291,20 @@ mod tests {
             .change(GameSettings {
                 audio: quiet(),
                 hyperspace_effects: true,
+                fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
+                quicktime_movies: true,
+                map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
+                frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             })
             .expect("saves");
         keeper
             .change(GameSettings {
                 hyperspace_effects: false,
+                quicktime_movies: true,
                 ..keeper.settings()
             })
             .expect("saves");
@@ -474,17 +1347,27 @@ mod tests {
             Prefs {
                 sound: quiet().prefs(),
                 hyperspace_effects: false,
+                quicktime_movies: true,
+                smoke_trails: true,
+                weapon_effects: true,
+                fullscreen: FullscreenKind::Borderless,
+                scaling: Scaling::Native,
             }
         );
-        assert_eq!(settings.with_prefs(prefs), settings, "between levels kept");
+        assert_eq!(
+            settings.clone().with_prefs(prefs),
+            settings,
+            "between levels kept"
+        );
         let changed = settings.with_prefs(Prefs {
             sound: SoundPrefs {
                 effects_level: 3,
                 ..prefs.sound
             },
             hyperspace_effects: true,
+            ..prefs
         });
-        assert_eq!(changed.audio.effects_volume, level_volume(3));
+        assert_eq!(changed.audio.effects_volume, effects_level_volume(3));
         assert_eq!(changed.audio.music_volume, Volume::new(0.5));
         assert!(changed.hyperspace_effects);
         assert_eq!(GameSettings::default().prefs(), Prefs::default());
@@ -534,8 +1417,16 @@ mod tests {
                 ..AudioSettings::default()
             },
             hyperspace_effects: false,
+            fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
+            quicktime_movies: true,
+            map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
+            frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         };
-        assert_eq!((settings, warning), (expected, None));
+        assert_eq!((settings, warning), (expected.clone(), None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");
         assert_eq!(keeper.settings(), expected);
         keeper.change(GameSettings::default()).expect("saves");

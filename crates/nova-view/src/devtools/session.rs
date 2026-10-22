@@ -169,7 +169,6 @@ mod tests {
             frame_size: Some((100, 100)),
             flags: CAN_LAND,
             min_status: 0,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,
@@ -179,6 +178,10 @@ mod tests {
             dead_graphic: None,
             dead_frame_size: None,
             type_counts_frames: true,
+            exit_angle: -1,
+            tribute: 0,
+            gravity: 0,
+            animation: nova_sim::catalog::SiteAnimation::default(),
         }
     }
 
@@ -194,6 +197,7 @@ mod tests {
                 },
                 cash: 1000,
                 legal: [None; 4],
+                kills: 0,
                 on_start: nova_sim::Script::default(),
             })
         }
@@ -242,6 +246,14 @@ mod tests {
             CommodityStrings::default()
         }
 
+        fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
+            nova_sim::catalog::StringPatch::Absent
+        }
+
+        fn buoy_strings(&self) -> Vec<String> {
+            Vec::new()
+        }
+
         fn junk(&self) -> Vec<JunkRecord> {
             Vec::new()
         }
@@ -271,6 +283,62 @@ mod tests {
 
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((100, 100))
+        }
+
+        fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
+            Vec::new()
+        }
+
+        fn mission_texts(&self) -> Vec<nova_sim::catalog::MissionTexts> {
+            Vec::new()
+        }
+
+        /// Sol's and Alpha Centauri's stellars, as each lists them.
+        fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+            let sites = [SystemId(130), SystemId(131)].map(|id| (id, self.landing_sites(id)));
+            nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            )
+        }
+
+        fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+            Vec::new()
+        }
+
+        fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+            nova_sim::catalog::PlaceNames::default()
+        }
+
+        fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+            Vec::new()
+        }
+
+        fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+            Vec::new()
+        }
+
+        fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+            Vec::new()
+        }
+    }
+
+    impl nova_sim::AsteroidCatalog for Catalog {
+        fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+            Vec::new()
+        }
+
+        fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+            Vec::new()
+        }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+            [None; nova_sim::BOX_GRAPHICS]
         }
     }
 
@@ -324,6 +392,7 @@ mod tests {
         let mut session = session();
         while session.landed().is_none() {
             session.land().expect("lands");
+            session.tick(nova_sim::Controls::default());
         }
         session.take_save_due();
         session

@@ -1,16 +1,17 @@
 //! The widgets' ports over `nova_data`: dialog templates from the
-//! interface file ([`InterfaceData`]), and descriptions and the button
-//! style from the game data ([`GameData`]). Thin mappings; the decisions
-//! are the core's.
+//! interface file ([`InterfaceData`]), and descriptions, their graphics
+//! and the button style from the game data ([`GameData`]). Thin
+//! mappings; the decisions are the core's.
 
 use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::{DialogItem, ItemKind};
 use nova_data::{GameData, InterfaceData, Rect};
+use nova_sim::DescMovie;
 
 use super::button::ButtonStyle;
-use super::catalog::{DescriptionSource, DialogResources};
+use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources};
 use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use crate::color::Color;
 use crate::font::Font;
@@ -100,6 +101,24 @@ impl DescriptionSource for GameData {
             up: Color::from_rgb24(colors.button_up),
             down: Color::from_rgb24(colors.button_down),
             grey: Color::from_rgb24(colors.button_grey),
+        }
+    }
+}
+
+impl DescriptionGraphics for GameData {
+    fn description_graphic(&self, id: i16) -> Option<i16> {
+        match self.get::<Desc>(id) {
+            Some(Ok(desc)) => desc.record.graphic.map(|pict| pict.0),
+            _ => None,
+        }
+    }
+
+    fn description_movie(&self, id: i16) -> Option<DescMovie> {
+        match self.get::<Desc>(id) {
+            Some(Ok(desc)) => {
+                DescMovie::from_desc(desc.record.movie_file.as_str(), desc.record.flags.0)
+            }
+            _ => None,
         }
     }
 }
@@ -359,6 +378,59 @@ mod tests {
         bytes.extend([0; 32]);
         bytes.extend([0, 0]);
         bytes
+    }
+
+    /// A `dësc` holding `text` and `graphic`.
+    fn pictured(text: &[u8], graphic: i16) -> Vec<u8> {
+        let mut bytes = desc(text);
+        let at = text.len() + 1;
+        bytes[at..at + 2].copy_from_slice(&graphic.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_descriptions_graphic_is_its_pict_or_none() {
+        let data = game(&[
+            (Desc::TYPE, 13000, pictured(b"Shuttle", 20128)),
+            (Desc::TYPE, 13001, pictured(b"Plain", -1)),
+            (Desc::TYPE, 13002, vec![0xFF; 2]),
+        ]);
+        assert_eq!(data.description_graphic(13000), Some(20128));
+        assert_eq!(data.description_graphic(13001), None, "-1 is none");
+        assert_eq!(data.description_graphic(13002), None, "undecodable");
+        assert_eq!(data.description_graphic(13003), None, "missing");
+    }
+
+    /// A `dësc` holding `text` and naming the movie `file`, played as
+    /// `flags` say.
+    fn filmed(text: &[u8], file: &[u8], flags: u16) -> Vec<u8> {
+        let mut bytes = desc(text);
+        let at = text.len() + 3;
+        bytes[at..at + file.len()].copy_from_slice(file);
+        bytes[at + 32..at + 34].copy_from_slice(&flags.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_descriptions_movie_is_its_movie_file_played_as_its_flags_say_or_none() {
+        let data = game(&[
+            (Desc::TYPE, 4778, filmed(b"Offer", b"\x01", 0x0001)),
+            (Desc::TYPE, 13000, filmed(b"Race", b"Race 1.mov", 0x0006)),
+            (Desc::TYPE, 13001, desc(b"Plain")),
+            (Desc::TYPE, 13002, vec![0xFF; 2]),
+        ]);
+        assert_eq!(
+            data.description_movie(13000),
+            DescMovie::from_desc("Race 1.mov", 0x0006)
+        );
+        assert_eq!(
+            data.description_movie(4778),
+            DescMovie::from_desc("\u{1}", 0x0001),
+            "stock mission 906's offer"
+        );
+        assert_eq!(data.description_movie(13001), None, "no MovieFile");
+        assert_eq!(data.description_movie(13002), None, "undecodable");
+        assert_eq!(data.description_movie(13003), None, "missing");
     }
 
     #[test]

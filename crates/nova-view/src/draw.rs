@@ -3,6 +3,7 @@
 use nova_sim::blink::FULL;
 
 use crate::color::Color;
+use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -14,8 +15,11 @@ pub enum Blend {
     #[default]
     Normal,
     /// Adds its colour, scaled by its alpha, to what is beneath: a true
-    /// saturating add. No screen uses it since the glow and lights moved to
-    /// [`Blend::Or`].
+    /// saturating add. The main screen's pilot panel draws the ship's
+    /// target picture with it, for QuickDraw's addOver (`CopyBits` mode
+    /// 0x22), which wraps instead; the two agree over black, as every
+    /// stock picture lies (see
+    /// [`pilot_panel`](crate::menu::pilot_panel)).
     Additive,
     /// ORs its colour, scaled by a level from the tint, into what is
     /// beneath, bit for bit: the original's ship glow and lights blits,
@@ -64,6 +68,61 @@ pub enum Blend {
     ///   to 5 bits as well would posterise every such pixel under the
     ///   layer's black area, which is the whole ship frame.
     Or,
+    /// Takes, in each colour channel, the larger of its colour (scaled by
+    /// its alpha) and what is beneath, and keeps the destination's alpha. A
+    /// transparent texel scales to black, so it leaves what is beneath as it
+    /// is. This is QuickDraw's `addMax` transfer mode (`CopyBits` mode
+    /// 0x25), which `_MapDialogUpdate` copies each map nebula with (0xfc42),
+    /// so overlapping nebulae, and the borders under them, take the
+    /// brighter of each channel.
+    Max,
+    /// Crossfades it with what is beneath by OR, in 5 bits: the original's
+    /// translucent copy, `_BlitPixieTranslucentCopy` (0xc1110), with its
+    /// channel factors at 0, which computes
+    /// `((src_c × k) >> 5) | ((dst_c × (32 − k)) >> 5)` per 5-bit channel,
+    /// k the source's opacity in 32nds (32 − the sprite's translucency
+    /// +0xa8). A shot's plain fade zeroes the channel factors
+    /// (`_HandleShot` @0x359ac-0x359d8) and an escape pod's are never set
+    /// (`_SWCreateSprite` @0xa8d56-0xa8d71; `_HandleEscapePods`
+    /// @0x3a00a-0x3a024), so the general form, `min(c − t + 32, 32)` for
+    /// a channel factor c, is never needed.
+    ///
+    /// # The tint
+    ///
+    /// The tint's colour multiplies the source (white, or a murk's
+    /// darkening), and its alpha is the opacity: `k = round(a × 32 / 255)`,
+    /// exact for [`lights_tint`]`(k)` and every alpha a fade gives, as the
+    /// renderer stores it in 32nds.
+    ///
+    /// # The bit depth
+    ///
+    /// Per channel, with the texel `t` (straight RGBA) and the destination
+    /// `d8`:
+    ///
+    /// ```text
+    /// s5  = round(t.rgb × tint.rgb × 255) >> 3
+    /// d5  = d8 >> 3
+    /// c5  = ((s5 × k) >> 5) | ((d5 × (32 − k)) >> 5)
+    /// c8  = (c5 << 3) | (c5 >> 2)
+    /// out = mix(d8, c8, t.a) ;  out.a = d.a
+    /// ```
+    ///
+    /// Unlike [`Blend::Or`], the destination is quantised to 5 bits, as the
+    /// original scales it: every bit of it moves, so none can be kept at
+    /// 8. A transparent texel (the original's skipped RLE pixel) and k = 0
+    /// leave the destination exactly; an opaque black texel darkens it to
+    /// `d5 × (32 − k) >> 5`.
+    OrCrossfade,
+}
+
+impl Blend {
+    /// Whether it reads what is beneath it as it draws ([`Blend::Or`] and
+    /// [`Blend::OrCrossfade`]): every quad of such a batch reads the same
+    /// copy of the scene, so a later overlapping quad starts a new batch.
+    #[must_use]
+    pub fn reads_backdrop(self) -> bool {
+        matches!(self, Self::Or | Self::OrCrossfade)
+    }
 }
 
 /// One thing to draw, in logical coordinates.
@@ -80,6 +139,22 @@ pub enum DrawCommand {
         tint: Color,
         /// How it combines with what is beneath it.
         blend: Blend,
+    },
+    /// A sprite frame as [`DrawCommand::Sprite`] draws it, each texel
+    /// first mixed toward a colour by `colorize` ([`Colorize::mix`]), as
+    /// the murk and an ionized ship's tint colorize a ship's layers. A
+    /// colorize that does not mix draws as the plain sprite.
+    Colorized {
+        /// The frame.
+        image: ImageKey,
+        /// Where the frame's centre goes.
+        center: Point,
+        /// Colour multiplier and alpha, or the OR level, as for a sprite.
+        tint: Color,
+        /// How it combines with what is beneath it.
+        blend: Blend,
+        /// The mix toward a colour.
+        colorize: Colorize,
     },
     /// A picture, unscaled and untinted, with its top-left corner at
     /// `top_left`.
@@ -101,6 +176,38 @@ pub enum DrawCommand {
         width: f32,
         /// The rectangle's height.
         height: f32,
+    },
+    /// A picture stretched (or shrunk) to fill a rectangle, untinted, and
+    /// combined with what is beneath by `blend`. It follows
+    /// [`DrawCommand::StretchedPicture`]'s rules: a rectangle whose width or
+    /// height is not a positive, finite number draws nothing. A
+    /// `StretchedPicture` is this with [`Blend::Normal`].
+    BlendedPicture {
+        /// The picture.
+        image: ImageKey,
+        /// The rectangle's top-left corner.
+        top_left: Point,
+        /// The rectangle's width.
+        width: f32,
+        /// The rectangle's height.
+        height: f32,
+        /// How it combines with what is beneath it.
+        blend: Blend,
+    },
+    /// A picture repeated edge to edge from `origin`, as QuickDraw's
+    /// `FillCRect` tiles a pattern from the port's origin, and drawn only
+    /// inside `area`, untinted. An area with no drawable size draws
+    /// nothing.
+    TiledPicture {
+        /// The picture.
+        image: ImageKey,
+        /// Where it shows.
+        area: Bounds,
+        /// Where one copy's top-left corner is, which every other copy
+        /// lines up with: the screen's origin, (0, 0), unless the command
+        /// was moved ([`DrawList::extend_translated`]), so a pattern keeps
+        /// its phase where its frame goes.
+        origin: Point,
     },
     /// A run of text.
     Text {
@@ -137,12 +244,93 @@ pub enum DrawCommand {
         /// Its colour.
         color: Color,
     },
+    /// `command` drawn only inside `clip`: a text run cut to it, a
+    /// sprite's or picture's quad cropped to it with its texture
+    /// coordinates, a tiled picture's area cut to it. A line or a dot is
+    /// drawn as it is, uncut. The floating map clips its names and arrows
+    /// to its frame so.
+    Clipped {
+        /// Where it may draw.
+        clip: Bounds,
+        /// What it draws.
+        command: Box<DrawCommand>,
+    },
 }
 
-/// A frame's draw commands, drawn in order (later ones on top).
+impl DrawCommand {
+    /// The command moved by `by` ([`DrawList::extend_translated`]).
+    #[must_use]
+    pub fn translated(&self, by: Point) -> Self {
+        let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
+        let moved_bounds = |b: Bounds| Bounds {
+            min: moved(b.min),
+            max: moved(b.max),
+        };
+        let mut command = self.clone();
+        match &mut command {
+            Self::Sprite { center, .. }
+            | Self::Colorized { center, .. }
+            | Self::Dot { center, .. } => *center = moved(*center),
+            Self::Picture { top_left, .. }
+            | Self::StretchedPicture { top_left, .. }
+            | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
+            Self::TiledPicture { area, origin, .. } => {
+                *area = moved_bounds(*area);
+                *origin = moved(*origin);
+            }
+            Self::Text { origin, .. } => *origin = moved(*origin),
+            Self::Line { from, to, .. } => {
+                *from = moved(*from);
+                *to = moved(*to);
+            }
+            Self::Clipped { clip, command } => {
+                *clip = moved_bounds(*clip);
+                **command = command.translated(by);
+            }
+        }
+        command
+    }
+}
+
+impl DrawCommand {
+    /// Whether it draws text: a [`DrawCommand::Text`], clipped or not.
+    fn is_text(&self) -> bool {
+        match self {
+            Self::Text { .. } => true,
+            Self::Clipped { command, .. } => command.is_text(),
+            _ => false,
+        }
+    }
+}
+
+/// Which layer of the frame a command is drawn in.
+///
+/// Only flight draws a world layer ([`DrawList::world`]): space, the
+/// stellars, asteroids, boxes, beams, ships, shots, effects and smoke,
+/// everything the original draws into its sprite world. Everything else
+/// (the HUD, every text, the maps, the dialogs, the cursor and the fades)
+/// is overlay, and so is all of every other screen's drawing.
+///
+/// A renderer may draw the world at the logical resolution and enlarge it
+/// (a frame upscaler), drawing the overlay over it at the window's own.
+/// Drawn at the window's own resolution, the layers change nothing: the
+/// commands are drawn in the list's order, whatever their layers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DrawLayer {
+    /// The sprite world, under the overlay.
+    World,
+    /// Drawn at the window's own resolution, over the world.
+    #[default]
+    Overlay,
+}
+
+/// A frame's draw commands, drawn in order (later ones on top), each in
+/// its [`DrawLayer`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DrawList {
     commands: Vec<DrawCommand>,
+    /// Each command's layer, index for index.
+    layers: Vec<DrawLayer>,
 }
 
 impl DrawList {
@@ -152,15 +340,37 @@ impl DrawList {
         Self::default()
     }
 
-    /// Appends `command`.
+    /// Appends `command`, in the overlay.
     pub fn push(&mut self, command: DrawCommand) -> &mut Self {
         self.commands.push(command);
+        self.layers.push(DrawLayer::Overlay);
+        self
+    }
+
+    /// Has `draw` append the world's commands: each one it appends is in
+    /// [`DrawLayer::World`], except text, which stays in the overlay. Text
+    /// is drawn at the window's own resolution, so a world drawn at the
+    /// logical resolution never holds it, even text drawn among the world's
+    /// sprites (flight's message line, a placeholder's reason).
+    pub fn world(&mut self, draw: impl FnOnce(&mut Self)) -> &mut Self {
+        let start = self.commands.len();
+        draw(self);
+        for (command, layer) in self.commands[start..].iter().zip(&mut self.layers[start..]) {
+            if !command.is_text() {
+                *layer = DrawLayer::World;
+            }
+        }
         self
     }
 
     /// The commands, in draw order.
     pub fn iter(&self) -> std::slice::Iter<'_, DrawCommand> {
         self.commands.iter()
+    }
+
+    /// The commands with their layers, in draw order.
+    pub fn layered(&self) -> impl Iterator<Item = (DrawLayer, &DrawCommand)> {
+        self.layers.iter().copied().zip(&self.commands)
     }
 
     /// How many commands there are.
@@ -205,6 +415,34 @@ impl DrawList {
         })
     }
 
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::OrCrossfade`].
+    pub fn crossfade_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::OrCrossfade,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Colorized`] combined by `blend`.
+    pub fn colorized_sprite(
+        &mut self,
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Colorize,
+    ) -> &mut Self {
+        self.push(DrawCommand::Colorized {
+            image,
+            center,
+            tint,
+            blend,
+            colorize,
+        })
+    }
+
     /// Appends a [`DrawCommand::Picture`].
     pub fn picture(&mut self, image: ImageKey, top_left: Point) -> &mut Self {
         self.push(DrawCommand::Picture { image, top_left })
@@ -224,6 +462,46 @@ impl DrawList {
             width,
             height,
         })
+    }
+
+    /// Appends a [`DrawCommand::BlendedPicture`].
+    pub fn blended_picture(
+        &mut self,
+        image: ImageKey,
+        top_left: Point,
+        width: f32,
+        height: f32,
+        blend: Blend,
+    ) -> &mut Self {
+        self.push(DrawCommand::BlendedPicture {
+            image,
+            top_left,
+            width,
+            height,
+            blend,
+        })
+    }
+
+    /// Appends a [`DrawCommand::TiledPicture`] tiled from the screen's
+    /// origin, (0, 0).
+    pub fn tiled_picture(&mut self, image: ImageKey, area: Bounds) -> &mut Self {
+        self.push(DrawCommand::TiledPicture {
+            image,
+            area,
+            origin: Point::new(0.0, 0.0),
+        })
+    }
+
+    /// Appends every command of `other`, in order, moved by `by`: each
+    /// point, each rectangle and each clip, and a tiled picture's tiling
+    /// origin with its area, so what `other` draws looks the same, `by`
+    /// further on. A frame drawn for Nova's 1024x768 is drawn centred in a
+    /// widened view so. Each keeps its layer.
+    pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
+        self.commands
+            .extend(other.iter().map(|command| command.translated(by)));
+        self.layers.extend(&other.layers);
+        self
     }
 
     /// Appends a [`DrawCommand::Text`] in [`Font::Geneva`].
@@ -274,6 +552,14 @@ impl DrawList {
             center,
             size,
             color,
+        })
+    }
+
+    /// Appends `command` drawn only inside `clip` ([`DrawCommand::Clipped`]).
+    pub fn clipped(&mut self, clip: Bounds, command: DrawCommand) -> &mut Self {
+        self.push(DrawCommand::Clipped {
+            clip,
+            command: Box::new(command),
         })
     }
 }
@@ -441,6 +727,45 @@ mod tests {
     }
 
     #[test]
+    fn a_crossfade_sprite_asks_for_the_or_crossfade() {
+        let tint = Color::rgba(200, 200, 200, 191);
+        let mut list = DrawList::new();
+        list.crossfade_sprite(ImageKey::sprite(202, 5), at(50.0, 60.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Sprite {
+                image: ImageKey::sprite(202, 5),
+                center: at(50.0, 60.0),
+                tint,
+                blend: Blend::OrCrossfade,
+            }]
+        );
+    }
+
+    #[test]
+    fn only_the_or_blends_read_the_backdrop() {
+        let reads: Vec<(Blend, bool)> = [
+            Blend::Normal,
+            Blend::Additive,
+            Blend::Or,
+            Blend::Max,
+            Blend::OrCrossfade,
+        ]
+        .map(|blend| (blend, blend.reads_backdrop()))
+        .into();
+        assert_eq!(
+            reads,
+            [
+                (Blend::Normal, false),
+                (Blend::Additive, false),
+                (Blend::Or, true),
+                (Blend::Max, false),
+                (Blend::OrCrossfade, true),
+            ]
+        );
+    }
+
+    #[test]
     fn a_new_list_is_empty() {
         let list = DrawList::new();
         assert!(list.is_empty());
@@ -575,6 +900,148 @@ mod tests {
     }
 
     #[test]
+    fn a_blended_picture_keeps_its_rectangle_and_its_blend() {
+        let mut list = DrawList::new();
+        list.blended_picture(
+            ImageKey::picture(9502),
+            at(-3.5, 20.0),
+            188.25,
+            223.5,
+            Blend::Max,
+        )
+        .picture(ImageKey::picture(1), at(0.0, 0.0));
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            *commands[0],
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(9502),
+                top_left: at(-3.5, 20.0),
+                width: 188.25,
+                height: 223.5,
+                blend: Blend::Max,
+            }
+        );
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn a_tiled_picture_keeps_its_area() {
+        let area = Bounds {
+            min: at(838.0, 8.0),
+            max: at(1014.0, 184.0),
+        };
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(130), area)
+            .picture(ImageKey::picture(1), at(0.0, 0.0));
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            *commands[0],
+            DrawCommand::TiledPicture {
+                image: ImageKey::pattern(130),
+                area,
+                origin: at(0.0, 0.0),
+            }
+        );
+        assert_eq!(list.len(), 2);
+    }
+
+    /// One of each command at `(x, y)`-based points, the clipped one
+    /// clipping a tiled picture.
+    fn one_of_each(x: f32, y: f32, origin: Point) -> Vec<DrawCommand> {
+        let p = |dx: f32, dy: f32| at(x + dx, y + dy);
+        let area = |dx: f32| Bounds {
+            min: p(dx, 0.0),
+            max: p(dx + 10.0, 10.0),
+        };
+        vec![
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(1, 0),
+                center: p(1.0, 2.0),
+                tint: Color::WHITE,
+                blend: Blend::Additive,
+            },
+            DrawCommand::Picture {
+                image: ImageKey::picture(2),
+                top_left: p(3.0, 4.0),
+            },
+            DrawCommand::StretchedPicture {
+                image: ImageKey::picture(3),
+                top_left: p(5.0, 6.0),
+                width: 7.0,
+                height: 8.0,
+            },
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(4),
+                top_left: p(9.0, 10.0),
+                width: 11.0,
+                height: 12.0,
+                blend: Blend::Max,
+            },
+            DrawCommand::TiledPicture {
+                image: ImageKey::pattern(5),
+                area: area(13.0),
+                origin,
+            },
+            DrawCommand::Text {
+                text: "Hi".to_owned(),
+                font: Font::Charcoal,
+                origin: p(14.0, 15.0),
+                size: 12.0,
+                wrap_width: Some(100.0),
+                color: Color::WHITE,
+            },
+            DrawCommand::Line {
+                from: p(16.0, 17.0),
+                to: p(18.0, 19.0),
+                width: 2.0,
+                color: Color::BLACK,
+            },
+            DrawCommand::Dot {
+                center: p(20.0, 21.0),
+                size: 3.0,
+                color: Color::WHITE,
+            },
+            DrawCommand::Clipped {
+                clip: area(22.0),
+                command: Box::new(DrawCommand::TiledPicture {
+                    image: ImageKey::pattern(6),
+                    area: area(23.0),
+                    origin,
+                }),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_list_extended_translated_moves_every_command_and_its_tiling_origin() {
+        let mut other = DrawList::new();
+        for command in one_of_each(0.0, 0.0, at(0.0, 0.0)) {
+            other.push(command);
+        }
+        let mut list = DrawList::new();
+        list.dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        list.extend_translated(&other, at(170.0, -5.0));
+        let mut expected = vec![DrawCommand::Dot {
+            center: at(1.0, 1.0),
+            size: 1.0,
+            color: Color::WHITE,
+        }];
+        expected.extend(one_of_each(170.0, -5.0, at(170.0, -5.0)));
+        assert_eq!(list.iter().cloned().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn a_list_extended_untranslated_is_appended_as_it_is() {
+        let mut other = DrawList::new();
+        for command in one_of_each(4.0, 2.0, at(1.0, 1.0)) {
+            other.push(command);
+        }
+        let mut list = DrawList::new();
+        list.extend_translated(&other, at(0.0, 0.0));
+        assert_eq!(list, other);
+    }
+
+    #[test]
     fn a_borrowed_list_iterates_in_draw_order() {
         let mut list = DrawList::new();
         list.dot(at(1.0, 0.0), 1.0, Color::WHITE)
@@ -591,6 +1058,139 @@ mod tests {
     #[test]
     fn default_is_empty() {
         assert!(DrawList::default().is_empty());
+    }
+
+    /// Each command's layer, in draw order.
+    fn layers(list: &DrawList) -> Vec<DrawLayer> {
+        list.layered().map(|(layer, _)| layer).collect()
+    }
+
+    #[test]
+    fn commands_drawn_in_the_world_are_world_and_the_rest_overlay() {
+        let mut list = DrawList::new();
+        list.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        list.world(|list| {
+            list.dot(at(2.0, 0.0), 1.0, Color::WHITE).sprite(
+                ImageKey::sprite(200, 0),
+                at(3.0, 0.0),
+                Color::WHITE,
+            );
+        });
+        list.dot(at(4.0, 0.0), 1.0, Color::WHITE);
+        assert_eq!(
+            layers(&list),
+            [
+                DrawLayer::Overlay,
+                DrawLayer::World,
+                DrawLayer::World,
+                DrawLayer::Overlay
+            ]
+        );
+        let layered: Vec<&DrawCommand> = list.layered().map(|(_, command)| command).collect();
+        assert_eq!(layered, list.iter().collect::<Vec<_>>());
+        assert_eq!(list.len(), 4);
+        assert_eq!(DrawLayer::default(), DrawLayer::Overlay);
+    }
+
+    #[test]
+    fn text_drawn_in_the_world_stays_in_the_overlay() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE).text(
+                "message",
+                at(0.0, 0.0),
+                10.0,
+                None,
+                Color::WHITE,
+            );
+            let clip = Bounds {
+                min: at(0.0, 0.0),
+                max: at(9.0, 9.0),
+            };
+            let text = DrawCommand::Text {
+                text: "clipped".into(),
+                font: Font::Geneva,
+                origin: at(0.0, 0.0),
+                size: 10.0,
+                wrap_width: None,
+                color: Color::WHITE,
+            };
+            list.clipped(
+                clip,
+                DrawCommand::Clipped {
+                    clip,
+                    command: Box::new(text),
+                },
+            )
+            .clipped(
+                clip,
+                DrawCommand::Picture {
+                    image: ImageKey::picture(128),
+                    top_left: at(0.0, 0.0),
+                },
+            );
+        });
+        assert_eq!(
+            layers(&list),
+            [
+                DrawLayer::World,
+                DrawLayer::Overlay,
+                DrawLayer::Overlay,
+                DrawLayer::World
+            ]
+        );
+    }
+
+    #[test]
+    fn a_world_inside_the_world_is_still_world() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+            list.world(|list| {
+                list.dot(at(2.0, 0.0), 1.0, Color::WHITE);
+            });
+            list.dot(at(3.0, 0.0), 1.0, Color::WHITE);
+        });
+        assert_eq!(layers(&list), [DrawLayer::World; 3]);
+    }
+
+    #[test]
+    fn a_list_extended_translated_keeps_its_layers() {
+        let mut other = DrawList::new();
+        other.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        other.world(|list| {
+            list.dot(at(2.0, 0.0), 1.0, Color::WHITE);
+        });
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(0.0, 0.0), 1.0, Color::WHITE);
+        });
+        list.extend_translated(&other, at(5.0, 5.0));
+        assert_eq!(
+            layers(&list),
+            [DrawLayer::World, DrawLayer::Overlay, DrawLayer::World]
+        );
+        // Moved into a world, an overlay command is world too.
+        let mut world = DrawList::new();
+        world.world(|list| {
+            list.extend_translated(&other, at(0.0, 0.0));
+        });
+        assert_eq!(layers(&world), [DrawLayer::World; 2]);
+    }
+
+    #[test]
+    fn lists_drawing_the_same_commands_in_different_layers_differ() {
+        let mut overlay = DrawList::new();
+        overlay.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        let mut world = DrawList::new();
+        world.world(|list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        });
+        assert_eq!(
+            overlay.iter().collect::<Vec<_>>(),
+            world.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(overlay, world);
     }
 
     #[test]

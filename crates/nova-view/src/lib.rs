@@ -29,6 +29,10 @@
 //!   [`flight::CombatLooks`] port.
 //! - [`menu`]: the main menu (New Pilot, Open Pilot and Quit) and the
 //!   saved pilots' list.
+//! - [`menu_command`]: the commands a platform's menu bar sends the game
+//!   ([`MenuCommand`]): About, Preferences… and Quit.
+//! - [`fade`]: the black screen fades, the death's fade out and the main
+//!   screen's fade back in ([`fade::ScreenFade`]).
 //! - [`spaceport`]: the spaceport landed on, its landscape, name,
 //!   description and service buttons laid out by the interface file's
 //!   "Spaceport" dialog, reading the stellar through its
@@ -51,11 +55,19 @@
 //!
 //! # Sounds
 //!
-//! Screens report the sounds they make as events ([`sound`]): a button
-//! pressed or released, the flight session's own, and a fight's, heard
-//! from where they happen. The audio side decides what each plays. The
+//! Screens report the sounds they make as events ([`sound`]): a
+//! main-menu button pressed or released, the flight session's own, and a
+//! fight's, heard from where they happen. The audio side decides what each plays. The
 //! player's preferences, sound and hyperspace effects alike, are reported
-//! as a [`Prefs`] ([`preferences`]).
+//! as a [`Prefs`] ([`preferences`]), the display modes it offers for
+//! exclusive fullscreen are [`VideoMode`]s ([`video_mode`]), and the
+//! Scaling it lists is a [`Scaling`] ([`scaling`]): one choice, a per-frame
+//! [`Upscaler`] ([`upscaler`]) or a load-time [`Enlargement`].
+//!
+//! # Display shapes
+//!
+//! Each screen asks for a [`ViewShape`] ([`view_shape`]): flight widens to
+//! the window's aspect ratio, and every other screen keeps 1024x768.
 //!
 //! # Developer tools
 //!
@@ -63,8 +75,10 @@
 //!   draws with egui only in its `dev-tools` build.
 
 pub mod color;
+pub mod colorize;
 pub mod devtools;
 pub mod draw;
+pub mod fade;
 pub mod flight;
 pub mod font;
 pub mod galaxy;
@@ -72,8 +86,12 @@ pub mod geometry;
 pub mod image;
 pub mod input;
 pub mod menu;
+pub mod menu_command;
+pub mod movie;
 pub mod navigator;
+pub mod oval;
 pub mod preferences;
+pub mod scaling;
 pub mod screen;
 pub mod ships;
 pub mod sound;
@@ -82,14 +100,23 @@ pub mod system;
 pub mod text;
 mod time;
 pub mod ui;
+pub mod upscaler;
+pub mod video_mode;
+pub mod view_shape;
 
 pub use color::Color;
-pub use draw::{Blend, DrawCommand, DrawList};
+pub use colorize::Colorize;
+pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
+pub use menu_command::MenuCommand;
 pub use navigator::Navigator;
 pub use preferences::Prefs;
+pub use scaling::{Enlargement, Scaling};
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};
+pub use upscaler::Upscaler;
+pub use video_mode::{FullscreenKind, MonitorMode, VideoMode, listed_modes};
+pub use view_shape::ViewShape;

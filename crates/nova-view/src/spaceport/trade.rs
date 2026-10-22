@@ -18,7 +18,7 @@
 //! Command and Control change nothing, as the original tests Option alone
 //! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held, by the engine's
 //! reading of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount)
-//! ([`Market::trade_count`]), they open the quantity dialog over the
+//! ([`Market::option_asks_count`]), they open the quantity dialog over the
 //! exchange ([`QuantityDialog`], `DLOG` 1003, or its fallback) at the most
 //! the row offers ([`Market::row_max`]), even when that is 0 or less; a
 //! count above 0 confirmed there is traded ([`Lot::Count`]), and 0 or
@@ -32,15 +32,31 @@
 //! whoever holds the session makes the trade and gives back the exchange
 //! as it now is ([`TradeScreen::set_market`]).
 //!
+//! Given the offer dialog's template ([`TradeScreen::with_offers`]), the
+//! trade center offers missions as `_DoTradeDialog` and `_TradeFilter`
+//! do: it asks for an offer as it opens ([`TradeScreen::take_offer_request`],
+//! `_DoTradeDialog` @0x5df7f), and whoever holds the session answers with
+//! one, opening the [`OfferDialog`] over it ([`TradeScreen::open_offer`]),
+//! or rearms it ([`TradeScreen::rearm`]) with the gap drawn, after which it
+//! asks again (`_TradeFilter` @0x4e550-0x4e581). The offer takes every
+//! input while it is open, and its choice is taken through the screen
+//! ([`TradeScreen::take_offer_choice`]). The quantity dialog covers the
+//! trade center, as the offer does: nothing is asked while either is
+//! open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`TradeScreen::with_offer_clock`]).
+//!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, Order, RuleSource};
+use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -48,12 +64,15 @@ use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
-use crate::ui::quantity::{PROMPT, QuantityDialog};
+use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::player_info::is_player_info_press;
+use crate::ui::quantity::QuantityDialog;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -127,16 +146,6 @@ pub fn status_line(market: &Market) -> String {
 struct Laid {
     dialog: Dialog,
     metrics: MetricsHandle,
-    /// The quantity dialog's template, if the interface file has one.
-    quantity: Option<DialogTemplate>,
-}
-
-/// The quantity dialog open over the exchange, and the trade it counts.
-#[derive(Clone, Debug)]
-struct Asking {
-    row: usize,
-    direction: Direction,
-    dialog: QuantityDialog,
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -159,13 +168,20 @@ pub struct TradeScreen {
     selected: usize,
     /// The row shown first.
     top: usize,
-    /// Whether Alt is held.
-    max_lot: bool,
-    /// The quantity dialog, while it is open.
-    asking: Option<Asking>,
+    /// The quantity dialog, while it is open, the row and direction it
+    /// counts, and whether Alt is held.
+    quantity: QuantityAsk<(usize, Direction)>,
+    /// The mission offers, once given.
+    offering: Option<VenueOffers>,
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
+    /// The buttons' style, for the offer dialog.
     style: ButtonStyle,
     sounds: Vec<Sound>,
 }
@@ -196,7 +212,6 @@ impl TradeScreen {
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
-                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -204,8 +219,10 @@ impl TradeScreen {
             market,
             selected: 0,
             top: 0,
-            max_lot: false,
-            asking: None,
+            quantity: QuantityAsk::new(quantity.ok(), style),
+            offering: None,
+            player_info: false,
+            info_requested: false,
             order: None,
             closed: false,
             style,
@@ -213,6 +230,117 @@ impl TradeScreen {
         };
         screen.regrey();
         screen
+    }
+
+    /// The trade center with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
+    /// first as it opens, and again once rearmed
+    /// ([`TradeScreen::rearm`]), as the original's does ([`TRADE_CENTER`](nova_sim::mission::screens::TRADE_CENTER)).
+    #[must_use]
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
+        Self {
+            offering: Some(VenueOffers::asking(templates)),
+            ..self
+        }
+    }
+
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`TradeScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
+            ..self
+        }
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// since this was last asked, in the trade center or its offer
+    /// (`_TradeFilter` @0x4e109), not in its quantity dialog.
+    pub fn take_player_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request);
+        std::mem::take(&mut self.player_info) || offer
+    }
+
+    /// The mission of the offer open over it, when the offer's map key
+    /// asked for the map since this was last asked, once.
+    pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
+        self.offering.as_mut()?.take_map_request()
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.info_requested) || offer
+    }
+
+    /// Whether the trade center has asked for an offer since this was last
+    /// asked: whoever holds the session answers with
+    /// [`TradeScreen::open_offer`], or, with none, rearms it
+    /// ([`TradeScreen::rearm`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_request)
+    }
+
+    /// Opens the offer dialog over the trade center on `prompt`.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
+            return;
+        };
+        offering.open(prompt, Rc::clone(&laid.metrics.0), self.style);
+    }
+
+    /// The offer dialog, while it is open.
+    #[must_use]
+    pub fn offer_dialog(&self) -> Option<&OfferDialog> {
+        self.offering.as_ref()?.dialog()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.offering.as_mut()?.take_choice()
+    }
+
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub fn rearm(&mut self, gap: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the trade center.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
+        }
     }
 
     /// The exchange shown.
@@ -297,7 +425,7 @@ impl TradeScreen {
     /// The quantity dialog, while it is open.
     #[must_use]
     pub fn quantity(&self) -> Option<&QuantityDialog> {
-        self.asking.as_ref().map(|asking| &asking.dialog)
+        self.quantity.dialog()
     }
 
     /// Asks to trade on the selected row `direction`, if that button is
@@ -309,12 +437,14 @@ impl TradeScreen {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
         };
-        let lot = match (self.max_lot, self.market.trade_count) {
+        let lot = match (self.quantity.alt_held(), self.market.option_asks_count()) {
             (false, _) => Lot::Click,
-            (true, RuleSource::Bible) => Lot::Max,
-            (true, RuleSource::Engine) => {
-                if let Some(max) = self.market.row_max(index, direction) {
-                    self.open_quantity(index, direction, max, by_key);
+            (true, false) => Lot::Max,
+            (true, true) => {
+                if let (Some(max), Ok(laid)) = (self.market.row_max(index, direction), &self.laid) {
+                    let metrics = Rc::clone(&laid.metrics.0);
+                    self.quantity
+                        .open((index, direction), direction, max, by_key, metrics);
                 }
                 return;
             }
@@ -325,71 +455,6 @@ impl TradeScreen {
             direction,
             lot,
         });
-    }
-
-    /// Opens the quantity dialog over the exchange for row `row`'s trade
-    /// `direction`, at `max`, laid out by its template or its fallback.
-    fn open_quantity(&mut self, row: usize, direction: Direction, max: i64, by_key: bool) {
-        let Ok(laid) = &self.laid else {
-            return;
-        };
-        let metrics = Rc::clone(&laid.metrics.0);
-        let title = match direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
-        let built = laid.quantity.as_ref().and_then(|template| {
-            QuantityDialog::new(
-                template,
-                max,
-                title,
-                PROMPT,
-                self.style,
-                Rc::clone(&metrics),
-            )
-            .ok()
-        });
-        let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
-        if by_key {
-            dialog.flush_typed_key();
-        }
-        self.asking = Some(Asking {
-            row,
-            direction,
-            dialog,
-        });
-    }
-
-    /// Gives `input` to the quantity dialog open, after following Alt, and
-    /// records a count above 0 confirmed there as the order; 0 or Cancel
-    /// closes it with none.
-    fn quantity_input(&mut self, input: &Input) {
-        let Some(asking) = &mut self.asking else {
-            return;
-        };
-        if let Input::Key {
-            key: MAX_LOT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.max_lot = pressed;
-        }
-        asking.dialog.input(input);
-        self.sounds.extend(asking.dialog.take_sounds());
-        let Some(count) = asking.dialog.take_outcome() else {
-            return;
-        };
-        if count > 0 {
-            self.order = Some(Order {
-                row: asking.row,
-                good: self.market.rows[asking.row].good,
-                direction: asking.direction,
-                lot: Lot::Count(count),
-            });
-        }
-        self.asking = None;
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and a
@@ -439,8 +504,20 @@ impl Screen for TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
     /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.asking.is_some() {
-            self.quantity_input(input);
+        if let Some(offering) = &mut self.offering
+            && offering.input(input, &mut self.sounds)
+        {
+            return ScreenAction::None;
+        }
+        if self.quantity.is_open() {
+            if let Some(((row, direction), count)) = self.quantity.input(input, &mut self.sounds) {
+                self.order = Some(Order {
+                    row,
+                    good: self.market.rows[row].good,
+                    direction,
+                    lot: Lot::Count(count),
+                });
+            }
             return ScreenAction::None;
         }
         let Ok(laid) = &mut self.laid else {
@@ -454,12 +531,18 @@ impl Screen for TradeScreen {
             }
             return ScreenAction::None;
         };
+        if is_player_info_press(input) {
+            self.player_info = true;
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
+            return ScreenAction::None;
+        }
         match *input {
             Input::Key {
-                key: MAX_LOT_KEY,
-                pressed,
-                ..
-            } => self.max_lot = pressed,
+                key: MAX_LOT_KEY, ..
+            } => self.quantity.follow_alt(input),
             Input::Key {
                 key: Key::Up,
                 pressed: true,
@@ -482,7 +565,6 @@ impl Screen for TradeScreen {
             } => self.ask(Direction::Sell, true),
             _ => {
                 let event = laid.dialog.input(input);
-                self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
                 if let Some(DialogEvent::Item(item)) = event {
                     self.activate(item);
                 }
@@ -491,8 +573,14 @@ impl Screen for TradeScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The wait for the next offer runs down, the quantity dialog
+    /// covering the trade center while it is open.
+    fn tick(&mut self, dt: Duration) {
+        let covered = self.quantity.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -544,28 +632,35 @@ impl Screen for TradeScreen {
             &status_line(&self.market),
         );
         dialog.draw(list);
-        if let Some(asking) = &self.asking {
-            asking.dialog.draw(list);
+        self.quantity.draw(list);
+        if let Some(offering) = &self.offering {
+            offering.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.cancel_pointer();
-        } else if let Ok(laid) = &mut self.laid {
+        if self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::cancel_pointer)
+        {
+            return;
+        }
+        if !self.quantity.cancel_pointer()
+            && let Ok(laid) = &mut self.laid
+        {
             laid.dialog.cancel_pointer();
         }
     }
 
     /// Lets go of Alt, and of the keys held in the quantity dialog.
     fn release_keys(&mut self) {
-        self.max_lot = false;
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.release_keys();
-        }
+        self.quantity.release_keys();
     }
 
-    /// The buttons' sounds and the quantity dialog's, in order.
+    /// The quantity dialog's and the offer's sounds, in order. The
+    /// buttons are silent under the pointer, as `_TrackTradeButtons`
+    /// @0x294cd plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -574,7 +669,7 @@ impl Screen for TradeScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{Good, JunkId, MarketRow};
+    use nova_sim::{Good, JunkId, MarketRow, RuleKey, RuleSource, Rulebook};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1082,7 +1177,7 @@ mod tests {
     #[test]
     fn by_the_other_count_reading_with_alt_held_buy_and_sell_ask_for_the_most() {
         let mut screen = screen_of(Market {
-            trade_count: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
             ..market()
         });
         press(&mut screen, MAX_LOT_KEY);
@@ -1291,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dialogs_beep_and_button_sounds_come_out_of_the_exchange() {
+    fn the_dialogs_beep_comes_out_of_the_exchange_and_its_buttons_are_silent() {
         let mut screen = screen();
         alt_click(&mut screen, BUY_ITEM);
         screen.take_sounds();
@@ -1305,10 +1400,7 @@ mod tests {
         );
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
     }
 
     /// Waste at -200 a ton, none held, with `cash` and a ton free.
@@ -1393,19 +1485,23 @@ mod tests {
     /// The original tests Option alone (`_DoTradeDialog` @0x5e211,
     /// @0x5e45c): any other modifier is a plain trade.
     #[test]
-    fn with_control_held_buy_and_sell_ask_for_a_plain_trade() {
-        let mut screen = screen();
-        screen.input(&key(Key::Control, true, false));
-        press(&mut screen, BUY_KEY);
-        assert_eq!(
-            screen.take_order(),
-            Some(order(0, FOOD, Direction::Buy, Lot::Click))
-        );
-        click_item(&mut screen, SELL_ITEM);
-        assert_eq!(
-            screen.take_order(),
-            Some(order(0, FOOD, Direction::Sell, Lot::Click))
-        );
+    fn with_shift_control_or_command_held_buy_and_sell_ask_for_a_plain_trade() {
+        for modifier in [Key::Shift, Key::Control, Key::Command] {
+            let mut screen = screen();
+            screen.input(&key(modifier, true, false));
+            press(&mut screen, BUY_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(0, FOOD, Direction::Buy, Lot::Click)),
+                "{modifier:?}"
+            );
+            click_item(&mut screen, SELL_ITEM);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(0, FOOD, Direction::Sell, Lot::Click)),
+                "{modifier:?}"
+            );
+        }
     }
 
     /// Whether Buy and Sell draw enabled.
@@ -1589,8 +1685,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackTradeButtons` @0x294cd plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_as_they_are_clicked_and_keys_are_silent() {
+    fn pointer_click_and_keys_are_silent_as_the_original() {
         let mut screen = screen();
         let buy = item(&screen, BUY_ITEM).center();
         screen.input(&Input::PointerButton {
@@ -1598,13 +1695,13 @@ mod tests {
             pressed: true,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
             pressed: false,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), []);
@@ -1666,6 +1763,234 @@ mod tests {
             assert_eq!(screen.take_order(), None);
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
+        }
+    }
+
+    // The trade center's mission offers.
+
+    use crate::spaceport::offer::OfferChoice;
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// The trade center, its offers given.
+    fn offering() -> TradeScreen {
+        screen().with_offers(offer_templates())
+    }
+
+    #[test]
+    fn the_trade_center_with_offers_asks_for_an_offer_as_it_opens() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request(), "before any tick");
+        assert!(!screen.take_offer_request(), "once");
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not again until rearmed");
+    }
+
+    #[test]
+    fn without_offers_the_trade_center_never_asks() {
+        let mut screen = screen();
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_none());
+    }
+
+    #[test]
+    fn an_offer_opens_over_the_trade_center_and_takes_its_input() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let offer = screen.offer_dialog().expect("open");
+        assert_eq!(offer.prompt(), &prompt());
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        let mut expected = drawn(&self::screen());
+        let mut over = DrawList::new();
+        offer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&screen), expected, "drawn over the trade center");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None, "B went to the offer");
+        assert_eq!(screen.take_offer_choice(), None);
+        press(&mut screen, Key::Enter);
+        assert!(screen.offer_dialog().is_none(), "answered, it closes");
+        assert!(!screen.closed(), "Return went to the offer");
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    #[test]
+    fn the_trade_centers_offer_pointer_goes_through_it() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let at = screen
+            .offer_dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_offer_choice(), None, "abandoned");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+    }
+
+    #[test]
+    fn after_a_rearm_the_trade_center_asks_again_after_the_gap() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        press(&mut screen, Key::Enter);
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_trade_center_waits_out_its_quantity_dialog() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some());
+        screen.tick(ms(10_000));
+        assert!(
+            !screen.take_offer_request(),
+            "paused under the quantity dialog"
+        );
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_quantity_dialog_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn the_trade_centers_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_trade_center_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_the_mission_info_screen() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut broken = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, i);
+        assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
+    }
+
+    /// The original's `_TradeFilter` @0x4e092 maps Tab to `_TradeDialogTabKey`, Up/Down to the selection and Return/Escape to item 1 (@0x4e0dc-0x4e1cf), none with a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Tab,
+            Key::Down,
+            Key::Up,
+            BUY_KEY,
+            SELL_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
 }

@@ -22,13 +22,18 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The developer tools' record view is checked by parsing its JSON.
 serde_json.workspace = true
+# The fake catalogs' listed stellars, derived from their landing sites,
+# and setting a ship's condition directly, for flight-view tests.
+nova-sim = { workspace = true, features = ["fixture"] }
 # The text-metrics mock for the stock dialog tests.
 nova-view = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the text-metrics mock and the port's contract to other crates'
+# Exposes the text-metrics mock, the port's contract and the main screen's
+# fixture art (built with nova-data's and nova-rsrc's fixture builders) to
+# other crates'
 # tests.
-fixture = []
+fixture = ["nova-data/fixture", "nova-rsrc/fixture"]
 
 [lints]
 workspace = true

@@ -12,10 +12,28 @@
 //! - [`gpu`]: the [`Gpu`] port and the [`Frame`]s handed to it. Each
 //!   [`TextRun`] names its `nova_view` [`Font`](nova_view::Font).
 //! - [`fonts`]: the font files text is drawn in ([`FontFaces`], with the
-//!   bundled [`FALLBACK_FONT`]) and which face draws each font
-//!   ([`face_for`]).
+//!   bundled [`FALLBACK_FONT`] and [`SERIF_FONT`]) and which face draws
+//!   each font ([`face_for`]).
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
-//!   and turns a draw list into batches in draw order.
+//!   and turns a draw list into batches in draw order, keeping flight's
+//!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
+//!   batch holds both.
+//! - [`enlarge`]: the [`Enlarger`] port, the load-time scaling site: what
+//!   the atlas holds for each decoded frame, which the [`Renderer`] draws
+//!   at the frame's own logical size. [`NativeDetail`] holds each frame
+//!   as it decodes; a new enlarger ([`Renderer::set_enlarger`]) starts the
+//!   atlas afresh at the next frame ([`Gpu::clear_pages`]).
+//! - [`super_xbr`]: [`SuperXbr`], the enlarger that doubles each image
+//!   but a pattern with Hyllian's Super-xBR, ported to the CPU.
+//! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
+//!   ([`Gpu::set_upscaler`]), the [`UpscalerProbe`] port that says which
+//!   the device can use and the list the player picks from ([`listed`]),
+//!   what a device with given [`Abilities`] offers ([`offered`]) and
+//!   draws a choice with ([`effective`]), the sizes MetalFX takes
+//!   ([`metal_fx_takes`]) and the ones it rejected, logged once each
+//!   ([`RejectedSizes`]), and the [`WorldSpace`] a frame's world layer is
+//!   drawn in, from the [`WorldResolution`] the [`Gpu`] draws it at
+//!   ([`world_space`]).
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives
 //!   a masked picture its alpha) that needs no GPU.
@@ -26,8 +44,17 @@
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
 //! the work to [`wgpu::WgpuRenderer`], which draws each frame into an
 //! offscreen scene and blits it to the target; an OR batch reads a backdrop
-//! copy of the rectangle the core says it covers
-//! ([`Frame::pixels_covered`]). The core turns each OR tint into exact
+//! copy of the rectangle the core says it covers, in its layer's pixels
+//! ([`Frame::pixels_covered`]). The renderer draws the world with an
+//! upscaler ([`wgpu::Upscale`]): native draws it straight into the scene
+//! in the frame's order, as before there were layers, and
+//! [`wgpu::SharpBilinear`] draws it into a texture of the logical size
+//! and enlarges that onto the viewport, the overlay over it. On macOS,
+//! MetalFX's spatial scaler (through the `nova_metalfx` crate, the one
+//! place unsafe code lives) does the same in a command buffer of its own,
+//! falling back to sharp-bilinear, with one warning, for a size it won't
+//! take ([`Gpu::take_warnings`]); it needs macOS 13. The core
+//! turns each OR tint into exact
 //! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
 //! no GPU: the widgets lay text out by the widths it is drawn at, and the
@@ -50,6 +77,7 @@
 
 pub mod atlas;
 pub mod batch;
+pub mod enlarge;
 pub mod fonts;
 pub mod gpu;
 pub mod images;
@@ -57,13 +85,21 @@ pub mod present;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod source;
+pub mod super_xbr;
+pub mod upscale;
 pub mod viewport;
 pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
-pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, face_for};
-pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
+pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
+pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
+pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
+pub use super_xbr::SuperXbr;
+pub use upscale::{
+    Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, listed,
+    metal_fx_takes, offered, resolution_of, world_space,
+};
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

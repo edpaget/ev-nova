@@ -2,6 +2,17 @@
 //! the simulation takes the player's controls and advances the game state
 //! one fixed step at a time.
 //!
+//! This crate is the session layer and the facade over the layered
+//! crates below it, bottom to top: `nova-sim-base`, `nova-sim-catalog`,
+//! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story` and
+//! `nova-sim-port`. Each of their modules is re-exported here at its old
+//! path, so a `nova_sim::…` path doesn't depend on which crate holds the
+//! code. The crate's own modules are the session layer's: [`session`],
+//! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
+//! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
+//! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
+//! with the test support in `fixture`.
+//!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
 //!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
 //!   traffic that never fights; and [`NovaAi`], Nova's combat AI, routing
@@ -10,7 +21,13 @@
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
-//!   orders; and an NPC carrier's fighters to [`CarriedAi`].
+//!   orders; and a ship with an NPC parent, a fleet's escort or an NPC
+//!   carrier's fighter, to [`FleetEscortAi`] (or, by the rulebook's other
+//!   reading, a led ship by its AI type and a fighter to [`CarriedAi`]).
+//! - [`asteroid`]: a system's asteroid field: the 16 slots
+//!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
+//!   field's edge or in place, how it drifts and spins, and when it is
+//!   culled.
 //! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
 //!   one is launched, the window it docks in ([`dock_window`]) with its
 //!   [`Carrier`], and what the flight is told of fighters abandoned
@@ -24,18 +41,30 @@
 //! - [`blink`]: how bright a ship's running lights are at a tick,
 //!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
 //!   mode rolling on the [`BlinkChance`] port.
+//! - [`brackets`]: the corner brackets round the nav target and the ship
+//!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
+//!   target's [`Standing`](brackets::Standing).
+//! - [`cargo_box`]: the cargo boxes a jettison drops behind the player
+//!   and its trader escorts: how many ([`box_count`](cargo_box::box_count)),
+//!   where each starts, and how it drifts, spins and fades
+//!   ([`CargoBoxes`](cargo_box::CargoBoxes)).
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
-//!   `jünk` and `öops` the exchange trades and is moved by; the
+//!   `jünk` and `öops` the exchange trades and is moved by, the
+//!   `crön`s the day's cron pass runs and the `ränk`s the pilot can hold; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
 //!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
-//!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
-//!   [`CommCatalog`] port, the string lists a hailed ship's words come
+//!   each `shïp`'s combat fields and the `gövt`s ships fight by; the
+//!   [`AsteroidCatalog`] port, the `röid`s and each `sÿst`'s asteroid
+//!   field; and the [`CommCatalog`] port, the string lists a hailed ship's words come
 //!   from.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`clearance`]: the dock request the land key makes
+//!   ([`DockRequest`]), its counter, and the dock approach that counts it
+//!   on every frame and greets the pilot ([`approach`]).
 //! - [`control`]: the control bits missions and storylines script with,
 //!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
 //!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
@@ -44,38 +73,64 @@
 //!   ([`control::execute`]), its operators beyond the bit writes handed to
 //!   the caller's dispatch (the session's: `Session::apply_op`, one match
 //!   over the set operators).
+//! - [`cron`]: the `crön`s the day's second participant runs: whether an
+//!   inactive one starts ([`cron::eligibility`], with its disputed
+//!   `Random` and date range), the daily pass over their holdoffs and
+//!   durations, each one's [`CronState`](cron::CronState), and whose
+//!   `Contribute` bits count ([`cron::contributes`]).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
 //!   shooting missiles down, sub-munitions, damage to shields then armour,
 //!   the fight's [`Rules`]: the [`DisableRule`] port with Nova's
 //!   [`NovaDisable`] and the [`PointDefenceRule`] port with Nova's
-//!   [`Allegiance`], and destruction, reported as [`CombatEvent`]s, with
+//!   [`Allegiance`], which point defence asks only by the other reading
+//!   of [`RuleKey::PdHostility`], and destruction, reported as
+//!   [`CombatEvent`]s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`].
+//! - [`comm_line`]: the message line's countdown, `_commCount`, as one
+//!   [`CommLine`] the session keeps: what the calls that wait for a free
+//!   line read.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
-//!   `MemoryPilots`, a pilot store in memory.
+//!   `MemoryPilots`, a pilot store in memory, and `StoryWalker`, which
+//!   walks a session through a mission chain from a script.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   a day for each day a jump takes, and [`date::date_text`], how it is
 //!   displayed.
+//! - [`escape`]: the player's escape: the escape pod and auto-eject
+//!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
+//!   and where the escape pod is taken.
+//! - [`npc_escape`]: what a dying NPC leaves behind: its crew's escape
+//!   pods, its person's pod, and its one roll for an escape ship.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`escort_voice`]: who among the player's escorts speaks, and when:
+//!   a command's acknowledgement, the 1-in-3 call on a new target and the
+//!   victory.
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`fleet`]: the player's fleet as data: each ship in it, an
+//!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
+//! - [`galaxy_map`]: what the galaxy map draws, as `_DrawMap` decides
+//!   it: the course, the links, the systems coloured by
+//!   `_ColorCodeSystem`, the arrows and the names ([`galaxy_map::draw_map`]).
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`]), where each leads, and how a ship comes out of one,
 //!   under the [`GateArrivalRule`] and [`WormholeRule`].
+//! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
+//!   while a ship comes out of it and closing once none does.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
@@ -92,8 +147,8 @@
 //!   ([`JoinFleet`]) for a person who may join, which answer each
 //!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
-//!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
-//!   a hired one's daily pay among it.
+//!   the comm dialog shows of a ship the player leads ([`EscortStatus`]),
+//!   a hired escort's daily pay among it.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port
@@ -102,29 +157,76 @@
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
-//!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
-//!   [`ControlBits`] port a ship's `Availability` goes through, what a
+//!   with Nova's [`NovaHire`] fee and daily wage, [`price_flux`] (the
+//!   original's price flux under the ranks' multiplier, which the
+//!   shipyard shares), the [`ControlBits`] port a ship's `Availability` goes through, what a
 //!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
+//! - [`gravity`]: a stellar's pull by inverse square and who resists it,
+//!   and [`deadly_stellar`]: the stellars that destroy the ships that
+//!   touch them.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
+//! - [`jump_arrival`]: the original's jump arrival, 1350 out on the
+//!   side the player came from at its top speed.
+//! - [`inertialess`]: inertialess flight: who flies it
+//!   ([`is_inertialess`](inertialess::is_inertialess)), the speed along
+//!   the heading thrust and brakes move, and the velocity pulled toward
+//!   it.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
-//!   clearance, then land (or, over a hypergate or wormhole, enter it);
-//!   whether the ship can land, [`check_landing`],
+//!   clearance, then, once the dock approach has cleared the request,
+//!   land (or, over a hypergate or wormhole, enter it);
+//!   whether traffic control clears the pilot, [`cleared`]; whether the ship
+//!   can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
 //!   [`Service`]s a stellar's flags offer.
-//! - [`legal`]: the player's legal record: the [`LegalCode`] port that
-//!   says what a [`Crime`] against a ship does to it, Nova's
-//!   [`NovaLaw`], and [`legal::convict`], which applies it.
+//! - [`legal`]: the player's legal record, kept with each government and
+//!   in each system: the [`LegalCode`] port that says what a [`Crime`]
+//!   against a ship does to it, with each government and along its walk
+//!   through the [`CrimeMap`] from system to system, Nova's [`NovaLaw`],
+//!   [`legal::convict`], which applies it, and
+//!   [`legal::systems_from_govts`], which derives the records in each
+//!   system, and [`legal::spread_statuses`], which spreads a new pilot's
+//!   `chär` statuses.
+//! - [`map_borders`]: the galaxy map's government borders, as
+//!   `_AddSystemInfluenceToMap` and `_RecalcMapInfluence` work them out: a
+//!   grid of screen cells of four slots each ([`map_borders::grid`]), and
+//!   the coarse and fine passes over it ([`map_borders::passes`]).
+//! - [`map_panel`]: what the galaxy map's two info panels say about the
+//!   system selected, as `_MapDialogUpdate` decides it: the ports, the
+//!   hazards, the title, and the explored level's goods and services
+//!   ([`map_panel::map_panel`]).
+//! - [`map_route`]: how a Shift-click on the course map writes the
+//!   course, as `_DoSystemMap` cuts, wraps and appends it
+//!   ([`map_route::shift_click`]).
+//! - [`map_search`]: the galaxy map's Find, as `_DoSystemSearch` matches a
+//!   typed name against the systems' names ([`map_search::search`]).
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
 //! - [`message`]: the [`SimMessage`] events a session raises for the
 //!   message line, such as arriving from a jump or through a gate; the
 //!   view words them.
+//! - [`mission`]: mission offers: which missions a docked stellar offers
+//!   at its mission computer and outside it ([`mission::availability`],
+//!   each field a plain [`Check`](rules::Check) refusing with a
+//!   [`mission::Refusal`]), the stellars a mission's codes choose
+//!   ([`mission::select_stellar`]), each [`mission::Offer`]'s resolved
+//!   values ([`mission::resolve`]), and the per-visit [`mission::Offers`]
+//!   with the roll table `AvailRandom` reads.
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
+//! - [`news`]: the bar's news, a commercial line and a story ([`News`]),
+//!   and which running `crön`s have a story for the stellar docked at
+//!   ([`news::candidates`], with the disputed [`news::news_govt_match`]),
+//!   and the `öops` price story ([`news::oops_story`]), drawn by the
+//!   session as the bar opens.
+//! - [`order_loop`]: an order of a count run one pass at a time: each
+//!   pass handed its [`order_loop::Pass`], the buy loop
+//!   ([`order_loop::run`]) stopping at the first refusal and the sell
+//!   loop ([`order_loop::run_on`]) running on past it, with the
+//!   [`order_loop::OrderRun`] keeping the first refusal and its pass.
 //! - [`outfit_effects`]: what granting an outfit does: a map explores, a
 //!   clean-record outfit cleans the legal record and a paint paints the
 //!   ship ([`Rgb15`]) instead of being added
@@ -142,14 +244,29 @@
 //!   the fleet of [`Escort`]s, the control bits and the player's
 //!   [`Gender`] and its ship's paint and name, starting from the first
 //!   `chär`.
+//! - [`player_fate`]: the player's lifecycle, a [`PlayerFate`] read off
+//!   its [`Condition`], and each fate's [`FateRow`]: how much of the ship
+//!   is [`Drawn`].
+//! - [`player_turn`]: the player's turn block: the whole-degree turn,
+//!   the auto-turn toward an aim that holds the turn keys off, and the
+//!   aims reverse and the jump's brake take.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
+//! - [`rank`]: the ranks, as `_ActivateRank` and `_DeactivateRank` change
+//!   them, their salaries, `Contribute` bits and names in the text tags.
+//! - [`rating`]: the player's combat rating: what a kill adds
+//!   ([`rating::credit`]) and which kills count ([`rating::counts`]).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
+//! - [`red_alert`]: the Red Alert: when a threat to the player sounds it
+//!   ([`RedAlert::check`], every [`ALERT_CHECK_FRAMES`]) and the icon's
+//!   blink ([`AlertIcon`]).
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
+//! - [`rule_values`]: the rules whose setting is a number, each a
+//!   [`RuleValue`] the [`Rulebook`] holds, the original's by default.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
 //!   disagree: each follows a [`RuleSource`], the engine's by default, as
 //!   the [`Rulebook`] says, by its [`RuleKey`].
@@ -164,15 +281,25 @@
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
 //!   each is saved under, and the [`PilotKeeper`] that saves, lists and
 //!   opens them.
+//! - [`scan`]: a warship's or an interceptor's scan of the player: whether
+//!   it goes on ([`scan::goes_on`]) and the illegal `jünk` or outfit it
+//!   finds after the mission cargo ([`scan::contraband`]).
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
 //!   fighting, boarding and capturing ships, hailing them
 //!   ([`HailView`], [`HailRefusal`], [`CommNote`]), flying and
 //!   commanding its escorts, launching and docking the fighters of its
-//!   bays and the NPC carriers' ([`Sortie`]), and hiring escorts in the
-//!   bar and paying their wages.
+//!   bays and the NPC carriers' ([`Sortie`]), hiring escorts in the
+//!   bar and paying their wages, and the mission offers rolled as it lands
+//!   ([`Session::mission_offers`]).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
+//! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
+//!   disabled at the bottom, then the ships the player leads, then the
+//!   rest with the player.
+//! - [`sprite_layer`]: the order the ship and shot layers are drawn in
+//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), shots under or over the
+//!   ships as `_SpawnShot` and `_SetupSpriteWorld` place them.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -191,95 +318,179 @@
 //!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
 //!   static galaxy, which every reader sees through the
 //!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
+//! - [`target_panel`]: what the status bar's target panel says of the
+//!   target at its bottom: its [`TargetStatus`] and its [`TargetTag`].
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
+//! - [`text_parse`]: the conditional text (`{G "he" "she"}`, `{bnnn …}`,
+//!   `{Pnnn …}`) every loaded text is resolved by, as the original's
+//!   `_ParseTextDescription` ([`text_parse::conditional_text`]).
+//! - [`text_tags`]: the one substitution path for the text tags, as the
+//!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
+//!   person, the ranks and the mission's resolved [`MissionValues`], its
+//!   names read through the [`TagNames`] port ([`text_tags::expand`]).
+//! - [`top_speed`]: a ship's top speed in flight, the original's
+//!   `_ShipMaxSpeed` branch by branch: the 1.5 the player and the ships it
+//!   leads fly at without Strict Play ([`top_speed::led_speed`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
+//! - [`tutorial`]: the new pilot's first-flight [`Tutorial`]: its hints
+//!   ([`TutorialHint`]), the take-off greeting and the newbie-only "No
+//!   destination".
+//! - [`voice`]: the escorts' voices: the clips of each voice set and
+//!   message, each government's voice, and the one voice channel a session
+//!   plays them through.
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
+//! - [`warp`]: the player's warp clock: the warp factor, the warp sound's
+//!   duration, and when the warp's lead-in ends and scans are held.
 
-pub mod ai;
-pub mod bay;
-pub mod blink;
-pub mod board;
-pub mod catalog;
-pub mod chance;
-pub mod clock;
-pub mod combat;
-pub mod control;
-pub mod data;
-pub mod date;
-pub mod escort;
-pub mod exploration;
+pub use nova_sim_ai::ai;
+pub use nova_sim_ai::brackets;
+pub use nova_sim_ai::cargo_box;
+pub use nova_sim_base::afterburner;
+pub use nova_sim_base::blink;
+pub use nova_sim_base::chance;
+pub use nova_sim_base::clock;
+pub use nova_sim_base::deadly_stellar;
+pub use nova_sim_base::gravity;
+pub use nova_sim_base::ionization;
+pub use nova_sim_catalog::buoy;
+pub use nova_sim_catalog::catalog;
+pub use nova_sim_catalog::control;
+pub use nova_sim_combat::asteroid;
+pub use nova_sim_combat::bay;
+pub use nova_sim_combat::cloak;
+pub use nova_sim_combat::combat;
+pub use nova_sim_combat::comm_line;
+pub use nova_sim_port::board;
+pub use nova_sim_state::clearance;
+pub mod course;
+pub use nova_sim_ai::escort;
+pub use nova_sim_ai::escort_voice;
+pub use nova_sim_catalog::data;
+pub use nova_sim_port::escape;
+pub use nova_sim_port::npc_escape;
+pub use nova_sim_state::cron;
+pub use nova_sim_state::date;
+pub use nova_sim_story::exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
-pub mod flight;
-pub mod fuel;
-pub mod gate;
-pub mod geometry;
+pub use nova_sim_base::flight;
+pub use nova_sim_base::fuel;
+pub use nova_sim_combat::fleet;
+pub mod galaxy_map;
+pub use nova_sim_ai::gate;
+pub use nova_sim_base::geometry;
+pub use nova_sim_port::gate_sprite;
 pub mod glow;
-pub mod govt;
-pub mod grant;
-pub mod hail;
-pub mod handling;
-pub mod hire;
-pub mod hyperspace;
-pub mod landing;
-pub mod legal;
-pub mod market;
-pub mod message;
-pub mod navigation;
-pub mod outfit_effects;
-pub mod outfitter;
-pub mod person;
-pub mod pilot;
+pub mod map_borders;
+pub mod map_panel;
+pub mod map_route;
+pub mod map_search;
+pub use nova_sim_ai::hail;
+pub use nova_sim_ai::hover;
+pub use nova_sim_ai::hyperspace;
+pub use nova_sim_ai::jump_arrival;
+pub use nova_sim_ai::navigation;
+pub use nova_sim_base::handling;
+pub use nova_sim_base::inertialess;
+pub use nova_sim_base::player_turn;
+pub use nova_sim_combat::message;
+pub use nova_sim_combat::player_fate;
+pub use nova_sim_port::grant;
+pub use nova_sim_port::hire;
+pub use nova_sim_port::iff;
+pub use nova_sim_port::murk;
+pub use nova_sim_port::order_loop;
+pub use nova_sim_port::outfitter;
+pub use nova_sim_port::player_info;
+pub use nova_sim_state::govt;
+pub use nova_sim_state::landing;
+pub use nova_sim_state::legal;
+pub use nova_sim_state::market;
+pub use nova_sim_state::outfit_effects;
+pub use nova_sim_story::mission;
+pub use nova_sim_story::nebula;
+pub use nova_sim_story::news;
+pub use nova_sim_story::person;
+pub use nova_sim_story::pilot;
+pub mod pilot_panel;
 pub mod pre_jump;
-pub mod recharge;
-pub mod reserves;
-pub mod rulebook;
-pub mod rules;
+pub use nova_sim_story::rank;
+pub mod rating;
+pub use nova_sim_port::recharge;
+pub mod red_alert;
+pub use nova_sim_base::reserves;
+pub use nova_sim_base::rule_values;
+pub use nova_sim_base::rulebook;
+pub use nova_sim_base::rules;
+pub use nova_sim_base::skill;
+pub use nova_sim_base::speed_cap;
+pub use nova_sim_combat::sabotage;
+pub use nova_sim_combat::self_destruct;
 pub mod save;
 pub mod saves;
+pub use nova_sim_ai::scan;
+pub use nova_sim_ai::scoop;
+pub use nova_sim_combat::self_repair;
 pub mod session;
-pub mod ship_change;
-pub mod shipyard;
-pub mod sound;
-pub mod stats;
-pub mod story;
-pub mod targeting;
+pub use nova_sim_catalog::sound;
+pub use nova_sim_combat::ship_layer;
+pub use nova_sim_combat::sprite_layer;
+pub use nova_sim_port::ship_change;
+pub use nova_sim_port::shipyard;
+pub use nova_sim_state::stats;
+pub mod status_cargo;
+pub use nova_sim_catalog::strings;
+pub use nova_sim_story::story;
+pub mod target_panel;
+pub use nova_sim_ai::targeting;
 #[cfg(test)]
 mod testkit;
-pub mod traffic;
-pub mod wares;
+pub use nova_sim_story::text_parse;
+pub use nova_sim_story::text_tags;
+pub mod top_speed;
+pub use nova_sim_ai::traffic;
+pub use nova_sim_base::trig;
+pub use nova_sim_catalog::voice;
+pub use nova_sim_catalog::warp;
+pub use nova_sim_combat::tutorial;
+pub use nova_sim_port::wares;
 
 pub use ai::{
-    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,
-    Reaction, Surroundings, Warship, WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, FleetEscortAi, Goal, Interceptor, NovaAi,
+    Peaceful, PlayerSide, Reaction, Surroundings, Warship, WimpyTrader,
 };
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use board::{
-    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, NovaBoarding, Plunder, PlunderView,
-    Take, Taken,
+    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine, NovaBoarding,
+    Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, NebulaId, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
-    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon,
-    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DescMovie,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
+    GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipDisplay, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
+pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
+pub use combat::{CombatEvent, Downed, Field, FireSound, GamePass, Rules, ShipRef, Sortie, Strike};
+pub use comm_line::CommLine;
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
@@ -288,11 +499,12 @@ pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };
-pub use flight::{Controls, ShipState, Turn, step};
+pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
+pub use galaxy_map::{MARKS_DESTINATION, MapMarks};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
-pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
+pub use glow::{GLOW_AFTERBURNER, GLOW_CRUISE, glow_level, ramp_afterburner_glow, ramp_glow};
 pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
@@ -301,39 +513,71 @@ pub use hail::{
 };
 pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
+pub use hover::{DrawnBox, DrawnShips, Hover, hover_gate};
 pub use hyperspace::{
-    HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
-    Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
+    CoLocated, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
+    MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,
+    next_hyper_destination,
 };
+pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{
-    Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
-    REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,
-    is_landable, land_or_select, landing_radius, landing_reach, nearest_landable, services,
+    DockPress, DockSaid, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH,
+    OUT_OF_RANGE_FRAME_WIDTH, REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth,
+    UNLOADED_TYPE_WIDTH, check_landing, cleared, is_landable, land_or_select, landing_radius,
+    landing_reach, nearest_stellar, nearest_stellar_station, services, stellar_width,
 };
-pub use legal::{Crime, LegalCode, NovaLaw};
+pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
-pub use message::SimMessage;
-pub use navigation::{next_after, stellar_under};
+pub use message::{SelfDestructLine, SimMessage};
+pub use navigation::{NavMode, next_after, stellar_under};
+pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
-pub use outfitter::{LcNames, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+pub use outfitter::{
+    Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,
+    OutfitRun, OutfitVisit, Outfitter, Raise, Reselection, SaleAlert,
+};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
-pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
-pub use reserves::{Gauge, Reserve, Reserves};
-pub use rulebook::{RuleKey, RuleSource, Rulebook};
-pub use save::SaveError;
-pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::{
-    HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent,
-    Settled, ShipChangeRules, StellarPick,
+pub use player_fate::{
+    Drawn, Ending, FateRow, HOLD_TICKS, POD_TICKS, PlayerCommand, PlayerFate, Takes,
 };
-pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
-pub use sound::SimSound;
+pub use player_info::PlayerInfo;
+pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
+pub use red_alert::{
+    ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,
+    alert_check_due, alert_step_due,
+};
+pub use reserves::{Gauge, Reserve, Reserves};
+pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
+pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
+pub use save::SaveError;
+pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
+pub use self_destruct::SelfDestruct;
+pub use session::{
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
+    HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress,
+    MissionComputer, MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind,
+    NotOffered, OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav,
+    ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
+    TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
+};
+pub use ship_layer::ShipLayer;
+pub use shipyard::{
+    Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
+};
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
 pub use stats::ShipStats;
+pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use story::DrawnSheet;
+pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
+pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
-pub use traffic::{Traffic, World};
+pub use traffic::{Leave, Traffic, World};
+pub use tutorial::{Tutorial, TutorialHint};
+pub use wares::{ShownTons, TonUnit};

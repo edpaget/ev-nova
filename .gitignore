@@ -9,3 +9,5 @@ mutants.out*/
 /notes
 # Local helper script to build and run nova.
 /run-nova.sh
+# `mise run bundle -- dist`'s .dmg, the nightly workflow's macOS Package step.
+/dist

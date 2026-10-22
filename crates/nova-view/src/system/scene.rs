@@ -4,6 +4,7 @@
 //! [`draw_stellars`], which draws them through a camera for every screen
 //! that shows a system.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use super::animation::Frames;
@@ -43,6 +44,9 @@ pub struct SceneStellar {
     pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation_data: AnimationData,
+    /// Whether the radar draws it as a square: a station, hypergate or
+    /// wormhole ([`StellarContents::radar_square`]).
+    pub radar_square: bool,
     /// Whether it is destroyed, as last set.
     pub destroyed: bool,
     /// Which sheet it draws, as last set: the session's answer
@@ -56,6 +60,10 @@ pub struct SceneStellar {
     /// Its animation state: the frame of the sheet drawn that shows, and
     /// when the next shows. A sheet that cannot be read counts 1 frame.
     pub frames: Frames,
+    /// The frame a hypergate draws, as its session steps it
+    /// (`Session::gate_frame`), in place of [`frames`](Self::frames)';
+    /// `None` for every other stellar, and in a viewer with no session.
+    pub gate_frame: Option<u16>,
 }
 
 /// How a stellar looks, for [`SystemScene::set_destroyed`] and
@@ -82,11 +90,13 @@ impl SceneStellar {
             sprite: stellar.sprite,
             dead_sprite: stellar.dead_sprite,
             animation_data: stellar.animation,
+            radar_square: stellar.radar_square,
             destroyed: false,
             drawn: DrawnSheet::Type,
             counted: DrawnSheet::Type,
             type_zero_sprite: type_zero,
             frames: Frames::new(),
+            gate_frame: None,
         }
     }
 
@@ -159,11 +169,35 @@ impl SystemScene {
     /// of [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback):
     /// the sheet is broken either way.
     pub fn load(catalog: &impl SystemCatalog, id: SystemId) -> Self {
+        Self::loaded(catalog, id, |_| true)
+    }
+
+    /// System `id`, read from `catalog` once, with only the stellars of
+    /// `shown`, in navigation order: the stellars the flight's session
+    /// shows (`Session::stellars_shown`), as the original draws only the
+    /// stellars the player's system holds. Its problems are as
+    /// [`SystemScene::load`] gives them, for the stellars kept alone.
+    pub fn load_shown(
+        catalog: &impl SystemCatalog,
+        id: SystemId,
+        shown: &BTreeSet<StellarId>,
+    ) -> Self {
+        Self::loaded(catalog, id, |stellar| shown.contains(&stellar))
+    }
+
+    /// System `id`, read from `catalog` once, with the stellars `keep`
+    /// keeps (see [`SystemScene::load`]).
+    fn loaded(
+        catalog: &impl SystemCatalog,
+        id: SystemId,
+        keep: impl Fn(StellarId) -> bool,
+    ) -> Self {
         let contents = catalog.system(id);
         let type_zero = contents.type_zero_sprite;
         let stellars: Vec<SceneStellar> = contents
             .stellars
             .into_iter()
+            .filter(|stellar| keep(stellar.id))
             .map(|stellar| SceneStellar::new(stellar, type_zero.clone()))
             .collect();
         let mut problems = contents.problems;
@@ -257,6 +291,14 @@ impl SystemScene {
         }
     }
 
+    /// Sets the frame each stellar draws as `frame` gives it: `Some` for a
+    /// hypergate, drawn in place of its animation's.
+    pub fn set_gate_frames(&mut self, frame: impl Fn(StellarId) -> Option<u16>) {
+        for stellar in &mut self.stellars {
+            stellar.gate_frame = frame(stellar.id);
+        }
+    }
+
     /// Where the camera may go: the box round the system's centre and every
     /// stellar, grown by [`CAMERA_MARGIN`].
     #[must_use]
@@ -269,16 +311,20 @@ impl SystemScene {
 }
 
 /// Draws every stellar of `scene` where `camera` puts it, at the frame its
-/// animation shows: each sprite (or, without a sheet, a placeholder box
-/// and the reason), then every name under its stellar, so no sprite
-/// covers a name.
+/// animation shows, or a hypergate on the frame its session gave it
+/// ([`SystemScene::set_gate_frames`]), modulo its sheet's frames: each
+/// sprite (or, without a sheet, a placeholder box and the reason), then
+/// every name under its stellar, so no sprite covers a name.
 pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
     let mut labels = Vec::new();
     for stellar in scene.stellars() {
         let at = camera.world_to_screen(stellar.position);
         let (width, height) = match stellar.drawn() {
             Ok(sheet) => {
-                let frame = stellar.frames.shown();
+                let frame = stellar.gate_frame.map_or_else(
+                    || stellar.frames.shown(),
+                    |frame| frame % sheet.frames.get(),
+                );
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
                 (sheet.frame_width as f32, sheet.frame_height as f32)
             }
@@ -364,6 +410,7 @@ mod tests {
             sprite,
             dead_sprite: None,
             animation: WORMHOLE,
+            radar_square: false,
         }
     }
 
@@ -380,14 +427,18 @@ mod tests {
         }
     }
 
-    /// System 130 holds a 4-frame stellar 129 at (900, -600), a 1-frame
+    /// System 130 holds a 4-frame stellar 129 at (900, -600), a square on
+    /// the radar, a 1-frame
     /// stellar 128 at (0, 0) and stellar 140, with no sheet, at (-1700, 900).
     fn catalog() -> FakeCatalog {
         FakeCatalog::new(vec![
             system(
                 130,
                 vec![
-                    stellar(129, 900, -600, Ok(sheet(1001, 4))),
+                    StellarContents {
+                        radar_square: true,
+                        ..stellar(129, 900, -600, Ok(sheet(1001, 4)))
+                    },
                     stellar(128, 0, 0, Ok(sheet(1000, 1))),
                     stellar(140, -1700, 900, Err("no spïn 1002".to_owned())),
                 ],
@@ -416,7 +467,9 @@ mod tests {
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: true,
                     frames: Frames::new(),
+                    gate_frame: None,
                 },
                 SceneStellar {
                     id: StellarId(128),
@@ -429,7 +482,9 @@ mod tests {
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: false,
                     frames: Frames::new(),
+                    gate_frame: None,
                 },
                 SceneStellar {
                     id: StellarId(140),
@@ -442,7 +497,9 @@ mod tests {
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: false,
                     frames: Frames::new(),
+                    gate_frame: None,
                 },
             ]
         );
@@ -588,6 +645,28 @@ mod tests {
                 _ => None,
             })
             .expect("the name is drawn")
+    }
+
+    #[test]
+    fn a_hypergate_draws_the_frame_its_session_gives_modulo_its_sheet() {
+        let mut scene = SystemScene::load(&catalog(), SystemId(130));
+        scene.step(3);
+        let before = drawn(&scene);
+        assert_eq!(before[0], ImageKey::sprite(1001, 1), "its own animation");
+        let gate = |frame| move |id: StellarId| (id == StellarId(129)).then_some(frame);
+        scene.set_gate_frames(gate(3));
+        assert_eq!(scene.stellars()[0].gate_frame, Some(3));
+        assert_eq!(scene.stellars()[1].gate_frame, None);
+        let shown = drawn(&scene);
+        assert_eq!(shown[0], ImageKey::sprite(1001, 3));
+        assert_eq!(shown[1..], before[1..], "the rest as they were");
+        scene.set_gate_frames(gate(0));
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 0));
+        // A frame past the sheet drawn wraps round its 4 frames.
+        scene.set_gate_frames(gate(6));
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 2));
+        scene.set_gate_frames(|_| None);
+        assert_eq!(drawn(&scene), before);
     }
 
     #[test]
@@ -791,6 +870,39 @@ mod tests {
         scene.step(6);
         scene.rebuild(|_| look(false, DrawnSheet::Dead, DrawnSheet::Type));
         assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 1)]);
+    }
+
+    #[test]
+    fn a_scene_loaded_for_a_shown_set_keeps_only_those_stellars_in_navigation_order() {
+        let mut catalog = dying();
+        catalog.systems[0].problems = vec!["sÿst 134: no spöb 160".to_owned()];
+        catalog.systems[0].type_zero_sprite = Err("no spïn 1000".to_owned());
+        let shown = [StellarId(153), StellarId(150)].into();
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &shown);
+        let ids: Vec<i16> = scene
+            .stellars()
+            .iter()
+            .map(|stellar| stellar.id.0)
+            .collect();
+        assert_eq!(ids, [150, 153]);
+        assert_eq!(
+            scene.problems(),
+            [
+                "sÿst 134: no spöb 160",
+                "spïn 1000 (graphic type 0): no spïn 1000"
+            ],
+            "152's DeadType left out with it"
+        );
+        let shown = [StellarId(150)].into();
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &shown);
+        assert_eq!(
+            scene.problems(),
+            ["sÿst 134: no spöb 160"],
+            "150 has its DeadType, so none falls back"
+        );
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &BTreeSet::new());
+        assert_eq!(scene.stellars(), []);
+        assert_eq!(scene.id(), SystemId(134));
     }
 
     #[test]

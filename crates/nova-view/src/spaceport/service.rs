@@ -14,7 +14,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 
@@ -151,15 +150,6 @@ impl Screen for ServiceScreen {
     fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
     }
-
-    /// Done's sounds as it is clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.tracker
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -168,7 +158,6 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
 
     fn bar() -> ServiceScreen {
@@ -312,8 +301,11 @@ mod tests {
         assert!(format!("{screen:?}").contains("Bar"));
     }
 
+    /// The spaceport's screens play nothing under the pointer
+    /// (`_TrackPlanetButtons` @0x2996f and its kin); this placeholder has no
+    /// counterpart and is silent like its neighbours.
     #[test]
-    fn a_click_on_done_sounds_it_going_down_then_up_and_keys_are_silent() {
+    fn a_click_on_done_and_keys_are_silent() {
         let mut screen = bar();
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -321,12 +313,24 @@ mod tests {
             at: DONE_BUTTON.center(),
         };
         screen.input(&button(true));
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&button(false));
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_sounds(), []);
         let mut screen = bar();
         screen.input(&key(Key::Enter, true, false));
         assert_eq!(screen.take_sounds(), []);
+    }
+
+    /// The engine's placeholder screen has no counterpart in the original;
+    /// Return and Escape are pinned silent like the original's filters.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = bar();
+            screen.input(&key(k, true, false));
+            screen.input(&key(k, false, false));
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
     }
 }

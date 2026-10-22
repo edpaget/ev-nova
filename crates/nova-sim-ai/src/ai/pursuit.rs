@@ -1,0 +1,2171 @@
+//! How an NPC fights, frame by frame: `_LowLevelAIHandler`'s substates
+//! 0x12, 5, 6, 0x10, 0x11 and 7 (@0x85247-0x85361, @0x85c62-0x869ff in
+//! the `EV Nova` executable) and the substate `_HighLevelAIHandler`
+//! leaves them in (@0x8e3fc-0x8e6dc, @0x8e017-0x8e06b).
+//!
+//! Each tick a fighting NPC's step ([`step`]) works out its frame
+//! ([`Frame`]): the bodies the low level runs, in its block order, each
+//! with the heading it wants (the original's +0x68), and the substate it
+//! keeps for the next tick ([`Kept`], the original's 0x10 or 0x11 in
+//! +0xc8ca). Its passes ([`fire`]) run every body's fire, in order; its
+//! flight ([`autopilot`](crate::traffic::autopilot)) is the last body's,
+//! as 0x10 and 0x11 always write the thrust +0x30, the cap +0x34 and the
+//! heading +0x68 after the bodies before them.
+//!
+//! - **The high level** ([`high_level`]), every think: attacking, a
+//!   stand-off ship keeps its band ([`stand_off::keep`]: back away (5),
+//!   approach (7) or snipe (0xe)) and never keeps a pursuit; any other
+//!   outside [`DOGFIGHT_BOX`] on either axis swarms (0x12) when its class
+//!   swarms and its swarm leader is not its own leader
+//!   ([`swarm::lead`], @0x8e63c-0x8e679), dropping a kept rush, else
+//!   approaches (7) unless it is rushing (0x11, @0x8e68d-0x8e697), and
+//!   inside dogfights (6) unless it is breaking off (0x10,
+//!   @0x8e6cf-0x8e6dc). Sniping, it snipes (0xe); a plunderer never
+//!   swarms, as nothing else writes 0x12.
+//!   Plundering an intact ship (goal 0xd, [`Goal::Plunder`],
+//!   @0x8ea49-0x8eb3a), it keeps no band: outside [`DOGFIGHT_BOX`] it
+//!   snipes when the chase is hopeless, else approaches unless rushing;
+//!   inside it dogfights unless breaking off or **rushing**, both kept
+//!   (`sub - 0x10 <= 1` @0x8eb28). Plundering a disabled ship it flies no
+//!   fight: it docks (@0x8e873-0x8ea44, see
+//!   [`plunder_dock`](crate::traffic::plunder_dock)).
+//!   Fleeing, within [`FLEE_REACH`] of its attacker on both axes, the
+//!   offsets truncated, it flees close (5, @0x8e017-0x8e06b); beyond, it
+//!   runs out (substates 1, 3 and 4: past 1000 of the centre and able to
+//!   jump it brakes unless it expedites, then jumps, as
+//!   [`leave::flee_leg`](crate::ai::leave::flee_leg) says), which run no
+//!   pass (no `_AIFireTurret`, so no point defence either). Nothing else clears a
+//!   kept pursuit: not a new target, nor a goal change in itself, as
+//!   nothing but these rewrites touches +0xc8ca in state 4.
+//! - **Swarm** (0x12, [`Manoeuvre::Swarm`]), the chain's first block: it
+//!   wants `_CalcInterceptAngle` to its swarm lead's aim, [`SWARM_AHEAD`]
+//!   of its own top speeds ahead of its swarm leader along the leader's
+//!   whole-degree heading ([`SwarmLead::aim`]), thrusts its plain
+//!   acceleration while off it by less than its turn and
+//!   [`SWARM_THRUST`](crate::traffic::autopilot::SWARM_THRUST) whole
+//!   degrees, at its own top speed, and fires its missile pass alone with
+//!   no facing test, so no point defence (@0x85247-0x8535c). It keeps the
+//!   substate, so no other block runs. Its branch with no swarm leader
+//!   (substate 0, no thrust or turn, @0x8535e) is reached by no frame here
+//!   (see [`swarm`]).
+//! - **Flee close** (5, [`Manoeuvre::Flee`]): it wants the table bearing
+//!   from its attacker to itself and runs its turret pass; with an
+//!   afterburner ([`Npc::afterburner`]) and its attacker within
+//!   [`DOGFIGHT_BOX`] on at least one axis (`|d|` < 165,
+//!   @0x85d77-0x85e0b) it rushes (0x11) in the same frame.
+//! - **Dogfight** (6, [`Manoeuvre::Dogfight`]): its lead
+//!   ([`fire::dogfight_lead`]), its turret and gun passes; then the joust
+//!   ([`joust`]) may break it off (0x10), and the rush entry
+//!   ([`rush_entry`]), tested after it even when it passed, may rush it
+//!   (0x11), either in the same frame.
+//! - **The speed match** ([`speed_match`], @0x85f85-0x860a6): an
+//!   inertialess dogfighter ([`Npc::flies_inertialess`], by
+//!   [`PursuitRules::inertial_dampener`]) facing its lead within
+//!   [`GUN_FACING`] turns, strictly, its target within [`MATCH_BOX`] on
+//!   both axes, strictly, and faster than its target, caps its speed at
+//!   its target's ([`Frame::speed_cap`]). The cap binds only on a
+//!   thrusting tick, and only while the dogfight is the frame's last body,
+//!   as 0x10 and 0x11 write the cap after it (@0x8645a, @0x865cf); a target
+//!   at none sets a cap of none, which is none
+//!   (see [`autopilot`](crate::traffic::autopilot)).
+//! - **The joust's skip** (@0x86143-0x86150): an inertialess dogfighter
+//!   outside 165.0 on both axes skips the joust for the rush entry. The
+//!   joust's [`JOUST_RANGE`] already fails there, so the skip changes only
+//!   whether its rolls are drawn, and nothing is built for it.
+//! - **Break off** (0x10, [`Manoeuvre::BreakOff`]): it wants its break
+//!   heading (+0x8e), thrusts every tick at [`BREAK_THRUST`] times its
+//!   acceleration, runs its turret pass alone inside [`FIRE_BOX`] on both
+//!   axes, and drops back to dogfight once it faces the break heading
+//!   within [`GUN_FACING`] turns, strictly (@0x86515-0x86563). An
+//!   inertialess one drops back instead once its target is beyond
+//!   [`BREAK_EXIT_BOX`] whole pixels on an axis, never by its facing
+//!   ([`leaves_break_off`], @0x864bd-0x86513). The high level, which runs
+//!   first on the same positions, keeps 0x10 only inside 165.0 on both
+//!   axes, so in the engine's tick the exit beyond 165 is never reached:
+//!   the original reaches it when the low level runs under an AI wait
+//!   without the high level (@0x8d4b9-0x8d4d2, @0x901f4), which the
+//!   engine's pursuit doesn't (rdm task
+//!   waiting-ships-run-their-per-type-ai). What shows is that an
+//!   inertialess ship never leaves the break-off by facing its break
+//!   heading.
+//! - **Rush** (0x11, [`Manoeuvre::Rush`]): it wants the table bearing to
+//!   its target, thrusts every tick at [`RUSH_THRUST`] times its
+//!   acceleration up to [`RUSH_SPEED`] times its top speed; inside
+//!   [`FIRE_BOX`] its turret pass, then its gun pass facing within
+//!   [`GUN_FACING`] turns; outside, its missile pass facing within the
+//!   same. Then inside [`DOGFIGHT_BOX`] on both axes, truncated, it drops
+//!   back to dogfight at once; outside, on `Rand(`[`RUSH_DROP`]`)` == 0
+//!   (@0x86755-0x867b2).
+//! - **Approach** (7, [`Manoeuvre::Approach`]): its lead
+//!   ([`fire::approach_lead`]) and passes, then the rush entry, which runs
+//!   on the next tick.
+//! - Every facing test is the original's: `_AngularDifference` of the
+//!   whole-degree heading and the heading wanted
+//!   ([`fire::faces`](crate::ai::fire::faces)).
+//! - None of these blocks calls `PlaySound` or `_beepSnd`.
+//!
+//! # Not modelled
+//!
+//! - The swarm's `_AIMaintainFormation` and +0xc8d4 copy in subs 5, 0x11
+//!   and 7 (@0x85c87-0x85cbf, @0x8660b-0x8663d, @0x867e0-0x86818): rdm
+//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14, after NPC
+//!   formation parents and glow.
+//! - The order of the joust's draws: the rolls come after its other
+//!   gates here, which decides the same.
+
+use crate::ai::afterburner;
+use crate::ai::fire::{self, DOGFIGHT_BOX, GUN_FACING, Manoeuvre};
+#[cfg(doc)]
+use crate::ai::swarm::SWARM_AHEAD;
+use crate::ai::swarm::{self, SwarmLead};
+use crate::ai::{Goal, Surroundings, stand_off};
+use crate::catalog::WeaponId;
+use crate::chance::Chance;
+use crate::combat::ShipRef;
+use crate::combat::armament::Arsenal;
+use crate::combat::hull::Condition;
+use crate::flight::ShipState;
+use crate::geometry::Vec2;
+use crate::inertialess::InertialDampener;
+use crate::rulebook::RuleSource;
+use crate::traffic::npc::Npc;
+use crate::trig;
+
+/// How near, in whole pixels on both axes, a fleeing ship's attacker must
+/// be for it to flee close (250, `cmpw $0xfa` @0x8e025, @0x8e047).
+pub const FLEE_REACH: i32 = 250;
+/// How near, in whole pixels on both axes, a ship breaking off or rushing
+/// must be for its turret (and a rush's gun) pass (`trunc(d) + 164`
+/// unsigned ≤ 328, @0x86479-0x864ad, @0x86644-0x86689).
+pub const FIRE_BOX: i32 = 164;
+/// How near, in whole pixels on both axes, a rushing ship drops back to
+/// dogfight at once (`trunc(d) + 165` unsigned ≤ 330, @0x86755-0x8679c).
+pub const STAY_BOX: i32 = 165;
+/// `Rand(100)`: the roll a rushing ship outside [`STAY_BOX`] drops back on
+/// at 0 (@0x8679e).
+pub const RUSH_DROP: u16 = 100;
+/// How many times its acceleration a ship breaking off thrusts (1.5
+/// @0xdd078).
+pub const BREAK_THRUST: f32 = 1.5;
+/// How many times its acceleration a rushing ship thrusts (2.75
+/// @0xdd96c).
+pub const RUSH_THRUST: f32 = 2.75;
+/// How many times its top speed a rushing ship flies up to (the double
+/// 1.8 @0xdd6e0).
+pub const RUSH_SPEED: f64 = 1.8;
+/// How far its break heading turns from its heading, in degrees (135.0
+/// @0xdda3c): clockwise from an even slot, anticlockwise from an odd one.
+pub const BREAK_TURN: f32 = 135.0;
+/// How near, in whole pixels on both axes, a joust's target must be
+/// (`cmpl $0x7a` @0x861eb, @0x8620e).
+pub const JOUST_RANGE: i32 = 122;
+/// How far off, in whole degrees, each ship of a joust may face (`cmpw
+/// $0x1e` @0x8626f, @0x862c7), and a ship rushing in may face its target
+/// (@0x863f5, @0x869ed).
+pub const FACE_OFF: i16 = 30;
+/// The `InherentAI` a ship's class must be above to break off (`cmpw $0x2`
+/// @0x8619a).
+pub const JOUST_AI: i16 = 2;
+/// The `Mass`, in tons, a ship's class may be at most to break off (`cmpw
+/// $0xc7` @0x861ac, signed: a negative `Mass` passes).
+pub const JOUST_MASS: i16 = 199;
+/// `Rand(2)`: the roll a joust against an NPC goes on at 0 (@0x86160).
+pub const JOUST_ROLL: u16 = 2;
+/// How far, in whole pixels on both axes, a ship must be from its target
+/// to rush in (`cmpl $0x52`, strictly, @0x863b2, @0x863ce, @0x869a4,
+/// @0x869c3).
+pub const RUSH_CLEARANCE: i32 = 82;
+/// How far, in whole pixels on an axis, an inertialess ship breaking off
+/// must be from its target to drop back to dogfight, strictly (`cmpl
+/// $0xa5`, `jg` @0x864f3, @0x86511).
+pub const BREAK_EXIT_BOX: i32 = 165;
+/// How near, in pixels on both axes, an inertialess dogfighter's target
+/// must be for it to match its speed, strictly and untruncated (the
+/// float 100.0 @0xdd060, @0x8603b, @0x8607b).
+pub const MATCH_BOX: f32 = 100.0;
+
+/// The substate a ship keeps from tick to tick: its pursuit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// Breaking off (0x10) toward this whole-degree break heading (+0x8e).
+    BreakOff {
+        /// The heading it breaks off along.
+        heading: i16,
+    },
+    /// Rushing on its afterburner (0x11).
+    Rush,
+}
+
+/// One body a frame runs: how it flies and fires, and the whole-degree
+/// heading it wants (+0x68).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Body {
+    /// Its manoeuvre.
+    pub manoeuvre: Manoeuvre,
+    /// The heading it wants.
+    pub heading: i16,
+}
+
+/// The bodies a fighting ship's low level runs this tick, in block order
+/// (up to two), for the goal it was worked out under.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    /// The goal it was worked out under: a frame for any other is stale.
+    pub goal: Goal,
+    /// The bodies, in order; none for a ship running out.
+    pub bodies: [Option<Body>; 2],
+    /// The speed an inertialess dogfighter matches (sub 6's cap +0x34,
+    /// @0x85ff3-0x860a6): its target's speed, which it flies at most while
+    /// the dogfight is the frame's last body. A cap of none is no cap, as
+    /// `_HandleShip` reads it (@0x34a8a-0x34aab).
+    pub speed_cap: Option<f32>,
+}
+
+impl Frame {
+    /// A frame of `goal` running `bodies`, in order: two at most, as no
+    /// block chain runs more.
+    fn of(goal: Goal, bodies: &[Body]) -> Self {
+        debug_assert!(bodies.len() <= 2, "{bodies:?}");
+        let mut frame = Self {
+            goal,
+            bodies: [None; 2],
+            speed_cap: None,
+        };
+        for (slot, body) in frame.bodies.iter_mut().zip(bodies) {
+            *slot = Some(*body);
+        }
+        frame
+    }
+
+    /// Its bodies, in order.
+    pub fn iter(&self) -> impl Iterator<Item = Body> + '_ {
+        self.bodies.iter().flatten().copied()
+    }
+
+    /// Its last body, whose flight wins: none for a ship running out.
+    #[must_use]
+    pub fn last(&self) -> Option<Body> {
+        self.iter().last()
+    }
+}
+
+/// What an NPC holds of its pursuit: the substate it keeps and this
+/// tick's frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pursuit {
+    /// The pursuit it keeps for the next tick.
+    pub kept: Option<Kept>,
+    /// This tick's frame, once its step has run.
+    pub frame: Option<Frame>,
+}
+
+/// The rulebook's entries the step follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PursuitRules {
+    /// Which weapon an approach leads with
+    /// ([`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead)).
+    pub approach_lead: RuleSource,
+    /// Whose dampener makes a ship inertialess
+    /// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
+    pub inertial_dampener: InertialDampener,
+}
+
+/// Whether `off` lies within `reach` whole pixels on both axes, each
+/// axis truncated (`cvttss2si`) as the original's boxes are.
+fn within_whole(off: Vec2, reach: i32) -> bool {
+    whole_off(off.x).abs() <= reach && whole_off(off.y).abs() <= reach
+}
+
+/// An offset truncated to whole pixels (`cvttss2si`).
+#[allow(clippy::cast_possible_truncation)] // Offsets in a system fit an i32.
+fn whole_off(offset: f32) -> i32 {
+    offset as i32
+}
+
+/// The substate `npc`'s high level leaves it in, at a ship at `at`,
+/// disabled as `disabled` says, with `swarm` its swarm lead
+/// ([`swarm::lead`]) (see the module docs): where its frame starts. None
+/// for a goal that is no fight.
+#[must_use]
+pub fn high_level(
+    npc: &Npc,
+    at: &ShipState,
+    disabled: bool,
+    swarm: Option<SwarmLead>,
+) -> Option<Start> {
+    let off = at.position - npc.state.position;
+    if matches!(npc.goal, Goal::Attack(_) | Goal::Snipe(_))
+        && let Some(band) = stand_off::band(npc, disabled)
+    {
+        return Some(Start::Sub(stand_off::keep(off, band)));
+    }
+    match npc.goal {
+        Goal::Attack(_) => {
+            let outside = off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX;
+            Some(Start::Sub(match (outside, npc.pursuit.kept) {
+                // The swarm test comes before the kept rush (@0x8e63c-0x8e697).
+                (true, _) if swarms(npc, swarm) => Manoeuvre::Swarm,
+                (true, Some(Kept::Rush)) => Manoeuvre::Rush,
+                (true, _) => Manoeuvre::Approach,
+                (false, Some(Kept::BreakOff { heading })) => {
+                    return Some(Start::BreakOff { heading });
+                }
+                (false, _) => Manoeuvre::Dogfight,
+            }))
+        }
+        Goal::Snipe(_) => Some(Start::Sub(Manoeuvre::Snipe)),
+        // Goal 0xd against an intact ship (@0x8ea49-0x8eb3a); against a
+        // disabled one it docks (@0x8e873-0x8ea44, `plunder_dock`).
+        Goal::Plunder { .. } if disabled => None,
+        Goal::Plunder { hopeless, .. } => {
+            let outside = off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX;
+            Some(match (outside, npc.pursuit.kept) {
+                (true, _) if hopeless => Start::Sub(Manoeuvre::Snipe),
+                (_, Some(Kept::Rush)) => Start::Sub(Manoeuvre::Rush),
+                (true, _) => Start::Sub(Manoeuvre::Approach),
+                (false, Some(Kept::BreakOff { heading })) => Start::BreakOff { heading },
+                (false, None) => Start::Sub(Manoeuvre::Dogfight),
+            })
+        }
+        Goal::Flee(_) if within_whole(off, FLEE_REACH) => Some(Start::Sub(Manoeuvre::Flee)),
+        Goal::Flee(_) => Some(Start::RunningOut),
+        _ => None,
+    }
+}
+
+/// Whether `npc` swarms on `swarm` outside the dogfight box
+/// (@0x8e63c-0x8e679): its class swarms and its swarm leader is not its
+/// own leader. The original also needs +0x8c of -1, a ship that is no
+/// stellar's defender, which every ship here is.
+fn swarms(npc: &Npc, swarm: Option<SwarmLead>) -> bool {
+    npc.hull.swarms && swarm.is_some_and(|lead| !lead.leads_it)
+}
+
+/// Where a frame starts (see [`high_level`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// In this substate.
+    Sub(Manoeuvre),
+    /// Breaking off along its kept break heading.
+    BreakOff {
+        /// The heading it breaks off along.
+        heading: i16,
+    },
+    /// Running out from its attacker, beyond [`FLEE_REACH`]: no body.
+    RunningOut,
+}
+
+/// The frame `npc` flies at a ship at `at` before its step has run this
+/// tick (see [`step`]): its stored frame while it is for its goal, else
+/// the high level's substate alone, with `swarm` its swarm lead, its lead
+/// from the pick it holds and its approach's by the engine, each read from
+/// `weapons`, the global records. None for a goal that is no fight.
+#[must_use]
+pub fn frame_of(
+    npc: &Npc,
+    at: &ShipState,
+    disabled: bool,
+    swarm: Option<SwarmLead>,
+    weapons: &Arsenal,
+) -> Option<Frame> {
+    if let Some(frame) = npc.pursuit.frame
+        && frame.goal == npc.goal
+    {
+        return Some(frame);
+    }
+    let start = high_level(npc, at, disabled, swarm)?;
+    let looks = Looks::of(npc, at, (npc.pick, RuleSource::Engine, weapons), swarm);
+    Some(match start {
+        Start::Sub(manoeuvre) => Frame::of(npc.goal, &[looks.body(manoeuvre)]),
+        Start::BreakOff { heading } => Frame::of(
+            npc.goal,
+            &[Body {
+                manoeuvre: Manoeuvre::BreakOff,
+                heading,
+            }],
+        ),
+        Start::RunningOut => Frame::of(npc.goal, &[]),
+    })
+}
+
+/// The headings each body wants, worked out once at the frame's start.
+struct Looks {
+    away: i16,
+    bearing: i16,
+    dogfight: i16,
+    approach: i16,
+    swarm: i16,
+}
+
+impl Looks {
+    /// `npc`'s headings at a ship at `at`, leading with `pick` as its
+    /// pick and its approach by `approach_lead`, each weapon read from
+    /// `weapons`, flying at its `swarm` lead's aim
+    /// (`_CalcInterceptAngle(self, P)`, @0x852d6), or with none the
+    /// bearing, which no frame then reads.
+    fn of(
+        npc: &Npc,
+        at: &ShipState,
+        (pick, approach_lead, weapons): (Option<WeaponId>, RuleSource, &Arsenal),
+        swarm: Option<SwarmLead>,
+    ) -> Self {
+        let bearing = trig::intercept_angle(npc.state.position, at.position);
+        Self {
+            away: trig::intercept_angle(at.position, npc.state.position),
+            bearing,
+            dogfight: fire::dogfight_lead(npc, at, pick, weapons),
+            approach: fire::approach_lead(npc, at, pick, approach_lead, weapons),
+            swarm: swarm.map_or(bearing, |lead| {
+                trig::intercept_angle(npc.state.position, lead.aim)
+            }),
+        }
+    }
+
+    /// The body of `manoeuvre`, with the heading it wants. A break-off's
+    /// is its kept heading, given apart.
+    fn body(&self, manoeuvre: Manoeuvre) -> Body {
+        let heading = match manoeuvre {
+            Manoeuvre::Flee => self.away,
+            Manoeuvre::Dogfight => self.dogfight,
+            Manoeuvre::Approach => self.approach,
+            Manoeuvre::Swarm => self.swarm,
+            Manoeuvre::Rush | Manoeuvre::Snipe | Manoeuvre::BreakOff => self.bearing,
+        };
+        Body { manoeuvre, heading }
+    }
+}
+
+/// What the joust, the rush entry and the speed match read of a ship and
+/// its target.
+struct Duel {
+    /// Its offset from its target (self − target).
+    off: Vec2,
+    /// Its target's speed along its heading, +0x48 ([`Npc::speed`], or
+    /// the player's [`PlayerSide::speed`](crate::ai::PlayerSide::speed)).
+    target_speed: f32,
+    /// Its whole-degree heading.
+    heading: i16,
+    /// The table bearing to its target.
+    bearing: i16,
+    /// Its target's whole-degree heading.
+    target_heading: i16,
+    /// Whether its target is the player.
+    at_player: bool,
+    /// Its target's ship-table slot: the player's is 0.
+    target_slot: u32,
+    /// Its target's class's `Mass` field, signed
+    /// ([`HullSpec::signed_mass`](crate::combat::hull::HullSpec::signed_mass)).
+    target_mass: i16,
+    /// The player's combat rating.
+    rating: i64,
+}
+
+impl Duel {
+    /// What `npc` reads of `ship`, its target at `at`, among `around`, its
+    /// table bearing to it `bearing`.
+    fn of(
+        npc: &Npc,
+        (ship, at): (ShipRef, &ShipState),
+        bearing: i16,
+        around: &Surroundings,
+    ) -> Self {
+        let (target_slot, target_mass, target_speed) = match ship {
+            ShipRef::Player => around.player.map_or((0, 0, 0.0), |player| {
+                (0, player.hull.signed_mass, player.speed)
+            }),
+            ShipRef::Npc(id) => around.npc(id).map_or((0, 0, 0.0), |other| {
+                (other.berth, other.hull.signed_mass, other.speed)
+            }),
+        };
+        Self {
+            off: npc.state.position - at.position,
+            target_speed,
+            heading: trig::whole(npc.state.heading),
+            bearing,
+            target_heading: trig::whole(at.heading),
+            at_player: ship == ShipRef::Player,
+            target_slot,
+            target_mass,
+            rating: around.player.map_or(0, |player| player.rating),
+        }
+    }
+}
+
+/// Whether `npc` jousting `duel` breaks off, rolling on `chance` (see the
+/// module docs; @0x860c6-0x86242): its class's hull, its target within
+/// [`JOUST_RANGE`], the slot and mass tiebreak, both facing each other
+/// within [`FACE_OFF`], and the roll. Both mass tests read the classes'
+/// `Mass` fields signed (`cmpw` @0x861ac, @0x8623a).
+fn joust(npc: &Npc, duel: &Duel, chance: &mut (impl Chance + ?Sized)) -> bool {
+    let hull = npc.hull.inherent_ai > JOUST_AI && npc.hull.signed_mass <= JOUST_MASS;
+    let near =
+        whole_off(duel.off.x).abs() <= JOUST_RANGE && whole_off(duel.off.y).abs() <= JOUST_RANGE;
+    let tiebreak = duel.target_slot < npc.berth
+        || (duel.target_slot > npc.berth && npc.hull.signed_mass < duel.target_mass);
+    let reverse = (i32::from(duel.bearing) + 180).rem_euclid(360);
+    #[allow(clippy::cast_possible_truncation)] // In 0..360.
+    let reverse = reverse as i16;
+    let face_off = trig::angular_difference(duel.heading, duel.bearing) <= FACE_OFF
+        && trig::angular_difference(duel.target_heading, reverse) <= FACE_OFF;
+    if !(hull && near && tiebreak && face_off) {
+        return false;
+    }
+    // Against an NPC, `Rand(2)` == 0 goes on, or the complex roll; against
+    // the player, the complex roll alone (@0x86156-0x8617e).
+    (!duel.at_player && chance.roll(JOUST_ROLL) == 0)
+        || afterburner::performs_complex_manoeuvres(duel.rating, chance)
+}
+
+/// The break heading of a ship heading `heading` in slot `berth`:
+/// `trunc(heading ± 135)`, wrapped once into 0..360 (@0x862d1-0x86338).
+#[must_use]
+pub fn break_heading(heading: f32, berth: u32) -> i16 {
+    let turned = if berth.is_multiple_of(2) {
+        heading + BREAK_TURN
+    } else {
+        heading - BREAK_TURN
+    };
+    let mut whole = trig::whole(turned);
+    if whole < 0 {
+        whole += 360;
+    }
+    if whole > 359 {
+        whole -= 360;
+    }
+    whole
+}
+
+/// The speed an inertialess (`inertialess`) dogfighter `npc` matches on
+/// `duel`, wanting its dogfight `lead` (sub 6, @0x85f85-0x860a6): its
+/// target's, when it faces `lead` within [`GUN_FACING`] turns, strictly
+/// (the gun pass's branch it runs in), its target lies within
+/// [`MATCH_BOX`] on both axes, strictly and untruncated, and its own
+/// speed is higher, strictly.
+fn speed_match(npc: &Npc, inertialess: bool, lead: i16, duel: &Duel) -> Option<f32> {
+    (inertialess
+        && fire::faces(npc, lead, GUN_FACING)
+        && duel.off.x.abs() < MATCH_BOX
+        && duel.off.y.abs() < MATCH_BOX
+        && npc.speed > duel.target_speed)
+        .then_some(duel.target_speed)
+}
+
+/// Whether `npc`, breaking off along `heading` with its target `off`
+/// (self − target), drops back to dogfight (@0x864b7-0x86563): an
+/// inertialess one (`inertialess`) once its target is beyond
+/// [`BREAK_EXIT_BOX`] whole pixels on an axis (@0x864c6-0x86513), never
+/// by its facing; any other once it faces `heading` within
+/// [`GUN_FACING`] turns, strictly (@0x86515-0x8655e).
+fn leaves_break_off(npc: &Npc, inertialess: bool, heading: i16, off: Vec2) -> bool {
+    if inertialess {
+        !within_whole(off, BREAK_EXIT_BOX)
+    } else {
+        fire::faces(npc, heading, GUN_FACING)
+    }
+}
+
+/// Whether `npc` rushes in on `duel` (see the module docs): an afterburner,
+/// more than [`RUSH_CLEARANCE`] off on both axes, and facing its target
+/// within [`FACE_OFF`] (@0x86371-0x86404, @0x86969-0x869f6).
+fn rush_entry(npc: &Npc, duel: &Duel) -> bool {
+    npc.afterburner
+        && whole_off(duel.off.x).abs() > RUSH_CLEARANCE
+        && whole_off(duel.off.y).abs() > RUSH_CLEARANCE
+        && trig::angular_difference(duel.heading, duel.bearing) <= FACE_OFF
+}
+
+/// `npc`'s pursuit this tick among `around`, by `rules`, rolling on
+/// `chance` (see the module docs): its frame at the ship its goal is
+/// about, and the pursuit it keeps. None of either for a goal that is no
+/// fight or a ship not in the system.
+pub fn step(
+    npc: &Npc,
+    around: &Surroundings,
+    rules: PursuitRules,
+    chance: &mut (impl Chance + ?Sized),
+) -> Pursuit {
+    let Some(ship) = npc.goal.quarry() else {
+        return Pursuit::default();
+    };
+    let Some(at) = around.state_of(ship) else {
+        return Pursuit::default();
+    };
+    let disabled = around.condition_of(ship) == Some(Condition::Disabled);
+    let swarm = swarm::lead(npc, around);
+    let Some(start) = high_level(npc, &at, disabled, swarm) else {
+        return Pursuit::default();
+    };
+    // A fight is never close formation: no leader.
+    let inertialess = npc.hull_inertialess(rules.inertial_dampener);
+    let looks = Looks::of(
+        npc,
+        &at,
+        (
+            fire::lead_pick(npc, around),
+            rules.approach_lead,
+            around.weapons,
+        ),
+        swarm,
+    );
+    let duel = Duel::of(npc, (ship, &at), looks.bearing, around);
+    let mut sub = match start {
+        Start::Sub(manoeuvre) => Sub::Body(manoeuvre),
+        Start::BreakOff { heading } => Sub::BreakOff(heading),
+        Start::RunningOut => {
+            return Pursuit {
+                kept: None,
+                frame: Some(Frame::of(npc.goal, &[])),
+            };
+        }
+    };
+    let mut bodies: Vec<Body> = Vec::with_capacity(2);
+    let mut speed_cap = None;
+    // Sub 0x12 (@0x85247-0x85361), the chain's first block: it keeps the
+    // substate, so no later block runs.
+    if sub == Sub::Body(Manoeuvre::Swarm) {
+        bodies.push(looks.body(Manoeuvre::Swarm));
+    }
+    // Sub 5 (@0x85c62-0x85e0b).
+    if sub == Sub::Body(Manoeuvre::Flee) {
+        bodies.push(looks.body(Manoeuvre::Flee));
+        if npc.afterburner && (duel.off.x.abs() < DOGFIGHT_BOX || duel.off.y.abs() < DOGFIGHT_BOX) {
+            sub = Sub::Body(Manoeuvre::Rush);
+        }
+    }
+    // Sub 6 (@0x85e14-0x8640d): the joust, then the rush entry over it.
+    if sub == Sub::Body(Manoeuvre::Dogfight) {
+        bodies.push(looks.body(Manoeuvre::Dogfight));
+        speed_cap = speed_match(npc, inertialess, looks.dogfight, &duel);
+        if joust(npc, &duel, chance) {
+            sub = Sub::BreakOff(break_heading(npc.state.heading, npc.berth));
+        }
+        if rush_entry(npc, &duel) {
+            sub = Sub::Body(Manoeuvre::Rush);
+        }
+    }
+    // Sub 0x10 (@0x86410-0x86563).
+    if let Sub::BreakOff(heading) = sub {
+        bodies.push(Body {
+            manoeuvre: Manoeuvre::BreakOff,
+            heading,
+        });
+        if leaves_break_off(npc, inertialess, heading, duel.off) {
+            sub = Sub::Body(Manoeuvre::Dogfight);
+        }
+    }
+    // Sub 0x11 (@0x8656c-0x867b2).
+    if sub == Sub::Body(Manoeuvre::Rush) {
+        bodies.push(looks.body(Manoeuvre::Rush));
+        if within_whole(duel.off, STAY_BOX) || chance.roll(RUSH_DROP) == 0 {
+            sub = Sub::Body(Manoeuvre::Dogfight);
+        }
+    }
+    // Sub 7 (@0x867bb-0x869ff): its rush entry runs on the next tick.
+    if sub == Sub::Body(Manoeuvre::Approach) {
+        bodies.push(looks.body(Manoeuvre::Approach));
+        if rush_entry(npc, &duel) {
+            sub = Sub::Body(Manoeuvre::Rush);
+        }
+    }
+    // A snipe (0xe) is a block of its own.
+    if sub == Sub::Body(Manoeuvre::Snipe) {
+        bodies.push(looks.body(Manoeuvre::Snipe));
+    }
+    Pursuit {
+        kept: match sub {
+            Sub::BreakOff(heading) => Some(Kept::BreakOff { heading }),
+            Sub::Body(Manoeuvre::Rush) => Some(Kept::Rush),
+            Sub::Body(_) => None,
+        },
+        frame: Some(Frame {
+            speed_cap,
+            ..Frame::of(npc.goal, &bodies)
+        }),
+    }
+}
+
+/// The substate +0xc8ca as the low level's blocks pass it on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sub {
+    /// Any substate but a break-off.
+    Body(Manoeuvre),
+    /// Breaking off (0x10) along this heading (+0x8e).
+    BreakOff(i16),
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use crate::ai::PlayerSide;
+    use crate::ai::fixture::player;
+    use crate::combat::ShipRef;
+    use crate::stats::ShipStats;
+    use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::{FAST, Ranged};
+
+    /// Where the fighter is: off the centre, so every offset is measured
+    /// from it.
+    const AT: Vec2 = Vec2::new(300.0, 200.0);
+    /// An NPC as a ship.
+    const OTHER: ShipRef = ShipRef::Npc(NpcId(2));
+
+    /// A fighter at [`AT`] facing `heading` (3 degrees a tick), in slot 2,
+    /// of a class that may break off (`InherentAI` 3, 100 tons), with
+    /// `goal`, no afterburner.
+    fn fighter(goal: Goal, heading: f32) -> Npc {
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
+        npc.goal = goal;
+        npc.berth = 2;
+        npc.state.position = AT;
+        npc.state.heading = heading;
+        npc.hull.inherent_ai = 3;
+        npc.hull.signed_mass = 100;
+        npc
+    }
+
+    /// The player `off` from [`AT`], facing `heading`.
+    fn player_off(off: Vec2, heading: f32) -> PlayerSide {
+        let mut side = player(AT.x + off.x, AT.y + off.y);
+        side.state.heading = heading;
+        side
+    }
+
+    /// `npc`'s step at the player `side` of combat rating `rating`, on
+    /// `chance`.
+    fn stepped_at_player(
+        npc: &Npc,
+        side: &PlayerSide,
+        rating: i64,
+        chance: &mut Ranged,
+    ) -> Pursuit {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(PlayerSide { rating, ..*side }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        step(npc, &around, PursuitRules::default(), chance)
+    }
+
+    /// `npc`'s step at NPC 2, `off` from [`AT`] facing `heading`, in
+    /// `slot`, of `mass` tons, with the player's rating `rating`, on
+    /// `chance`.
+    fn stepped_at_npc(
+        npc: &Npc,
+        (off, heading): (Vec2, f32),
+        (slot, mass): (u32, i16),
+        rating: i64,
+        chance: &mut Ranged,
+    ) -> Pursuit {
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = AT + off;
+        other.state.heading = heading;
+        other.berth = slot;
+        other.hull.signed_mass = mass;
+        let npcs = [npc.clone(), other];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                rating,
+                ..player(0.0, 0.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        step(npc, &around, PursuitRules::default(), chance)
+    }
+
+    /// The manoeuvres of `pursuit`'s frame, in order.
+    fn bodies(pursuit: &Pursuit) -> Vec<Manoeuvre> {
+        pursuit
+            .frame
+            .map(|frame| frame.iter().map(|body| body.manoeuvre).collect())
+            .unwrap_or_default()
+    }
+
+    const AT_PLAYER: Goal = Goal::Attack(ShipRef::Player);
+    /// Straight up from [`AT`], 100 off.
+    const ABOVE: Vec2 = Vec2::new(0.0, -100.0);
+
+    /// A joust at the player above, facing down at the fighter facing up,
+    /// the complex roll passing (a rating of 1599 against `Rand(1344)`'s
+    /// highest outcome).
+    fn jousted(npc: &Npc, off: Vec2, target_heading: f32) -> Pursuit {
+        stepped_at_player(
+            npc,
+            &player_off(off, target_heading),
+            1599,
+            &mut Ranged::of(&[]),
+        )
+    }
+
+    #[test]
+    fn the_named_values() {
+        assert_eq!(
+            (FLEE_REACH, FIRE_BOX, STAY_BOX, JOUST_RANGE, RUSH_CLEARANCE),
+            (250, 164, 165, 122, 82)
+        );
+        assert_eq!((RUSH_DROP, JOUST_ROLL, FACE_OFF, JOUST_AI), (100, 2, 30, 2));
+        assert_eq!(
+            (BREAK_THRUST, RUSH_THRUST, BREAK_TURN, JOUST_MASS),
+            (1.5, 2.75, 135.0, 199)
+        );
+        assert_eq!(RUSH_SPEED, 1.8);
+        assert_eq!((BREAK_EXIT_BOX, MATCH_BOX), (165, 100.0));
+    }
+
+    #[test]
+    fn a_dogfighter_meeting_its_target_head_on_breaks_off_clockwise_from_an_even_slot() {
+        let npc = fighter(AT_PLAYER, 0.0);
+        let pursuit = jousted(&npc, ABOVE, 180.0);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Dogfight, Manoeuvre::BreakOff]);
+        assert_eq!(pursuit.kept, Some(Kept::BreakOff { heading: 135 }));
+        assert_eq!(
+            pursuit
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.heading),
+            Some(135)
+        );
+    }
+
+    #[test]
+    fn the_break_heading_turns_anticlockwise_from_an_odd_slot_and_is_whole_and_wrapped() {
+        assert_eq!(break_heading(0.0, 2), 135);
+        assert_eq!(break_heading(0.0, 3), 225);
+        assert_eq!(break_heading(10.7, 2), 145);
+        assert_eq!(break_heading(300.5, 2), 75);
+        // 359 stays; only 360 and over wrap.
+        assert_eq!(break_heading(224.5, 2), 359);
+        // Truncated toward zero: -34.1 is -34, so 326.
+        assert_eq!(break_heading(100.9, 1), 326);
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.berth = 3;
+        assert_eq!(
+            jousted(&npc, ABOVE, 180.0).kept,
+            Some(Kept::BreakOff { heading: 225 })
+        );
+    }
+
+    #[test]
+    fn a_class_of_inherent_ai_2_or_over_199_tons_never_breaks_off() {
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.hull.inherent_ai = 2;
+        assert_eq!(jousted(&npc, ABOVE, 180.0).kept, None);
+        npc.hull.inherent_ai = 3;
+        npc.hull.signed_mass = 200;
+        assert_eq!(jousted(&npc, ABOVE, 180.0).kept, None);
+        npc.hull.signed_mass = 199;
+        assert!(jousted(&npc, ABOVE, 180.0).kept.is_some());
+    }
+
+    #[test]
+    fn a_joust_needs_its_target_within_122_whole_pixels_on_both_axes() {
+        let npc = fighter(AT_PLAYER, 0.0);
+        assert!(jousted(&npc, Vec2::new(0.0, -122.9), 180.0).kept.is_some());
+        assert_eq!(jousted(&npc, Vec2::new(0.0, -123.0), 180.0).kept, None);
+        // 30 degrees off up the screen, 122 across: the bearing still
+        // within 30 of its heading of 330.
+        let npc = fighter(AT_PLAYER, 315.0);
+        assert!(
+            jousted(&npc, Vec2::new(-100.0, -100.0), 135.0)
+                .kept
+                .is_some()
+        );
+        assert_eq!(jousted(&npc, Vec2::new(-123.0, -100.0), 135.0).kept, None);
+    }
+
+    #[test]
+    fn a_joust_needs_each_ship_within_30_whole_degrees_of_facing_the_other() {
+        // Its own heading off the bearing (0): 30 goes on, 31 does not.
+        assert!(
+            jousted(&fighter(AT_PLAYER, 30.9), ABOVE, 180.0)
+                .kept
+                .is_some()
+        );
+        assert_eq!(jousted(&fighter(AT_PLAYER, 31.0), ABOVE, 180.0).kept, None);
+        assert!(
+            jousted(&fighter(AT_PLAYER, 330.0), ABOVE, 180.0)
+                .kept
+                .is_some()
+        );
+        assert_eq!(jousted(&fighter(AT_PLAYER, 329.9), ABOVE, 180.0).kept, None);
+        // The target's off the bearing turned about (180).
+        let npc = fighter(AT_PLAYER, 0.0);
+        assert!(jousted(&npc, ABOVE, 210.5).kept.is_some());
+        assert_eq!(jousted(&npc, ABOVE, 211.0).kept, None);
+        assert!(jousted(&npc, ABOVE, 150.0).kept.is_some());
+        assert_eq!(jousted(&npc, ABOVE, 149.9).kept, None);
+    }
+
+    #[test]
+    fn against_an_npc_a_lower_slot_goes_on_the_same_never_and_a_higher_only_for_a_lighter_ship() {
+        let npc = fighter(Goal::Attack(OTHER), 0.0);
+        // A roll of 0 on `Rand(2)` goes on with no complex roll.
+        let jousted_npc = |slot: u32, mass: i16| {
+            stepped_at_npc(
+                &npc,
+                (ABOVE, 180.0),
+                (slot, mass),
+                0,
+                &mut Ranged::of(&[(2, 0)]),
+            )
+            .kept
+            .is_some()
+        };
+        assert!(jousted_npc(1, 50));
+        assert!(!jousted_npc(2, 500));
+        assert!(jousted_npc(3, 101));
+        assert!(!jousted_npc(3, 100));
+    }
+
+    #[test]
+    fn against_an_npc_a_higher_slot_of_negative_mass_goes_on_against_a_less_negative_one() {
+        // The joust compares `Mass` signed (`cmpw`/`jge` @0x8623a): own -10
+        // is lighter than -5.
+        let mut npc = fighter(Goal::Attack(OTHER), 0.0);
+        npc.hull.signed_mass = -10;
+        npc.hull.mass = 0.0;
+        let jousted_npc = |npc: &Npc, mass: i16| {
+            stepped_at_npc(
+                npc,
+                (ABOVE, 180.0),
+                (3, mass),
+                0,
+                &mut Ranged::of(&[(2, 0)]),
+            )
+            .kept
+            .is_some()
+        };
+        assert!(jousted_npc(&npc, -5));
+        // The mirror: own -5 is heavier than -10, and never goes on.
+        npc.hull.signed_mass = -5;
+        assert!(!jousted_npc(&npc, -10));
+    }
+
+    #[test]
+    fn a_class_of_negative_mass_passes_the_199_ton_gate() {
+        // `cmpw $0xc7` / `jg` @0x861ac, signed.
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.hull.signed_mass = -300;
+        npc.hull.mass = 0.0;
+        assert!(jousted(&npc, ABOVE, 180.0).kept.is_some());
+    }
+
+    #[test]
+    fn against_an_npc_a_roll_of_0_breaks_off_and_a_1_only_with_the_complex_roll() {
+        let npc = fighter(Goal::Attack(OTHER), 0.0);
+        let jousted_npc = |chance: &mut Ranged, rating: i64| {
+            stepped_at_npc(&npc, (ABOVE, 180.0), (1, 100), rating, chance)
+                .kept
+                .is_some()
+        };
+        let mut chance = Ranged::of(&[(2, 0)]);
+        assert!(jousted_npc(&mut chance, 0));
+        assert!(chance.was_asked(2));
+        let mut chance = Ranged::of(&[(2, 1), (1344, 100)]);
+        assert!(!jousted_npc(&mut chance, 355));
+        assert_eq!(chance.asked, [2, 1344]);
+        let mut chance = Ranged::of(&[(2, 1), (1344, 100)]);
+        assert!(jousted_npc(&mut chance, 356));
+    }
+
+    #[test]
+    fn against_the_player_only_the_complex_roll_decides() {
+        let npc = fighter(AT_PLAYER, 0.0);
+        let at_rating = |rating: i64| {
+            let mut chance = Ranged::of(&[(2, 0), (1344, 44)]);
+            let kept = stepped_at_player(&npc, &player_off(ABOVE, 180.0), rating, &mut chance).kept;
+            assert!(!chance.was_asked(2), "no `Rand(2)` against the player");
+            assert_eq!(chance.asked, [1344]);
+            kept.is_some()
+        };
+        assert!(at_rating(300));
+        assert!(!at_rating(299));
+    }
+
+    #[test]
+    fn a_ship_breaking_off_keeps_it_inside_165_until_it_faces_its_break_heading_within_3_turns() {
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let mut chance = Ranged::of(&[]);
+        // Far off its break heading: it breaks off on, its turret alone.
+        let pursuit = stepped_at_player(&npc, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::BreakOff]);
+        assert_eq!(pursuit.kept, Some(Kept::BreakOff { heading: 135 }));
+        // 9 off (3 turns of 3): still breaking off, strictly. 126.9 is
+        // 8.1 off as a float but 126, 9 off, in whole degrees: still. 127
+        // is 8 off, and it drops back to dogfight.
+        for heading in [126.0, 126.9] {
+            npc.state.heading = heading;
+            let pursuit = stepped_at_player(&npc, &player_off(ABOVE, 180.0), 0, &mut chance);
+            assert_eq!(
+                pursuit.kept,
+                Some(Kept::BreakOff { heading: 135 }),
+                "{heading}"
+            );
+        }
+        npc.state.heading = 127.0;
+        let pursuit = stepped_at_player(&npc, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::BreakOff]);
+        assert_eq!(pursuit.kept, None);
+        assert!(chance.asked.is_empty());
+    }
+
+    /// `npc` on an inertialess hull ([`FAST`]'s, `Flags2` 0x0040).
+    fn inertialess(mut npc: Npc) -> Npc {
+        npc.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        assert!(npc.hull_inertialess(InertialDampener::PlayerOnly));
+        npc
+    }
+
+    #[test]
+    fn an_inertialess_ship_breaking_off_leaves_only_beyond_165_whole_pixels_never_by_facing() {
+        let facing = fighter(AT_PLAYER, 135.0);
+        assert!(fire::faces(&facing, 135, GUN_FACING));
+        let away = fighter(AT_PLAYER, 0.0);
+        assert!(!fire::faces(&away, 135, GUN_FACING));
+        for npc in [&facing, &away] {
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(100.0, 100.0)));
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(165.9, 0.0)));
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(0.0, -165.9)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(166.0, 0.0)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(0.0, -166.0)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(-166.0, 20.0)));
+        }
+        // An inertial one leaves by facing alone, wherever its target.
+        assert!(leaves_break_off(&facing, false, 135, Vec2::new(0.0, 0.0)));
+        assert!(!leaves_break_off(&away, false, 135, Vec2::new(0.0, 0.0)));
+        assert!(!leaves_break_off(&away, false, 135, Vec2::new(500.0, 0.0)));
+    }
+
+    #[test]
+    fn an_inertialess_ship_breaking_off_keeps_it_facing_its_break_heading() {
+        let mut npc = fighter(AT_PLAYER, 135.0);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let mut chance = Ranged::of(&[]);
+        let inertial = stepped_at_player(&npc, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(inertial.kept, None, "an inertial one drops back");
+        let raven = inertialess(npc);
+        let pursuit = stepped_at_player(&raven, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::BreakOff]);
+        assert_eq!(pursuit.kept, Some(Kept::BreakOff { heading: 135 }));
+        // By the Bible's reading a dampener counts too.
+        let mut dampened = fighter(AT_PLAYER, 135.0);
+        dampened.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        dampened.stats.dampener = true;
+        let npcs = [dampened.clone()];
+        let around = Surroundings {
+            player: Some(player_off(ABOVE, 180.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let bible = PursuitRules {
+            inertial_dampener: InertialDampener::AnyShip,
+            ..PursuitRules::default()
+        };
+        assert_eq!(
+            step(&dampened, &around, bible, &mut chance).kept,
+            Some(Kept::BreakOff { heading: 135 })
+        );
+        assert_eq!(
+            step(&dampened, &around, PursuitRules::default(), &mut chance).kept,
+            None
+        );
+    }
+
+    #[test]
+    fn an_inertialess_dogfighter_outside_165_on_both_axes_never_breaks_off() {
+        // The original skips the joust there (@0x86143-0x86150); its 122
+        // range already fails, so only its draws differ.
+        let duel = |off: Vec2| Duel {
+            off,
+            target_speed: 0.0,
+            heading: 315,
+            bearing: 315,
+            target_heading: 135,
+            at_player: true,
+            target_slot: 0,
+            target_mass: 100,
+            rating: 1599,
+        };
+        let npc = inertialess(fighter(AT_PLAYER, 315.0));
+        assert!(joust(
+            &npc,
+            &duel(Vec2::new(122.0, 122.0)),
+            &mut Ranged::of(&[])
+        ));
+        assert!(!joust(
+            &npc,
+            &duel(Vec2::new(165.0, 165.0)),
+            &mut Ranged::of(&[])
+        ));
+        assert!(!joust(
+            &npc,
+            &duel(Vec2::new(-200.0, 166.0)),
+            &mut Ranged::of(&[])
+        ));
+    }
+
+    /// The surroundings of a fighter `npc` whose target, NPC 2 (in slot 2,
+    /// so no joust) or the player, lies `off` from [`AT`], facing away
+    /// along the bearing to it and moving at `speed` along its heading.
+    fn match_target(npc: &Npc, off: Vec2, speed: f32) -> (Vec<Npc>, PlayerSide) {
+        let heading = f32::from(trig::intercept_angle(AT, AT + off));
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = AT + off;
+        other.state.heading = heading;
+        other.berth = 2;
+        other.speed = speed;
+        let side = PlayerSide {
+            speed,
+            ..player_off(off, heading)
+        };
+        (vec![npc.clone(), other], side)
+    }
+
+    /// The speed cap `npc`'s step sets at its target `off` from [`AT`]
+    /// moving at `speed` (see [`match_target`]), its heading `turned` from
+    /// its dogfight lead.
+    fn speed_cap(npc: &Npc, off: Vec2, speed: f32, turned: f32) -> Option<f32> {
+        let (npcs, side) = match_target(npc, off, speed);
+        let target = if npc.goal == AT_PLAYER {
+            side.state
+        } else {
+            npcs[1].state
+        };
+        let mut npc = npc.clone();
+        npc.state.heading = f32::from(fire::dogfight_lead(
+            &npc,
+            &target,
+            None,
+            &crate::ai::NO_WEAPONS,
+        )) + turned;
+        let npcs = [npc.clone(), npcs[1].clone()];
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Dogfight]);
+        pursuit.frame.and_then(|frame| frame.speed_cap)
+    }
+
+    #[test]
+    fn an_inertialess_dogfighter_facing_within_3_turns_and_inside_100_caps_at_its_targets_lower_speed()
+     {
+        let close = Vec2::new(50.0, -50.0);
+        for goal in [Goal::Attack(OTHER), AT_PLAYER] {
+            let mut npc = inertialess(fighter(goal, 0.0));
+            npc.speed = 5.0;
+            assert_eq!(speed_cap(&npc, close, 2.0, 0.0), Some(2.0), "{goal:?}");
+            // Within 3 turns of 3, strictly.
+            assert_eq!(speed_cap(&npc, close, 2.0, 8.0), Some(2.0));
+            assert_eq!(speed_cap(&npc, close, 2.0, 9.0), None);
+            // Within 100 on both axes, strictly.
+            assert_eq!(speed_cap(&npc, Vec2::new(99.9, -99.9), 2.0, 0.0), Some(2.0));
+            assert_eq!(speed_cap(&npc, Vec2::new(100.0, 0.0), 2.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, Vec2::new(0.0, 100.0), 2.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, Vec2::new(-100.0, 0.0), 2.0, 0.0), None);
+            // Only at a lower speed, strictly; a target at none sets none.
+            assert_eq!(speed_cap(&npc, close, 5.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, close, 4.9, 0.0), Some(4.9));
+            assert_eq!(speed_cap(&npc, close, 0.0, 0.0), Some(0.0));
+            // Never for an inertial ship.
+            let inertial = Npc {
+                stats: ShipStats::new(FAST, &[]),
+                ..npc
+            };
+            assert_eq!(speed_cap(&inertial, close, 2.0, 0.0), None);
+        }
+    }
+
+    #[test]
+    fn outside_165_the_high_level_replaces_a_break_off_with_the_approach() {
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let pursuit = stepped_at_player(
+            &npc,
+            &player_off(Vec2::new(0.0, -165.1), 180.0),
+            0,
+            &mut Ranged::of(&[]),
+        );
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Approach]);
+        assert_eq!(pursuit.kept, None);
+    }
+
+    /// `npc` with an afterburner.
+    fn burning(mut npc: Npc) -> Npc {
+        npc.afterburner = true;
+        npc
+    }
+
+    #[test]
+    fn an_approaching_afterburner_ship_more_than_82_off_on_both_axes_and_facing_rushes_from_the_next_tick()
+     {
+        let off = Vec2::new(-83.0, -300.0);
+        let bearing = trig::intercept_angle(AT, AT + off);
+        let npc = burning(fighter(AT_PLAYER, f32::from(bearing)));
+        let mut chance = Ranged::of(&[]);
+        let pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Approach], "this tick");
+        assert_eq!(pursuit.kept, Some(Kept::Rush));
+        let next = Npc {
+            pursuit,
+            ..npc.clone()
+        };
+        let pursuit = stepped_at_player(&next, &player_off(off, 0.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Rush], "the next");
+        // 82 whole pixels across, or up, is not enough.
+        for off in [Vec2::new(-82.9, -300.0), Vec2::new(-300.0, -82.9)] {
+            let npc = burning(fighter(
+                AT_PLAYER,
+                f32::from(trig::intercept_angle(AT, AT + off)),
+            ));
+            assert_eq!(
+                stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance).kept,
+                None,
+                "{off:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ship_rushes_in_only_with_an_afterburner_and_facing_within_30_whole_degrees() {
+        let off = Vec2::new(-200.0, -200.0);
+        let mut chance = Ranged::of(&[]);
+        let kept = |npc: &Npc, chance: &mut Ranged| {
+            stepped_at_player(npc, &player_off(off, 0.0), 0, chance).kept
+        };
+        // The table's bearing up and left is 314.
+        let bearing = f32::from(trig::intercept_angle(AT, AT + off));
+        assert_eq!(bearing, 314.0);
+        assert_eq!(kept(&fighter(AT_PLAYER, bearing), &mut chance), None);
+        assert_eq!(
+            kept(&burning(fighter(AT_PLAYER, bearing + 30.9)), &mut chance),
+            Some(Kept::Rush)
+        );
+        assert_eq!(
+            kept(&burning(fighter(AT_PLAYER, bearing + 31.0)), &mut chance),
+            None
+        );
+        assert_eq!(
+            kept(&burning(fighter(AT_PLAYER, bearing - 30.0)), &mut chance),
+            Some(Kept::Rush)
+        );
+    }
+
+    #[test]
+    fn a_dogfighting_afterburner_ship_rushes_in_the_same_tick_and_drops_back_inside_165() {
+        let off = Vec2::new(-100.0, -100.0);
+        let npc = burning(fighter(AT_PLAYER, 315.0));
+        let mut chance = Ranged::of(&[]);
+        let pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Dogfight, Manoeuvre::Rush]);
+        assert_eq!(pursuit.kept, None, "inside 165 on both axes");
+        assert!(!chance.was_asked(100));
+    }
+
+    #[test]
+    fn a_ship_that_both_jousts_and_rushes_in_rushes() {
+        // 100 off on both axes, head on: the joust's 0x10, then the rush
+        // entry's 0x11 over it.
+        let off = Vec2::new(-100.0, -100.0);
+        let npc = burning(fighter(AT_PLAYER, 315.0));
+        let pursuit = stepped_at_player(&npc, &player_off(off, 135.0), 1599, &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Dogfight, Manoeuvre::Rush]);
+        assert_eq!(pursuit.kept, None);
+    }
+
+    #[test]
+    fn a_rushing_ship_wants_the_plain_bearing_and_outside_165_drops_back_on_a_roll_of_0_in_100() {
+        let off = Vec2::new(-200.0, -300.0);
+        let mut npc = burning(fighter(AT_PLAYER, 0.0));
+        npc.pursuit.kept = Some(Kept::Rush);
+        npc.state.velocity = Vec2::new(3.0, 0.0);
+        let rushed = |outcome: u32| {
+            let mut chance = Ranged::of(&[(100, outcome)]);
+            let pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance);
+            assert_eq!(chance.asked, [100]);
+            pursuit
+        };
+        let kept = rushed(99);
+        assert_eq!(bodies(&kept), [Manoeuvre::Rush]);
+        assert_eq!(kept.kept, Some(Kept::Rush));
+        assert_eq!(
+            kept.frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.heading),
+            Some(trig::intercept_angle(AT, AT + off)),
+            "the bearing, never a lead"
+        );
+        assert_eq!(rushed(0).kept, None);
+    }
+
+    #[test]
+    fn a_fleeing_afterburner_ship_within_250_and_165_on_an_axis_rushes_and_at_166_by_166_flees() {
+        let fleeing = Goal::Flee(ShipRef::Player);
+        let fled = |npc: &Npc, off: Vec2| {
+            stepped_at_player(npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]))
+        };
+        let npc = burning(fighter(fleeing, 0.0));
+        // Within 165 on one axis, 249 on the other: it rushes.
+        let pursuit = fled(&npc, Vec2::new(164.9, 249.0));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Flee, Manoeuvre::Rush]);
+        assert_eq!(
+            bodies(&fled(&npc, Vec2::new(-200.0, 100.0))),
+            [Manoeuvre::Flee, Manoeuvre::Rush]
+        );
+        // Inside the 250 box but beyond 165 on both axes: it flees.
+        assert_eq!(
+            bodies(&fled(&npc, Vec2::new(166.0, 166.0))),
+            [Manoeuvre::Flee]
+        );
+        assert_eq!(
+            bodies(&fled(&npc, Vec2::new(165.0, -165.0))),
+            [Manoeuvre::Flee]
+        );
+        // With no afterburner it flees as before.
+        let plain = fighter(fleeing, 0.0);
+        assert_eq!(
+            bodies(&fled(&plain, Vec2::new(100.0, 100.0))),
+            [Manoeuvre::Flee]
+        );
+    }
+
+    #[test]
+    fn a_fleeing_ship_runs_out_beyond_250_whole_pixels_with_no_body() {
+        let npc = burning(fighter(Goal::Flee(ShipRef::Player), 0.0));
+        let fled =
+            |off: Vec2| stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+        assert_eq!(
+            bodies(&fled(Vec2::new(250.9, 0.0))),
+            [Manoeuvre::Flee, Manoeuvre::Rush]
+        );
+        let out = fled(Vec2::new(251.0, 0.0));
+        assert!(out.frame.is_some_and(|frame| frame.last().is_none()));
+        assert_eq!(out.kept, None);
+    }
+
+    #[test]
+    fn a_stand_off_afterburner_ship_backing_away_rushes_in_the_same_tick() {
+        let mut npc = burning(fighter(AT_PLAYER, 0.0));
+        npc.hull.stands_off = true;
+        let pursuit = stepped_at_player(
+            &npc,
+            &player_off(Vec2::new(0.0, -100.0), 0.0),
+            0,
+            &mut Ranged::of(&[]),
+        );
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Flee, Manoeuvre::Rush]);
+        assert_eq!(pursuit.kept, None);
+    }
+
+    #[test]
+    fn a_stand_off_ship_never_keeps_a_rush() {
+        let mut npc = burning(fighter(AT_PLAYER, 0.0));
+        npc.hull.stands_off = true;
+        npc.pursuit.kept = Some(Kept::Rush);
+        // No weapons: a band of none, so beyond the box it approaches.
+        let pursuit = stepped_at_player(
+            &npc,
+            &player_off(Vec2::new(0.0, -400.0), 0.0),
+            0,
+            &mut Ranged::of(&[]),
+        );
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Approach]);
+    }
+
+    #[test]
+    fn a_new_target_keeps_the_pursuit_and_a_goal_that_is_no_attack_drops_it() {
+        let off = Vec2::new(-200.0, -300.0);
+        let mut npc = burning(fighter(Goal::Attack(OTHER), 0.0));
+        npc.pursuit.kept = Some(Kept::Rush);
+        npc.goal = AT_PLAYER;
+        let pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Rush]);
+        assert_eq!(pursuit.kept, Some(Kept::Rush));
+        npc.goal = Goal::Idle;
+        assert_eq!(
+            stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[])),
+            Pursuit::default()
+        );
+        npc.goal = Goal::Snipe(ShipRef::Player);
+        let sniped = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+        assert_eq!(bodies(&sniped), [Manoeuvre::Snipe]);
+        assert_eq!(sniped.kept, None);
+    }
+
+    const PLUNDER: Goal = Goal::Plunder {
+        ship: ShipRef::Player,
+        hopeless: false,
+    };
+    const HOPELESS: Goal = Goal::Plunder {
+        ship: ShipRef::Player,
+        hopeless: true,
+    };
+
+    /// Where `npc`'s high level starts its frame at a ship `off` from
+    /// [`AT`], disabled as `disabled` says.
+    fn start_at(npc: &Npc, off: Vec2, disabled: bool) -> Option<Start> {
+        let at = ShipState {
+            position: AT + off,
+            ..ShipState::default()
+        };
+        high_level(npc, &at, disabled, None)
+    }
+
+    #[test]
+    fn a_plunderer_inside_165_dogfights_keeping_a_break_off_and_a_rush() {
+        let inside = Vec2::new(165.0, -165.0);
+        let mut npc = fighter(PLUNDER, 0.0);
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight))
+        );
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::BreakOff { heading: 135 })
+        );
+        npc.pursuit.kept = Some(Kept::Rush);
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::Sub(Manoeuvre::Rush)),
+            "`sub - 0x10 <= 1` keeps 0x11 too (@0x8eb28)"
+        );
+        let attacker = Npc {
+            goal: AT_PLAYER,
+            ..npc.clone()
+        };
+        assert_eq!(
+            start_at(&attacker, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "an attacker drops its rush inside"
+        );
+        let hopeless = Npc {
+            goal: HOPELESS,
+            pursuit: Pursuit::default(),
+            ..npc
+        };
+        assert_eq!(
+            start_at(&hopeless, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "never a snipe inside"
+        );
+    }
+
+    #[test]
+    fn outside_165_a_plunderer_approaches_unless_rushing_and_snipes_when_hopeless() {
+        for outside in [Vec2::new(165.1, 0.0), Vec2::new(0.0, -165.1)] {
+            let mut npc = fighter(PLUNDER, 0.0);
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Approach)),
+                "{outside:?}"
+            );
+            npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Approach))
+            );
+            npc.pursuit.kept = Some(Kept::Rush);
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Rush))
+            );
+            npc.goal = HOPELESS;
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Snipe)),
+                "the hopeless test comes first (@0x8eace)"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plunderer_keeps_no_stand_off_band() {
+        let mut npc = fighter(PLUNDER, 0.0);
+        npc.hull.stands_off = true;
+        npc.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        let attacker = Npc {
+            goal: AT_PLAYER,
+            ..npc.clone()
+        };
+        let off = Vec2::new(0.0, -600.0);
+        assert_eq!(
+            start_at(&attacker, off, false),
+            Some(Start::Sub(Manoeuvre::Snipe)),
+            "within its band, an attacker snipes"
+        );
+        assert_eq!(
+            start_at(&npc, off, false),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+        assert_eq!(
+            start_at(&npc, Vec2::new(0.0, -100.0), false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "no backing away"
+        );
+    }
+
+    #[test]
+    fn a_plunderer_of_a_disabled_ship_flies_no_fight_as_it_docks() {
+        for goal in [PLUNDER, HOPELESS] {
+            let npc = burning(fighter(goal, 0.0));
+            assert_eq!(start_at(&npc, Vec2::new(0.0, -100.0), true), None);
+            assert_eq!(start_at(&npc, Vec2::new(0.0, -600.0), true), None);
+        }
+    }
+
+    #[test]
+    fn a_frame_is_read_only_for_the_goal_it_was_worked_out_under() {
+        let npc = burning(fighter(AT_PLAYER, 315.0));
+        let off = Vec2::new(-100.0, -100.0);
+        let at = player_off(off, 0.0).state;
+        let mut stepped = npc.clone();
+        stepped.pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+        assert_eq!(
+            frame_of(&stepped, &at, false, None, &crate::ai::NO_WEAPONS)
+                .map(|frame| frame.iter().count()),
+            Some(2)
+        );
+        stepped.goal = Goal::Attack(OTHER);
+        assert_eq!(
+            frame_of(&stepped, &at, false, None, &crate::ai::NO_WEAPONS)
+                .map(|frame| frame.iter().count()),
+            Some(1),
+            "the high level's substate alone"
+        );
+    }
+
+    // Swarming (substate 0x12).
+
+    /// A swarming fighter attacking the player, naming berth 1 as its
+    /// swarm leader.
+    fn swarmer() -> Npc {
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.hull.swarms = true;
+        npc.swarm_leader = Some(1);
+        npc
+    }
+
+    /// The swarm leader at berth 1: NPC 7, 100 left of [`AT`], facing
+    /// 90.9 (whole 90, right across the screen).
+    fn swarm_leader() -> Npc {
+        let mut leader = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
+        leader.berth = 1;
+        leader.hull.swarms = true;
+        leader.state.position = AT + Vec2::new(-100.0, 0.0);
+        leader.state.heading = 90.9;
+        leader
+    }
+
+    /// A lead not led by the swarm leader, aiming at `aim`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn aiming(aim: Vec2) -> Option<SwarmLead> {
+        Some(SwarmLead {
+            aim,
+            leads_it: false,
+            glow: 0,
+        })
+    }
+
+    /// Where `npc`'s high level starts at the player `off` from [`AT`]
+    /// with `swarm`.
+    fn swarm_start(npc: &Npc, off: Vec2, swarm: Option<SwarmLead>) -> Option<Start> {
+        let at = ShipState {
+            position: AT + off,
+            ..ShipState::default()
+        };
+        high_level(npc, &at, false, swarm)
+    }
+
+    /// 400 above [`AT`]: outside the dogfight box.
+    const FAR: Vec2 = Vec2::new(0.0, -400.0);
+
+    #[test]
+    fn outside_165_a_swarmer_with_a_swarm_leader_flies_at_15_top_speeds_ahead_of_it() {
+        let npc = swarmer();
+        let leader = swarm_leader();
+        let npcs = [npc.clone(), leader.clone()];
+        let around = Surroundings {
+            player: Some(player_off(FAR, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Swarm]);
+        assert_eq!(pursuit.kept, None);
+        let aim = leader.state.position + trig::accel(90, npc.stats.handling.max_speed * 15.0);
+        assert_eq!(
+            pursuit
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.heading),
+            Some(trig::intercept_angle(AT, aim))
+        );
+        // Either axis outside the box will do.
+        for off in [Vec2::new(165.1, 0.0), Vec2::new(0.0, -165.1)] {
+            assert_eq!(
+                swarm_start(&npc, off, aiming(AT)),
+                Some(Start::Sub(Manoeuvre::Swarm)),
+                "{off:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kept_rush_outside_165_gives_way_to_the_swarm() {
+        let mut npc = burning(swarmer());
+        npc.pursuit.kept = Some(Kept::Rush);
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Swarm))
+        );
+        let leader = swarm_leader();
+        let npcs = [npc.clone(), leader];
+        let around = Surroundings {
+            player: Some(player_off(FAR, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut chance = Ranged::of(&[]);
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Swarm]);
+        assert_eq!(pursuit.kept, None, "the rush is dropped");
+        assert!(chance.asked.is_empty(), "no rush roll");
+    }
+
+    #[test]
+    fn a_swarmer_led_by_its_own_swarm_leader_approaches() {
+        let npc = swarmer();
+        let led = Some(SwarmLead {
+            aim: AT,
+            leads_it: true,
+            glow: 0,
+        });
+        assert_eq!(
+            swarm_start(&npc, FAR, led),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_swarmer_with_no_swarm_leader_approaches() {
+        assert_eq!(
+            swarm_start(&swarmer(), FAR, None),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_ship_that_does_not_swarm_approaches() {
+        let mut npc = swarmer();
+        npc.hull.swarms = false;
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn inside_165_a_swarmer_dogfights() {
+        assert_eq!(
+            swarm_start(&swarmer(), Vec2::new(165.0, -165.0), aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Dogfight))
+        );
+    }
+
+    #[test]
+    fn a_stand_off_swarmer_keeps_its_band() {
+        let mut npc = swarmer();
+        npc.hull.stands_off = true;
+        // No weapons: a band of none, so beyond the box it approaches.
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_plunderer_never_swarms() {
+        let npc = Npc {
+            goal: PLUNDER,
+            ..swarmer()
+        };
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_sniper_never_swarms() {
+        let npc = Npc {
+            goal: Goal::Snipe(ShipRef::Player),
+            ..swarmer()
+        };
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Snipe))
+        );
+    }
+
+    #[test]
+    fn a_swarm_frame_is_worked_out_from_the_lead_before_the_step_runs() {
+        let npc = swarmer();
+        let at = player_off(FAR, 0.0).state;
+        let aim = Vec2::new(900.0, 200.0);
+        let frame =
+            frame_of(&npc, &at, false, aiming(aim), &crate::ai::NO_WEAPONS).expect("a fight");
+        assert_eq!(
+            frame.last(),
+            Some(Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading: trig::intercept_angle(AT, aim),
+            })
+        );
+    }
+
+    // The passes and the flight of a frame.
+
+    use crate::ai::fire::{FireRules, trigger};
+    use crate::catalog::{WeaponId, WeaponRecord};
+    use crate::combat::armament::{Armament, Trigger};
+    use crate::combat::weapon::WeaponSpec;
+    use crate::traffic::autopilot::{self, TopSpeeds};
+    use nova_sim_catalog::fixture::weapon;
+
+    /// A gun (128), a turret (130) and a missile (131), each reaching 300.
+    fn armed(mut npc: Npc, ids: &[i16]) -> Npc {
+        let of = |id: i16| {
+            let guidance = match id {
+                130 => 4,
+                131 => 1,
+                _ => -1,
+            };
+            WeaponSpec::new(&WeaponRecord {
+                guidance,
+                speed: 1000,
+                count: 30,
+                ..weapon(id)
+            })
+        };
+        npc.armament = Armament::new(ids.iter().map(|&id| (of(id), 1)));
+        npc
+    }
+
+    /// `npc` stepped at the player `off` from [`AT`], then the trigger it
+    /// holds.
+    fn triggered(npc: &Npc, off: Vec2) -> Trigger {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(player_off(off, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut stepped = npc.clone();
+        stepped.pursuit = step(npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        trigger(&stepped, &around, FireRules::default())
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn id(id: i16) -> Option<WeaponId> {
+        Some(WeaponId(id))
+    }
+
+    #[test]
+    fn a_ship_breaking_off_fires_its_turret_and_point_defence_only_in_the_164_box_and_never_a_gun()
+    {
+        let mut npc = armed(fighter(AT_PLAYER, 0.0), &[128, 130]);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let near = triggered(&npc, Vec2::new(0.0, -164.9));
+        assert_eq!((near.only, near.point_defence), (id(130), true));
+        let edge = triggered(&npc, Vec2::new(0.0, -165.0));
+        assert_eq!((edge.only, edge.point_defence), (None, false), "past 164");
+        let gunner = Npc {
+            armament: armed(fighter(AT_PLAYER, 0.0), &[128]).armament,
+            ..npc
+        };
+        assert_eq!(triggered(&gunner, Vec2::new(0.0, -100.0)).only, None);
+    }
+
+    #[test]
+    fn a_rushing_ship_outside_the_box_fires_its_missile_facing_within_3_turns_and_no_gun() {
+        let mut npc = burning(armed(fighter(AT_PLAYER, 0.0), &[128, 131]));
+        npc.pursuit.kept = Some(Kept::Rush);
+        let off = Vec2::new(0.0, -290.0);
+        let rushing = triggered(&npc, off);
+        assert_eq!((rushing.only, rushing.point_defence), (id(131), false));
+        npc.state.heading = 9.0;
+        assert_eq!(triggered(&npc, off).only, None, "9 off, strictly");
+        let gunner = Npc {
+            armament: armed(fighter(AT_PLAYER, 0.0), &[128]).armament,
+            ..npc
+        };
+        assert_eq!(triggered(&gunner, off).only, None);
+    }
+
+    #[test]
+    fn a_rushing_ship_in_the_box_runs_its_turret_then_its_gun_facing_within_3_turns() {
+        // Fleeing close, it rushes in the same frame: the flee's turret
+        // pass, then the rush's turret and gun passes.
+        let flee = Goal::Flee(ShipRef::Player);
+        let gunner = burning(armed(fighter(flee, 0.0), &[128]));
+        let rushing = triggered(&gunner, Vec2::new(0.0, -100.0));
+        assert_eq!((rushing.only, rushing.point_defence), (id(128), true));
+        let off_by_9 = Npc {
+            state: ShipState {
+                heading: 9.0,
+                ..gunner.state
+            },
+            ..gunner.clone()
+        };
+        assert_eq!(triggered(&off_by_9, Vec2::new(0.0, -100.0)).only, None);
+        // Without the afterburner it flees, its turret pass alone.
+        let plain = Npc {
+            afterburner: false,
+            ..gunner
+        };
+        assert_eq!(triggered(&plain, Vec2::new(0.0, -100.0)).only, None);
+    }
+
+    /// `npc` stepped at the player `off` from [`AT`], then flown a tick.
+    fn flown(npc: &Npc, off: Vec2) -> Npc {
+        let side = player_off(off, 0.0);
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut ship = npc.clone();
+        ship.pursuit = step(npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&side.state),
+            false,
+            crate::traffic::autopilot::Beside::default(),
+            TopSpeeds::own_of(npc),
+            crate::flight::FlightRules::default(),
+            crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
+            &mut Ranged::of(&[]),
+        );
+        ship
+    }
+
+    #[test]
+    fn a_ship_breaking_off_thrusts_every_tick_at_1_5_times_its_acceleration() {
+        // FAST thrusts 900 / 5000 = 0.18 a tick; facing 135 off its break
+        // heading, it turns 3 toward it and thrusts at 0.27 all the same.
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let ship = flown(&npc, ABOVE);
+        assert_eq!(ship.state.heading, 3.0);
+        assert!(
+            (ship.state.velocity.length() - 0.27).abs() < 1e-6,
+            "{:?}",
+            ship.state
+        );
+    }
+
+    #[test]
+    fn a_rushing_ship_thrusts_at_2_75_times_its_acceleration_up_to_1_8_times_its_top_speed() {
+        let mut npc = burning(fighter(AT_PLAYER, 0.0));
+        npc.pursuit.kept = Some(Kept::Rush);
+        npc.state.velocity = Vec2::new(0.0, -6.0);
+        // 2000 above, so it stays outside the box; a roll of 99 keeps it.
+        let off = Vec2::new(0.0, -2000.0);
+        let ship = flown(&npc, off);
+        // 2.75 × 0.18 = 0.495 a tick.
+        assert!(
+            (ship.state.velocity.length() - 6.495).abs() < 1e-5,
+            "{:?}",
+            ship.state
+        );
+        // Each push lands while it is short of 1.8 × 6 = 10.8, the tenth
+        // carrying it to 10.95, past it, and then no more: `_AdjustedAccel`
+        // stops adding at the cap but clamps nothing.
+        let mut ship = npc;
+        for _ in 0..12 {
+            let relative = off - (ship.state.position - AT);
+            ship = flown(&ship, relative);
+        }
+        assert!(
+            (ship.state.velocity.length() - 10.95).abs() < 1e-4,
+            "{:?}",
+            ship.state
+        );
+    }
+
+    /// An inertialess fighter at speed 5 (top 6, 0.18 a tick) attacking
+    /// NPC 2 `off` from [`AT`] at `speed` (see [`match_target`]), in
+    /// `slot` and facing `heading`, the fighter facing its dogfight lead,
+    /// stepped on `chance` and then flown a tick.
+    fn flown_matching(
+        off: Vec2,
+        speed: f32,
+        (slot, heading): (u32, f32),
+        chance: &mut Ranged,
+    ) -> Npc {
+        let mut npc = inertialess(fighter(Goal::Attack(OTHER), 0.0));
+        npc.speed = 5.0;
+        let (mut npcs, side) = match_target(&npc, off, speed);
+        npcs[1].berth = slot;
+        npcs[1].state.heading = heading;
+        npc.state.heading = f32::from(fire::dogfight_lead(
+            &npc,
+            &npcs[1].state,
+            None,
+            &crate::ai::NO_WEAPONS,
+        ));
+        npcs[0] = npc.clone();
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut ship = npc.clone();
+        ship.pursuit = step(&npc, &around, PursuitRules::default(), chance);
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&npcs[1].state),
+            false,
+            crate::traffic::autopilot::Beside::default(),
+            TopSpeeds::own_of(&npc),
+            crate::flight::FlightRules::default(),
+            autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
+            &mut Ranged::of(&[]),
+        );
+        ship
+    }
+
+    #[test]
+    fn a_speed_matched_inertialess_dogfighter_thrusting_snaps_its_speed_down_to_the_cap() {
+        let ship = flown_matching(Vec2::new(50.0, -50.0), 2.0, (2, 45.0), &mut Ranged::of(&[]));
+        assert_eq!(
+            ship.pursuit
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.manoeuvre),
+            Some(Manoeuvre::Dogfight)
+        );
+        assert_eq!(ship.speed, 2.0);
+        assert_eq!(
+            ship.display.drive.thrust,
+            crate::traffic::ship_display::Thrust::Plain
+        );
+    }
+
+    #[test]
+    fn a_cap_of_none_is_no_cap() {
+        // A target at none sets a cap of none, which `_HandleShip` reads
+        // as the top speed (@0x34a8a-0x34aab): 5 + 0.18.
+        let ship = flown_matching(Vec2::new(50.0, -50.0), 0.0, (2, 45.0), &mut Ranged::of(&[]));
+        assert_eq!(
+            ship.pursuit.frame.and_then(|frame| frame.speed_cap),
+            Some(0.0)
+        );
+        assert!((ship.speed - 5.18).abs() < 1e-6, "{}", ship.speed);
+    }
+
+    #[test]
+    fn a_dogfight_that_breaks_off_or_rushes_flies_no_cap() {
+        // Head on, 50 above, NPC 2 in slot 1 and a roll of 0 on `Rand(2)`:
+        // it jousts, and the break-off's cap of none wins (@0x8645a), so
+        // it thrusts at 1.5 × 0.18 to 5.27.
+        let ship = flown_matching(
+            Vec2::new(0.0, -50.0),
+            2.0,
+            (1, 180.0),
+            &mut Ranged::of(&[(2, 0)]),
+        );
+        let frame = ship.pursuit.frame.expect("a frame");
+        assert_eq!(
+            frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
+            [Manoeuvre::Dogfight, Manoeuvre::BreakOff]
+        );
+        assert_eq!(frame.speed_cap, Some(2.0), "set by the dogfight");
+        assert!((ship.speed - 5.27).abs() < 1e-5, "{}", ship.speed);
+        // Rushing, at 2.75 × 0.18 up to 1.8 × 6.
+        let mut chance = Ranged::of(&[]);
+        let mut npc = burning(inertialess(fighter(Goal::Attack(OTHER), 0.0)));
+        npc.speed = 5.0;
+        let off = Vec2::new(-100.0, -100.0);
+        let (mut npcs, side) = match_target(&npc, off, 2.0);
+        npc.state.heading = f32::from(fire::dogfight_lead(
+            &npc,
+            &npcs[1].state,
+            None,
+            &crate::ai::NO_WEAPONS,
+        ));
+        npcs[0] = npc.clone();
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut ship = npc.clone();
+        ship.pursuit = step(&npc, &around, PursuitRules::default(), &mut chance);
+        assert_eq!(
+            bodies(&ship.pursuit),
+            [Manoeuvre::Dogfight, Manoeuvre::Rush]
+        );
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&npcs[1].state),
+            false,
+            crate::traffic::autopilot::Beside::default(),
+            TopSpeeds::own_of(&npc),
+            crate::flight::FlightRules::default(),
+            autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
+            &mut chance,
+        );
+        assert!((ship.speed - 5.495).abs() < 1e-5, "{}", ship.speed);
+    }
+
+    #[test]
+    fn a_fleeing_ship_that_rushes_flies_the_rush_at_its_attacker() {
+        // The frame's last body wins: it turns toward its attacker, not
+        // away, and thrusts at the rush's 2.75 × 0.18 = 0.495.
+        let npc = burning(fighter(Goal::Flee(ShipRef::Player), 10.0));
+        let ship = flown(&npc, ABOVE);
+        assert_eq!(ship.state.heading, 7.0, "toward the bearing of 0");
+        assert!(
+            (ship.state.velocity.length() - 0.495).abs() < 1e-6,
+            "{:?}",
+            ship.state
+        );
+    }
+
+    /// `npc`, naming [`swarm_leader`] as its swarm leader, stepped at the
+    /// player `off` from [`AT`] beside it, then the trigger it holds.
+    fn triggered_in_swarm(npc: &Npc, off: Vec2) -> Trigger {
+        let npcs = [npc.clone(), swarm_leader()];
+        let around = Surroundings {
+            player: Some(player_off(off, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut stepped = npc.clone();
+        stepped.pursuit = step(npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&stepped.pursuit), [Manoeuvre::Swarm]);
+        trigger(&stepped, &around, FireRules::default())
+    }
+
+    #[test]
+    fn a_swarmer_fires_its_missile_with_no_facing_test_and_no_gun_or_turret() {
+        // Facing down, away from the player 290 above.
+        let off = Vec2::new(0.0, -290.0);
+        let mut npc = armed(swarmer(), &[128, 130, 131]);
+        npc.state.heading = 180.0;
+        let swarming = triggered_in_swarm(&npc, off);
+        assert_eq!((swarming.only, swarming.point_defence), (id(131), false));
+        // A gun and a turret in reach are never picked.
+        let gunner = Npc {
+            armament: armed(swarmer(), &[128, 130]).armament,
+            ..npc.clone()
+        };
+        let held = triggered_in_swarm(&gunner, off);
+        assert_eq!((held.only, held.point_defence), (None, false));
+    }
+
+    #[test]
+    fn a_swarmer_whose_target_is_gone_fires_nothing() {
+        let npc = Npc {
+            goal: Goal::Attack(OTHER),
+            ..armed(swarmer(), &[131])
+        };
+        let npcs = [npc.clone(), swarm_leader()];
+        let around = Surroundings::new(&[], &npcs);
+        let mut stepped = npc.clone();
+        stepped.pursuit.frame = Some(Frame::of(
+            npc.goal,
+            &[Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading: 0,
+            }],
+        ));
+        let held = trigger(&stepped, &around, FireRules::default());
+        assert_eq!((held.only, held.point_defence), (None, false));
+    }
+
+    /// `npc` flown a tick on a stored swarm frame wanting `heading`, the
+    /// player [`FAR`] above.
+    fn flown_swarming(npc: &Npc, heading: i16) -> Npc {
+        let side = player_off(FAR, 0.0);
+        let mut ship = npc.clone();
+        ship.pursuit.frame = Some(Frame::of(
+            npc.goal,
+            &[Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading,
+            }],
+        ));
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&side.state),
+            false,
+            crate::traffic::autopilot::Beside::default(),
+            TopSpeeds::own_of(npc),
+            crate::flight::FlightRules::default(),
+            crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
+            &mut Ranged::of(&[]),
+        );
+        ship
+    }
+
+    #[test]
+    fn a_swarmer_thrusts_fully_while_off_by_less_than_its_turn_and_20_whole_degrees() {
+        // FAST turns 3 a tick: within 23 whole degrees it thrusts its plain
+        // 900 / 5000 = 0.18 and turns toward the heading wanted.
+        let npc = swarmer();
+        let ship = flown_swarming(&npc, 22);
+        assert_eq!(ship.state.heading, 3.0);
+        assert!(
+            (ship.state.velocity.length() - 0.18).abs() < 1e-6,
+            "{:?}",
+            ship.state
+        );
+        // At 23, strictly, it turns without thrust; 22.9 is 22 whole.
+        let ship = flown_swarming(&npc, 23);
+        assert_eq!(ship.state.heading, 3.0);
+        assert_eq!(ship.state.velocity, Vec2::ZERO);
+        let ship = flown_swarming(&npc, -23);
+        assert_eq!(ship.state.velocity, Vec2::ZERO, "either way");
+        let mut turned = npc.clone();
+        turned.state.heading = 0.9;
+        assert_eq!(flown_swarming(&turned, 23).state.velocity, Vec2::ZERO);
+        // At its top speed along its heading, the push adds nothing.
+        let mut fast = npc;
+        let top = fast.stats.handling.max_speed;
+        fast.state.velocity = Vec2::new(0.0, -top);
+        let ship = flown_swarming(&fast, 0);
+        assert!(
+            (ship.state.velocity.length() - top).abs() < 1e-5,
+            "{:?}",
+            ship.state
+        );
+    }
+
+    #[test]
+    fn the_swarm_flight_names_its_window() {
+        assert_eq!(autopilot::SWARM_THRUST, 20.0);
+    }
+}

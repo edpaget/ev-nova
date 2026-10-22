@@ -8,8 +8,8 @@
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
 //! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
 //! "Class: <ship> (<government>)" (`STR#` 2002 #195), with "Status:
-//! Hostile" (#196, #174) in red below for a hostile ship, and for the
-//! player's own escort "Status: Hired Escort" (#166) and its daily pay,
+//! Hostile" (#196, #174) in red below for a hostile ship, and for a
+//! ship the player leads "Status: Hired Escort" (#166) and its daily pay,
 //! "Pay: <wage> credits per day" (#297, #267), or "Status: Escort"
 //! (#168), in bright green (`_CommDialogUpdate` @0x90688-0x90704; the
 //! pay line is the original's escort dialog's, shown here, as the help
@@ -51,7 +51,6 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -179,7 +178,7 @@ pub fn pay_text(wage: i64) -> String {
 }
 
 /// The status lines item 12 shows below the class for `view`, each with
-/// its colour: for the player's escort "Status: Hired Escort" (`STR#`
+/// its colour: for a ship the player leads "Status: Hired Escort" (`STR#`
 /// 2002 #166) and its pay, or "Status: Escort" (#168), in bright green;
 /// for a hostile ship "Status: Hostile", in red; otherwise none.
 #[must_use]
@@ -539,15 +538,6 @@ impl Screen for CommDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 /// The haggle dialog (see the module docs).
@@ -717,15 +707,6 @@ impl Screen for HaggleDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
-
-    /// The buttons' sounds as they are clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -736,7 +717,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
-    use crate::sound::UiSound;
+    use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
     fn button(label: &str, key: Option<char>) -> HailButton {
@@ -752,6 +733,7 @@ mod tests {
         HailView {
             npc: NpcId(3),
             ship: ShipId(129),
+            first: None,
             reply: "Channel open.".to_owned(),
             comm_name: "Cruiser".to_owned(),
             govt_name: Some("Federation".to_owned()),
@@ -907,6 +889,8 @@ mod tests {
         assert!(texts(&dialog).contains(&"Taunt".to_owned()));
     }
 
+    /// Silent under the pointer: `_TrackCommDialogButtons` @0x28eff and
+    /// `_TrackPlanetCommDialogButtons` @0x28b28 play nothing.
     #[test]
     fn a_click_gives_its_press_once() {
         let mut three = dialog(&HailView {
@@ -927,10 +911,7 @@ mod tests {
             let sounds = click(&mut three, at);
             assert_eq!(three.take_press(), Some(press), "{item}");
             assert_eq!(three.take_press(), None, "once");
-            assert_eq!(
-                sounds,
-                [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-            );
+            assert_eq!(sounds, []);
         }
         let at = three
             .dialog()
@@ -948,6 +929,31 @@ mod tests {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_press(), Some(CommPress::Close), "{pressed:?}");
         }
+    }
+
+    /// A key that presses a button plays nothing in the original:
+    /// `_CommFilter` @0x908ed and `_PlanetCommFilter` @0x911a9 call no
+    /// sound routine, and neither does `_MyModalDialog` @0x59954.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for (pressed, press) in [
+            (Key::Enter, CommPress::Close),
+            (Key::Escape, CommPress::Close),
+            (Key::Char('e'), CommPress::Close),
+            (Key::Char('g'), CommPress::Option(0)),
+            (Key::Char('r'), CommPress::Option(1)),
+        ] {
+            let mut dialog = dialog(&view());
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_press(), Some(press), "{pressed:?}");
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        let mut dialog = dialog(&view());
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(dialog.take_press().is_some(), "Space on the focused button");
+        assert_eq!(dialog.take_sounds(), [], "Space");
     }
 
     #[test]
@@ -1313,6 +1319,33 @@ mod tests {
         }
     }
 
+    /// A key that chooses plays nothing in the original: `_CommFilter`
+    /// @0x908ed calls no sound routine, and neither does `_MyModalDialog`
+    /// @0x59954.
+    #[test]
+    fn haggle_keyboard_activation_is_silent_as_the_original() {
+        for (input, choice) in [
+            (key(Key::Enter), Some(Haggle::Accept)),
+            (key(Key::Char('a')), Some(Haggle::Accept)),
+            (key(Key::Char('l')), Some(Haggle::LowerPrice)),
+            (key(Key::Escape), None),
+        ] {
+            let mut dialog = haggle(3000);
+            assert_eq!(dialog.take_sounds(), []);
+            dialog.input(&input);
+            assert_eq!(dialog.take_choice(), choice, "{input:?}");
+            assert_eq!(dialog.take_sounds(), [], "{input:?}");
+        }
+        let mut dialog = haggle(3000);
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert!(
+            dialog.take_choice().is_some(),
+            "Space on the focused button"
+        );
+        assert_eq!(dialog.take_sounds(), [], "Space");
+    }
+
     #[test]
     fn a_click_abandoned_presses_nothing() {
         let mut dialog = dialog(&view());
@@ -1361,18 +1394,16 @@ mod tests {
         }
     }
 
+    /// `_TrackHaggleButtons` @0x27670 plays nothing under the pointer.
     #[test]
-    fn a_haggle_button_sounds_as_it_is_clicked_and_an_abandoned_click_chooses_nothing() {
+    fn a_haggle_button_click_is_silent_and_an_abandoned_click_chooses_nothing() {
         let mut dialog = haggle(3000);
         let at = dialog
             .dialog()
             .item_bounds(ACCEPT_ITEM)
             .expect("an item")
             .center();
-        assert_eq!(
-            click(&mut dialog, at),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, at), []);
         dialog.take_choice();
         for pressed in [true, false] {
             if !pressed {

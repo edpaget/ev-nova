@@ -8,6 +8,10 @@ pub enum ImageKind {
     Pict,
     /// An `rlëD` sprite sheet: one or more equal-sized frames.
     Rled,
+    /// An `rlëD`'s solid runs alone (its opcode-4 runs of one colour), one
+    /// frame per sheet frame: drawn plainly over the sheet's own frame, as
+    /// the original's blits fill a run raw over every blend and colorize.
+    RledSolid,
     /// A `PICT` picture whose alpha comes from another `PICT`, its mask:
     /// opaque where the mask is dark, clear where it is light. Nova's
     /// button caps are drawn this way.
@@ -15,6 +19,10 @@ pub enum ImageKind {
         /// The mask `PICT`'s ID.
         mask: i16,
     },
+    /// A `ppat` pixel pattern: one frame, drawn tiled.
+    Pattern,
+    /// A `cicn` colour icon: one frame, its mask as alpha.
+    Icon,
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -49,11 +57,42 @@ impl ImageKey {
         }
     }
 
+    /// `ppat` `id`.
+    #[must_use]
+    pub const fn pattern(id: i16) -> Self {
+        Self {
+            kind: ImageKind::Pattern,
+            id,
+            frame: 0,
+        }
+    }
+
+    /// `cicn` `id`.
+    #[must_use]
+    pub const fn icon(id: i16) -> Self {
+        Self {
+            kind: ImageKind::Icon,
+            id,
+            frame: 0,
+        }
+    }
+
     /// Frame `frame` of `rlëD` `id`.
     #[must_use]
     pub const fn sprite(id: i16, frame: u16) -> Self {
         Self {
             kind: ImageKind::Rled,
+            id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of `rlëD` `id`'s solid runs alone
+    /// ([`ImageKind::RledSolid`]).
+    #[must_use]
+    pub const fn solid_runs(id: i16, frame: u16) -> Self {
+        Self {
+            kind: ImageKind::RledSolid,
             id,
             frame,
         }
@@ -93,6 +132,32 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_is_frame_zero_of_a_ppat() {
+        assert_eq!(
+            ImageKey::pattern(128),
+            ImageKey {
+                kind: ImageKind::Pattern,
+                id: 128,
+                frame: 0
+            }
+        );
+        assert_ne!(ImageKey::pattern(128), ImageKey::picture(128));
+    }
+
+    #[test]
+    fn an_icon_is_frame_zero_of_a_cicn() {
+        assert_eq!(
+            ImageKey::icon(18000),
+            ImageKey {
+                kind: ImageKind::Icon,
+                id: 18000,
+                frame: 0
+            }
+        );
+        assert_ne!(ImageKey::icon(18000), ImageKey::picture(18000));
+    }
+
+    #[test]
     fn a_sprite_keeps_its_id_and_frame() {
         let key = ImageKey::sprite(-200, 35);
         assert_eq!(
@@ -103,5 +168,19 @@ mod tests {
                 frame: 35
             }
         );
+    }
+
+    #[test]
+    fn a_sprites_solid_runs_are_their_own_image() {
+        let key = ImageKey::solid_runs(1930, 13);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledSolid,
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(1930, 13));
     }
 }

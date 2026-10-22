@@ -3,13 +3,19 @@
 
 use std::collections::{HashMap, HashSet};
 
+use nova_data::graphics::Image;
+use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
-use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, Point};
 
-use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE};
-use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
+use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
+use crate::enlarge::{Enlarger, NativeDetail};
+use crate::gpu::{
+    Batch, Frame, Gpu, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun, colorize_instance,
+};
 use crate::images::{ImageError, ImageSource};
-use crate::viewport::Viewport;
+use crate::upscale::world_space;
+use crate::viewport::{PixelRect, Viewport};
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -22,33 +28,51 @@ pub struct RenderReport {
     pub new_failures: Vec<(ImageKey, ImageError)>,
 }
 
+/// A frame's place in the atlas and the size it is drawn at.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    /// Where the atlas holds it, perhaps enlarged.
+    entry: AtlasEntry,
+    /// The decoded frame's width and height: the logical size it is drawn
+    /// at, whatever size the atlas holds it.
+    size: (f32, f32),
+}
+
 /// One resource's frames once it has been asked for.
 #[derive(Debug)]
 enum Resident {
     /// Each frame's placement, or why it has none.
-    Frames(Vec<Result<AtlasEntry, ImageError>>),
+    Frames(Vec<Result<Placed, ImageError>>),
     /// The whole resource failed.
     Failed,
 }
 
 /// Turns draw lists into frames for a [`Gpu`], packing images into the
-/// atlas the first time a draw list names them.
+/// atlas the first time a draw list names them, each as its [`Enlarger`]
+/// turns it, and drawing each at its own logical size.
 #[derive(Debug)]
 pub struct Renderer<S> {
     images: S,
     atlas: Atlas,
     resident: HashMap<(ImageKind, i16), Resident>,
     reported: HashSet<ImageKey>,
+    /// What each decoded frame becomes in the atlas.
+    enlarger: Box<dyn Enlarger>,
+    /// Whether the atlas starts afresh at the next frame, for a new
+    /// enlarger.
+    rebuild: bool,
 }
 
 impl<S: ImageSource> Renderer<S> {
-    /// A renderer drawing images from `images` on [`PAGE_SIZE`] pages.
+    /// A renderer drawing images from `images` on [`PAGE_SIZE`] pages, as
+    /// they decode ([`NativeDetail`]).
     #[must_use]
     pub fn new(images: S) -> Self {
         Self::with_page_size(images, PAGE_SIZE)
     }
 
-    /// A renderer drawing images from `images` on `page_size` pages.
+    /// A renderer drawing images from `images` on `page_size` pages, as
+    /// they decode ([`NativeDetail`]).
     #[must_use]
     pub fn with_page_size(images: S, page_size: u32) -> Self {
         Self {
@@ -56,6 +80,8 @@ impl<S: ImageSource> Renderer<S> {
             atlas: Atlas::new(page_size),
             resident: HashMap::new(),
             reported: HashSet::new(),
+            enlarger: Box::new(NativeDetail),
+            rebuild: false,
         }
     }
 
@@ -64,11 +90,46 @@ impl<S: ImageSource> Renderer<S> {
         &self.images
     }
 
+    /// Places images in the atlas as `enlarger` turns them from the next
+    /// frame drawn on. That frame starts the atlas afresh: it drops every
+    /// page on the GPU ([`Gpu::clear_pages`], when any is open) and every
+    /// image placed, then loads again, through `enlarger`, each image it
+    /// draws. A resource that failed as a whole stays failed, and no
+    /// failure is reported again. It needs no GPU, so it can be called
+    /// before the first frame.
+    pub fn set_enlarger(&mut self, enlarger: Box<dyn Enlarger>) {
+        self.enlarger = enlarger;
+        self.rebuild = true;
+    }
+
+    /// Starts the atlas afresh, if a new enlarger asks it to.
+    fn rebuild(&mut self, gpu: &mut impl Gpu) {
+        if !std::mem::take(&mut self.rebuild) {
+            return;
+        }
+        if self.atlas.page_count() > 0 {
+            gpu.clear_pages();
+        }
+        self.atlas = Atlas::new(self.atlas.page_size());
+        self.resident
+            .retain(|_, resident| matches!(resident, Resident::Failed));
+    }
+
     /// Draws `list` into `viewport` through `gpu`: uploads images seen for
     /// the first time, then submits one frame. A zero-area viewport draws
     /// nothing. Text that is empty, or whose size is not a positive, finite
-    /// number of pixels, is skipped, as is a stretched picture whose width
-    /// or height is not a positive, finite number.
+    /// number of pixels, is skipped, as is a stretched or tiled picture
+    /// whose width or height is not a positive, finite number.
+    ///
+    /// The frame's batches keep the list's order. Each run of the list's
+    /// world commands ([`DrawList::world`]) is batched apart from the
+    /// overlay's around it, so no batch holds both, and its batches are
+    /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
+    /// resolution for it says ([`world_space`]). Text is never world, so
+    /// every text run is in target pixels.
+    ///
+    /// A frame drawn after [`Renderer::set_enlarger`] first starts the
+    /// atlas afresh; a zero-area viewport leaves that to the next frame.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -76,124 +137,244 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
     ) -> RenderReport {
         let mut report = RenderReport::default();
-        let Some((rect, scale)) = viewport.content() else {
+        let (Some((rect, _)), Some(scale)) = (viewport.content(), viewport.axis_scales()) else {
             return report;
         };
-        let mut batches: Vec<Batch> = Vec::new();
-        for command in list {
-            match *command {
-                DrawCommand::Sprite {
-                    image,
-                    center,
-                    tint,
-                    blend,
-                } => {
-                    if let Some(entry) = self.entry(image, gpu, &mut report) {
-                        let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
-                        let dest = Rect {
-                            x: center.x - w / 2.0,
-                            y: center.y - h / 2.0,
-                            w,
-                            h,
-                        };
-                        push_quad(&mut batches, &entry, dest, tint, blend);
-                    }
-                }
-                DrawCommand::Picture { image, top_left } => {
-                    let picture = (image, top_left, None);
-                    self.push_picture(&mut batches, picture, gpu, &mut report);
-                }
-                DrawCommand::StretchedPicture {
-                    image,
-                    top_left,
-                    width,
-                    height,
-                } => {
-                    // A rectangle with no drawable size draws nothing, so
-                    // its picture is not even loaded.
-                    let drawable = |side: f32| side.is_finite() && side > 0.0;
-                    if drawable(width) && drawable(height) {
-                        let picture = (image, top_left, Some((width, height)));
-                        self.push_picture(&mut batches, picture, gpu, &mut report);
-                    }
-                }
-                DrawCommand::Text {
-                    ref text,
-                    font,
-                    origin,
-                    size,
-                    wrap_width,
-                    color,
-                } => {
-                    let size_px = size * scale;
-                    let line_height_px = LINE_HEIGHT * size_px;
-                    // Text with nothing in it draws nothing. Nor does text
-                    // whose size is zero, negative, NaN or too big to give
-                    // a finite line height in pixels, and the text shaper
-                    // would panic on some of those, so skip both.
-                    if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
-                        continue;
-                    }
-                    let run = TextRun {
-                        text: text.clone(),
-                        font,
-                        origin_px: (
-                            rect.x as f32 + origin.x * scale,
-                            rect.y as f32 + origin.y * scale,
-                        ),
-                        size_px,
-                        line_height_px,
-                        wrap_px: wrap_width.map(|w| w * scale),
-                        color,
-                        clip: rect,
-                    };
-                    if let Some(Batch::Text(runs)) = batches.last_mut() {
-                        runs.push(run);
-                    } else {
-                        batches.push(Batch::Text(vec![run]));
-                    }
-                }
-                DrawCommand::Line {
-                    from,
-                    to,
-                    width,
-                    color,
-                } => push_solid(&mut batches, line_corners(from, to, width), color),
-                DrawCommand::Dot {
-                    center,
-                    size,
-                    color,
-                } => push_solid(&mut batches, square(center, size), color),
-            }
+        self.rebuild(gpu);
+        let target = Target { rect, scale };
+        let mut layers = Layers::default();
+        for (layer, command) in list.layered() {
+            let run = layers.run_in(layer);
+            self.draw(command, None, target, run, gpu, &mut report);
         }
+        let Layers { batches, world, .. } = layers.settled();
         gpu.submit(&Frame {
             target: viewport.window_px(),
             viewport: rect,
             logical: viewport.logical(),
             clear: Color::BLACK,
+            world_space: world_space(gpu.world_resolution(), viewport),
             batches,
+            world,
         });
         report
     }
 
+    /// Appends `command`'s batches, drawn only inside `clip` when it is
+    /// given (see [`DrawCommand::Clipped`]).
+    #[allow(clippy::too_many_lines)] // one arm for each command
+    fn draw(
+        &mut self,
+        command: &DrawCommand,
+        clip: Option<Bounds>,
+        target: Target,
+        batches: &mut Vec<Batch>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        let Target { rect, scale } = target;
+        match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            } => {
+                let sprite = (image, center, tint, blend);
+                self.push_sprite(batches, sprite, NO_COLORIZE, clip, gpu, report);
+            }
+            DrawCommand::Colorized {
+                image,
+                center,
+                tint,
+                blend,
+                colorize,
+            } => {
+                let sprite = (image, center, tint, blend);
+                let colorize = colorize_instance(colorize);
+                self.push_sprite(batches, sprite, colorize, clip, gpu, report);
+            }
+            DrawCommand::Picture { image, top_left } => {
+                let picture = (image, top_left, None);
+                self.push_picture(batches, picture, Blend::Normal, clip, gpu, report);
+            }
+            DrawCommand::StretchedPicture {
+                image,
+                top_left,
+                width,
+                height,
+            } => {
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, Blend::Normal, clip, gpu, report);
+            }
+            DrawCommand::BlendedPicture {
+                image,
+                top_left,
+                width,
+                height,
+                blend,
+            } => {
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, blend, clip, gpu, report);
+            }
+            DrawCommand::TiledPicture {
+                image,
+                area,
+                origin,
+            } => {
+                let area = match clip {
+                    Some(clip) => meet(area, clip),
+                    None => Some(area),
+                };
+                // An area with no drawable size draws nothing, so its
+                // picture is not even loaded.
+                if let Some(area) = area
+                    && drawable(area.width())
+                    && drawable(area.height())
+                    && let Some(placed) = self.entry(image, gpu, report)
+                {
+                    push_tiles(batches, &placed.entry, placed.size, area, origin);
+                }
+            }
+            DrawCommand::Text {
+                ref text,
+                font,
+                origin,
+                size,
+                wrap_width,
+                color,
+            } => {
+                let (across, down) = scale;
+                // Glyphs are sized by the height: the axes' scales differ
+                // only in a widened view, by under half a unit's width.
+                let size_px = size * down;
+                let line_height_px = LINE_HEIGHT * size_px;
+                // Text with nothing in it draws nothing. Nor does text
+                // whose size is zero, negative, NaN or too big to give
+                // a finite line height in pixels, and the text shaper
+                // would panic on some of those, so skip both.
+                if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
+                    return;
+                }
+                let Some(clip) = clip.map_or(Some(rect), |clip| pixel_clip(rect, scale, clip))
+                else {
+                    return;
+                };
+                let run = TextRun {
+                    text: text.clone(),
+                    font,
+                    origin_px: (
+                        rect.x as f32 + origin.x * across,
+                        rect.y as f32 + origin.y * down,
+                    ),
+                    size_px,
+                    line_height_px,
+                    wrap_px: wrap_width.map(|w| w * across),
+                    color,
+                    clip,
+                };
+                if let Some(Batch::Text(runs)) = batches.last_mut() {
+                    runs.push(run);
+                } else {
+                    batches.push(Batch::Text(vec![run]));
+                }
+            }
+            DrawCommand::Line {
+                from,
+                to,
+                width,
+                color,
+            } => push_solid(batches, line_corners(from, to, width), color),
+            DrawCommand::Dot {
+                center,
+                size,
+                color,
+            } => push_solid(batches, square(center, size), color),
+            DrawCommand::Clipped {
+                clip: inner,
+                ref command,
+            } => {
+                let clip = match clip {
+                    Some(outer) => meet(outer, inner),
+                    None => Some(inner),
+                };
+                // A clip with no area draws nothing at all.
+                if let Some(clip) = clip {
+                    self.draw(command, Some(clip), target, batches, gpu, report);
+                }
+            }
+        }
+    }
+
+    /// Appends a sprite's quad, `(image, center, tint, blend)`, centred on
+    /// `center` and mixed by `colorize`.
+    fn push_sprite(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, center, tint, blend): (ImageKey, Point, Color, Blend),
+        colorize: [f32; 4],
+        clip: Option<Bounds>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if let Some(Placed {
+            entry,
+            size: (w, h),
+        }) = self.entry(image, gpu, report)
+        {
+            let dest = Rect {
+                x: center.x - w / 2.0,
+                y: center.y - h / 2.0,
+                w,
+                h,
+            };
+            if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                push_quad(batches, &entry, dest, (tint, colorize), blend);
+            }
+        }
+    }
+
+    /// Appends a stretched picture's quad, `(image, top_left, size)`,
+    /// combined by `blend`. A rectangle with no drawable size draws
+    /// nothing, so its picture is not even loaded.
+    fn push_stretched(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, top_left, (width, height)): (ImageKey, Point, (f32, f32)),
+        blend: Blend,
+        clip: Option<Bounds>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if drawable(width) && drawable(height) {
+            let picture = (image, top_left, Some((width, height)));
+            self.push_picture(batches, picture, blend, clip, gpu, report);
+        }
+    }
+
     /// Appends a picture's quad: `(image, top_left, size)`, drawn at `size`
-    /// when given and at the picture's own size otherwise.
+    /// when given and at the picture's own size otherwise, combined by
+    /// `blend`.
     fn push_picture(
         &mut self,
         batches: &mut Vec<Batch>,
         (image, top_left, size): (ImageKey, Point, Option<(f32, f32)>),
+        blend: Blend,
+        clip: Option<Bounds>,
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) {
-        if let Some(entry) = self.entry(image, gpu, report) {
-            let (w, h) = size.unwrap_or((entry.rect.w as f32, entry.rect.h as f32));
+        if let Some(Placed { entry, size: own }) = self.entry(image, gpu, report) {
+            let (w, h) = size.unwrap_or(own);
             let dest = Rect {
                 x: top_left.x,
                 y: top_left.y,
                 w,
                 h,
             };
-            push_quad(batches, &entry, dest, Color::WHITE, Blend::Normal);
+            if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                push_quad(batches, &entry, dest, (Color::WHITE, NO_COLORIZE), blend);
+            }
         }
     }
 
@@ -204,7 +385,7 @@ impl<S: ImageSource> Renderer<S> {
         key: ImageKey,
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
-    ) -> Option<AtlasEntry> {
+    ) -> Option<Placed> {
         let resource = (key.kind, key.id);
         if !self.resident.contains_key(&resource) {
             let loaded = self.load(key, gpu, report);
@@ -214,7 +395,7 @@ impl<S: ImageSource> Renderer<S> {
             return None;
         };
         let error = match frames.get(usize::from(key.frame)) {
-            Some(Ok(entry)) => return Some(*entry),
+            Some(Ok(placed)) => return Some(*placed),
             Some(Err(error)) => error.clone(),
             None => ImageError::NoFrame {
                 frame: key.frame,
@@ -227,27 +408,213 @@ impl<S: ImageSource> Renderer<S> {
         None
     }
 
-    /// Decodes every frame of `key`'s resource and places and uploads each.
+    /// Decodes every frame of `key`'s resource, has the enlarger turn them
+    /// all, then places and uploads each. The enlarging is done before
+    /// this returns, so the frame that first draws the resource draws it
+    /// enlarged.
     fn load(&mut self, key: ImageKey, gpu: &mut impl Gpu, report: &mut RenderReport) -> Resident {
         match self.images.frames(key.kind, key.id) {
             Err(error) => {
                 report.new_failures.push((key, error));
                 Resident::Failed
             }
-            Ok(frames) => Resident::Frames(
-                frames
-                    .iter()
-                    .map(|image| {
-                        let entry = self.atlas.place(image.width(), image.height())?;
-                        if entry.opened {
-                            gpu.create_page(entry.page, self.atlas.page_size());
-                        }
-                        gpu.upload(entry.page, entry.rect, image);
-                        Ok(entry)
-                    })
-                    .collect(),
-            ),
+            Ok(frames) => {
+                let enlarged = self.enlarger.enlarge_frames(key.kind, &frames);
+                Resident::Frames(
+                    frames
+                        .iter()
+                        .zip(enlarged)
+                        .map(|(image, enlarged)| self.place(image, &enlarged, gpu))
+                        .collect(),
+                )
+            }
         }
+    }
+
+    /// Places `enlarged`, the image the atlas holds for frame `image`, and
+    /// uploads it. One too big for a page is placed as the frame decoded
+    /// instead, so every frame that fits natively draws.
+    fn place(
+        &mut self,
+        image: &Image,
+        enlarged: &Image,
+        gpu: &mut impl Gpu,
+    ) -> Result<Placed, ImageError> {
+        let (entry, held) = match self.atlas.place(enlarged.width(), enlarged.height()) {
+            Ok(entry) => (entry, enlarged),
+            Err(_) => (self.atlas.place(image.width(), image.height())?, image),
+        };
+        if entry.opened {
+            gpu.create_page(entry.page, self.atlas.page_size());
+        }
+        gpu.upload(entry.page, entry.rect, held);
+        Ok(Placed {
+            entry,
+            size: (image.width() as f32, image.height() as f32),
+        })
+    }
+}
+
+/// Where a frame draws: the viewport's content rect in window pixels, and
+/// how many pixels a logical unit is across and down
+/// ([`Viewport::axis_scales`]).
+#[derive(Clone, Copy, Debug)]
+struct Target {
+    rect: PixelRect,
+    scale: (f32, f32),
+}
+
+/// A frame's batches as they are made, in draw order, each run of one
+/// layer's commands batched on its own so that no batch holds both.
+#[derive(Debug, Default)]
+struct Layers {
+    /// The batches of the runs settled so far.
+    batches: Vec<Batch>,
+    /// Which of `batches` are world.
+    world: Vec<usize>,
+    /// The run being batched, and its layer.
+    run: Vec<Batch>,
+    layer: DrawLayer,
+}
+
+impl Layers {
+    /// The batches a command in `layer` extends: the current run's, once
+    /// any run of the other layer is settled.
+    fn run_in(&mut self, layer: DrawLayer) -> &mut Vec<Batch> {
+        if layer != self.layer {
+            self.settle();
+            self.layer = layer;
+        }
+        &mut self.run
+    }
+
+    /// Appends the current run's batches to the frame's.
+    fn settle(&mut self) {
+        if self.layer == DrawLayer::World {
+            let start = self.batches.len();
+            self.world.extend(start..start + self.run.len());
+        }
+        self.batches.append(&mut self.run);
+    }
+
+    /// Every run settled.
+    fn settled(mut self) -> Self {
+        self.settle();
+        self
+    }
+}
+
+/// Where `a` and `b` overlap, if they share any area.
+fn meet(a: Bounds, b: Bounds) -> Option<Bounds> {
+    let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
+    let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));
+    (min.x < max.x && min.y < max.y).then_some(Bounds { min, max })
+}
+
+/// `entry`'s quad at `dest` cropped to `clip`, its texture coordinates
+/// cut to match; as it is with no clip, and none when nothing of it is
+/// inside.
+fn cropped(entry: &AtlasEntry, dest: Rect, clip: Option<Bounds>) -> Option<(AtlasEntry, Rect)> {
+    let Some(clip) = clip else {
+        return Some((*entry, dest));
+    };
+    let whole = Bounds {
+        min: Point::new(dest.x, dest.y),
+        max: Point::new(dest.x + dest.w, dest.y + dest.h),
+    };
+    let kept = meet(whole, clip)?;
+    if kept == whole {
+        return Some((*entry, dest));
+    }
+    let uv = entry.uv;
+    let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
+    let u = |x: f32| (x - dest.x) / dest.w * du + uv.u0;
+    let v = |y: f32| (y - dest.y) / dest.h * dv + uv.v0;
+    let cut = AtlasEntry {
+        uv: Uv {
+            u0: u(kept.min.x),
+            v0: v(kept.min.y),
+            u1: u(kept.max.x),
+            v1: v(kept.max.y),
+        },
+        ..*entry
+    };
+    let dest = Rect {
+        x: kept.min.x,
+        y: kept.min.y,
+        w: kept.width(),
+        h: kept.height(),
+    };
+    Some((cut, dest))
+}
+
+/// `clip`, in logical units, as window pixels inside `rect`, the
+/// viewport's content at `scale` across and down, each edge rounded to
+/// the nearest pixel; none when nothing of it is inside.
+fn pixel_clip(rect: PixelRect, (across, down): (f32, f32), clip: Bounds) -> Option<PixelRect> {
+    let to_px = |origin: u32, logical: f32, scale: f32| (origin as f32 + logical * scale).round();
+    let left = to_px(rect.x, clip.min.x, across).max(rect.x as f32);
+    let top = to_px(rect.y, clip.min.y, down).max(rect.y as f32);
+    let right = to_px(rect.x, clip.max.x, across).min((rect.x + rect.w) as f32);
+    let bottom = to_px(rect.y, clip.max.y, down).min((rect.y + rect.h) as f32);
+    (left < right && top < bottom).then_some(PixelRect {
+        x: left as u32,
+        y: top as u32,
+        w: (right - left) as u32,
+        h: (bottom - top) as u32,
+    })
+}
+
+/// Whether a side `side` long can be drawn: a positive, finite number.
+fn drawable(side: f32) -> bool {
+    side.is_finite() && side > 0.0
+}
+
+/// Appends the quads tiling `area` with `entry`'s picture, each tile `(w,
+/// h)`, the picture's logical size: copies of it edge to edge from
+/// `origin`, each cut to `area` with its texture coordinates cut to
+/// match. A picture with no size draws nothing: its first edge, a
+/// division by 0 times 0, is NaN, which no loop runs past.
+fn push_tiles(
+    batches: &mut Vec<Batch>,
+    entry: &AtlasEntry,
+    (w, h): (f32, f32),
+    area: Bounds,
+    origin: Point,
+) {
+    let uv = entry.uv;
+    let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
+    let mut top = ((area.min.y - origin.y) / h).floor().mul_add(h, origin.y);
+    while top < area.max.y {
+        let (y0, y1) = (top.max(area.min.y), (top + h).min(area.max.y));
+        let mut left = ((area.min.x - origin.x) / w).floor().mul_add(w, origin.x);
+        while left < area.max.x {
+            let (x0, x1) = (left.max(area.min.x), (left + w).min(area.max.x));
+            let cut = AtlasEntry {
+                uv: Uv {
+                    u0: (x0 - left) / w * du + uv.u0,
+                    v0: (y0 - top) / h * dv + uv.v0,
+                    u1: (x1 - left) / w * du + uv.u0,
+                    v1: (y1 - top) / h * dv + uv.v0,
+                },
+                ..*entry
+            };
+            let dest = Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            };
+            push_quad(
+                batches,
+                &cut,
+                dest,
+                (Color::WHITE, NO_COLORIZE),
+                Blend::Normal,
+            );
+            left += w;
+        }
+        top += h;
     }
 }
 
@@ -266,6 +633,13 @@ fn or_levels(tint: Color) -> [u8; 3] {
     [tint.r, tint.g, tint.b].map(|c| ((u32::from(c) * alpha * 32 + FULL / 2) / FULL) as u8)
 }
 
+/// The opacity, in 32nds, that `tint` asks a [`Blend::OrCrossfade`] sprite
+/// to be drawn at: `round(a × 32 / 255)` for its alpha `a`, exact for
+/// every alpha a fade gives (`round(k × 255 / 32)`).
+fn crossfade_opacity(tint: Color) -> u8 {
+    ((u32::from(tint.a) * 32 + 127) / 255) as u8
+}
+
 /// Whether `a` and `b` share any area; rectangles that only touch along
 /// an edge do not.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -274,21 +648,35 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 /// Appends a quad, extending the last batch when it is the same page's
 /// and blends the same way. An [`Blend::Or`] quad's tint becomes its
-/// levels as fractions of 32 (alpha 1), and it starts a new batch when it
-/// overlaps a quad already in the last one: every quad of an OR batch
-/// reads the same copy of what is beneath, so a later overlapping one
-/// would not see the earlier.
-fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: Color, blend: Blend) {
-    let tint = if blend == Blend::Or {
-        let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
-        [r, g, b, 1.0]
-    } else {
-        rgba(tint)
+/// levels as fractions of 32 (alpha 1), and an [`Blend::OrCrossfade`]
+/// quad's alpha its opacity as a fraction of 32 ([`crossfade_opacity`]).
+/// Either starts a new batch when it overlaps a quad already in the last
+/// one ([`Blend::reads_backdrop`]): every quad of such a batch reads the
+/// same copy of what is beneath, so a later overlapping one would not see
+/// the earlier.
+fn push_quad(
+    batches: &mut Vec<Batch>,
+    entry: &AtlasEntry,
+    dest: Rect,
+    (tint, colorize): (Color, [f32; 4]),
+    blend: Blend,
+) {
+    let tint = match blend {
+        Blend::Or => {
+            let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
+            [r, g, b, 1.0]
+        }
+        Blend::OrCrossfade => {
+            let [r, g, b, _] = rgba(tint);
+            [r, g, b, f32::from(crossfade_opacity(tint)) / 32.0]
+        }
+        Blend::Normal | Blend::Additive | Blend::Max => rgba(tint),
     };
     let quad = QuadInstance {
         dest,
         uv: entry.uv,
         tint,
+        colorize,
     };
     if let Some(Batch::Sprites {
         page,
@@ -297,7 +685,7 @@ fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: Col
     }) = batches.last_mut()
         && *page == entry.page
         && *last == blend
-        && !(blend == Blend::Or && quads.iter().any(|q| overlaps(q.dest, dest)))
+        && !(blend.reads_backdrop() && quads.iter().any(|q| overlaps(q.dest, dest)))
     {
         quads.push(quad);
         return;
@@ -354,18 +742,24 @@ fn square(center: Point, size: f32) -> [Point; 4] {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     use nova_data::graphics::Image;
     use nova_view::draw::lights_tint;
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
-    use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun};
+    use crate::enlarge::{Enlarger, NativeDetail, enlarger_for};
+    use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
     use crate::recording::{GpuCall, RecordingGpu};
+    use crate::super_xbr::SuperXbr;
+    use crate::upscale::WorldResolution;
     use crate::viewport::{LogicalSize, PixelRect, Viewport};
     use crate::{PackError, PageId, Uv};
+    use nova_view::DrawLayer;
 
     /// Canned frames by resource; `Missing` for anything else. Records
     /// every request.
@@ -454,9 +848,13 @@ mod tests {
         Renderer::with_page_size(images, 64)
     }
 
+    /// The one call, a submit of a frame with no world layer.
     fn only_submit(calls: &[GpuCall]) -> &Frame {
         match calls {
-            [GpuCall::Submit(frame)] => frame,
+            [GpuCall::Submit(frame)] => {
+                assert_eq!(frame.world, [0_usize; 0], "no world");
+                frame
+            }
             other => panic!("expected one submit, got {other:?}"),
         }
     }
@@ -487,6 +885,7 @@ mod tests {
                 },
                 uv: uv(0, 0, 8, 4),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             },
             QuadInstance {
                 dest: Rect {
@@ -497,6 +896,7 @@ mod tests {
                 },
                 uv: uv(12, 5, 5, 6),
                 tint: [51.0 / 255.0, 102.0 / 255.0, 204.0 / 255.0, 1.0],
+                colorize: NO_COLORIZE,
             },
             QuadInstance {
                 dest: Rect {
@@ -507,6 +907,7 @@ mod tests {
                 },
                 uv: uv(0, 5, 5, 6),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             },
         ];
         assert_eq!(
@@ -525,11 +926,13 @@ mod tests {
                     viewport: rect(0, 0, 128, 96),
                     logical: SMALL,
                     clear: Color::BLACK,
+                    world_space: WorldSpace::Target,
                     batches: vec![Batch::Sprites {
                         page: PageId(0),
                         blend: Blend::Normal,
                         quads: expected_quads,
                     }],
+                    world: Vec::new(),
                 }),
             ]
         );
@@ -559,6 +962,7 @@ mod tests {
                     },
                     uv: uv(0, 0, 8, 4),
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 }],
             }]
         );
@@ -601,6 +1005,243 @@ mod tests {
         assert_eq!(report, RenderReport::default());
         assert_eq!(only_submit(&gpu.calls).batches, vec![]);
         assert_eq!(renderer.images().calls(), []);
+    }
+
+    /// A 16x16 `ppat` 130, placed at the page's top-left.
+    fn tiles() -> FakeImages {
+        images().with(ImageKind::Pattern, 130, vec![solid(16, 16, [7, 7, 7, 255])])
+    }
+
+    fn area(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        }
+    }
+
+    fn tiled_quads(area: Bounds) -> Vec<QuadInstance> {
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(130), area);
+        let frame = render_one_with(tiles(), &list);
+        match frame.batches.as_slice() {
+            [Batch::Sprites { quads, blend, .. }] => {
+                assert_eq!(*blend, Blend::Normal);
+                quads.clone()
+            }
+            other => panic!("one sprite batch: {other:?}"),
+        }
+    }
+
+    fn render_one_with(images: FakeImages, list: &DrawList) -> Frame {
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(list, &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        let frame = gpu.submits()[0].clone();
+        assert_eq!(frame.world, [0_usize; 0], "no world");
+        frame
+    }
+
+    /// The quad showing the part of the tile at `tile` (its top-left) from
+    /// `(x0, y0)` to `(x1, y1)`, the tile 16 square at the page's
+    /// top-left, of 64.
+    fn tile_quad(tile: (f32, f32), (x0, y0): (f32, f32), (x1, y1): (f32, f32)) -> QuadInstance {
+        let to_uv = |offset: f32| offset / 16.0 * 0.25;
+        QuadInstance {
+            dest: Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            },
+            uv: Uv {
+                u0: to_uv(x0 - tile.0),
+                v0: to_uv(y0 - tile.1),
+                u1: to_uv(x1 - tile.0),
+                v1: to_uv(y1 - tile.1),
+            },
+            tint: WHITE,
+            colorize: NO_COLORIZE,
+        }
+    }
+
+    #[test]
+    fn a_tiled_picture_repeats_from_the_origin_cut_to_its_area() {
+        // Columns cut at 16, 32 and 48; rows at 16 and 32.
+        let columns = [
+            (0.0, 10.0, 16.0),
+            (16.0, 16.0, 32.0),
+            (32.0, 32.0, 48.0),
+            (48.0, 48.0, 50.0),
+        ];
+        let rows = [(0.0, 5.0, 16.0), (16.0, 16.0, 32.0), (32.0, 32.0, 45.0)];
+        let mut expected = Vec::new();
+        for (tile_y, y0, y1) in rows {
+            for (tile_x, x0, x1) in columns {
+                expected.push(tile_quad((tile_x, tile_y), (x0, y0), (x1, y1)));
+            }
+        }
+        assert_eq!(tiled_quads(area(10.0, 5.0, 50.0, 45.0)), expected);
+    }
+
+    #[test]
+    fn tiles_left_of_and_above_the_origin_line_up_with_it() {
+        assert_eq!(
+            tiled_quads(area(-10.0, -10.0, 5.0, 5.0)),
+            [
+                tile_quad((-16.0, -16.0), (-10.0, -10.0), (0.0, 0.0)),
+                tile_quad((0.0, -16.0), (0.0, -10.0), (5.0, 0.0)),
+                tile_quad((-16.0, 0.0), (-10.0, 0.0), (0.0, 5.0)),
+                tile_quad((0.0, 0.0), (0.0, 0.0), (5.0, 5.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tiled_picture_moved_with_its_origin_draws_the_same_tiles_moved() {
+        let mut at_home = DrawList::new();
+        at_home.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
+        let mut moved = DrawList::new();
+        // Far enough down that the tiling's first row moves with it.
+        moved.extend_translated(&at_home, at(170.0, 40.0));
+        let quads = |list: &DrawList| match &render_one_with(tiles(), list).batches[..] {
+            [Batch::Sprites { quads, .. }] => quads.clone(),
+            other => panic!("{other:?}"),
+        };
+        let expected: Vec<QuadInstance> = quads(&at_home)
+            .into_iter()
+            .map(|quad| QuadInstance {
+                dest: Rect {
+                    x: quad.dest.x + 170.0,
+                    y: quad.dest.y + 40.0,
+                    ..quad.dest
+                },
+                ..quad
+            })
+            .collect();
+        assert_eq!(quads(&moved), expected);
+    }
+
+    #[test]
+    fn an_area_on_tile_edges_takes_whole_tiles_and_no_more() {
+        assert_eq!(
+            tiled_quads(area(16.0, 32.0, 32.0, 48.0)),
+            [tile_quad((16.0, 32.0), (16.0, 32.0), (32.0, 48.0))]
+        );
+    }
+
+    #[test]
+    fn a_tiled_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::NAN),
+            (f32::INFINITY, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.tiled_picture(ImageKey::pattern(130), Bounds::at(at(0.0, 0.0), w, h));
+        }
+        let mut renderer = renderer(tiles());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
+    }
+
+    #[test]
+    fn a_missing_pattern_draws_nothing_and_is_reported_once() {
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(131), area(0.0, 0.0, 20.0, 20.0))
+            .tiled_picture(ImageKey::pattern(131), area(0.0, 0.0, 20.0, 20.0));
+        let mut renderer = renderer(tiles());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(
+            report.new_failures,
+            [(ImageKey::pattern(131), ImageError::Missing)]
+        );
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+    }
+
+    #[test]
+    fn a_tiles_texture_coordinates_are_cut_from_its_place_on_the_page() {
+        // A 60x5 picture fills the first shelf and a 10x16 sprite starts
+        // the second, so the pattern lands away from the page's edges.
+        let images = tiles()
+            .with(ImageKind::Pict, 1, vec![solid(60, 5, [1, 1, 1, 255])])
+            .with(ImageKind::Rled, 2, vec![solid(10, 16, [2, 2, 2, 255])]);
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(1), at(0.0, 0.0))
+            .sprite(ImageKey::sprite(2, 0), at(0.0, 0.0), Color::WHITE)
+            .tiled_picture(ImageKey::pattern(130), area(4.0, 8.0, 20.0, 16.0));
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let placed = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::Upload { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .next_back()
+            .expect("the pattern uploaded");
+        assert!(placed.x > 0 && placed.y > 0, "{placed:?}");
+        let quads = match gpu.submits()[0].batches.as_slice() {
+            [Batch::Sprites { quads, .. }] => quads.clone(),
+            other => panic!("one sprite batch: {other:?}"),
+        };
+        let page = |texel: u32, offset: f32| (texel as f32 + offset) / 64.0;
+        let cut = |x0: f32, x1: f32| Uv {
+            u0: page(placed.x, x0),
+            v0: page(placed.y, 8.0),
+            u1: page(placed.x, x1),
+            v1: page(placed.y, 16.0),
+        };
+        let uvs: Vec<Uv> = quads[2..].iter().map(|quad| quad.uv).collect();
+        assert_eq!(uvs, [cut(4.0, 16.0), cut(0.0, 4.0)]);
+    }
+
+    #[test]
+    fn a_pattern_with_no_size_tiles_nothing() {
+        let mut batches = Vec::new();
+        let entry = AtlasEntry {
+            page: PageId(0),
+            rect: rect(0, 0, 0, 16),
+            uv: uv(0, 0, 0, 16),
+            opened: false,
+        };
+        let origin = at(0.0, 0.0);
+        let tile = (0.0, 16.0);
+        push_tiles(
+            &mut batches,
+            &entry,
+            tile,
+            area(0.0, 0.0, 20.0, 20.0),
+            origin,
+        );
+        let entry = AtlasEntry {
+            rect: rect(0, 0, 16, 0),
+            ..entry
+        };
+        let tile = (16.0, 0.0);
+        push_tiles(
+            &mut batches,
+            &entry,
+            tile,
+            area(0.0, 0.0, 20.0, 20.0),
+            origin,
+        );
+        assert_eq!(batches, vec![]);
     }
 
     #[test]
@@ -803,6 +1444,50 @@ mod tests {
     }
 
     #[test]
+    fn a_crossfade_quads_alpha_is_its_opacity_in_exact_32nds() {
+        // The alphas a fade gives: `see_through(t)` and `Pod::tint` are
+        // round(k × 255 / 32), as `lights_tint(k)` is.
+        let sprite = ImageKey::sprite(200, 0);
+        for k in 0..=32_u8 {
+            let mut list = DrawList::new();
+            let tint = Color {
+                r: 200,
+                ..lights_tint(k)
+            };
+            list.crossfade_sprite(sprite, at(10.0, 10.0), tint);
+            let frame = render_one(&list, &viewport());
+            assert_eq!(
+                tints(&frame),
+                [[200.0 / 255.0, 1.0, 1.0, f32::from(k) / 32.0]],
+                "k {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_crossfade_sprites_split_and_never_share_an_or_batch() {
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.crossfade_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(40.0, 10.0), Color::WHITE)
+            .or_sprite(sprite, at(60.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(80.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::OrCrossfade, 1),
+                (Blend::OrCrossfade, 2),
+                (Blend::Or, 1),
+                (Blend::OrCrossfade, 1),
+            ]
+        );
+    }
+
+    #[test]
     fn overlapping_normal_and_additive_sprites_still_merge() {
         let sprite = ImageKey::sprite(200, 0);
         let mut list = DrawList::new();
@@ -841,6 +1526,163 @@ mod tests {
                 (Blend::Normal, 1)
             ]
         );
+    }
+
+    #[test]
+    fn a_max_picture_lowers_to_a_max_batch_at_its_rectangle() {
+        let mut list = DrawList::new();
+        list.blended_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5, Blend::Max);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: -2.5,
+                        y: 3.0,
+                        w: 20.0,
+                        h: 1.5,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                    colorize: NO_COLORIZE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_max_picture_after_a_solid_keeps_its_place() {
+        let mut list = DrawList::new();
+        list.dot(at(5.0, 5.0), 4.0, Color::WHITE).blended_picture(
+            ImageKey::picture(128),
+            at(0.0, 0.0),
+            16.0,
+            8.0,
+            Blend::Max,
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let kinds: Vec<Option<Blend>> = frame
+            .batches
+            .iter()
+            .map(|batch| match batch {
+                Batch::Sprites { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, [None, Some(Blend::Max)]);
+        assert!(matches!(frame.batches[0], Batch::Solid(_)));
+    }
+
+    #[test]
+    fn overlapping_max_pictures_share_a_batch() {
+        // A fixed-function max sees earlier quads of the same draw, so it
+        // needs no split as OR's copy of what is beneath does.
+        let mut list = DrawList::new();
+        for x in [0.0, 4.0, 8.0] {
+            list.blended_picture(ImageKey::picture(128), at(x, 0.0), 16.0, 8.0, Blend::Max);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(sprite_blends(&frame), [(Blend::Max, 3)]);
+    }
+
+    #[test]
+    fn a_blended_picture_lowers_to_its_own_blend() {
+        let mut list = DrawList::new();
+        for (y, blend) in [
+            (0.0, Blend::Normal),
+            (10.0, Blend::Additive),
+            (20.0, Blend::Or),
+            (30.0, Blend::Max),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, y), 16.0, 8.0, blend);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::Normal, 1),
+                (Blend::Additive, 1),
+                (Blend::Or, 1),
+                (Blend::Max, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clipped_max_picture_is_cropped_with_its_texture_coordinates() {
+        // 8x4 stretched to 16x8: each texel two units wide and tall.
+        let mut list = DrawList::new();
+        list.clipped(
+            bounds(4.0, 2.0, 40.0, 40.0),
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(128),
+                top_left: at(0.0, 0.0),
+                width: 16.0,
+                height: 8.0,
+                blend: Blend::Max,
+            },
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let page = 64.0;
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: 4.0,
+                        y: 2.0,
+                        w: 12.0,
+                        h: 6.0,
+                    },
+                    uv: Uv {
+                        u0: 2.0 / page,
+                        v0: 1.0 / page,
+                        u1: 8.0 / page,
+                        v1: 4.0 / page,
+                    },
+                    tint: WHITE,
+                    colorize: NO_COLORIZE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_blended_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, 0.0), w, h, Blend::Max);
+        }
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
     }
 
     #[test]
@@ -986,7 +1828,52 @@ mod tests {
         renderer.render(list, viewport, &mut gpu);
         let submits = gpu.submits();
         assert_eq!(submits.len(), 1);
+        assert_eq!(submits[0].world, [0_usize; 0], "no world");
         submits[0].clone()
+    }
+
+    #[test]
+    fn in_a_widened_view_text_dots_and_clips_meet_on_the_same_pixel_column() {
+        let viewport = Viewport::for_shape(nova_view::ViewShape::Widened, (1920, 1080), 1.0);
+        let x = 1365.0 - 10.0;
+        let clip = Bounds {
+            min: at(x, 0.0),
+            max: at(1365.0, 768.0),
+        };
+        let mut list = DrawList::new();
+        list.text("Edge", at(x, 100.0), 12.0, Some(100.0), Color::WHITE)
+            .dot(at(x, 200.0), 2.0, Color::WHITE)
+            .clipped(
+                clip,
+                DrawCommand::Text {
+                    text: "Cut".to_owned(),
+                    font: Font::Geneva,
+                    origin: at(0.0, 300.0),
+                    size: 12.0,
+                    wrap_width: None,
+                    color: Color::WHITE,
+                },
+            );
+        let frame = render_one(&list, &viewport);
+        let across = 1920.0 / 1365.0;
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        assert_eq!(runs[0].origin_px, (x * across, 100.0 * 1.406_25));
+        assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
+        assert_eq!(runs[0].wrap_px, Some(100.0 * across));
+        // The GPU projects quads from the logical space onto the content.
+        let dot = solid_quads(&frame)[0].corners;
+        let dot_centre = f32::midpoint(dot[0].x, dot[2].x);
+        let projected = dot_centre * frame.viewport.w as f32 / frame.logical.w as f32;
+        let Batch::Text(cut) = &frame.batches[2] else {
+            panic!("{frame:?}");
+        };
+        let column = runs[0].origin_px.0.round();
+        assert_eq!(projected.round(), column);
+        assert_eq!(cut[0].clip.x as f32, column);
+        assert_eq!(cut[0].clip.x + cut[0].clip.w, 1920, "to the window's edge");
+        assert_eq!(cut[0].clip.h, 1080);
     }
 
     #[test]
@@ -1030,6 +1917,250 @@ mod tests {
                 },
             ])]
         );
+    }
+
+    fn bounds(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        }
+    }
+
+    #[test]
+    fn a_clipped_text_run_is_cut_to_its_clip_in_pixels() {
+        let mut list = DrawList::new();
+        let text = DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: Font::Geneva,
+            origin: at(1.0, 2.0),
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        };
+        list.clipped(bounds(10.0, 5.25, 30.0, 70.0), text.clone())
+            .clipped(bounds(70.0, 0.0, 90.0, 10.0), text);
+
+        let frame = render_one(&list, &viewport());
+
+        let [Batch::Text(runs)] = frame.batches.as_slice() else {
+            panic!("one text batch: {frame:?}");
+        };
+        assert_eq!(runs.len(), 1, "the clip off the viewport drops its run");
+        assert_eq!(runs[0].origin_px, (2.0, 4.0));
+        assert_eq!(
+            runs[0].clip,
+            rect(20, 11, 40, 85),
+            "rounded to pixels, and cut to the viewport"
+        );
+    }
+
+    #[test]
+    fn a_clipped_picture_is_cropped_with_its_texture_coordinates() {
+        let mut list = DrawList::new();
+        let picture = DrawCommand::Picture {
+            image: ImageKey::picture(128),
+            top_left: at(10.0, 20.0),
+        };
+        list.clipped(bounds(12.0, 21.0, 40.0, 40.0), picture.clone())
+            .clipped(bounds(0.0, 0.0, 40.0, 40.0), picture.clone())
+            .clipped(bounds(30.0, 30.0, 40.0, 40.0), picture);
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        assert_eq!(
+            quads.as_slice(),
+            [
+                QuadInstance {
+                    dest: Rect {
+                        x: 12.0,
+                        y: 21.0,
+                        w: 6.0,
+                        h: 3.0,
+                    },
+                    uv: Uv {
+                        u0: 2.0 / page,
+                        v0: 1.0 / page,
+                        u1: 8.0 / page,
+                        v1: 4.0 / page,
+                    },
+                    tint: WHITE,
+                    colorize: NO_COLORIZE,
+                },
+                QuadInstance {
+                    dest: Rect {
+                        x: 10.0,
+                        y: 20.0,
+                        w: 8.0,
+                        h: 4.0,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                    colorize: NO_COLORIZE,
+                },
+            ],
+            "whole inside its clip, as it is; wholly outside, nothing"
+        );
+    }
+
+    #[test]
+    fn a_clip_that_only_touches_or_misses_one_axis_draws_nothing() {
+        let mut list = DrawList::new();
+        let picture = DrawCommand::Picture {
+            image: ImageKey::picture(128),
+            top_left: at(10.0, 20.0),
+        };
+        // The 8 x 4 picture covers (10, 20)-(18, 24).
+        for clip in [
+            bounds(18.0, 0.0, 40.0, 40.0),
+            bounds(0.0, 24.0, 40.0, 40.0),
+            bounds(12.0, 30.0, 16.0, 40.0),
+            bounds(30.0, 21.0, 40.0, 23.0),
+        ] {
+            list.clipped(clip, picture.clone());
+        }
+        list.clipped(bounds(10.0, 0.0, 10.2, 40.0), text_at(at(1.0, 2.0)))
+            .clipped(bounds(0.0, 10.0, 40.0, 10.2), text_at(at(1.0, 2.0)));
+
+        let frame = render_one_with(images(), &list);
+
+        assert_eq!(frame.batches, [], "no area left, in pixels too");
+    }
+
+    fn text_at(origin: Point) -> DrawCommand {
+        DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: Font::Geneva,
+            origin,
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn a_cropped_quad_keeps_its_place_on_the_page() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0)).clipped(
+            bounds(0.0, 0.0, 30.0, 40.0),
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(200, 1),
+                center: at(30.0, 40.0),
+                tint: Color::WHITE,
+                blend: Blend::Normal,
+            },
+        );
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        // Frame 1 is at (6, 5) on the page, under the picture's shelf.
+        assert_eq!(
+            quads[1].uv,
+            Uv {
+                u0: 6.0 / page,
+                v0: 5.0 / page,
+                u1: 8.5 / page,
+                v1: 8.0 / page,
+            }
+        );
+    }
+
+    #[test]
+    fn a_clipped_sprite_is_cropped_and_keeps_its_tint() {
+        let mut list = DrawList::new();
+        let tint = Color::rgba(255, 255, 255, 128);
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(200, 0),
+            center: at(30.0, 40.0),
+            tint,
+            blend: Blend::Normal,
+        };
+        list.clipped(bounds(0.0, 0.0, 30.0, 40.0), sprite);
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        assert_eq!(
+            quads[0].dest,
+            Rect {
+                x: 27.5,
+                y: 37.0,
+                w: 2.5,
+                h: 3.0,
+            }
+        );
+        assert_eq!(
+            quads[0].uv,
+            Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 2.5 / page,
+                v1: 3.0 / page,
+            },
+            "the sheet alone on its page, its first frame at the corner"
+        );
+        assert_eq!(quads[0].tint, [1.0, 1.0, 1.0, 128.0 / 255.0]);
+    }
+
+    #[test]
+    fn clips_meet_and_lines_and_dots_are_not_cut() {
+        let mut list = DrawList::new();
+        let mut inner = DrawList::new();
+        inner.clipped(
+            bounds(20.0, 0.0, 64.0, 48.0),
+            DrawCommand::TiledPicture {
+                image: ImageKey::picture(128),
+                area: bounds(0.0, 0.0, 64.0, 48.0),
+                origin: at(0.0, 0.0),
+            },
+        );
+        let nested = inner.iter().next().cloned().expect("one");
+        list.clipped(bounds(0.0, 0.0, 28.0, 4.0), nested).clipped(
+            bounds(0.0, 0.0, 1.0, 1.0),
+            DrawCommand::Line {
+                from: at(0.0, 10.0),
+                to: at(10.0, 10.0),
+                width: 2.0,
+                color: Color::WHITE,
+            },
+        );
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }, Batch::Solid(solids)] = frame.batches.as_slice() else {
+            panic!("tiles then a line: {frame:?}");
+        };
+        let dests: Vec<Rect> = quads.iter().map(|quad| quad.dest).collect();
+        assert_eq!(
+            dests,
+            [
+                Rect {
+                    x: 20.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 4.0,
+                },
+                Rect {
+                    x: 24.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 4.0,
+                },
+            ],
+            "the tiles in both clips"
+        );
+        assert_eq!(solids.len(), 1, "the line drawn whole");
+        assert_eq!(solids[0].corners[0], at(0.0, 11.0));
     }
 
     #[test]
@@ -1209,5 +2340,648 @@ mod tests {
                 ("sprites", 1)
             ]
         );
+    }
+
+    // The world layer and the overlay.
+
+    const WORLD: DrawLayer = DrawLayer::World;
+    const OVERLAY: DrawLayer = DrawLayer::Overlay;
+
+    /// Each batch's kind, size and layer, in order.
+    fn layered_shape(frame: &Frame) -> Vec<(&'static str, usize, DrawLayer)> {
+        frame
+            .batches
+            .iter()
+            .enumerate()
+            .map(|(at, batch)| {
+                let (kind, size) = match batch {
+                    Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+                    Batch::Solid(quads) => ("solid", quads.len()),
+                    Batch::Text(runs) => ("text", runs.len()),
+                };
+                (kind, size, frame.layer(at))
+            })
+            .collect()
+    }
+
+    /// `list`'s one frame, rendered through `gpu`.
+    fn render_through(list: &DrawList, gpu: &mut RecordingGpu) -> Frame {
+        let mut renderer = renderer(images());
+        let report = renderer.render(list, &viewport(), gpu);
+        assert_eq!(report, RenderReport::default());
+        gpu.submits()[0].clone()
+    }
+
+    fn sprite(frame: u16) -> ImageKey {
+        ImageKey::sprite(200, frame)
+    }
+
+    #[test]
+    fn world_commands_are_batched_in_the_world_layer_in_draw_order() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        list.world(|list| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+                .or_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
+                .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .dot(at(1.0, 1.0), 1.0, Color::WHITE)
+                .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .picture(ImageKey::picture(128), at(1.0, 1.0));
+        });
+        list.text("b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .sprite(sprite(2), at(30.0, 10.0), Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("sprites", 1, WORLD),
+                ("solid", 2, WORLD),
+                ("text", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("text", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+        assert_eq!(frame.world, [1, 2, 3, 5]);
+        assert_eq!(frame.world_space, WorldSpace::Target);
+    }
+
+    #[test]
+    fn no_batch_holds_both_layers() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        });
+        list.dot(at(2.0, 2.0), 1.0, Color::WHITE);
+        list.world(|list| {
+            list.dot(at(3.0, 3.0), 1.0, Color::WHITE).sprite(
+                sprite(0),
+                at(10.0, 10.0),
+                Color::WHITE,
+            );
+        });
+        list.sprite(sprite(1), at(20.0, 10.0), Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("solid", 1, WORLD),
+                ("solid", 1, OVERLAY),
+                ("solid", 1, WORLD),
+                ("sprites", 1, WORLD),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_world_drawn_between_overlays_keeps_its_place() {
+        // A dialog's map over flight: the dialog, flight's world, then its
+        // HUD and the map.
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        list.world(|list| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE).line(
+                at(0.0, 0.0),
+                at(4.0, 0.0),
+                1.0,
+                Color::WHITE,
+            );
+        });
+        list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .picture(ImageKey::picture(128), at(1.0, 1.0));
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("solid", 1, WORLD),
+                ("solid", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_list_with_no_world_draws_every_batch_as_the_unlayered_list_did() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0))
+            .sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+            .or_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
+            .or_sprite(sprite(2), at(21.0, 10.0), Color::WHITE)
+            .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.world, [0_usize; 0]);
+        assert_eq!(frame.in_layer(WORLD).count(), 0);
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 2, OVERLAY),
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+                ("solid", 1, OVERLAY),
+                ("text", 1, OVERLAY),
+            ]
+        );
+    }
+
+    /// An OR sprite (5x6, so at (7.5, 7)) in the world, and the same in
+    /// the overlay.
+    fn or_in_both_layers() -> DrawList {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.or_sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+        });
+        list.or_sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+        list
+    }
+
+    /// What each OR batch of `frame` covers, in its layer's pixels.
+    fn or_covers(frame: &Frame) -> Vec<(DrawLayer, Option<PixelRect>)> {
+        frame
+            .batches
+            .iter()
+            .enumerate()
+            .map(|(at, batch)| match batch {
+                Batch::Sprites {
+                    blend: Blend::Or,
+                    quads,
+                    ..
+                } => {
+                    let layer = frame.layer(at);
+                    (layer, frame.pixels_covered(layer, quads))
+                }
+                other => panic!("an OR batch: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_world_at_the_logical_resolution_is_a_texture_and_its_or_batches_cover_texels() {
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+
+        let frame = render_through(&or_in_both_layers(), &mut gpu);
+
+        assert_eq!(frame.world_space, WorldSpace::Texture { size: (64, 48) });
+        // (7.5, 7)-(12.5, 13) in texels; twice that in the 128x96 target.
+        assert_eq!(
+            or_covers(&frame),
+            [
+                (WORLD, Some(rect(7, 7, 6, 6))),
+                (OVERLAY, Some(rect(15, 14, 10, 12))),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_native_world_is_drawn_into_the_target_and_its_or_batches_cover_target_pixels() {
+        let frame = render_through(&or_in_both_layers(), &mut RecordingGpu::new());
+
+        assert_eq!(frame.world_space, WorldSpace::Target);
+        assert_eq!(
+            or_covers(&frame),
+            [
+                (WORLD, Some(rect(15, 14, 10, 12))),
+                (OVERLAY, Some(rect(15, 14, 10, 12))),
+            ]
+        );
+    }
+
+    /// Replicates each texel 2x2 for every kind, patterns included, and
+    /// records the kinds it is asked about.
+    #[derive(Debug, Default)]
+    struct Doubled {
+        kinds: Rc<RefCell<Vec<ImageKind>>>,
+    }
+
+    impl Enlarger for Doubled {
+        fn enlarge<'a>(&self, kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            self.kinds.borrow_mut().push(kind);
+            Cow::Owned(doubled(image))
+        }
+    }
+
+    /// `image` with each texel replicated 2x2.
+    fn doubled(image: &Image) -> Image {
+        let (w, h) = (image.width(), image.height());
+        let pixels = (0..h * 2)
+            .flat_map(|y| (0..w * 2).flat_map(move |x| image.pixel(x / 2, y / 2).expect("inside")))
+            .collect();
+        Image::from_rgba(w * 2, h * 2, pixels).expect("doubled")
+    }
+
+    /// The renderer on 64-texel pages, enlarging with [`Doubled`].
+    fn doubling(images: FakeImages) -> Renderer<FakeImages> {
+        let mut renderer = renderer(images);
+        renderer.set_enlarger(Box::new(Doubled::default()));
+        renderer
+    }
+
+    /// Leaves a frame alone asked for one, and doubles a resource's frames
+    /// asked for them all at once.
+    #[derive(Debug)]
+    struct DoublesSheets;
+
+    impl Enlarger for DoublesSheets {
+        fn enlarge<'a>(&self, _kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            Cow::Borrowed(image)
+        }
+
+        fn enlarge_frames<'a>(&self, _kind: ImageKind, frames: &'a [Image]) -> Vec<Cow<'a, Image>> {
+            frames
+                .iter()
+                .map(|frame| Cow::Owned(doubled(frame)))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_resources_frames_are_enlarged_all_at_once() {
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 1), at(10.0, 10.0), Color::WHITE);
+        let mut renderer = renderer(images());
+        renderer.set_enlarger(Box::new(DoublesSheets));
+        let mut gpu = RecordingGpu::new();
+
+        renderer.render(&list, &viewport(), &mut gpu);
+
+        let sizes: Vec<(u32, u32)> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::Upload { width, height, .. } => Some((*width, *height)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sizes, [(10, 12); 3]);
+    }
+
+    /// Every textured quad of `frame`, in draw order.
+    fn all_quads(frame: &Frame) -> Vec<QuadInstance> {
+        frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => quads.clone(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// The quads `renderer` draws `list` with, reporting no failure.
+    fn quads_of(mut renderer: Renderer<FakeImages>, list: &DrawList) -> Vec<QuadInstance> {
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(list, &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        all_quads(gpu.submits()[0])
+    }
+
+    /// `uv` twice as far from the page's corner: an image at the corner
+    /// placed at twice its size.
+    fn twice(uv: Uv) -> Uv {
+        Uv {
+            u0: uv.u0 * 2.0,
+            v0: uv.v0 * 2.0,
+            u1: uv.u1 * 2.0,
+            v1: uv.v1 * 2.0,
+        }
+    }
+
+    #[test]
+    fn an_enlarged_picture_and_sprite_upload_twice_their_size_and_draw_at_their_own() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(10.0, 20.0)).sprite(
+            ImageKey::sprite(200, 2),
+            at(30.5, 40.25),
+            Color::WHITE,
+        );
+        let native = quads_of(renderer(images()), &list);
+        let mut renderer = doubling(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        let sheet = sheet();
+        // The 16x8 picture fills the first shelf, and the 10x12 frames
+        // start a second below it and its gutter.
+        assert_eq!(
+            gpu.calls[..5],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+                GpuCall::upload(PageId(0), rect(0, 9, 10, 12), &doubled(&sheet[0])),
+                GpuCall::upload(PageId(0), rect(11, 9, 10, 12), &doubled(&sheet[1])),
+                GpuCall::upload(PageId(0), rect(22, 9, 10, 12), &doubled(&sheet[2])),
+            ]
+        );
+        let enlarged = all_quads(gpu.submits()[0]);
+        let dests: Vec<Rect> = enlarged.iter().map(|quad| quad.dest).collect();
+        assert_eq!(
+            dests,
+            native.iter().map(|quad| quad.dest).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            dests[1],
+            Rect {
+                x: 28.0,
+                y: 37.25,
+                w: 5.0,
+                h: 6.0
+            },
+            "the sprite's own size, centred to the quarter unit"
+        );
+        let uvs: Vec<Uv> = enlarged.iter().map(|quad| quad.uv).collect();
+        assert_eq!(uvs, [uv(0, 0, 16, 8), uv(22, 9, 10, 12)]);
+    }
+
+    #[test]
+    fn enlarged_stretched_clipped_and_tiled_images_keep_their_places_and_take_the_bigger_rect() {
+        let mut picture = DrawList::new();
+        picture.picture(ImageKey::picture(128), at(1.25, 2.5));
+        let mut stretched = DrawList::new();
+        stretched.stretched_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5);
+        let mut clipped = DrawList::new();
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(200, 0),
+            center: at(30.0, 40.0),
+            tint: Color::WHITE,
+            blend: Blend::Normal,
+        };
+        clipped.clipped(bounds(28.5, 38.0, 30.0, 40.0), sprite);
+        let mut tiled = DrawList::new();
+        tiled.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
+        for list in [picture, stretched, clipped, tiled] {
+            // Each image alone at its page's corner, so the enlarged one's
+            // texture coordinates are the native one's doubled.
+            let native = quads_of(renderer(tiles()), &list);
+            let enlarged = quads_of(doubling(tiles()), &list);
+            assert!(!native.is_empty(), "{list:?}");
+            let expected: Vec<QuadInstance> = native
+                .iter()
+                .map(|quad| QuadInstance {
+                    uv: twice(quad.uv),
+                    ..*quad
+                })
+                .collect();
+            assert_eq!(enlarged, expected, "{list:?}");
+        }
+    }
+
+    #[test]
+    fn an_enlarged_frame_too_big_for_a_page_falls_back_to_its_native_frame() {
+        let fits = solid(40, 4, [3, 3, 3, 255]);
+        let images = FakeImages::default()
+            .with(ImageKind::Pict, 1, vec![fits.clone()])
+            .with(ImageKind::Pict, 2, vec![solid(70, 2, [4, 4, 4, 255])]);
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(1), at(1.0, 2.0))
+            .picture(ImageKey::picture(2), at(0.0, 0.0));
+        let mut renderer = doubling(images);
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(
+            report.new_failures,
+            [(
+                ImageKey::picture(2),
+                ImageError::Pack(PackError::TooLarge {
+                    width: 70,
+                    height: 2,
+                    page: 64
+                })
+            )],
+            "only what is too big natively fails"
+        );
+        assert_eq!(
+            gpu.calls[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 40, 4), &fits),
+            ]
+        );
+        assert_eq!(
+            all_quads(gpu.submits()[0]),
+            [QuadInstance {
+                dest: Rect {
+                    x: 1.0,
+                    y: 2.0,
+                    w: 40.0,
+                    h: 4.0
+                },
+                uv: uv(0, 0, 40, 4),
+                tint: WHITE,
+                colorize: NO_COLORIZE,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_new_enlarger_clears_the_pages_and_the_next_frame_reloads_what_it_draws() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(10.0, 20.0)).sprite(
+            ImageKey::sprite(200, 2),
+            at(30.0, 40.0),
+            Color::WHITE,
+        );
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let native = all_quads(gpu.take().last().and_then(submitted).expect("a frame"));
+        let kinds = Rc::new(RefCell::new(Vec::new()));
+        renderer.set_enlarger(Box::new(Doubled {
+            kinds: Rc::clone(&kinds),
+        }));
+
+        renderer.render(&list, &viewport(), &mut gpu);
+
+        let sheet = sheet();
+        assert_eq!(
+            gpu.calls[..6],
+            [
+                GpuCall::ClearPages,
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+                GpuCall::upload(PageId(0), rect(0, 9, 10, 12), &doubled(&sheet[0])),
+                GpuCall::upload(PageId(0), rect(11, 9, 10, 12), &doubled(&sheet[1])),
+                GpuCall::upload(PageId(0), rect(22, 9, 10, 12), &doubled(&sheet[2])),
+            ]
+        );
+        let rebuilt = all_quads(gpu.submits()[0]);
+        let dests = |quads: &[QuadInstance]| quads.iter().map(|q| q.dest).collect::<Vec<_>>();
+        assert_eq!(dests(&rebuilt), dests(&native));
+        assert_eq!(
+            *kinds.borrow(),
+            [
+                ImageKind::Pict,
+                ImageKind::Rled,
+                ImageKind::Rled,
+                ImageKind::Rled
+            ]
+        );
+        assert_eq!(
+            renderer.images().calls(),
+            [
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200)
+            ],
+            "decoded again"
+        );
+
+        gpu.take();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let again = only_submit(&gpu.calls);
+        assert_eq!(all_quads(again), rebuilt, "a second frame uploads nothing");
+    }
+
+    /// The frame `call` submits, if it is a submit.
+    fn submitted(call: &GpuCall) -> Option<&Frame> {
+        match call {
+            GpuCall::Submit(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn pages_are_cleared_only_by_a_new_enlarger_once_some_are_open() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        let mut never = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        never.render(&list, &viewport(), &mut gpu);
+        never.render(&list, &viewport(), &mut gpu);
+        assert!(!gpu.calls.contains(&GpuCall::ClearPages), "never set");
+
+        let mut early = doubling(images());
+        let mut gpu = RecordingGpu::new();
+        early.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            gpu.take()[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+            ],
+            "no page to clear"
+        );
+
+        early.set_enlarger(Box::new(NativeDetail));
+        early.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            gpu.calls[..3],
+            [
+                GpuCall::ClearPages,
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 8, 4), &red_picture()),
+            ]
+        );
+    }
+
+    #[test]
+    fn after_a_rebuild_failures_stay_failed_and_are_not_reported_again() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(99), at(0.0, 0.0))
+            .sprite(ImageKey::sprite(200, 7), at(0.0, 0.0), Color::WHITE)
+            .picture(ImageKey::picture(128), at(0.0, 0.0));
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        let first = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(first.new_failures.len(), 2, "{first:?}");
+        renderer.set_enlarger(Box::new(Doubled::default()));
+        gpu.take();
+
+        let again = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(again, RenderReport::default());
+        assert_eq!(
+            renderer.images().calls(),
+            [
+                (ImageKind::Pict, 99),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128)
+            ],
+            "the missing picture is not asked for again"
+        );
+        assert_eq!(gpu.calls[0], GpuCall::ClearPages);
+        assert_eq!(
+            all_quads(gpu.submits()[0]),
+            [QuadInstance {
+                dest: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 4.0
+                },
+                uv: uv(33, 0, 16, 8),
+                tint: WHITE,
+                colorize: NO_COLORIZE,
+            }],
+            "the picture placed after the sheet's three 10x12 frames"
+        );
+    }
+
+    #[test]
+    fn with_super_xbr_a_sprites_atlas_entry_is_its_super_xbr_image_at_its_native_place() {
+        let frame = solid(5, 6, [0, 0, 255, 255]);
+        let images = FakeImages::default().with(ImageKind::Rled, 200, vec![frame.clone()]);
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 0), at(30.5, 40.25), Color::WHITE);
+        let native = quads_of(
+            renderer(FakeImages::default().with(ImageKind::Rled, 200, vec![frame.clone()])),
+            &list,
+        );
+        let mut renderer = renderer(images);
+        renderer.set_enlarger(enlarger_for(nova_view::Enlargement::SuperXbr));
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        let enlarged = SuperXbr.enlarge(ImageKind::Rled, &frame);
+        assert_eq!(
+            gpu.calls[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 10, 12), &enlarged),
+            ]
+        );
+        let quads = all_quads(gpu.submits()[0]);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].dest, native[0].dest);
+        assert_eq!(quads[0].uv, uv(0, 0, 10, 12));
     }
 }

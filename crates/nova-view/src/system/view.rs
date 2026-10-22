@@ -236,6 +236,7 @@ mod tests {
                 frame0_bias: 0,
                 only_when_destroyed: false,
             },
+            radar_square: false,
         }
     }
 

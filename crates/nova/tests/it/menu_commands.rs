@@ -1,0 +1,66 @@
+//! The menu bar's Quit through the whole app: in flight it exits at once
+//! and the pilot is saved; during the start-up appear it waits for the
+//! appear to end, as Command-Q does.
+
+use std::time::Duration;
+
+use nova::app::{Control, Showing, WindowEvent};
+use nova_sim::fixture::MemoryPilots;
+use nova_view::MenuCommand;
+
+use crate::common::EntryHarness;
+use crate::pilots::{Harness, saved};
+
+/// How many 16 ms frames it takes to reach `delay`.
+fn frames_to(delay: Duration) -> u64 {
+    delay.as_millis().div_ceil(16) as u64
+}
+
+#[test]
+fn quit_from_the_menu_bar_in_flight_exits_and_saves_the_pilot() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.click(game.menu_button(nova_view::menu::MenuChoice::NewPilot));
+    game.type_name("Ada");
+    game.press(winit::keyboard::KeyCode::Enter);
+    game.enter_ship();
+    assert_eq!(game.showing(), Showing::Flight);
+    for _ in 0..10 {
+        assert_eq!(game.redraw(), Control::Continue);
+    }
+    let flying = game
+        .app
+        .screen()
+        .flight_view()
+        .and_then(|flight| flight.pilot())
+        .expect("a pilot")
+        .clone();
+    let writes = store.writes();
+    assert_eq!(
+        game.handle(WindowEvent::Menu(MenuCommand::Quit)),
+        Control::Exit
+    );
+    assert_eq!(store.writes(), writes + 1, "saved as it quits");
+    assert_eq!(saved(&store, "Ada"), flying);
+}
+
+#[test]
+fn quit_from_the_menu_bar_during_the_start_up_appear_exits_once_it_ends() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::starting_up(&store);
+    assert_eq!(
+        game.handle(WindowEvent::Menu(MenuCommand::Quit)),
+        Control::Continue,
+        "held for the appear's end"
+    );
+    let mut frames = 0;
+    while game.redraw() == Control::Continue {
+        frames += 1;
+        assert!(frames < 200, "the app never exits");
+    }
+    assert!(
+        frames + 1 >= frames_to(nova_view::fade::DEATH_FADE_FOR),
+        "not before the appear ends: {frames}"
+    );
+    assert_eq!(store.writes(), 0, "nothing to save on the main menu");
+}

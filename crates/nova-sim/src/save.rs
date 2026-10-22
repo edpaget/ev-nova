@@ -57,6 +57,65 @@
 //!   17 writer ever set, so the upgrade gives a destroyed one 0 days left:
 //!   due to regenerate on its next day, as a `Y` with a `DeadTime` of 0
 //!   leaves it.
+//! - Version 19: adds the combat rating. No older save kept one, so the
+//!   upgrade gives 0, the original's value for a pilot with no `chär`
+//!   (@0x76f70).
+//! - Version 20: adds the active missions, none in an older save.
+//! - Version 21: adds the legal record in each system (`system_legal`,
+//!   each its `system` and `record`, or `null` until derived). An older
+//!   save kept only the record with each government, so the upgrade
+//!   saves `null`, and flying the pilot derives each system's
+//!   ([`Session::fly`](crate::Session::fly)).
+//! - Version 22: adds each active mission's special ships (`ships`) and
+//!   auxiliary ships (`aux`: their `countdown`, how many `arrived` and
+//!   how many are `left` to come). An older save kept none of their
+//!   state, so the upgrade gives each mission none left, nowhere, with no
+//!   timer and no name, and none destroyed, boarded, disabled or chased
+//!   off: an old save's mission spawns no ship, and its `<SN>` reads
+//!   empty. It gives each no auxiliary ship left to come, its countdown
+//!   0, so none comes until a restart refills them (`Flags` 0x0010).
+//! - Version 23: adds the crons running or holding off, each its `crön`
+//!   ID, `days` and `holdoff`; none in an older save.
+//! - Version 24: adds the active ranks; none in an older save.
+//! - Version 25: adds whether the pilot plays Strict Play
+//!   (`strict_play`). Every older pilot was made with the new-pilot
+//!   dialog's Strict Play box greyed and clear, so the upgrade gives
+//!   `false`.
+//! - Version 26: adds the one ship type each active mission's special
+//!   ships fly under `Flags` 0x0800 (`uniform_type` in its `ships`). An
+//!   older save kept none, so the upgrade gives `null`, and such a
+//!   mission draws its type at its ships' next spawn.
+//! - Version 27: adds the system the player last jumped from
+//!   (`jumped_from`, a `sÿst` ID, or `null` before the first jump), the
+//!   side mission ships coming in enter from. An older save kept none,
+//!   so the upgrade gives `null`, and after its load they come in at a
+//!   drawn angle until the next jump.
+//! - Version 28: adds whether each active mission's goals-met moment has
+//!   come (`ship_done` in its `ships`), read by the other reading of
+//!   [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce). An older
+//!   save kept none, and the upgrade can't read a mission's `ShipGoal` to
+//!   tell goals met by the moment from an escort goal's met at its
+//!   return with none, so it gives `false` to every mission.
+//! - Version 29: adds the systems charted (`charted`, `sÿst` IDs): those
+//!   at explored level 2, which a take-off or a map gives, as the
+//!   original's pilot file keeps each system's level (`_LoadPilotData`
+//!   @0x7553f-0x75565; see `Pilot::explored_level`). An older save kept
+//!   only whether each system was explored, so the upgrade gives `[]` and
+//!   its explored systems load at level 1. Each charted system loads
+//!   explored too.
+//! - Version 30: adds the reinforcement countdowns (`reinforcement_days`,
+//!   each its `system` and `days` left), as the original's pilot file
+//!   keeps every system's +0xc4 (`_WritePilotData` @0x72aa0-0x72ac9,
+//!   `_LoadPilotData` @0x76027-0x7605b; see the session's
+//!   `reinforcements` module). The timer of a fleet on its way (+0xc8) is
+//!   not saved, as the original's isn't. An older save kept none, so the
+//!   upgrade gives `[]`. A load drops an entry of 0 days.
+//! - Version 31: adds whether the pilot has seen the intro screen
+//!   (`seen_intro`), as the original's pilot file keeps `seenIntroScreen`
+//!   at +0x3086 (`_WritePilotData` @0x72970, `_LoadPilotData` @0x75ee2).
+//!   An older save can't tell whether its pilot ever entered play, and
+//!   showing a long-played pilot the intro is worse than skipping it for
+//!   one never flown, so the upgrade gives `true`.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -76,38 +135,86 @@
 //! gone for good (`gone_persons`) and those holding a grudge (`grudges`)
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
-//! `female`. The `paint` is `null` when unpainted, or its red, green and
+//! `female`. Strict Play (`strict_play`) is `true` or `false`. The system last jumped from (`jumped_from`) is its `sÿst` ID, or `null` before the first jump. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
-//! (`mission_ships`, `missions`, `crons`, `nebulae`, `plugins` or
-//! `fixture`), record and hook (`{"consumer": "missions", "record": 3,
+//! (`offers`, `mission_ships`, `missions`, `crons`, `nebulae`, `plugins`
+//! or `fixture`), record and hook (`{"consumer": "missions", "record": 3,
 //! "hook": 1}`), listed by consumer, record and hook. The galaxy overlay
 //! (`galaxy`) is three lists, each by ascending ID: `systems`, each its
 //! `sÿst` ID, whether it is `visible` and its `govt`; `stellars`, each its
 //! `spöb` ID, its `govt` and, while it is `destroyed`, its regeneration
 //! countdown (`{"days_left": 3}`), else `null`; and `nebulae`, each its
-//! `nëbu` ID and whether it is `active`. A `visible` or `govt` of `null`
+//! `nëbu` ID and whether it is `active`; whether a nebula is explored
+//! is never saved, as the original's load forgets it (`_ResetPlayer`
+//! @0x1da86; see the [`nebula`](crate::nebula) module). A `visible` or `govt` of `null`
 //! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
 //! null}` for independent (`{"system": 131, "visible": false, "govt":
-//! {"govt": 128}}`).
+//! {"govt": 128}}`). A system's `visible` is written as the overlay holds
+//! it (`false` hidden by the last refresh of its `Visibility`, `true` a
+//! chain head the player's move showed), but never trusted: a load
+//! recomputes it from the bits before anything reads it (crons-news-ranks
+//! phase 5), as the original saves no visibility.
+//!
+//! The active missions (`missions`) are listed by slot, the free slots
+//! left out: each its `slot` (0 to 15), its `mïsn` ID (`mission`), its
+//! `destination` and `return`, each a `spöb` ID with the `sÿst` it belongs
+//! to (`{"stellar": 150, "system": 132}`, the system `null` when no
+//! visible system listed it) or `null` for none, its `cargo_type` (raw, or
+//! `null`), `cargo_tons` and `pay`, its `days_left` and `deadline` date,
+//! each `null` without a `TimeLimit`, whether its destination is
+//! `reached`, its `goals_met` and its cargo `aboard`, and how it
+//! `failed`: `null`, `quick` (at once, its `OnFailure` run) or
+//! `operator` (marked, by `F` or a ship goal's check, nothing run yet),
+//! and its special `ships`: their `system` (`{"at":
+//! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
+//! and have `arrived`, their `appear` timer (-1 when it does not run),
+//! their drawn `name` and `subtitle`, how many have been
+//! `destroyed`, `boarded`, `disabled` and `chased_off`, the one ship
+//! type they fly (`uniform_type`, a `shïp` ID, or `null` for a type drawn
+//! for each), and whether their goals-met moment has come (`ship_done`).
+//! A slot past 15
+//! is unusable.
+//!
+//! The crons (`crons`) are those running or holding off, by ascending
+//! ID: each its `crön` ID (`cron`), its `days` left (-1 in its
+//! post-holdoff) and its `holdoff` (`{"cron": 156, "days": 105,
+//! "holdoff": 0}`). A load keeps an entry only while its `days` or
+//! `holdoff` is 0 or more, as the original derives a slot's `active`
+//! (`_LoadPilotData` @0x75fbc-0x76025), so an entry of -1 and -1 is an
+//! inactive crön, and a save leaves the inactive ones out. One whose
+//! record is gone is kept as saved, and flying the pilot drops it
+//! ([`Session::fly`](crate::Session::fly)).
+//!
+//! The active ranks (`ranks`) are their `ränk` IDs, ascending, as the
+//! original saves one flag for each rank (`_WritePilotData` @0x72910).
+//! The recent rank `<RRK>` reads is not saved, as the original's isn't.
+//! One whose record is gone is kept as saved, and flying the pilot drops
+//! it, as `_LoadPilotData` does (@0x75e47-0x75eb6).
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::catalog::{
-    DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+    CronId, DisasterId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, RankId, ShipId,
+    StellarId, SystemId,
 };
 use crate::control::Bit;
+use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
+use crate::mission::aux_ships::AuxShips;
+use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 18;
+pub const CURRENT: u64 = 31;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -130,7 +237,7 @@ pub enum SaveError {
 }
 
 /// A save's date.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 struct SavedDate {
     year: i32,
     month: u8,
@@ -300,6 +407,13 @@ struct SavedRecord {
     record: i16,
 }
 
+/// A saved legal record in a system.
+#[derive(Serialize, Deserialize)]
+struct SavedSystemRecord {
+    system: i16,
+    record: i16,
+}
+
 /// A saved good: a standard commodity's number, or a `jünk`'s ID.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -329,6 +443,7 @@ struct SavedEvent {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SavedConsumer {
+    Offers,
     MissionShips,
     Missions,
     Crons,
@@ -340,6 +455,7 @@ enum SavedConsumer {
 impl From<Consumer> for SavedConsumer {
     fn from(consumer: Consumer) -> Self {
         match consumer {
+            Consumer::Offers => Self::Offers,
             Consumer::MissionShips => Self::MissionShips,
             Consumer::Missions => Self::Missions,
             Consumer::Crons => Self::Crons,
@@ -353,6 +469,7 @@ impl From<Consumer> for SavedConsumer {
 impl From<SavedConsumer> for Consumer {
     fn from(saved: SavedConsumer) -> Self {
         match saved {
+            SavedConsumer::Offers => Self::Offers,
             SavedConsumer::MissionShips => Self::MissionShips,
             SavedConsumer::Missions => Self::Missions,
             SavedConsumer::Crons => Self::Crons,
@@ -516,6 +633,256 @@ struct SavedOutfit {
     count: u16,
 }
 
+/// A saved stellar a mission names, with the system it belongs to.
+#[derive(Serialize, Deserialize)]
+struct SavedStop {
+    stellar: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    system: Option<i16>,
+}
+
+impl From<Stop> for SavedStop {
+    fn from(stop: Stop) -> Self {
+        Self {
+            stellar: stop.stellar.0,
+            system: stop.system.map(|system| system.0),
+        }
+    }
+}
+
+impl From<SavedStop> for Stop {
+    fn from(saved: SavedStop) -> Self {
+        Self {
+            stellar: StellarId(saved.stellar),
+            system: saved.system.map(SystemId),
+        }
+    }
+}
+
+/// How a saved mission failed.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedFailure {
+    Quick,
+    Operator,
+}
+
+impl From<FailedBy> for SavedFailure {
+    fn from(failed: FailedBy) -> Self {
+        match failed {
+            FailedBy::Quick => Self::Quick,
+            FailedBy::Marked => Self::Operator,
+        }
+    }
+}
+
+impl From<SavedFailure> for FailedBy {
+    fn from(saved: SavedFailure) -> Self {
+        match saved {
+            SavedFailure::Quick => Self::Quick,
+            SavedFailure::Operator => Self::Marked,
+        }
+    }
+}
+
+/// Where a saved mission's special ships are; `null` for nowhere.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedShipSystem {
+    At(i16),
+    FollowsPlayer,
+}
+
+/// A saved mission's special ships.
+#[derive(Serialize, Deserialize)]
+struct SavedShips {
+    #[serde(deserialize_with = "Option::deserialize")]
+    system: Option<SavedShipSystem>,
+    left: i16,
+    arrived: i16,
+    appear: i16,
+    name: String,
+    subtitle: String,
+    destroyed: i16,
+    boarded: i16,
+    disabled: i16,
+    chased_off: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    uniform_type: Option<i16>,
+    ship_done: bool,
+}
+
+impl From<&SpecialShips> for SavedShips {
+    fn from(ships: &SpecialShips) -> Self {
+        Self {
+            system: match ships.system {
+                ShipSystem::At(system) => Some(SavedShipSystem::At(system.0)),
+                ShipSystem::FollowsPlayer => Some(SavedShipSystem::FollowsPlayer),
+                ShipSystem::Nowhere => None,
+            },
+            left: ships.left,
+            arrived: ships.arrived,
+            appear: ships.appear,
+            name: ships.name.clone(),
+            subtitle: ships.subtitle.clone(),
+            destroyed: ships.destroyed,
+            boarded: ships.boarded,
+            disabled: ships.disabled,
+            chased_off: ships.chased_off,
+            uniform_type: ships.uniform_type.map(|ship| ship.0),
+            ship_done: ships.ship_done,
+        }
+    }
+}
+
+impl From<SavedShips> for SpecialShips {
+    fn from(saved: SavedShips) -> Self {
+        Self {
+            system: match saved.system {
+                Some(SavedShipSystem::At(system)) => ShipSystem::At(SystemId(system)),
+                Some(SavedShipSystem::FollowsPlayer) => ShipSystem::FollowsPlayer,
+                None => ShipSystem::Nowhere,
+            },
+            left: saved.left,
+            arrived: saved.arrived,
+            appear: saved.appear,
+            name: saved.name,
+            subtitle: saved.subtitle,
+            destroyed: saved.destroyed,
+            boarded: saved.boarded,
+            disabled: saved.disabled,
+            chased_off: saved.chased_off,
+            uniform_type: saved.uniform_type.map(ShipId),
+            ship_done: saved.ship_done,
+        }
+    }
+}
+
+/// A saved mission's auxiliary ships.
+#[derive(Serialize, Deserialize)]
+struct SavedAux {
+    countdown: i16,
+    arrived: i16,
+    left: i16,
+}
+
+impl From<AuxShips> for SavedAux {
+    fn from(aux: AuxShips) -> Self {
+        Self {
+            countdown: aux.countdown,
+            arrived: aux.arrived,
+            left: aux.left,
+        }
+    }
+}
+
+impl From<SavedAux> for AuxShips {
+    fn from(saved: SavedAux) -> Self {
+        Self {
+            countdown: saved.countdown,
+            arrived: saved.arrived,
+            left: saved.left,
+        }
+    }
+}
+
+/// A saved active mission, in its slot.
+#[derive(Serialize, Deserialize)]
+struct SavedMission {
+    slot: u8,
+    mission: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    destination: Option<SavedStop>,
+    #[serde(rename = "return", deserialize_with = "Option::deserialize")]
+    return_to: Option<SavedStop>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cargo_type: Option<i16>,
+    cargo_tons: i64,
+    pay: i64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    days_left: Option<u32>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    deadline: Option<SavedDate>,
+    reached: bool,
+    goals_met: bool,
+    aboard: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    failed: Option<SavedFailure>,
+    ships: SavedShips,
+    aux: SavedAux,
+}
+
+impl SavedMission {
+    /// `active`, in `slot`.
+    fn new(slot: u8, active: &ActiveMission) -> Self {
+        Self {
+            slot,
+            mission: active.mission.0,
+            destination: active.destination.map(SavedStop::from),
+            return_to: active.return_to.map(SavedStop::from),
+            cargo_type: active.cargo_type,
+            cargo_tons: active.cargo_tons,
+            pay: active.pay,
+            days_left: active.days_left,
+            deadline: active.deadline.map(SavedDate::from),
+            reached: active.reached,
+            goals_met: active.goals_met,
+            aboard: active.aboard,
+            failed: active.failed.map(SavedFailure::from),
+            ships: SavedShips::from(&active.ships),
+            aux: SavedAux::from(active.aux),
+        }
+    }
+}
+
+impl From<GameDate> for SavedDate {
+    fn from(date: GameDate) -> Self {
+        Self {
+            year: date.year(),
+            month: date.month(),
+            day: date.day(),
+        }
+    }
+}
+
+/// The date `saved` names, or why it names none.
+fn date_of(saved: SavedDate) -> Result<GameDate, SaveError> {
+    let SavedDate { year, month, day } = saved;
+    GameDate::new(year, month, day)
+        .ok_or_else(|| SaveError::Unusable(format!("no such date, {day}/{month}/{year}")))
+}
+
+/// The active missions `saved` lists, each in its slot, or why they
+/// cannot be.
+fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
+    let mut missions = ActiveMissions::default();
+    for saved in saved {
+        let active = ActiveMission {
+            mission: MissionId(saved.mission),
+            destination: saved.destination.map(Stop::from),
+            return_to: saved.return_to.map(Stop::from),
+            cargo_type: saved.cargo_type,
+            cargo_tons: saved.cargo_tons,
+            pay: saved.pay,
+            days_left: saved.days_left,
+            deadline: saved.deadline.map(date_of).transpose()?,
+            reached: saved.reached,
+            goals_met: saved.goals_met,
+            aboard: saved.aboard,
+            failed: saved.failed.map(FailedBy::from),
+            ships: SpecialShips::from(saved.ships),
+            aux: AuxShips::from(saved.aux),
+        };
+        if !missions.put(saved.slot, active) {
+            return Err(SaveError::Unusable(format!(
+                "no such mission slot, {}",
+                saved.slot
+            )));
+        }
+    }
+    Ok(missions)
+}
+
 /// The current version's save. No field has a default: a missing one is
 /// an error.
 #[derive(Serialize, Deserialize)]
@@ -535,7 +902,13 @@ struct Saved {
     reserves: SavedReserves,
     course: Vec<i16>,
     explored: Vec<i16>,
+    charted: Vec<i16>,
+    reinforcement_days: Vec<SavedReinforcementDays>,
     legal: Vec<SavedRecord>,
+    /// `None` until the records in each system are derived.
+    #[serde(deserialize_with = "Option::deserialize")]
+    system_legal: Option<Vec<SavedSystemRecord>>,
+    combat_rating: i64,
     cargo: Vec<SavedCargo>,
     events: Vec<SavedEvent>,
     /// `None` for the ship's default items, not yet read.
@@ -549,11 +922,83 @@ struct Saved {
     grudges: Vec<i16>,
     bits: Vec<Bit>,
     gender: SavedGender,
+    strict_play: bool,
+    /// `None` before the first jump.
+    #[serde(deserialize_with = "Option::deserialize")]
+    jumped_from: Option<i16>,
     /// `None` when unpainted.
     #[serde(deserialize_with = "Option::deserialize")]
     paint: Option<SavedPaint>,
     story_fired: Vec<SavedFired>,
     galaxy: SavedGalaxy,
+    missions: Vec<SavedMission>,
+    crons: Vec<SavedCron>,
+    ranks: Vec<i16>,
+    seen_intro: bool,
+}
+
+/// A saved reinforcement countdown: a system and its days left.
+#[derive(Serialize, Deserialize)]
+struct SavedReinforcementDays {
+    system: i16,
+    days: u16,
+}
+
+/// The countdowns `days` holds as saved, by system.
+fn saved_reinforcement_days(days: &BTreeMap<SystemId, u16>) -> Vec<SavedReinforcementDays> {
+    days.iter()
+        .map(|(system, &days)| SavedReinforcementDays {
+            system: system.0,
+            days,
+        })
+        .collect()
+}
+
+/// The countdowns `saved` lists, those of none left out, as the pilot
+/// keeps them.
+fn reinforcement_days_of(saved: Vec<SavedReinforcementDays>) -> BTreeMap<SystemId, u16> {
+    saved
+        .into_iter()
+        .filter(|saved| saved.days > 0)
+        .map(|saved| (SystemId(saved.system), saved.days))
+        .collect()
+}
+
+/// A saved crön running or holding off: its ID and its counters.
+#[derive(Serialize, Deserialize)]
+struct SavedCron {
+    cron: i16,
+    days: i16,
+    holdoff: i16,
+}
+
+/// The crons `crons` holds as saved: the active ones, by ID.
+fn saved_crons(crons: &BTreeMap<CronId, CronState>) -> Vec<SavedCron> {
+    crons
+        .iter()
+        .filter(|(_, state)| state.active())
+        .map(|(id, state)| SavedCron {
+            cron: id.0,
+            days: state.days,
+            holdoff: state.holdoff,
+        })
+        .collect()
+}
+
+/// The crons `saved` lists that a load finds active
+/// (`_LoadPilotData` @0x75fbc-0x76025).
+fn crons_of(saved: Vec<SavedCron>) -> BTreeMap<CronId, CronState> {
+    saved
+        .into_iter()
+        .map(|saved| {
+            let state = CronState {
+                days: saved.days,
+                holdoff: saved.holdoff,
+            };
+            (CronId(saved.cron), state)
+        })
+        .filter(|(_, state)| state.active())
+        .collect()
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -566,15 +1011,13 @@ pub fn encode(pilot: &Pilot) -> String {
         ship_name: pilot.ship_name.clone(),
         system: pilot.system.0,
         stellar: pilot.stellar.map(|stellar| stellar.0),
-        date: SavedDate {
-            year: pilot.date.year(),
-            month: pilot.date.month(),
-            day: pilot.date.day(),
-        },
+        date: pilot.date.into(),
         cash: pilot.cash,
         reserves: pilot.reserves.into(),
         course: pilot.course.iter().map(|system| system.0).collect(),
         explored: pilot.explored.iter().map(|system| system.0).collect(),
+        charted: pilot.charted.iter().map(|system| system.0).collect(),
+        reinforcement_days: saved_reinforcement_days(&pilot.reinforcement_days),
         legal: pilot
             .legal
             .iter()
@@ -583,6 +1026,16 @@ pub fn encode(pilot: &Pilot) -> String {
                 record,
             })
             .collect(),
+        system_legal: pilot.system_legal.as_ref().map(|legal| {
+            legal
+                .iter()
+                .map(|(system, &record)| SavedSystemRecord {
+                    system: system.0,
+                    record,
+                })
+                .collect()
+        }),
+        combat_rating: pilot.combat_rating,
         cargo: pilot
             .cargo
             .iter()
@@ -630,6 +1083,8 @@ pub fn encode(pilot: &Pilot) -> String {
         grudges: pilot.grudges.iter().map(|person| person.0).collect(),
         bits: pilot.bits.iter().collect(),
         gender: pilot.gender.into(),
+        strict_play: pilot.strict_play,
+        jumped_from: pilot.jumped_from.map(|system| system.0),
         paint: pilot.paint.map(SavedPaint::from),
         story_fired: pilot
             .story_fired
@@ -638,6 +1093,14 @@ pub fn encode(pilot: &Pilot) -> String {
             .map(SavedFired::from)
             .collect(),
         galaxy: (&pilot.galaxy).into(),
+        missions: pilot
+            .missions
+            .iter()
+            .map(|(slot, active)| SavedMission::new(slot, active))
+            .collect(),
+        crons: saved_crons(&pilot.crons),
+        ranks: pilot.ranks.iter().map(|rank| rank.0).collect(),
+        seen_intro: pilot.seen_intro,
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -662,7 +1125,96 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     story_fired,
     galaxy,
     countdowns,
+    combat_rating,
+    active_missions,
+    system_records,
+    mission_ships,
+    crons,
+    ranks,
+    strict_play,
+    uniform_types,
+    jumped_from,
+    ship_done,
+    charted,
+    reinforcement_days,
+    seen_intro,
 ];
+
+/// Version 30 to 31: the intro screen seen. An older save can't tell
+/// whether its pilot ever entered play, and showing a long-played pilot
+/// the intro is worse than skipping it for one never flown.
+fn seen_intro(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("seen_intro".to_owned(), Value::Bool(true));
+    }
+}
+
+/// Version 29 to 30: no reinforcement countdown. An older save kept
+/// none, so every system's fleet can be called at once, as after a
+/// countdown run out.
+fn reinforcement_days(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("reinforcement_days".to_owned(), Value::Array(Vec::new()));
+    }
+}
+
+/// Version 28 to 29: nothing charted. An older save kept only whether
+/// each system had been explored, which every level-1 writer gives, so
+/// each explored system loads at level 1.
+fn charted(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("charted".to_owned(), Value::Array(Vec::new()));
+    }
+}
+
+/// Version 27 to 28: no active mission's goals-met moment has come. The
+/// upgrade reads no `mïsn`, so it can't tell goals met by a moment from
+/// an escort goal's met at its return with none
+/// ([`met_at_return`](crate::mission::goals::met_at_return)); giving
+/// `false` never holds back a `ShipDone` still to run, and at most lets
+/// one already run run once more, and only under the other reading of
+/// [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce).
+fn ship_done(save: &mut Value) {
+    let Some(entries) = save.get_mut("missions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for ships in entries
+        .iter_mut()
+        .filter_map(|entry| entry.get_mut("ships")?.as_object_mut())
+    {
+        ships.insert("ship_done".to_owned(), Value::Bool(false));
+    }
+}
+
+/// Version 26 to 27: no system jumped from, so mission ships coming in
+/// before the next jump enter at a drawn angle.
+fn jumped_from(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("jumped_from".to_owned(), Value::Null);
+    }
+}
+
+/// Version 25 to 26: no active mission's ships keep a type, so a
+/// mission of `Flags` 0x0800 draws it at its ships' next spawn.
+fn uniform_types(save: &mut Value) {
+    let Some(entries) = save.get_mut("missions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for ships in entries
+        .iter_mut()
+        .filter_map(|entry| entry.get_mut("ships")?.as_object_mut())
+    {
+        ships.insert("uniform_type".to_owned(), Value::Null);
+    }
+}
+
+/// Version 24 to 25: the pilot does not play Strict Play, as every older
+/// pilot was made with the box greyed and clear.
+fn strict_play(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("strict_play".to_owned(), Value::Bool(false));
+    }
+}
 
 /// Version 1 to 2: nothing explored, and no legal records.
 fn explored_and_legal(save: &mut Value) {
@@ -779,6 +1331,57 @@ fn countdowns(save: &mut Value) {
     }
 }
 
+/// Version 18 to 19: a combat rating of 0.
+fn combat_rating(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("combat_rating".to_owned(), Value::from(0));
+    }
+}
+
+/// Version 19 to 20: no mission active.
+fn active_missions(save: &mut Value) {
+    add_empty(save, &["missions"]);
+}
+
+/// Version 20 to 21: the records in each system not yet derived.
+fn system_records(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("system_legal".to_owned(), Value::Null);
+    }
+}
+
+/// Version 21 to 22: each active mission with no special ships left,
+/// nowhere, with no timer and no name, none of them destroyed, boarded,
+/// disabled or chased off; and no auxiliary ship left to come, none
+/// arrived, its countdown 0.
+fn mission_ships(save: &mut Value) {
+    let none = serde_json::json!({
+        "system": null,
+        "left": 0,
+        "arrived": 0,
+        "appear": -1,
+        "name": "",
+        "subtitle": "",
+        "destroyed": 0,
+        "boarded": 0,
+        "disabled": 0,
+        "chased_off": 0
+    });
+    add_to_each(save, "missions", "ships", &none);
+    let no_aux = serde_json::json!({"countdown": 0, "arrived": 0, "left": 0});
+    add_to_each(save, "missions", "aux", &no_aux);
+}
+
+/// Version 22 to 23: no crön running or holding off.
+fn crons(save: &mut Value) {
+    add_empty(save, &["crons"]);
+}
+
+/// Version 23 to 24: no active rank.
+fn ranks(save: &mut Value) {
+    add_empty(save, &["ranks"]);
+}
+
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
 fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
     let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
@@ -798,6 +1401,26 @@ fn add_empty(save: &mut Value, fields: &[&str]) {
             object.insert((*field).to_owned(), Value::Array(Vec::new()));
         }
     }
+}
+
+/// The good and tons a saved hold entry keeps.
+fn cargo_of(saved: &SavedCargo) -> (Good, u32) {
+    let good = match saved.good {
+        SavedGood::Commodity(n) => Good::Commodity(n),
+        SavedGood::Junk(id) => Good::Junk(JunkId(id)),
+    };
+    (good, saved.tons)
+}
+
+/// The systems explored a save lists, each charted one among them (see
+/// the module docs' version 29).
+fn explored_of(explored: &[i16], charted: &[i16]) -> std::collections::BTreeSet<SystemId> {
+    explored
+        .iter()
+        .chain(charted)
+        .copied()
+        .map(SystemId)
+        .collect()
 }
 
 /// The pilot `text` saves, at any version up to [`CURRENT`].
@@ -827,9 +1450,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         upgrade(&mut save);
     }
     let saved = Saved::deserialize(save).map_err(|error| unusable(error.to_string()))?;
-    let SavedDate { year, month, day } = saved.date;
-    let date = GameDate::new(year, month, day)
-        .ok_or_else(|| unusable(format!("no such date, {day}/{month}/{year}")))?;
+    let date = date_of(saved.date)?;
+    let missions = missions_of(saved.missions)?;
     Ok(Pilot {
         name: saved.name,
         ship: ShipId(saved.ship),
@@ -840,23 +1462,22 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         cash: saved.cash,
         reserves: saved.reserves.into(),
         course: saved.course.into_iter().map(SystemId).collect(),
-        explored: saved.explored.into_iter().map(SystemId).collect(),
+        explored: explored_of(&saved.explored, &saved.charted),
+        charted: saved.charted.into_iter().map(SystemId).collect(),
+        reinforcement_days: reinforcement_days_of(saved.reinforcement_days),
         legal: saved
             .legal
             .into_iter()
             .map(|saved| (GovtId(saved.govt), saved.record))
             .collect(),
-        cargo: saved
-            .cargo
-            .into_iter()
-            .map(|saved| {
-                let good = match saved.good {
-                    SavedGood::Commodity(n) => Good::Commodity(n),
-                    SavedGood::Junk(id) => Good::Junk(JunkId(id)),
-                };
-                (good, saved.tons)
-            })
-            .collect(),
+        system_legal: saved.system_legal.map(|legal| {
+            legal
+                .into_iter()
+                .map(|saved| (SystemId(saved.system), saved.record))
+                .collect()
+        }),
+        combat_rating: saved.combat_rating,
+        cargo: saved.cargo.iter().map(cargo_of).collect(),
         events: saved
             .events
             .into_iter()
@@ -890,6 +1511,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         grudges: saved.grudges.into_iter().map(PersonId).collect(),
         bits: saved.bits.into_iter().collect(),
         gender: saved.gender.into(),
+        strict_play: saved.strict_play,
+        jumped_from: saved.jumped_from.map(SystemId),
         paint: saved.paint.map(Rgb15::from),
         story_fired: saved
             .story_fired
@@ -897,6 +1520,10 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .map(SubscriptionId::from)
             .collect(),
         galaxy: saved.galaxy.into(),
+        missions,
+        crons: crons_of(saved.crons),
+        ranks: saved.ranks.into_iter().map(RankId).collect(),
+        seen_intro: saved.seen_intro,
     })
 }
 
@@ -907,13 +1534,14 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+        DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, RankId, ShipId, StellarId,
+        SystemId,
     };
     use crate::control::ControlBitSet;
     use crate::date::GameDate;
     use crate::escort::EscortOrder;
     use crate::market::Good;
-    use crate::pilot::Escort;
+    use crate::pilot::{Escort, ExploredLevel};
     use crate::reserves::{Gauge, Reserves};
     use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
@@ -936,6 +1564,66 @@ mod tests {
         overlay.set_nebula_active(NebulaId(129), Some(true));
         overlay.set_nebula_active(NebulaId(128), Some(false));
         overlay
+    }
+
+    /// The escorts of [`seasoned`]: each order, carried, hired and a
+    /// person.
+    fn seasoned_escorts() -> Vec<Escort> {
+        vec![
+            Escort {
+                ship: ShipId(130),
+                reserves: Reserves {
+                    shield: Gauge {
+                        now: 4.5,
+                        max: 50.0,
+                    },
+                    armor: Gauge {
+                        now: 20.0,
+                        max: 40.0,
+                    },
+                    fuel: Gauge {
+                        now: 100.0,
+                        max: 200.0,
+                    },
+                },
+                order: Some(EscortOrder::Defend),
+                carried: false,
+                wage: None,
+                person: None,
+            },
+            Escort {
+                ship: ShipId(141),
+                reserves: Reserves::full(1000.0, 500.0, 400.0),
+                order: None,
+                carried: false,
+                wage: None,
+                person: None,
+            },
+            Escort {
+                ship: ShipId(144),
+                reserves: Reserves::full(60.0, 40.0, 300.0),
+                order: Some(EscortOrder::Dock),
+                carried: true,
+                wage: None,
+                person: None,
+            },
+            Escort {
+                ship: ShipId(128),
+                reserves: Reserves::full(30.0, 45.0, 300.0),
+                order: Some(EscortOrder::Hold),
+                carried: false,
+                wage: Some(100),
+                person: None,
+            },
+            Escort {
+                ship: ShipId(136),
+                reserves: Reserves::full(200.0, 100.0, 300.0),
+                order: None,
+                carried: false,
+                wage: None,
+                person: Some(PersonId(128)),
+            },
+        ]
     }
 
     /// A pilot with every field away from its default.
@@ -964,7 +1652,11 @@ mod tests {
             },
             course: vec![SystemId(132), SystemId(133)],
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
+            charted: BTreeSet::from([SystemId(131)]),
+            reinforcement_days: BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)]),
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
+            system_legal: Some(BTreeMap::from([(SystemId(130), -12), (SystemId(131), 7)])),
+            combat_rating: 12_345,
             cargo: BTreeMap::from([(Good::Commodity(2), 7), (Good::Junk(JunkId(146)), 2)]),
             events: BTreeMap::from([
                 (DisasterId(128), active(12, Some(StellarId(150)))),
@@ -973,75 +1665,100 @@ mod tests {
             outfits: BTreeMap::from([(OutfitId(256), 3), (OutfitId(128), 1)]),
             default_outfits_pending: false,
             stock_weapons_pending: false,
-            escorts: vec![
-                Escort {
-                    ship: ShipId(130),
-                    reserves: Reserves {
-                        shield: Gauge {
-                            now: 4.5,
-                            max: 50.0,
-                        },
-                        armor: Gauge {
-                            now: 20.0,
-                            max: 40.0,
-                        },
-                        fuel: Gauge {
-                            now: 100.0,
-                            max: 200.0,
-                        },
-                    },
-                    order: Some(EscortOrder::Defend),
-                    carried: false,
-                    wage: None,
-                    person: None,
-                },
-                Escort {
-                    ship: ShipId(141),
-                    reserves: Reserves::full(1000.0, 500.0, 400.0),
-                    order: None,
-                    carried: false,
-                    wage: None,
-                    person: None,
-                },
-                Escort {
-                    ship: ShipId(144),
-                    reserves: Reserves::full(60.0, 40.0, 300.0),
-                    order: Some(EscortOrder::Dock),
-                    carried: true,
-                    wage: None,
-                    person: None,
-                },
-                Escort {
-                    ship: ShipId(128),
-                    reserves: Reserves::full(30.0, 45.0, 300.0),
-                    order: Some(EscortOrder::Hold),
-                    carried: false,
-                    wage: Some(100),
-                    person: None,
-                },
-                Escort {
-                    ship: ShipId(136),
-                    reserves: Reserves::full(200.0, 100.0, 300.0),
-                    order: None,
-                    carried: false,
-                    wage: None,
-                    person: Some(PersonId(128)),
-                },
-            ],
+            escorts: seasoned_escorts(),
             gone_persons: BTreeSet::from([PersonId(151), PersonId(600)]),
             grudges: BTreeSet::from([PersonId(510)]),
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
             gender: Gender::Female,
+            strict_play: false,
+            jumped_from: Some(SystemId(130)),
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
             story_fired: all_fired(),
             galaxy: overlaid(),
+            missions: busy(),
+            crons: holding_off(),
+            ranks: BTreeSet::from([RankId(140), RankId(128)]),
+            seen_intro: true,
         }
+    }
+
+    /// Slots 2 and 9 taken, every field set, one failed at once with a
+    /// deadline and its cargo aboard, one by `F` with none.
+    fn busy() -> ActiveMissions {
+        let stop = |stellar, system| {
+            Some(Stop {
+                stellar: StellarId(stellar),
+                system,
+            })
+        };
+        let mut missions = ActiveMissions::default();
+        missions.put(
+            2,
+            ActiveMission {
+                mission: MissionId(140),
+                destination: stop(150, Some(SystemId(132))),
+                return_to: stop(128, None),
+                cargo_type: Some(1000),
+                cargo_tons: 9_000_000_000,
+                pay: -40_050,
+                days_left: Some(4_000_000_000),
+                deadline: GameDate::new(1180, 3, 1),
+                reached: true,
+                goals_met: false,
+                aboard: true,
+                failed: Some(FailedBy::Quick),
+                ships: SpecialShips {
+                    system: ShipSystem::At(SystemId(131)),
+                    left: 3,
+                    arrived: 1,
+                    appear: 57,
+                    name: "Rover".to_owned(),
+                    subtitle: "Hunter".to_owned(),
+                    destroyed: 2,
+                    boarded: 1,
+                    disabled: 4,
+                    chased_off: 5,
+                    uniform_type: Some(ShipId(137)),
+                    ship_done: false,
+                },
+                aux: AuxShips {
+                    countdown: 33,
+                    arrived: 1,
+                    left: -2,
+                },
+            },
+        );
+        missions.put(
+            9,
+            ActiveMission {
+                mission: MissionId(141),
+                destination: None,
+                return_to: None,
+                cargo_type: None,
+                cargo_tons: 0,
+                pay: 500,
+                days_left: None,
+                deadline: None,
+                reached: false,
+                goals_met: true,
+                aboard: false,
+                failed: Some(FailedBy::Marked),
+                ships: SpecialShips {
+                    system: ShipSystem::FollowsPlayer,
+                    ship_done: true,
+                    ..SpecialShips::default()
+                },
+                aux: AuxShips::default(),
+            },
+        );
+        missions
     }
 
     /// A once-only subscription of every consumer fired, out of order.
     fn all_fired() -> BTreeSet<SubscriptionId> {
         BTreeSet::from([
             fired(Consumer::Plugins, 128, 0),
+            fired(Consumer::Offers, 0, 0),
             fired(Consumer::Missions, 3, 1),
             fired(Consumer::MissionShips, 15, 2),
             fired(Consumer::Missions, 3, 0),
@@ -1071,6 +1788,7 @@ mod tests {
             stellar: None,
             course: Vec::new(),
             explored: BTreeSet::new(),
+            charted: BTreeSet::new(),
             legal: BTreeMap::new(),
             cargo: BTreeMap::new(),
             events: BTreeMap::new(),
@@ -1113,7 +1831,14 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 18);
+        assert_eq!(CURRENT, 31);
+        assert_eq!(value["seen_intro"], true);
+        assert_eq!(value["explored"], serde_json::json!([130, 131, 200]));
+        assert_eq!(value["charted"], serde_json::json!([131]));
+        assert_eq!(
+            value["reinforcement_days"],
+            serde_json::json!([{"system": 130, "days": 2}, {"system": 200, "days": 15}])
+        );
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1135,19 +1860,6 @@ mod tests {
             "by ID"
         );
         assert_eq!(value["stock_weapons_fitted"], true);
-        assert_eq!(
-            value["story_fired"],
-            serde_json::json!([
-                {"consumer": "mission_ships", "record": 15, "hook": 2},
-                {"consumer": "missions", "record": 3, "hook": 0},
-                {"consumer": "missions", "record": 3, "hook": 1},
-                {"consumer": "crons", "record": -5, "hook": 9},
-                {"consumer": "nebulae", "record": 200, "hook": 0},
-                {"consumer": "plugins", "record": 128, "hook": 0},
-                {"consumer": "fixture", "record": 1, "hook": 255}
-            ]),
-            "by consumer, record and hook"
-        );
         assert_eq!(value["ship_name"], "Kestrel");
         assert_eq!(value["paint"], serde_json::json!({"r": 31, "g": 0, "b": 4}));
         assert_eq!(value["bits"], serde_json::json!([0, 512, 9999]));
@@ -1209,7 +1921,28 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 18"), "{text}");
+        assert_eq!(value["strict_play"], false);
+        assert_eq!(value["jumped_from"], 130);
+        assert!(text.contains("\n  \"version\": 31"), "{text}");
+    }
+
+    #[test]
+    fn the_fired_subscriptions_are_saved_by_consumer_record_and_hook() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["story_fired"],
+            serde_json::json!([
+                {"consumer": "offers", "record": 0, "hook": 0},
+                {"consumer": "mission_ships", "record": 15, "hook": 2},
+                {"consumer": "missions", "record": 3, "hook": 0},
+                {"consumer": "missions", "record": 3, "hook": 1},
+                {"consumer": "crons", "record": -5, "hook": 9},
+                {"consumer": "nebulae", "record": 200, "hook": 0},
+                {"consumer": "plugins", "record": 128, "hook": 0},
+                {"consumer": "fixture", "record": 1, "hook": 255}
+            ]),
+            "by consumer, record and hook"
+        );
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1912,6 +2645,42 @@ mod tests {
     }
 
     #[test]
+    fn strict_play_either_way_survives_a_round_trip() {
+        for strict_play in [false, true] {
+            let pilot = seasoned().with_strict_play(strict_play);
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{strict_play}");
+        }
+    }
+
+    #[test]
+    fn a_version_24_save_loads_without_strict_play() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_25(&seasoned().with_strict_play(true))).expect("JSON");
+        let object = value.as_object_mut().expect("an object");
+        object.insert("version".to_owned(), serde_json::Value::from(24));
+        object.remove("strict_play");
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert!(!pilot.strict_play());
+        assert_eq!(pilot, without_uniform_types(seasoned()));
+    }
+
+    #[test]
+    fn a_current_save_missing_strict_play_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("strict_play");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("strict_play"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    #[test]
     fn a_current_save_with_a_bit_past_9999_or_of_no_known_gender_is_unusable() {
         let text = encode(&seasoned()).replace("9999", "10000");
         assert!(text.contains("10000"), "{text}");
@@ -2236,6 +3005,975 @@ mod tests {
         }
     }
 
+    /// A version 18 save: before the combat rating.
+    const VERSION_18: &str = r#"{
+        "version": 18,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [132],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {
+            "systems": [],
+            "stellars": [{"stellar": 151, "govt": null, "destroyed": {"days_left": 2}}],
+            "nebulae": []
+        }
+    }"#;
+
+    /// A version 19 save: before the active missions.
+    const VERSION_19: &str = r#"{
+        "version": 19,
+        "name": "Courier",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []}
+    }"#;
+
+    #[test]
+    fn the_records_in_each_system_are_saved_by_system() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["system_legal"],
+            serde_json::json!([{"system": 130, "record": -12}, {"system": 131, "record": 7}])
+        );
+    }
+
+    /// A version 20 save: before the legal record in each system.
+    const VERSION_20: &str = r#"{
+        "version": 20,
+        "name": "Lawful",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [{"govt": 128, "record": 25}],
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": []
+    }"#;
+
+    #[test]
+    fn a_version_20_save_loads_with_its_system_records_pending() {
+        let pilot = decode(VERSION_20).expect("loads");
+        assert_eq!(pilot.name(), "Lawful");
+        assert!(!pilot.system_records_derived());
+        assert_eq!(pilot.legal_record(GovtId(128)), 25, "kept");
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_19, VERSION_18, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(!pilot.system_records_derived(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_pilot_with_its_system_records_pending_saves_null() {
+        let pilot = Pilot {
+            system_legal: None,
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        let derived_empty = Pilot {
+            system_legal: Some(BTreeMap::new()),
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&derived_empty)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&derived_empty)), Ok(derived_empty));
+    }
+
+    #[test]
+    fn a_current_save_missing_its_system_records_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("system_legal");
+        }
+        assert!(unusable(&value.to_string()).contains("system_legal"));
+    }
+
+    /// Crön 156 in its pre-holdoff, and crön 129 in its post-holdoff.
+    fn holding_off() -> BTreeMap<CronId, CronState> {
+        BTreeMap::from([
+            (
+                CronId(156),
+                CronState {
+                    days: 105,
+                    holdoff: 2,
+                },
+            ),
+            (
+                CronId(129),
+                CronState {
+                    days: -1,
+                    holdoff: 3,
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn the_crons_running_or_holding_off_are_saved_by_id() {
+        let pilot = seasoned();
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(
+            value["crons"],
+            serde_json::json!([
+                {"cron": 129, "days": -1, "holdoff": 3},
+                {"cron": 156, "days": 105, "holdoff": 2}
+            ])
+        );
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn an_inactive_cron_is_left_out_of_the_save() {
+        let mut crons = holding_off();
+        crons.insert(
+            CronId(200),
+            CronState {
+                days: -1,
+                holdoff: -1,
+            },
+        );
+        let pilot = Pilot {
+            crons,
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(
+            value["crons"]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .map(|cron| cron["cron"].clone())
+                .collect::<Vec<_>>(),
+            [129, 156]
+        );
+    }
+
+    /// A version 22 save: before the crons.
+    const VERSION_22: &str = r#"{
+        "version": 22,
+        "name": "Lawful",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [{"govt": 128, "record": 25}],
+        "system_legal": null,
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": []
+    }"#;
+
+    #[test]
+    fn an_older_save_loads_with_no_cron_running() {
+        let pilot = decode(VERSION_22).expect("loads");
+        assert_eq!(pilot.name(), "Lawful");
+        assert!(pilot.crons().is_empty());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["crons"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_21, VERSION_20, VERSION_19, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(pilot.crons().is_empty(), "{text}");
+        }
+    }
+
+    /// The current save of `seasoned`, its crons `crons`.
+    fn with_crons(crons: serde_json::Value) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["crons"] = crons;
+        value.to_string()
+    }
+
+    #[test]
+    fn a_saved_cron_is_active_while_its_days_or_holdoff_are_0_or_more() {
+        let pilot = decode(&with_crons(serde_json::json!([
+            {"cron": 128, "days": -1, "holdoff": -1},
+            {"cron": 129, "days": 0, "holdoff": -1},
+            {"cron": 130, "days": -1, "holdoff": 0},
+            {"cron": 131, "days": -2, "holdoff": -5}
+        ])))
+        .expect("loads");
+        assert_eq!(
+            pilot.crons(),
+            &BTreeMap::from([
+                (
+                    CronId(129),
+                    CronState {
+                        days: 0,
+                        holdoff: -1
+                    }
+                ),
+                (
+                    CronId(130),
+                    CronState {
+                        days: -1,
+                        holdoff: 0
+                    }
+                ),
+            ]),
+            "_LoadPilotData @0x75fbc-0x76025"
+        );
+    }
+
+    #[test]
+    fn a_current_save_missing_its_crons_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("crons");
+        }
+        assert!(unusable(&value.to_string()).contains("crons"));
+    }
+
+    #[test]
+    fn the_active_ranks_are_saved_by_id() {
+        let pilot = seasoned();
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["ranks"], serde_json::json!([128, 140]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    /// A version 23 save: before the ranks.
+    const VERSION_23: &str = r#"{
+        "version": 23,
+        "name": "Ranked",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [{"govt": 128, "record": 25}],
+        "system_legal": null,
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": [],
+        "crons": [{"cron": 156, "days": 105, "holdoff": 2}]
+    }"#;
+
+    #[test]
+    fn a_version_23_save_upgrades_with_no_rank() {
+        let pilot = decode(VERSION_23).expect("loads");
+        assert_eq!(pilot.name(), "Ranked");
+        assert_eq!(pilot.crons().len(), 1, "the rest kept");
+        assert!(pilot.ranks().is_empty());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["ranks"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_22, VERSION_21, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(pilot.ranks().is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_its_ranks_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("ranks");
+        }
+        assert!(unusable(&value.to_string()).contains("ranks"));
+    }
+
+    #[test]
+    fn an_older_save_loads_with_no_active_missions() {
+        let pilot = decode(VERSION_19).expect("loads");
+        assert_eq!(pilot.name(), "Courier");
+        assert_eq!(pilot.combat_rating(), 7);
+        assert_eq!(pilot.missions(), &ActiveMissions::default());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["missions"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_18, VERSION_17, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.missions(), &ActiveMissions::default(), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_active_missions_are_saved_by_slot() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["missions"],
+            serde_json::json!([
+                {
+                    "slot": 2,
+                    "mission": 140,
+                    "destination": {"stellar": 150, "system": 132},
+                    "return": {"stellar": 128, "system": null},
+                    "cargo_type": 1000,
+                    "cargo_tons": 9_000_000_000_i64,
+                    "pay": -40_050,
+                    "days_left": 4_000_000_000_u32,
+                    "deadline": {"year": 1180, "month": 3, "day": 1},
+                    "reached": true,
+                    "goals_met": false,
+                    "aboard": true,
+                    "failed": "quick",
+                    "ships": {
+                        "system": {"at": 131},
+                        "left": 3,
+                        "arrived": 1,
+                        "appear": 57,
+                        "name": "Rover",
+                        "subtitle": "Hunter",
+                        "destroyed": 2,
+                        "boarded": 1,
+                        "disabled": 4,
+                        "chased_off": 5,
+                        "uniform_type": 137,
+                        "ship_done": false
+                    },
+                    "aux": {"countdown": 33, "arrived": 1, "left": -2}
+                },
+                {
+                    "slot": 9,
+                    "mission": 141,
+                    "destination": null,
+                    "return": null,
+                    "cargo_type": null,
+                    "cargo_tons": 0,
+                    "pay": 500,
+                    "days_left": null,
+                    "deadline": null,
+                    "reached": false,
+                    "goals_met": true,
+                    "aboard": false,
+                    "failed": "operator",
+                    "ships": {
+                        "system": "follows_player",
+                        "left": 0,
+                        "arrived": 0,
+                        "appear": -1,
+                        "name": "",
+                        "subtitle": "",
+                        "destroyed": 0,
+                        "boarded": 0,
+                        "disabled": 0,
+                        "chased_off": 0,
+                        "uniform_type": null,
+                        "ship_done": true
+                    },
+                    "aux": {"countdown": 0, "arrived": 0, "left": 0}
+                }
+            ])
+        );
+    }
+
+    /// A version 21 save: before the active missions' special ships.
+    const VERSION_21: &str = r#"{
+        "version": 21,
+        "name": "Hunter",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "system_legal": null,
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": [{
+            "slot": 4,
+            "mission": 140,
+            "destination": null,
+            "return": null,
+            "cargo_type": null,
+            "cargo_tons": 0,
+            "pay": 500,
+            "days_left": null,
+            "deadline": null,
+            "reached": false,
+            "goals_met": false,
+            "aboard": false,
+            "failed": null
+        }]
+    }"#;
+
+    #[test]
+    fn a_version_21_saves_missions_load_with_no_special_ships() {
+        let pilot = decode(VERSION_21).expect("loads");
+        let active = pilot.missions().get(4).expect("held");
+        assert_eq!(active.mission, MissionId(140));
+        assert_eq!(active.ships, SpecialShips::default());
+        assert_eq!(active.ships.system, ShipSystem::Nowhere);
+        assert_eq!(active.ships.chased_off, 0);
+        assert_eq!(active.aux, AuxShips::default(), "none to come");
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn the_special_ships_survive_a_round_trip() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(back.missions(), pilot.missions());
+        assert_eq!(
+            back.missions().get(2).map(|active| active.ships.system),
+            Some(ShipSystem::At(SystemId(131)))
+        );
+        assert_eq!(
+            back.missions().get(2).map(|active| active.ships.chased_off),
+            Some(5)
+        );
+        assert_eq!(
+            back.missions().get(2).map(|active| active.aux),
+            Some(AuxShips {
+                countdown: 33,
+                arrived: 1,
+                left: -2,
+            })
+        );
+    }
+
+    #[test]
+    fn a_mission_ships_uniform_type_survives_a_save_and_load() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        let uniform = |slot| {
+            back.missions()
+                .get(slot)
+                .map(|active| active.ships.uniform_type)
+        };
+        assert_eq!(uniform(2), Some(Some(ShipId(137))));
+        assert_eq!(uniform(9), Some(None));
+    }
+
+    #[test]
+    fn a_missions_ship_done_survives_a_save_and_load() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        let done = |slot| {
+            back.missions()
+                .get(slot)
+                .map(|active| active.ships.ship_done)
+        };
+        assert_eq!(done(2), Some(false));
+        assert_eq!(done(9), Some(true));
+        assert_eq!(back, pilot);
+    }
+
+    /// `pilot` saved at version 30: whether it has seen the intro screen
+    /// not kept.
+    fn at_version_30(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(30);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("seen_intro");
+        value.to_string()
+    }
+
+    #[test]
+    fn whether_the_intro_screen_was_seen_survives_a_round_trip_either_way() {
+        for seen_intro in [false, true] {
+            let pilot = Pilot {
+                seen_intro,
+                ..seasoned()
+            };
+            let back = decode(&encode(&pilot)).expect("loads");
+            assert_eq!(back.seen_intro(), seen_intro);
+            assert_eq!(back, pilot, "{seen_intro}");
+        }
+    }
+
+    #[test]
+    fn a_version_30_save_loads_with_the_intro_screen_seen() {
+        let unseen = Pilot {
+            seen_intro: false,
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_30(&unseen)).expect("loads");
+        assert!(pilot.seen_intro());
+        assert_eq!(pilot, seasoned());
+    }
+
+    #[test]
+    fn a_current_save_missing_seen_intro_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_30(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("seen_intro"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 29: no reinforcement countdown kept, nor
+    /// whether it has seen the intro screen.
+    fn at_version_29(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_30(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(29);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("reinforcement_days");
+        value.to_string()
+    }
+
+    /// `pilot` with no reinforcement countdown, as a save from before
+    /// version 30 loads it.
+    fn without_reinforcement_days(mut pilot: Pilot) -> Pilot {
+        pilot.reinforcement_days.clear();
+        pilot
+    }
+
+    #[test]
+    fn the_reinforcement_countdowns_survive_a_round_trip() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(
+            back.reinforcement_days,
+            BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)])
+        );
+        assert_eq!(back, pilot);
+    }
+
+    #[test]
+    fn a_saved_countdown_of_none_loads_as_none_kept() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["reinforcement_days"] = serde_json::json!([
+            {"system": 130, "days": 0},
+            {"system": 131, "days": 4}
+        ]);
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(
+            pilot.reinforcement_days,
+            BTreeMap::from([(SystemId(131), 4)])
+        );
+    }
+
+    #[test]
+    fn a_version_29_save_loads_with_no_reinforcement_countdown() {
+        let pilot = decode(&at_version_29(&seasoned())).expect("loads");
+        assert!(pilot.reinforcement_days.is_empty());
+        assert_eq!(pilot, without_reinforcement_days(seasoned()));
+    }
+
+    #[test]
+    fn a_current_save_missing_reinforcement_days_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("reinforcement_days");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("reinforcement_days"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 28: no system is kept charted, and no
+    /// reinforcement countdown.
+    fn at_version_28(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_29(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(28);
+        value.as_object_mut().expect("an object").remove("charted");
+        value.to_string()
+    }
+
+    /// `pilot` with nothing charted and no reinforcement countdown, as a
+    /// save from before version 29 loads it.
+    fn uncharted(pilot: Pilot) -> Pilot {
+        let mut pilot = without_reinforcement_days(pilot);
+        pilot.charted.clear();
+        pilot
+    }
+
+    #[test]
+    fn the_explored_levels_survive_a_round_trip() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(back.explored_level(SystemId(131)), ExploredLevel::Charted);
+        assert_eq!(back.explored_level(SystemId(130)), ExploredLevel::Explored);
+        assert_eq!(back, pilot);
+    }
+
+    #[test]
+    fn a_version_28_save_loads_with_nothing_charted() {
+        let pilot = decode(&at_version_28(&seasoned())).expect("loads");
+        assert_eq!(pilot.charted().count(), 0);
+        assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Explored);
+        assert_eq!(pilot, uncharted(seasoned()));
+    }
+
+    #[test]
+    fn a_charted_system_missing_from_the_explored_loads_explored_too() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["explored"] = serde_json::json!([130]);
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Charted);
+        assert_eq!(
+            pilot.explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(131)]
+        );
+    }
+
+    #[test]
+    fn a_current_save_missing_charted_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value.as_object_mut().expect("an object").remove("charted");
+        let text = value.to_string();
+        assert!(unusable(&text).contains("charted"), "{}", unusable(&text));
+    }
+
+    /// `pilot` saved at version 27: no mission keeps whether its
+    /// goals-met moment has come, and no system is kept charted.
+    fn at_version_27(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_28(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(27);
+        for mission in value["missions"].as_array_mut().expect("a list") {
+            mission["ships"]
+                .as_object_mut()
+                .expect("an object")
+                .remove("ship_done");
+        }
+        value.to_string()
+    }
+
+    /// `pilot` with no mission's goals-met moment come and nothing
+    /// charted, as a save from before version 28 loads it.
+    fn without_ship_done(pilot: Pilot) -> Pilot {
+        let mut pilot = uncharted(pilot);
+        for slot in 0..16 {
+            if let Some(active) = pilot.missions.get_mut(slot) {
+                active.ships.ship_done = false;
+            }
+        }
+        pilot
+    }
+
+    #[test]
+    fn a_version_27_save_loads_with_no_missions_ship_done_whatever_its_goals_met() {
+        let pilot = decode(&at_version_27(&seasoned())).expect("loads");
+        let met_and_done = |slot| {
+            pilot
+                .missions()
+                .get(slot)
+                .map(|active| (active.goals_met, active.ships.ship_done))
+        };
+        assert_eq!(met_and_done(2), Some((false, false)));
+        // Slot 9's goals are met with its destination not reached, as an
+        // escort goal met at its return leaves them with no moment
+        // (`met_at_return`): a goal-blind upgrade can't tell it from one
+        // met by a moment, so it leaves the moment to come.
+        assert_eq!(met_and_done(9), Some((true, false)));
+        assert_eq!(pilot, without_ship_done(seasoned()));
+    }
+
+    #[test]
+    fn a_current_save_missing_ship_done_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_27(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        value["charted"] = serde_json::json!([]);
+        value["reinforcement_days"] = serde_json::json!([]);
+        value["seen_intro"] = serde_json::json!(true);
+        let text = value.to_string();
+        assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
+    }
+
+    /// `pilot` saved at version 26: no system jumped from, and no
+    /// mission's ship done kept.
+    fn at_version_26(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_27(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(26);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("jumped_from");
+        value.to_string()
+    }
+
+    #[test]
+    fn jumped_from_either_way_survives_a_round_trip() {
+        for jumped_from in [None, Some(SystemId(130))] {
+            let pilot = Pilot {
+                jumped_from,
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{jumped_from:?}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_jumped_from_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("jumped_from");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("jumped_from"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    #[test]
+    fn a_version_26_save_loads_with_no_jumped_from() {
+        let pilot = decode(&at_version_26(&seasoned())).expect("loads");
+        assert_eq!(
+            pilot,
+            Pilot {
+                jumped_from: None,
+                ..without_ship_done(seasoned())
+            }
+        );
+    }
+
+    /// `pilot` saved at version 25: no mission's ships keep a type, and
+    /// no system jumped from.
+    fn at_version_25(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_26(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(25);
+        for mission in value["missions"].as_array_mut().expect("a list") {
+            mission["ships"]
+                .as_object_mut()
+                .expect("an object")
+                .remove("uniform_type");
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn a_version_25_save_loads_with_no_uniform_type() {
+        let pilot = decode(&at_version_25(&seasoned())).expect("loads");
+        assert_eq!(
+            pilot
+                .missions()
+                .get(2)
+                .map(|active| active.ships.uniform_type),
+            Some(None),
+            "drawn at its next spawn"
+        );
+        assert_eq!(pilot, without_uniform_types(seasoned()));
+    }
+
+    /// `pilot` with no mission's ships keeping a type, no system
+    /// jumped from and no mission's ship done, as a save from before
+    /// version 26 loads it.
+    fn without_uniform_types(pilot: Pilot) -> Pilot {
+        let mut pilot = without_ship_done(pilot);
+        pilot.jumped_from = None;
+        for slot in 0..16 {
+            if let Some(active) = pilot.missions.get_mut(slot) {
+                active.ships.uniform_type = None;
+            }
+        }
+        pilot
+    }
+
+    #[test]
+    fn a_current_save_missing_uniform_type_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_25(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("uniform_type"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    #[test]
+    fn a_mission_in_no_slot_or_on_no_date_is_unusable() {
+        let with_slot = |slot: i64, day: u8| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&encode(&seasoned())).expect("JSON");
+            value["missions"][0]["slot"] = serde_json::json!(slot);
+            value["missions"][0]["deadline"]["day"] = serde_json::json!(day);
+            value.to_string()
+        };
+        assert_eq!(unusable(&with_slot(16, 1)), "no such mission slot, 16");
+        assert_eq!(unusable(&with_slot(2, 32)), "no such date, 32/3/1180");
+        assert!(!unusable(&with_slot(-1, 1)).is_empty());
+        assert_eq!(
+            decode(&with_slot(15, 1)).map(|pilot| pilot.missions().holding(MissionId(140))),
+            Ok(vec![15])
+        );
+    }
+
+    #[test]
+    fn an_older_save_loads_with_a_combat_rating_of_0() {
+        let pilot = decode(VERSION_18).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(pilot.combat_rating(), 0);
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["combat_rating"], 0);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_17, VERSION_16, VERSION_15, VERSION_14, VERSION_13, VERSION_12, VERSION_11,
+            VERSION_10, VERSION_9, VERSION_8, VERSION_7, VERSION_6, VERSION_5, VERSION_4,
+            VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.combat_rating(), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn any_combat_rating_survives_a_round_trip() {
+        for combat_rating in [i64::MIN, -3, 0, 10_000_009, i64::MAX] {
+            let pilot = Pilot {
+                combat_rating,
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{combat_rating}");
+        }
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(value["combat_rating"], 12_345, "its number");
+    }
+
     #[test]
     fn any_overlay_survives_a_round_trip() {
         let mut overlay = GalaxyOverlay::default();
@@ -2256,6 +3994,32 @@ mod tests {
             };
             assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         }
+    }
+
+    #[test]
+    fn a_nebulas_explored_flag_is_never_saved() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_explored(NebulaId(128), true);
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        let pilot = Pilot {
+            galaxy: overlay,
+            ..seasoned()
+        };
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(
+            value["galaxy"]["nebulae"],
+            serde_json::json!([{"nebula": 129, "active": false}]),
+            "no explored key, and 128, only explored, not listed"
+        );
+        let decoded = decode(&text).expect("decodes").galaxy;
+        assert_eq!(decoded.nebula(NebulaId(129)), Some(false));
+        assert!(!decoded.nebula_explored(NebulaId(128)));
+        assert!(!decoded.nebula_explored(NebulaId(129)));
+        let mut expected = GalaxyOverlay::default();
+        expected.set_nebula_active(NebulaId(129), Some(false));
+        assert_eq!(decoded, expected, "nothing explored");
     }
 
     #[test]
@@ -2479,12 +4243,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 18", "\"version\": 19");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 19 }));
+        let newer = encode(&seasoned()).replace("\"version\": 31", "\"version\": 32");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 32 }));
         assert_eq!(
-            SaveError::Newer { version: 19 }.to_string(),
+            SaveError::Newer { version: 32 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 19, and this version of Nova reads up to 18)."
+             (it is version 32, and this version of Nova reads up to 31)."
         );
     }
 

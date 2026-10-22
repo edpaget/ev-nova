@@ -1,0 +1,37 @@
+[package]
+name = "nova-sim-combat"
+description = "The combat layer of nova-sim's layered crates: ships fighting, the asteroid field, fighter bays, cloaking, sabotage, self-repair, and the player's fleet, fate and tutorial"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: geometry, handling, flight, chance, fuel,
+# reserves, trigonometry and the rulebook.
+nova-sim-base.workspace = true
+# The catalog below it: the typed records combat reads (weapons, ships,
+# outfits, governments), the control bits and the buoys.
+nova-sim-catalog.workspace = true
+# The state below it: governments' relations, the legal record, crons and
+# clearance. Nothing else of the nova-sim stack: `deny.toml` bans the way
+# back up.
+nova-sim-state.workspace = true
+
+[dev-dependencies]
+# The scripted and ranged `Chance`s (`Scripted`, `Ranged`) the moved tests
+# draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog record builders (`weapon`, `hull`, `outfit`, `govt`) the
+# moved tests build from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[features]
+# Test support for other crates' tests: `combat::fixture::among`, and the
+# two setters nova-sim's session tests call, `SabotageClock::set_counter`
+# and `Combat::shots_mut`.
+fixture = []
+
+[lints]
+workspace = true

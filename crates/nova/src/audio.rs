@@ -3,9 +3,12 @@
 //! are [`settings`](crate::settings)'.
 
 use std::fmt::Display;
+use std::num::NonZeroUsize;
 
+use nova_audio::voices::ORIGINAL_VOICES;
 use nova_audio::{Audio, AudioCore};
 use nova_data::music::MusicError;
+use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 /// The audio core playing the original's sounds through `device`, the
 /// result of opening the audio device, and a warning to print, if any. A
@@ -16,6 +19,18 @@ pub fn game_audio<A: Audio + 'static, E: Display>(
     match device {
         Ok(audio) => (Some(AudioCore::new(Box::new(audio))), None),
         Err(error) => (None, Some(format!("nova: running without sound: {error}"))),
+    }
+}
+
+/// How many voices the audio device plays at once, as `rulebook`'s
+/// [`RuleKey::SoundVoices`] says: the original's 8 by the engine's
+/// reading, or as many as are asked for (`None`) by the other, the
+/// default.
+#[must_use]
+pub fn voice_limit(rulebook: &Rulebook) -> Option<NonZeroUsize> {
+    match rulebook.source_for(RuleKey::SoundVoices) {
+        RuleSource::Engine => Some(ORIGINAL_VOICES),
+        RuleSource::Bible => None,
     }
 }
 
@@ -35,7 +50,7 @@ mod tests {
     use std::path::PathBuf;
 
     use nova_audio::recording::RecordingAudio;
-    use nova_audio::{AudioCommand, Volume};
+    use nova_audio::{AudioCommand, AudioSettings};
     use nova_view::Showing;
     use nova_view::sound::{SimSound, Sound};
 
@@ -48,18 +63,33 @@ mod tests {
         let (core, warning) = game_audio::<_, String>(Ok(audio));
         assert_eq!(warning, None);
         let mut core = core.expect("a core");
-        core.update(Some(Showing::GalaxyMap), &[Sound::Sim(SimSound::JumpBegan)]);
+        core.update(
+            Some(Showing::MainMenu),
+            &[Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
+        );
         assert_eq!(
             *log.borrow(),
             [
                 AudioCommand::StartMusic {
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().music_volume
                 },
                 AudioCommand::Play {
                     sound: nova_data::SoundId(128),
-                    volume: Volume::FULL
+                    volume: AudioSettings::default().effects_volume,
+                    priority: nova_audio::priority::JUMP,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_voices_are_unlimited_by_default_and_the_originals_8_by_the_engine() {
+        assert_eq!(voice_limit(&Rulebook::default()), None);
+        let engine = Rulebook::default().with_override(RuleKey::SoundVoices, RuleSource::Engine);
+        assert_eq!(voice_limit(&engine), NonZeroUsize::new(8));
+        assert_eq!(
+            voice_limit(&Rulebook::new(RuleSource::Engine)),
+            NonZeroUsize::new(8)
         );
     }
 

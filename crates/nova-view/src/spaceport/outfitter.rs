@@ -25,31 +25,49 @@
 //! 2002 #206).
 //!
 //! The selected outfit's picture is `PICT` 6000 plus its ID less 128, or
-//! "No Picture" (#213) when the data has none, and its description is
+//! "No Picture" and "Available" (#213, #214) centred on the picture item in
+//! white when the data has none, and its description is
 //! `dësc` 3000 plus its ID less 128, both read through the
-//! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
-//! has and the free mass (#215-218), and why it cannot be bought (#219-222)
-//! or sold (#207), when the original has words for it. The buy words are
-//! the row's own ([`OutfitRow::words`]), not its buy refusal: the
+//! [`OutfitterCatalog`] as the selection changes. The info box shows, in
+//! white at the original's baselines (`_OutfitDialogUpdate`
+//! @0x57b36-0x57e7b), "Item Price:" with its price and "You Have:" with
+//! the player's cash, each followed by " cr" (#215, #217, #34), then, for
+//! an outfit of `Mass` above 0, "Item Mass:" and "Available:" (#216,
+//! #218). Each label is at the box's left and each amount
+//! [`AMOUNT_COLUMN`](super::credits::AMOUNT_COLUMN) right of it, drawn as
+//! `_DrawCommaNumber` draws it ([`credits`](super::credits)). Below them,
+//! at a fixed row, is why it cannot be bought (#219-222), when the
+//! original has words for it. The count owned is only in the grid's
+//! corner, as in the original. The buy words are
+//! the outfit's own ([`Outfitter::words`]), not its buy refusal: the
 //! original works them out without asking whether the outfit can be
 //! bought, so an outfit not for sale, or a fighter refused for full bays,
 //! still gets them. Every refusal `_HasMaxOfItem` makes (its `Max`, none
 //! allowed, a gun or turret limit) reads by the count owned, #219 when the
 //! player owns one or more of the outfit and #220 otherwise, as
 //! `_OutfitDialogUpdate` words it (@0x57ddf-0x57df8); otherwise an outfit
-//! that lacks the mass gets #221 or #222 (@0x57e33-0x57e4f). A launcher that cannot be sold for
-//! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
-//! which the original shows in a text dialog when Sell is clicked, Sell
-//! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
-//! sentence is an info-box line, as #207 is. An outfit that cannot be sold
-//! for the `Max` it raises (`ModType` 27) gets the same #208/#212
-//! sentence, naming the outfit to sell first ([`raised_first`]).
+//! that lacks the mass gets #221 or #222 (@0x57e33-0x57e4f).
+//!
+//! A sale refused for the free mass (#207), for its ammunition (a
+//! launcher, the #208-212 sentence, [`ammunition_first`]) or for the `Max`
+//! it raises (`ModType` 27, the same sentence naming the outfit to sell
+//! first, [`raised_first`]) is shown as
+//! [`RuleKey::SaleRefusal`](nova_sim::RuleKey::SaleRefusal) says. By the
+//! engine, as the original does, Sell stays enabled (the Sell flag alone
+//! enables it) and the info box never words it; a click refused in the
+//! sell loop shows the words in "Desc Dialog" (`DLOG` 3003,
+//! `_ShowTextDialog` @0x5a8cf) over the outfitter ([`OutfitterScreen::alert`],
+//! [`sale_alert_text`]), naming the sold outfit in the plural while passes
+//! of a counted sale remain. It takes every input while it is open, and
+//! Done, Return or Escape closes it, the outfitter staying open. By the
+//! other reading, the port's earlier behaviour, Sell is greyed and the
+//! words are an info-box line ([`Outfitter::sale_words`]).
 //!
 //! Buy and Sell, clicked or with B and S (key repeats too, so holding a
 //! key keeps going, but only on the outfit the key went down on: when an
 //! order removes its cell, a held key stops until it is pressed again),
 //! ask for one of the selected outfit, and each is
-//! greyed when one could not be bought or sold. With Option held (Alt
+//! greyed when its button is not enabled ([`Outfitter::can`]). With Option held (Alt
 //! here, [`COUNT_KEY`]), Buy or Sell asks for a count instead, as
 //! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
 //! for a sale): when the outfitter says it asks
@@ -59,14 +77,64 @@
 //! ([`QuantityDialog`], `DLOG` 1003, or its fallback; `_DoQuantityDialog`
 //! @0x56d5b) opens over the outfitter at that count, OK titled "Buy" or
 //! "Sell" and asking "Enter quantity:". It takes every input while it is
-//! open; a count above 0 confirmed there is the order, and 0 or Cancel
-//! orders nothing. B or S opening it types nothing into it. Otherwise, by
+//! open; the count confirmed there is the order, 0 or Cancel an order of
+//! none, which moves nothing but still runs what the original runs after
+//! its loop once the button's check passed (@0x5c2fc-0x5c2ff to the buy's
+//! reset and `_DrawStatus`, the sell's likewise). B or S opening it types
+//! nothing into it. Otherwise, by
 //! the other reading too, a click moves one. Shift, Command and Control
 //! change nothing: the original tests Option alone (`testb $0x8` on the
 //! event's modifiers). The screen only records the order and its count
 //! ([`OutfitterScreen::take_order`]): whoever holds the session makes it
 //! and gives back the outfitter as it now is
 //! ([`OutfitterScreen::set_outfitter`]).
+//!
+//! After an order that changes the listing, the screen follows what the
+//! order left the selection at ([`OutfitterScreen::reselect`]), as
+//! [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+//! says. By the engine, the selection is reset as `_DoOutfitDialog` resets
+//! it (@0x5c32c-0x5c35b, @0x5d021-0x5d04b): no cell is highlighted, the
+//! grid scrolls to its top, and Buy and Sell answer for `oütf` 128,
+//! listed or not ([`OutfitterScreen::selected_outfit`]), while the
+//! picture, the description and the info box are blank
+//! (`_OutfitDialogUpdate` @0x5789b-0x578a5). A click on a listed cell, or
+//! an arrow, ends the reset: Right and Down pick the first cell shown, and
+//! Left and Up the last cell shown, or the last listed when fewer are
+//! (`_OutfitFilter` @0x583bd-0x58440). When the order leaves nothing
+//! listed, the outfitter closes as Done closes it, once any alert the
+//! order showed is closed (-0x63d, @0x5da33).
+//!
+//! The grid's presses and arrows follow
+//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection). By the
+//! engine, the selection is the selected outfit, as `_OutfitFilter` keeps
+//! it (`*0xded58`). A press on an empty cell position within the grid's
+//! cells selects nothing (@0x58632-0x58648): no cell is highlighted, Buy
+//! and Sell are greyed, the picture, the info box and the description are
+//! blank, and the press reaches no button; after a reset, that lets the
+//! reset's outfit go. An arrow then picks a cell as after a reset. An
+//! arrow that leaves the selected outfit as it was reads no description
+//! (@0x58442-0x5844f), while the picture and the info box follow the
+//! highlighted cell (@0x57949-0x579d6): an arrow onto `oütf` 128's cell
+//! after a reset shows them over a blank description. By the other
+//! reading, the port's earlier behaviour, a press on an empty cell is
+//! left to the dialog, keeping the selection or the reset, and an arrow
+//! reads the description of an outfit not already shown. Either way, a
+//! press on the highlighted cell changes nothing.
+//!
+//! Given the offer dialog's template ([`OutfitterScreen::with_offers`]),
+//! the outfitter offers missions as `_DoOutfitDialog` and `_OutfitFilter`
+//! do: it asks for an offer as it opens
+//! ([`OutfitterScreen::take_offer_request`], `_DoOutfitDialog`
+//! @0x5bd92), and whoever holds the session answers with one, opening the
+//! [`OfferDialog`] over it ([`OutfitterScreen::open_offer`]), or rearms it
+//! ([`OutfitterScreen::rearm`]) with the gap drawn, after which it asks
+//! again (`_OutfitFilter` @0x589ce-0x589ff). The offer takes every input
+//! while it is open, and its choice is taken through the screen
+//! ([`OutfitterScreen::take_offer_choice`]). The quantity dialog and a
+//! sale's alert cover the outfitter, as the offer does: nothing is asked
+//! while any is open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`OutfitterScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
@@ -75,11 +143,18 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+use nova_sim::{
+    Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow,
+    Outfitter, Reselection, RuleSource, SaleAlert,
+};
 
 use super::catalog::SpaceportCatalog;
+use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
+use super::modal::ModalHost;
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -88,14 +163,17 @@ use crate::flight::escorts::NUMBER_WORDS;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
+use crate::ui::desc::DescDialog;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
-use crate::ui::quantity::{PROMPT, QuantityDialog};
+use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::quantity::QuantityDialog;
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
 pub const OUTFIT_DIALOG: i16 = 1002;
@@ -154,10 +232,43 @@ pub const NEGATIVE_FREE_MASS: &str =
 pub const PRICE_LABEL: &str = "Item Price:";
 /// `STR#` 2002 #216.
 pub const MASS_LABEL: &str = "Item Mass:";
-/// `STR#` 2002 #217.
-pub const OWNED_LABEL: &str = "You Have:";
 /// `STR#` 2002 #218.
 pub const AVAILABLE_LABEL: &str = "Available:";
+/// The info box's rows' baselines below its top: Item Price, You Have,
+/// Item Mass and Available (`_OutfitDialogUpdate` @0x57b42, @0x57bef,
+/// @0x57c7e, @0x57d1e).
+pub const INFO_ROWS: [f32; 4] = [12.0, 24.0, 48.0, 60.0];
+/// The refusal's baseline below the info box's top, mass lines or not
+/// (@0x57da2-0x57db5).
+pub const REFUSAL_ROW: f32 = 93.0;
+
+/// The info box's amounts for `row`, in the order `_OutfitDialogUpdate`
+/// draws them, each as its baseline below the box's top, its label and
+/// its amount: "Item Price:" with what buying one costs, its
+/// [`buy_price`](OutfitRow::buy_price) (@0x57b42-0x57bea), and "You
+/// Have:" with the player's cash (@0x57bef-0x57c62), each in credits,
+/// then, for an outfit of `Mass` above 0 (@0x57c72-0x57c78), "Item
+/// Mass:" (@0x57c7e-0x57d19) and "Available:" (@0x57d1e-0x57d9d).
+#[must_use]
+pub fn amount_lines(outfitter: &Outfitter, row: &OutfitRow) -> Vec<(f32, &'static str, String)> {
+    let mut lines = vec![
+        (INFO_ROWS[0], PRICE_LABEL, credits_text(row.buy_price)),
+        (
+            INFO_ROWS[1],
+            credits::YOU_HAVE,
+            credits_text(outfitter.cash),
+        ),
+    ];
+    if let Some(mass) = outfitter.item_mass_shown(row.id) {
+        lines.push((INFO_ROWS[2], MASS_LABEL, comma_tons_text(mass)));
+        lines.push((
+            INFO_ROWS[3],
+            AVAILABLE_LABEL,
+            comma_tons_text(outfitter.free_mass_shown()),
+        ));
+    }
+    lines
+}
 /// `STR#` 2002 #219.
 pub const MAX_OWNED: &str = "Can't have any more!";
 /// `STR#` 2002 #220.
@@ -236,20 +347,56 @@ pub fn refusal_text(
         | OutfitRefusal::TurretLimit => NONE_ALLOWED,
         OutfitRefusal::NoSpace => NO_SPACE,
         OutfitRefusal::NoSpaceForAny => NO_SPACE_FOR_ANY,
-        OutfitRefusal::NegativeFreeMass => NEGATIVE_FREE_MASS,
-        OutfitRefusal::AmmunitionFirst { rounds, ammo } => {
-            let launcher = names.get(&row.id).map_or("", |names| &names.singular);
-            let ammo = ammo.and_then(|ammo| names.get(&ammo));
-            return Some(ammunition_first(rounds, ammo, launcher));
-        }
-        OutfitRefusal::RaisedFirst { count, target } => {
-            let outfit = names.get(&row.id).map_or("", |names| &names.singular);
-            let target = names.get(&target).cloned().unwrap_or_default();
-            return Some(raised_first(count, &target, outfit));
+        OutfitRefusal::NegativeFreeMass
+        | OutfitRefusal::AmmunitionFirst { .. }
+        | OutfitRefusal::RaisedFirst { .. } => {
+            let sold = names.get(&row.id).map_or("", |names| &names.singular);
+            return sale_sentence(refusal, sold, names);
         }
         _ => return None,
     };
     Some(text.to_owned())
+}
+
+/// The original's words for a sale refused inside the sell loop, as
+/// `DLOG` 3003 shows them (`_DoOutfitDialog` @0x5c735-0x5ce6c): #207 alone
+/// for the free mass; the #208-#212 sentence for a raised `Max`
+/// ([`raised_first`]) or a launcher's ammunition ([`ammunition_first`]),
+/// the sold outfit named by its `LCPlural` when passes remain
+/// ([`SaleAlert::plural`]) and its `LCName` otherwise. No alert carries
+/// any other refusal, which gives no words.
+#[must_use]
+pub fn sale_alert_text(alert: &SaleAlert) -> String {
+    let sold = alert.names.get(&alert.outfit).map_or("", |names| {
+        if alert.plural {
+            &names.plural
+        } else {
+            &names.singular
+        }
+    });
+    sale_sentence(alert.refusal, sold, &alert.names).unwrap_or_default()
+}
+
+/// The words for a sale refusal of the sell loop's, naming the sold
+/// outfit `sold` and the others by `names`: #207, or the #208-#212
+/// sentence. None for any other refusal.
+fn sale_sentence(
+    refusal: OutfitRefusal,
+    sold: &str,
+    names: &BTreeMap<OutfitId, LcNames>,
+) -> Option<String> {
+    match refusal {
+        OutfitRefusal::NegativeFreeMass => Some(NEGATIVE_FREE_MASS.to_owned()),
+        OutfitRefusal::AmmunitionFirst { rounds, ammo } => {
+            let ammo = ammo.and_then(|ammo| names.get(&ammo));
+            Some(ammunition_first(rounds, ammo, sold))
+        }
+        OutfitRefusal::RaisedFirst { count, target } => {
+            let target = names.get(&target).cloned().unwrap_or_default();
+            Some(raised_first(count, &target, sold))
+        }
+        _ => None,
+    }
 }
 
 /// Outfit `outfit`'s `PICT`, 6000 plus its ID less 128, if `exists` says
@@ -259,6 +406,13 @@ pub fn refusal_text(
 pub fn outfit_picture(outfit: OutfitId, exists: impl Fn(i16) -> bool) -> Option<i16> {
     let picture = FIRST_PICTURE.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
     exists(picture).then_some(picture)
+}
+
+/// Outfit `outfit`'s `dësc`, 3000 plus its ID less 128
+/// (`_OutfitFilter` @0x58465, @0x588cc).
+#[must_use]
+pub fn outfit_desc_id(outfit: OutfitId) -> i16 {
+    FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT))
 }
 
 /// What the outfitter reads about an outfit: its description, through
@@ -295,15 +449,20 @@ struct Laid {
     metrics: MetricsHandle,
     /// The outfit whose picture and description are shown, and them.
     shown: Option<(OutfitId, Shown)>,
-    /// The quantity dialog's template, if the interface file has one.
-    quantity: Option<DialogTemplate>,
 }
 
-/// The quantity dialog open over the outfitter, and the order it counts.
-#[derive(Clone, Debug)]
-struct Asking {
-    order: OutfitOrder,
-    dialog: QuantityDialog,
+/// Whether a grid cell is highlighted, and with none, the outfit Buy and
+/// Sell answer for (`*0xded5c` and `*0xded58`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Highlight {
+    /// The grid's selected cell is highlighted, and its outfit selected.
+    Cell,
+    /// No cell is highlighted. `Some` is the outfit an order that changed
+    /// the listing reset the selection to, listed or not
+    /// ([`OutfitterScreen::reselect`]); `None` is nothing selected, after
+    /// an empty cell clicked by the engine's reading of
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection).
+    None(Option<OutfitId>),
 }
 
 /// The Outfitter of the stellar landed on.
@@ -324,12 +483,28 @@ pub struct OutfitterScreen {
     /// outfit selected then, if any: its repeats act on that outfit
     /// alone.
     held: Option<(Key, Option<OutfitId>)>,
-    /// Whether Alt is held.
-    counting: bool,
-    /// The quantity dialog, while it is open.
-    asking: Option<Asking>,
-    closed: bool,
+    /// The quantity dialog, while it is open, the order it counts, and
+    /// whether Alt is held.
+    quantity: QuantityAsk<OutfitOrder>,
+    /// The alert a sale refused in the sell loop shows, while it is open.
+    alert: ModalHost<(), DescDialog>,
+    /// The alert's template (`DLOG` 3003), if the interface file has one.
+    alert_template: Option<DialogTemplate>,
+    /// The mission offers, once given.
+    offering: Option<VenueOffers>,
     style: ButtonStyle,
+    closed: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
+    /// Whether a cell is highlighted, and with none, the outfit Buy and
+    /// Sell answer for.
+    highlight: Highlight,
+    /// Whether an order left nothing listed, so the outfitter closes
+    /// once its alert is closed.
+    leaving: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -337,13 +512,16 @@ impl OutfitterScreen {
     /// The outfitter `outfitter`, laid out by `layout`: the "Outfit"
     /// dialog's template and the metrics its text is measured by, or why
     /// there are none. The quantity dialog is laid out by `quantity`, its
-    /// template (or, without one, its fallback). Its buttons are labelled
-    /// in `style`, and each outfit's picture and description are read
-    /// from `catalog`. The first cell is selected.
+    /// template (or, without one, its fallback). A sale refused in the
+    /// sell loop shows its words in "Desc Dialog", laid out by `alert`,
+    /// its template (`DLOG` 3003), and none without one. Its buttons are
+    /// labelled in `style`, and each outfit's picture and description are
+    /// read from `catalog`. The first cell is selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
         quantity: Result<DialogTemplate, String>,
+        alert: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
         style: ButtonStyle,
@@ -373,7 +551,6 @@ impl OutfitterScreen {
                 dialog,
                 metrics: MetricsHandle(metrics),
                 shown: None,
-                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -384,15 +561,160 @@ impl OutfitterScreen {
             grid: CellGrid::default(),
             order: None,
             held: None,
-            counting: false,
-            asking: None,
-            closed: false,
+            quantity: QuantityAsk::new(quantity.ok(), style),
+            alert: ModalHost::default(),
+            alert_template: alert.ok(),
+            offering: None,
             style,
+            closed: false,
+            info_requested: false,
+            highlight: Highlight::Cell,
+            leaving: false,
+            description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
         screen.select(0);
         screen
+    }
+
+    /// The outfitter with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
+    /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
+    /// the original's does ([`OUTFITTER`](nova_sim::mission::screens::OUTFITTER)).
+    #[must_use]
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
+        Self {
+            offering: Some(VenueOffers::asking(templates)),
+            ..self
+        }
+    }
+
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`OutfitterScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
+            ..self
+        }
+    }
+
+    /// Whether its offer has asked for the player info screen since this
+    /// was last asked: the outfitter itself ignores
+    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), as `_OutfitFilter` never reads it.
+    pub fn take_player_info_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request)
+    }
+
+    /// The `dësc` of the outfit the outfitter has shown since this was
+    /// last taken, once, read raw until whoever flies the ship loads it
+    /// as `_OutfitFilter` does (@0x58476, @0x588dd; `_DoOutfitDialog`
+    /// @0x5d3b4, @0x5d737) and answers with
+    /// [`OutfitterScreen::show_description`], in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the outfit
+    /// shown, while it is the outfit whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((outfit, shown)),
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if outfit_desc_id(*outfit) == id {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
+    /// The mission of the offer open over it, when the offer's map key
+    /// asked for the map since this was last asked, once.
+    pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
+        self.offering.as_mut()?.take_map_request()
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.info_requested) || offer
+    }
+
+    /// Whether the outfitter has asked for an offer since this was last
+    /// asked: whoever holds the session answers with
+    /// [`OutfitterScreen::open_offer`], or, with none, rearms it
+    /// ([`OutfitterScreen::rearm`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_request)
+    }
+
+    /// Opens the offer dialog over the outfitter on `prompt`.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
+            return;
+        };
+        offering.open(prompt, Rc::clone(&laid.metrics.0), self.style);
+    }
+
+    /// The offer dialog, while it is open.
+    #[must_use]
+    pub fn offer_dialog(&self) -> Option<&OfferDialog> {
+        self.offering.as_ref()?.dialog()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.offering.as_mut()?.take_choice()
+    }
+
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub fn rearm(&mut self, gap: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the outfitter.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
+        }
     }
 
     /// The outfitter shown.
@@ -401,10 +723,30 @@ impl OutfitterScreen {
         &self.outfitter
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index, if anything is listed and a cell is
+    /// highlighted: none after an order that reset the selection, or by
+    /// the engine after a click on an empty cell, until a cell is chosen
+    /// ([`OutfitterScreen::reselect`]).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.outfitter.rows.len())
+        self.grid
+            .selected(self.outfitter.rows.len())
+            .filter(|_| self.highlight == Highlight::Cell)
+    }
+
+    /// The outfit Buy and Sell answer for (`*0xded58`, which
+    /// `_OutfitFilter` reads, @0x5806f-0x580ca): the highlighted cell's;
+    /// with none highlighted after a reset, the outfit the reset
+    /// selected, listed or not; and none after a click on an empty cell
+    /// by the engine's reading of
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)
+    /// (@0x58632-0x58648).
+    #[must_use]
+    pub fn selected_outfit(&self) -> Option<OutfitId> {
+        match self.highlight {
+            Highlight::Cell => self.selected().map(|index| self.outfitter.rows[index].id),
+            Highlight::None(outfit) => outfit,
+        }
     }
 
     /// The grid's first row shown.
@@ -425,14 +767,38 @@ impl OutfitterScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
-    /// Whether Done has been activated.
+    /// Whether Done has been activated, or an order left nothing listed
+    /// and no alert is open: the original shows a sale's alert inside its
+    /// loop, then leaves (-0x63d, @0x5da33).
     #[must_use]
     pub fn closed(&self) -> bool {
-        self.closed
+        self.closed || (self.leaving && !self.alert.is_open())
+    }
+
+    /// Follows what an order left the selection at, as
+    /// [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+    /// reads it: [`Reselection::Kept`] changes nothing;
+    /// [`Reselection::Reset`] highlights no cell, scrolls the grid to its
+    /// top and has Buy and Sell answer for its outfit, listed or not, with
+    /// no picture, description or info box (`*0xded5c` = -1, `*0xdeda8`
+    /// = 0, @0x5c32c-0x5c35b, @0x5d021-0x5d04b; `_OutfitDialogUpdate`
+    /// @0x5789b-0x578a5); and [`Reselection::Leave`] closes the outfitter
+    /// once its alert is closed ([`closed`](Self::closed)).
+    pub fn reselect(&mut self, after: Reselection) {
+        match after {
+            Reselection::Kept => {}
+            Reselection::Reset(outfit) => {
+                self.highlight = Highlight::None(Some(outfit));
+                self.grid = CellGrid::default();
+                self.selected_changed();
+            }
+            Reselection::Leave => self.leaving = true,
+        }
     }
 
     /// The order asked for since it was last taken, and how many it
-    /// moves (1 for a plain click), once.
+    /// moves (1 for a plain click, 0 for the quantity dialog's Cancel or
+    /// a count of 0), once.
     pub fn take_order(&mut self) -> Option<(OutfitOrder, u32)> {
         self.order.take()
     }
@@ -440,7 +806,31 @@ impl OutfitterScreen {
     /// The quantity dialog, while it is open.
     #[must_use]
     pub fn quantity(&self) -> Option<&QuantityDialog> {
-        self.asking.as_ref().map(|asking| &asking.dialog)
+        self.quantity.dialog()
+    }
+
+    /// Opens `alert`'s words ([`sale_alert_text`]) in "Desc Dialog" over
+    /// the outfitter, as `_DoOutfitDialog` shows a sale refused in the
+    /// sell loop (`_ShowTextDialog` @0x5a8cf). Without the outfitter's
+    /// dialog, or without the alert's template, it opens nothing:
+    /// "Desc Dialog" has no fallback.
+    pub fn alert(&mut self, alert: &SaleAlert) {
+        let (Ok(laid), Some(template)) = (&self.laid, &self.alert_template) else {
+            return;
+        };
+        let dialog = DescDialog::new(
+            template,
+            &sale_alert_text(alert),
+            self.style,
+            Rc::clone(&laid.metrics.0),
+        );
+        self.alert.open((), dialog);
+    }
+
+    /// The alert, while it is open.
+    #[must_use]
+    pub fn alert_dialog(&self) -> Option<&DescDialog> {
+        self.alert.dialog()
     }
 
     /// Where cell `index` (counted from the grid's first row shown) is,
@@ -453,7 +843,15 @@ impl OutfitterScreen {
 
     /// Shows `outfitter`, the outfitter after an order, keeping the same
     /// outfit selected when it is still listed, or the cell where it was.
+    /// With no cell highlighted, after a reset or an empty cell clicked,
+    /// it keeps that and the grid's scroll.
     pub fn set_outfitter(&mut self, outfitter: Outfitter) {
+        if self.highlight != Highlight::Cell {
+            self.outfitter = outfitter;
+            self.read_pictures();
+            self.selected_changed();
+            return;
+        }
         let kept = self
             .selected()
             .map(|index| self.outfitter.rows[index].id)
@@ -489,12 +887,26 @@ impl OutfitterScreen {
     /// Regreys and shows the selected outfit.
     fn selected_changed(&mut self) {
         self.regrey();
-        self.show();
+        self.show(true);
     }
 
-    /// Reads the selected outfit's picture and description, unless they
-    /// are shown already; with nothing selected, shows none.
-    fn show(&mut self) {
+    /// Whether the grid's presses and arrows follow `_OutfitFilter`, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection): an empty cell clicked selects nothing,
+    /// and an arrow that leaves the selected outfit as it was reads no
+    /// description.
+    fn follows_outfit_filter(&self) -> bool {
+        self.outfitter
+            .rules
+            .source_for(nova_sim::RuleKey::GridSelection)
+            == nova_sim::RuleSource::Engine
+    }
+
+    /// Shows the highlighted cell's picture and description, unless they
+    /// are shown already; with no cell highlighted, shows none. The
+    /// description is read when `read` says so, and otherwise left blank,
+    /// as the original's emptied buffer (`_OutfitFilter` skipping
+    /// `_LoadDescription`, @0x58442-0x5844f).
+    fn show(&mut self, read: bool) {
         let selected = self.selected().map(|index| {
             let picture = self.pictures.get(index).copied().flatten();
             (self.outfitter.rows[index].id, picture)
@@ -514,12 +926,17 @@ impl OutfitterScreen {
         {
             return;
         }
-        let description = FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
+        let description = outfit_desc_id(outfit);
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let description = catalog.description(description).unwrap_or_default();
+        let description = if read {
+            self.description_request = Some(description);
+            catalog.description(description).unwrap_or_default()
+        } else {
+            String::new()
+        };
         laid.shown = Some((
             outfit,
             Shown::read_text(&description, picture, area, &laid.metrics.0),
@@ -537,14 +954,13 @@ impl OutfitterScreen {
         }
     }
 
-    /// Whether one of the selected outfit can go `direction`.
+    /// Whether one of the selected outfit ([`selected_outfit`](Self::selected_outfit))
+    /// can go `direction` ([`Outfitter::can`]).
     fn allows(&self, direction: Direction) -> bool {
-        self.selected().is_some_and(|index| {
-            let row = &self.outfitter.rows[index];
-            match direction {
-                Direction::Buy => row.buy.is_ok(),
-                Direction::Sell => row.sell.is_ok(),
-            }
+        self.selected_outfit().is_some_and(|outfit| {
+            self.outfitter
+                .can(OutfitOrder { outfit, direction })
+                .is_ok()
         })
     }
 
@@ -553,78 +969,24 @@ impl OutfitterScreen {
     /// ([`Outfitter::count_asked`]), the quantity dialog at that count.
     /// `by_key` says B or S asked, whose character the dialog then drops.
     fn ask(&mut self, direction: Direction, by_key: bool) {
-        let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
+        let Some(outfit) = self.selected_outfit().filter(|_| self.allows(direction)) else {
             return;
         };
-        let order = OutfitOrder {
-            outfit: self.outfitter.rows[index].id,
-            direction,
-        };
+        let order = OutfitOrder { outfit, direction };
         let asked = self
             .outfitter
             .count_asked(order.outfit, direction)
-            .filter(|_| self.counting);
+            .filter(|_| self.quantity.alt_held());
         match asked {
-            Some(max) => self.open_quantity(order, max, by_key),
+            Some(max) => {
+                if let Ok(laid) = &self.laid {
+                    let metrics = Rc::clone(&laid.metrics.0);
+                    self.quantity
+                        .open(order, order.direction, i64::from(max), by_key, metrics);
+                }
+            }
             None => self.order = Some((order, 1)),
         }
-    }
-
-    /// Opens the quantity dialog over the outfitter for `order`, at
-    /// `max`, laid out by its template or its fallback.
-    fn open_quantity(&mut self, order: OutfitOrder, max: u32, by_key: bool) {
-        let Ok(laid) = &self.laid else {
-            return;
-        };
-        let metrics = Rc::clone(&laid.metrics.0);
-        let title = match order.direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
-        let max = i64::from(max);
-        let built = laid.quantity.as_ref().and_then(|template| {
-            QuantityDialog::new(
-                template,
-                max,
-                title,
-                PROMPT,
-                self.style,
-                Rc::clone(&metrics),
-            )
-            .ok()
-        });
-        let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
-        if by_key {
-            dialog.flush_typed_key();
-        }
-        self.asking = Some(Asking { order, dialog });
-    }
-
-    /// Gives `input` to the quantity dialog open, after following Alt, and
-    /// records a count above 0 confirmed there as the order; 0 or Cancel
-    /// closes it with none.
-    fn quantity_input(&mut self, input: &Input) {
-        let Some(asking) = &mut self.asking else {
-            return;
-        };
-        if let Input::Key {
-            key: COUNT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.counting = pressed;
-        }
-        asking.dialog.input(input);
-        self.sounds.extend(asking.dialog.take_sounds());
-        let Some(count) = asking.dialog.take_outcome() else {
-            return;
-        };
-        if count > 0 {
-            self.order = Some((asking.order, count));
-        }
-        self.asking = None;
     }
 
     /// Asks to go `direction` for `key` going down: a press asks for the
@@ -633,7 +995,7 @@ impl OutfitterScreen {
     /// key held while an order removes the outfit's cell never acts on
     /// the outfit that takes the cell.
     fn ask_by_key(&mut self, key: Key, input: &Input, direction: Direction) {
-        let selected = self.selected().map(|index| self.outfitter.rows[index].id);
+        let selected = self.selected_outfit();
         let repeat = matches!(*input, Input::Key { repeat: true, .. });
         if !repeat {
             self.held = Some((key, selected));
@@ -641,6 +1003,28 @@ impl OutfitterScreen {
             return;
         }
         self.ask(direction, true);
+    }
+
+    /// Moves the selection for an arrow `key` going down, and says
+    /// whether it was an arrow. With no cell highlighted, after a reset or
+    /// an empty cell clicked, an arrow highlights one: Right and Down pick
+    /// the first cell shown, and Left and Up the last cell shown, or the
+    /// last listed when fewer are (`_OutfitFilter` @0x583bd-0x58440);
+    /// otherwise the grid moves the selection.
+    fn arrow(&mut self, key: Key) -> bool {
+        let count = self.outfitter.rows.len();
+        if self.highlight == Highlight::Cell {
+            return self.grid.arrow(key, count);
+        }
+        let first = self.grid.top_row() * COLUMNS;
+        let index = match key {
+            Key::Right | Key::Down => first,
+            Key::Left | Key::Up => first + COLUMNS * GRID_ROWS - 1,
+            _ => return false,
+        };
+        self.highlight = Highlight::Cell;
+        self.grid.select(index, count);
+        true
     }
 
     /// Scrolls the grid a row down, or up, never past either end.
@@ -661,10 +1045,42 @@ impl OutfitterScreen {
         }
     }
 
-    /// The cell index under `at` on the grid, if a listed outfit is there.
-    fn cell_at(&self, at: Point) -> Option<usize> {
+    /// The cell position under `at` on the grid, listed or not
+    /// ([`CellGrid::cell_under`]).
+    fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_at(grid, at, self.outfitter.rows.len())
+        self.grid.cell_under(grid, at)
+    }
+
+    /// Follows `input` when it is a press on one of the grid's cell
+    /// positions, and says whether it took it.
+    fn press_grid(&mut self, input: &Input) -> bool {
+        let Input::PointerButton {
+            pressed: true, at, ..
+        } = *input
+        else {
+            return false;
+        };
+        self.cell_under(at)
+            .is_some_and(|index| self.press_cell(index))
+    }
+
+    /// Follows a press on the cell position `index` and says whether it
+    /// took the press. A listed cell is highlighted and selected. An
+    /// empty one, by the engine's reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection),
+    /// highlights and selects nothing (`_OutfitFilter` @0x58632-0x58648),
+    /// and by the other is left to the dialog.
+    fn press_cell(&mut self, index: usize) -> bool {
+        if index < self.outfitter.rows.len() {
+            self.highlight = Highlight::Cell;
+            self.select(index);
+        } else if self.follows_outfit_filter() {
+            self.highlight = Highlight::None(None);
+            self.selected_changed();
+        } else {
+            return false;
+        }
+        true
     }
 
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
@@ -698,28 +1114,30 @@ impl OutfitterScreen {
         let row = &self.outfitter.rows[index];
         if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
         {
-            shown.draw(list, area);
+            shown.draw(list, area, &*laid.metrics.0);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_ITEM) else {
             return;
         };
+        draw_amount_rows(list, info, amount_lines(&self.outfitter, row));
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        let mut lines = vec![
-            format!("{PRICE_LABEL} {}", row.price),
-            format!("{MASS_LABEL} {} tons", row.mass),
-            format!("{OWNED_LABEL} {}", row.owned),
-            format!("{AVAILABLE_LABEL} {} tons", self.outfitter.free_mass),
+        let sale = OutfitOrder {
+            outfit: row.id,
+            direction: Direction::Sell,
+        };
+        let refusals = [
+            self.outfitter.words(row.id),
+            self.outfitter.sale_words(row.id),
         ];
-        let refusals = [row.words, row.sell.err()];
-        lines.extend(
-            refusals
-                .into_iter()
-                .flatten()
-                .filter_map(|refusal| refusal_text(refusal, row, &self.outfitter.lc_names)),
-        );
-        for (n, line) in lines.iter().enumerate() {
-            let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            text(list, line, origin, TEXT_COLOR);
+        let names = self.outfitter.lc_names(sale);
+        let words = refusals
+            .into_iter()
+            .flatten()
+            .filter_map(|refusal| refusal_text(refusal, row, &names));
+        let top = grid::baseline_top(info.min.y + REFUSAL_ROW);
+        for (n, line) in words.enumerate() {
+            let origin = Point::new(info.min.x, top + line_height * n as f32);
+            text(list, &line, origin, TEXT_COLOR);
         }
     }
 
@@ -736,21 +1154,27 @@ impl OutfitterScreen {
 }
 
 impl Screen for OutfitterScreen {
-    /// Every input goes to the outfitter, or to the quantity dialog while
-    /// it is open; it never quits.
+    /// Every input goes to the outfitter, or to the alert while it is
+    /// open (Alt still followed), or else to the quantity dialog while it
+    /// is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.asking.is_some() {
-            self.quantity_input(input);
+        if let Some(offering) = &mut self.offering
+            && offering.input(input, &mut self.sounds)
+        {
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key: COUNT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.counting = pressed;
+        if self.alert.is_open() {
+            self.quantity.follow_alt(input);
+            self.alert.input(input, &mut self.sounds);
+            return ScreenAction::None;
         }
+        if self.quantity.is_open() {
+            if let Some(counted) = self.quantity.answer(input, &mut self.sounds) {
+                self.order = Some(counted);
+            }
+            return ScreenAction::None;
+        }
+        self.quantity.follow_alt(input);
         if self.laid.is_err() {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -762,30 +1186,34 @@ impl Screen for OutfitterScreen {
             }
             return ScreenAction::None;
         }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
+            return ScreenAction::None;
+        }
         let pressed =
             |wanted: Key| matches!(*input, Input::Key { key, pressed: true, .. } if key == wanted);
+        let before = self.selected_outfit();
         let arrow = match *input {
             Input::Key {
                 key, pressed: true, ..
-            } => self.grid.arrow(key, self.outfitter.rows.len()),
+            } => self.arrow(key),
             _ => false,
         };
         if arrow {
-            self.selected_changed();
+            if self.follows_outfit_filter() && self.selected_outfit() == before {
+                self.regrey();
+                self.show(false);
+            } else {
+                self.selected_changed();
+            }
         } else if pressed(BUY_KEY) {
             self.ask_by_key(BUY_KEY, input, Direction::Buy);
         } else if pressed(SELL_KEY) {
             self.ask_by_key(SELL_KEY, input, Direction::Sell);
-        } else if let Some(index) = match *input {
-            Input::PointerButton {
-                pressed: true, at, ..
-            } => self.cell_at(at),
-            _ => None,
-        } {
-            self.select(index);
-        } else if let Ok(laid) = &mut self.laid {
+        } else if !self.press_grid(input)
+            && let Ok(laid) = &mut self.laid
+        {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -793,8 +1221,14 @@ impl Screen for OutfitterScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The wait for the next offer runs down, the quantity dialog or the
+    /// alert covering the outfitter while either is open.
+    fn tick(&mut self, dt: Duration) {
+        let covered = self.quantity.is_open() || self.alert.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -817,28 +1251,39 @@ impl Screen for OutfitterScreen {
         self.draw_selected(laid, list);
         self.draw_arrows(laid, list);
         laid.dialog.draw(list);
-        if let Some(asking) = &self.asking {
-            asking.dialog.draw(list);
+        self.quantity.draw(list);
+        self.alert.draw(list);
+        if let Some(offering) = &self.offering {
+            offering.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.cancel_pointer();
-        } else if let Ok(laid) = &mut self.laid {
+        if self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::cancel_pointer)
+        {
+            return;
+        }
+        if !self.alert.cancel_pointer()
+            && !self.quantity.cancel_pointer()
+            && let Ok(laid) = &mut self.laid
+        {
             laid.dialog.cancel_pointer();
         }
     }
 
-    /// Lets go of Alt, and of the keys held in the quantity dialog.
+    /// Lets go of Alt, and of the keys held in the alert and the quantity
+    /// dialog.
     fn release_keys(&mut self) {
-        self.counting = false;
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.release_keys();
-        }
+        self.alert.release_keys();
+        self.quantity.release_keys();
     }
 
-    /// The buttons' sounds and the quantity dialog's, in order.
+    /// The quantity dialog's and the alert's sounds, in order. The
+    /// buttons are silent under the pointer, as `_TrackOutfitButtons`
+    /// @0x2a029 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -850,7 +1295,9 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::RuleSource;
+    use nova_sim::{
+        Launcher, OutfitFacts, Raise, Reselection, RuleKey, RuleSource, Rulebook, SaleAlert,
+    };
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -946,18 +1393,27 @@ mod tests {
             name: format!("Outfit {id}"),
             short_name: short_name.to_owned(),
             price,
+            buy_price: price,
             mass,
             owned,
             max: 10,
-            cap: 10,
-            buy: Ok(()),
-            sell: if owned > 0 {
-                Ok(())
-            } else {
-                Err(OutfitRefusal::NoneOwned)
+            facts: OutfitFacts {
+                listed: true,
+                buy_tech: true,
+                required: true,
+                available: true,
+                sold_here: true,
+                mass_field: i16::try_from(mass).expect("a 16-bit mass"),
+                ..OutfitFacts::default()
             },
-            words: None,
         }
+    }
+
+    /// A map (1 owned) that can only be sold here.
+    fn map() -> OutfitRow {
+        let mut map = row(131, "Map", 0, 0, 1);
+        map.facts.buy_tech = false;
+        map
     }
 
     /// A light blaster (2 owned), ammunition, a gun too heavy to hold, and
@@ -968,20 +1424,13 @@ mod tests {
             rows: vec![
                 row(128, "Light\\nBlaster", 1000, 1, 2),
                 row(129, "*Ammo\\nPack", 50, 0, 0),
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NoSpaceForAny),
-                    words: Some(OutfitRefusal::NoSpaceForAny),
-                    ..row(130, "Big Gun", 9000, 10, 0)
-                },
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NotForSale),
-                    ..row(131, "Map", 0, 0, 1)
-                },
+                row(130, "Big Gun", 9000, 10, 0),
+                map(),
             ],
             cash: 5000,
             free_mass: 5,
-            lc_names: BTreeMap::new(),
-            outfit_count: RuleSource::Engine,
+            rules: Rulebook::default().with_override(RuleKey::OutfitCount, RuleSource::Engine),
+            ..Outfitter::default()
         }
     }
 
@@ -994,6 +1443,7 @@ mod tests {
         OutfitterScreen::new(
             Ok(layout()),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter,
             catalog,
             ButtonStyle::STOCK,
@@ -1150,21 +1600,10 @@ mod tests {
         assert_eq!((BUY_KEY, SELL_KEY), (Key::Char('b'), Key::Char('s')));
         assert_eq!((FIRST_PICTURE, FIRST_DESCRIPTION), (6000, 3000));
         assert_eq!(
-            [
-                PRICE_LABEL,
-                MASS_LABEL,
-                OWNED_LABEL,
-                AVAILABLE_LABEL,
-                NO_PICTURE
-            ],
-            [
-                "Item Price:",
-                "Item Mass:",
-                "You Have:",
-                "Available:",
-                "No Picture"
-            ]
+            [PRICE_LABEL, MASS_LABEL, AVAILABLE_LABEL, NO_PICTURE],
+            ["Item Price:", "Item Mass:", "Available:", "No Picture"]
         );
+        assert_eq!((INFO_ROWS, REFUSAL_ROW), ([12.0, 24.0, 48.0, 60.0], 93.0));
     }
 
     /// The words for `refusal` of a row with `owned` owned, no names
@@ -1331,20 +1770,23 @@ mod tests {
 
     #[test]
     fn the_info_box_says_why_a_launcher_cannot_be_sold() {
-        let bay = OutfitRow {
-            sell: Err(OutfitRefusal::AmmunitionFirst {
-                rounds: 2,
-                ammo: Some(OutfitId(158)),
-            }),
-            ..row(157, "Viper\\nBay", 100, 5, 1)
-        };
-        let launcher = LcNames {
+        // One bay holds one Viper, and two are aboard.
+        let mut bay = row(157, "Viper\\nBay", 100, 5, 1);
+        bay.facts.names = LcNames {
             singular: "Viper bay".to_owned(),
             plural: "Viper bays".to_owned(),
         };
+        bay.facts.launcher = Some(Launcher {
+            max_ammo: 1,
+            rounds: 2,
+            ammo: Some(OutfitId(158)),
+        });
+        bay.facts.ammo_names = Some(vipers());
         let screen = screen_of(Outfitter {
             rows: vec![bay],
-            lc_names: BTreeMap::from([(OutfitId(157), launcher), (OutfitId(158), vipers())]),
+            rules: outfitter()
+                .rules
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..outfitter()
         });
         let info = item(&screen, INFO_ITEM);
@@ -1399,6 +1841,7 @@ mod tests {
         let mut screen = OutfitterScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -1416,6 +1859,7 @@ mod tests {
         let screen = OutfitterScreen::new(
             Ok((short, Rc::new(MonoMetrics))),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -1453,8 +1897,7 @@ mod tests {
             let width = 5.0 * words.chars().count() as f32;
             Point::new(bounds.max.x - 3.0 - width, bounds.min.y + 12.0 - 10.0)
         };
-        let info = item(&screen, INFO_ITEM);
-        let line = |n: f32| Point::new(info.min.x + INSET, info.min.y + 12.0 * n);
+        let at = info_at(&screen);
         let description = item(&screen, DESCRIPTION_ITEM).min;
         let mut expected = vec![
             ("2".to_owned(), count(0, "2"), TEXT_COLOR),
@@ -1466,10 +1909,14 @@ mod tests {
             ("1".to_owned(), count(3, "1"), TEXT_COLOR),
             ("Map".to_owned(), name(3, "Map", 6.0), TEXT_COLOR),
             ("dësc 3000.".to_owned(), description, Color::WHITE),
-            ("Item Price: 1000".to_owned(), line(0.0), TEXT_COLOR),
-            ("Item Mass: 1 tons".to_owned(), line(1.0), TEXT_COLOR),
-            ("You Have: 2".to_owned(), line(2.0), TEXT_COLOR),
-            ("Available: 5 tons".to_owned(), line(3.0), TEXT_COLOR),
+            ("Item Price:".to_owned(), at(0.0, 2.0), TEXT_COLOR),
+            ("1,000 cr".to_owned(), at(70.0, 2.0), TEXT_COLOR),
+            ("You Have:".to_owned(), at(0.0, 14.0), TEXT_COLOR),
+            ("5,000 cr".to_owned(), at(70.0, 14.0), TEXT_COLOR),
+            ("Item Mass:".to_owned(), at(0.0, 38.0), TEXT_COLOR),
+            ("1 ton".to_owned(), at(70.0, 38.0), TEXT_COLOR),
+            ("Available:".to_owned(), at(0.0, 50.0), TEXT_COLOR),
+            ("5 tons".to_owned(), at(70.0, 50.0), TEXT_COLOR),
         ];
         let mut dialog = DrawList::new();
         screen.dialog().expect("laid out").draw(&mut dialog);
@@ -1581,8 +2028,8 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_cell_selects_it_and_on_an_empty_one_nothing() {
-        let mut screen = screen();
+    fn a_click_on_a_cell_selects_it_and_by_the_other_reading_on_an_empty_one_nothing() {
+        let mut screen = screen_of(by_the_other_grid_reading(outfitter()));
         click_cell(&mut screen, 2);
         assert_eq!(screen.selected(), Some(2));
         click_cell(&mut screen, 4);
@@ -1785,17 +2232,44 @@ mod tests {
             "the pictures once a list, each description once while it stays selected"
         );
         let picture = item(&screen, PICTURE_ITEM);
-        let no_picture = texts(&drawn(&screen))
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
+    }
+
+    /// The texts drawn in the picture item.
+    fn in_picture(screen: &OutfitterScreen) -> Vec<(String, Point, Color)> {
+        let picture = item(screen, PICTURE_ITEM);
+        texts(&drawn(screen))
             .into_iter()
-            .find(|(text, _, _)| text == NO_PICTURE)
-            .expect("drawn");
-        assert_eq!(
-            (no_picture.1, no_picture.2),
+            .filter(|(_, at, _)| picture.contains(*at))
+            .collect()
+    }
+
+    /// The picture item's two missing-picture lines as drawn: centred
+    /// across it (`MonoMetrics` sets Geneva 10 at 5 a character), on
+    /// baselines 6 either side of the floor of its middle, in white.
+    fn no_picture_lines(picture: Bounds) -> Vec<(String, Point, Color)> {
+        let mid_x = f32::midpoint(picture.min.x, picture.max.x).floor();
+        let mid_y = f32::midpoint(picture.min.y, picture.max.y).floor();
+        vec![
             (
-                Point::new(picture.min.x + INSET, picture.min.y + INSET),
-                GREY
-            )
-        );
+                "No Picture".to_owned(),
+                Point::new(mid_x - 25.0, grid::baseline_top(mid_y - 6.0)),
+                grid::TEXT_COLOR,
+            ),
+            (
+                "Available".to_owned(),
+                Point::new(mid_x - 22.5, grid::baseline_top(mid_y + 6.0)),
+                grid::TEXT_COLOR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
+        let mut screen = screen_with(outfitter(), &art());
+        press(&mut screen, Key::Right);
+        let picture = item(&screen, PICTURE_ITEM);
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
     }
 
     #[test]
@@ -1916,27 +2390,208 @@ mod tests {
     }
 
     #[test]
+    fn the_available_line_is_the_clamped_free_mass_with_a_ton_at_exactly_1() {
+        for (free_mass, amount) in [(-3, "0 tons"), (0, "0 tons"), (1, "1 ton"), (2, "2 tons")] {
+            let shown = info_lines_of(Outfitter {
+                free_mass,
+                ..outfitter()
+            });
+            assert!(
+                follows(&shown, AVAILABLE_LABEL, amount),
+                "{free_mass}: {shown:?}"
+            );
+            assert!(!shown.iter().any(|(text, _)| text == "-3 tons"));
+        }
+    }
+
+    #[test]
+    fn the_item_mass_line_has_a_ton_at_exactly_1_and_no_line_without_mass() {
+        let lines = |mass| {
+            info_lines_of(Outfitter {
+                rows: vec![row(128, "Widget", 100, mass, 0)],
+                free_mass: 5,
+                ..outfitter()
+            })
+        };
+        let one = lines(1);
+        assert!(follows(&one, MASS_LABEL, "1 ton"), "{one:?}");
+        assert!(follows(&one, AVAILABLE_LABEL, "5 tons"), "{one:?}");
+        let two = lines(2);
+        assert!(follows(&two, MASS_LABEL, "2 tons"), "{two:?}");
+        for mass in [0, -5] {
+            let none = lines(mass);
+            assert!(
+                !none
+                    .iter()
+                    .any(|(line, _)| line == "Item Mass:" || line == "Available:"),
+                "{mass}: {none:?}"
+            );
+            assert!(follows(&none, PRICE_LABEL, "100 cr"), "{none:?}");
+            assert!(follows(&none, "You Have:", "5,000 cr"), "{none:?}");
+        }
+    }
+
+    /// `lines` as texts placed from the info box's top left.
+    fn placed(lines: &[(&str, f32, f32)]) -> Vec<(String, Point)> {
+        lines
+            .iter()
+            .map(|&(text, x, y)| (text.to_owned(), Point::new(x, y)))
+            .collect()
+    }
+
+    #[test]
+    fn the_info_box_draws_its_lines_at_the_originals_rows_and_columns() {
+        // Baselines 12, 24, 48 and 60 below the top, and 93 for the
+        // refusal; MonoMetrics sets Geneva 10 with its top 10 above.
+        let mut screen = screen();
+        let drawn = info_drawn(&screen);
+        assert!(drawn.iter().all(|(_, _, color)| *color == TEXT_COLOR));
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("1,000 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                ("Item Mass:", 0.0, 38.0),
+                ("1 ton", 70.0, 38.0),
+                ("Available:", 0.0, 50.0),
+                ("5 tons", 70.0, 50.0),
+            ])
+        );
+        // The massless ammunition.
+        press(&mut screen, Key::Right);
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("50 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+            ])
+        );
+        // The gun too heavy to hold.
+        press(&mut screen, Key::Right);
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("9,000 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                ("Item Mass:", 0.0, 38.0),
+                ("10 tons", 70.0, 38.0),
+                ("Available:", 0.0, 50.0),
+                ("5 tons", 70.0, 50.0),
+                (NO_SPACE_FOR_ANY, 0.0, 83.0),
+            ])
+        );
+        // A massless outfit's refusal stays on its row; the Bible's sale
+        // refusal is a line below it.
+        let overloaded = Outfitter {
+            rows: vec![OutfitRow {
+                max: 1,
+                ..row(128, "Expansion", 100, -5, 1)
+            }],
+            free_mass: 4,
+            rules: Rulebook::default()
+                .with_override(RuleKey::OutfitCount, RuleSource::Engine)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+            ..outfitter()
+        };
+        let screen = screen_of(overloaded);
+        let drawn = info_drawn(&screen);
+        assert!(drawn.iter().all(|(_, _, color)| *color == TEXT_COLOR));
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("100 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                (MAX_OWNED, 0.0, 83.0),
+                (NEGATIVE_FREE_MASS, 0.0, 95.0),
+            ])
+        );
+    }
+
+    #[test]
+    fn you_have_is_the_cash_and_the_count_owned_is_only_in_the_grid() {
+        // Two light blasters owned, 5000 credits.
+        let mut screen = screen();
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "5,000 cr"), "{shown:?}");
+        assert!(
+            !shown
+                .iter()
+                .any(|(text, _)| text == "2" || text.starts_with("You Have: ")),
+            "{shown:?}"
+        );
+        assert!(words(&screen).contains(&"2".to_owned()), "in the grid");
+        for (cash, amount) in [(0, "0 cr"), (-250, "-250 cr")] {
+            let shown = info_lines_of(Outfitter {
+                cash,
+                ..outfitter()
+            });
+            assert!(follows(&shown, "You Have:", amount), "{cash}: {shown:?}");
+        }
+        let mut bought = outfitter();
+        bought.rows[0].owned = 3;
+        bought.cash = 10;
+        screen.set_outfitter(bought);
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "10 cr"), "{shown:?}");
+    }
+
+    #[test]
+    fn every_amount_draws_with_draw_comma_numbers_separators() {
+        let one = |price, mass, cash, free_mass| {
+            info_lines_of(Outfitter {
+                rows: vec![row(128, "Widget", price, mass, 0)],
+                cash,
+                free_mass,
+                ..outfitter()
+            })
+        };
+        let shown = one(12_345, 0, 5000, 5);
+        assert!(follows(&shown, PRICE_LABEL, "12,345 cr"), "{shown:?}");
+        let shown = one(999, 0, 5000, 5);
+        assert!(follows(&shown, PRICE_LABEL, "999 cr"), "{shown:?}");
+        let shown = one(100, 0, 1_234_567, 5);
+        assert!(follows(&shown, "You Have:", "1.23M cr"), "{shown:?}");
+        let shown = one(100, 1_000, 5000, 2_500);
+        assert!(follows(&shown, MASS_LABEL, "1,000 tons"), "{shown:?}");
+        assert!(follows(&shown, AVAILABLE_LABEL, "2,500 tons"), "{shown:?}");
+        let shown = one(100, 1, 5000, 1);
+        assert!(follows(&shown, AVAILABLE_LABEL, "1 ton"), "{shown:?}");
+    }
+
+    #[test]
     fn the_info_box_says_why_buy_or_sell_is_greyed_when_the_original_words_it() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
         press(&mut screen, Key::Right);
         let shown = words(&screen);
         assert!(shown.contains(&NO_SPACE_FOR_ANY.to_owned()), "{shown:?}");
-        assert!(shown.contains(&"Item Price: 9000".to_owned()));
-        assert!(shown.contains(&"Item Mass: 10 tons".to_owned()));
+        assert!(shown.contains(&"9,000 cr".to_owned()));
+        assert!(shown.contains(&"10 tons".to_owned()));
         press(&mut screen, Key::Right);
         let shown = words(&screen);
         assert!(
             !shown.iter().any(|text| text.starts_with("Can't")),
             "{shown:?}"
         );
+        // Its one owned is its `Max`, and selling it would leave a ton
+        // short of the 4 tons free.
         let overloaded = Outfitter {
             rows: vec![OutfitRow {
-                buy: Err(OutfitRefusal::MaxOwned),
-                sell: Err(OutfitRefusal::NegativeFreeMass),
-                words: Some(OutfitRefusal::MaxOwned),
+                max: 1,
                 ..row(128, "Expansion", 100, -5, 1)
             }],
+            free_mass: 4,
+            rules: Rulebook::default()
+                .with_override(RuleKey::OutfitCount, RuleSource::Engine)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..outfitter()
         };
         let screen = screen_of(overloaded);
@@ -1949,83 +2604,158 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "Item Price: 100",
-                "Item Mass: -5 tons",
-                "You Have: 1",
-                "Available: 5 tons",
+                "Item Price:",
+                "100 cr",
+                "You Have:",
+                "5,000 cr",
                 MAX_OWNED,
                 NEGATIVE_FREE_MASS,
             ]
         );
     }
 
-    /// The info box's lines for a row of outfit 128, `owned` owned,
-    /// refused `buy` and carrying `words`.
-    fn info_lines(buy: OutfitRefusal, words: Option<OutfitRefusal>, owned: u16) -> Vec<String> {
-        let screen = screen_of(Outfitter {
-            rows: vec![OutfitRow {
-                buy: Err(buy),
-                words,
-                ..row(128, "Widget", 100, 1, owned)
-            }],
-            ..outfitter()
+    #[test]
+    fn the_item_price_is_what_buying_one_costs() {
+        let shown = info_lines(OutfitRow {
+            price: 1500,
+            buy_price: 1275,
+            ..widget(0)
         });
-        let info = item(&screen, INFO_ITEM);
-        texts(&drawn(&screen))
+        assert!(follows(&shown, PRICE_LABEL, "1,275 cr"), "{shown:?}");
+    }
+
+    /// Widget 128, 100 credits and a ton, `owned` owned.
+    fn widget(owned: u16) -> OutfitRow {
+        row(128, "Widget", 100, 1, owned)
+    }
+
+    /// The info box's texts for `widget`, in [`outfitter`]'s place.
+    fn info_lines(widget: OutfitRow) -> Vec<(String, Point)> {
+        info_lines_of(Outfitter {
+            rows: vec![widget],
+            ..outfitter()
+        })
+    }
+
+    /// The info box's texts for the first row of `outfitter`, each where
+    /// it starts from the box's top left.
+    fn info_lines_of(outfitter: Outfitter) -> Vec<(String, Point)> {
+        info_placed(&screen_of(outfitter))
+    }
+
+    /// The point `dx` across and `dy` down from the info box's top left.
+    fn info_at(screen: &OutfitterScreen) -> impl Fn(f32, f32) -> Point {
+        let info = item(screen, INFO_ITEM).min;
+        move |dx, dy| Point::new(info.x + dx, info.y + dy)
+    }
+
+    /// The info box's texts, each where it starts from the box's top left,
+    /// and its colour.
+    fn info_drawn(screen: &OutfitterScreen) -> Vec<(String, Point, Color)> {
+        let info = item(screen, INFO_ITEM);
+        texts(&drawn(screen))
             .into_iter()
             .filter(|(_, at, _)| info.contains(*at))
-            .map(|(text, _, _)| text)
+            .map(|(text, at, color)| {
+                let from = Point::new(at.x - info.min.x, at.y - info.min.y);
+                (text, from, color)
+            })
             .collect()
     }
 
-    /// The last of the info box's lines, when it says why buy is greyed.
-    fn said_why(lines: &[String]) -> Option<&str> {
+    /// The info box's texts, each where it starts from the box's top left.
+    fn info_placed(screen: &OutfitterScreen) -> Vec<(String, Point)> {
+        info_drawn(screen)
+            .into_iter()
+            .map(|(text, at, _)| (text, at))
+            .collect()
+    }
+
+    /// Whether `amount` is drawn next after `label`, on its row 70 right
+    /// of it.
+    fn follows(lines: &[(String, Point)], label: &str, amount: &str) -> bool {
+        lines.windows(2).any(|pair| {
+            let [(first, at), (second, then)] = pair else {
+                return false;
+            };
+            first == label && second == amount && *then == Point::new(at.x + 70.0, at.y)
+        })
+    }
+
+    /// The words on the info box's refusal row, when it says why buy is
+    /// greyed: its baseline 93 below the top, at the left.
+    fn said_why(lines: &[(String, Point)]) -> Option<&str> {
         lines
-            .last()
-            .map(String::as_str)
-            .filter(|line| !line.starts_with("Available:"))
+            .iter()
+            .find(|(_, at)| *at == Point::new(0.0, 83.0))
+            .map(|(text, _)| text.as_str())
     }
 
     #[test]
     fn the_info_box_words_a_max_refusal_by_the_count_owned() {
-        let granted = info_lines(
-            OutfitRefusal::NoneAllowed,
-            Some(OutfitRefusal::NoneAllowed),
-            1,
-        );
+        // None allowed, one granted.
+        let granted = info_lines(OutfitRow {
+            max: 0,
+            ..widget(1)
+        });
         assert_eq!(said_why(&granted), Some(MAX_OWNED), "{granted:?}");
     }
 
     #[test]
     fn a_fighter_refused_for_full_bays_shows_the_mass_words_when_it_lacks_the_mass() {
-        let none = info_lines(
-            OutfitRefusal::BaysFull,
-            Some(OutfitRefusal::NoSpaceForAny),
-            0,
-        );
+        // 6 tons is past the 5 free.
+        let bays_full = |mass, owned| {
+            let mut fighter = OutfitRow {
+                mass,
+                ..widget(owned)
+            };
+            fighter.facts.fighter_room = Some(0);
+            info_lines(fighter)
+        };
+        let none = bays_full(6, 0);
         assert_eq!(said_why(&none), Some(NO_SPACE_FOR_ANY), "{none:?}");
-        let one = info_lines(OutfitRefusal::BaysFull, Some(OutfitRefusal::NoSpace), 1);
+        let one = bays_full(6, 1);
         assert_eq!(said_why(&one), Some(NO_SPACE), "{one:?}");
         for owned in [0, 2] {
-            let fits = info_lines(OutfitRefusal::BaysFull, None, owned);
-            assert!(fits.iter().any(|text| text.starts_with("Available:")));
+            let fits = bays_full(1, owned);
+            assert!(fits.iter().any(|(text, _)| text == "Available:"));
             assert_eq!(said_why(&fits), None, "{owned}: {fits:?}");
         }
     }
 
     #[test]
     fn the_info_box_words_the_rows_words_not_its_buy_refusal() {
-        let heavy = info_lines(
-            OutfitRefusal::NotForSale,
-            Some(OutfitRefusal::NoSpaceForAny),
-            0,
-        );
+        let not_for_sale = |mass, max, owned| {
+            let mut row = OutfitRow {
+                mass,
+                max,
+                ..widget(owned)
+            };
+            row.facts.buy_tech = false;
+            info_lines(row)
+        };
+        let heavy = not_for_sale(6, 10, 0);
         assert_eq!(said_why(&heavy), Some(NO_SPACE_FOR_ANY), "{heavy:?}");
-        let at_max = info_lines(OutfitRefusal::NotForSale, Some(OutfitRefusal::MaxOwned), 1);
+        let at_max = not_for_sale(1, 1, 1);
         assert_eq!(said_why(&at_max), Some(MAX_OWNED), "{at_max:?}");
-        let expansion = info_lines(OutfitRefusal::NoExpansion, Some(OutfitRefusal::NoSpace), 1);
+        // A mass expansion on a ship of negative `Holds`.
+        let mut expansion = OutfitRow {
+            mass: 6,
+            ..widget(1)
+        };
+        expansion.facts.expansion = Some(5);
+        let expansion = info_lines_of(Outfitter {
+            rows: vec![expansion],
+            holds: -1,
+            ..outfitter()
+        });
         assert_eq!(said_why(&expansion), Some(NO_SPACE), "{expansion:?}");
-        let fits = info_lines(OutfitRefusal::NoSpaceForAny, None, 0);
+        // Refused for the cash: 6000 credits.
+        let fits = info_lines(OutfitRow {
+            price: 6000,
+            buy_price: 6000,
+            ..widget(0)
+        });
         assert_eq!(said_why(&fits), None, "buy alone gets no words: {fits:?}");
     }
 
@@ -2114,13 +2844,7 @@ mod tests {
     fn a_held_key_never_acts_on_an_outfit_it_did_not_start_on() {
         // A sell-only map (1 owned) next to a sellable blaster (2 owned).
         let both = || Outfitter {
-            rows: vec![
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NotForSale),
-                    ..row(131, "Map", 0, 0, 1)
-                },
-                row(128, "Light\\nBlaster", 1000, 1, 2),
-            ],
+            rows: vec![map(), row(128, "Light\\nBlaster", 1000, 1, 2)],
             ..outfitter()
         };
         let mut screen = screen_of(both());
@@ -2177,14 +2901,12 @@ mod tests {
         press(&mut screen, Key::Right);
         let mut bought = outfitter();
         bought.rows[1].owned = 3;
-        bought.rows[1].sell = Ok(());
-        bought.rows[1].buy = Err(OutfitRefusal::CannotAfford);
         bought.cash = 10;
         screen.set_outfitter(bought.clone());
         assert_eq!(screen.outfitter(), &bought);
         assert_eq!(screen.selected(), Some(1));
         assert_eq!(enabled(&screen), (false, true));
-        assert!(words(&screen).contains(&"You Have: 3".to_owned()));
+        assert!(follows(&info_placed(&screen), "You Have:", "10 cr"));
         // Sold out of a sell-only map: the next cell along is selected.
         click_cell(&mut screen, 3);
         let mut sold = outfitter();
@@ -2207,6 +2929,499 @@ mod tests {
         assert_eq!(kept.selected(), Some(0));
     }
 
+    // After an order that changes the listing
+    // (`RuleKey::RelistedSelection`).
+
+    const BLASTER: OutfitId = OutfitId(128);
+
+    /// `screen` after an order that reset the selection to the blaster.
+    fn reset(mut screen: OutfitterScreen) -> OutfitterScreen {
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen
+    }
+
+    /// Whether any cell shown is highlighted.
+    fn any_highlight(screen: &OutfitterScreen) -> bool {
+        let commands = drawn(screen);
+        (0..COLUMNS * GRID_ROWS)
+            .filter(|&index| screen.cell_bounds(index).is_some())
+            .any(|index| contains(&commands, &highlight(screen, index)))
+    }
+
+    /// Whether outfit `outfit` can go `direction` by `screen`'s outfitter.
+    fn can(screen: &OutfitterScreen, outfit: OutfitId, direction: Direction) -> bool {
+        screen
+            .outfitter()
+            .can(OutfitOrder { outfit, direction })
+            .is_ok()
+    }
+
+    #[test]
+    fn after_a_reset_no_cell_is_highlighted_and_buy_and_sell_answer_for_the_outfit() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        assert!(any_highlight(&screen));
+        let mut screen = reset(screen);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(
+            enabled(&screen),
+            (
+                can(&screen, BLASTER, Direction::Buy),
+                can(&screen, BLASTER, Direction::Sell)
+            )
+        );
+        assert_eq!(enabled(&screen), (true, true));
+        assert!(!any_highlight(&screen));
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        assert_eq!(screen.selected(), None, "still no cell");
+    }
+
+    #[test]
+    fn after_a_reset_the_picture_description_and_info_box_are_blank() {
+        let screen = screen();
+        let before = words(&screen);
+        assert!(before.contains(&"dësc 3000.".to_owned()), "{before:?}");
+        assert!(before.contains(&credits::YOU_HAVE.to_owned()));
+        let pictured = |screen: &OutfitterScreen| {
+            let area = item(screen, PICTURE_ITEM);
+            drawn(screen).iter().any(|command| {
+                matches!(command, DrawCommand::StretchedPicture { top_left, .. } if *top_left == area.min)
+            })
+        };
+        assert!(pictured(&screen));
+        let screen = reset(screen);
+        let shown = words(&screen);
+        for blank in [
+            PRICE_LABEL,
+            credits::YOU_HAVE,
+            MASS_LABEL,
+            AVAILABLE_LABEL,
+            NO_PICTURE,
+        ] {
+            assert!(!shown.contains(&blank.to_owned()), "{blank}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|text| text.starts_with("dësc")));
+        assert!(!pictured(&screen));
+    }
+
+    /// An outfitter listing only the ammunition, with the blaster (2
+    /// owned) not listed.
+    fn unlisted_blaster() -> Outfitter {
+        let mut blaster = row(128, "Light\\nBlaster", 1000, 1, 2);
+        blaster.facts.listed = false;
+        Outfitter {
+            rows: vec![row(129, "*Ammo\\nPack", 50, 0, 0)],
+            unlisted: Some(blaster),
+            ..outfitter()
+        }
+    }
+
+    #[test]
+    fn a_reset_outfit_need_not_be_listed() {
+        let mut screen = reset(screen_of(unlisted_blaster()));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (true, true));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        let commands = drawn(&screen);
+        assert!(contains(&commands, &frame(&screen, 0)));
+        assert!(!contains(&commands, &frame(&screen, 1)), "one cell");
+        press(&mut screen, COUNT_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(field_text(&screen), Some("2"), "the blaster's count");
+    }
+
+    #[test]
+    fn a_reset_outfit_with_no_row_greys_both() {
+        let mut screen = reset(screen_of(long(3)));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (false, false));
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn a_reset_scrolls_the_grid_to_its_top() {
+        let mut screen = screen_of(long(30));
+        for _ in 0..6 {
+            press(&mut screen, Key::Down);
+        }
+        assert_eq!(screen.top_row(), 3);
+        let screen = reset(screen);
+        assert_eq!(screen.top_row(), 0);
+        assert_eq!(names(&screen)[0], "Good 0");
+    }
+
+    #[test]
+    fn a_click_or_an_arrow_ends_the_reset() {
+        let mut clicked = reset(screen());
+        click_cell(&mut clicked, 2);
+        assert_eq!(clicked.selected(), Some(2));
+        assert_eq!(clicked.selected_outfit(), Some(OutfitId(130)));
+        assert!(contains(&drawn(&clicked), &highlight(&clicked, 2)));
+        let mut empty = reset(screen());
+        click_cell(&mut empty, 4);
+        assert_eq!(empty.selected(), None, "an empty cell");
+        assert_eq!(empty.selected_outfit(), None, "the blaster let go");
+        let arrowed = |outfitter: Outfitter, scrolled: usize, k: Key| {
+            let mut screen = reset(screen_of(outfitter));
+            for _ in 0..scrolled {
+                click_item(&mut screen, SCROLL_DOWN_ITEM);
+            }
+            press(&mut screen, k);
+            (
+                screen.selected(),
+                screen.top_row(),
+                screen.selected_outfit(),
+            )
+        };
+        let at = |index: usize, top_row: usize| {
+            (
+                Some(index),
+                top_row,
+                Some(OutfitId(200 + i16::try_from(index).expect("few"))),
+            )
+        };
+        for (k, first_or_last) in [
+            (Key::Right, 0),
+            (Key::Down, 0),
+            (Key::Left, 15),
+            (Key::Up, 15),
+        ] {
+            assert_eq!(arrowed(long(30), 0, k), at(first_or_last, 0), "{k:?}");
+            assert_eq!(
+                arrowed(long(30), 2, k),
+                at(first_or_last + 8, 2),
+                "{k:?} scrolled"
+            );
+        }
+        for k in [Key::Left, Key::Up] {
+            assert_eq!(arrowed(long(10), 0, k), at(9, 0), "{k:?}: the last");
+            assert_eq!(
+                arrowed(long(22), 2, k),
+                at(21, 2),
+                "{k:?}: the last, scrolled"
+            );
+        }
+        let mut ended = reset(screen_of(long(30)));
+        press(&mut ended, Key::Right);
+        press(&mut ended, Key::Right);
+        assert_eq!(ended.selected(), Some(1), "the arrows move as before");
+    }
+
+    // The grid's presses and arrows (`RuleKey::GridSelection`).
+
+    /// `outfitter` with the grid's selection read the other way, the
+    /// port's earlier behaviour.
+    fn by_the_other_grid_reading(outfitter: Outfitter) -> Outfitter {
+        Outfitter {
+            rules: outfitter
+                .rules
+                .with_override(RuleKey::GridSelection, RuleSource::Bible),
+            ..outfitter
+        }
+    }
+
+    /// Whether an outfit's picture is drawn in the picture item, and
+    /// which.
+    fn picture_drawn(screen: &OutfitterScreen) -> Option<ImageKey> {
+        let area = item(screen, PICTURE_ITEM);
+        drawn(screen).iter().find_map(|command| match command {
+            DrawCommand::StretchedPicture {
+                image, top_left, ..
+            } if *top_left == area.min => Some(*image),
+            _ => None,
+        })
+    }
+
+    /// Whether any description is drawn.
+    fn described(screen: &OutfitterScreen) -> bool {
+        words(screen).iter().any(|text| text.starts_with("dësc"))
+    }
+
+    /// Whether the info box draws any of its lines.
+    fn any_info(screen: &OutfitterScreen) -> bool {
+        let shown = words(screen);
+        [PRICE_LABEL, credits::YOU_HAVE, MASS_LABEL, AVAILABLE_LABEL]
+            .iter()
+            .any(|label| shown.contains(&(*label).to_owned()))
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_an_empty_cell_leaves_nothing_selected() {
+        let mut screen = screen();
+        click_cell(&mut screen, 1);
+        assert!(any_info(&screen) && described(&screen));
+        assert!(words(&screen).contains(&NO_PICTURE.to_owned()));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.take_sounds(), [], "the press reaches no button");
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        assert!(!any_highlight(&screen));
+        assert!(!any_info(&screen), "{:?}", words(&screen));
+        assert!(!words(&screen).contains(&NO_PICTURE.to_owned()));
+        assert_eq!(picture_drawn(&screen), None);
+        assert!(!described(&screen));
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        click_item(&mut screen, BUY_ITEM);
+        click_item(&mut screen, SELL_ITEM);
+        press(&mut screen, COUNT_KEY);
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none());
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_an_empty_cell_after_a_reset_lets_the_outfit_go() {
+        let mut screen = reset(screen());
+        assert_eq!(enabled(&screen), (true, true));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn a_click_on_the_highlighted_cell_changes_nothing() {
+        for outfitter in [outfitter(), by_the_other_grid_reading(outfitter())] {
+            let art = art();
+            let mut screen = screen_with(outfitter, &art);
+            click_cell(&mut screen, 1);
+            let asked = art.asked.borrow().len();
+            let before = drawn(&screen);
+            click_cell(&mut screen, 1);
+            assert_eq!(art.asked.borrow().len(), asked, "no description read");
+            assert_eq!(drawn(&screen), before);
+            assert_eq!(screen.selected(), Some(1));
+        }
+    }
+
+    #[test]
+    fn after_an_empty_cell_an_arrow_picks_the_first_or_last_cell_shown() {
+        let arrowed = |outfitter: Outfitter, scrolled: usize, empty: usize, k: Key| {
+            let art = art();
+            let mut screen = screen_with(outfitter, &art);
+            for _ in 0..scrolled {
+                click_item(&mut screen, SCROLL_DOWN_ITEM);
+            }
+            click_cell(&mut screen, empty);
+            assert_eq!(screen.selected_outfit(), None, "{k:?}");
+            art.asked.borrow_mut().clear();
+            press(&mut screen, k);
+            assert!(described(&screen), "{k:?}");
+            let asked = art.asked.borrow().clone();
+            (screen.selected(), screen.top_row(), asked)
+        };
+        let at = |index: usize, top_row: usize| {
+            let description = 3072 + i16::try_from(index).expect("few");
+            (Some(index), top_row, vec![format!("dësc {description}")])
+        };
+        for k in [Key::Right, Key::Down] {
+            assert_eq!(arrowed(long(10), 0, 12, k), at(0, 0), "{k:?}");
+            assert_eq!(arrowed(long(22), 2, 14, k), at(8, 2), "{k:?} scrolled");
+        }
+        for k in [Key::Left, Key::Up] {
+            assert_eq!(arrowed(long(10), 0, 12, k), at(9, 0), "{k:?}");
+            assert_eq!(arrowed(long(22), 2, 14, k), at(21, 2), "{k:?} scrolled");
+        }
+    }
+
+    #[test]
+    fn each_description_read_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_description_request(),
+            Some(3000),
+            "the first cell's"
+        );
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(3000, "Loaded blaster.");
+        assert!(words(&screen).contains(&"Loaded blaster.".to_owned()));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), Some(3001));
+        screen.show_description(3000, "Too late.");
+        assert!(
+            !words(&screen).contains(&"Too late.".to_owned()),
+            "another outfit's is not shown"
+        );
+        assert!(words(&screen).contains(&"dësc 3001.".to_owned()));
+        assert_eq!(outfit_desc_id(OutfitId(130)), 3002);
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_onto_the_reset_outfit_asks_no_load() {
+        let mut screen = reset(screen());
+        let _ = screen.take_description_request();
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), None, "@0x58442-0x5844f");
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_onto_the_reset_outfit_reads_no_description() {
+        let art = art();
+        let mut screen = reset(screen_with(outfitter(), &art));
+        art.asked.borrow_mut().clear();
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.selected(), Some(0));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert!(contains(&drawn(&screen), &highlight(&screen, 0)));
+        assert_eq!(picture_drawn(&screen), Some(ImageKey::picture(6000)));
+        assert!(any_info(&screen));
+        assert!(follows(&info_placed(&screen), PRICE_LABEL, "1,000 cr"));
+        assert_eq!(enabled(&screen), (true, true));
+        assert!(!described(&screen), "{:?}", words(&screen));
+        assert_eq!(*art.asked.borrow(), Vec::<String>::new());
+        press(&mut screen, Key::Right);
+        assert_eq!(*art.asked.borrow(), ["dësc 3001"]);
+        press(&mut screen, Key::Left);
+        assert_eq!(*art.asked.borrow(), ["dësc 3001", "dësc 3000"]);
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_the_reset_outfits_cell_reads_its_description() {
+        let mut screen = reset(screen());
+        click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_other_reading_an_arrow_onto_the_reset_outfit_reads_its_description() {
+        let mut screen = reset(screen_of(by_the_other_grid_reading(outfitter())));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_click_on_an_empty_cell_keeps_a_reset() {
+        let mut screen = reset(screen_of(by_the_other_grid_reading(outfitter())));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(
+            enabled(&screen),
+            (
+                can(&screen, BLASTER, Direction::Buy),
+                can(&screen, BLASTER, Direction::Sell)
+            )
+        );
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_new_outfitter_keeps_nothing_selected() {
+        let mut screen = screen();
+        click_cell(&mut screen, 4);
+        screen.set_outfitter(outfitter());
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        assert!(!any_highlight(&screen));
+    }
+
+    #[test]
+    fn a_key_held_on_another_outfit_stops_when_a_reset_selects_128() {
+        let mut screen = screen();
+        click_cell(&mut screen, 3);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(131, Direction::Sell)));
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen.set_outfitter(outfitter());
+        for _ in 0..2 {
+            screen.input(&key(SELL_KEY, true, true));
+            assert_eq!(screen.take_order(), None, "the held key stops");
+        }
+        screen.input(&key(SELL_KEY, false, false));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_key_held_on_128_goes_on_when_a_reset_selects_128_again() {
+        // The original has no held-key guard: `_OutfitFilter` asks Buy and
+        // Sell of `*0xded58` on every event, repeats included
+        // (@0x5806f-0x580ca, @0x5817a-0x581ab), so a held S keeps selling
+        // `oütf` 128 when a reset selects it again. The port stops a held
+        // key only when the outfit it answers for changes, and here it
+        // does not.
+        let mut screen = screen();
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen.set_outfitter(outfitter());
+        assert_eq!(screen.selected(), None);
+        screen.input(&key(SELL_KEY, true, true));
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        // Pressed during the reset, it goes on once an arrow picks 128's
+        // cell: the outfit is the same.
+        let mut reset = reset(screen_of(outfitter()));
+        press(&mut reset, SELL_KEY);
+        assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
+        press(&mut reset, Key::Right);
+        assert_eq!(reset.selected(), Some(0));
+        reset.input(&key(SELL_KEY, true, true));
+        assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_new_outfitter_keeps_the_reset() {
+        let mut screen = reset(screen());
+        let mut broke = outfitter();
+        broke.cash = 10;
+        screen.set_outfitter(broke.clone());
+        assert_eq!(screen.outfitter(), &broke);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (false, true), "regreyed");
+        assert!(!any_highlight(&screen));
+        let mut scrolled = reset(screen_of(long(30)));
+        click_item(&mut scrolled, SCROLL_DOWN_ITEM);
+        scrolled.set_outfitter(unlisted_blaster());
+        assert_eq!(scrolled.top_row(), 1, "the scroll kept");
+        assert_eq!(scrolled.selected(), None);
+        assert_eq!(enabled(&scrolled), (true, true), "the unlisted blaster");
+    }
+
+    #[test]
+    fn an_order_that_keeps_the_listing_keeps_the_selection() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        let before = drawn(&screen);
+        screen.reselect(Reselection::Kept);
+        assert_eq!(screen.selected(), Some(1));
+        assert_eq!(screen.selected_outfit(), Some(OutfitId(129)));
+        assert_eq!(drawn(&screen), before);
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn leave_closes_the_outfitter_once_its_alert_is_closed() {
+        let mut screen = screen();
+        assert!(!screen.closed());
+        screen.reselect(Reselection::Leave);
+        assert!(screen.closed());
+        let mut alerted = alerting(OutfitRefusal::NegativeFreeMass);
+        alerted.reselect(Reselection::Leave);
+        assert!(!alerted.closed(), "the alert first");
+        press(&mut alerted, Key::Escape);
+        assert!(alerted.alert_dialog().is_none());
+        assert!(alerted.closed());
+    }
+
     #[test]
     fn done_return_and_escape_close_it() {
         let mut screen = screen();
@@ -2225,8 +3440,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackOutfitButtons` @0x2a029 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_as_they_are_clicked() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut screen = screen();
         let buy = item(&screen, BUY_ITEM).center();
         screen.input(&Input::PointerButton {
@@ -2234,13 +3450,13 @@ mod tests {
             pressed: true,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
             pressed: false,
             at: buy,
         });
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), []);
@@ -2284,6 +3500,7 @@ mod tests {
             let mut screen = OutfitterScreen::new(
                 Err("no DLOG 1002".to_owned()),
                 Ok(quantity()),
+                Ok(desc_template()),
                 outfitter(),
                 Rc::clone(&art) as Rc<dyn OutfitterCatalog>,
                 ButtonStyle::STOCK,
@@ -2430,17 +3647,17 @@ mod tests {
     }
 
     #[test]
-    fn cancel_or_0_records_nothing_and_closes_the_dialog() {
+    fn cancel_or_0_records_an_order_of_none_and_closes_the_dialog() {
         let mut screen = counting_screen();
         alt_click(&mut screen, SELL_ITEM);
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Sell, 0)));
         assert!(screen.quantity().is_none(), "closed");
-        alt_click(&mut screen, SELL_ITEM);
+        alt_click(&mut screen, BUY_ITEM);
         typed(&mut screen, "0");
         press(&mut screen, Key::Enter);
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 0)));
         assert!(screen.quantity().is_none(), "closed");
         assert!(!screen.closed());
     }
@@ -2470,8 +3687,7 @@ mod tests {
 
     #[test]
     fn with_shift_control_or_command_held_buy_records_one() {
-        // Shift and Command reach the screen as `Key::Other`.
-        for modifier in [Key::Control, Key::Other] {
+        for modifier in [Key::Shift, Key::Control, Key::Command] {
             let mut screen = counting_screen();
             press(&mut screen, modifier);
             click_item(&mut screen, BUY_ITEM);
@@ -2489,7 +3705,7 @@ mod tests {
     #[test]
     fn by_the_other_count_reading_alt_records_one_and_never_opens_the_dialog() {
         let mut screen = screen_of(Outfitter {
-            outfit_count: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::OutfitCount, RuleSource::Bible),
             ..counting()
         });
         alt_click(&mut screen, BUY_ITEM);
@@ -2528,6 +3744,7 @@ mod tests {
             let mut screen = OutfitterScreen::new(
                 Ok(layout()),
                 template,
+                Ok(desc_template()),
                 counting(),
                 art(),
                 ButtonStyle::STOCK,
@@ -2547,7 +3764,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dialog_is_drawn_over_the_outfitter_and_its_sounds_come_out() {
+    fn the_dialog_is_drawn_over_the_outfitter_and_its_alert_comes_out() {
         let mut screen = counting_screen();
         let under = drawn(&screen);
         alt_click(&mut screen, BUY_ITEM);
@@ -2563,10 +3780,7 @@ mod tests {
         assert_eq!(field_text(&screen), Some("3"), "reset to the maximum");
         let ok = quantity_item(&screen, 1);
         click(&mut screen, ok);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 3)));
     }
 
@@ -2621,5 +3835,667 @@ mod tests {
         screen.input(&button(false));
         assert_eq!(screen.take_order(), None, "the click was abandoned");
         assert!(screen.quantity().is_some());
+    }
+
+    // The outfitter's mission offers.
+
+    use crate::spaceport::offer::OfferChoice;
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// The outfitter, its offers given.
+    fn offering() -> OutfitterScreen {
+        counting_screen().with_offers(offer_templates())
+    }
+
+    #[test]
+    fn the_outfitter_with_offers_asks_for_an_offer_as_it_opens() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request(), "before any tick");
+        assert!(!screen.take_offer_request(), "once");
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not again until rearmed");
+    }
+
+    #[test]
+    fn without_offers_the_outfitter_never_asks() {
+        let mut screen = counting_screen();
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_none());
+    }
+
+    #[test]
+    fn an_offer_opens_over_the_outfitter_and_takes_its_input() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let offer = screen.offer_dialog().expect("open");
+        assert_eq!(offer.prompt(), &prompt());
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        let mut expected = drawn(&counting_screen());
+        let mut over = DrawList::new();
+        offer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&screen), expected, "drawn over the outfitter");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None, "B went to the offer");
+        assert_eq!(screen.take_offer_choice(), None);
+        press(&mut screen, Key::Enter);
+        assert!(screen.offer_dialog().is_none(), "answered, it closes");
+        assert!(!screen.closed(), "Return went to the offer");
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    #[test]
+    fn the_outfitters_offer_pointer_goes_through_it() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let at = screen
+            .offer_dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_offer_choice(), None, "abandoned");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+    }
+
+    #[test]
+    fn after_a_rearm_the_outfitter_asks_again_after_the_gap() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        press(&mut screen, Key::Enter);
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn by_the_other_reading_the_outfitter_waits_out_its_quantity_dialog() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some());
+        screen.tick(ms(10_000));
+        assert!(
+            !screen.take_offer_request(),
+            "paused under the quantity dialog"
+        );
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_quantity_dialog_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn an_offer_due_under_the_alert_waits_as_the_offer_clock_reads() {
+        for (clock, wait) in [(RuleSource::Engine, 0), (RuleSource::Bible, 600)] {
+            let mut screen = alerting(OutfitRefusal::NegativeFreeMass)
+                .with_offers(offer_templates())
+                .with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: under the alert");
+            press(&mut screen, Key::Escape);
+            assert!(screen.alert_dialog().is_none());
+            if wait > 0 {
+                screen.tick(ms(wait - 1));
+                assert!(!screen.take_offer_request(), "{clock:?}");
+                screen.tick(ms(1));
+            } else {
+                screen.tick(ms(0));
+            }
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn the_outfitters_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_outfitter_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
+    }
+
+    // A sale refused in the loop (`RuleKey::SaleRefusal`).
+
+    /// "Desc Dialog"'s shape, fixed at (0, 0): Done (1) at (100, 90), a
+    /// parked picture (2) and a text box (3) wide enough for a sentence
+    /// on a line.
+    fn desc_template() -> DialogTemplate {
+        let item = |bounds, enabled, kind| ItemTemplate {
+            bounds,
+            enabled,
+            kind,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true, ItemSpec::User),
+                item(
+                    rect(10.0, 150.0, 20.0, 20.0),
+                    false,
+                    ItemSpec::Picture(1431),
+                ),
+                item(rect(10.0, 10.0, 2000.0, 60.0), false, ItemSpec::User),
+            ],
+        }
+    }
+
+    /// Outfit 128, a rack (3 owned), refused only in the sell loop: by
+    /// its negative mass, a raised `Max` (its widgets) or its launcher's
+    /// ammunition (Vipers), with the info-box line the other reading
+    /// shows.
+    fn refused_in_the_loop() -> [(OutfitRow, &'static str); 3] {
+        let mut rack = row(128, "Rack", 100, 0, 3);
+        rack.facts.names = LcNames {
+            singular: "rack".to_owned(),
+            plural: "racks".to_owned(),
+        };
+        let negative = OutfitRow {
+            mass: -10,
+            ..rack.clone()
+        };
+        let mut raiser = rack.clone();
+        raiser.facts.raises = vec![Raise {
+            target: OutfitId(200),
+            held: 5,
+            target_max: Some(2),
+            left_by_the_bible: 0,
+            target_names: Some(widgets()),
+        }];
+        let mut launcher = rack;
+        launcher.facts.launcher = Some(Launcher {
+            max_ammo: 1,
+            rounds: 4,
+            ammo: Some(OutfitId(158)),
+        });
+        launcher.facts.ammo_names = Some(vipers());
+        [
+            (negative, NEGATIVE_FREE_MASS),
+            (
+                raiser,
+                "You need to sell one widget before you can sell your rack.",
+            ),
+            (
+                launcher,
+                "You need to sell two Vipers before you can sell your rack.",
+            ),
+        ]
+    }
+
+    /// The outfitter of `row` alone, 5 tons free, `SaleRefusal` read as
+    /// `source` says.
+    fn loop_refusing(row: OutfitRow, source: RuleSource) -> Outfitter {
+        Outfitter {
+            rows: vec![row],
+            rules: outfitter()
+                .rules
+                .with_override(RuleKey::SaleRefusal, source),
+            ..outfitter()
+        }
+    }
+
+    /// The info box's texts.
+    fn info_box(screen: &OutfitterScreen) -> Vec<String> {
+        info_placed(screen)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn by_the_engine_sell_stays_enabled_for_a_row_refused_only_in_the_loop() {
+        for (row, line) in refused_in_the_loop() {
+            let screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            assert!(enabled(&screen).1, "{line}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_info_box_shows_no_sale_refusal_line() {
+        for (row, line) in refused_in_the_loop() {
+            let engine = info_box(&screen_of(loop_refusing(row.clone(), RuleSource::Engine)));
+            assert!(!engine.contains(&line.to_owned()), "{engine:?}");
+            // The price and the cash: the rack is massless, so it shows
+            // no Item Mass or Available line.
+            assert_eq!(engine.len(), 4, "{engine:?}");
+            let other = info_box(&screen_of(loop_refusing(row, RuleSource::Bible)));
+            assert_eq!(other.last().map(String::as_str), Some(line), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_sell_on_a_row_refused_in_the_loop_records_the_order() {
+        for (row, line) in refused_in_the_loop() {
+            let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            click_item(&mut screen, SELL_ITEM);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(128, Direction::Sell)),
+                "{line}"
+            );
+            press(&mut screen, SELL_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(128, Direction::Sell)),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_alt_sell_on_a_row_refused_in_the_loop_opens_the_quantity_dialog() {
+        for (row, line) in refused_in_the_loop() {
+            let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            alt_click(&mut screen, SELL_ITEM);
+            assert_eq!(screen.take_order(), None, "{line}");
+            assert_eq!(field_text(&screen), Some("3"), "{line}: the 3 owned");
+        }
+    }
+
+    /// A sale of the rack refused with `refusal`, naming the rack, the
+    /// widgets and the Vipers, `plural` or not.
+    fn rack_alert(refusal: OutfitRefusal, plural: bool) -> SaleAlert {
+        SaleAlert {
+            outfit: OutfitId(128),
+            refusal,
+            names: BTreeMap::from([
+                (
+                    OutfitId(128),
+                    LcNames {
+                        singular: "rack".to_owned(),
+                        plural: "racks".to_owned(),
+                    },
+                ),
+                (OutfitId(200), widgets()),
+                (OutfitId(158), vipers()),
+            ]),
+            plural,
+        }
+    }
+
+    const RAISED: OutfitRefusal = OutfitRefusal::RaisedFirst {
+        count: 2,
+        target: OutfitId(200),
+    };
+
+    const AMMUNITION: OutfitRefusal = OutfitRefusal::AmmunitionFirst {
+        rounds: 1,
+        ammo: Some(OutfitId(158)),
+    };
+
+    #[test]
+    fn the_alert_names_the_sold_outfit_in_the_plural_while_passes_remain() {
+        assert_eq!(
+            sale_alert_text(&rack_alert(RAISED, false)),
+            "You need to sell two widgets before you can sell your rack."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(RAISED, true)),
+            "You need to sell two widgets before you can sell your racks."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(AMMUNITION, false)),
+            "You need to sell one Viper before you can sell your rack."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(AMMUNITION, true)),
+            "You need to sell one Viper before you can sell your racks."
+        );
+        let mut unnamed = rack_alert(
+            OutfitRefusal::AmmunitionFirst {
+                rounds: 3,
+                ammo: None,
+            },
+            true,
+        );
+        assert_eq!(
+            sale_alert_text(&unnamed),
+            "You need to sell three units of ammunition before you can sell your racks."
+        );
+        unnamed.names.clear();
+        unnamed.refusal = OutfitRefusal::RaisedFirst {
+            count: 1,
+            target: OutfitId(200),
+        };
+        assert_eq!(
+            sale_alert_text(&unnamed),
+            "You need to sell one  before you can sell your ."
+        );
+    }
+
+    #[test]
+    fn a_negative_free_mass_alert_is_207_alone() {
+        for plural in [false, true] {
+            assert_eq!(
+                sale_alert_text(&rack_alert(OutfitRefusal::NegativeFreeMass, plural)),
+                NEGATIVE_FREE_MASS
+            );
+        }
+        assert_eq!(
+            sale_alert_text(&rack_alert(OutfitRefusal::CannotAfford, false)),
+            "",
+            "no alert gives any other refusal"
+        );
+    }
+
+    /// The engine's outfitter of the overloaded rack, an alert open over
+    /// it for `refusal`.
+    fn alerting(refusal: OutfitRefusal) -> OutfitterScreen {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+        screen.alert(&rack_alert(refusal, false));
+        screen
+    }
+
+    fn alert_item(screen: &OutfitterScreen, number: usize) -> Point {
+        screen
+            .alert_dialog()
+            .expect("an alert")
+            .dialog()
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn a_sale_alert_opens_its_words_in_the_desc_dialog_over_the_outfitter() {
+        let screen = alerting(RAISED);
+        let alert = screen.alert_dialog().expect("an alert");
+        assert_eq!(
+            alert.lines().join(" "),
+            "You need to sell two widgets before you can sell your rack."
+        );
+        let mut list = DrawList::new();
+        alert.draw(&mut list);
+        let alert_drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        let all = drawn(&screen);
+        assert!(all.ends_with(&alert_drawn), "drawn last");
+        assert!(all.len() > alert_drawn.len(), "over the outfitter");
+    }
+
+    #[test]
+    fn after_a_part_way_sale_the_alert_opens_over_the_outfitter_as_it_now_is() {
+        let [_, (raiser, _), _] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(raiser.clone(), RuleSource::Engine));
+        alt_click(&mut screen, SELL_ITEM);
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(counted(128, Direction::Sell, 3)),
+            "the 3 owned"
+        );
+        // One rack sold, then the rest refused.
+        screen.set_outfitter(loop_refusing(
+            OutfitRow { owned: 2, ..raiser },
+            RuleSource::Engine,
+        ));
+        screen.alert(&rack_alert(RAISED, true));
+        let alert = screen.alert_dialog().expect("an alert");
+        assert_eq!(
+            alert.lines().join(" "),
+            "You need to sell two widgets before you can sell your racks."
+        );
+        let mut list = DrawList::new();
+        alert.draw(&mut list);
+        let alert_drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert!(drawn(&screen).ends_with(&alert_drawn), "drawn last");
+        assert_eq!(screen.outfitter().rows[0].owned, 2);
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "5,000 cr"), "{shown:?}");
+    }
+
+    #[test]
+    fn done_return_or_escape_closes_the_alert_and_leaves_the_outfitter_open() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+            press(&mut screen, k);
+            assert!(screen.alert_dialog().is_none(), "{k:?}");
+            assert!(!screen.closed(), "{k:?}");
+        }
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        click(&mut screen, done);
+        assert!(screen.alert_dialog().is_none());
+        assert!(!screen.closed());
+        press(&mut screen, Key::Escape);
+        assert!(screen.closed(), "the next Escape closes the outfitter");
+    }
+
+    #[test]
+    fn while_the_alert_is_open_it_takes_every_input() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let selected = screen.selected();
+        let sell = item(&screen, SELL_ITEM).center();
+        let cell = screen.cell_bounds(0).expect("a cell").center();
+        for k in [BUY_KEY, SELL_KEY, Key::Right, Key::Down, Key::Char('i')] {
+            press(&mut screen, k);
+        }
+        click(&mut screen, sell);
+        click(&mut screen, cell);
+        alt_click(&mut screen, SELL_ITEM);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.selected(), selected);
+        assert!(screen.alert_dialog().is_some(), "still open");
+        assert!(!screen.closed());
+        press(&mut screen, Key::Escape);
+        assert!(screen.alert_dialog().is_none());
+        assert!(!screen.closed(), "Escape closed the alert alone");
+    }
+
+    #[test]
+    fn alt_let_go_while_the_alert_is_open_is_followed() {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+        press(&mut screen, COUNT_KEY);
+        screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        screen.input(&key(COUNT_KEY, false, false));
+        press(&mut screen, Key::Escape);
+        press(&mut screen, SELL_KEY);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn without_the_desc_template_an_alert_opens_nothing() {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = OutfitterScreen::new(
+            Ok(layout()),
+            Ok(quantity()),
+            Err("no DLOG 3003".to_owned()),
+            loop_refusing(row.clone(), RuleSource::Engine),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        assert!(screen.alert_dialog().is_none());
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        let mut unlaid = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            loop_refusing(row, RuleSource::Engine),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        unlaid.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        assert!(unlaid.alert_dialog().is_none(), "no metrics to lay it out");
+    }
+
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
+    #[test]
+    fn the_alerts_done_is_silent_under_the_pointer() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        assert_eq!(screen.take_sounds(), []);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: done,
+        });
+        assert_eq!(screen.take_sounds(), []);
+        assert!(screen.alert_dialog().is_none());
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_in_the_alert() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: done,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.release_keys();
+        screen.input(&button(false));
+        assert!(screen.alert_dialog().is_some(), "Done was not clicked");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_the_mission_info_screen() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut screen = counting_screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut screen = alerting(RAISED);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the alert takes it");
+        assert!(screen.alert_dialog().is_some());
+        let mut broken = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            art() as Rc<dyn OutfitterCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, i);
+        assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
+    }
+
+    /// The original's `_OutfitFilter` @0x58039 maps keys to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            BUY_KEY,
+            SELL_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+        }
     }
 }

@@ -1,8 +1,11 @@
-//! Images from the game data: `PICT`s, masked `PICT`s and `rlëD` sprite
-//! sheets, decoded on request.
+//! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
+//! sheets, `ppat` pixel patterns and `cicn` colour icons, decoded on
+//! request.
 
 use nova_data::GameData;
-use nova_data::graphics::{Image, PICT, RLED, apply_mask, decode_pict, decode_rled};
+use nova_data::graphics::{
+    CICN, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict, decode_ppat, decode_rled,
+};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -21,11 +24,16 @@ impl ImageSource for GameData {
         Ok(match kind {
             ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
             ImageKind::Rled => decode_rled(bytes(RLED, id)?, None)?.into_frames(),
+            ImageKind::RledSolid => decode_rled(bytes(RLED, id)?, None)?
+                .into_solid_frames()
+                .ok_or(ImageError::Missing)?,
             ImageKind::MaskedPict { mask } => {
                 let picture = decode_pict(bytes(PICT, id)?)?;
                 let mask = decode_pict(bytes(PICT, mask)?)?;
                 vec![apply_mask(&picture, &mask)?]
             }
+            ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
+            ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
         })
     }
 }
@@ -36,7 +44,7 @@ mod tests {
     use std::path::Path;
 
     use nova_data::graphics::GraphicsError;
-    use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder};
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
@@ -114,6 +122,86 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
         assert_eq!(frames[1].pixel(0, 0), Some([0, 0, 255, 255]));
+    }
+
+    #[test]
+    fn a_sprite_sheets_solid_runs_are_its_run_frames_or_missing() {
+        let runs = RledBuilder::new(2, 1)
+            .frame(|f| f.line().pixels(&[0x7C00]).run(1, 0x7FFF, 0x7FFF))
+            .frame(|f| f.line().pixels(&[0x001F]))
+            .build();
+        let data = store(&[(RLED, 200, runs), (RLED, 201, sheet())]);
+        let frames = data.frames(ImageKind::RledSolid, 200).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].pixel(0, 0), Some([0, 0, 0, 0]));
+        assert_eq!(frames[0].pixel(1, 0), Some([255, 255, 255, 255]));
+        assert_eq!(frames[1].pixel(0, 0), Some([0, 0, 0, 0]));
+        assert_eq!(
+            data.frames(ImageKind::RledSolid, 201),
+            Err(ImageError::Missing),
+            "no runs"
+        );
+        assert_eq!(
+            data.frames(ImageKind::RledSolid, 202),
+            Err(ImageError::Missing),
+            "no sheet"
+        );
+    }
+
+    /// A 2x2 pattern: red, green over blue, red.
+    fn pattern() -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![
+                (0, [0xFFFF, 0, 0]),
+                (1, [0, 0xFFFF, 0]),
+                (2, [0, 0, 0xFFFF]),
+            ],
+        };
+        Ppat::new(2, 2, 8, &ctab, &[0, 1, 2, 0]).bytes()
+    }
+
+    #[test]
+    fn a_pattern_is_one_frame_with_its_pixels() {
+        let data = store(&[(PPAT, 128, pattern())]);
+        let frames = data.frames(ImageKind::Pattern, 128).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!((frames[0].width(), frames[0].height()), (2, 2));
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[0].pixel(1, 0), Some([0, 255, 0, 255]));
+        assert_eq!(frames[0].pixel(0, 1), Some([0, 0, 255, 255]));
+        assert_eq!(
+            data.frames(ImageKind::Pattern, 129),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(data.frames(ImageKind::Pict, 128), Err(ImageError::Missing));
+    }
+
+    /// A 2x1 icon: red, then green masked out.
+    fn icon() -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0xFFFF, 0, 0]), (1, [0, 0xFFFF, 0])],
+        };
+        Cicn::new(2, 1, 8, &ctab, &[0, 1], &[true, false]).bytes()
+    }
+
+    #[test]
+    fn an_icon_is_one_frame_with_its_mask_as_alpha() {
+        let data = store(&[(CICN, 18000, icon())]);
+        let frames = data.frames(ImageKind::Icon, 18000).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!((frames[0].width(), frames[0].height()), (2, 1));
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[0].pixel(1, 0), Some([0, 0, 0, 0]));
+        assert_eq!(
+            data.frames(ImageKind::Icon, 18001),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            data.frames(ImageKind::Pict, 18000),
+            Err(ImageError::Missing)
+        );
     }
 
     #[test]

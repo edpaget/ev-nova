@@ -1,0 +1,1455 @@
+//! Persons (`përs`): named characters who take an ordinary ship's place,
+//! with their own ship, loadout, government, AI, comm and hail quotes.
+//!
+//! The rules are the original's (`_LoadObjectData`, `_SpawnPerson`
+//! @0x408d5, `_SetupShipsInSystem`, `_HyperShipSpawn`, `_WarshipAI`,
+//! `_SelectWarshipTarget`, `_DamageShip`, `_HandleShip`,
+//! `_HandleShipDisplay`, `_DoShipCapture`, `_SetPlunderValues`,
+//! `_LoadAdvice` and `_ShowPersonHailQuote` in the `EV Nova`
+//! executable). Each disputed one follows its rulebook key; the engine's
+//! reading is the default.
+//!
+//! **Where a person may appear** (`_SpawnPerson` @0x40990-0x40ba4), in a
+//! system S, all of these holding:
+//!
+//! 1. it is alive: not gone for good ([`Pilot::gone`](crate::pilot::Pilot::gone));
+//! 2. its `AIType` is above 0;
+//! 3. its `ActiveOn` holds for the player, through the [`ControlBits`](crate::control::ControlBits)
+//!    port: a randomly drawn person's both for the player as the last
+//!    galaxy refresh read them and now ([`PersonWorld::drawn_active`],
+//!    @0x409b5, @0x40b5d; see [`RuleKey::SpawnAvailability`](crate::RuleKey::SpawnAvailability)),
+//!    a system's person slot's now ([`PersonWorld::slot_active`],
+//!    @0x4334d); one that did not parse never holds;
+//! 4. its `LinkSyst` allows S ([`PersonLink`]): -1 any system; 128-9998
+//!    that system; 9999-14999 a system governed by government
+//!    `LinkSyst` - 10000 + 128, so 9999 means the independent systems
+//!    (a fleet's government range starts at 10000); 15000-19999 a
+//!    governed system allied with `LinkSyst` - 15000 + 128, a government
+//!    counting as its own ally; 20000-24999 a governed system not of
+//!    `LinkSyst` - 20000 + 128; 25000-29999 a governed system at war with
+//!    `LinkSyst` - 25000 + 128; anything else none. The engine also
+//!    compares the raw value with S's index (ID - 128, @0x409db), so a
+//!    `LinkSyst` of 0-2047 also allows the system of ID `LinkSyst` + 128:
+//!    the [`RuleKey::LinkSystSlip`](crate::RuleKey::LinkSystSlip) entry chooses;
+//! 5. arriving by hyperspace, its government is not derelict (`gövt`
+//!    `Flags` 0x0800): drifting derelicts never jump in;
+//! 6. no person of its name is in the system already, in any condition
+//!    (@0x40baa-0x40c48), the persons escorting the player counted; a
+//!    mission's special ship, which no person flies, never counts, whatever
+//!    its name;
+//! 7. it does not escort the player ([`PersonWorld::fleet`]): a person in
+//!    the fleet is never rolled nor slotted.
+//!
+//! A person whose ship type has no record never appears (the original
+//! flies ship 128 for a `ShipType` out of range).
+//!
+//! **How often** ([`PersonRules::roll`], [`RuleKey::PersonOdds`](crate::RuleKey::PersonOdds)): each
+//! setup pass and each hyperspace arrival first rolls for a person
+//! ([`PersonRoll`]). By the engine, `Rand(7)` not 0 is none; 0 with no
+//! person who may appear is empty, with no further draw; otherwise
+//! `Rand(1022)` = r and the person of ID 128 + r appears when it may, or
+//! else the roll is empty. So each person has a fixed 1-in-1022 share, and
+//! persons 1150 and 1151 are never drawn at random. By the Bible ("a 5%
+//! chance that a specific AI-person will also be created"), `Rand(100)`
+//! below 5 fires and one of those who may appear, in ascending ID, is
+//! picked by `Rand(k)` (drawn only when k is 2 or more); with none, the
+//! roll is none. A person takes the ship's place, keeping `AvgShips`.
+//!
+//! After setup's passes each of the system's eight Person slots is tried
+//! in turn (`_SetupShipsInSystem` @0x43310-0x4344b): a slot naming a
+//! person alive, whose ship has a record and whose `ActiveOn` holds is
+//! listed by [`PersonRules::listed`]
+//! ([`RuleKey::SystemPersons`](crate::RuleKey::SystemPersons): by the
+//! engine `Rand(100) + 1` at most the slot's chance, drawn even at 0 %;
+//! by the Bible always), and then appears unless one of its name is
+//! there. Its `LinkSyst` and `AIType` are not tested.
+//!
+//! **The ship it flies** ([`fit`], `_SpawnPerson` @0x40cd4-0x41108): its
+//! `Govt`, its `AIType`, and `Aggress` 0 or below as 1, 1 and 2 as they
+//! are, and 3 or above as 4 ([`aggression_of`]); no `düde`, so no booty
+//! and no `InfoTypes`. Each weapon slot naming a weapon with a record
+//! adds its `WeapCount` to the ship's count of it (a later slot naming
+//! the same weapon replaces the earlier), a count of none or less
+//! removing it, and its `AmmoLoad` to that weapon's own slot of rounds,
+//! signed, whatever its `AmmoType` (@0x40e5c-0x40eb5, see
+//! [`LauncherRounds`](crate::combat::armament::LauncherRounds)). A `ShieldMod` above 0 scales the shield and armour
+//! capacity by `ShieldMod` / 100 ([`RuleKey::ShieldMod`](crate::RuleKey::ShieldMod): the Bible
+//! scales the shield only); below 0 the person is invincible, its shield
+//! and armour refilled every fight tick. `Flags2` 0x0001 starts it with
+//! no fuel. A person of a derelict government starts disabled: shield 0
+//! and armour its ship type's times 0.33 (0.1 for a tough hull) less 1.
+//! Placed at setup it is placed as any ship, and arriving it jumps in as
+//! any ship, but it draws no aggression.
+//!
+//! **Its mission** (`_HandlePlayerCommunication` @0x61f48,
+//! `_HandlePlayerBoardAttempt` @0x6585c): a person's `LinkMission` is
+//! resolved as it spawns, and offered from a ship when the person is
+//! hailed, or with [`MISSION_ON_BOARD`] boarded, while it is available;
+//! an accept makes it gone for good with [`GONE_ON_ACCEPT`] and, on its
+//! hail, leave with [`LEAVES_ON_ACCEPT`] (see the session's
+//! `person_offers`). Its hail quote with [`QUOTE_IF_MISSION`] waits for
+//! the mission to be available ([`QuoteView::mission_available`]).
+//!
+//! The values are defaults, not a contract.
+
+use std::fmt::Debug;
+
+use crate::ai::Goal;
+use crate::catalog::{self, PersonRecord, StringPatch};
+use crate::combat::hull::Condition;
+use crate::mission::ShipGoal;
+use crate::rank::RankNames;
+use crate::text_tags::{self, NoNames, RankTagGovts, TagContext, TagRules};
+use crate::traffic::npc::{Npc, NpcPerson};
+
+pub use crate::traffic::persons::{
+    BIBLE_PERSON_PERCENT, DERELICT_ARMOR_LESS, DERELICT_ARMOR_SHARE, FIRST_PERSON, GateView,
+    LAST_SLIP, Linked, NovaPersons, PERCENT, PERSON_DRAW, PersonLink, PersonRoll, PersonRules,
+    PersonWorld, SHIELD_MOD_PERCENT, TOUGH_DERELICT_ARMOR_SHARE, ZERO_FUEL, aggression_of,
+    derelict_armor, fit, turns_with_quote,
+};
+pub use crate::traffic::{COMM_QUOTES, GRUDGE, QUOTE_ON_ATTACK};
+
+/// `Flags`: it uses an escape pod, so it survives its ship (@0x2dc9b).
+pub const ESCAPE_POD: u16 = 0x0002;
+/// `Flags`: its hail quote only while it holds a grudge.
+pub const QUOTE_IF_GRUDGE: u16 = 0x0004;
+/// `Flags`: its hail quote only while it likes the player.
+pub const QUOTE_IF_LIKED: u16 = 0x0008;
+/// `Flags`: its hail quote only while it is disabled.
+pub const QUOTE_IF_DISABLED: u16 = 0x0020;
+/// `Flags`: its hail quote only once a stay.
+pub const QUOTE_ONCE: u16 = 0x0080;
+/// `Flags`: its hail quote only while its mission is available.
+pub const QUOTE_IF_MISSION: u16 = 0x0400;
+/// `Flags`: no hail quote while it is leaving.
+pub const QUOTE_UNLESS_LEAVING: u16 = 0x0800;
+/// `Flags`: no hail quote to a player whose ship's `InherentAI` is 1.
+pub const NOT_TO_WIMPY: u16 = 0x1000;
+/// `Flags`: no hail quote to a player whose ship's `InherentAI` is 2.
+pub const NOT_TO_BRAVE: u16 = 0x2000;
+/// `Flags`: no hail quote to a player whose ship's `InherentAI` is 3 or
+/// more.
+pub const NOT_TO_WARSHIP: u16 = 0x4000;
+/// `Flags`: accepting its mission on its hail, with one of the mission's
+/// ships left, swaps its ship for the mission's ship, whatever the
+/// mission's `ShipGoal` (@0x62421-0x62440; [`swaps_for_mission_ship`]).
+pub const REPLACED_BY_MISSION_SHIP: u16 = 0x0040;
+/// `Flags`: its mission is offered when it is boarded, not hailed
+/// (@0x621c3).
+pub const MISSION_ON_BOARD: u16 = 0x0200;
+/// `Flags`: it is gone for good once its mission is accepted on its hail
+/// (@0x622f4-0x62300), or once it is answered on its boarding, whatever
+/// the answer (@0x65982-0x65988).
+pub const GONE_ON_ACCEPT: u16 = 0x0100;
+/// `Flags`: it leaves once its mission is accepted on its hail
+/// (`_AIMakeShipLeave` @0x6234d); the boarding does not read it. The same
+/// bit as [`QUOTE_UNLESS_LEAVING`].
+pub const LEAVES_ON_ACCEPT: u16 = 0x0800;
+
+/// Whether a person of `Flags` `flags`, its mission just accepted on its
+/// hail, is swapped for the mission's ship, the mission's slot holding
+/// `ships_left` of its ships after `OnAccept`
+/// (`_HandlePlayerCommunication` @0x62421-0x62445): `Flags` has
+/// [`REPLACED_BY_MISSION_SHIP`], and exactly one ship is left. Neither
+/// `ShipGoal` nor `ShipCount` is asked.
+#[must_use]
+pub const fn swaps_for_mission_ship(flags: u16, ships_left: i16) -> bool {
+    flags & REPLACED_BY_MISSION_SHIP != 0 && ships_left == 1
+}
+
+/// Whether `record`'s person's record lets it join the player, under
+/// [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)'s other reading, which reads the swap of a
+/// person of [`REPLACED_BY_MISSION_SHIP`] for its mission's escort ship
+/// (`_HandlePlayerCommunication` @0x621a9-0x62509) as an offer to join.
+/// This is that reading's gate, narrower than the swap's
+/// ([`swaps_for_mission_ship`]): its `Flags` has
+/// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
+/// `LinkMission` has one special ship whose goal is [`ShipGoal::Escort`]. The
+/// session asks too that the mission be available from a ship
+/// (@0x6220d).
+#[must_use]
+pub fn offers_to_join(record: &PersonRecord) -> bool {
+    record.flags & REPLACED_BY_MISSION_SHIP != 0
+        && record.flags & MISSION_ON_BOARD == 0
+        && record.mission_ship.is_some_and(|ship| {
+            ship.count == 1 && ShipGoal::from_code(ship.goal) == ShipGoal::Escort
+        })
+}
+
+/// The hail quotes, `STR#` 7101 (0x1bbd @0x445d6).
+pub const HAIL_QUOTES: i16 = 7101;
+
+/// What a hail quote's `STR ` patch adds to its `HailQuote`: 4999 (0x1387
+/// @0x445b8), so `HailQuote` 1 is `STR ` 5000.
+pub const HAIL_QUOTE_PATCHES: i16 = 4999;
+
+/// The `STR ` that patches hail quote `hail_quote`
+/// (`_LoadPluginString(0x1387 + HailQuote)` @0x445b8-0x445c6), or none when
+/// the sum does not fit in 16 bits: the engine keeps wider numbers and
+/// looks up no `STR ` for it ([`catalog::patch_id`]).
+#[must_use]
+pub fn hail_quote_patch_id(hail_quote: i16) -> Option<i16> {
+    catalog::patch_id(hail_quote, HAIL_QUOTE_PATCHES)
+}
+
+/// The words of hail quote `hail_quote`, as `_ShowPersonHailQuote` reads
+/// them (@0x445b8-0x445e1): its `STR ` `patch`
+/// ([`hail_quote_patch_id`]), from any open file, base data or plug-in,
+/// when there is one; else line `hail_quote` of `lines` (`STR#` 7101,
+/// `GetIndString` @0x445e1), or an empty line for one it does not hold
+/// ([`catalog::patched_string`]).
+///
+/// An empty or unreadable `STR ` leaves the shared buffer (0x3b5570) as
+/// it last was in the original; the engine shows an empty line for it
+/// (see [`StringPatch::shown`]).
+#[must_use]
+pub fn hail_quote_text(hail_quote: i16, patch: StringPatch, lines: &[String]) -> String {
+    catalog::patched_string(hail_quote, patch, lines).unwrap_or_default()
+}
+
+/// What a rank tag reads with no rank to name and no string lists wired:
+/// stock `STR#` 2002 #341 (the Bible's word; see [`rank`](crate::rank)).
+pub const NO_RANK: &str = "captain";
+/// `Rand(140)` (0x8c @0x33f31): a hail quote said now and then.
+pub const QUOTE_ODDS: u32 = 140;
+/// How long a hail quote shows, and keeps any other from being said at
+/// random, in ticks (420 frames, 0x1a4 @0x4464d).
+pub const QUOTE_SHOWN_TICKS: u16 = 420;
+/// How long a person waits after its quote before it says it again at
+/// random, in ticks (2700 Mac ticks, 45 s, 0xa8c @0x33f5b).
+pub const QUOTE_GAP_TICKS: u64 = 1350;
+
+/// The names a quote's text tags read (`_MungeBriefing`, tags @0xdb198).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuoteTags<'a> {
+    /// The person's name: `<OSN>`.
+    pub person: &'a str,
+    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname yet.
+    pub pilot: &'a str,
+    /// The player's ship type's name: `<PST>`.
+    pub ship_type: &'a str,
+    /// The player's ship's name, as the player named it: `<PSN>`.
+    pub ship_name: &'a str,
+    /// The player's ranks: the rank tags.
+    pub ranks: RankNames<'a>,
+    /// The rank governments the quote's crossed rank tags read: those
+    /// its parse leaves (see [`RankTagGovts`]).
+    pub rank_govts: RankTagGovts,
+    /// Whether the `l33t` mode is on.
+    pub leet: bool,
+    /// The disputed rules the tags follow.
+    pub rules: TagRules,
+}
+
+/// `text` with its tags read as `tags` say, through the one substitution
+/// path ([`text_tags::expand`]) with no mission: `<OSN>`, `<PN>`,
+/// `<PNN>`, `<PST>` and `<PSN>`, the rank tags from the ranks and `<REG>`
+/// as empty; the mission tags as
+/// [`RuleKey::MissionlessTags`](crate::RuleKey::MissionlessTags) says,
+/// and any other tag as written.
+#[must_use]
+pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
+    let context = TagContext {
+        pilot: tags.pilot,
+        ship_type: tags.ship_type,
+        ship_name: tags.ship_name,
+        person: Some(tags.person),
+        ranks: tags.ranks.clone(),
+        mission: None,
+        rank_govts: tags.rank_govts,
+        leet: tags.leet,
+        rules: tags.rules,
+    };
+    text_tags::expand(text, &context, &NoNames)
+}
+
+/// What a person's hail quote filters see of the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuoteView {
+    /// Whether the person likes the player
+    /// ([`likes_player`](crate::hail::likes_player)).
+    pub liked: bool,
+    /// Whether the player is jumping out.
+    pub player_jumping: bool,
+    /// The player's ship type's `InherentAI`.
+    pub player_ai: i16,
+    /// Whether the person's `LinkMission` is available from a ship
+    /// (`_IsMissionAvailable(m, 0)` with `_offeringFromShip` set,
+    /// @0x33dc7-0x33e31), its `AvailBits` read as
+    /// [`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits) says.
+    pub mission_available: bool,
+}
+
+/// Whether a person's hail quote may be said this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Eligible {
+    /// Not this tick: nothing is drawn.
+    No,
+    /// On a draw of [`QUOTE_ODDS`] landing on 0, when no quote shows and
+    /// its last is [`QUOTE_GAP_TICKS`] back.
+    Yes,
+    /// Now: it has begun to attack the player.
+    Now,
+}
+
+/// Whether `npc`'s hail quote, flown by `person`, may be said this tick
+/// as `view` sees the player, among `npcs` (`_HandleShip` @0x33bea-0x33f21;
+/// see the module docs). A quote on attack is due once the ship threatens
+/// the player or a ship the player leads among `npcs`
+/// ([`Npc::threatens_player_among`]; `_IsThreatToPlayer` asked @0x33d38).
+#[must_use]
+pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[Npc]) -> Eligible {
+    // A ship holding its course after its glide may speak: the quote's
+    // tests (@0x33bea-0x33f21) read its hyperspace state and goal, not
+    // its wait (+0x4c), and run before `_HandleShip` holds it (@0x34a54).
+    let flying = npc.arrived()
+        && !matches!(
+            npc.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        );
+    if person.hail_quote < 1 || view.player_jumping || !flying {
+        return Eligible::No;
+    }
+    let flag = |bit: u16| person.flags & bit != 0;
+    let disabled = npc.condition == Condition::Disabled;
+    let mut eligible = if flag(QUOTE_IF_DISABLED) {
+        disabled
+    } else {
+        !disabled
+    };
+    let mut now = false;
+    if flag(QUOTE_ON_ATTACK) && !disabled {
+        now = !person.quoted && npc.threatens_player_among(npcs);
+        eligible = now;
+    }
+    let held_back = (flag(QUOTE_IF_GRUDGE) && !person.grudge)
+        || (flag(QUOTE_IF_LIKED) && !view.liked)
+        || (person.mission && flag(QUOTE_IF_MISSION) && !view.mission_available)
+        || (flag(QUOTE_UNLESS_LEAVING) && npc.goal == Goal::JumpOut)
+        || (flag(NOT_TO_WIMPY) && view.player_ai == 1)
+        || (flag(NOT_TO_BRAVE) && view.player_ai == 2)
+        || (flag(NOT_TO_WARSHIP) && view.player_ai >= 3)
+        || (flag(QUOTE_ONCE) && person.quoted);
+    match (eligible && !held_back, now) {
+        (false, _) => Eligible::No,
+        (true, false) => Eligible::Yes,
+        (true, true) => Eligible::Now,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use crate::combat::armament::{Armament, Arsenal, LauncherRounds};
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::catalog::{
+        GovtId, GovtRecord, PersonId, PersonWeapon, RankId, RankRecord, SystemId, WeaponId,
+        WeaponRecord,
+    };
+    use crate::combat::hull::HullSpec;
+    use crate::control::{ControlBits, PilotFacts, Test};
+    use crate::govt::Governments;
+    use crate::reserves::Reserves;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::stats::ShipStats;
+    use crate::traffic::table::ShipKind;
+    use nova_sim_base::fixture::{Draws, FAST};
+    use nova_sim_catalog::fixture::{govt, person, weapon};
+
+    /// Governments 128 and 129 are allies (class 1 and its ally); 130 is
+    /// at war with 128 (class 3, listing class 1).
+    fn relations() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                ..govt(129)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                enemies: [1, -1, -1, -1],
+                ..govt(130)
+            },
+        ])
+    }
+
+    /// The systems of the fake star, 128-260, that `raw` allows by
+    /// `slip`, each governed by `govt_of`.
+    fn allowed(raw: i16, slip: RuleSource, govt_of: impl Fn(i16) -> Option<i16>) -> Vec<i16> {
+        let govts = relations();
+        (128..=260)
+            .filter(|&id| {
+                PersonLink::decode(raw).matches(SystemId(id), govt_of(id).map(GovtId), &govts, slip)
+            })
+            .collect()
+    }
+
+    /// Systems 128-130 are governed by 128-130, 131 by none, the rest by
+    /// 128.
+    fn governed(id: i16) -> Option<i16> {
+        match id {
+            128..=130 => Some(id),
+            131 => None,
+            _ => Some(128),
+        }
+    }
+
+    const ENGINE: RuleSource = RuleSource::Engine;
+    const BIBLE: RuleSource = RuleSource::Bible;
+
+    #[test]
+    fn any_link_allows_every_system() {
+        assert_eq!(allowed(-1, ENGINE, governed).len(), 133);
+        assert_eq!(allowed(-1, BIBLE, governed).len(), 133);
+    }
+
+    #[test]
+    fn a_system_link_allows_its_system_and_by_the_engines_slip_another() {
+        assert_eq!(allowed(132, ENGINE, governed), [132, 260]);
+        assert_eq!(allowed(132, BIBLE, governed), [132]);
+        assert_eq!(allowed(50, ENGINE, governed), [178]);
+        assert_eq!(allowed(50, BIBLE, governed), Vec::<i16>::new());
+        assert_eq!(allowed(0, ENGINE, governed), [128]);
+        assert_eq!(PersonLink::decode(2047).slip, Some(SystemId(2175)));
+        assert_eq!(PersonLink::decode(2048).slip, None);
+        assert_eq!(PersonLink::decode(-1).slip, None);
+        assert_eq!(LAST_SLIP, 2047);
+    }
+
+    #[test]
+    fn a_government_link_allows_its_systems_and_9999_the_independent_ones() {
+        let one = |id: i16| (id == 131).then_some(129).or(Some(128));
+        let independent = |id: i16| (id != 131).then_some(128);
+        assert_eq!(allowed(9999, ENGINE, independent), [131]);
+        assert_eq!(allowed(10_000, ENGINE, governed), {
+            let mut ids = vec![128];
+            ids.extend(132..=260);
+            ids
+        });
+        assert_eq!(allowed(10_001, ENGINE, one), [131]);
+        assert_eq!(allowed(10_000, ENGINE, |_| None), Vec::<i16>::new());
+    }
+
+    /// Systems 128-131 only: 128 to 130 governed by their own number, 131
+    /// independent.
+    fn four(raw: i16) -> Vec<i16> {
+        allowed(raw, BIBLE, governed)
+            .into_iter()
+            .filter(|&id| id <= 131)
+            .collect()
+    }
+
+    #[test]
+    fn the_relation_links_allow_their_governed_systems_only() {
+        assert_eq!(four(15_000), [128, 129], "its own and its ally's");
+        assert_eq!(four(20_000), [129, 130], "never an independent one");
+        assert_eq!(four(25_000), [130], "its enemy's");
+        assert_eq!(four(30_000), Vec::<i16>::new());
+        assert_eq!(four(-2), Vec::<i16>::new());
+        assert_eq!(four(127), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn link_syst_decodes_at_each_ranges_edges() {
+        for (raw, linked) in [
+            (-1, Linked::Any),
+            (128, Linked::System(SystemId(128))),
+            (9998, Linked::System(SystemId(9998))),
+            (9999, Linked::Govt(None)),
+            (10_000, Linked::Govt(Some(GovtId(128)))),
+            (14_999, Linked::Govt(Some(GovtId(5127)))),
+            (15_000, Linked::AlliesOf(GovtId(128))),
+            (19_999, Linked::AlliesOf(GovtId(5127))),
+            (20_000, Linked::NotGovt(GovtId(128))),
+            (24_999, Linked::NotGovt(GovtId(5127))),
+            (25_000, Linked::EnemiesOf(GovtId(128))),
+            (29_999, Linked::EnemiesOf(GovtId(5127))),
+            (30_000, Linked::Never),
+            (127, Linked::Never),
+            (-2, Linked::Never),
+        ] {
+            assert_eq!(PersonLink::decode(raw).linked, linked, "{raw}");
+        }
+    }
+
+    // The roll.
+
+    fn roll(rules: NovaPersons, eligible: &[i16], draws: &[u32]) -> (PersonRoll, Vec<u32>) {
+        let eligible: Vec<PersonId> = eligible.iter().copied().map(PersonId).collect();
+        let mut chance = Draws::of(draws);
+        let rolled = rules.roll(&eligible, &mut chance);
+        (rolled, chance.asked)
+    }
+
+    fn bible() -> NovaPersons {
+        NovaPersons::from_rulebook(&Rulebook::new(RuleSource::Bible))
+    }
+
+    #[test]
+    fn by_the_engine_a_person_comes_on_0_in_7_then_its_draw_of_1022() {
+        let engine = NovaPersons::default();
+        assert_eq!(roll(engine, &[510], &[1]), (PersonRoll::None, vec![7]));
+        assert_eq!(roll(engine, &[], &[0]), (PersonRoll::Empty, vec![7]));
+        assert_eq!(
+            roll(engine, &[510], &[0, 382]),
+            (PersonRoll::Person(PersonId(510)), vec![7, 1022])
+        );
+        assert_eq!(
+            roll(engine, &[510], &[0, 381]),
+            (PersonRoll::Empty, vec![7, 1022])
+        );
+        assert_eq!(
+            roll(engine, &[128, 510], &[0, 0]).0,
+            PersonRoll::Person(PersonId(128))
+        );
+        assert_eq!([PERSON_DRAW, FIRST_PERSON as u32], [1022, 128]);
+    }
+
+    #[test]
+    fn by_the_bible_a_person_comes_5_times_in_100_picked_evenly() {
+        assert_eq!(roll(bible(), &[510], &[5]), (PersonRoll::None, vec![100]));
+        assert_eq!(
+            roll(bible(), &[510], &[4]),
+            (PersonRoll::Person(PersonId(510)), vec![100])
+        );
+        assert_eq!(
+            roll(bible(), &[131, 510], &[4, 1]),
+            (PersonRoll::Person(PersonId(510)), vec![100, 2])
+        );
+        assert_eq!(
+            roll(bible(), &[131, 510], &[0, 0]).0,
+            PersonRoll::Person(PersonId(131))
+        );
+        assert_eq!(roll(bible(), &[], &[4]), (PersonRoll::None, vec![100]));
+        assert_eq!(BIBLE_PERSON_PERCENT, 5);
+    }
+
+    fn listed(rules: NovaPersons, prob: i16, draws: &[u32]) -> (bool, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let listed = rules.listed(prob, &mut chance);
+        (listed, chance.asked)
+    }
+
+    #[test]
+    fn by_the_engine_a_slot_lists_its_person_on_a_percentage_roll_and_by_the_bible_always() {
+        let engine = NovaPersons::default();
+        assert_eq!(listed(engine, 50, &[49]), (true, vec![100]));
+        assert_eq!(listed(engine, 50, &[50]), (false, vec![100]));
+        assert_eq!(listed(engine, 0, &[0]), (false, vec![100]), "drawn at 0 %");
+        assert_eq!(listed(engine, 100, &[99]), (true, vec![100]));
+        assert_eq!(listed(bible(), 1, &[]), (true, vec![]), "no draw");
+        assert_eq!(listed(bible(), 0, &[]), (true, vec![]));
+    }
+
+    #[test]
+    fn the_rules_follow_their_five_rulebook_keys() {
+        assert_eq!(NovaPersons::default(), NovaPersons::ENGINE);
+        assert_eq!(
+            NovaPersons::from_rulebook(&Rulebook::default()),
+            NovaPersons::ENGINE
+        );
+        for (key, expected) in [
+            (
+                RuleKey::PersonOdds,
+                NovaPersons {
+                    odds: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
+            (
+                RuleKey::SystemPersons,
+                NovaPersons {
+                    slots: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
+            (
+                RuleKey::LinkSystSlip,
+                NovaPersons {
+                    link: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
+            (
+                RuleKey::ShieldMod,
+                NovaPersons {
+                    shield_mod: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
+            (
+                RuleKey::DerelictSetupSpeed,
+                NovaPersons {
+                    derelict_speed: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
+        ] {
+            let rulebook = Rulebook::default().with_override(key, BIBLE);
+            assert_eq!(NovaPersons::from_rulebook(&rulebook), expected, "{key:?}");
+        }
+        let bible = bible();
+        assert_eq!(
+            (
+                bible.link_slip(),
+                bible.shield_mod(),
+                bible.derelict_setup_speed()
+            ),
+            (BIBLE, BIBLE, BIBLE)
+        );
+        let engine = NovaPersons::ENGINE;
+        assert_eq!(
+            (
+                engine.link_slip(),
+                engine.shield_mod(),
+                engine.derelict_setup_speed()
+            ),
+            (ENGINE, ENGINE, ENGINE)
+        );
+    }
+
+    #[test]
+    fn the_world_without_persons_follows_the_engine_and_lets_every_person_be() {
+        let none = PersonWorld::NONE;
+        assert!(none.gone.is_empty() && none.grudges.is_empty());
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(none.rules.roll(&[], &mut chance), PersonRoll::Empty);
+        assert_eq!(none.rules.link_slip(), ENGINE);
+    }
+
+    #[test]
+    fn the_world_without_persons_tests_a_fresh_pilots_control_bits() {
+        let none = PersonWorld::NONE;
+        assert!(none.drawn_active(&Test::default()), "a blank ActiveOn");
+        assert!(!none.drawn_active(&Test::parse("b3")), "no bit is set");
+        assert!(none.drawn_active(&Test::parse("!b3 & g")), "male");
+        assert!(none.drawn_active(&Test::parse("p30")), "paid");
+        assert!(!none.drawn_active(&Test::parse("o130")), "owning nothing");
+        assert!(
+            !none.drawn_active(&Test::parse("e128")),
+            "having explored nowhere"
+        );
+        assert!(!none.drawn_active(&Test::parse("b1 &")), "malformed");
+    }
+
+    #[test]
+    fn a_persons_active_on_goes_through_the_worlds_control_bits() {
+        /// Holds every test, recording that it was asked.
+        #[derive(Debug, Default)]
+        struct Every(std::cell::Cell<u32>);
+
+        impl ControlBits for Every {
+            fn allows(&self, _test: &crate::control::TestExpr, _pilot: &dyn PilotFacts) -> bool {
+                self.0.set(self.0.get() + 1);
+                true
+            }
+        }
+
+        let every = Every::default();
+        let world = PersonWorld {
+            control_bits: &every,
+            ..PersonWorld::NONE
+        };
+        assert!(world.drawn_active(&Test::parse("b3")));
+        assert_eq!(every.0.get(), 2, "at the refresh and now");
+        assert!(!world.drawn_active(&Test::parse("b1 &")), "never asked");
+        assert_eq!(every.0.get(), 2);
+    }
+
+    // The ship.
+
+    #[test]
+    fn a_persons_aggression_is_1_2_or_4() {
+        for (aggress, aggression) in [
+            (i16::MIN, 1),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (3, 4),
+            (4, 4),
+            (9, 4),
+        ] {
+            assert_eq!(aggression_of(aggress), aggression, "{aggress}");
+        }
+    }
+
+    /// Weapon A (128); launcher L (129) firing rounds of R (130); C (131).
+    fn arsenal() -> Arsenal {
+        Arsenal::new(
+            &[
+                weapon(128),
+                WeaponRecord {
+                    ammo_type: 2,
+                    ..weapon(129)
+                },
+                weapon(130),
+                weapon(131),
+            ],
+            Vec::new(),
+        )
+    }
+
+    /// A ship carrying weapon A twice and launcher L once, with 10 rounds
+    /// on L and 10 on R, which it does not carry.
+    fn armed() -> ShipKind {
+        let arsenal = arsenal();
+        let spec = |id: i16| *arsenal.weapon(WeaponId(id)).expect("armed");
+        ShipKind {
+            stats: ShipStats::new(FAST, &[]),
+            armament: Armament::new([(spec(128), 2), (spec(129), 1)]),
+            rounds: LauncherRounds::from([(WeaponId(129), 10), (WeaponId(130), 10)]),
+            ..ShipKind::default()
+        }
+    }
+
+    fn slot(weapon: i16, count: i16, ammo: i16) -> PersonWeapon {
+        PersonWeapon {
+            weapon: WeaponId(weapon),
+            count,
+            ammo,
+        }
+    }
+
+    /// `kind` fitted for a person with `slots`, by the engine.
+    fn fitted(kind: &ShipKind, slots: &[PersonWeapon]) -> ShipKind {
+        let person = PersonRecord {
+            weapons: slots.to_vec(),
+            ..person(128, 128)
+        };
+        fit(kind, &person, &arsenal(), ENGINE, false).0
+    }
+
+    fn counts(kind: &ShipKind) -> Vec<(i16, u32)> {
+        kind.armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec.id.0, mount.count))
+            .collect()
+    }
+
+    #[test]
+    fn a_persons_weapon_slots_add_to_the_ships_counts() {
+        let kind = armed();
+        assert_eq!(counts(&fitted(&kind, &[])), [(128, 2), (129, 1)]);
+        assert_eq!(
+            counts(&fitted(&kind, &[slot(128, 2, 0)])),
+            [(128, 4), (129, 1)]
+        );
+        assert_eq!(
+            counts(&fitted(&kind, &[slot(128, -3, 0)])),
+            [(129, 1)],
+            "none left"
+        );
+        assert_eq!(counts(&fitted(&kind, &[slot(128, -2, 0)])), [(129, 1)]);
+        assert_eq!(
+            counts(&fitted(&kind, &[slot(131, 1, 0)])),
+            [(128, 2), (129, 1), (131, 1)],
+            "one not carried is added"
+        );
+        assert_eq!(
+            counts(&fitted(&kind, &[slot(999, 3, 3)])),
+            [(128, 2), (129, 1)],
+            "no record: ignored"
+        );
+        assert_eq!(
+            counts(&fitted(&kind, &[slot(128, 5, 0), slot(128, 1, 0)])),
+            [(128, 3), (129, 1)],
+            "a later slot for the same weapon replaces the earlier"
+        );
+    }
+
+    #[test]
+    fn a_persons_ammunition_loads_its_own_launcher() {
+        let kind = armed();
+        let rounds = |slots: &[PersonWeapon]| fitted(&kind, slots).rounds;
+        assert_eq!(
+            rounds(&[slot(129, 1, 50)]),
+            LauncherRounds::from([(WeaponId(129), 60), (WeaponId(130), 10)]),
+            "launcher L's own slot, not R's, its ammunition's"
+        );
+        assert_eq!(
+            rounds(&[slot(128, 1, 5)]),
+            LauncherRounds::from([(WeaponId(128), 5), (WeaponId(129), 10), (WeaponId(130), 10)]),
+            "a weapon firing no rounds gets its load too"
+        );
+    }
+
+    #[test]
+    fn a_persons_ammunition_adds_signed_to_the_launchers_slot() {
+        let kind = armed();
+        let rounds = |slots: &[PersonWeapon]| fitted(&kind, slots).rounds;
+        assert_eq!(
+            rounds(&[slot(129, 0, -15)]).slot(WeaponId(129)),
+            -5,
+            "below none, as the original's `addw` leaves it"
+        );
+        assert_eq!(rounds(&[slot(129, 0, -10)]).slot(WeaponId(129)), 0);
+        assert_eq!(
+            rounds(&[slot(131, 1, -1)]).slot(WeaponId(131)),
+            -1,
+            "a slot of its own for a weapon not carried"
+        );
+        assert_eq!(
+            rounds(&[slot(999, 1, 7)]),
+            armed().rounds,
+            "no record: ignored"
+        );
+        assert_eq!(
+            rounds(&[slot(129, 0, 5), slot(129, 0, 2)]).slot(WeaponId(129)),
+            12,
+            "a later slot for the same weapon replaces the earlier"
+        );
+    }
+
+    fn shielded(shield_mod: i16, rule: RuleSource) -> (ShipKind, Reserves) {
+        let person = PersonRecord {
+            shield_mod,
+            ..person(128, 128)
+        };
+        let (kind, reserves, condition) = fit(&armed(), &person, &arsenal(), rule, false);
+        assert_eq!(condition, Condition::Intact);
+        (kind, reserves)
+    }
+
+    #[test]
+    fn shield_mod_scales_the_shield_and_by_the_engine_the_armour() {
+        let (kind, reserves) = shielded(250, ENGINE);
+        assert_eq!((kind.stats.shield, kind.stats.armor), (75.0, 112.5));
+        assert_eq!(reserves, kind.stats.full(), "full");
+        let (kind, reserves) = shielded(250, BIBLE);
+        assert_eq!((kind.stats.shield, kind.stats.armor), (75.0, 45.0));
+        assert_eq!(reserves, kind.stats.full());
+        for unscaled in [0, -1] {
+            let (kind, _) = shielded(unscaled, ENGINE);
+            assert_eq!(kind.stats, ShipStats::new(FAST, &[]), "{unscaled}");
+        }
+        assert_eq!(shielded(50, ENGINE).0.stats.shield, 15.0);
+    }
+
+    #[test]
+    fn a_person_of_zero_fuel_starts_with_none_of_a_full_tanks_capacity() {
+        let empty = PersonRecord {
+            flags2: ZERO_FUEL,
+            ..person(128, 128)
+        };
+        let (kind, reserves, _) = fit(&armed(), &empty, &arsenal(), ENGINE, false);
+        assert_eq!(reserves.fuel.now, 0.0);
+        assert_eq!(reserves.fuel.max, kind.stats.fuel);
+        assert_eq!(reserves.shield, kind.stats.full().shield);
+        let (_, reserves, _) = fit(&armed(), &person(128, 128), &arsenal(), ENGINE, false);
+        assert_eq!(reserves.fuel.now, 300.0, "without the flag, full");
+        assert_eq!(ZERO_FUEL, 0x0001);
+    }
+
+    #[test]
+    fn a_derelict_person_starts_disabled_with_no_shield_and_a_third_of_its_armour() {
+        let armed = || ShipKind {
+            base_armor: 45.0,
+            ..armed()
+        };
+        let (kind, reserves, condition) =
+            fit(&armed(), &person(128, 128), &arsenal(), ENGINE, true);
+        assert_eq!(condition, Condition::Disabled);
+        assert_eq!(reserves.shield.now, 0.0);
+        assert!((reserves.armor.now - (45.0 * 0.33 - 1.0)).abs() < 1e-4);
+        assert_eq!(reserves.armor.max, kind.stats.armor);
+        let tough = ShipKind {
+            hull: HullSpec {
+                tough: true,
+                ..HullSpec::default()
+            },
+            ..armed()
+        };
+        let (_, reserves, _) = fit(&tough, &person(128, 128), &arsenal(), ENGINE, true);
+        assert!((reserves.armor.now - (45.0 * 0.1 - 1.0)).abs() < 1e-4);
+        assert_eq!(
+            [
+                DERELICT_ARMOR_SHARE,
+                TOUGH_DERELICT_ARMOR_SHARE,
+                DERELICT_ARMOR_LESS
+            ],
+            [0.33, 0.1, 1.0]
+        );
+    }
+
+    #[test]
+    fn a_derelict_persons_armour_comes_from_its_ship_types_base_armor() {
+        for (tough, share) in [(false, 0.33), (true, 0.1)] {
+            let plated = ShipKind {
+                stats: ShipStats {
+                    armor: 150.0,
+                    ..ShipStats::new(FAST, &[])
+                },
+                hull: HullSpec {
+                    tough,
+                    ..HullSpec::default()
+                },
+                base_armor: 100.0,
+                ..armed()
+            };
+            let (kind, reserves, _) = fit(&plated, &person(128, 128), &arsenal(), ENGINE, true);
+            assert!(
+                (reserves.armor.now - (100.0f32).mul_add(share, -1.0)).abs() < 1e-4,
+                "tough {tough}: {}",
+                reserves.armor.now
+            );
+            assert_eq!(kind.base_armor, 100.0, "carried through the fit");
+        }
+    }
+
+    #[test]
+    fn a_person_repairs_itself_as_its_ship_class_does() {
+        for self_repair in [false, true] {
+            let kind = ShipKind {
+                self_repair,
+                ..armed()
+            };
+            assert_eq!(fitted(&kind, &[]).self_repair, self_repair);
+        }
+    }
+
+    #[test]
+    fn the_flag_bits_are_the_bibles() {
+        assert_eq!(
+            [
+                GRUDGE,
+                ESCAPE_POD,
+                QUOTE_IF_GRUDGE,
+                QUOTE_IF_LIKED,
+                QUOTE_ON_ATTACK,
+                QUOTE_IF_DISABLED,
+                QUOTE_ONCE,
+                QUOTE_IF_MISSION,
+                QUOTE_UNLESS_LEAVING,
+                NOT_TO_WIMPY,
+                NOT_TO_BRAVE,
+                NOT_TO_WARSHIP
+            ],
+            [
+                0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0080, 0x0400, 0x0800, 0x1000,
+                0x2000, 0x4000
+            ]
+        );
+    }
+
+    // Quotes.
+
+    #[test]
+    fn a_quotes_tags_are_the_persons_the_pilots_and_the_ship_types_names() {
+        let tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
+            leet: false,
+            rules: TagRules::default(),
+        };
+        assert_eq!(
+            expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
+            "Bounty Hunter: Prepare to die, Stock!"
+        );
+        assert_eq!(expand_tags("Hey <PNN>.", &tags), "Hey Stock.");
+        assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Kestrel or Shuttle?");
+        assert_eq!(
+            expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
+            "Yes, captain. No, captain."
+        );
+        assert_eq!(expand_tags("No tags.", &tags), "No tags.");
+        assert_eq!(NO_RANK, "captain");
+    }
+
+    #[test]
+    fn a_quotes_mission_tags_read_unset_by_the_engine_and_are_left_by_the_other_reading() {
+        let mut tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames::none(),
+            rank_govts: RankTagGovts::NONE,
+            leet: false,
+            rules: TagRules::default(),
+        };
+        assert_eq!(
+            expand_tags("Off to <DSY>.", &tags),
+            "Off to [Error].",
+            "_ShowPersonHailQuote munges with index -1 (@0x44605)"
+        );
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] [Error] [Error]"
+        );
+        tags.rules.missionless = RuleSource::Bible;
+        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PAY> <DL>", &tags),
+            "captain [] <PAY> <DL>",
+            "the mission tags kept"
+        );
+    }
+
+    #[test]
+    fn quote_tags_fill_the_rank_tags() {
+        let records = [RankRecord {
+            name: "Commander".to_owned(),
+            conv_name: "Cmdr".to_owned(),
+            short_name: "Cdr".to_owned(),
+            affil_govt: Some(GovtId(128)),
+            ..nova_sim_catalog::fixture::rank(200)
+        }];
+        let active = BTreeSet::from([RankId(200)]);
+        let text = "<PRK>, <SRK>, <RRK>, <PRK128>.";
+        let mut tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames {
+                records: &records,
+                active: &active,
+                recent: Some(RankId(200)),
+                fallback: "captain".into(),
+            },
+            rank_govts: RankTagGovts::NONE.parsed(text),
+            leet: false,
+            rules: TagRules::default(),
+        };
+        assert_eq!(
+            expand_tags(text, &tags),
+            "Cmdr, Cdr, Commander, captain.",
+            "by the engine a lone <PRKnnn> reads the <SRKnnn> government's: none"
+        );
+        tags.rules.crossed_rank_tags = RuleSource::Bible;
+        assert_eq!(expand_tags(text, &tags), "Cmdr, Cdr, Commander, Cdr.");
+    }
+
+    fn quoting(flags: u16) -> NpcPerson {
+        NpcPerson {
+            id: PersonId(151),
+            flags,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 8,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+            zero_fuel: false,
+        }
+    }
+
+    /// The player liked, not jumping, in a ship of `InherentAI` 1, its
+    /// missions available.
+    const VIEW: QuoteView = QuoteView {
+        liked: true,
+        player_jumping: false,
+        player_ai: 1,
+        mission_available: true,
+    };
+
+    fn npc_of(condition: Condition, goal: crate::ai::Goal) -> Npc {
+        Npc {
+            goal,
+            condition,
+            ..crate::traffic::fixture::npc(1, crate::stats::ShipStats::new(FAST, &[]))
+        }
+    }
+
+    fn eligible(npc: &Npc, person: NpcPerson, view: QuoteView) -> Eligible {
+        quote_eligible(npc, &person, &view, &[])
+    }
+
+    use crate::ai::Goal;
+    use crate::combat::ShipRef;
+    use crate::traffic::npc::{Mode, Npc, NpcPerson};
+
+    const IDLE: Goal = Goal::Idle;
+    const ATTACKING: Goal = Goal::Attack(ShipRef::Player);
+
+    #[test]
+    fn a_plain_persons_quote_is_eligible_while_it_is_intact_and_one_of_0x0020_while_disabled() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let disabled = npc_of(Condition::Disabled, IDLE);
+        assert_eq!(eligible(&intact, quoting(0), VIEW), Eligible::Yes);
+        assert_eq!(eligible(&disabled, quoting(0), VIEW), Eligible::No);
+        let when_disabled = quoting(QUOTE_IF_DISABLED);
+        assert_eq!(eligible(&intact, when_disabled, VIEW), Eligible::No);
+        assert_eq!(eligible(&disabled, when_disabled, VIEW), Eligible::Yes);
+    }
+
+    #[test]
+    fn a_quote_on_attack_is_due_now_once_it_threatens_the_player() {
+        let on_attack = quoting(QUOTE_ON_ATTACK);
+        assert_eq!(
+            eligible(&npc_of(Condition::Intact, IDLE), on_attack, VIEW),
+            Eligible::No
+        );
+        let attacking = npc_of(Condition::Intact, ATTACKING);
+        assert_eq!(eligible(&attacking, on_attack, VIEW), Eligible::Now);
+        let quoted = NpcPerson {
+            quoted: true,
+            ..on_attack
+        };
+        assert_eq!(eligible(&attacking, quoted, VIEW), Eligible::No);
+        let both = quoting(QUOTE_ON_ATTACK | QUOTE_IF_DISABLED);
+        assert_eq!(
+            eligible(&npc_of(Condition::Disabled, ATTACKING), both, VIEW),
+            Eligible::Yes,
+            "disabled, step 1's"
+        );
+        assert_eq!(
+            eligible(&npc_of(Condition::Disabled, IDLE), on_attack, VIEW),
+            Eligible::No
+        );
+        let raider = npc_of(
+            Condition::Intact,
+            Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(5))),
+        );
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..crate::traffic::fixture::npc(5, crate::stats::ShipStats::new(FAST, &[]))
+        };
+        assert_eq!(
+            quote_eligible(&raider, &on_attack, &VIEW, std::slice::from_ref(&escort)),
+            Eligible::Now,
+            "attacking a ship the player leads"
+        );
+        assert_eq!(
+            eligible(&raider, on_attack, VIEW),
+            Eligible::No,
+            "attacking a ship nobody leads"
+        );
+    }
+
+    #[test]
+    fn the_grudge_liking_mission_and_leaving_filters_each_hold_their_quote_back() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let grudging = quoting(QUOTE_IF_GRUDGE);
+        assert_eq!(eligible(&intact, grudging, VIEW), Eligible::No);
+        let held = NpcPerson {
+            grudge: true,
+            ..grudging
+        };
+        assert_eq!(eligible(&intact, held, VIEW), Eligible::Yes);
+        let liking = quoting(QUOTE_IF_LIKED);
+        assert_eq!(eligible(&intact, liking, VIEW), Eligible::Yes);
+        let disliked = QuoteView {
+            liked: false,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, liking, disliked), Eligible::No);
+        assert_eq!(eligible(&intact, quoting(0), disliked), Eligible::Yes);
+        let mission = NpcPerson {
+            mission: true,
+            ..quoting(QUOTE_IF_MISSION)
+        };
+        assert_eq!(
+            eligible(&intact, mission, VIEW),
+            Eligible::Yes,
+            "taken as available"
+        );
+        let unavailable = QuoteView {
+            mission_available: false,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, mission, unavailable), Eligible::No);
+        assert_eq!(
+            eligible(&intact, quoting(QUOTE_IF_MISSION), unavailable),
+            Eligible::Yes,
+            "no mission, no test"
+        );
+        let leaving = npc_of(Condition::Intact, Goal::JumpOut);
+        assert_eq!(
+            eligible(&leaving, quoting(QUOTE_UNLESS_LEAVING), VIEW),
+            Eligible::No
+        );
+        assert_eq!(eligible(&leaving, quoting(0), VIEW), Eligible::Yes);
+    }
+
+    #[test]
+    fn the_players_ship_type_filters_hold_their_quote_back() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let flying = |player_ai| QuoteView { player_ai, ..VIEW };
+        for (flag, silenced) in [
+            (NOT_TO_WIMPY, vec![1]),
+            (NOT_TO_BRAVE, vec![2]),
+            (NOT_TO_WARSHIP, vec![3, 4]),
+        ] {
+            for ai in 0..=4 {
+                let expected = if silenced.contains(&ai) {
+                    Eligible::No
+                } else {
+                    Eligible::Yes
+                };
+                assert_eq!(
+                    eligible(&intact, quoting(flag), flying(ai)),
+                    expected,
+                    "{flag:#x} {ai}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_quote_said_once_a_stay_is_not_said_again() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let once = quoting(QUOTE_ONCE);
+        assert_eq!(eligible(&intact, once, VIEW), Eligible::Yes);
+        let said = NpcPerson {
+            quoted: true,
+            ..once
+        };
+        assert_eq!(eligible(&intact, said, VIEW), Eligible::No);
+        assert_eq!(
+            eligible(
+                &intact,
+                NpcPerson {
+                    quoted: true,
+                    ..quoting(0)
+                },
+                VIEW
+            ),
+            Eligible::Yes
+        );
+    }
+
+    #[test]
+    fn hail_quote_1_is_the_first_quote_a_person_may_say() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let first = NpcPerson {
+            hail_quote: 1,
+            ..quoting(0)
+        };
+        assert_eq!(
+            eligible(&intact, first, VIEW),
+            eligible(&intact, quoting(0), VIEW)
+        );
+        assert_ne!(eligible(&intact, first, VIEW), Eligible::No);
+    }
+
+    #[test]
+    fn no_quote_without_one_while_the_player_jumps_or_the_npc_jumps_in_or_breaks_up() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        for none in [-1, 0] {
+            let quiet = NpcPerson {
+                hail_quote: none,
+                ..quoting(0)
+            };
+            assert_eq!(eligible(&intact, quiet, VIEW), Eligible::No, "{none}");
+        }
+        let jumping = QuoteView {
+            player_jumping: true,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, quoting(0), jumping), Eligible::No);
+        let arriving = Npc {
+            mode: Mode::JumpingIn { tick: 0 },
+            ..intact.clone()
+        };
+        assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
+        let coasting = Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..intact.clone()
+        };
+        assert_eq!(
+            eligible(&coasting, quoting(0), VIEW),
+            eligible(&intact, quoting(0), VIEW),
+            "holding its course after its glide, it may speak"
+        );
+        assert_ne!(eligible(&coasting, quoting(0), VIEW), Eligible::No);
+        for condition in [
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
+            let dying = npc_of(condition, IDLE);
+            assert_eq!(
+                eligible(&dying, quoting(QUOTE_IF_DISABLED), VIEW),
+                Eligible::No,
+                "{condition:?}"
+            );
+        }
+        assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
+        assert_eq!([u64::from(QUOTE_SHOWN_TICKS), QUOTE_GAP_TICKS], [420, 1350]);
+    }
+
+    /// A flying person of `QUOTE_ON_ATTACK` (and `more`), idle.
+    fn turning(more: u16) -> Npc {
+        Npc {
+            person: Some(quoting(QUOTE_ON_ATTACK | more)),
+            ..npc_of(Condition::Intact, IDLE)
+        }
+    }
+
+    #[test]
+    fn a_ship_turning_on_the_player_says_its_quote_as_ai_make_ship_attack_player_gates_it() {
+        assert!(turns_with_quote(&turning(0), false, false));
+        let no_flag = Npc {
+            person: Some(quoting(0)),
+            ..turning(0)
+        };
+        let marked = Npc {
+            mission: Some(crate::traffic::npc::MissionMark {
+                slot: 0,
+                behav: crate::mission::ships::ShipBehav::AttackPlayer,
+                formation: None,
+                order: None,
+            }),
+            ..turning(0)
+        };
+        let nobody = Npc {
+            person: None,
+            ..turning(0)
+        };
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..turning(0)
+        };
+        for (npc, why) in [
+            (&no_flag, "no 0x0010"),
+            (&marked, "a mission's special ship"),
+            (&nobody, "no person"),
+            (&escort, "the player's escort is not the person"),
+        ] {
+            assert!(!turns_with_quote(npc, false, false), "{why}");
+        }
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
+            let npc = Npc {
+                condition,
+                ..turning(0)
+            };
+            assert!(!turns_with_quote(&npc, false, false), "{condition:?}");
+        }
+        assert!(!turns_with_quote(&turning(0), true, false), "a threat");
+        assert!(
+            !turns_with_quote(&turning(0), false, true),
+            "the player dying"
+        );
+        // The gate reads none of `_HandleShip`'s filters.
+        let quoted = Npc {
+            person: Some(NpcPerson {
+                quoted: true,
+                hail_quote: 0,
+                ..quoting(QUOTE_ON_ATTACK | QUOTE_ONCE)
+            }),
+            ..turning(0)
+        };
+        assert!(turns_with_quote(&quoted, false, false), "once, said");
+        for more in [QUOTE_IF_GRUDGE, QUOTE_IF_LIKED, NOT_TO_WARSHIP] {
+            assert!(turns_with_quote(&turning(more), false, false), "{more:#x}");
+        }
+    }
+
+    /// Person 128 of `flags`, its mission's special ships `ship`.
+    fn joining(flags: u16, ship: Option<(i16, i16)>) -> PersonRecord {
+        PersonRecord {
+            flags,
+            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip {
+                count,
+                goal,
+                ..crate::catalog::MissionShip::NONE
+            }),
+            ..person(128, 136)
+        }
+    }
+
+    #[test]
+    fn a_person_replaced_by_its_one_escort_mission_ship_offers_to_join() {
+        assert!(offers_to_join(&joining(0x0040, Some((1, 3)))));
+        assert!(
+            offers_to_join(&joining(0x14ca, Some((1, 3)))),
+            "stock Terrapin"
+        );
+        assert_eq!(
+            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD),
+            (0x0040, 0x0200)
+        );
+    }
+
+    #[test]
+    fn a_person_of_0x0040_swaps_for_its_missions_one_ship_left_whatever_the_goal() {
+        assert!(swaps_for_mission_ship(0x0040, 1));
+        assert!(swaps_for_mission_ship(0x14ca, 1), "stock Terrapin");
+        assert!(
+            swaps_for_mission_ship(0x0409 | 0x0040, 1),
+            "a refuel trader"
+        );
+        assert!(
+            swaps_for_mission_ship(0x0240, 1),
+            "0x0200 is not the gate's"
+        );
+        for (flags, left) in [
+            (0x0000, 1),
+            (0x0bbf, 1),
+            (0x0040, 0),
+            (0x0040, 2),
+            (0x0040, -1),
+        ] {
+            assert!(!swaps_for_mission_ship(flags, left), "{flags:#x} {left}");
+        }
+    }
+
+    #[test]
+    fn any_other_person_does_not_offer_to_join() {
+        for (flags, ship) in [
+            (0x0000, Some((1, 3))),
+            (0x0240, Some((1, 3))),
+            (0x0040, Some((1, 5))),
+            (0x0040, Some((2, 3))),
+            (0x0040, Some((-1, 3))),
+            (0x0040, None),
+        ] {
+            assert!(
+                !offers_to_join(&joining(flags, ship)),
+                "{flags:#x} {ship:?}"
+            );
+        }
+    }
+
+    // `_ShowPersonHailQuote`'s plug-in string (@0x445b8-0x445e1).
+
+    #[test]
+    fn a_hail_quotes_str_patch_wins_over_str_list_7101() {
+        use crate::catalog::StringPatch;
+        let lines = ["One".to_owned(), "Two".to_owned()];
+        let text = |hail_quote, patch| hail_quote_text(hail_quote, patch, &lines);
+        assert_eq!(text(2, StringPatch::Text("Patched".to_owned())), "Patched");
+        assert_eq!(text(2, StringPatch::Empty), "", "an empty STR");
+        assert_eq!(text(2, StringPatch::Unreadable), "", "an unreadable STR");
+        assert_eq!(text(2, StringPatch::Absent), "Two");
+        assert_eq!(text(1, StringPatch::Absent), "One");
+        assert_eq!(text(3, StringPatch::Absent), "", "out of range");
+        assert_eq!(text(0, StringPatch::Absent), "", "none");
+        assert_eq!(text(-1, StringPatch::Absent), "", "below");
+        assert_eq!(HAIL_QUOTE_PATCHES, 4999);
+        assert_eq!(hail_quote_patch_id(1), Some(5000), "0x1387 + 1 (@0x445b8)");
+        assert_eq!(hail_quote_patch_id(27_768), Some(i16::MAX));
+        assert_eq!(hail_quote_patch_id(27_769), None, "no 16-bit wrap");
+    }
+}

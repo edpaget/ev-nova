@@ -23,9 +23,10 @@
 //! shows frame 0 otherwise (`_SWCloneFramesFromMaster` @0xac504-0xac532).
 //!
 //! The `AnimDelay` of 0 or less that the original advances every frame
-//! with, and `Flags2` 0x0001 and 0x0002, are story-runtime phase 21
-//! (stellar-animation-flags); hypergates are phase 22
-//! (hypergate-animation).
+//! with, and `Flags2` 0x0001 and 0x0002, are stellar-fidelity phase 10
+//! (stellar-animation-flags). A hypergate draws the frame its session
+//! steps it to in place of this one (`SceneStellar::gate_frame`,
+//! system-traffic-fidelity phase 7).
 
 use std::num::NonZeroU16;
 

@@ -134,7 +134,7 @@ impl Toggle {
                 pressed: true,
                 repeat: false,
             } => self.enabled,
-            Input::Key { .. } | Input::Text(_) => false,
+            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => false,
             // A check box clicks silently: the tracker's sounds are not
             // taken.
             Input::PointerButton { .. } | Input::PointerMoved(_) => {

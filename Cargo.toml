@@ -14,11 +14,23 @@ nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
+nova-metalfx = { path = "crates/nova-metalfx" }
+nova-appkit = { path = "crates/nova-appkit" }
 nova-sim = { path = "crates/nova-sim" }
+nova-sim-base = { path = "crates/nova-sim-base" }
+nova-sim-catalog = { path = "crates/nova-sim-catalog" }
+nova-sim-state = { path = "crates/nova-sim-state" }
+nova-sim-combat = { path = "crates/nova-sim-combat" }
+nova-sim-ai = { path = "crates/nova-sim-ai" }
+nova-sim-story = { path = "crates/nova-sim-story" }
+nova-sim-port = { path = "crates/nova-sim-port" }
 nova-audio = { path = "crates/nova-audio" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
+# nova-bundle writes Nova.app's Info.plist with it, and its tests read the
+# plist back. Its default `serde` feature is not needed.
+plist = { version = "1.10.1", default-features = false }
 tempfile = "3"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
@@ -33,6 +45,10 @@ wgpu = "30.0.1"
 glyphon = "0.12.0"
 winit = "0.30.13"
 pollster = "1.0.1"
+# The open panel that asks for the Nova Files and the startup alerts
+# (nova's macOS-only dependency). Its default features are Linux's portal
+# and Wayland backends, which the macOS build does not need.
+rfd = { version = "0.17.2", default-features = false }
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu
 # 0.36 is built on wgpu 30 and egui-winit 0.36 on winit 0.30, so the three
@@ -46,6 +62,19 @@ egui-winit = { version = "0.36.2", default-features = false }
 # thread priority (and its dbus dependency) and the other formats are not
 # needed.
 kira = { version = "0.12.5", default-features = false, features = ["cpal", "mp3"] }
+
+# Line tables only in dev and test builds: backtraces keep their files and
+# lines, but debuggers lose local variables. It cuts a cold build by about a
+# fifth and halves `target/`, which slows the growth of `target/debug/deps`
+# behind the wgpu test timeouts.
+[profile.dev]
+debug = "line-tables-only"
+
+# cargo-mutants builds every mutant with this profile (`.cargo/mutants.toml`):
+# no debug info at all, as a mutant's build is never debugged.
+[profile.mutants]
+inherits = "test"
+debug = "none"
 
 # The PNG encoder and its compression and checksum crates run tens of
 # times slower unoptimised, and nova-dump's stock test (a debug build)

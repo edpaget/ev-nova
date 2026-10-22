@@ -6,11 +6,15 @@
 //! selection. Escape on the map does nothing here: what it means there
 //! (quitting) is the app's router's to decide.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::{SystemCatalog, SystemView};
-use crate::{DrawList, Input, Key, Screen, ScreenAction};
+use crate::text::TextMetrics;
+use crate::ui::button::ButtonStyle;
+use crate::ui::dialog::DialogTemplate;
+use crate::{DrawList, Input, Key, Screen, ScreenAction, Sound};
 
 /// The galaxy map and, while one is open, a system's view.
 #[derive(Clone, Debug)]
@@ -47,6 +51,29 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
+    }
+}
+
+impl<C> Navigator<C> {
+    /// The navigator with the map's text measured by `metrics`, which its
+    /// Find needs ([`GalaxyMap::with_metrics`]).
+    #[must_use]
+    pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
+        Self {
+            map: self.map.with_metrics(metrics),
+            ..self
+        }
+    }
+
+    /// The navigator with the map's Find laid out from `template`, or its
+    /// fallback for `None`, its buttons labelled in `style`
+    /// ([`GalaxyMap::with_find`]).
+    #[must_use]
+    pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
+        Self {
+            map: self.map.with_find(template, style),
+            ..self
+        }
     }
 }
 
@@ -124,6 +151,11 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
     fn release_keys(&mut self) {
         self.shown_mut().release_keys();
     }
+
+    /// The map's beeps: Find's ([`GalaxyMap::take_ui_sounds`]).
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.map.take_sounds()
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +210,7 @@ mod tests {
                     }),
                     dead_sprite: None,
                     animation: AnimationData::default(),
+                    radar_square: false,
                 }]
             } else {
                 Vec::new()
@@ -231,7 +264,7 @@ mod tests {
     fn dot(navigator: &Navigator<FakeCatalog>, id: i16) -> Point {
         let map = navigator.map();
         let system = map.model().system(SystemId(id)).expect("a system");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     fn select(navigator: &mut Navigator<FakeCatalog>, id: i16) {
@@ -296,11 +329,14 @@ mod tests {
         let mut navigator = navigator();
         navigator.input(&press(Key::Char('-')));
         select(&mut navigator, 129);
-        let (view, selected) = (*navigator.map().view(), navigator.map().selected());
+        let (view, selected) = (
+            *navigator.map().view().expect("the viewer"),
+            navigator.map().selected(),
+        );
         navigator.input(&press(Key::Enter));
         assert_eq!(navigator.input(&press(Key::Escape)), ScreenAction::None);
         assert_eq!(open(&navigator), None);
-        assert_eq!(*navigator.map().view(), view);
+        assert_eq!(*navigator.map().view().expect("the viewer"), view);
         assert_eq!(navigator.map().selected(), selected);
         assert_eq!(drawn(&navigator), drawn(navigator.map()));
         assert_eq!(navigator.map().clone().take_entry(), None, "taken");
@@ -321,7 +357,10 @@ mod tests {
     fn escape_on_the_map_neither_quits_nor_changes_anything() {
         let mut navigator = navigator();
         select(&mut navigator, 129);
-        let (view, selected) = (*navigator.map().view(), navigator.map().selected());
+        let (view, selected) = (
+            *navigator.map().view().expect("the viewer"),
+            navigator.map().selected(),
+        );
         for input in [
             press(Key::Escape),
             key(Key::Escape, true, true),
@@ -331,7 +370,10 @@ mod tests {
         }
         assert_eq!(open(&navigator), None);
         assert_eq!(
-            (*navigator.map().view(), navigator.map().selected()),
+            (
+                *navigator.map().view().expect("the viewer"),
+                navigator.map().selected()
+            ),
             (view, selected)
         );
     }
@@ -340,13 +382,17 @@ mod tests {
     fn input_in_a_system_goes_to_its_view_not_the_map() {
         let mut navigator = navigator();
         select(&mut navigator, 128);
-        let view = *navigator.map().view();
+        let view = *navigator.map().view().expect("the viewer");
         navigator.input(&press(Key::Enter));
         navigator.input(&press(Key::Right));
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(240.0, 0.0));
-        assert_eq!(*navigator.map().view(), view, "the map stays put");
+        assert_eq!(
+            *navigator.map().view().expect("the viewer"),
+            view,
+            "the map stays put"
+        );
         // A click on the map's dots does nothing either.
         let beta = dot(&navigator, 129);
         click(&mut navigator, beta);
@@ -368,11 +414,15 @@ mod tests {
     #[test]
     fn cancelling_the_pointer_reaches_the_map() {
         let mut navigator = navigator();
-        let view = *navigator.map().view();
+        let view = *navigator.map().view().expect("the viewer");
         navigator.input(&left(true, Point::new(300.0, 300.0)));
         navigator.cancel_pointer();
         navigator.input(&Input::PointerMoved(Point::new(350.0, 300.0)));
-        assert_eq!(*navigator.map().view(), view, "no drag");
+        assert_eq!(
+            *navigator.map().view().expect("the viewer"),
+            view,
+            "no drag"
+        );
         // In a system it does nothing there, and the map is left alone.
         select(&mut navigator, 128);
         navigator.input(&press(Key::Enter));
@@ -384,7 +434,7 @@ mod tests {
     fn entering_cancels_a_drag_in_progress_on_the_map() {
         let mut navigator = navigator();
         select(&mut navigator, 128);
-        let view = *navigator.map().view();
+        let view = *navigator.map().view().expect("the viewer");
         // The button goes down on the map, then Return enters the system,
         // where the button's release goes.
         navigator.input(&left(true, Point::new(300.0, 300.0)));
@@ -392,7 +442,11 @@ mod tests {
         navigator.input(&left(false, Point::new(300.0, 300.0)));
         navigator.input(&press(Key::Escape));
         navigator.input(&Input::PointerMoved(Point::new(400.0, 350.0)));
-        assert_eq!(*navigator.map().view(), view, "no drag");
+        assert_eq!(
+            *navigator.map().view().expect("the viewer"),
+            view,
+            "no drag"
+        );
         assert_eq!(navigator.map().selected(), Some(SystemId(128)));
     }
 
@@ -420,5 +474,33 @@ mod tests {
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(0.0, -240.0));
+    }
+
+    #[test]
+    fn the_maps_find_is_laid_out_as_given_and_its_beeps_come_through() {
+        let mut template = crate::galaxy::find::fallback();
+        template.items[crate::galaxy::find::FIND_ITEM - 1].kind =
+            crate::ui::dialog::ItemSpec::Button("Seek".to_owned());
+        let mut navigator = navigator()
+            .with_metrics(std::rc::Rc::new(crate::text::fixture::MonoMetrics))
+            .with_find(Some(template), crate::ui::ButtonStyle::STOCK);
+        navigator.input(&press(Key::Char('s')));
+        assert!(navigator.map().finding());
+        let mut list = DrawList::new();
+        navigator.draw(&mut list);
+        assert!(list.iter().any(|command| matches!(
+            command,
+            crate::DrawCommand::Text { text, .. } if text == "Seek"
+        )));
+        for c in ['s', 'b', 'e'] {
+            navigator.input(&Input::Text(c));
+        }
+        navigator.input(&press(Key::Enter));
+        assert_eq!(navigator.map().selected(), Some(SystemId(129)));
+        assert_eq!(
+            navigator.take_sounds(),
+            [crate::Sound::Ui(crate::sound::UiSound::MapSystemFound)]
+        );
+        assert_eq!(navigator.take_sounds(), []);
     }
 }

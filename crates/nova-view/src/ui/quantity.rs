@@ -426,10 +426,7 @@ mod tests {
         let mut dialog = dialog();
         typed(&mut dialog, "5");
         assert_eq!(dialog.field().text(), "5");
-        assert_eq!(
-            click(&mut dialog, OK_ITEM),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, OK_ITEM), []);
         assert_eq!(dialog.take_outcome(), Some(5));
         assert_eq!(dialog.take_outcome(), None, "taken once");
         let mut dialog = self::dialog();
@@ -443,7 +440,21 @@ mod tests {
         let mut dialog = dialog();
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_outcome(), Some(12));
+    }
+
+    /// Return and Escape play nothing in the original: `_DoQuantityDialog`
+    /// (`ModalDialog` @0x56fa5) passes a NULL filter, and the Toolbox's
+    /// standard filter only flashes the button. Space types into the
+    /// field, so it activates nothing here.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog();
         assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(12));
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
     }
 
     #[test]

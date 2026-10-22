@@ -3,12 +3,17 @@ rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "cargo:cargo-workspaces" = "0.4.2"
 "cargo:cargo-nextest" = "0.9.146"
 "cargo:cargo-mutants" = "27.1.0"
+"cargo:cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
 
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
 RDM_PROJECT = "ev-nova"
+# Build and test four mutants at once: a mutant's build is mostly one crate
+# and its links, which leaves most of the 18 cores idle at two. A flag passed
+# after `--` (`-j`) still wins.
+CARGO_MUTANTS_JOBS = "4"
 
 [tasks.fmt]
 description = "Check formatting"
@@ -18,6 +23,19 @@ run = "cargo fmt --all --check"
 description = "Clippy over every crate and target, warnings are errors"
 run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 
+[tasks.deny]
+description = "cargo-deny's bans over the default build's dependency graph (deny.toml)"
+run = "cargo deny --locked check bans"
+
+[tasks.doc]
+description = "Rustdoc over every crate, private items included, with broken intra-doc links denied"
+env = { RUSTDOCFLAGS = "-D rustdoc::broken_intra_doc_links" }
+run = "cargo doc --workspace --no-deps --document-private-items --locked"
+
+[tasks.lint-lib]
+description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
+run = "cargo clippy --workspace --locked -- -D warnings"
+
 [tasks.test]
 description = "Unit/integration tests (nextest) plus doctests"
 run = [
@@ -26,9 +44,9 @@ run = [
 ]
 
 # The dev-tools tasks build nova with the `dev-tools` feature (egui) into
-# their own target directories, so the default build's `target/debug/nova`,
-# which `tests/default_build_links_no_egui.rs` reads, is never relinked
-# with egui by a parallel task or a running viewer.
+# their own target directories, so the default build in `target/debug` is
+# never rebuilt with egui, and its cache never thrashed, by a parallel task
+# or a running viewer.
 [tasks.lint-dev-tools]
 description = "Clippy over nova with the dev-tools feature, warnings are errors"
 run = "cargo clippy -p nova --all-targets --features dev-tools --target-dir target/dev-tools --locked -- -D warnings"
@@ -41,10 +59,14 @@ run = "cargo nextest run -p nova --features dev-tools --target-dir target/dev-to
 description = "Run the viewer with the developer tools; backquote (`) shows and hides them. Pass the Nova Files folder after --, or set NOVA_DATA"
 run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --locked --"
 
+[tasks.bundle]
+description = "macOS only: build Nova.app (Apple silicon, ad-hoc signed) into ev-nova-aarch64-apple-darwin.dmg; pass an output dir after -- (default target/bundle/out)"
+run = "cargo run -p nova-bundle --locked --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"
 
 [tasks.ci]
-description = "Everything CI would run; the pre-commit hook runs this"
-depends = ["fmt", "lint", "test", "lint-dev-tools", "test-dev-tools"]
+description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
+depends = ["fmt", "lint", "lint-lib", "deny", "doc", "test", "lint-dev-tools", "test-dev-tools"]

@@ -11,6 +11,8 @@
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
 //! - [`config`]: where the player's settings and pilots are saved, for
 //!   each operating system.
+//! - [`developer`]: the developer settings, the port's own flight
+//!   overlays, as the settings file turns them on.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
@@ -22,8 +24,12 @@
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
 //! - [`settings`]: the player's settings, sound and Hyperspace Effects,
 //!   and the one keeper that reads and saves them all.
+//! - [`startup`]: starting the game: where the `Nova Files` are (the
+//!   argument, `NOVA_DATA`, the remembered directory, the usual places or
+//!   the open panel), and where startup errors and warnings go (stderr,
+//!   the startup log and, without a terminal, an alert).
 //! - [`platform`]: the thin winit adapter: event translation, the window
-//!   port over a real window, and the event-loop runner.
+//!   port over a real window, the event-loop runner and the dialogs.
 //!
 //! With the `dev-tools` feature (`mise run dev`), `devtools` draws the
 //! developer tools overlay with egui. Without it, egui is not linked.
@@ -33,12 +39,15 @@ pub mod audio;
 pub mod chance;
 pub mod cli;
 pub mod config;
+pub mod developer;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;
 pub mod exit;
 pub mod fonts;
 pub mod load;
+pub mod movie;
 pub mod platform;
 pub mod rulebook;
 pub mod saves;
 pub mod settings;
+pub mod startup;
