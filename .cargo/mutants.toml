@@ -568,4 +568,7 @@ exclude_re = [
     # @0xdd568) read the same with or without equality.
     "nova-sim-base/src/ionization\\.rs:62:26: replace > with >= in slowdown$",
     "nova-sim-combat/src/combat/ion_tint\\.rs:54:26: replace < with <= in tint_level$",
+    # `PilotCatalog::voices`' default body is `Voices::default()`, so
+    # replacing it with `Default::default()` is the same body.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::voices -> Voices with Default::default\\(\\)$",
 ]

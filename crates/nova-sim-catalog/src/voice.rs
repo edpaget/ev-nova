@@ -492,10 +492,9 @@ mod tests {
     #[test]
     fn a_set_with_no_clips_picks_none() {
         let table = VoiceTable::read(&run(1000, 3));
-        assert_eq!(
-            table.pick(0, VoiceMessage::Target, None, &mut Draws::default()),
-            None
-        );
+        let mut draws = Draws::default();
+        assert_eq!(table.pick(0, VoiceMessage::Target, None, &mut draws), None);
+        assert!(draws.asked.is_empty(), "no Rand(0): {:?}", draws.asked);
         assert_eq!(
             table.pick(9, VoiceMessage::Acknowledge, None, &mut Draws::default()),
             None
