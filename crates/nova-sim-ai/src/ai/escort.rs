@@ -18,6 +18,13 @@
 //!   or still arriving ([`kept_by_order`]); with none, it takes the best
 //!   threat to the player at any distance, and attacks it with every
 //!   weapon. With none, it keeps formation.
+//!
+//!   Defend and Attack keep the player too: `_EscortAI` keeps no record
+//!   of where its target came from, so an escort the player hits
+//!   (`_AIMakeShipAttackPlayer`, goal 4, +0x70 = 0) attacks the player at
+//!   every think after, Defend measuring the player from itself, 0. Only
+//!   formation drops it (@0x83f0d-0x83f1a). No source says an escort
+//!   spares the player, so there is no rulebook key.
 //! - **No standing command** ("Formation"), as the rulebook's
 //!   [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) entry says:
 //!   - by the engine, it keeps formation ([`Goal::Formation`]) and guards
@@ -137,8 +144,7 @@ impl Behaviour for EscortAi {
         };
         match order {
             Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)) => {
-                let target =
-                    valid_target(npc, order, around).filter(|&target| target != ShipRef::Player);
+                let target = valid_target(npc, order, around);
                 let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
                 kept_by_order(order, target, player.position, around).map_or_else(
                     || attack_or_form(best_threat(npc, around, &player, radius)),
@@ -1078,6 +1084,41 @@ mod tests {
         assert_eq!(
             decide(&npcs, (0.0, 0.0), &[]).0,
             Goal::Formation { guard: None }
+        );
+    }
+
+    #[test]
+    fn defending_or_attacking_it_keeps_the_player_as_its_target_and_formation_drops_it() {
+        // `_EscortAI` keeps no record of where +0x70 came from: Defend
+        // measures the player from itself, 0 (@0x83c67-0x83cd6), and
+        // Attack keeps it (@0x83d5d-0x83d6d); formation drops a target
+        // that is its parent (@0x83f0d-0x83f1a).
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let hit = having(
+                escort(Some(order)),
+                Goal::Attack(ShipRef::Player),
+                Some(ShipRef::Player),
+            );
+            let npcs = [hit, pirate(2, 0.0, 100.0)];
+            for ai in [ENGINE, BIBLE] {
+                assert_eq!(
+                    decide_with(ai, &npcs, (0.0, 200.0), &[]).0,
+                    Goal::Attack(ShipRef::Player),
+                    "{order:?} {:?}",
+                    ai.escort_ai
+                );
+            }
+        }
+        let hit = having(
+            escort(None),
+            Goal::Attack(ShipRef::Player),
+            Some(ShipRef::Player),
+        );
+        let npcs = [hit, pirate(2, 0.0, 100.0)];
+        assert_eq!(
+            decide(&npcs, (0.0, 200.0), &[0]),
+            (Goal::Formation { guard: Some(n(2)) }, vec![1]),
+            "formation draws a threat in its place"
         );
     }
 
