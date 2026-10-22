@@ -42,7 +42,7 @@
 //!   stellar, read as the session starts, at its own position (the
 //!   `spöb`'s `xPos`, `yPos`), or by [`ScriptEffectRules::starless`] at
 //!   the centre with none; `N` keeps it, holding the next take-off's
-//!   landing position by [`ScriptEffectRules::keep_flag`]'s engine
+//!   landing position by [`ScriptEffectRules::keep_flag`]'s other
 //!   reading.
 //! - A move to a system with no record, or an `N` out of range, is the
 //!   tail with no move, by [`ScriptEffectRules::missing_system_move`]'s and
@@ -377,7 +377,7 @@ pub(super) mod tests {
             assert_eq!(session.npcs().len(), 2, "populated");
             assert_eq!(
                 session.port.hold_position,
-                source == RuleSource::Engine,
+                source == RuleSource::Bible,
                 "{source:?}"
             );
         }

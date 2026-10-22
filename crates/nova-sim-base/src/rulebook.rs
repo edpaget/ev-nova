@@ -64,7 +64,7 @@
 //! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; `nova_sim::ShipChangeRules`) | it adds nothing, as a purchase reads it\* |
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity (`nova_sim::ScriptEffectRules`) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only every ship the player leads (hired and mission escorts, fighters out) follows, the new system filling with arrivals over time (`nova_sim::ScriptEffectRules`) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
-//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed (`nova_sim::ScriptEffectRules`) | only a landed `N` keeps the landing position\* |
+//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | only a docked `N` keeps the next take-off's landing position: `N` sets `_dontMovePlayerAfterLanding` landed or not (`_EvalSetExp` @0x15903), every landing clears it before the port (`_PlayerLandOnStellar` @0x631f1-0x631f6), and the take-off reads and clears it (@0x633ad-0x633bb, @0x63400) (`nova_sim::ScriptEffectRules`) | an `N` in flight, or after a take-off's placement, also keeps the next take-off's landing position\* |
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one (`nova_sim::ScriptEffectRules`) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing (`nova_sim::ScriptEffectRules`) | every `P` sounds at once, landed or not\* |
 //! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; `nova_sim::ScriptEffectRules`) | it does nothing, as every other operator out of range does\* |
@@ -1160,15 +1160,19 @@ rule_keys! {
     /// Bible says (see `nova_sim::ScriptEffectRules`).
     MoveArrival => "move_arrival",
     /// What the `N` set operator's flag does when it runs in flight: by
-    /// the engine, `_dontMovePlayerAfterLanding` (@0x158d9) stays set
-    /// until the next take-off, which then keeps the ship where it landed
-    /// instead of at the stellar's centre, and clears it
-    /// (`_PlayerLandOnStellar` @0x633ad-0x63400); otherwise only a landed
-    /// `N` keeps the landing position, and a take-off after an `N` in
-    /// flight is from the stellar's centre as any other. The Bible is
-    /// silent here, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see
-    /// `nova_sim::ScriptEffectRules`).
+    /// the engine, nothing. `N` sets `_dontMovePlayerAfterLanding`
+    /// (0x316951) landed or in flight (`_EvalSetExp` @0x15903-0x15908),
+    /// every landing clears it first (`_PlayerLandOnStellar`
+    /// @0x631f1-0x631f6, before the port), and the take-off reads and
+    /// clears it after the port (@0x633ad-0x633bb, @0x63400). So only an
+    /// `N` run while docked keeps the ship where it landed instead of at
+    /// the stellar's centre; one in flight, or after the take-off's
+    /// placement, is cleared before it is read. By the other reading,
+    /// the one control-bits phase 8 read from the take-off alone, kept as
+    /// a setting, an `N` in flight or after the placement also keeps the
+    /// next take-off's landing position. The Bible is silent here, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see `nova_sim::ScriptEffectRules`).
     MoveKeepFlag => "move_keep_flag",
     /// What a `Q` set operator whose `STR#` is missing or empty, or whose
     /// pick is empty, does: by the engine, nothing, as the player leaves

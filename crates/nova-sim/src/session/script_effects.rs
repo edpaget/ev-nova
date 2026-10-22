@@ -95,10 +95,12 @@
 //!
 //! Every take-off now explores the system, as the original's does, which
 //! changes nothing in a system explored already. It keeps the ship where
-//! it touched down, instead of the stellar's centre, after an `N`: by
-//! [`ScriptEffectRules::keep_flag`]'s engine reading after any `N` since
-//! the last take-off, landed or in flight, as the original's flag stays
-//! set; by the other, only after a landed one. The flag is not saved.
+//! it touched down, instead of the stellar's centre, after an `N` run
+//! while docked: by [`ScriptEffectRules::keep_flag`]'s engine reading only
+//! then, as the original clears its flag at every landing
+//! (`_PlayerLandOnStellar` @0x631f1-0x631f6) before the take-off reads it
+//! (@0x633ad); by the other, after any `N` since the last take-off, landed
+//! or in flight. The flag is not saved.
 //!
 //! What else a move does follows [`ScriptEffectRules::arrival`]. By the
 //! engine, nothing: the course is kept, and J refuses while its next
@@ -242,8 +244,9 @@ pub struct ScriptEffectRules {
     pub starless: RuleSource,
     /// Whether a move is an arrival ([`RuleKey::MoveArrival`]).
     pub arrival: RuleSource,
-    /// Whether an `N` in flight keeps the next take-off's landing
-    /// position ([`RuleKey::MoveKeepFlag`]).
+    /// Whether an `N` in flight, or after a take-off's placement, keeps
+    /// the next take-off's landing position ([`RuleKey::MoveKeepFlag`]):
+    /// by the engine reading it doesn't, as every landing clears the flag.
     pub keep_flag: RuleSource,
     /// Whether a blank `Q` makes the player leave ([`RuleKey::BlankLeave`]).
     pub blank_leave: RuleSource,
@@ -469,7 +472,7 @@ impl Session {
 /// stays as it is in flight, unless [`ScriptEffectRules::starless`] stops
 /// it at the centre, and landed it rests at the centre. `N` keeps the
 /// ship, and holds the next take-off's landing position landed, or in
-/// flight by [`ScriptEffectRules::keep_flag`]'s engine reading.
+/// flight by [`ScriptEffectRules::keep_flag`]'s other reading.
 pub(super) fn move_placement(
     first: Option<(Vec2, Option<StellarId>)>,
     keep: bool,
@@ -487,7 +490,7 @@ pub(super) fn move_placement(
     Placement {
         ship,
         stellar,
-        hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
+        hold: keep && (landed || rules.keep_flag == RuleSource::Bible),
     }
 }
 
@@ -1513,8 +1516,15 @@ mod tests {
     /// The ship lands from (10, -10) on planet 128, after `text` ran in
     /// flight under `keep_flag`, and takes off: where it is then.
     fn taken_off_after(text: &str, keep_flag: RuleSource) -> Vec2 {
+        taken_off_under(
+            text,
+            Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag),
+        )
+    }
+
+    /// [`taken_off_after`] under the whole of `rules`.
+    fn taken_off_under(text: &str, rules: Rulebook) -> Vec2 {
         let catalog = moving();
-        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag);
         let mut session = flying(&catalog).with_rules(rules);
         moved(&mut session, &catalog, text);
         session.ship.player.position = Vec2::new(10.0, -10.0);
@@ -1524,36 +1534,48 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_an_n_in_flight_keeps_the_next_take_offs_landing_position() {
+    fn by_the_engine_an_n_in_flight_leaves_the_take_off_as_any_other() {
+        // `_PlayerLandOnStellar` clears the flag first (@0x631f1-0x631f6).
         assert_eq!(
             taken_off_after("N130", RuleSource::Engine),
+            Vec2::new(30.0, -40.0)
+        );
+        assert_eq!(
+            taken_off_under("N130", Rulebook::default()),
+            Vec2::new(30.0, -40.0),
+            "the default"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_n_in_flight_keeps_the_next_take_offs_landing_position() {
+        assert_eq!(
+            taken_off_after("N130", RuleSource::Bible),
             Vec2::new(10.0, -10.0)
         );
         assert_eq!(
-            taken_off_after("M130", RuleSource::Engine),
+            taken_off_after("M130", RuleSource::Bible),
             Vec2::new(30.0, -40.0),
             "only N"
         );
     }
 
     #[test]
-    fn by_the_other_reading_an_n_in_flight_leaves_the_take_off_as_any_other() {
-        assert_eq!(
-            taken_off_after("N130", RuleSource::Bible),
-            Vec2::new(30.0, -40.0)
-        );
-    }
-
-    #[test]
-    fn by_the_other_reading_a_landed_n_still_keeps_the_landing_position() {
-        let catalog = moving();
-        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, RuleSource::Bible);
-        let mut session = flying(&catalog).with_rules(rules);
-        session.ship.player.position = Vec2::new(10.0, -10.0);
-        land_now(&mut session).expect("lands");
-        moved(&mut session, &catalog, "N130");
-        session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
+    fn a_landed_n_keeps_the_landing_position_by_either_reading() {
+        for source in RuleSource::ALL {
+            let catalog = moving();
+            let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, source);
+            let mut session = flying(&catalog).with_rules(rules);
+            session.ship.player.position = Vec2::new(10.0, -10.0);
+            land_now(&mut session).expect("lands");
+            moved(&mut session, &catalog, "N130");
+            session.take_off(&catalog, &mut NeverFires);
+            assert_eq!(
+                session.player().position,
+                Vec2::new(10.0, -10.0),
+                "{source:?}"
+            );
+        }
     }
 
     // P.

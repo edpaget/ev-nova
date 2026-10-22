@@ -71,8 +71,9 @@
 //!   take-off's landing position, under either reading of
 //!   [`ScriptEffectRules::keep_flag`]. After the placement it places
 //!   nothing, and an `N` holds the next take-off's landing position only
-//!   by [`ScriptEffectRules::keep_flag`]'s engine reading, as an `N` in
-//!   flight does (phase 48 changes that key's default).
+//!   by [`ScriptEffectRules::keep_flag`]'s other reading, as an `N` in
+//!   flight does: the original sets its flag after the take-off's read
+//!   (@0x633ad-0x63400), and the next landing clears it (@0x631f1-0x631f6).
 //! - Every move, and a move to a system with no record or an `N` out of
 //!   range by the engine readings of
 //!   [`ScriptEffectRules::missing_system_move`] and
@@ -178,9 +179,9 @@ impl Session {
             .is_some_and(|window| window.placed);
         if placed {
             // The flag an `N` sets now is cleared at the next landing
-            // (@0x631f1-0x631f6) before it is read; the engine's
+            // (@0x631f1-0x631f6) before it is read; the other reading of
             // `keep_flag` keeps it to the next take-off, as in flight.
-            if keep && rules.keep_flag == RuleSource::Engine {
+            if keep && rules.keep_flag == RuleSource::Bible {
                 self.port.hold_position = true;
             }
         } else {
@@ -351,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn an_n_after_the_placement_holds_only_by_the_engine_keep_flag() {
+    fn an_n_after_the_placement_holds_only_by_the_other_keep_flag() {
         for source in RuleSource::ALL {
             let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, source);
             let placed = placed_with_no_move(rules);
@@ -363,7 +364,7 @@ mod tests {
                 assert_eq!(session.player().position, placed, "{what} {source:?}");
                 assert_eq!(
                     session.port.hold_position,
-                    source == RuleSource::Engine,
+                    source == RuleSource::Bible,
                     "{what} {source:?}"
                 );
             }
