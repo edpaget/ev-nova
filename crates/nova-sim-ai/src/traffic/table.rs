@@ -1691,7 +1691,9 @@ mod tests {
                 on_radar: true,
                 flags2: 0x5282,
                 shield_usage: 8,
+                fuel_usage: 0,
                 zeroes_shields: false,
+                can_cloak_mod: Some(0x080b),
                 scanner: crate::cloak::Scanner::default(),
             }
         );

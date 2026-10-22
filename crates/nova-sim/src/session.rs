@@ -2055,6 +2055,7 @@ impl Session {
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
+            cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2136,6 +2137,7 @@ impl Session {
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
+            cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2527,7 +2529,8 @@ impl Session {
         self.punish(&strikes, &losses, was, law);
         self.space
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
-        self.space.cloak_hits(&self.statics, &strikes);
+        let reserves = self.setup.rules.source_for(RuleKey::CloakReserves);
+        self.space.cloak_hits(&self.statics, reserves, &strikes);
         self.space.strikes.extend(strikes);
     }
 
@@ -18948,7 +18951,9 @@ pub(super) mod tests {
         on_radar: false,
         flags2: 0,
         shield_usage: 0,
+        fuel_usage: 0,
         zeroes_shields: false,
+        can_cloak_mod: None,
         scanner: crate::cloak::Scanner::NONE,
     };
 
@@ -19406,7 +19411,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.space.cloak_hits(&session.statics, &[by_none]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[by_none]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19414,7 +19421,9 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.space.cloak_hits(&session.statics, &[by_none]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[by_none]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
@@ -19473,7 +19482,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.space.cloak_hits(&session.statics, &[shockwave]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
@@ -19481,7 +19492,9 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.space.cloak_hits(&session.statics, &[shockwave]);
+        session
+            .space
+            .cloak_hits(&session.statics, RuleSource::Engine, &[shockwave]);
         assert_eq!(session.npcs()[0].cloak, CLOAKED);
     }
 

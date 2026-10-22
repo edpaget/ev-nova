@@ -162,6 +162,7 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord};
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 
 /// The fade above which a ship fading in, or holding, is cloaked.
 pub const CLOAKED_RISING: f32 = 16.0;
@@ -415,12 +416,23 @@ pub struct CloakGear {
     pub flags2: u16,
     /// The shield its cloak costs, a tick, while cloaked
     /// (`_CloakShieldUsage` @0x4033: `(ModVal >> 8) & 0xf` of the first
-    /// cloak, see [`CloakGear::with_upkeep`]), times
-    /// [`CLOAK_UPKEEP_RATE`].
+    /// cloak, see [`CloakGear::with_upkeep`] and [`CloakGear::player`]),
+    /// times [`CLOAK_UPKEEP_RATE`].
     pub shield_usage: u8,
+    /// The fuel its cloak costs, a tick, while cloaked, times
+    /// [`CLOAK_UPKEEP_RATE`]: the player's first owned cloak's
+    /// `(ModVal >> 4) & 0xf` (`_CloakFuelUsage` @0x3e25-0x3e73). It is
+    /// always 0 for an NPC (@0x3e31-0x3e39).
+    pub fuel_usage: u8,
     /// Whether cloaking zeroes its shield (`_CloakZeroesShields` @0x3e9d:
     /// the first cloak's `ModVal` bit [`CLOAK_ZEROES_SHIELDS`]).
     pub zeroes_shields: bool,
+    /// The `ModVal` of the cloak mod `_ShipCanCloak` reads, by the Bible's
+    /// reading of [`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves):
+    /// the first cloak mod of the **last** owned cloak outfit, in outfit
+    /// order (the player, @0x556b-0x55ca), or of the last default-item slot
+    /// holding a cloak (an NPC, @0x55cc-0x5640). `None` with no cloak.
+    pub can_cloak_mod: Option<i16>,
     /// What the cloak scanners among its default items give: an NPC's
     /// own scanner (`_ShipCanTargetUntargetableShips` @0x2402 and
     /// `_ShipCanTargetCloakedShips` @0x24d9 read its ship type's default
@@ -453,23 +465,67 @@ impl CloakGear {
     /// cloak mod, decides (`_CloakShieldUsage` @0x40a7-0x40ef,
     /// `_CloakZeroesShields` @0x3f02-0x3f5c). An NPC's cloak costs no fuel
     /// (`_CloakFuelUsage` @0x3e31-0x3e39).
+    ///
+    /// The first slot's cloak mod also decides whether a hit decloaks it
+    /// (`_ShipDecloaksWhenHit`'s NPC branch @0x3fcd-0x4027), and the last
+    /// slot's sets [`CloakGear::can_cloak_mod`] (`_ShipCanCloak`
+    /// @0x55cc-0x5640).
     #[must_use]
     pub fn with_upkeep(self, slots: &[(OutfitId, u16)], outfits: &[OutfitRecord]) -> Self {
-        let first = slots
+        let cloaks: Vec<i16> = slots
             .iter()
             .filter(|&&(_, count)| count > 0)
             .filter_map(|&(id, _)| outfits.iter().find(|record| record.id == id))
-            .flat_map(|record| record.mods)
-            .find(|&(kind, _)| kind == MOD_CLOAK);
-        let Some((_, mod_val)) = first else {
+            .filter_map(first_cloak_mod)
+            .collect();
+        let (Some(&first), Some(&last)) = (cloaks.first(), cloaks.last()) else {
             return self;
         };
         Self {
-            // Masked to a nibble, so it fits.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            shield_usage: ((mod_val >> 8) & 0xf) as u8,
-            zeroes_shields: mod_val & CLOAK_ZEROES_SHIELDS != 0,
+            shield_usage: shield_usage(first),
+            zeroes_shields: first & CLOAK_ZEROES_SHIELDS != 0,
+            decloaks_when_hit: first & CLOAK_DECLOAKS_WHEN_HIT != 0,
+            can_cloak_mod: Some(last),
             ..self
+        }
+    }
+
+    /// The player's gear: its ship type's `flags2` and the outfits it
+    /// owns of `outfits`, walked in outfit order, which is by ID (the
+    /// original's 512 owned-outfit slots). Any owned cloak is a device
+    /// (`_HasCloak` @0x95fd-0x9647). The **first** owned cloak outfit's
+    /// first cloak mod gives its usages, its zeroing and its decloak
+    /// (`_CloakShieldUsage` @0x4046, `_CloakFuelUsage` @0x3e25,
+    /// `_CloakZeroesShields` @0x3eb0, `_ShipDecloaksWhenHit`
+    /// @0x3f71-0x3faf, which answers from it without looking further,
+    /// @0x3fad), and its radar bit, which nothing reads for the player;
+    /// the **last** one's sets [`CloakGear::can_cloak_mod`]
+    /// (`_ShipCanCloak` @0x556b-0x55ca).
+    #[must_use]
+    pub fn player(flags2: u16, owned: &BTreeMap<OutfitId, u16>, outfits: &[OutfitRecord]) -> Self {
+        let gear = Self {
+            flags2,
+            scanner: Scanner::of(owned, outfits),
+            ..Self::default()
+        };
+        let cloaks: Vec<i16> = owned
+            .iter()
+            .filter(|&(_, &count)| count > 0)
+            .filter_map(|(&id, _)| outfits.iter().find(|record| record.id == id))
+            .filter_map(first_cloak_mod)
+            .collect();
+        let (Some(&first), Some(&last)) = (cloaks.first(), cloaks.last()) else {
+            return gear;
+        };
+        Self {
+            device: true,
+            decloaks_when_hit: first & CLOAK_DECLOAKS_WHEN_HIT != 0,
+            on_radar: first & CLOAK_ON_RADAR != 0,
+            shield_usage: shield_usage(first),
+            fuel_usage: nibble(first, 4),
+            zeroes_shields: first & CLOAK_ZEROES_SHIELDS != 0,
+            can_cloak_mod: Some(last),
+            ..gear
         }
     }
 
@@ -490,11 +546,93 @@ impl CloakGear {
         self.flags2 & bit != 0
     }
 
-    /// Whether a ship of it can cloak (`_ShipCanCloak`): it has a cloak,
-    /// is not `disabled`, and has `fuel` left.
+    /// Whether a ship of it can cloak, as `_ShipCanCloak` (@0x553c-0x56b0)
+    /// asks under `reserves` ([`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves)):
+    ///
+    /// 1. a disabled ship can't (@0x554b);
+    /// 2. nor one with no cloak (@0x5642);
+    /// 3. a fuel nibble with fuel at or below 0 can't, nor a shield nibble
+    ///    with shield at or below 0 (@0x5648-0x566a). By the engine the
+    ///    nibbles come from the `ModType` word, [`MOD_CLOAK`] (0x11), so
+    ///    every cloak needs fuel and none shield; by the Bible from
+    ///    [`CloakGear::can_cloak_mod`];
+    /// 4. a ship `jumping` (the player's jump timer +0x50 above 0, never
+    ///    set for an NPC) can't unless its `Flags2` has [`CLOAK_JUMPING`]
+    ///    (shïp +0x9eb bit 0x04, @0x566c-0x569e).
     #[must_use]
-    pub fn can_cloak(self, disabled: bool, fuel: f32) -> bool {
-        self.device && !disabled && fuel > 0.0
+    pub fn can_cloak(self, check: CloakCheck, reserves: RuleSource) -> bool {
+        if check.disabled || !self.device {
+            return false;
+        }
+        let word = match reserves {
+            RuleSource::Engine => MOD_CLOAK,
+            RuleSource::Bible => self.can_cloak_mod.unwrap_or(0),
+        };
+        if nibble(word, 4) > 0 && check.fuel <= 0.0 {
+            return false;
+        }
+        if nibble(word, 8) > 0 && check.shield <= 0.0 {
+            return false;
+        }
+        !check.jumping || self.has(CLOAK_JUMPING)
+    }
+}
+
+/// What `_ShipCanCloak` asks of a ship besides its gear, for
+/// [`CloakGear::can_cloak`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CloakCheck {
+    /// Whether it is disabled (`_IsDisabled`).
+    pub disabled: bool,
+    /// Its fuel (+0x38).
+    pub fuel: f32,
+    /// Its shield (+0x54).
+    pub shield: f32,
+    /// Whether its jump timer (+0x50) runs: only ever the player's.
+    pub jumping: bool,
+}
+
+/// The first `ModType` 17 mod's `ModVal` of `record`, if it has one.
+fn first_cloak_mod(record: &OutfitRecord) -> Option<i16> {
+    record
+        .mods
+        .iter()
+        .find(|&&(kind, _)| kind == MOD_CLOAK)
+        .map(|&(_, mod_val)| mod_val)
+}
+
+/// The nibble of `word` at bit `shift`.
+fn nibble(word: i16, shift: u32) -> u8 {
+    // Masked to a nibble, so it fits.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let nibble = ((word >> shift) & 0xf) as u8;
+    nibble
+}
+
+/// A cloak mod's shield usage, `(ModVal >> 8) & 0xf`.
+fn shield_usage(mod_val: i16) -> u8 {
+    nibble(mod_val, 8)
+}
+
+/// How a ship with `cloak` is drawn when a full fade draws it at
+/// `full_level` (`_HandleShipDisplay` @0x2d169-0x2d648): at a full fade
+/// [`CloakShown::Translucent`] below [`TRANSLUCENCY_STEPS`], else
+/// [`CloakShown::Hidden`]; with any fade, [`CloakShown::Fading`]; with
+/// none, [`CloakShown::Opaque`]. The player's full fade is always
+/// [`SEEN_AT_FULL_FADE`] (+0x86 0, @0x2d199-0x2d1a1 → 0x2d1be), and an
+/// NPC's [`full_fade_translucency`].
+#[must_use]
+pub fn shown(cloak: Cloak, full_level: u8) -> CloakShown {
+    if cloak.full() {
+        if full_level < TRANSLUCENCY_STEPS {
+            CloakShown::Translucent(full_level)
+        } else {
+            CloakShown::Hidden
+        }
+    } else if cloak.fade > 0.0 {
+        CloakShown::Fading(cloak.fade)
+    } else {
+        CloakShown::Opaque
     }
 }
 
@@ -722,10 +860,16 @@ pub fn hit(
     if cloaks {
         cloak_ship(cloak, gear, shield);
     }
-    if gear.decloaks_when_hit && (cloak.full() || cloak.direction > 0) {
-        cloak.uncloak();
-    }
+    decloak_on_hit(cloak, gear);
     cloaks
+}
+
+/// `cloak` after a direct hit's decloak on a ship of `gear` (`_DamageShip`
+/// @0x3bf1f-0x3bf4f): a cloak that decloaks when hit, fully faded or still
+/// fading in, uncloaks ([`Cloak::uncloak`]). Returns [`Cloak::uncloak`]'s
+/// sound condition, which only the player's cloak raises.
+pub fn decloak_on_hit(cloak: &mut Cloak, gear: CloakGear) -> bool {
+    gear.decloaks_when_hit && (cloak.full() || cloak.direction > 0) && cloak.uncloak()
 }
 
 /// A rectangle in world space: x grows right and y down.
@@ -1015,7 +1159,9 @@ mod tests {
                 on_radar: true,
                 flags2: 0x5282,
                 shield_usage: 0,
+                fuel_usage: 0,
                 zeroes_shields: false,
+                can_cloak_mod: None,
                 scanner: Scanner::default(),
             },
             "the upkeep needs the slot order (`with_upkeep`)"
@@ -1041,16 +1187,295 @@ mod tests {
         assert!(!CloakGear::of(0, &none_held, &[in_a_later_slot]).device);
     }
 
+    /// Plenty of fuel and shield, not disabled and not jumping.
+    const READY: CloakCheck = CloakCheck {
+        disabled: false,
+        fuel: 100.0,
+        shield: 100.0,
+        jumping: false,
+    };
+
+    const READINGS: [RuleSource; 2] = [RuleSource::Engine, RuleSource::Bible];
+
+    /// The outfits `owned` holds, each of `(id, count)`.
+    fn owned(items: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
+        items.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
+    }
+
+    /// The player's gear owning one cloak, outfit 300, of `mod_val`.
+    fn players(mod_val: i16) -> CloakGear {
+        CloakGear::player(0, &one(300), &[cloak_outfit(mod_val)])
+    }
+
     #[test]
-    fn a_ship_can_cloak_with_a_cloak_fuel_and_not_disabled() {
-        let gear = CloakGear {
-            device: true,
-            ..CloakGear::default()
+    fn a_disabled_ship_or_one_with_no_cloak_never_can_cloak() {
+        let gear = players(0);
+        let disabled = CloakCheck {
+            disabled: true,
+            ..READY
         };
-        assert!(gear.can_cloak(false, 1.0));
-        assert!(!gear.can_cloak(true, 1.0), "disabled");
-        assert!(!gear.can_cloak(false, 0.0), "no fuel");
-        assert!(!CloakGear::default().can_cloak(false, 1.0), "no cloak");
+        for reserves in READINGS {
+            assert!(gear.can_cloak(READY, reserves), "{reserves:?}");
+            assert!(
+                !gear.can_cloak(disabled, reserves),
+                "{reserves:?}: disabled"
+            );
+            assert!(
+                !CloakGear::default().can_cloak(READY, reserves),
+                "{reserves:?}: no cloak"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_every_cloak_needs_fuel_and_none_needs_shield() {
+        // `_ShipCanCloak` reads the `ModType` word 0x11 (@0x558d): a fuel
+        // nibble of 1 and a shield nibble of 0, whatever the `ModVal`.
+        for mod_val in [0x080b, 0x0000, 0x0f00] {
+            let gear = players(mod_val);
+            let no_shield = CloakCheck {
+                shield: 0.0,
+                ..READY
+            };
+            let no_fuel = CloakCheck { fuel: 0.0, ..READY };
+            assert!(
+                gear.can_cloak(no_shield, RuleSource::Engine),
+                "{mod_val:#x}"
+            );
+            assert!(!gear.can_cloak(no_fuel, RuleSource::Engine), "{mod_val:#x}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_a_cloak_needs_fuel_only_with_a_fuel_usage_and_shield_only_with_a_shield_usage()
+    {
+        let no_shield = CloakCheck {
+            shield: 0.0,
+            ..READY
+        };
+        let less_shield = CloakCheck {
+            shield: -1.0,
+            ..READY
+        };
+        let no_fuel = CloakCheck { fuel: 0.0, ..READY };
+        let less_fuel = CloakCheck {
+            fuel: -1.0,
+            ..READY
+        };
+        let some = CloakCheck {
+            fuel: 0.1,
+            shield: 0.1,
+            ..READY
+        };
+        let bible = RuleSource::Bible;
+        for (mod_val, at_no_shield, at_no_fuel) in [
+            (0x080b, false, true),
+            (0x0010, true, false),
+            (0x0000, true, true),
+            (0x0f10, false, false),
+        ] {
+            let gear = players(mod_val);
+            assert_eq!(
+                gear.can_cloak(no_shield, bible),
+                at_no_shield,
+                "{mod_val:#x}"
+            );
+            assert_eq!(
+                gear.can_cloak(less_shield, bible),
+                at_no_shield,
+                "{mod_val:#x}"
+            );
+            assert_eq!(gear.can_cloak(no_fuel, bible), at_no_fuel, "{mod_val:#x}");
+            assert_eq!(gear.can_cloak(less_fuel, bible), at_no_fuel, "{mod_val:#x}");
+            assert!(
+                gear.can_cloak(some, bible),
+                "{mod_val:#x}: a little of each"
+            );
+        }
+    }
+
+    #[test]
+    fn can_cloak_reads_the_last_owned_cloak_outfit_and_its_first_cloak_mod() {
+        let outfits = [
+            outfit(268, &[(MOD_CLOAK, 0x080b)]),
+            outfit(300, &[(1, 1), (MOD_CLOAK, 0x0010), (MOD_CLOAK, 0x0800)]),
+            outfit(301, &[(1, 1)]),
+            outfit(302, &[(MOD_CLOAK, 0x0800)]),
+        ];
+        let gear = CloakGear::player(0, &owned(&[(268, 1), (300, 1), (301, 1)]), &outfits);
+        assert_eq!(gear.can_cloak_mod, Some(0x0010));
+        let no_shield = CloakCheck {
+            shield: 0.0,
+            ..READY
+        };
+        let no_fuel = CloakCheck { fuel: 0.0, ..READY };
+        assert!(
+            gear.can_cloak(no_shield, RuleSource::Bible),
+            "300's first cloak mod asks no shield"
+        );
+        assert!(!gear.can_cloak(no_fuel, RuleSource::Bible));
+        let unheld = CloakGear::player(0, &owned(&[(300, 1), (302, 0)]), &outfits);
+        assert_eq!(
+            unheld.can_cloak_mod,
+            Some(0x0010),
+            "a count of 0 is unowned"
+        );
+        let reversed = [outfits[1].clone(), outfits[0].clone()];
+        let by_id = CloakGear::player(0, &owned(&[(268, 1), (300, 1)]), &reversed);
+        assert_eq!(by_id.can_cloak_mod, Some(0x0010), "outfit order is by ID");
+        assert_eq!(
+            CloakGear::player(0, &owned(&[(301, 1)]), &outfits).can_cloak_mod,
+            None
+        );
+    }
+
+    #[test]
+    fn an_npcs_can_cloak_reads_its_last_cloak_slot() {
+        let outfits = [
+            outfit(268, &[(MOD_CLOAK, 0x080b)]),
+            outfit(269, &[(1, 1), (MOD_CLOAK, 0x0010), (MOD_CLOAK, 0x0800)]),
+            outfit(270, &[(1, 1)]),
+        ];
+        let gear = |items: &[(i16, u16)]| {
+            let held: BTreeMap<OutfitId, u16> = owned(items);
+            CloakGear::of(0, &held, &outfits).with_upkeep(&slots(items), &outfits)
+        };
+        let no_shield = CloakCheck {
+            shield: 0.0,
+            ..READY
+        };
+        let bible = RuleSource::Bible;
+        let last_asks_fuel = gear(&[(268, 1), (269, 1), (270, 1)]);
+        assert_eq!(last_asks_fuel.can_cloak_mod, Some(0x0010));
+        assert!(last_asks_fuel.can_cloak(no_shield, bible));
+        let last_asks_shield = gear(&[(269, 1), (268, 1)]);
+        assert_eq!(last_asks_shield.can_cloak_mod, Some(0x080b));
+        assert!(!last_asks_shield.can_cloak(no_shield, bible));
+        assert_eq!(
+            gear(&[(269, 1), (268, 0)]).can_cloak_mod,
+            Some(0x0010),
+            "a count-0 slot is skipped"
+        );
+    }
+
+    #[test]
+    fn a_jumping_player_keeps_its_cloak_only_with_flags2_0x0400() {
+        let jumping = CloakCheck {
+            jumping: true,
+            ..READY
+        };
+        let through = CloakGear::player(CLOAK_JUMPING, &one(300), &[cloak_outfit(0)]);
+        for reserves in READINGS {
+            assert!(!players(0).can_cloak(jumping, reserves), "{reserves:?}");
+            assert!(through.can_cloak(jumping, reserves), "{reserves:?}: 0x0400");
+            assert!(players(0).can_cloak(READY, reserves), "{reserves:?}: still");
+        }
+    }
+
+    #[test]
+    fn the_players_gear_reads_its_usages_and_decloak_from_the_first_owned_cloak_outfit() {
+        let outfits = [
+            outfit(260, &[(MOD_SCANNER, SCAN_SCREEN)]),
+            outfit(300, &[(1, 1), (MOD_CLOAK, 0x0a3e), (MOD_CLOAK, 0x0000)]),
+            outfit(301, &[(MOD_CLOAK, 0x0000)]),
+        ];
+        let gear = CloakGear::player(0x0401, &owned(&[(260, 1), (300, 1), (301, 2)]), &outfits);
+        assert_eq!(
+            gear,
+            CloakGear {
+                device: true,
+                decloaks_when_hit: true,
+                on_radar: true,
+                flags2: 0x0401,
+                shield_usage: 0xa,
+                fuel_usage: 3,
+                zeroes_shields: true,
+                can_cloak_mod: Some(0x0000),
+                scanner: Scanner {
+                    on_screen: true,
+                    ..Scanner::default()
+                },
+            }
+        );
+        let reversed = [outfits[2].clone(), outfits[1].clone()];
+        let later = CloakGear::player(0, &owned(&[(300, 1), (301, 1)]), &reversed);
+        assert_eq!(
+            (later.shield_usage, later.fuel_usage, later.zeroes_shields),
+            (0xa, 3, true),
+            "outfit 300 comes first by ID, whatever the records' order"
+        );
+        let plain = CloakGear::player(0, &owned(&[(301, 1)]), &outfits);
+        assert!(plain.device);
+        assert!(!plain.decloaks_when_hit && !plain.zeroes_shields && !plain.on_radar);
+        let none = CloakGear::player(0, &owned(&[(260, 1)]), &outfits);
+        assert!(!none.device);
+        assert!(none.scanner.on_screen);
+    }
+
+    #[test]
+    fn the_players_fuel_usage_is_its_first_cloaks_fuel_nibble_and_an_npcs_is_none() {
+        assert_eq!(players(0x0030).fuel_usage, 3);
+        assert_eq!(players(0x00f0).fuel_usage, 0xf);
+        assert_eq!(players(0x0f0f).fuel_usage, 0);
+        let outfits = [cloak_outfit(0x00f0)];
+        let npc = CloakGear::of(0, &one(300), &outfits).with_upkeep(&slots(&[(300, 1)]), &outfits);
+        assert_eq!(npc.fuel_usage, 0, "`_CloakFuelUsage` @0x3e31-0x3e39");
+    }
+
+    #[test]
+    fn an_npcs_decloak_when_hit_is_its_first_cloak_slots_bit() {
+        let outfits = [
+            outfit(268, &[(MOD_CLOAK, 0x0000)]),
+            outfit(269, &[(MOD_CLOAK, CLOAK_DECLOAKS_WHEN_HIT)]),
+        ];
+        let gear = |items: &[(i16, u16)]| {
+            CloakGear::of(0, &owned(items), &outfits).with_upkeep(&slots(items), &outfits)
+        };
+        assert!(!gear(&[(268, 1), (269, 1)]).decloaks_when_hit);
+        assert!(gear(&[(269, 1), (268, 1)]).decloaks_when_hit);
+        assert!(gear(&[(268, 0), (269, 1)]).decloaks_when_hit);
+    }
+
+    #[test]
+    fn the_players_full_fade_is_always_drawn_faint_and_a_fade_splits_as_an_npcs() {
+        let full = at(FADE_FULL, 0);
+        assert_eq!(
+            shown(full, SEEN_AT_FULL_FADE),
+            CloakShown::Translucent(SEEN_AT_FULL_FADE)
+        );
+        assert_eq!(shown(full, 0x3f), CloakShown::Translucent(0x3f));
+        assert_eq!(shown(full, TRANSLUCENCY_STEPS), CloakShown::Hidden);
+        assert_eq!(
+            shown(at(31.9, 1), SEEN_AT_FULL_FADE),
+            CloakShown::Fading(31.9)
+        );
+        assert_eq!(
+            shown(at(0.5, -2), TRANSLUCENCY_STEPS),
+            CloakShown::Fading(0.5)
+        );
+        assert_eq!(shown(at(0.0, 0), SEEN_AT_FULL_FADE), CloakShown::Opaque);
+        assert_eq!(shown(at(-0.5, 0), SEEN_AT_FULL_FADE), CloakShown::Opaque);
+    }
+
+    #[test]
+    fn a_direct_hit_decloaks_a_full_or_fading_in_cloak_that_decloaks_when_hit_and_says_whether_it_sounds()
+     {
+        let gear = players(CLOAK_DECLOAKS_WHEN_HIT);
+        let mut full = at(FADE_FULL, 0);
+        assert!(decloak_on_hit(&mut full, gear));
+        assert_eq!(full, at(FADE_FULL, -1));
+        let mut rising = at(20.0, 1);
+        assert!(decloak_on_hit(&mut rising, gear));
+        assert_eq!(rising, at(20.0, -1));
+        let mut holding = at(20.0, 0);
+        assert!(!decloak_on_hit(&mut holding, gear));
+        assert_eq!(holding, at(20.0, 0), "neither full nor fading in");
+        let mut early = at(10.0, 1);
+        assert!(!decloak_on_hit(&mut early, gear), "not yet cloaked");
+        assert_eq!(early, at(10.0, 1));
+        let mut kept = at(FADE_FULL, 0);
+        assert!(!decloak_on_hit(&mut kept, players(0)));
+        assert_eq!(kept, at(FADE_FULL, 0));
     }
 
     #[test]
@@ -1222,7 +1647,9 @@ mod tests {
         on_radar: true,
         flags2: 0x5282,
         shield_usage: 0,
+        fuel_usage: 0,
         zeroes_shields: false,
+        can_cloak_mod: Some(0x080b),
         scanner: Scanner::NONE,
     };
 

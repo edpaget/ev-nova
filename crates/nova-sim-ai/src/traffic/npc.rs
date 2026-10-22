@@ -7,7 +7,7 @@ use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, PersonRecord, ShipId, StellarId, WeaponId};
-use crate::cloak::{Cloak, CloakGear};
+use crate::cloak::{Cloak, CloakCheck, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
@@ -1002,15 +1002,20 @@ impl Npc {
         crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen);
     }
 
-    /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
+    /// Whether it can cloak now (`_ShipCanCloak` @0x553c) under `reserves`
+    /// ([`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves)): its
     /// [`CloakGear::can_cloak`], knowing whether it is disabled and how
-    /// much fuel it has left.
+    /// much fuel and shield it has left. An NPC is never asked about a
+    /// jump: the jump-timer test is the player's alone (@0x566c).
     #[must_use]
-    pub fn can_cloak(&self) -> bool {
-        self.cloak_gear.can_cloak(
-            self.condition == Condition::Disabled,
-            self.reserves.fuel.now,
-        )
+    pub fn can_cloak(&self, reserves: RuleSource) -> bool {
+        let check = CloakCheck {
+            disabled: self.condition == Condition::Disabled,
+            fuel: self.reserves.fuel.now,
+            shield: self.reserves.shield.now,
+            jumping: false,
+        };
+        self.cloak_gear.can_cloak(check, reserves)
     }
 
     /// Whether it threatens the player itself: intact and attacking,
@@ -2051,18 +2056,27 @@ mod tests {
 
     #[test]
     fn an_npc_can_cloak_with_a_cloak_and_fuel_while_not_disabled() {
+        let (engine, bible) = (RuleSource::Engine, RuleSource::Bible);
         let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
         npc.cloak_gear.device = true;
+        // A Polaris organ's 0x080b: a shield usage of 8 and no fuel usage.
+        npc.cloak_gear.can_cloak_mod = Some(0x080b);
         npc.reserves.fuel.now = 1.0;
-        assert!(npc.can_cloak());
+        npc.reserves.shield.now = 1.0;
+        assert!(npc.can_cloak(engine) && npc.can_cloak(bible));
         npc.condition = Condition::Disabled;
-        assert!(!npc.can_cloak(), "disabled");
+        assert!(!npc.can_cloak(engine) && !npc.can_cloak(bible), "disabled");
         npc.condition = Condition::Intact;
         npc.reserves.fuel.now = 0.0;
-        assert!(!npc.can_cloak(), "no fuel");
+        assert!(!npc.can_cloak(engine), "no fuel, by the engine");
+        assert!(npc.can_cloak(bible), "no fuel usage, by the Bible");
         npc.reserves.fuel.now = 1.0;
+        npc.reserves.shield.now = 0.0;
+        assert!(npc.can_cloak(engine), "no shield, by the engine");
+        assert!(!npc.can_cloak(bible), "a shield usage, by the Bible");
+        npc.reserves.shield.now = 1.0;
         npc.cloak_gear.device = false;
-        assert!(!npc.can_cloak(), "no cloak");
+        assert!(!npc.can_cloak(engine) && !npc.can_cloak(bible), "no cloak");
     }
 
     #[test]

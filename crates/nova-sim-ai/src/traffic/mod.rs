@@ -591,6 +591,11 @@ pub struct World<'a> {
     /// by the engine, on a burst reload by the Bible
     /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
     pub cloak_on_reload: RuleSource,
+    /// Which reserves an NPC's cloak needs to hold, as its frame hold asks
+    /// `_ShipCanCloak` ([`Npc::can_cloak`](npc::Npc::can_cloak)): fuel
+    /// alone by the engine, by the cloak mod's `ModVal` by the Bible
+    /// ([`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves)).
+    pub cloak_reserves: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -710,6 +715,7 @@ impl<'a> World<'a> {
             odds_cache: RuleSource::Engine,
             refuel_cap: RuleSource::Engine,
             cloak_on_reload: RuleSource::Engine,
+            cloak_reserves: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -1780,11 +1786,12 @@ impl Traffic {
     /// The fade steps at the ship's display step
     /// ([`Traffic::step_fades`]). Then each that was cloaked pays its
     /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204),
-    /// even one the hold just uncloaked.
-    fn hold_cloaks(&mut self) {
+    /// even one the hold just uncloaked. Whether it can cloak reads
+    /// `reserves` ([`World::cloak_reserves`]).
+    fn hold_cloaks(&mut self, reserves: RuleSource) {
         for npc in &mut self.npcs {
             if npc.cloak.is_cloaked() {
-                let able = npc.can_cloak();
+                let able = npc.can_cloak(reserves);
                 cloak::hold(&mut npc.cloak, able);
                 let usage = npc.cloak_gear.shield_usage;
                 cloak::drain_shield(&mut npc.reserves.shield.now, usage, true);
@@ -6464,7 +6471,9 @@ mod tests {
         on_radar: true,
         flags2: 0x5282,
         shield_usage: 0,
+        fuel_usage: 0,
         zeroes_shields: false,
+        can_cloak_mod: Some(0x080b),
         scanner: crate::cloak::Scanner::NONE,
     };
 

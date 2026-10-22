@@ -140,7 +140,7 @@ impl Traffic {
             // A ship pass with no decisions before it (see `gone`).
             self.gone.ship_pass();
         }
-        self.hold_cloaks();
+        self.hold_cloaks(world.cloak_reserves);
         if think {
             // `TickCount` moves on between advance passes alone, and the
             // high level holds each ship's warp to its goal.
