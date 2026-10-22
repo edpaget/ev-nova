@@ -665,12 +665,16 @@ mod tests {
             (Some(NpcId(2)), vec![1]),
             "berth 5 held by NPC 2"
         );
-        // The helper's own slot (@0x82d36-0x82d48): the hailed helper is
-        // NPC 1 at berth 0's fixture berth.
+        // The helper's own slot (@0x82d36-0x82d48): the hailed helper, NPC
+        // 1, is not among `npcs`, and the pirate sits at another berth, so
+        // only the helper's own berth keeps the record out.
+        let mut elsewhere = pirate();
+        elsewhere.berth = 2;
         let mut at_helpers = swapped_out();
         at_helpers.berth = helper(AiType::Warship).berth;
+        assert_ne!(elsewhere.berth, at_helpers.berth);
         assert_eq!(
-            picked_among(&[pirate()], &[at_helpers], &[0], enemy(ENGINE)),
+            picked_among(&[elsewhere], &[at_helpers], &[0], enemy(ENGINE)),
             (Some(NpcId(2)), vec![1]),
             "the helper's berth"
         );
