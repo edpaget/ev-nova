@@ -584,6 +584,11 @@ pub struct PlayerSide {
     /// original's player +0x48 (`nova_sim::Session::player_speed`): an
     /// inertialess dogfighter matches it ([`pursuit`]).
     pub speed: f32,
+    /// Its cloak, as the player's display step left it this pass: its
+    /// close-formation escorts' parent rule reads it
+    /// ([`cloak_situation`](crate::traffic::cloak_situation)), and
+    /// [`sight::sees_player`] tests it.
+    pub cloak: crate::cloak::Cloak,
 }
 
 /// No governments at all.
@@ -1999,6 +2004,7 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
         };
         around.player = Some(player);
         assert!(around.live(P));

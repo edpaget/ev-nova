@@ -489,6 +489,7 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
         }
     }
 

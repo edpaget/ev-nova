@@ -1716,10 +1716,13 @@ impl Traffic {
     /// in from hyperspace or bursting out of a gate thinks its cloak
     /// (`_AIHandleCloaking`, see [`cloak`]), in the
     /// [situation](cloak_situation::situation) it reads in `world`: where
-    /// the ship it attacks is, among the NPCs and the player, its NPC
-    /// leader and that leader's cloak (the player has no cloak here yet,
-    /// rdm:phase/cloaking-fidelity/phase-8-cloaking-device), and the
-    /// asteroid in slot 0. The original thinks a glide and a burst too
+    /// the ship it attacks is, among the NPCs and the player, its leader
+    /// and that leader's cloak, and the asteroid in slot 0. A ship with no
+    /// NPC leader that escorts the player takes the player as its leader,
+    /// with the cloak the player's display step left it this pass and its
+    /// sight of it ([`sight::sees_player`](crate::ai::sight::sees_player)),
+    /// as the parent rule reads the player's slot (+0x9a 0,
+    /// @0x83633-0x8366d). The original thinks a glide and a burst too
     /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
     /// emerging, held at its gate, coasting, entering a gate or adrift
     /// waits out +0x4c, so its cloak doesn't think.
@@ -1731,13 +1734,21 @@ impl Traffic {
             .map(|npc| (npc.id, npc.state, npc.cloak))
             .collect();
         let npc_at = |id: NpcId| ships.iter().find(|(other, ..)| *other == id);
+        // The player leads a ship with no NPC leader that escorts it.
+        let led_by_player = |npc: &Npc| {
+            world
+                .player
+                .filter(|_| npc.leader.is_none() && npc.escorts_player())
+        };
         let leaders_seen: Vec<bool> = self
             .npcs
             .iter()
-            .map(|npc| {
-                npc.leader
+            .map(|npc| match led_by_player(npc) {
+                Some(player) => crate::ai::sight::sees_player(npc, &player),
+                None => npc
+                    .leader
                     .and_then(|id| self.npcs.iter().find(|other| other.id == id))
-                    .is_some_and(|leader| crate::ai::sight::npc_sees(npc, leader))
+                    .is_some_and(|leader| crate::ai::sight::npc_sees(npc, leader)),
             })
             .collect();
         for ((npc, _), leader_seen) in
@@ -1757,12 +1768,16 @@ impl Traffic {
                 ShipRef::Player => player,
                 ShipRef::Npc(id) => npc_at(id).map(|&(_, state, _)| state),
             });
-            let around = cloak_situation::Around {
-                attacking: attacking.map(|state| state.position - npc.state.position),
-                leader: npc
+            let leader = match led_by_player(npc) {
+                Some(player) => Some((player.state, player.cloak)),
+                None => npc
                     .leader
                     .and_then(npc_at)
                     .map(|&(_, state, cloak)| (state, cloak)),
+            };
+            let around = cloak_situation::Around {
+                attacking: attacking.map(|state| state.position - npc.state.position),
+                leader,
                 mining_rock: world.mining_rock.is_some(),
                 cloak_on_reload: world.cloak_on_reload,
                 leader_seen,
@@ -4396,6 +4411,7 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
         };
         let world = World {
             player: Some(player),
@@ -4464,6 +4480,7 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
         };
         let world = World {
             player: Some(player),
@@ -5931,6 +5948,7 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
         }
     }
 

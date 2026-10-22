@@ -154,6 +154,7 @@ fn player(at: Vec2) -> PlayerSide {
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
         speed: 0.0,
+        cloak: nova_sim::cloak::Cloak::default(),
     }
 }
 

@@ -6,8 +6,11 @@
 //! out of a gate is seen by nobody (@0x972d); an uncloaked one is seen;
 //! a cloaked one is seen by an escort of it that has a cloak itself
 //! (@0x9788-0x97a2), or by a ship with a cloak scanner on screen within
-//! 200 of it on both axes (@0x97a4-0x97f8). The player never cloaks, so
-//! is always seen. `_ShipVisibleToShip` tests no presence, so a ship not
+//! 200 of it on both axes (@0x97a4-0x97f8). The player can cloak, but
+//! [`Surroundings::sees`] reads it as seen until
+//! rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player;
+//! [`sees_player`] is the rule for it, which only the player's escorts'
+//! parent rule asks so far. `_ShipVisibleToShip` tests no presence, so a ship not
 //! in the system reads as seen: the gates that drop a gone target
 //! (`target::dropped`, [`Surroundings::live`]) are not a search's.
 //!
@@ -26,7 +29,7 @@
 //! The observer +0xc8d0 == 0x3ff branch (@0x973a): the shareware nag
 //! ship sees everything. The engine has no nag ship.
 
-use crate::ai::Surroundings;
+use crate::ai::{PlayerSide, Surroundings};
 use crate::cloak::{Observer, visible};
 use crate::combat::ShipRef;
 use crate::traffic::npc::Npc;
@@ -55,6 +58,28 @@ pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
             at: observer.state.position,
             scanner: observer.cloak_gear.scanner.on_screen,
             cloaked_escort: observer.leader == Some(other.id) && observer.cloak_gear.device,
+        },
+    )
+}
+
+/// Whether `observer` sees the `player`: `_ShipVisibleToShip(player,
+/// observer)` (@0x971c) with the player the target. The player never
+/// emerges from a gate as an NPC does, and a cloaked player is seen by an
+/// escort of it with a cloak itself (@0x9788-0x97a2, the player its
+/// parent) or by a scanner on screen within 200 on both axes. The parent
+/// rule of the player's close-formation escorts reads it
+/// (`Traffic::think_cloaks`); [`Surroundings::sees`] does not ask it yet
+/// (rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player).
+#[must_use]
+pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
+    visible(
+        player.cloak,
+        player.state.position,
+        false,
+        Observer {
+            at: observer.state.position,
+            scanner: observer.cloak_gear.scanner.on_screen,
+            cloaked_escort: observer.escorts_player() && observer.cloak_gear.device,
         },
     )
 }
@@ -113,6 +138,41 @@ mod tests {
         let mut emerging = other(50.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 5 };
         assert!(!sees(&warship(), emerging));
+    }
+
+    #[test]
+    fn an_escort_with_a_cloak_sees_the_cloaked_player_and_one_without_sees_it_only_by_scanner() {
+        use crate::ai::fixture::player;
+        use crate::escort::{EscortDuty, FormationSlot};
+        let mut cloaked_player = player(900.0, 0.0);
+        cloaked_player.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        let mut escort = warship();
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        assert!(escort.escorts_player());
+        escort.cloak_gear.device = true;
+        assert!(super::sees_player(&escort, &cloaked_player), "its escort");
+        escort.cloak_gear.device = false;
+        assert!(!super::sees_player(&escort, &cloaked_player), "no cloak");
+        assert!(
+            super::sees_player(&escort, &player(900.0, 0.0)),
+            "uncloaked"
+        );
+        let mut stranger = warship();
+        stranger.cloak_gear.device = true;
+        assert!(!super::sees_player(&stranger, &cloaked_player), "not its");
+        stranger.cloak_gear.scanner.on_screen = true;
+        assert!(!super::sees_player(&stranger, &cloaked_player), "too far");
+        let near = crate::ai::PlayerSide {
+            state: player(200.0, -200.0).state,
+            ..cloaked_player
+        };
+        assert!(super::sees_player(&stranger, &near), "scanned within 200");
     }
 
     #[test]

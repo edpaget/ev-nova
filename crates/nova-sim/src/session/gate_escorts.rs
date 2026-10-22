@@ -475,6 +475,45 @@ mod tests {
         );
     }
 
+    /// `_AIHandleCloaking`'s parent rule (@0x83633-0x8366d) with the
+    /// player, ship 0, as the parent of its hired escort in close
+    /// formation: the escort's think reads the player's cloak as the
+    /// player's display step left it on the same pass.
+    #[test]
+    fn the_players_escorts_cloak_once_the_player_reads_cloaked() {
+        use crate::cloak::{CloakGear, FADE_FULL, MOD_CLOAK};
+        let mut catalog = catalog();
+        catalog
+            .outfits
+            .push(nova_sim_catalog::fixture::outfit(300, &[(MOD_CLOAK, 0)]));
+        let mut session = flying(&catalog, Rulebook::default());
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        session.pilot.reserves.fuel.now = 100.0;
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(hired).expect("here").cloak_gear = CloakGear {
+            device: true,
+            ..CloakGear::default()
+        };
+        let cloak = |session: &Session| session.space.npc(hired).expect("here").cloak;
+        for _ in 0..60 {
+            pass(&mut session, &catalog);
+        }
+        assert_eq!(cloak(&session), Cloak::default(), "the player uncloaked");
+        session.ship.cloak.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        let mut passes = 0;
+        while cloak(&session).direction != 1 && passes < 60 {
+            pass(&mut session, &catalog);
+            passes += 1;
+        }
+        assert_eq!(cloak(&session).direction, 1, "cloaking with the player");
+    }
+
     /// A gate-exit escort's cloak doesn't think while its wait +0x4c
     /// (`Rand(20) + 15`, @0x675a3-0x675b7) runs: `_AIDispatch` thinks it
     /// only once +0x4c is at or below 0 (@0x8fc9e-0x8fcaa), and
