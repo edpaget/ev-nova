@@ -536,6 +536,22 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_slot_ks_distance_is_measured_from_the_beams_start_on_both_axes() {
+        let mut beam = right();
+        beam.start = Vec2::new(10.0, 0.0);
+        let rocks = [rock(0, 110.0, 0.0), rock(1, 70.0, 0.0)];
+        // Slot 0's ship 30 and 40 off the start (2500), slot 1's 60 below
+        // it (3600): the farther asteroid, in slot 0, wins.
+        let ships = |k| match k {
+            0 => Some(Vec2::new(40.0, 40.0)),
+            1 => Some(Vec2::new(10.0, 60.0)),
+            _ => None,
+        };
+        let (index, _) = pick(&beam, &rocks, PLAIN, ships).expect("hit");
+        assert_eq!(index, 0);
+    }
+
+    #[test]
     fn by_the_engine_a_slot_never_held_weighs_its_asteroid_by_its_own_distance() {
         let rocks = [rock(0, 80.0, 0.0), rock(1, 40.0, 0.0)];
         let only_0 = |k| (k == 0).then_some(Vec2::new(70.0, 0.0));
@@ -554,6 +570,11 @@ mod tests {
         assert!(close(end, Vec2::new(x, 0.0)), "{end:?}");
         let far = [rock(0, 50.0, 25.0)];
         assert_eq!(pick(&right(), &far, SEGMENT, nowhere), None, "passes by");
+        let mut moved = right();
+        moved.start = Vec2::new(10.0, 5.0);
+        moved.end = Vec2::new(110.0, 5.0);
+        let (_, end) = pick(&moved, &[rock(0, 60.0, 5.0)], SEGMENT, nowhere).expect("hit");
+        assert!(close(end, Vec2::new(40.0, 5.0)), "from its start: {end:?}");
     }
 
     #[test]

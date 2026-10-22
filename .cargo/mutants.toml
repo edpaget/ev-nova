@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The beams' asteroid push-or-pull reads the sign of a non-zero
+    # `Impact`: `moves` returns before it for an `Impact` of none, so
+    # `impact < 0.0` and `impact <= 0.0` split the rest the same way.
+    "asteroid_beam\\.rs:[0-9]+:[0-9]+: replace < with <= in moves$",
     # A formation slot's side push turns by trunc(heading + 90) % 360:
     # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
     # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same
