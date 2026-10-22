@@ -228,15 +228,16 @@ impl Behaviour for EscortAi {
 
 /// Whether the player in `around` is breaking up or destroyed, as
 /// `_IsDying` reads it (@0x253d: its death timer set, or its armour at or
-/// below none, [`Condition::is_dying`]): `_EscortAI`'s lost parent then
-/// frees every ship it leads at that ship's think (@0x83917-0x8397b). The
-/// session frees the player's own (`nova_sim`'s `dying_player_escorts`
-/// module); a mission escort, which the dispatch leads again each frame
-/// (@0x8fbcd-0x8fc22), idles here, its mission's still.
+/// below none, [`Condition::dying_or_destroyed`]): `_EscortAI`'s lost
+/// parent then frees every ship it leads at that ship's think
+/// (@0x83917-0x8397b). The session frees the player's own (`nova_sim`'s
+/// `dying_player_escorts` module); a mission escort, which the dispatch
+/// leads again each frame (@0x8fbcd-0x8fc22), idles here, its mission's
+/// still.
 fn player_breaking_up(around: &Surroundings) -> bool {
-    around.player.is_some_and(|player| {
-        player.condition == Condition::Destroyed || player.condition.is_dying(player.reserves.armor)
-    })
+    around
+        .player
+        .is_some_and(|player| player.condition.dying_or_destroyed(player.reserves.armor))
 }
 
 /// What `npc`, an escort or fighter (AI type above 4, @0x80e59), holds

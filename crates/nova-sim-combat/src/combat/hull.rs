@@ -583,6 +583,18 @@ impl Condition {
     pub fn is_dying(self, armor: Gauge) -> bool {
         matches!(self, Self::Dying { .. }) || self.breaking_up(armor).is_some()
     }
+
+    /// Whether a ship in this condition with `armor` is dying
+    /// ([`is_dying`](Self::is_dying)) or destroyed: `_EscortAI`'s lost
+    /// parent (@0x83917-0x8397b) as the engine reads it of the player,
+    /// which frees every ship the player leads while it breaks up or once
+    /// it is destroyed. The session's release of the player's escorts
+    /// (`nova_sim::Session::free_dying_players_escorts`) and the escort AI's
+    /// mission escort (`nova_sim_ai::ai::escort`) both read it.
+    #[must_use]
+    pub fn dying_or_destroyed(self, armor: Gauge) -> bool {
+        self == Self::Destroyed || self.is_dying(armor)
+    }
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -738,6 +750,25 @@ mod tests {
             );
         }
         assert!(!Condition::Destroyed.is_dying(armor(-1.0, 100.0)), "gone");
+    }
+
+    #[test]
+    fn dying_or_destroyed_reads_is_dying_or_a_destroyed_ship() {
+        // The lost parent's test, which a destroyed ship passes too.
+        let left = armor(5.0, 100.0);
+        assert!(Condition::Destroyed.dying_or_destroyed(left), "gone");
+        assert!(UNSET.dying_or_destroyed(left), "breaking up");
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert!(
+                condition.dying_or_destroyed(armor(0.0, 100.0)),
+                "{condition:?}"
+            );
+            assert!(!condition.dying_or_destroyed(left), "{condition:?}");
+            assert!(
+                !condition.dying_or_destroyed(armor(0.0, 0.0)),
+                "{condition:?} holds no armour to lose"
+            );
+        }
     }
 
     #[test]

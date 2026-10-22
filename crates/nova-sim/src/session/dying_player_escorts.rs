@@ -29,7 +29,6 @@
 
 use super::Session;
 use crate::ai::Goal;
-use crate::combat::hull::Condition;
 use crate::traffic::npc::NpcId;
 
 impl Session {
@@ -37,8 +36,11 @@ impl Session {
     /// that is its own (hired or captured escorts, launched fighters)
     /// leaves its fleet (see the module docs).
     pub(super) fn free_dying_players_escorts(&mut self) {
-        let condition = self.ship.condition;
-        if condition != Condition::Destroyed && !condition.is_dying(self.pilot.reserves.armor) {
+        if !self
+            .ship
+            .condition
+            .dying_or_destroyed(self.pilot.reserves.armor)
+        {
             return;
         }
         let led: Vec<NpcId> = self
@@ -77,6 +79,7 @@ mod tests {
     use crate::ai::{Behaviour, Surroundings};
     use crate::bay::Carrier;
     use crate::chance::{Chance, NeverFires};
+    use crate::combat::hull::Condition;
     use crate::combat::{Rules, ShipRef};
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::mission::ships::ShipBehav;
