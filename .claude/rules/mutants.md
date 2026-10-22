@@ -23,6 +23,11 @@ Let the tool generate and run the mutants rather than editing source by hand.
 - Run one mutants session at a time across all worktrees. They share the
   machine's cores, and two at once slow both. `mise.toml` sets
   `CARGO_MUTANTS_JOBS=4`; pass `-j` to change it for one run.
+- To wait for another session's run, match the process name exactly:
+  `until ! pgrep -x cargo-mutants >/dev/null; do sleep 30; done`. Never use
+  `pgrep -f "cargo-mutants ..."`: `-f` matches whole command lines, and the
+  waiting shell's own command line contains the pattern, so the loop finds
+  itself and never ends.
 - For each `MISSED` mutant, write a test that fails against that mutant, then
   rerun to confirm it is `caught`.
 - For a mutant that genuinely can't change observable behaviour, add a pattern
