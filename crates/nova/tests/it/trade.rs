@@ -15,7 +15,8 @@
 //! reading), the pilot resumes docked with its cargo: S sells a ton at
 //! the local price and Alt-S, confirming the quantity dialog's default,
 //! the rest, then holding B buys a ton a repeat and Alt-B, confirmed
-//! likewise, fills the hold again.
+//! likewise, fills the hold again. The Trade Center lists in the colours
+//! of the game data's `cölr` 128.
 
 use std::io;
 use std::path::Path;
@@ -28,6 +29,7 @@ use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::colors::Colors;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::ship::Ship;
@@ -45,11 +47,11 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Good, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook};
-use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
-use nova_view::spaceport::TradeScreen;
+use nova_view::spaceport::{ListColors, TradeScreen};
+use nova_view::{Color, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -213,6 +215,14 @@ fn trade_words() -> Vec<&'static str> {
     list
 }
 
+/// The list colours the game data's `cölr` 128 gives, none of them the
+/// stock ones.
+const LIST_COLORS: ListColors = ListColors {
+    text: Color::rgba(0x11, 0x22, 0x33, 255),
+    background: Color::rgba(0x44, 0x55, 0x66, 255),
+    hilite: Color::rgba(0x77, 0x88, 0x99, 255),
+};
+
 fn game_data() -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
@@ -252,8 +262,21 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 100, pict(13, 25, [0, 0, 0])));
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
-    // The main menu's art, so the menu draws the original's screen.
+    // The main menu's art, so the menu draws the original's screen, its
+    // `cölr` 128 also giving the lists the colours of `LIST_COLORS`.
     resources.extend(main_screen_resources());
+    let (_, _, colors) = resources
+        .iter_mut()
+        .find(|(ty, id, _)| *ty == Colors::TYPE && *id == 128)
+        .expect("the main screen's colours");
+    for (at, color) in [
+        (0x8E, LIST_COLORS.text),
+        (0x92, LIST_COLORS.background),
+        (0x96, LIST_COLORS.hilite),
+    ] {
+        let rgb24 = u32::from_be_bytes([0, color.r, color.g, color.b]);
+        colors[at..at + 4].copy_from_slice(&rgb24.to_be_bytes());
+    }
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -708,3 +731,19 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
 }
 
 crate::common::entry_harness!(Harness, click, frame);
+
+#[test]
+fn the_trade_center_lists_in_the_game_datas_list_colours() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store, RuleSource::Engine);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    game.frame();
+    game.land();
+    game.open_trade_center();
+    assert_ne!(LIST_COLORS, ListColors::STOCK);
+    assert_eq!(game.trade().colors(), LIST_COLORS);
+}
