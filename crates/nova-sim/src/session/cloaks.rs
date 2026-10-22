@@ -825,4 +825,24 @@ mod tests {
         assert!(!has_cloak(false, true), "out of close formation");
         assert!(!has_cloak(true, false), "no area cloak");
     }
+
+    #[test]
+    fn the_players_escort_riding_its_area_cloak_fights_with_a_cloak() {
+        // The player's escorts are the main riders: the player owns the
+        // area cloak, and its escort's parent slot (+0x9a) is the player.
+        use crate::rulebook::RuleSource;
+        let catalog = area_cloaking();
+        let has_cloak = |area: bool| {
+            let mut session = riding(&catalog, RuleSource::Engine);
+            if !area {
+                session.pilot.outfits.remove(&crate::catalog::OutfitId(300));
+            }
+            assert_eq!(session.player_side().area_cloak, area);
+            session.ship.cloak.cloak = CLOAKED;
+            let (_, npcs) = session.fight_terms();
+            npcs[0].has_cloak
+        };
+        assert!(has_cloak(true), "rides the cloaked player's area cloak");
+        assert!(!has_cloak(false), "no area cloak");
+    }
 }
