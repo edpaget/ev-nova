@@ -25562,16 +25562,13 @@ pub(super) mod tests {
         );
         let left = *session.player();
         let held = session.pilot().cargo().collect::<Vec<_>>();
-        let mut chance = Draws::of(&[123]);
+        let mut chance = Draws::default().keyed(300, 123);
         assert_eq!(
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        assert_eq!(
-            chance.asked,
-            [300, 2],
-            "the fuel drawn below its Fuel, then the old ship's voice"
-        );
+        assert_eq!(chance.times_asked(300), 1, "the fuel drawn below its Fuel");
+        assert!(session.npcs()[1].voice.is_some(), "the old ship's voice");
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
         assert_eq!(
@@ -25713,9 +25710,15 @@ pub(super) mod tests {
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        // No fuel drawn: only the old ship's voice, Rand(2) (see the
-        // `voices` module).
-        assert_eq!(chance.asked, [2]);
+        // No fuel drawn: no draw but the old ship's voice, Rand(2) (see
+        // the `voices` module).
+        assert!(chance.asked.iter().all(|&n| n == 2), "{:?}", chance.asked);
+        let old = session.space.escorts.fleet.iter().flatten().next();
+        let old = *old.expect("the old ship kept");
+        assert!(
+            session.space.npc(old).expect("there").voice.is_some(),
+            "the old ship's voice"
+        );
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
 

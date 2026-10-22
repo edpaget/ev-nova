@@ -1077,30 +1077,39 @@ mod tests {
     #[test]
     fn on_capture_draws_before_the_fuel() {
         let (mut session, _) = captured_kitted("", "R(b1 b2)", Rulebook::default());
-        let mut chance = Draws::of(&[1, 7]);
+        let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(
-            chance.asked,
-            [2, 300, 2],
-            "the roll, then the fuel, then the old ship's voice"
-        );
-        assert!(session.control_bit(bit(1)));
-        assert_eq!(session.reserves().fuel.now, 7.0);
+        assert_roll_then_fuel(&session, &chance);
     }
 
     #[test]
     fn by_the_other_reading_on_capture_still_draws_before_the_fuel() {
         let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, _) = captured_kitted("", "R(b1 b2)", rules);
-        let mut chance = Draws::of(&[1, 7]);
+        let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(
-            chance.asked,
-            [2, 300, 2],
-            "the roll, then the fuel, then the old ship's voice"
+        assert_roll_then_fuel(&session, &chance);
+    }
+
+    /// The `OnCapture` roll (a `Rand(2)`, keyed to 1) drew before the fuel
+    /// (below 300, keyed to 7), and the old ship kept rolled its voice (see
+    /// the `voices` module), wherever that roll falls among the draws.
+    fn assert_roll_then_fuel(session: &Session, chance: &Draws) {
+        let roll = chance.asked.iter().position(|&n| n == 2);
+        let fuel = chance.asked.iter().position(|&n| n == 300);
+        assert!(
+            roll.is_some() && roll < fuel,
+            "the roll, then the fuel: {:?}",
+            chance.asked
         );
         assert!(session.control_bit(bit(1)));
         assert_eq!(session.reserves().fuel.now, 7.0);
+        let old = session.space.escorts.fleet.iter().flatten().next();
+        let old = *old.expect("the old ship kept");
+        assert!(
+            session.space.npc(old).expect("there").voice.is_some(),
+            "the old ship's voice"
+        );
     }
 
     // A new pilot.

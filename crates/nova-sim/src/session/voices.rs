@@ -241,7 +241,7 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, FakePilotCatalog, Ranged, hull, jump, ship};
+    use crate::testkit::{FAST, FakePilotCatalog, Ranged, hull, jump, ship};
     use crate::traffic::npc::{AiType, Npc};
     use crate::voice::Voices;
     use crate::warp::SoundLength;
@@ -848,21 +848,23 @@ mod tests {
     }
 
     #[test]
-    fn of_two_escorts_with_no_variant_the_lower_berth_rolls_first() {
-        // Rand(2) of 0 then 1: the first to roll takes the even voice.
-        // Neither calls its target, on Rand(3) of 1.
+    fn of_two_escorts_with_no_variant_each_takes_one_in_the_same_pass() {
+        // Each roll stands alone, so which escort draws first is not
+        // asked. A Rand(2) of 1 gives the free medium the odd voice; the
+        // other keeps its government's even one. Neither calls its
+        // target, on Rand(3) of 1.
         let catalog = voiced();
-        let (mut session, _) = raided_swapped(&catalog, &[MEDIUM, MEDIUM]);
+        let (mut session, _) = raided_swapped(&catalog, &[MEDIUM, MEDIUM_EVEN]);
         heard(
             &mut session,
             &catalog,
             &sitting_ai(),
-            &mut Draws::of(&[0, 1]).keyed(3, 1),
+            &mut Ranged::of(&[(2, 1), (3, 1)]),
         );
         assert_eq!(
             [0, 1].map(|index| escort_npc(&mut session, index).voice),
             [Some(VoiceVariant::Odd), Some(VoiceVariant::Even)],
-            "the second of the fleet, at the lower berth, rolled first"
+            "the free one rolled, the other forced"
         );
     }
 
