@@ -484,6 +484,41 @@ fn planet_laser() -> WeaponRecord {
     }
 }
 
+/// One planet-type reading set on a fight.
+type Setter = fn(&mut Combat);
+
+#[test]
+fn the_fight_reads_its_planet_type_rules_from_the_rulebook() {
+    use crate::rulebook::{RuleKey, Rulebook};
+    let read = |rulebook: Rulebook| {
+        let mut combat = Combat::default();
+        combat.set_planet_type_rules(&rulebook);
+        combat
+    };
+    assert_eq!(read(Rulebook::default()), Combat::default(), "the engine's");
+    let cases: [(RuleKey, Setter); 3] = [
+        (RuleKey::PlanetBlasts, |combat| {
+            combat.set_planet_blasts(PlanetBlasts::Matching);
+        }),
+        (RuleKey::BeamPlanetFlag, |combat| {
+            combat.set_beam_planet_flag(BeamPlanetFlag::Flags2);
+        }),
+        (RuleKey::BeamStellars, |combat| {
+            combat.set_beam_stellars(RuleSource::Bible);
+        }),
+    ];
+    for (key, set) in cases {
+        let mut expected = Combat::default();
+        set(&mut expected);
+        assert_ne!(expected, Combat::default());
+        assert_eq!(
+            read(Rulebook::default().with_override(key, RuleSource::Bible)),
+            expected,
+            "{key:?}"
+        );
+    }
+}
+
 /// A fires `record` once to the right among `others` and `stellars`, by
 /// `reading` of [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars),
 /// for 5 ticks. The ships, the events, and the strikes on stellars.

@@ -1841,8 +1841,8 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
-            destroyable: &self.statics.destroyable,
-            // No tractor's step: the entry flies no ship.
+            // No tractor's step: the entry flies no ship. No stellar
+            // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)
         };
         let last = self.space.last_npc();

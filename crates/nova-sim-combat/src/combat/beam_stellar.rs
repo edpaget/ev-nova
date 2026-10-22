@@ -194,6 +194,44 @@ mod tests {
     }
 
     #[test]
+    fn a_beam_off_the_centre_measures_from_its_own_start() {
+        // From (100, 0) to the left, to (-100, 0): 128 at the centre is
+        // met at (10, 0), 90 along.
+        let from = ShipState {
+            position: Vec2::new(100.0, 0.0),
+            heading: 270.0,
+            ..ShipState::default()
+        };
+        let planet = Beam {
+            end: Vec2::new(-100.0, 0.0),
+            ..Beam::launch(
+                beam(PLANET_TYPE, Aiming::Ahead).weapon,
+                ShipRef::Player,
+                ShipRef::Player,
+                &from,
+                Aiming::Ahead,
+            )
+        };
+        assert_eq!(planet.start, Vec2::new(100.0, 0.0));
+        let stellars = [stellar(128, 0.0, 5)];
+        let met_at = met(&planet, None, &stellars).expect("met");
+        assert!(
+            (met_at.1 - Vec2::new(10.0, 0.0)).length() < 1e-3,
+            "{met_at:?}"
+        );
+        assert_eq!(
+            met(&planet, Some(Vec2::new(20.0, 0.0)), &stellars),
+            None,
+            "a ship 80 along is nearer"
+        );
+        assert_eq!(
+            met(&planet, Some(Vec2::new(5.0, 0.0)), &stellars).map(|m| m.0),
+            Some(0),
+            "one 95 along is not"
+        );
+    }
+
+    #[test]
     fn a_beam_takes_its_mass_and_energy_times_the_factor_truncated() {
         let record = WeaponRecord {
             mass_dmg: 2,

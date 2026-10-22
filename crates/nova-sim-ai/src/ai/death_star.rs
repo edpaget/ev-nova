@@ -183,7 +183,7 @@ pub fn planet_weapon(npc: &Npc, weapons: &Arsenal) -> Option<WeaponSpec> {
         .find(|spec| {
             spec.planet_type()
                 && planet_guidance(spec.guidance)
-                && fire::has_ammo(npc, &own_mount(npc, spec))
+                && fire::has_ammo(npc, &unmounted(spec))
         })
 }
 
@@ -254,19 +254,19 @@ pub fn attack_band<'a>(
 }
 
 /// The weapon `_AIFirePlanetGun` (@0x80536-0x805c9) picks for `npc`: the
-/// **highest** index among its own mounts it carries, of a guidance
-/// [`planet_guidance`] passes, with its ammunition ([`fire::has_ammo`])
-/// and its reload at or below none. It does not test the planet-type bit,
-/// so a ready ordinary gun above the planet gun wins. None when nothing
-/// is ready.
+/// **highest** index among its own mounts it carries (count above 0, which
+/// every mount of an [`Armament`](crate::combat::armament::Armament) has),
+/// of a guidance [`planet_guidance`] passes, with its ammunition
+/// ([`fire::has_ammo`]) and its reload at or below none. It does not test
+/// the planet-type bit, so a ready ordinary gun above the planet gun wins.
+/// None when nothing is ready.
 #[must_use]
 pub fn planet_gun_pick(npc: &Npc) -> Option<WeaponId> {
     npc.armament
         .mounts()
         .iter()
         .filter(|mount| {
-            mount.count > 0
-                && planet_guidance(mount.spec.guidance)
+            planet_guidance(mount.spec.guidance)
                 && fire::has_ammo(npc, mount)
                 && mount.reload <= 0.0
         })
@@ -297,20 +297,16 @@ pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
     }
 }
 
-/// `npc`'s mount of `spec`, or one of none when it carries none, which
-/// `_WeaponHasAmmo` reads all the same.
-fn own_mount(npc: &Npc, spec: &WeaponSpec) -> Mount {
-    npc.armament
-        .mounts()
-        .iter()
-        .find(|mount| mount.spec.id == spec.id)
-        .copied()
-        .unwrap_or(Mount {
-            spec: *spec,
-            count: 0,
-            reload: 0.0,
-            burst: 0,
-        })
+/// A mount of `spec` for `_WeaponHasAmmo` to read, whether or not the
+/// ship carries the weapon: it reads only the weapon and the ship's rounds
+/// and fuel, never how many it carries or its reload.
+fn unmounted(spec: &WeaponSpec) -> Mount {
+    Mount {
+        spec: *spec,
+        count: 0,
+        reload: 0.0,
+        burst: 0,
+    }
 }
 
 #[cfg(test)]
@@ -473,6 +469,22 @@ mod tests {
         assert!(decision.clears_target);
         assert_eq!(decision.travel, TravelWrite::Set);
         assert_eq!(*warship.asked.borrow(), [], "no warship think");
+        let govts = govts(0, 0);
+        let destroyable = destroyable();
+        let armed = arsenal(&[gun], &[(130, 1)]);
+        let (sites, npcs) = (sites(), [attacker(&[gun])]);
+        let around = Surroundings {
+            govts: &govts,
+            weapons: &armed,
+            destroyable: &destroyable,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let death_star = DeathStar { warship };
+        assert_eq!(
+            death_star.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::AttackStellar(StellarId(131)),
+            "its decision's goal"
+        );
     }
 
     #[test]
@@ -520,10 +532,11 @@ mod tests {
             let armed = arsenal(&[record], &[(record.id.0, stock)]);
             planet_weapon(&npc, &armed).is_some()
         };
-        for guidance in [-1, 1, 2, 4, 5, 6, 7] {
+        // Undocumented codes go by the signed test too: -2 passes, 11 not.
+        for guidance in [-2, -1, 1, 2, 4, 5, 6, 7] {
             assert!(found(planet_gun(130, guidance), 1, 0), "{guidance}");
         }
-        for guidance in [0, 3, 8, 9, 10, 99] {
+        for guidance in [0, 3, 8, 9, 10, 11, 99] {
             assert!(!found(planet_gun(130, guidance), 1, 0), "{guidance}");
         }
         let launcher = WeaponRecord {
@@ -601,6 +614,17 @@ mod tests {
             set.goal,
             Goal::Land(StellarId(128)),
             "a landing set this think stands"
+        );
+        let set_gate = decided(
+            &attacker(&[gun]),
+            &sites(),
+            &armed,
+            Recording::answering(Goal::EnterGate(StellarId(128))),
+        );
+        assert_eq!(
+            set_gate.goal,
+            Goal::EnterGate(StellarId(128)),
+            "so does a gate entry"
         );
         let written = decided(
             &landing,
@@ -764,6 +788,17 @@ mod tests {
         assert_eq!(no_gun(0.75), Band::Aim, "r² 1.0, not squared");
         assert_eq!(no_gun(0.76), Band::Approach);
         assert_eq!(no_gun(0.24), Band::RunOut);
+        // Both axes count: 60 by 60 is 84.9 off, beyond 75; 30 by 40 is 50.
+        let off = |x: f32, y: f32| {
+            let state = ShipState {
+                position: Vec2::new(x, y),
+                ..ShipState::default()
+            };
+            band(&state, Vec2::ZERO, Some(100.0))
+        };
+        assert_eq!(off(60.0, 60.0), Band::Approach);
+        assert_eq!(off(30.0, -40.0), Band::Aim);
+        assert_eq!(off(0.0, 20.0), Band::RunOut);
         assert_eq!(
             (APPROACH_BAND, RUN_OUT_BAND, AIM_FACING, NO_GUN_RANGE_SQ),
             (0.5625, 0.0625, 15.0, 1.0)
