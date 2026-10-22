@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
+    # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
+    # same half-width.
+    "landing\\.rs:[0-9]+:[0-9]+: replace < with <= in npc_box$",
     # A formation slot's side push turns by trunc(heading + 90) % 360:
     # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
     # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same

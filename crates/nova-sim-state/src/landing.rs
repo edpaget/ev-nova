@@ -1561,6 +1561,21 @@ mod tests {
             1.0,
             RuleSource::Bible
         ));
+        // Measured from the stellar's centre, wherever it is.
+        let off_centre = site(128, 500.0, -300.0);
+        let at = |x: f32, y: f32| Vec2::new(500.0 + x, -300.0 + y);
+        assert!(npc_over(
+            &off_centre,
+            at(30.0, 40.0),
+            8.0,
+            RuleSource::Bible
+        ));
+        assert!(!npc_over(
+            &off_centre,
+            at(30.0, 40.01),
+            8.0,
+            RuleSource::Bible
+        ));
     }
 
     #[test]
