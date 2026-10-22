@@ -434,6 +434,27 @@ fn a_pilot_flown_with_a_stellar_destroyed_draws_it_dead_at_once() {
     assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "before any frame");
 }
 
+// Stellar animation.
+
+/// At 60 fps each frame is half a tick: the halves add up, so the Moon
+/// (1129) steps once the second one completes the tick.
+#[test]
+fn two_half_tick_frames_step_the_stellars_once() {
+    let mut view = flight();
+    view.tick(TICK / 2);
+    assert_eq!(
+        sprites(&drawn(&view))[1].0,
+        ImageKey::sprite(1129, 0),
+        "not on half a tick"
+    );
+    view.tick(REST_OF_TICK);
+    assert_eq!(
+        sprites(&drawn(&view))[1].0,
+        ImageKey::sprite(1129, 1),
+        "on the tick's second half"
+    );
+}
+
 // A `DeadType` with no sheet after a rebuild point (story-runtime
 // phase 9).
 

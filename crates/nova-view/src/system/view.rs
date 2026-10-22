@@ -723,4 +723,20 @@ mod tests {
         }
         assert_eq!(shown, [0, 0, 1, 1, 2, 2, 3, 3, 0, 0]);
     }
+
+    /// At 60 fps each frame is half a tick: the halves add up, so the
+    /// Wormhole, a frame every 2 ticks, steps every 4 frames.
+    #[test]
+    fn half_tick_frames_add_up_to_the_animations_ticks() {
+        let tick = Duration::from_secs(1) / 30;
+        // `tick / 2` rounds down, so the second half is a nanosecond longer.
+        let halves = [tick / 2, Duration::from_nanos(16_666_667)];
+        let mut view = sol();
+        let mut shown = Vec::new();
+        for half in halves.iter().cycle().take(12) {
+            shown.push(view.frame(2).expect("a sheet"));
+            view.tick(*half);
+        }
+        assert_eq!(shown, [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]);
+    }
 }
