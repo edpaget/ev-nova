@@ -95,4 +95,4 @@ pub use catalog::{
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, MapOpener, SharedChance};
+pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, SharedChance};

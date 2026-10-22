@@ -160,6 +160,7 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::escorts::NUMBER_WORDS;
+use crate::flight::view::is_map_press;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -465,6 +466,16 @@ enum Highlight {
     None(Option<OutfitId>),
 }
 
+/// What the screen's own keys asked for, until each is taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyAsks {
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    mission_info: bool,
+    /// Whether the map key asked for the course map.
+    map: bool,
+}
+
 /// The Outfitter of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct OutfitterScreen {
@@ -494,9 +505,8 @@ pub struct OutfitterScreen {
     offering: Option<VenueOffers>,
     style: ButtonStyle,
     closed: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
-    /// asked for the mission info screen.
-    info_requested: bool,
+    /// What its keys asked for, until each is taken.
+    asks: KeyAsks,
     /// Whether a cell is highlighted, and with none, the outfit Buy and
     /// Sell answer for.
     highlight: Highlight,
@@ -567,7 +577,7 @@ impl OutfitterScreen {
             offering: None,
             style,
             closed: false,
-            info_requested: false,
+            asks: KeyAsks::default(),
             highlight: Highlight::Cell,
             leaving: false,
             description_request: None,
@@ -640,6 +650,14 @@ impl OutfitterScreen {
         }
     }
 
+    /// Whether the map key (`_keyPrefs` +0x12, a press) has asked for the
+    /// course map since this was last asked, once (`_OutfitFilter` item 2, @0x580f3-0x58111): never in the
+    /// dialogs open over the outfitter or its offer, and never without its
+    /// dialog. Whoever holds the session opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
+    }
+
     /// The mission of the offer open over it, when the offer's map key
     /// asked for the map since this was last asked, once.
     pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
@@ -654,7 +672,7 @@ impl OutfitterScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_info_request);
-        std::mem::take(&mut self.info_requested) || offer
+        std::mem::take(&mut self.asks.mission_info) || offer
     }
 
     /// Whether the outfitter has asked for an offer since this was last
@@ -1186,8 +1204,12 @@ impl Screen for OutfitterScreen {
             }
             return ScreenAction::None;
         }
+        if is_map_press(input) {
+            self.asks.map = true;
+            return ScreenAction::None;
+        }
         if is_mission_info_press(input) {
-            self.info_requested = true;
+            self.asks.mission_info = true;
             return ScreenAction::None;
         }
         let pressed =
@@ -4463,6 +4485,44 @@ mod tests {
         );
         press(&mut broken, i);
         assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_on_a_press_not_in_the_quantity_dialog_or_the_alert() {
+        let m = crate::flight::view::MAP_KEY;
+        let mut screen = counting_screen();
+        assert!(!screen.take_map_request());
+        screen.input(&key(m, true, true));
+        screen.input(&key(m, false, false));
+        assert!(!screen.take_map_request(), "a repeat or a release");
+        press(&mut screen, m);
+        assert!(screen.take_map_request());
+        assert!(!screen.take_map_request(), "once");
+        assert!(!screen.take_info_request());
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut screen = alerting(RAISED);
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the alert takes it");
+        assert!(screen.alert_dialog().is_some());
+        let mut broken = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            art() as Rc<dyn OutfitterCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, m);
+        assert!(!broken.take_map_request(), "no dialog");
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the offer's");
+        assert!(screen.take_offer_map_request().is_some());
     }
 
     #[test]

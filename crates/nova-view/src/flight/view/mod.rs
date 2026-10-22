@@ -318,7 +318,10 @@
 //!   ([`FlightView::open_dialog_map`]): marked with the green mission
 //!   system and the arrow flag the dialog gives it, opening and closing
 //!   in silence, its close followed by the dialog's own restore of the
-//!   nav (see [`MapOpener`]'s module).
+//!   nav (see [`MapOpener`]'s module). So does the spaceport, a shop,
+//!   the shipyard or the hire screen, and the ship description
+//!   ([`FlightView::open_port_screen_map`]), silently and unmarked (see
+//!   [`PortScreen`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
@@ -663,6 +666,7 @@ mod dialog_map;
 mod docked;
 mod interface;
 mod messages;
+mod port_screen_map;
 mod readouts;
 mod screen;
 mod shots;
@@ -674,6 +678,7 @@ mod world;
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
 pub use messages::*;
+pub use port_screen_map::PortScreen;
 
 /// The developer overlays: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);

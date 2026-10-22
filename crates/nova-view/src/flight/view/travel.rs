@@ -189,9 +189,10 @@ impl<
         self.open_map_as(MapOpening::Plain);
     }
 
-    /// [`FlightView::open_map`], opened `by` whoever opens it, which
-    /// gives the map its marks ([`FlightView::open_dialog_map`]), and the
-    /// nav noted as it opens (`_DoSystemMap` @0x12349).
+    /// [`FlightView::open_map`], opened `by` whoever opens it (flight, the
+    /// bar, a port screen or a mission dialog), which gives the map its
+    /// marks ([`FlightView::open_dialog_map`]) and its close's restore, and
+    /// the nav noted as it opens (`_DoSystemMap` @0x12349).
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
         self.map_opened = Some(MapOpened {
             by,
@@ -274,8 +275,9 @@ impl<
     }
 
     /// The input to the map opened over a screen: in port
-    /// ([`FlightView::open_bar_map`]), or by a mission dialog docked or in
-    /// flight ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
+    /// ([`FlightView::open_bar_map`], [`FlightView::open_port_screen_map`]),
+    /// or by a mission dialog docked or in flight
+    /// ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
     /// closes it ([`FlightView::close_map`]), unless
     /// Find is open, where it types, and anything else goes to the map, so
     /// flight's own keys and cursor stay out of the port.
@@ -1446,7 +1448,11 @@ impl<
     /// ([`Session::restore_bar_nav`], `_DoBarDialog` @0x492b7-0x492d3),
     /// with no redraw, as `_UpdateAllPortDialogs` (@0x492d7) draws no
     /// status, so the nav area shows the map's selection until the port's
-    /// next nav redraw, such as the bar's close; a mission dialog its own
+    /// next nav redraw, such as the bar's close; a port screen its own
+    /// ([`FlightView::open_port_screen_map`]), with no redraw either: the
+    /// exchange and the outfitter the nav they opened with, and the
+    /// spaceport, the shipyard, the hire screen and the ship description
+    /// the nav as the map opened; a mission dialog its own
     /// ([`FlightView::open_dialog_map`]): the offer's, the computer's and
     /// the briefing's the nav as the map opened, docked or in flight, the
     /// computer's then redrawing the nav area, and mission info's nothing.

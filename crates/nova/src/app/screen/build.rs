@@ -726,7 +726,8 @@ impl AppScreen {
     }
 
     /// Whether flight's course map is open over the spaceport: the bar's
-    /// map ([`FlightView::open_bar_map`]) or a mission dialog's
+    /// map ([`FlightView::open_bar_map`]), a port screen's
+    /// ([`FlightView::open_port_screen_map`]) or a mission dialog's
     /// ([`FlightView::open_dialog_map`]).
     pub(super) fn port_map_open(&self) -> bool {
         self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)

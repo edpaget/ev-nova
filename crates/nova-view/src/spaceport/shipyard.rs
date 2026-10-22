@@ -143,6 +143,8 @@ use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
+use crate::flight::PortScreen;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -898,6 +900,9 @@ struct InfoAsks {
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen.
     mission_info: bool,
+    /// The map the map key asked for: the shipyard's, or the Info
+    /// panel's.
+    map: Option<PortScreen>,
 }
 
 /// The Shipyard of the stellar landed on.
@@ -1046,6 +1051,16 @@ impl ShipyardScreen {
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
         std::mem::take(&mut self.asks.player_info) || offer
+    }
+
+    /// The map the map key (`_keyPrefs` +0x12, a press) asked for since
+    /// this was last asked, once: the shipyard's (`_ShipyardFilter` item 3,
+    /// @0x608ed-0x6090b), or the ship description's while the Info panel
+    /// is open (`_ShipDescFilter` item 4, @0x51108-0x51126). Never at the
+    /// name prompt, which takes M as a letter, and never without the
+    /// dialog. Whoever holds the session opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> Option<PortScreen> {
+        self.asks.map.take()
     }
 
     /// The mission of the offer open over it, when the offer's map key
@@ -1480,6 +1495,14 @@ impl Screen for ShipyardScreen {
             }
             return ScreenAction::None;
         }
+        if is_map_press(input) {
+            self.asks.map = Some(if self.panel.is_some() {
+                PortScreen::ShipDescription
+            } else {
+                PortScreen::Shipyard
+            });
+            return ScreenAction::None;
+        }
         if is_player_info_press(input) {
             self.asks.player_info = true;
             return ScreenAction::None;
@@ -1600,6 +1623,7 @@ mod tests {
 
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::flight::view::MAP_KEY;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
@@ -3284,6 +3308,54 @@ mod tests {
         press(&mut screen, p);
         assert!(!screen.take_player_info_request(), "the prompt takes it");
         assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_from_the_shipyard_and_its_panel_not_its_prompt() {
+        let mut screen = screen();
+        assert_eq!(screen.take_map_request(), None);
+        screen.input(&key(MAP_KEY, true, true));
+        screen.input(&key(MAP_KEY, false, false));
+        assert_eq!(screen.take_map_request(), None, "a repeat or a release");
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), Some(PortScreen::Shipyard));
+        assert_eq!(screen.take_map_request(), None, "once");
+        assert!(!screen.closed());
+        press(&mut screen, INFO_KEY);
+        press(&mut screen, MAP_KEY);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortScreen::ShipDescription),
+            "the Info panel"
+        );
+        assert!(screen.info_panel().is_some(), "which stays open");
+        let mut screen = naming_by_key();
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "the prompt takes it");
+        assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_map_key_asks_nothing_from_a_shipyard_without_its_dialog_or_under_an_offer() {
+        let mut screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            Rc::clone(&art()) as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "without its dialog");
+        let mut screen = screen_with_offers();
+        screen.open_offer(crate::spaceport::offer::fixture::prompt());
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "the offer's");
+        assert!(screen.take_offer_map_request().is_some());
+    }
+
+    fn screen_with_offers() -> ShipyardScreen {
+        screen().with_offers(crate::spaceport::offer::fixture::templates())
     }
 
     #[test]

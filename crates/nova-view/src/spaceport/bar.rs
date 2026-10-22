@@ -59,7 +59,9 @@
 //! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
 //! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
 //! only while the bar is laid out and neither the news, the hire screen
-//! nor an offer has the input, as each of those has its own filter.
+//! nor an offer has the input, as each of those has its own filter. The
+//! hire screen's own map key asks for the shipyard's map, or its ship
+//! description's while its Info panel is open, as the shipyard does.
 //! Whoever holds the session opens flight's course map over the
 //! spaceport, and puts back the nav the bar opened with as it closes
 //! (`_DoBarDialog` @0x492a3-0x4930b).
@@ -79,11 +81,13 @@ use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
 use super::news::{NEWS_DIALOG, NewsScreen, shown_news_picture};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::port_map::PortMap;
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::MAP_KEY;
+use crate::flight::PortScreen;
+use crate::flight::view::{MAP_KEY, is_map_press};
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -225,8 +229,9 @@ struct Asks {
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
-    /// The course map: [`MAP_KEY`] was pressed.
-    map: bool,
+    /// The course map [`MAP_KEY`] asked for: the bar's, or the hire
+    /// screen's.
+    map: Option<PortMap>,
 }
 
 /// The bar of the stellar landed on.
@@ -526,11 +531,16 @@ impl BarScreen {
         std::mem::take(&mut self.asks.hire)
     }
 
-    /// Whether [`MAP_KEY`] has asked for the course map since this was
-    /// last asked (`_BarFilter`'s item 8): whoever holds the session opens
-    /// it over the spaceport.
-    pub fn take_map_request(&mut self) -> bool {
-        std::mem::take(&mut self.asks.map)
+    /// The course map [`MAP_KEY`] has asked for since this was last
+    /// asked, once: the bar's ([`PortMap::Bar`], `_BarFilter`'s item 8),
+    /// or the hire screen's, the shipyard dialog in hire mode
+    /// ([`PortScreen::Shipyard`], `_ShipyardFilter` item 3,
+    /// @0x608ed-0x6090b), or its ship description's while its Info panel
+    /// is open ([`PortScreen::ShipDescription`], `_ShipDescFilter` item 4,
+    /// @0x51108-0x51126). Whoever holds the session opens it over the
+    /// spaceport.
+    pub fn take_map_request(&mut self) -> Option<PortMap> {
+        self.asks.map.take()
     }
 
     /// The mission of the offer open over it, when the offer's map key
@@ -652,6 +662,19 @@ impl Screen for BarScreen {
         {
             return ScreenAction::None;
         }
+        // The hire screen's filters read the map key first, before player
+        // info (`_ShipyardFilter` @0x608ed, `_ShipDescFilter` @0x51108).
+        if let Some(hire) = &self.hire
+            && hire.dialog().is_some()
+            && is_map_press(input)
+        {
+            self.asks.map = Some(PortMap::Screen(if hire.info_panel().is_some() {
+                PortScreen::ShipDescription
+            } else {
+                PortScreen::Shipyard
+            }));
+            return ScreenAction::None;
+        }
         if is_player_info_press(input) && (self.hire.is_some() || self.laid.is_ok()) {
             self.asks.player_info = true;
             return ScreenAction::None;
@@ -696,7 +719,7 @@ impl Screen for BarScreen {
                 repeat: false,
             })
         {
-            self.asks.map = true;
+            self.asks.map = Some(PortMap::Bar);
             return ScreenAction::None;
         }
         if let Input::Key {
@@ -1296,6 +1319,34 @@ mod tests {
                 .is_some(),
             "the panel stays open"
         );
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_shipyards_map_from_the_hire_screen_and_its_info_panel() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.input(&key(MAP_KEY, false));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortMap::Screen(PortScreen::Shipyard))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        assert!(screen.hire_screen().is_some(), "still open");
+        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        screen.input(&key(MAP_KEY, false));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortMap::Screen(PortScreen::ShipDescription))
+        );
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel stays open"
+        );
+        assert!(!screen.take_player_info_request());
+        assert!(!screen.take_info_request());
     }
 
     #[test]
@@ -2105,18 +2156,18 @@ mod tests {
     #[test]
     fn the_map_key_asks_for_the_map_on_a_press_only() {
         let mut screen = bar();
-        assert!(!screen.take_map_request());
+        assert_eq!(screen.take_map_request(), None);
         screen.input(&key(MAP_KEY, true));
-        assert!(!screen.take_map_request(), "a repeat");
+        assert_eq!(screen.take_map_request(), None, "a repeat");
         screen.input(&Input::Key {
             key: MAP_KEY,
             pressed: false,
             repeat: false,
         });
-        assert!(!screen.take_map_request(), "a release");
+        assert_eq!(screen.take_map_request(), None, "a release");
         screen.input(&key(MAP_KEY, false));
-        assert!(screen.take_map_request());
-        assert!(!screen.take_map_request(), "once");
+        assert_eq!(screen.take_map_request(), Some(PortMap::Bar));
+        assert_eq!(screen.take_map_request(), None, "once");
         assert!(!screen.take_hire_request());
         assert!(!screen.take_news_request());
         assert!(!screen.closed());
@@ -2124,17 +2175,21 @@ mod tests {
         let mut screen = newsy();
         screen.open_news(&news(), 9000);
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "the news open");
+        assert_eq!(screen.take_map_request(), None, "the news open");
 
         let mut screen = bar();
         screen.open_hire(list(2));
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "the hire screen open");
+        assert_eq!(
+            screen.take_map_request(),
+            None,
+            "a hire screen without its dialog"
+        );
 
         let mut screen = offering();
         screen.open_offer(prompt());
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "an offer open");
+        assert_eq!(screen.take_map_request(), None, "an offer open");
 
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
@@ -2149,7 +2204,7 @@ mod tests {
             true,
         );
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "without the bar's dialog");
+        assert_eq!(screen.take_map_request(), None, "without the bar's dialog");
     }
 
     /// `_BarFilter` @0x47a4b maps its keys to items with no click.

@@ -843,6 +843,59 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
 }
 
+/// The nav mode of `screen`'s session.
+fn port_nav_mode(screen: &AppScreen) -> Option<nova_sim::NavMode> {
+    flight(screen)
+        .session()
+        .ok()
+        .map(nova_sim::Session::nav_mode)
+}
+
+/// Opens the map from what `screen` shows with M, clears the route on it,
+/// and closes it with Escape, back to the spaceport with the nav put
+/// back.
+fn map_from_a_port_screen(screen: &mut AppScreen, what: &str) {
+    let landed = port_nav_mode(screen);
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::FlightMap, "{what}");
+    screen.input(&key(Key::Char('c'), true));
+    screen.input(&key(Key::Char('c'), false));
+    assert_ne!(port_nav_mode(screen), landed, "{what}: Clear Route");
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::Spaceport, "{what}: closed");
+    assert_eq!(port_nav_mode(screen), landed, "{what}: put back");
+}
+
+#[test]
+fn the_map_key_opens_the_map_over_the_spaceport_and_the_exchange_which_stay_open() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_trader(&store);
+    map_from_a_port_screen(&mut screen, "the spaceport");
+    assert!(spaceport(&screen).open_trade().is_none());
+    assert!(!spaceport(&screen).left(), "still docked");
+    click_port_item(&mut screen, 7);
+    map_from_a_port_screen(&mut screen, "the exchange");
+    assert!(spaceport(&screen).open_trade().is_some(), "still trading");
+}
+
+#[test]
+fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
+    let mut screen = landed_shipyard(&MemoryPilots::new());
+    click_port_item(&mut screen, 9);
+    map_from_a_port_screen(&mut screen, "the shipyard");
+    screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+    map_from_a_port_screen(&mut screen, "its Info panel");
+    assert!(
+        spaceport(&screen)
+            .open_shipyard()
+            .and_then(ShipyardScreen::info_panel)
+            .is_some(),
+        "the panel still open"
+    );
+}
+
 #[test]
 fn tab_on_the_bars_map_changes_nothing() {
     let mut screen = in_the_bar();
