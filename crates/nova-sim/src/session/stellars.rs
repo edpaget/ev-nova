@@ -244,13 +244,18 @@ impl Session {
 
     /// The width each hypergate and wormhole shown takes its entry box
     /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
-    /// (see [`gate_entry`](crate::traffic::gate_entry)).
+    /// (see [`gate_entry`](crate::traffic::gate_entry)). A gate the
+    /// player's system does not hold ([`Chart::held_here`]) reads the
+    /// unloaded width, 150, as the owner test comes first (@0xacb9-0xacc1).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
         self.chart
             .sites
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
-            .map(|site| (site.id, self.space.rebuilt.type_width(site)))
+            .map(|site| {
+                let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
+                (site.id, self.space.type_width(site, held))
+            })
             .collect()
     }
 
@@ -556,6 +561,19 @@ impl Space {
         }
     }
 
+    /// The width `_GetStellarSpriteXSize` reads of `site`'s `Type` master:
+    /// the unloaded width, 150, when the player's system does not hold it
+    /// (`held_here` false, [`Chart::held_here`]), as its owner test
+    /// (@0xacb9-0xacc1) comes before its master tests (@0xacc3); else what
+    /// the last rebuild point left of the master.
+    fn type_width(&self, site: &LandingSite, held_here: bool) -> TypeWidth {
+        if held_here {
+            self.rebuilt.type_width(site)
+        } else {
+            TypeWidth::Unloaded
+        }
+    }
+
     /// How close the ship must be to `site`, one of the stellars shown, to
     /// land on it, by [`RuleKey::LandingDistance`]: the original's box
     /// reads what the last rebuild point and the flight frames since left
@@ -569,14 +587,9 @@ impl Space {
         site: &LandingSite,
         held_here: bool,
     ) -> LandingReach {
-        let type_width = if held_here {
-            self.rebuilt.type_width(site)
-        } else {
-            TypeWidth::Unloaded
-        };
         let shown = StellarShown {
             frame: self.rebuilt.shows_frame(site.id),
-            type_width,
+            type_width: self.type_width(site, held_here),
         };
         landing_reach(
             site,
@@ -3501,5 +3514,29 @@ mod tests {
             "@0x6699a-0x669a4, though cleared, over it and at rest"
         );
         assert_eq!(sounds, [crate::SimSound::Refused], "snd 153 @0x67e8f");
+    }
+
+    #[test]
+    fn a_gate_another_system_holds_reads_150_for_its_entry_box() {
+        use crate::traffic::gate_entry::gate_reach;
+        let mut catalog = twice_listed();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(200)) {
+                site.frame_size = Some((80, 80));
+                site.flags2 = crate::gate::HYPERGATE;
+            }
+        }
+        let entry = |system| {
+            let session = kept_200(&catalog, &engine(), system);
+            let widths = session.gate_type_widths();
+            let width = widths[&StellarId(200)];
+            (width, gate_reach(&site_200(&session), &widths))
+        };
+        assert_eq!(entry(130), (TypeWidth::Frame, 20), "130 owns it: 80 / 4");
+        assert_eq!(
+            entry(131),
+            (TypeWidth::Unloaded, 37),
+            "130 owns it, not 131: 150 / 4 (@0xacb9, @0x8dbdf)"
+        );
     }
 }
