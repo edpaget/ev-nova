@@ -356,6 +356,29 @@ mod tests {
         assert!(with(cloaked));
         assert!(!with(Cloak::default()), "leader uncloaked");
         assert!(!situation(&escort, Around::default()).close_to_cloaked_parent);
+        let far_leader = ShipState {
+            position: Vec2::new(5000.0, 5000.0),
+            ..leader
+        };
+        assert!(!escort.keeps_close_formation(Some(&far_leader)));
+        let far = Around {
+            leader: Some((far_leader, cloaked)),
+            ..Around::default()
+        };
+        assert!(
+            !situation(&escort, far).close_to_cloaked_parent,
+            "escort off its slot"
+        );
+        for goal in [Goal::Follow(NpcId(2)), Goal::Hold] {
+            let around = Around {
+                leader: Some((leader, cloaked)),
+                ..Around::default()
+            };
+            assert!(
+                !situation(&npc(goal, FLYING), around).close_to_cloaked_parent,
+                "{goal:?} is not an escort"
+            );
+        }
         let gliding = Npc {
             mode: Mode::JumpingIn { tick: 0 },
             ..escort
