@@ -95,10 +95,13 @@
 //!
 //! Every frame, too, a cloaked ship that can no longer cloak
 //! ([`CloakGear::can_cloak`], `_ShipCanCloak` @0x553c: not disabled, a
-//! cloak, and fuel) uncloaks (`_HandleShip` @0x3413d-0x3415f, [`hold`]),
-//! and a weapon's hit uncloaks a ship whose cloak decloaks when hit while
-//! it is fully faded or still fading in (`_DamageShip` @0x3bf1f-0x3bf4f,
-//! [`hit`]).
+//! cloak, and the reserves its cloak needs by
+//! [`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves), fuel alone
+//! by the engine; and for the player, not jumping unless its `Flags2` has
+//! [`CLOAK_JUMPING`]) uncloaks (`_HandleShip` @0x3413d-0x3415f,
+//! [`hold`]), and a weapon's hit uncloaks a ship whose cloak decloaks when
+//! hit while it is fully faded or still fading in (`_DamageShip`
+//! @0x3bf1f-0x3bf4f, [`hit`], [`decloak_on_hit`]).
 //!
 //! # Upkeep
 //!
@@ -116,19 +119,27 @@
 //! the hold, so even a ship the hold uncloaks pays that frame. Stock: the
 //! Polaris Cloaking Organs 268 (usage 8) and 269 (4) zero nothing.
 //!
+//! # The player's cloak
+//!
+//! The player's gear reads the outfits it owns, in outfit order
+//! ([`CloakGear::player`]): the first owned cloak gives its usages, its
+//! zeroing and its decloak, and the last one the mod `_ShipCanCloak`
+//! reads. Its key and upkeep are [`player_cloak`](crate::player_cloak)'s,
+//! held through `nova_sim::Session::hold_cloak`; at a full fade it is
+//! always drawn faint ([`shown`] with [`SEEN_AT_FULL_FADE`],
+//! @0x2d199-0x2d1a1), and it alone hears its cloak's sounds.
+//!
 //! # Not modelled
 //!
 //! The think's 30-59 frame delay after a ship's hyperspace glide
 //! (`_HandleShip` @0x34d74); a cloak's fuel upkeep (the uncloak @0x83422-0x8343a and the drain @0x34164-0x341ac),
 //! which no NPC pays (`_CloakFuelUsage` @0x3e25 is 0 for one,
 //! @0x3e31-0x3e39); `_DoShipCloak`'s `_statusRedraw[1]` (@0xdf35-0xdf4b),
-//! player-only, as the HUD is drawn every frame; the player's own cloak,
-//! with its usages read from its owned outfits (@0x3e3b, @0x3eb0,
-//! @0x4046), so raising the cloak
-//! sounds (rdm:phase/cloaking-fidelity/phase-8-cloaking-device) and its
-//! own full fade (@0x2d199-0x2d1a1); area cloaks; NPCs' own sight of
-//! cloaked ships for their targeting (cloaking-fidelity 4; point defence
-//! and homing shots already ask [`seen`]).
+//! player-only, as the HUD is drawn every frame; area cloaks
+//! (rdm:phase/cloaking-fidelity/phase-10-area-cloaks); NPCs' own sight of
+//! the cloaked player for their targeting
+//! (rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player;
+//! point defence and homing shots already ask [`seen`]).
 //!
 //! Left out of `_HandleShipDisplay`'s drawing (@0x2d088-0x2d72e): the
 //! 8-bit depth, its hull at translucency 0x10 (@0x2d341-0x2d34c) and its
@@ -407,7 +418,12 @@ pub fn untargetable(flags2: u16) -> bool {
 pub struct CloakGear {
     /// Whether it has a cloak (a `ModType` 17 mod).
     pub device: bool,
-    /// Whether a hit uncloaks it ([`CLOAK_DECLOAKS_WHEN_HIT`]).
+    /// Whether a hit uncloaks it ([`CLOAK_DECLOAKS_WHEN_HIT`]): the bit of
+    /// the first cloak mod, of the first owned cloak outfit for the player
+    /// or the first cloak default-item slot for an NPC
+    /// (`_ShipDecloaksWhenHit` @0x3f71-0x3faf, @0x3fcd-0x4027); every
+    /// cloak mod's bit, any of them set, for a gear built by
+    /// [`CloakGear::of`] alone.
     pub decloaks_when_hit: bool,
     /// Whether it shows on the radar while cloaked ([`CLOAK_ON_RADAR`]).
     pub on_radar: bool,

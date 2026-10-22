@@ -22,9 +22,10 @@
 //!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
 //!   original retries `Rand(64)` slots, here one draw among them. It
 //!   picks only a ship it sees (`_ShipVisibleToShip`, @0x8cd5f in the
-//!   count, @0x8ce13 in the pick; [`sight`](super::sight)); the player is
-//!   always seen until rdm:phase/cloaking-fidelity/phase-8-cloaking-device
-//!   gives it a cloak. Within [`INSPECT_REACH`] of it on both axes
+//!   count, @0x8ce13 in the pick; [`sight`](super::sight)); the player can
+//!   cloak, but this site reads it as seen until
+//!   rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player.
+//!   Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
 //!   looked the player over, it has scanned the player

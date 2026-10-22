@@ -58,7 +58,9 @@ impl Session {
     /// hull or its inertialess flight, never its outfits. Whether it keeps
     /// close formation reads its leader's place and its sight of it
     /// (`_ShipVisibleToShip` @0x8ed5f): an NPC leader by
-    /// [`sight::npc_sees`], the player always seen.
+    /// [`sight::npc_sees`], the player always seen (it can cloak, but this
+    /// site reads it as seen until
+    /// rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player).
     fn npc_resists_gravity(&self, npc: &Npc) -> bool {
         let leader = self.leader_state(npc);
         let seen = match npc.leader_ref() {

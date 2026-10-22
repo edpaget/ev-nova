@@ -561,8 +561,10 @@ pub fn threat_score_to(
 /// candidate): none with no player in the system, a disabled one, one the
 /// lead's government blesses with peace, or one the lead doesn't threaten
 /// by the narrow `_IsThreatToPlayer(lead)` (`_ExtendedIsThreatToShip`
-/// @0x81a89-0x81a9c, [`Npc::threatens_player_among`]). The player is
-/// always seen. The score is `scored`'s, the class the player's
+/// @0x81a89-0x81a9c, [`Npc::threatens_player_among`]). The player can
+/// cloak, but this site reads it as seen until
+/// rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player. The
+/// score is `scored`'s, the class the player's
 /// ([`PlayerSide::class`](crate::ai::PlayerSide::class)).
 #[must_use]
 pub fn player_threat_score(

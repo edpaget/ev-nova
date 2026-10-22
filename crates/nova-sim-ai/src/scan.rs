@@ -15,7 +15,9 @@
 //! 100.0 of the player on both axes (@0x7e4c5-0x7e52d,
 //! [`within_reach`]); and `Rand(100)` ≤ 75 (@0x7e54c-0x7e55c). The
 //! visibility test between the reach and the draw (`_ShipVisibleToShip`
-//! @0x7e53f) always passes: the engine's player has no cloak. The reach
+//! @0x7e53f) always passes: the player can cloak, but this site reads it
+//! as seen until
+//! rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player. The reach
 //! is tested again before each contraband loop (@0x7eacb-0x7eb3f,
 //! @0x7ef0d-0x7ef7b); nothing moves in between, so once is enough.
 //!

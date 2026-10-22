@@ -351,10 +351,11 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
 /// a lead ([`Goal::Follow`]), and whether it sees its leader. A fleet
 /// escort sees its NPC lead as the half began (`_ShipVisibleToShip(leader,
-/// ship)` @0x8ed5f, [`sight::npc_sees`]); the player is always seen, as
-/// no ship fails to see it until the player has a cloak
-/// (rdm:phase/cloaking-fidelity/phase-8-cloaking-device, which passes the
-/// player's sight here).
+/// ship)` @0x8ed5f, [`sight::npc_sees`]); the player can cloak, but this
+/// site reads it as seen until
+/// rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player, which
+/// passes the player's sight
+/// ([`sight::sees_player`](crate::ai::sight::sees_player)) here.
 ///
 /// The original reads the sight in the escort's own high level, so a
 /// cloak its lead changed earlier in the same think half shows here a

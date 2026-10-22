@@ -1,6 +1,6 @@
 //! The player's own cloaking device (the key and upkeep are
 //! [`player_cloak`](crate::player_cloak); the fade, the gear and the
-//! draw are [`cloak`](crate::cloak)).
+//! draw are [`cloak`]).
 //!
 //! The view holds the cloak key, `cloakKey` (U by default), with
 //! [`Session::hold_cloak`] while the player's fate takes
@@ -33,7 +33,7 @@
 //!   system test (@0x2b7d8-0x2b7e0).
 //! - **Drawn** ([`Session::player_cloak_shown`]): at a full fade the
 //!   player is always drawn faint, at
-//!   [`SEEN_AT_FULL_FADE`](crate::cloak::SEEN_AT_FULL_FADE) (+0x86 0,
+//!   [`SEEN_AT_FULL_FADE`] (+0x86 0,
 //!   @0x2d199-0x2d1a1); fading, jittered and faint; with no fade, as it is.
 //! - **Hits** (`_DamageShip` @0x3bf1f-0x3bf4f): a direct hit decloaks a
 //!   cloak that decloaks when hit while it is fully faded or still fading

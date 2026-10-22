@@ -958,7 +958,8 @@ fn sight_of<'a>(
         let standing = reserves.shield.now + reserves.armor.now;
         f64::from(around.aimed_at(ship)) >= SUFFICIENT_DAMAGE * f64::from(standing)
     });
-    // The player has no cloak.
+    // The player can cloak, but this site reads it as uncloaked until
+    // rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player.
     let (untargetable, cloaked) = match ship {
         ShipRef::Player => (
             around.player.is_some_and(|player| player.untargetable),

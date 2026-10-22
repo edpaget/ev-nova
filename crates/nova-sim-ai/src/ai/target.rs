@@ -38,7 +38,9 @@
 //! the pick turns the ship on the player): these steps in order. A ship
 //! still jumping in is never one, nor one destroyed. An NPC is one only
 //! when the ship sees it ([`Surroundings::sees`], @0x8a0d2, @0x8a538,
-//! @0x8aa7b, @0x8ad92); the player always is seen, as it can't cloak yet.
+//! @0x8aa7b, @0x8ad92); the player always is seen: it can cloak, but
+//! these sites read it as seen until
+//! rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player.
 //! Step 1's keep asks no sight (@0x89e85-0x89eb6): the lost-sight search
 //! ([`lost_sight`](crate::ai::lost_sight)) drops a target the ship can't see.
 //!
@@ -163,8 +165,8 @@
 //!
 //! **Left out.** `_ShipVisibleToShip` for the player (@0x89f04, @0x89f7d,
 //! @0x8a0d2 for ship 0, @0x8a140, @0x8a6df, @0x8a748, @0x8a9ba) is
-//! rdm:phase/cloaking-fidelity/phase-8-cloaking-device's: the player
-//! can't cloak yet, so it is always seen. Stellar defenders (+0x8c,
+//! rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player's: the
+//! player can cloak, but these sites read it as seen until then. Stellar defenders (+0x8c,
 //! @0x8a21e) are rdm:task/planet-domination's, and the nag ship
 //! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system
 //! test (@0x8a214) and the +0x88 ≤ 4 gate of step 6 (@0x8a41e) always
@@ -277,7 +279,8 @@ fn enemy_class_roll(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -
 /// destroyed and not still jumping in (the active slot +0xb8), and `npc`
 /// sees it ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8a0d2,
 /// @0x8a538, @0x8aa7b, @0x8ad92). The player always is while it is there:
-/// it can't cloak yet.
+/// it can cloak, but this site reads it as seen until
+/// rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player.
 fn seen(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
     let present = match ship {
         ShipRef::Player => around.player.is_some(),

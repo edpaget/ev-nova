@@ -905,8 +905,10 @@ pub struct Fighter<'a> {
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
     /// Whether it is cloaked: it fires only its weapons that fire while
-    /// cloaked ([`Armament::has_ammo`]), and point defence sees it only
-    /// with a cloak scanner ([`defence::choose_ship`]). The player never is.
+    /// cloaked ([`Armament::has_ammo`]; the player's fire,
+    /// `_FirePlayerWeapon` @0x627f5-0x62814, and its point defence
+    /// @0x3931c-0x3932f, too), and point defence sees it only with a cloak
+    /// scanner ([`defence::choose_ship`]).
     pub cloaked: bool,
     /// The ship it attacks or snipes at, which point defence reads as
     /// fighting that ship (`_IsShipFightingMe` @0x827fa: the original's
@@ -940,7 +942,8 @@ pub struct Fighter<'a> {
     pub cloak_scanner: bool,
     /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
     /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
-    /// [`Sight::has_cloak`]). The player never has.
+    /// [`Sight::has_cloak`]). The player's reads the outfits it owns; it
+    /// has no leader, so nothing reads it yet.
     pub has_cloak: bool,
     /// How strongly it jams each jamming type (`_ShipECM`, see
     /// [`jamming`]), whatever its condition: a disabled ship jams nothing.

@@ -38,6 +38,12 @@
 //!   conditions also start the burst weapons of the ship's class on their
 //!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
 //!   not.
+//! - **Reserves**: whether an NPC can cloak, for its frame hold,
+//!   cloak-when-hit and the observe goal, reads
+//!   [`RuleKey::CloakReserves`] (see `Npc::can_cloak`).
+//!
+//! The player's own cloak, its draw and its hit decloak, are the
+//! `player_cloak` module's.
 
 use super::{PlayerShip, Session, Space, Statics};
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
