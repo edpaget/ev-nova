@@ -37,6 +37,7 @@
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see `nova_sim::landing`) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
+//! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
@@ -292,6 +293,7 @@
 //! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
+//! `eight_bit_sheet`,
 //! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
 //! `desc_movie_globals`,
@@ -914,6 +916,21 @@ rule_keys! {
     /// not anything the Bible says (see the `nova_sim::story` module's
     /// "Built by stellar-fidelity phase 3").
     TypeSheetFallback => "type_sheet_fallback",
+    /// How an `rlëD` whose header says 8 bits is drawn: by the engine, as
+    /// its bytes fall into the original's 16-bit world, which loads it
+    /// with no palette and no pixel buffer (`_SWCreateSpriteFromRLEResource`
+    /// @0xa9990, `_SWCreateFrame` @0xad62c → @0xad6f2), leaves its pixel
+    /// bytes unswapped (`_BlitPixieRLESwap` @0xbe3f0-0xbe3f7) and copies
+    /// them raw (`_BlitPixieRLE` @0xbddd0): each pair of bytes is one
+    /// little-endian RGB555 pixel, filling the left half of the frame;
+    /// by the other reading, each byte is a colour of the Mac's standard
+    /// 256-colour table at full width. The Bible says nothing of an 8-bit
+    /// `rlëD` ("rleD/rle8 resources"), so the other reading is the
+    /// intended alternative, not anything the Bible says. The reading is
+    /// applied where the game's images are decoded
+    /// (`nova_render::GameImages`; see the `nova_sim::story` module's
+    /// "Checked for stellar-fidelity phase 4").
+    EightBitSheet => "eight_bit_sheet",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -6027,6 +6044,12 @@ mod tests {
             RuleKey::from_key("type_sheet_fallback"),
             Some(RuleKey::TypeSheetFallback)
         );
+        assert_eq!(RuleKey::EightBitSheet.key(), "eight_bit_sheet");
+        assert_eq!(
+            RuleKey::from_key("eight_bit_sheet"),
+            Some(RuleKey::EightBitSheet)
+        );
+        assert_eq!(RuleKey::EightBitSheet.default_source(), RuleSource::Engine);
     }
 
     #[test]
@@ -6056,6 +6079,7 @@ mod tests {
                 RuleKey::LandingDistance,
                 RuleKey::StellarFrameCount,
                 RuleKey::TypeSheetFallback,
+                RuleKey::EightBitSheet,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
