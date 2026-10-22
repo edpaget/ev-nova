@@ -697,14 +697,15 @@ impl Npc {
     pub fn fleet_among(&self, npcs: &[Npc]) -> ShipRef {
         let mut at = self;
         for _ in 0..npcs.len() {
-            match at.fleet() {
-                ShipRef::Npc(lead) if lead != at.id => {
-                    match npcs.iter().find(|npc| npc.id == lead) {
-                        Some(next) => at = next,
-                        None => return ShipRef::Npc(lead),
-                    }
-                }
-                fleet => return fleet,
+            if at.escorts_player() {
+                return ShipRef::Player;
+            }
+            let Some(lead) = at.leader else {
+                return ShipRef::Npc(at.id);
+            };
+            match npcs.iter().find(|npc| npc.id == lead) {
+                Some(next) => at = next,
+                None => return ShipRef::Npc(lead),
             }
         }
         at.fleet()
