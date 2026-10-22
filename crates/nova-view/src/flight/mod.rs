@@ -42,6 +42,8 @@
 //! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
+//! - [`stars`]: the starfield as the original builds it, 20 star sprites
+//!   scattered, wrapped and scrolled about the ship.
 //! - [`target`]: the target panel and the secondary weapon's line.
 //! - [`trails`]: the particle trail a shot leaves at its tail.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
@@ -79,6 +81,7 @@ pub mod smoke;
 pub mod solid_runs;
 pub mod spin;
 pub mod sprite;
+pub mod stars;
 pub mod target;
 pub mod trails;
 pub mod view;
