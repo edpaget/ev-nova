@@ -813,6 +813,7 @@ mod tests {
     use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::scroll_text::ScrollText;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -1295,6 +1296,86 @@ mod tests {
         (fill, text)
     }
 
+    /// A text long enough to overflow either screen's text box.
+    fn long_text(tag: &str) -> String {
+        (0..120)
+            .map(|n| format!("{tag}{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Checks that `text`, which overflows its box, is shown from its first
+    /// line, and that `commands` draw exactly the whole lines that fit, the
+    /// last one's line ending inside the box.
+    fn shows_whole_lines_from_the_top(commands: &[DrawCommand], text: &ScrollText) {
+        assert!(text.overflows(), "the text is longer than its box");
+        assert_eq!(text.first(), 0, "shown from its first line");
+        let rect = text.rect();
+        let runs: Vec<(String, Point)> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if rect.contains(*origin) => {
+                    Some((text.clone(), *origin))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!runs.is_empty(), "lines drawn: {commands:#?}");
+        assert_eq!(
+            runs.iter()
+                .map(|(line, _)| line.as_str())
+                .collect::<Vec<_>>(),
+            text.lines()[..text.visible()],
+        );
+        let line_height = MonoMetrics.line_height(Font::Geneva, BODY_SIZE);
+        let last = runs.last().expect("a line").1;
+        assert!(
+            last.y + line_height <= rect.min.y + rect.height(),
+            "the last line drawn is whole"
+        );
+    }
+
+    #[test]
+    fn up_and_down_move_the_offers_and_never_scroll_their_black_boxed_text() {
+        // As at base: Up and Down go to the list, so nothing scrolls the
+        // offer's text; each offer shows from its first line.
+        let mut screen = screen_of(MissionComputer {
+            rows: vec![
+                row(130, "Run to Mars", &long_text("a")),
+                row(131, "Walk", &long_text("b")),
+            ],
+            ..computer()
+        });
+        let text = |screen: &MissionComputerScreen| {
+            screen
+                .dialog()
+                .expect("laid out")
+                .text(TEXT_ITEM)
+                .expect("the offer's text")
+                .clone()
+        };
+        shows_whole_lines_from_the_top(&drawn(&screen), &text(&screen));
+        for (input, selected) in [
+            (key(Key::Down), 1),
+            (
+                Input::Key {
+                    key: Key::Down,
+                    pressed: true,
+                    repeat: true,
+                },
+                1,
+            ),
+            (key(Key::Up), 0),
+            (key(Key::Up), 0),
+        ] {
+            screen.input(&input);
+            assert_eq!(screen.selected_mission(), Some(MissionId(130 + selected)));
+            let shown = text(&screen);
+            assert!(shown.lines()[0].starts_with(["a0", "b0"][selected as usize]));
+            shows_whole_lines_from_the_top(&drawn(&screen), &shown);
+        }
+    }
+
     #[test]
     fn the_offers_text_and_name_draw_over_black_boxes_filling_their_items() {
         let mut screen = screen();
@@ -1589,6 +1670,51 @@ mod tests {
                 !commands.contains(&fill_command(area, Color::BLACK)),
                 "item {item}"
             );
+        }
+    }
+
+    #[test]
+    fn up_and_down_move_the_missions_and_never_scroll_the_black_boxed_quickbrief() {
+        // As at base: Up and Down go to the list, so nothing scrolls the
+        // QuickBrief; each mission's shows from its first line.
+        let mut screen = MissionInfoScreen::new(
+            Ok((info_template(), Rc::new(MonoMetrics))),
+            MissionInfo {
+                rows: vec![
+                    info_row(0, "Run to Mars", false, &long_text("a"), true),
+                    info_row(3, "Stay", true, &long_text("b"), false),
+                ],
+                ..info()
+            },
+            ButtonStyle::STOCK,
+        );
+        let text = |screen: &MissionInfoScreen| {
+            screen
+                .dialog()
+                .expect("laid out")
+                .text(INFO_TEXT_ITEM)
+                .expect("the QuickBrief")
+                .clone()
+        };
+        shows_whole_lines_from_the_top(&info_drawn(&screen), &text(&screen));
+        for (input, slot) in [
+            (key(Key::Down), 3),
+            (
+                Input::Key {
+                    key: Key::Down,
+                    pressed: true,
+                    repeat: true,
+                },
+                3,
+            ),
+            (key(Key::Up), 0),
+            (key(Key::Up), 0),
+        ] {
+            screen.input(&input);
+            assert_eq!(screen.selected_row().map(|row| row.slot), Some(slot));
+            let shown = text(&screen);
+            assert!(shown.lines()[0].starts_with(if slot == 0 { "a0" } else { "b0" }));
+            shows_whole_lines_from_the_top(&info_drawn(&screen), &shown);
         }
     }
 
