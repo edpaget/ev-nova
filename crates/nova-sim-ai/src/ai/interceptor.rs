@@ -823,6 +823,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             },
             "@0x8cb8f-0x8cb9d"
         );

@@ -659,6 +659,7 @@ fn fighter(
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
+        order_word: crate::fleet::OrderWord::NONE,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.signed_pod_count,
@@ -2027,12 +2028,15 @@ pub(super) mod tests {
         session.space.traffic.add_npc(carrier_npc(lead, vipers))
     }
 
-    /// The pirate carrier [`carrier`] adds.
+    /// The pirate carrier [`carrier`] adds: a medium ship, so its lead,
+    /// attacking with its shield full, orders it to Attack on its first
+    /// order frame (see `nova_sim_ai::ai::escort_orders`).
     pub(in crate::session) fn carrier_npc(lead: NpcId, vipers: u32) -> Npc {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.ship = ShipId(160);
         npc.govt = Some(PIRATES);
         npc.ai_type = AiType::Warship;
+        npc.class = EscortClass::Medium;
         npc.leader = Some(lead);
         npc.state.position = Vec2::new(0.0, -200.0);
         npc.goal = Goal::Attack(ShipRef::Player);

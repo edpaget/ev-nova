@@ -83,6 +83,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
+        order_word: crate::fleet::OrderWord::NONE,
         marines: ClassMarines::default(),
         pods_left: 0,
         warp: crate::traffic::warp_out::Warp::default(),

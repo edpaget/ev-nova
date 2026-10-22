@@ -368,6 +368,7 @@ impl Hunt {
             visits: None,
             re_picked: false,
             ends_wait: false,
+            order_word: None,
         }
     }
 }
@@ -1334,6 +1335,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             }
         );
         assert!(
@@ -1842,6 +1844,7 @@ mod tests {
             visits: None,
             re_picked: false,
             ends_wait: false,
+            order_word: None,
         }
     }
 
@@ -1928,6 +1931,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             }
         );
         let mut calm = grudger;
@@ -1954,6 +1958,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             },
             "no grudge: dropped, and nothing picked"
         );

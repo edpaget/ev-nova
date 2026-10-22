@@ -45,6 +45,7 @@ pub mod call_for_help;
 pub mod candidates;
 pub mod carried;
 pub mod escort;
+pub mod escort_orders;
 pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -964,6 +965,12 @@ pub struct Decision {
     /// [`CAPTURED_WAIT`](plunder_contents::CAPTURED_WAIT) at its first
     /// think. The traffic zeroes [`Npc::ai_wait`] as it takes the goal.
     pub ends_wait: bool,
+    /// The order word the think writes to the ship, if any: a fighter of
+    /// the player's escort writes the order it takes from its parent
+    /// (`_EscortAI` @0x83b76, @0x83b7f; [`fleet_escort`]), which its next
+    /// target check, and a stray beam, then read. The traffic sets
+    /// [`Npc::order_word`] as it takes the goal; none leaves it as it was.
+    pub order_word: Option<crate::fleet::OrderWord>,
 }
 
 /// How NPCs decide what to do.

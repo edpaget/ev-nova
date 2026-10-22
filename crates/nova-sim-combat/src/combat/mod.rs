@@ -1965,7 +1965,8 @@ impl Combat {
     /// [`exits::step_stray`]), the beam starting at the centre
     /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
     /// +0xc908, outside the fight (the crew pods left, or the player's pod
-    /// countdown): by the engine it is returned for the caller to raise
+    /// countdown), and one of 6 on +0xc90a (the order word): by the engine
+    /// each is returned for the caller to raise
     /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
     /// the centre ([`StrayWord`]).
     fn beam_exit(

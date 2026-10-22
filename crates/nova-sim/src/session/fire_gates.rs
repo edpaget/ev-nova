@@ -113,6 +113,32 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_escort_order_reach() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::EscortOrderReach, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().escort_order_reach, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.escort_order_reach));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_pass_frame() {
+    let catalog = armed();
+    let mut session = Session::start(&catalog).expect("starts");
+    for frame in [-15, 0, 9, 1024] {
+        session.space.pass_frame = frame;
+        assert_eq!(session.world().frame, frame);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.frame));
+        assert_eq!(flown, Some(frame));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_rulebooks_approach_lead_and_afterburner_yardstick() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {

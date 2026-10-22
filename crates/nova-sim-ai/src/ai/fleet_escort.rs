@@ -25,15 +25,19 @@
 //!    rdm:phase/escort-fleet-fidelity/phase-7-leader-succession's.
 //! 3. **Target validity** (@0x83a9b-0x83ad2,
 //!    [`valid_target`](escort::valid_target)): a target gone is dropped,
-//!    and a disabled one unless the order is Attack.
+//!    and a disabled one unless its stored word ([`Npc::order_word`],
+//!    @0x83ac8) is Attack.
 //! 4. **By its order** (+0xc90a, [`order_of`]). Under a lead that is the
 //!    player's escort (@0x83b36-0x83b7f), the lead's Defend or Attack
 //!    while the lead's goal isn't 0xa ([`Goal::flies_in_form`]), else
 //!    Return: the player's escort carrier's fighters fight with it and
-//!    dock once it keeps formation or holds any other order. Under any
-//!    other lead, [`stand_in_order`] reads it off the lead until
-//!    rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
-//!    ports `_AIIssueEscortOrders`:
+//!    dock once it keeps formation or holds any other order; it writes
+//!    that order as its word (@0x83b76, @0x83b7f;
+//!    [`Decision::order_word`]), which its next target check reads. Under
+//!    any other lead, its stored word, the order the lead last issued it
+//!    every eighth frame (`_AIIssueEscortOrders`,
+//!    [`escort_orders`](crate::ai::escort_orders)), -1 (formation) until
+//!    the first:
 //!    - **Defend** (@0x83c56-0x83d4e): it keeps its target within
 //!      [`DEFEND_KEEP_SQ`] of its lead, inclusive (@0x83cbc), else attacks
 //!      the nearest threat to the lead within [`DEFEND_RADIUS`] of it
@@ -106,6 +110,7 @@ use crate::combat::{ShipRef, Strike};
 use crate::escort::{
     DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, Parent, fight_threats, nearest_threat,
 };
+use crate::fleet::OrderWord;
 use crate::traffic::npc::Npc;
 
 /// The AI of a ship with an NPC parent (see the module docs).
@@ -115,53 +120,16 @@ pub struct FleetEscortAi {
     pub fire: FireRules,
 }
 
-/// The order `npc` follows under its lead among `around`, a stand-in for
-/// `_AIIssueEscortOrders` (@0x89b68), which
-/// rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
-/// ports to replace it: Attack while its lead attacks or snipes
-/// ([`Goal::attacking`]), or plunders a ship that isn't disabled (goal
-/// 0xd, ordered as goal 4 until its target is disabled, @0x89968-0x8997e);
-/// otherwise Return (3), which docks a fighter and forms an escort, as the
-/// leader-goal override orders outside goals 3, 4, 0xd and 0x13. Return too
-/// with its lead gone. Until phase 5, every NPC escort's own order word is
-/// -1 (`_GenericRandomShipSpawn` @0x3cbb3), so this is the only order it
-/// takes under an NPC lead. A fighter of the player's escort takes the
-/// original's order instead ([`order_of`], @0x83b36-0x83b7f), which phase
-/// 5 must keep.
-#[must_use]
-pub fn stand_in_order(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
-    let fights =
-        npc.leader
-            .and_then(|id| around.npc(id))
-            .is_some_and(|lead| {
-                lead.goal.attacking().is_some()
-                    || lead.goal.plundering().is_some_and(|ship| {
-                        !around.condition_of(ship).is_some_and(Condition::disabled)
-                    })
-            });
-    Some(if fights {
-        EscortOrder::Attack
-    } else {
-        EscortOrder::Dock
-    })
-}
-
 /// The order `npc` follows under its NPC parent among `around`
 /// (`_EscortAI` @0x83b36-0x83b7f): under a lead that is the player's
 /// escort, the lead's Defend or Attack while its goal isn't 0xa
 /// ([`Goal::flies_in_form`]), else Return (3), which docks a fighter;
-/// under any other lead, [`stand_in_order`]. The first branch is the
-/// original's, which
-/// rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
-/// must keep as it replaces the stand-in.
+/// under any other lead, its stored word ([`Npc::order_word`]), which its
+/// lead issues ([`escort_orders`](crate::ai::escort_orders)).
 #[must_use]
 pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
-    let players_escort = npc
-        .leader
-        .and_then(|id| around.npc(id))
-        .filter(|lead| lead.escorts_player());
-    let Some(lead) = players_escort else {
-        return stand_in_order(npc, around);
+    let Some(lead) = players_escort_lead(npc, around) else {
+        return npc.order_word.order();
     };
     Some(match lead.escort_order() {
         Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !lead.goal.flies_in_form() => {
@@ -171,27 +139,37 @@ pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     })
 }
 
+/// `npc`'s lead among `around` while that lead is the player's escort.
+fn players_escort_lead<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<&'a Npc> {
+    npc.leader
+        .and_then(|id| around.npc(id))
+        .filter(|lead| lead.escorts_player())
+}
+
 /// What `npc`, under its NPC parent and following `order`, decides among
 /// `around`, drawing any guard on `chance`: `_EscortAI`'s think (see the
-/// module docs).
+/// module docs). Its target check reads its stored word
+/// ([`Npc::order_word`], @0x83ac8), and under a lead that is the player's
+/// escort it writes `order` as its word after the check (@0x83b76,
+/// @0x83b7f; [`Decision::order_word`]).
 pub fn decide_by(
     npc: &Npc,
     order: Option<EscortOrder>,
     around: &Surroundings,
     chance: &mut dyn Chance,
 ) -> Decision {
-    let goal = |goal: Goal, ends_wait: bool| Decision {
-        goal,
-        ends_wait,
-        ..Decision::default()
-    };
     if matches!(npc.goal, Goal::CountWait | Goal::Assist(_)) {
-        return goal(npc.goal, false);
+        return goal_of(npc.goal, false);
     }
     let Some(lead) = parent(npc, around) else {
-        return goal(Goal::Idle, false);
+        return goal_of(Goal::Idle, false);
     };
-    let target = escort::valid_target(npc, order, around);
+    let target = escort::valid_target(npc, npc.order_word.order(), around);
+    let writes = lead.escorts_player().then(|| OrderWord::of(order));
+    let goal = |goal: Goal, ends_wait: bool| Decision {
+        order_word: writes,
+        ..goal_of(goal, ends_wait)
+    };
     let follow = |guard: Option<ShipRef>| Goal::Follow {
         lead: lead.id,
         guard,
@@ -231,6 +209,15 @@ pub fn decide_by(
                 true,
             )
         }
+    }
+}
+
+/// A decision of `goal`, ending its AI wait as `ends_wait` says.
+fn goal_of(goal: Goal, ends_wait: bool) -> Decision {
+    Decision {
+        goal,
+        ends_wait,
+        ..Decision::default()
     }
 }
 
@@ -352,6 +339,7 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
+    use crate::fleet::OrderWord;
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
@@ -454,8 +442,9 @@ mod tests {
         npc
     }
 
-    /// What `npcs[1]` decides under `order` among `npcs`, the player at
-    /// (`x`, `y`), drawing on `draws`; and the bounds of the draws asked.
+    /// What `npcs[1]` decides under `order`, stored as its word too, among
+    /// `npcs`, the player at (`x`, `y`), drawing on `draws`; and the bounds
+    /// of the draws asked.
     fn decided_with(
         npcs: &[Npc],
         order: Option<EscortOrder>,
@@ -469,7 +458,11 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         let mut chance = Draws::of(draws);
-        let decision = decide_by(&npcs[1], order, &around, &mut chance);
+        let stored = Npc {
+            order_word: OrderWord::of(order),
+            ..npcs[1].clone()
+        };
+        let decision = decide_by(&stored, order, &around, &mut chance);
         (decision, chance.asked)
     }
 
@@ -828,53 +821,6 @@ mod tests {
         );
     }
 
-    /// The stand-in order for the escort under a lead with `goal`, among
-    /// `others` too.
-    fn order_under(goal: Goal, others: &[Npc]) -> Option<EscortOrder> {
-        let npcs: Vec<Npc> = [lead(goal), escort()]
-            .into_iter()
-            .chain(others.iter().cloned())
-            .collect();
-        stand_in_order(&npcs[1], &Surroundings::new(&[], &npcs))
-    }
-
-    #[test]
-    fn the_stand_in_order_is_attack_while_the_lead_fights_and_return_otherwise() {
-        // `_AIIssueEscortOrders`'s leader-goal override: Return (3) outside
-        // goals 3, 4, 0xd and 0x13, and Return once a plunder's target is
-        // disabled (@0x89968-0x8997e).
-        let attack = Some(EscortOrder::Attack);
-        let dock = Some(EscortOrder::Dock);
-        let victim = bystander(3, 0.0, 100.0);
-        let mut wreck = victim.clone();
-        wreck.condition = Condition::Disabled;
-        let plunder = Goal::Plunder {
-            ship: n(3),
-            hopeless: false,
-        };
-        assert_eq!(order_under(Goal::Attack(ShipRef::Player), &[]), attack);
-        assert_eq!(
-            order_under(Goal::Snipe(n(3)), std::slice::from_ref(&victim)),
-            attack
-        );
-        assert_eq!(order_under(plunder, &[victim]), attack);
-        assert_eq!(order_under(plunder, &[wreck]), dock);
-        for goal in [
-            Goal::Idle,
-            Goal::Wait,
-            Goal::JumpOut,
-            Goal::Flee(ShipRef::Player),
-        ] {
-            assert_eq!(order_under(goal, &[]), dock, "{goal:?}");
-        }
-        let alone = [escort()];
-        assert_eq!(
-            stand_in_order(&alone[0], &Surroundings::new(&[], &alone)),
-            dock,
-            "its lead gone"
-        );
-    }
-
     /// The order a fighter of the lead, NPC 1, takes when the lead is the
     /// player's escort following `order` with `goal`.
     fn players_escorts_fighter_order(
@@ -929,48 +875,112 @@ mod tests {
                 "{order:?}"
             );
         }
-        // Under any other lead, the stand-in order.
-        let npcs = [lead(Goal::Formation { guard: None }), fighter(n(1))];
+        // Under any other lead, its stored word, whatever the lead does.
+        for word in [-1, 0, 1, 2, 3, 4, 5] {
+            let mut stored = fighter(n(1));
+            stored.order_word = OrderWord(word);
+            for goal in [fighting, Goal::Idle] {
+                let npcs = [lead(goal), stored.clone()];
+                assert_eq!(
+                    order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+                    OrderWord(word).order(),
+                    "{word} {goal:?}"
+                );
+            }
+        }
+    }
+
+    /// What the escort, or a fighter of the lead when `fighter`, holding
+    /// `word`, decides under a lead attacking NPC 3, which attacks it from
+    /// 500 off; the lead escorts the player under the order `players` gives,
+    /// if any.
+    fn decision_holding(word: i16, fighter: bool, players: Option<EscortOrder>) -> Decision {
+        let mut first = lead(Goal::Attack(n(3)));
+        if let Some(order) = players {
+            first.escort = Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: Some(order),
+            });
+        }
+        let mut second = if fighter {
+            self::fighter(n(1))
+        } else {
+            escort()
+        };
+        second.order_word = OrderWord(word);
+        let npcs = [first, second, raider(3, 0.0, 500.0, n(1))];
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        FleetEscortAi::default().decision(&npcs[1], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn it_decides_by_its_stored_word() {
+        // `_EscortAI` reads +0xc90a (@0x83c56): -1 and 0 form, 3 docks a
+        // fighter and forms an escort, 1 and 2 fight.
+        for word in [-1, 0] {
+            let decision = decision_holding(word, false, None);
+            assert_eq!(decision.goal, follow(Some(n(3))), "{word}");
+            assert!(decision.ends_wait);
+            assert_eq!(decision.order_word, None, "an NPC lead's ship writes none");
+        }
+        assert_eq!(decision_holding(3, true, None).goal, Goal::Dock(n(1)));
+        assert_eq!(decision_holding(3, false, None).goal, follow(Some(n(3))));
+        for word in [1, 2] {
+            let decision = decision_holding(word, false, None);
+            assert_eq!(decision.goal, Goal::Attack(n(3)), "{word}");
+            assert!(decision.ends_wait);
+        }
+        assert_eq!(decision_holding(4, false, None).goal, Goal::Wait);
+        let ai = FleetEscortAi::default();
+        let mut stored = escort();
+        stored.order_word = OrderWord(2);
+        let npcs = [lead(Goal::Idle), stored, raider(3, 0.0, 3000.0, n(1))];
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
         assert_eq!(
-            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
-            stand_in_order(&npcs[1], &Surroundings::new(&[], &npcs))
-        );
-        let npcs = [lead(fighting), fighter(n(1))];
-        assert_eq!(
-            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
-            Some(EscortOrder::Attack)
+            ai.decide(&npcs[1], &around, &mut Draws::of(&[0])),
+            Goal::Attack(n(3)),
+            "decide is the decision's goal"
         );
     }
 
     #[test]
-    fn it_decides_by_the_stand_in_order() {
-        let ai = FleetEscortAi::default();
-        let govts = govts(0, 0);
-        let decide = |npcs: &[Npc]| {
+    fn a_fighter_of_the_players_escort_flies_its_parents_order_and_writes_it_as_its_word() {
+        // @0x83b36-0x83b7f: the parent's Attack, written to its own +0xc90a.
+        let decision = decision_holding(-1, true, Some(EscortOrder::Attack));
+        assert_eq!(decision.goal, Goal::Attack(n(3)));
+        assert_eq!(decision.order_word, Some(OrderWord(2)));
+        let decision = decision_holding(2, true, Some(EscortOrder::Hold));
+        assert_eq!(decision.goal, Goal::Dock(n(1)), "Return: it docks");
+        assert_eq!(decision.order_word, Some(OrderWord(3)));
+    }
+
+    #[test]
+    fn its_target_check_reads_its_stored_word_not_its_order() {
+        // Step 5 (@0x83ac8) comes before the escort-fighter write
+        // (@0x83b36): a disabled target is kept only under a stored Attack.
+        let mut down = bystander(3, 0.0, 600.0);
+        down.condition = Condition::Disabled;
+        let decide = |word: i16, order: EscortOrder| {
+            let mut stored = targeting(escort(), n(3));
+            stored.order_word = OrderWord(word);
+            let npcs = [lead(Goal::Idle), stored, down.clone()];
+            let govts = govts(0, 0);
             let around = Surroundings {
                 govts: &govts,
-                ..Surroundings::new(&[], npcs)
+                ..Surroundings::new(&[], &npcs)
             };
-            let mut chance = Draws::of(&[0]);
-            (
-                ai.decision(&npcs[1], &around, &mut chance),
-                ai.decide(&npcs[1], &around, &mut Draws::of(&[0])),
-            )
+            decide_by(&npcs[1], Some(order), &around, &mut Draws::of(&[])).goal
         };
-        let npcs = [
-            lead(Goal::Attack(n(4))),
-            escort(),
-            raider(3, 0.0, 3000.0, n(1)),
-            bystander(4, 0.0, 100.0),
-        ];
-        let (decision, goal) = decide(&npcs);
-        assert_eq!(
-            (decision.goal, goal),
-            (Goal::Attack(n(3)), Goal::Attack(n(3)))
-        );
-        assert!(decision.ends_wait);
-        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, 3000.0, n(1))];
-        assert_eq!(decide(&npcs).1, follow(Some(n(3))), "it forms");
+        assert_eq!(decide(2, EscortOrder::Defend), Goal::Attack(n(3)), "kept");
+        assert_eq!(decide(1, EscortOrder::Attack), follow(None), "dropped");
     }
 
     /// What `ai` holds for `npcs[1]` once it decided `goal`: its trigger

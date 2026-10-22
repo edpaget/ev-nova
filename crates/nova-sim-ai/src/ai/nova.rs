@@ -335,6 +335,7 @@ impl Behaviour for NovaAi {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -720,6 +721,7 @@ mod tests {
         lead.goal = Goal::Attack(ShipRef::Npc(NpcId(4)));
         let mut escort = ship(2, PIRATES, AiType::WimpyTrader, 0.0, 50.0);
         escort.leader = Some(NpcId(1));
+        escort.order_word = crate::fleet::OrderWord(2);
         let mut raider = ship(3, TRADERS, AiType::Warship, 0.0, 300.0);
         raider.goal = Goal::Attack(ShipRef::Npc(NpcId(1)));
         let victim = ship(4, TRADERS, AiType::WimpyTrader, 0.0, -300.0);
@@ -734,7 +736,7 @@ mod tests {
         assert_eq!(
             decision.goal,
             Goal::Attack(ShipRef::Npc(NpcId(3))),
-            "the stand-in Attack: the nearest threat to its lead"
+            "its stored Attack: the nearest threat to its lead"
         );
         assert!(decision.ends_wait);
         let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
@@ -1185,6 +1187,8 @@ mod tests {
             ShipRef::Npc(NpcId(1)),
         );
         fighter.leader = Some(NpcId(1));
+        // The Return (3) its idle carrier issues it.
+        fighter.order_word = crate::fleet::OrderWord(3);
         let npcs = [carrier, fighter];
         let around = Surroundings {
             player: Some(player(0.0, 300.0)),
@@ -1912,6 +1916,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             }
         }
     }
@@ -1943,6 +1948,7 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 ends_wait: false,
+                order_word: None,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

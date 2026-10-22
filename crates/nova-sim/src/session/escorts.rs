@@ -341,6 +341,7 @@ impl Session {
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
+            order_word: crate::fleet::OrderWord::NONE,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
@@ -1432,6 +1433,10 @@ mod tests {
             .map(|npc| (npc.ship, npc.pods_left))
             .collect();
         assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
+        for npc in escort_npcs(&session) {
+            // `_SpawnEscort` @0x3ffb8.
+            assert_eq!(npc.order_word, crate::fleet::OrderWord::NONE);
+        }
         catalog.hulls[1].pod_count = -3;
         let session = flying(&catalog, RuleSource::Engine);
         assert_eq!(escort_npcs(&session)[0].pods_left, -3, "raw");

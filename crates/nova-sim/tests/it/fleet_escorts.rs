@@ -1,15 +1,21 @@
 //! A fleet's escort through the traffic and Nova's AI
 //! (`nova_sim::ai::fleet_escort`, `_EscortAI` @0x838d2-0x83f5d under an
-//! NPC parent): while its lead attacks, the escort attacks a ship
-//! attacking the lead (the stand-in Attack order); while its lead idles,
-//! it follows the lead, guarding against that ship with its turret.
+//! NPC parent), flying the order its lead issues on its order frame
+//! (`nova_sim::ai::escort_orders`, `_AIIssueEscortOrders`
+//! @0x8986d-0x89b8d): until the first, it keeps formation; a lead
+//! attacking with its shield full orders a medium escort to Attack, and
+//! it attacks a ship attacking the lead; an idle lead orders Return, and
+//! it follows the lead, guarding against that ship with its turret; a
+//! lead whose odds are not yet cached orders its warship escort to keep
+//! formation.
 
 use std::collections::BTreeSet;
 
-use nova_sim::catalog::{GovtId, GovtRecord, WeaponId, WeaponRecord};
+use nova_sim::catalog::{EscortClass, GovtId, GovtRecord, WeaponId, WeaponRecord};
 use nova_sim::combat::ShipRef;
 use nova_sim::combat::armament::Armament;
 use nova_sim::combat::weapon::WeaponSpec;
+use nova_sim::fleet::OrderWord;
 use nova_sim::geometry::Vec2;
 use nova_sim::stats::ShipStats;
 use nova_sim::traffic::npc::AiType;
@@ -56,12 +62,13 @@ fn ship(govt: i16, ai_type: AiType, (x, y): (f32, f32), goal: Goal) -> Npc {
     npc
 }
 
-/// The traffic: the lead at the centre with `goal`, its escort beside it
-/// with a turret reaching 300 pixels, a raider 150 above attacking the
-/// lead, and the lead's quarry far below.
-fn traffic(goal: Goal) -> Traffic {
+/// The traffic: the lead at the centre with `goal`, its shield full, its
+/// escort of `class` beside it with a turret reaching 300 pixels, a
+/// raider 150 above attacking the lead, and the lead's quarry far below.
+fn traffic(goal: Goal, class: EscortClass) -> Traffic {
     let mut escort = ship(128, AiType::Warship, (40.0, 0.0), Goal::Idle);
     escort.leader = Some(LEAD);
+    escort.class = class;
     escort.armament = Armament::new([(
         WeaponSpec::new(&WeaponRecord {
             guidance: 4,
@@ -90,11 +97,13 @@ fn traffic(goal: Goal) -> Traffic {
     traffic
 }
 
-/// `traffic` a tick on by Nova's AI, every ship kept in place.
-fn tick(traffic: &mut Traffic) {
+/// `traffic` a tick on by Nova's AI on `frame`, every ship kept in
+/// place. The lead, in berth 1, issues on frames that are multiples of 8.
+fn tick(traffic: &mut Traffic, frame: i16) {
     let govts = govts();
     let world = World {
         govts: &govts,
+        frame,
         ..World::new(&[])
     };
     let still: BTreeSet<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
@@ -115,27 +124,49 @@ fn escort(traffic: &Traffic) -> &Npc {
         .expect("in the system")
 }
 
+/// Keeping formation on the lead, guarding against the raider.
+fn guarding() -> Goal {
+    Goal::Follow {
+        lead: LEAD,
+        guard: Some(ShipRef::Npc(RAIDER)),
+    }
+}
+
 #[test]
-fn while_its_lead_attacks_a_fleet_escort_attacks_a_ship_attacking_the_lead() {
-    let mut traffic = traffic(Goal::Attack(ShipRef::Npc(QUARRY)));
-    tick(&mut traffic);
+fn until_its_leads_first_order_a_fleet_escort_keeps_formation() {
+    let mut traffic = traffic(Goal::Attack(ShipRef::Npc(QUARRY)), EscortClass::Medium);
+    tick(&mut traffic, 1);
     let escort = escort(&traffic);
+    assert_eq!(escort.order_word, OrderWord::NONE, "-1 from its spawn");
+    assert_eq!(escort.goal, guarding());
+}
+
+#[test]
+fn a_lead_attacking_with_its_shield_full_orders_its_medium_escort_to_attack_a_ship_attacking_it() {
+    let mut traffic = traffic(Goal::Attack(ShipRef::Npc(QUARRY)), EscortClass::Medium);
+    tick(&mut traffic, 0);
+    let escort = escort(&traffic);
+    assert_eq!(escort.order_word, OrderWord(2), "Attack");
     assert_eq!(escort.goal, Goal::Attack(ShipRef::Npc(RAIDER)));
     assert_eq!(escort.target, Some(ShipRef::Npc(RAIDER)));
 }
 
 #[test]
-fn while_its_lead_idles_a_fleet_escort_follows_it_guarding_with_its_turret() {
-    let mut traffic = traffic(Goal::Idle);
-    tick(&mut traffic);
+fn a_lead_whose_odds_are_not_yet_cached_orders_its_warship_escort_to_keep_formation() {
+    let mut traffic = traffic(Goal::Attack(ShipRef::Npc(QUARRY)), EscortClass::Warship);
+    tick(&mut traffic, 0);
     let escort = escort(&traffic);
-    assert_eq!(
-        escort.goal,
-        Goal::Follow {
-            lead: LEAD,
-            guard: Some(ShipRef::Npc(RAIDER))
-        }
-    );
+    assert_eq!(escort.order_word, OrderWord(0), "formation");
+    assert_eq!(escort.goal, guarding());
+}
+
+#[test]
+fn an_idle_lead_orders_return_and_its_escort_follows_it_guarding_with_its_turret() {
+    let mut traffic = traffic(Goal::Idle, EscortClass::Medium);
+    tick(&mut traffic, 0);
+    let escort = escort(&traffic);
+    assert_eq!(escort.order_word, OrderWord(3), "Return");
+    assert_eq!(escort.goal, guarding());
     assert_eq!(escort.target, Some(ShipRef::Npc(RAIDER)));
     assert_eq!(escort.trigger.only, Some(TURRET), "its turret pick fired");
     assert!(escort.trigger.point_defence);

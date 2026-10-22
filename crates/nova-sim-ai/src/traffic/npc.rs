@@ -14,6 +14,7 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, KEEP_FORMATION};
+use crate::fleet::OrderWord;
 use crate::flight::{FlightRules, Flyer, FormationFlight, ShipState};
 use crate::geometry::Vec2;
 use crate::inertialess::{InertialDampener, is_inertialess};
@@ -547,6 +548,14 @@ pub struct Npc {
     /// next pass reads its new ship. None at every spawn and launch
     /// (`_AISetup` @0x7f415). Never saved.
     pub swarm_leader: Option<u32>,
+    /// Its order word, the original's +0xc90a: -1 at every spawn, launch
+    /// and placement ([`OrderWord::NONE`]), then the order its leader last
+    /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth
+    /// frame), which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A
+    /// fighter of the player's escort writes its own each think, and a
+    /// stray beam of `ExitType` 6 steps it (`nova_sim::stray_words`).
+    /// Never saved.
+    pub order_word: OrderWord,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).

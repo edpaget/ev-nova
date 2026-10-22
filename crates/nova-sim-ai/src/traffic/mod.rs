@@ -168,6 +168,7 @@ pub mod destination;
 mod display_tests;
 pub mod docked;
 pub mod emerge;
+pub mod escort_orders;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -613,6 +614,14 @@ pub struct World<'a> {
     /// Every weapon's record ([`Surroundings::weapons`]), which a fighter's
     /// lead reads.
     pub weapons: &'a Arsenal,
+    /// The game pass's frame counter (`_frameCounter`, the session's pass
+    /// frame), on which a fleet's leader issues its orders
+    /// ([`escort_orders`]).
+    pub frame: i16,
+    /// Which reach a fleet leader's orders read
+    /// ([`RuleKey::EscortOrderReach`](crate::RuleKey::EscortOrderReach), see
+    /// [`ai::escort_orders`](crate::ai::escort_orders)).
+    pub escort_order_reach: RuleSource,
 }
 
 /// Nova's disable rule, a world's default.
@@ -630,8 +639,8 @@ impl<'a> World<'a> {
     /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
     /// no government marked by an IFF scrambler, Nova's disable rule,
     /// no player's warp under way with warp sounds of no length, no
-    /// tractor's pull and no weapon records
-    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)).
+    /// tractor's pull, no weapon records
+    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)) and frame 0.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -667,6 +676,8 @@ impl<'a> World<'a> {
             warp: warp_out::WarpWorld::default(),
             tractor_step: 0.0,
             weapons: bare.weapons,
+            frame: 0,
+            escort_order_reach: RuleSource::Engine,
         }
     }
 
@@ -1122,7 +1133,8 @@ impl Traffic {
     /// The think half of a tick in `world` (steps 1 to 5 of the module
     /// docs), `_DoPlayGameWork`'s advance-pass AI after the collision
     /// passes: the arrivals pass (`_EnterMoreShips` @0x44237), the answers
-    /// to the `strikes` left, the decisions as `behaviour` says, rolling
+    /// to the `strikes` left, the fleet leaders' orders
+    /// ([`escort_orders`]), the decisions as `behaviour` says, rolling
     /// on `chance`, their goals, pursuit, fire commands and targets, the
     /// gate waits, each flying NPC's cloak think and each escape pod's
     /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`
@@ -1139,6 +1151,7 @@ impl Traffic {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.forget_provocations();
+        self.issue_escort_orders(&world);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
         self.launch_room = Some(left);
@@ -2227,7 +2240,9 @@ impl Traffic {
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
-    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`]. Each decision's calls,
+    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`], and one that
+    /// writes an order word ([`Decision::order_word`]) sets
+    /// [`Npc::order_word`]. Each decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
@@ -2248,6 +2263,7 @@ impl Traffic {
                 visits,
                 re_picked,
                 ends_wait,
+                order_word,
                 ..
             } = decision;
             if let Some(write) = lost_sight {
@@ -2286,6 +2302,9 @@ impl Traffic {
             }
             if ends_wait {
                 npc.ai_wait = 0;
+            }
+            if let Some(word) = order_word {
+                npc.order_word = word;
             }
             npc.goal = goal;
         }
@@ -2548,6 +2567,7 @@ impl Traffic {
                 // berth's.
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
+                order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,
                 warp: warp_out::Warp::default(),
@@ -2897,6 +2917,8 @@ mod tests {
         assert_eq!(npcs[0].ai_type, AiType::Warship, "its InherentAI");
         for npc in npcs {
             assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 });
+            // `_GenericRandomShipSpawn` @0x3cbb3.
+            assert_eq!(npc.order_word, crate::fleet::OrderWord::NONE);
         }
     }
 
@@ -4813,6 +4835,7 @@ mod tests {
             visits: None,
             re_picked: false,
             ends_wait: false,
+            order_word: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

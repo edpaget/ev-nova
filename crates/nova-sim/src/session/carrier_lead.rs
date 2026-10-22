@@ -166,6 +166,8 @@ fn npc_launched(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId, NpcId) {
     assert_eq!(launched.len(), 1, "one launched");
     let fighter = &launched[0];
     assert_eq!((fighter.goal, fighter.ai_wait), (Goal::Idle, GLIDE));
+    // `_AISetup` @0x7f40c.
+    assert_eq!(fighter.order_word, crate::fleet::OrderWord::NONE);
     (session, fighter.id, raider, lead)
 }
 
@@ -191,19 +193,37 @@ fn coasts(
 }
 
 #[test]
-fn an_npcs_fighter_under_attack_ends_its_glide_at_its_first_think() {
+fn an_npcs_fighter_ends_its_glide_at_its_first_think_and_attacks_once_its_carrier_orders_it() {
+    // It launches with order -1 (`_AISetup` @0x7f40c): its formation block
+    // ends the glide (@0x83ea8-0x83eb0), and it keeps formation until its
+    // carrier's next order frame gives it Attack, its carrier attacking
+    // with its shield full (`_AIIssueEscortOrders` @0x89a3c-0x89a53).
     let catalog = carrying();
-    let (mut session, id, _, _) = npc_launched(&catalog);
+    let (mut session, id, raider, _) = npc_launched(&catalog);
     fight(&mut session, &catalog, &raiding_ai());
     let fighter = session.space.npc(id).expect("there");
-    assert_eq!(fighter.ai_wait, 0, "its Attack block ends it (@0x83d62)");
-    assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player));
+    assert_eq!(fighter.ai_wait, 0, "its formation block ends it");
+    assert!(
+        matches!(fighter.goal, Goal::Follow { lead, .. } if lead == raider),
+        "{:?}",
+        fighter.goal
+    );
+    let mut ticks = 0;
+    while session.space.npc(id).expect("there").order_word == crate::fleet::OrderWord::NONE {
+        fight(&mut session, &catalog, &raiding_ai());
+        ticks += 1;
+        assert!(ticks < 8, "its carrier orders it within 8 frames");
+    }
+    let fighter = session.space.npc(id).expect("there");
+    assert_eq!(fighter.order_word, crate::fleet::OrderWord(2));
+    assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player), "the same tick");
 }
 
 #[test]
 fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
-    // Its carrier's lead, and so its carrier, no longer fights: the
-    // stand-in order is Return, whose block leaves +0x4c (@0x83e79-0x83ea3).
+    // Its carrier's lead, and so its carrier, no longer fights, and its
+    // carrier has issued it Return, whose block leaves +0x4c
+    // (@0x83e79-0x83ea3); an idle carrier issues Return again.
     let catalog = carrying();
     let (mut session, id, raider, lead) = npc_launched(&catalog);
     for ship in [lead, raider] {
@@ -211,6 +231,7 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
         npc.goal = Goal::Idle;
         npc.target = None;
     }
+    session.space.npc_mut(id).expect("there").order_word = crate::fleet::OrderWord(3);
     let ai = raiding_ai();
     let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 1);
     assert!(held, "no turn or thrust while it glides");

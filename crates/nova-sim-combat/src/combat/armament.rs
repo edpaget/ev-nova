@@ -1621,10 +1621,7 @@ impl Arsenal {
             .filter(|&(_, (count, _))| count > 0)
             .filter_map(|(weapon, _)| self.weapon(weapon))
             .filter(|spec| in_gun_range_walk(spec))
-            .map(|spec| match spec.guidance {
-                Guidance::Beam | Guidance::TurretBeam => spec.beam_length + GUN_RANGE_MARGIN,
-                _ => (spec.range() + GUN_RANGE_MARGIN).trunc(),
-            })
+            .map(WeaponSpec::gun_reach)
             .reduce(f32::max)
     }
 

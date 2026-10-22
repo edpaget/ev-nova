@@ -798,6 +798,21 @@ impl WeaponSpec {
         self.chain_range
     }
 
+    /// How far it reaches as `_AIInGunRange` reads one weapon
+    /// (@0x7faac-0x7faf3): a beam of guidance 0 or 3 its length and
+    /// [`GUN_RANGE_MARGIN`](super::armament::GUN_RANGE_MARGIN); anything
+    /// else its [`range`](Self::range) and the margin, truncated. A
+    /// ship's stock reach is the longest of its stock weapons'
+    /// ([`HullSpec::stock_reach`](super::hull::HullSpec::stock_reach)).
+    #[must_use]
+    pub fn gun_reach(&self) -> f32 {
+        use super::armament::GUN_RANGE_MARGIN;
+        match self.guidance {
+            Guidance::Beam | Guidance::TurretBeam => self.beam_length + GUN_RANGE_MARGIN,
+            _ => (self.range() + GUN_RANGE_MARGIN).trunc(),
+        }
+    }
+
     /// Whether it pushes its firer back as it fires: a `Recoil` of neither
     /// 0 nor -1 (`_FireAIShipWeapon` @0x88ee2-0x88efc).
     #[must_use]
@@ -1023,8 +1038,9 @@ mod tests {
         for (raw, stray) in [
             (-1, Some(StrayWord::FoldSet)),
             (5, Some(StrayWord::Pods)),
+            (6, Some(StrayWord::Order)),
             (-2, None),
-            (6, None),
+            (7, None),
             (i16::MIN, None),
         ] {
             let spec = WeaponSpec::new(&WeaponRecord {
@@ -1279,6 +1295,37 @@ mod tests {
                 ..light_blaster()
             });
             assert_eq!(spec.asteroid_damage(), damage, "{mass_dmg} {flags2:#x}");
+        }
+    }
+
+    #[test]
+    fn a_weapons_gun_reach_is_a_beams_length_or_its_range_truncated_and_32() {
+        let reach = |record: WeaponRecord| WeaponSpec::new(&record).gun_reach();
+        let blaster = WeaponRecord {
+            speed: 1400,
+            count: 25,
+            ..weapon(129)
+        };
+        assert_eq!(
+            reach(blaster),
+            382.0,
+            "the stock Medium Blaster's 350 and 32"
+        );
+        let odd = WeaponRecord {
+            speed: 1005,
+            count: 3,
+            ..weapon(130)
+        };
+        assert_eq!(reach(odd), 62.0, "30.15 and 32, truncated");
+        for guidance in [0, 3] {
+            let beam = WeaponRecord {
+                guidance,
+                count: 15,
+                speed: 1000,
+                beam_length: 400,
+                ..weapon(146)
+            };
+            assert_eq!(reach(beam), 432.0, "{guidance}");
         }
     }
 
