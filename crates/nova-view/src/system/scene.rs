@@ -162,8 +162,9 @@ pub struct SystemScene {
 impl SystemScene {
     /// System `id`, read from `catalog` once.
     ///
-    /// Its problems are the catalog's, then each stellar's `DeadType`
-    /// sheet that exists but cannot be read, then graphic type 0's sheet
+    /// Its problems are the catalog's, then each stellar's `Type` sheet
+    /// that cannot be read and `DeadType` sheet that exists but cannot be
+    /// read, then graphic type 0's sheet
     /// when it cannot be read and some stellar might fall back to it (one
     /// with no `DeadType` sheet that could be read, or with a `Type` sheet
     /// that cannot be), whatever the readings of
@@ -204,6 +205,9 @@ impl SystemScene {
             .collect();
         let mut problems = contents.problems;
         for stellar in &stellars {
+            if let Err(reason) = &stellar.sprite {
+                problems.push(format!("spöb {} Type: {reason}", stellar.id.0));
+            }
             if let Some(Err(reason)) = &stellar.dead_sprite {
                 problems.push(format!("spöb {} DeadType: {reason}", stellar.id.0));
             }
@@ -507,7 +511,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(scene.problems(), [] as [String; 0]);
+        assert_eq!(scene.problems(), ["spöb 140 Type: no spïn 1002"]);
         let mut scene = scene;
         scene.step(2);
         let shown: Vec<u16> = scene.stellars().iter().map(|s| s.frames.shown()).collect();
@@ -967,9 +971,21 @@ mod tests {
         let scene = SystemScene::load(&FakeCatalog::new(vec![broken]), SystemId(135));
         assert_eq!(
             scene.problems(),
-            ["spïn 1000 (graphic type 0): no spïn 1000"],
+            [
+                "spöb 160 Type: no spïn 1010",
+                "spïn 1000 (graphic type 0): no spïn 1000"
+            ],
             "whole, it may fall back to graphic type 0"
         );
+    }
+
+    #[test]
+    fn a_type_sheet_that_cannot_be_read_is_a_problem() {
+        let scene = SystemScene::load(&catalog(), SystemId(130));
+        assert_eq!(scene.problems(), ["spöb 140 Type: no spïn 1002"]);
+        let shown = BTreeSet::from([StellarId(128), StellarId(129)]);
+        let scene = SystemScene::load_shown(&catalog(), SystemId(130), &shown);
+        assert_eq!(scene.problems(), [] as [String; 0], "140 is not shown");
     }
 
     #[test]

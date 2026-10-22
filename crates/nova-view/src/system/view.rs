@@ -692,9 +692,9 @@ mod tests {
     fn problems_are_counted_with_the_first_one_in_red() {
         let list = drawn(&SystemView::new(&catalog(), SystemId(132)));
         assert_eq!(
-            text(&list, "2 problem"),
+            text(&list, "3 problem"),
             DrawCommand::Text {
-                text: "2 problem(s) reading the system: sÿst 132: no spöb 150".to_owned(),
+                text: "3 problem(s) reading the system: sÿst 132: no spöb 150".to_owned(),
                 font: Font::Geneva,
                 origin: at(16.0, 98.0),
                 size: 14.0,
