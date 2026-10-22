@@ -15,17 +15,20 @@
 //!
 //! | Window | Opens | Closes | Readers inside |
 //! |---|---|---|---|
-//! | A jump | the refresh @0x6bf3f | the HSSV @0x6c203 | the days' crons and `OnRegen`s (@0x6c144), the setup's persons (`_SetupShipsInSystem` @0x6c1f9) |
+//! | A jump | the first write of +0x74 (a hop's @0x6bdd4, else the arrival's @0x6be0b), as the owner words stay the departure's rescue until the refresh (@0x6bf3f) clears them | the HSSV @0x6c203 | the explorations' `OnExplore`s (@0x6bddb, @0x6be12, @0x6c1db), the days' crons and `OnRegen`s (@0x6c144), the setup's persons (`_SetupShipsInSystem` @0x6c1f9) |
 //! | A landed `M` or `N` | the write of +0x74 (@0x1572b, @0x158f2) | the take-off's HSSV (@0x674c7) | a later docked script's `S`, mission info, the map, the tribute, the take-off's persons (@0x674c2) |
 //!
 //! **Here.** [`Chart::leave_owners_unset`] makes the galaxy await its
 //! rebuild ([`OverlaidGalaxy::await_rebuild`](crate::story::OverlaidGalaxy::await_rebuild)):
 //! the holder then derives no rescue for the player's system, and the
 //! next rescue pass (`Chart::keep_rescues`, at every rebuild point and
-//! after every refresh) ends the wait. `Session::arrive` writes the jump's
-//! refresh, forgets the rescues and leaves the owners unset before the
-//! days, so the wait lasts through the entry's population and ends at its
-//! rebuild. A landed `M` or `N` (`Session::move_to`) leaves them unset
+//! after every refresh) ends the wait. `Session::arrive` leaves the
+//! owners unset as it first writes the player's system (see the
+//! `jump_exploration` module), so the holder keeps the departure's kept
+//! rescue and derives none for a hop or the arrival; it writes the
+//! refresh, forgets the rescues and leaves the owners unset again before
+//! the days, so the wait lasts through the entry's population and ends at
+//! its rebuild. A landed `M` or `N` (`Session::move_to`) leaves them unset
 //! until the take-off's rebuild, which follows its population, or until a
 //! landing's refresh: a land check's `M` settles before the `REOFFER`
 //! refresh under `story_reentry = engine`, so it leaves no window, as in
@@ -183,15 +186,15 @@ mod tests {
             let mut session = rescued_in_130(&catalog, source);
             assert!(session.pilot().missions().get(0).is_none(), "{source:?}");
             jump_to_131(&mut session, &catalog);
-            // By the other reading the holder derives the departure 130,
-            // the player's system during the days (phase 40 moves it to
-            // the arrival); 129 stands in for it at its place.
+            // By the other reading the holder derives the player's system
+            // during the days: the arrival 131, written before them
+            // (@0x6be0b).
             assert_eq!(
                 held_systems(&session),
                 by(
                     source,
                     (Some(SystemId(128)), Some(SystemId(128))),
-                    (Some(SystemId(129)), Some(SystemId(130)))
+                    (Some(SystemId(131)), Some(SystemId(131)))
                 ),
                 "{source:?}"
             );

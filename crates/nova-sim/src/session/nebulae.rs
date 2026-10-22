@@ -56,10 +56,11 @@
 //! `entry` module).
 //!
 //! Left to others: the escape pod's exploration (roadmap player-death),
-//! and a jump's scripts run in the arrival, its `EnteredSystem` hooks
-//! before the arrival is explored again and populated, and the
+//! a jump's `EnteredSystem` hooks before the arrival is explored again
+//! and populated (crons-news-ranks-fidelity phase 40), and the
 //! explorations of scripts run outside the dispatcher
-//! (crons-news-ranks-fidelity phase 40).
+//! (crons-news-ranks-fidelity phase 43). A jump's scripts read the
+//! arrival as the player's system (see the `jump_exploration` module).
 
 use super::{Chart, MissionRun, Outbox, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{NebulaId, SystemId};

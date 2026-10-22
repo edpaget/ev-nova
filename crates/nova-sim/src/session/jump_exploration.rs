@@ -42,14 +42,26 @@
 //! [`Session::begin`] dispatches the `OnStart`'s explorations before
 //! `_PlayGame`'s refresh.
 //!
+//! **The player's system** (crons-news-ranks-fidelity phase 40).
+//! `_HandlePlayer` writes +0x74 to each hop's stand-in (@0x6bdd4, after
+//! `_FindActiveCoLocatedSystem` @0x6bdc1) before exploring it, and to the
+//! system the jump writes (@0x6be0b) before exploring that; the refresh's
+//! move takes it out of a system the refresh hid (@0x99918) before the
+//! days. So every `OnExplore` and every day script reads the hop or the
+//! arrival as the player's system: a map's reveal origin, an `S`'s
+//! whereabouts, a crön's `OnStart`. [`Session::write_jump_system`] and
+//! [`Session::jump_refresh_move`] make the same writes. The owner words
+//! don't change with them, so the galaxy awaits its rebuild from the
+//! first write (see the `owners_unset` module). The stellars shown stay
+//! the departure's until the entry: nothing is drawn before the
+//! original's rebuild (@0x6c203), so that crosses no boundary.
+//!
 //! **Ordering.** A jump's `EnteredSystem` hooks settle in the caller's
 //! settling, after the re-explore and the population, where the original
-//! runs them (@0x6c15d) before both; the jump's explorations and days see
-//! the departure as the player's system, where the original writes the
-//! arrival first (@0x6bdd4, @0x6be0b); and a map granted by a script run
+//! runs them (@0x6c15d) before both; and a map granted by a script run
 //! outside the dispatcher (a crön's, a ship's hook, a stellar's `OnRegen`)
 //! explores at the next settling. Each crosses a boundary the player can
-//! see; crons-news-ranks-fidelity phase 40 covers them.
+//! see; crons-news-ranks-fidelity phases 40 and 43 cover them.
 //!
 //! [`RuleKey::StoryReentry`]: crate::RuleKey::StoryReentry
 
@@ -57,7 +69,7 @@ use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::story::StoryEvent;
 
-use super::Session;
+use super::{Session, SessionEvent, story};
 
 impl Session {
     /// Explores `system`'s nebulae at once (`_ExploreNebulaeFromSystem`;
@@ -72,6 +84,37 @@ impl Session {
         self.run.raise(StoryEvent::Explored { system });
         self.dispatch_explored_since(catalog, chance, mark);
     }
+
+    /// Writes `system` as the player's system during a jump, before it is
+    /// explored: a hop's stand-in (@0x6bdd4) or the system the jump writes
+    /// (@0x6be0b; see the module docs' "The player's system"). The owner
+    /// words don't change with it, so the galaxy awaits its rebuild from
+    /// the first write, as [`RuleKey::RescueUntilRefresh`] reads (see the
+    /// `owners_unset` module): the holder derives no rescue for the hop
+    /// or the arrival, and keeps the departure's.
+    ///
+    /// [`RuleKey::RescueUntilRefresh`]: crate::RuleKey::RescueUntilRefresh
+    pub(super) fn write_jump_system(&mut self, system: SystemId) {
+        self.pilot.system = system;
+        self.chart.leave_owners_unset(&self.setup);
+    }
+
+    /// The jump's refresh's move (@0x99918): the player is moved out of
+    /// `written` when the refresh hid it, as the entry will resolve it
+    /// ([`Chart::entry_resolution`](super::Chart::entry_resolution)), a
+    /// chain head it moves to made visible (@0x999a4), which makes a save
+    /// due and tells [`SessionEvent::GalaxyChanged`]. Gives the system the
+    /// player is left in, the player's system through the days, the
+    /// enter-system hook, the re-explore and the population.
+    pub(super) fn jump_refresh_move(&mut self, written: SystemId) -> SystemId {
+        let moved = self.chart.entry_resolution(&self.setup, written);
+        if story::show(&mut self.pilot, &mut self.chart.galaxy, moved) {
+            self.out.save_due = true;
+            self.out.emit(SessionEvent::GalaxyChanged);
+        }
+        self.pilot.system = moved.to;
+        moved.to
+    }
 }
 
 #[cfg(test)]
@@ -80,23 +123,28 @@ pub(super) mod tests {
     use std::rc::Rc;
 
     use super::super::crons::tests::scripted;
+    use super::super::kept_rescues::tests::{by, rescued_in_130, shared};
     use super::super::nebulae::tests::{around_131, nebulous};
-    use super::super::tests::chained;
-    use crate::catalog::{NebulaId, NebulaRecord, ShipId, StellarId, SystemId, SystemVisibility};
+    use super::super::tests::{alternates, chained};
+    use crate::catalog::{
+        MissionRecord, NebulaId, NebulaRecord, ShipId, StellarId, SystemId, SystemVisibility,
+    };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp, Test};
     use crate::handling::ShipFields;
     use crate::hyperspace::MultiJumpRule;
     use crate::outfit_effects::MAP;
-    use crate::pilot::Pilot;
+    use crate::pilot::{ExploredLevel, Pilot};
     use crate::reserves::Gauge;
+    use crate::rulebook::RuleSource;
     use crate::session::Session;
     use crate::session::control::SetOpObserver;
     use crate::story::{
         Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
     };
     use crate::testkit::{
-        FAST, FakePilotCatalog, begin_jump_now, fly_out, jump, nebula, outfit, ship,
+        FAST, FakePilotCatalog, begin_jump_now, fly_out, hideable, hiding_bit, jump, mission,
+        nebula, outfit, planet, ship, star,
     };
 
     fn bit(n: u16) -> Bit {
@@ -273,9 +321,153 @@ pub(super) mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
             *seen.0.borrow(),
-            [SystemId(130)],
-            "its OnExplore ran before the entry wrote the system"
+            [SystemId(131)],
+            "its OnExplore ran in the arrival, before the entry"
         );
+    }
+
+    #[test]
+    fn an_on_explore_during_a_jump_reads_the_arrival_as_the_players_system() {
+        // Arrived in 131: the original writes it before exploring it
+        // (@0x6be0b, @0x6be12).
+        let catalog = nebulous(vec![observed_around_131("")]);
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        let seen = Rc::new(Systems::default());
+        session = session.with_set_op_observer(seen.clone());
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(*seen.0.borrow(), [SystemId(131)]);
+
+        // 130 to 132 by 131: each hop's stand-in written before it is
+        // explored (@0x6bdd4, @0x6bddb), then the arrival.
+        let catalog = chained(
+            nebulous(vec![
+                observed_around_131(""),
+                nebula(129, (500, 500, 200, 200), "", "X133"),
+            ]),
+            2,
+        );
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        bound(&mut session, &catalog, 132, "");
+        let seen = Rc::new(Systems::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(*seen.0.borrow(), [SystemId(131), SystemId(132)]);
+    }
+
+    #[test]
+    fn a_map_an_on_explore_grants_during_a_jump_reveals_around_the_arrival() {
+        // A map of 1 jump: from 131, 130 and 132; from the departure 130,
+        // only 131.
+        let catalog = FakePilotCatalog {
+            outfits: vec![outfit(300, &[(MAP, 1)])],
+            ..nebulous(vec![nebula(128, (500, -100, 200, 200), "", "G300")])
+        };
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        assert_eq!(
+            session.pilot().explored_level(SystemId(132)),
+            ExploredLevel::Unexplored
+        );
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(
+            session.pilot().explored_level(SystemId(132)),
+            ExploredLevel::Charted
+        );
+    }
+
+    #[test]
+    fn a_cron_on_a_jumps_day_reads_the_arrival_as_the_players_system() {
+        let catalog = FakePilotCatalog {
+            crons: vec![scripted(128, 1, "X132", "")],
+            ..nebulous(Vec::new())
+        };
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        let seen = Rc::new(Systems::default());
+        session = session.with_set_op_observer(seen.clone());
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(*seen.0.borrow(), [SystemId(131)], "the crön's X132");
+    }
+
+    #[test]
+    fn a_jump_into_a_system_its_refresh_hides_reads_the_system_moved_to_on_its_days() {
+        // 134 shares 131's place; the jump's refresh hides 131, and its move
+        // takes the player to 134 (@0x99918) before the days (@0x6c144).
+        let mut catalog = alternates();
+        catalog.crons.push(scripted(128, 1, "X132", ""));
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        session.pilot.bits_mut().set(hiding_bit(131));
+        let seen = Rc::new(Systems::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(*seen.0.borrow(), [SystemId(134)], "the crön's X132");
+    }
+
+    #[test]
+    fn a_jumps_explorations_derive_no_rescue_for_the_arrival() {
+        // [`shared`] with 128, shadowed by 127 at (-600, 600), and 131
+        // listing 160, which no system owns or rescues: the lowest visible
+        // lister, 128, is `_FindSystemFromStellar`'s. 150 is kept rescued
+        // in the departure 130. The arrival's `OnExplore` starts 141, to
+        // 160, and 142, to 150.
+        let mut catalog = shared();
+        catalog.star_map.push(star(127, (-600.0, 600.0), &[]));
+        catalog.star_map.push(star(128, (-600.0, 600.0), &[]));
+        catalog.systems.push(SystemId(128));
+        catalog
+            .sites
+            .push((SystemId(128), vec![planet(160, 400.0, 300.0)]));
+        for (system, sites) in &mut catalog.sites {
+            if *system == SystemId(131) {
+                sites.push(planet(160, 400.0, 300.0));
+            }
+        }
+        hideable(&mut catalog);
+        for (id, stellar) in [(141, 160), (142, 150)] {
+            catalog.missions.push(MissionRecord {
+                travel_stel: stellar,
+                return_stel: stellar,
+                ..mission(id)
+            });
+        }
+        catalog
+            .nebulae
+            .push(nebula(128, (500, -100, 200, 200), "", "S141 S142"));
+        for source in RuleSource::ALL {
+            let mut session = rescued_in_130(&catalog, source);
+            session.plot_course(SystemId(131)).expect("a route");
+            fly_out(&mut session);
+            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            session.arrive(&catalog, &mut NeverFires).expect("arrives");
+            let destination = |slot| {
+                session
+                    .pilot()
+                    .missions()
+                    .get(slot)
+                    .expect("held")
+                    .destination
+                    .and_then(|stop| stop.system)
+            };
+            // By the other reading the holder derives the player's system,
+            // 131 now, as that reading always does.
+            assert_eq!(
+                destination(0),
+                by(source, Some(SystemId(128)), Some(SystemId(131))),
+                "{source:?}: 160 unowned while the rebuild is awaited"
+            );
+            assert_eq!(
+                destination(1),
+                by(source, Some(SystemId(129)), Some(SystemId(131))),
+                "{source:?}: 150 kept rescued in 130, which 129 stands for"
+            );
+        }
     }
 
     #[test]

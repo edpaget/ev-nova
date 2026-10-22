@@ -3032,6 +3032,22 @@ impl Session {
     /// populated. [`StoryEvent::EnteredSystem`] follows the days, and
     /// waits, with the days' events, for the caller's settling.
     ///
+    /// Each system explored is first written as the player's system, as
+    /// the original writes +0x74 (@0x6bdd4, @0x6be0b), and after the
+    /// refresh the player's system is the one its move leaves (@0x99918),
+    /// so the explorations' and the days' scripts read the hop or the
+    /// arrival (see the `jump_exploration` module); the galaxy awaits its
+    /// rebuild from the first write. The entry then writes the system
+    /// itself. Two differences cross no boundary the player sees, so they
+    /// are not filed: the engine raises the arrival's explored level as it
+    /// enters (`Reset::Explore`), after the re-explore, where the original
+    /// raises it before (@0x6c184-0x6c1b8, then @0x6c1db), and no
+    /// `OnExplore` operator reads it to any other end (`X` raises 0 to 1
+    /// either way, @0x15c93; the known pass a map's or `Y`'s rebuild makes
+    /// is made afresh by the entry's rebuild); and the hops leave the
+    /// course at the entry (`CourseStep::Arrival`), where the original
+    /// spools each before the days (@0x6bde0), which read no course.
+    ///
     /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
     /// every system's `Visibility`, and every nebula's `ActiveOn`,
     /// evaluated after the explorations, so it reads the bits their
@@ -3136,7 +3152,9 @@ impl Session {
                 hops += 1;
                 // Each system passed on the way, the visible system that
                 // stands for its hop as the original resolves them
-                // (@0x6bd67-0x6bdc1), explored at once (@0x6bddb).
+                // (@0x6bd67-0x6bdc1), written as the player's (@0x6bdd4)
+                // and explored at once (@0x6bddb).
+                self.write_jump_system(at);
                 self.explore_now(catalog, &mut &mut *chance, at);
                 (from, at) = (at, next);
             }
@@ -3147,8 +3165,10 @@ impl Session {
         let multi_jump =
             hops > 0 && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
         let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
-        // The arrival explored at once (@0x6be12). The written system
-        // shares its stand-in's place, so the same nebulae.
+        // The arrival written as the player's system and explored at once
+        // (@0x6be0b, @0x6be12). The written system shares its stand-in's
+        // place, so the same nebulae.
+        self.write_jump_system(written);
         let arrived = self.chart.jump_explored(&self.setup, written);
         self.explore_now(catalog, &mut &mut *chance, arrived);
         // The jump's fuel, after its explorations, so it comes off what an
@@ -3183,6 +3203,9 @@ impl Session {
             self.out.emit(SessionEvent::GalaxyChanged);
         }
         self.chart.leave_owners_unset(&self.setup);
+        // The refresh's move out of a system it hid (@0x99918), as the
+        // entry will resolve it: the player's system from here on.
+        let moved_to = self.jump_refresh_move(written);
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);
@@ -3210,9 +3233,12 @@ impl Session {
         // before the setup populates it (`_AutoSetExploration` @0x6c1db,
         // `_SetupShipsInSystem` @0x6c1f9): the system the entry will
         // resolve it to, as the refresh's move left +0x74.
-        let explored_again = self.chart.entry_resolution(&self.setup, written).to;
-        self.explore_now(catalog, &mut &mut *chance, explored_again);
+        self.explore_now(catalog, &mut &mut *chance, moved_to);
         self.pilot.jumped_from = Some(from);
+        // The entry writes the player's system itself, reading the one
+        // left as it was before the jump (`set_player_system`): the
+        // departure handed back, with nothing run in between.
+        self.pilot.system = departure;
         self.enter_system(
             Entry::Jump { hops, natural_end },
             entered,
