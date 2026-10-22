@@ -3350,7 +3350,8 @@ mod tests {
         assert_eq!(asteroids(Rc::new(One)), direct);
     }
 
-    /// `STR#` 3000 holds two replies; no other list exists.
+    /// `STR#` 3000 holds two replies; no other list exists. A plug-in
+    /// patches `STR ` 5000 alone.
     impl CommCatalog for One {
         fn string_list(&self, id: i16) -> Vec<String> {
             if id == 3000 {
@@ -3359,18 +3360,33 @@ mod tests {
                 Vec::new()
             }
         }
+
+        fn plugin_string(&self, id: i16) -> StringPatch {
+            if id == 5000 {
+                StringPatch::Text("Patched.".into())
+            } else {
+                StringPatch::Absent
+            }
+        }
     }
 
-    /// `STR#` 3000 and 3001, as `catalog` gives them.
-    fn comm(catalog: impl CommCatalog) -> Vec<Vec<String>> {
-        vec![catalog.string_list(3000), catalog.string_list(3001)]
+    /// `STR#` 3000 and 3001, and the plug-in's `STR ` 5000, as `catalog`
+    /// gives them.
+    fn comm(catalog: impl CommCatalog) -> (Vec<Vec<String>>, StringPatch) {
+        (
+            vec![catalog.string_list(3000), catalog.string_list(3001)],
+            catalog.plugin_string(5000),
+        )
     }
 
     #[test]
     fn borrowed_and_shared_comm_catalogs_are_catalogs() {
+        // `plugin_string` defaults to `Absent`, so a forwarding impl that
+        // dropped it would still compile: the patch shows it forwards.
         let direct = comm(One);
-        assert_eq!(direct[0], ["Channel open.", "Hello."]);
-        assert!(direct[1].is_empty(), "{direct:?}");
+        assert_eq!(direct.0[0], ["Channel open.", "Hello."]);
+        assert!(direct.0[1].is_empty(), "{direct:?}");
+        assert_eq!(direct.1, StringPatch::Text("Patched.".into()));
         assert_eq!(comm(&One), direct);
         assert_eq!(comm(Rc::new(One)), direct);
     }

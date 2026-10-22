@@ -46,6 +46,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
+use super::held_burst;
+use super::inertialess::Inertia;
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
@@ -422,6 +424,9 @@ fn fly_flown(
     ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
     let held = ship_display::held(npc);
     let beside = beside_of(pass, npc);
+    // What its flight flies by, and what it owed of a gate burst before it.
+    let inertia = Inertia::of(npc, other.as_ref(), beside.leader_seen, world.flight);
+    let owed = npc.owed_burst;
     let outcome = fly_steered(
         npc,
         pass,
@@ -430,6 +435,7 @@ fn fly_flown(
         speeds,
         &mut *chance,
     );
+    held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
     outcome
 }
@@ -502,6 +508,7 @@ fn fly_steered(
         autopilot::Readings {
             snipe_lead: world.snipe_brake_lead,
             jump_fuel: world.npc_jump_fuel,
+            held_burst: world.held_burst,
         },
         world.weapons,
         &mut *chance,

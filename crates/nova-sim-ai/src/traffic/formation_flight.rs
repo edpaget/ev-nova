@@ -130,6 +130,7 @@ use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::autopilot::{self, Beside};
+use crate::traffic::held_burst::{self, Word};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
@@ -314,13 +315,21 @@ pub(crate) fn fly(
     inertia: Inertia,
 ) {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
+        // `autopilot::brake` stands in for sub 1, which keeps +0x34.
         let controls = autopilot::brake(&npc.state, handling, inertia);
-        autopilot::step(npc, handling, controls, flight, inertia);
+        let word = Word::stop(controls, handling, inertia);
+        held_burst::step(npc, handling, controls, flight, inertia, word);
         return;
     };
     let slot = place.position(leader);
     let (controls, flown) = match sub(npc.state.position, leader.position, beside.leader_seen) {
-        Sub::Stop => leave_flight::stop(&mut npc.state, handling, inertia, false),
+        Sub::Stop => {
+            // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
+            let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, false);
+            let word = Word::stop(controls, &flown, inertia);
+            held_burst::step(npc, &flown, controls, flight, inertia, word);
+            return;
+        }
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
             let close = sub == Sub::Close;

@@ -2072,6 +2072,7 @@ impl Session {
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
+            held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2151,6 +2152,7 @@ impl Session {
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
+            held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
         }
     }
 

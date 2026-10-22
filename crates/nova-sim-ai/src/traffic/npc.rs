@@ -20,6 +20,7 @@ use crate::geometry::Vec2;
 use crate::inertialess::{InertialDampener, is_inertialess};
 use crate::market::Good;
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
@@ -97,8 +98,10 @@ pub enum Mode {
     /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
     /// its target and the damage as provocation, and its wait is cut to
     /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
-    /// through its burst. A hit by the player holds it here instead
-    /// ([`Mode::HeldAtGate`]).
+    /// through its burst. The hit's push moves it (`_DamageShip`
+    /// @0x3aa7d): it drifts on that velocity as it waits, as
+    /// `_HandleShip` moves every ship (@0x34274-0x342aa). A hit by the
+    /// player holds it here instead ([`Mode::HeldAtGate`]).
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -111,10 +114,11 @@ pub enum Mode {
     /// unfaded, it lets go of the gate's sprite (@0x2e8bd-0x2e8d7), and
     /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
     /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
-    /// (@0x34a54-0x34a72), so it holds still, and once the wait is out it
-    /// flies its goal from rest ([`Npc::hold_at_gate`]), with no burst:
-    /// its attack rewrites the burst word +0x34 the step it first thrusts
-    /// (see [`autopilot`](crate::traffic::autopilot)). Its decisions are
+    /// (@0x34a54-0x34a72), so it moves on only at its velocity, at rest
+    /// unless a hit pushed it, and once the wait is out it flies its goal
+    /// ([`Npc::hold_at_gate`]), owing the burst the emerge left in +0x34
+    /// by the engine's reading ([`Npc::owed_burst`], see
+    /// [`held_burst`](crate::traffic::held_burst)). Its decisions are
     /// due through the hold, as goal 0x15 no longer skips the per-type AIs
     /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
     /// defence of a waiting escort or fighter (see the traffic's tick).
@@ -596,6 +600,19 @@ pub struct Npc {
     /// and how it was flown this tick (see
     /// [`ship_display`](crate::traffic::ship_display)). Never saved.
     pub display: NpcDisplay,
+    /// The gate burst it still owes, released from its hold at its gate
+    /// ([`Mode::HeldAtGate`]): the speed of the original's negative burst
+    /// word +0x34, |+0x34|, which the emerge set (-30.0, or -15.0 when the
+    /// player leads it, @0x895aa-0x895bd) and the hold left, as nothing
+    /// writes it while +0x4c runs and `_LowLevelAIHandler` keeps a negative
+    /// one (@0x851e9-0x8520d). Set only by [`Npc::end_wait`], by the
+    /// engine's reading of
+    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst); lowered
+    /// by each tick it bursts on, and dropped by the first thrust that
+    /// writes +0x34, by a dogfight's speed cap, by the burst's end and by
+    /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
+    /// None at every spawn. Never saved.
+    pub owed_burst: Option<f32>,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -1240,6 +1257,8 @@ impl Npc {
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+        // Its own burst is the one `Mode::LeavingGate` flies.
+        self.owed_burst = None;
     }
 
     /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
@@ -1293,8 +1312,9 @@ impl Npc {
     /// Holds it where it waits in its gate, attacking the player
     /// ([`Mode::HeldAtGate`], its wait kept): `_AIMakeShipAttackPlayer`
     /// sets goal 4, target the player and travel stellar +0x6c = -1
-    /// (@0x89d3e-0x89d4d), keeping sub-goal 0. A ship not waiting in a
-    /// gate is left as it is.
+    /// (@0x89d3e-0x89d4d), keeping sub-goal 0 and the burst word +0x34
+    /// its emerge set, which it owes as the hold ends ([`Npc::end_wait`]).
+    /// A ship not waiting in a gate is left as it is.
     pub fn hold_at_gate(&mut self) {
         if let Mode::Emerging { ticks_left } = self.mode {
             self.mode = Mode::HeldAtGate { ticks_left };
@@ -1305,18 +1325,26 @@ impl Npc {
 
     /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a
     /// ship held at its gate ([`Mode::HeldAtGate`], the wait the hold
-    /// runs on) flies its goal from rest ([`Mode::Flying`]), its velocity
-    /// already none and its gate already let go, as when the hold runs
-    /// out (see [`autopilot`](crate::traffic::autopilot)). `_EscortAI`'s
-    /// Defend, Attack and formation blocks write it (@0x83c73, @0x83d6a,
-    /// @0x83eb0, [`Decision::ends_wait`](crate::ai::Decision::ends_wait)),
-    /// and `_HandleShip` then steers, thrusts and fires it in the same
-    /// frame (@0x34a54-0x34a72). Any other mode is left: only a ship
-    /// flying or held at its gate decides.
-    pub fn end_wait(&mut self) {
+    /// runs on) flies its goal ([`Mode::Flying`]), its gate already let
+    /// go, as when the hold runs out (see
+    /// [`autopilot`](crate::traffic::autopilot)). By `burst`'s engine
+    /// reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
+    /// it still owes its emerge's burst ([`Npc::owed_burst`]): 30, or 15
+    /// when the player led it out (@0x895aa-0x895bd), the burst word +0x34
+    /// the hold left; by the other it owes none. `_EscortAI`'s Defend,
+    /// Attack and formation blocks write it (@0x83c73, @0x83d6a, @0x83eb0,
+    /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)), as do
+    /// `_AIMakeShipRefuelPlayer` and `_AIMakeShipRepairPlayer` (@0x82de9,
+    /// @0x82e20), and `_HandleShip` then steers, thrusts and fires it in
+    /// the same frame (@0x34a54-0x34a72). Any other mode is left: only a
+    /// ship flying or held at its gate decides.
+    pub fn end_wait(&mut self, burst: RuleSource) {
         self.ai_wait = 0;
         if matches!(self.mode, Mode::HeldAtGate { .. }) {
             self.mode = Mode::Flying;
+            if burst == RuleSource::Engine {
+                self.owed_burst = Some(crate::traffic::emerge::exit_speed(self.led_out, 0));
+            }
         }
     }
 
@@ -2225,14 +2253,14 @@ mod tests {
     #[test]
     fn ending_the_wait_zeroes_it_and_releases_a_ship_held_at_its_gate() {
         // `_EscortAI`'s +0x4c = -1.0 (@0x83c73, @0x83d6a, @0x83eb0): the
-        // hold is that wait, so it flies from rest at once.
+        // hold is that wait, so it flies at once.
         let mut held = Npc {
             mode: Mode::HeldAtGate { ticks_left: 15 },
             ai_wait: 30,
             goal: Goal::Attack(ShipRef::Player),
             ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
-        held.end_wait();
+        held.end_wait(RuleSource::Engine);
         assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0));
         assert!(!held.wait_running());
         for mode in [
@@ -2245,9 +2273,44 @@ mod tests {
                 ai_wait: 30,
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
-            npc.end_wait();
+            npc.end_wait(RuleSource::Engine);
             assert_eq!((npc.mode, npc.ai_wait), (mode, 0), "{mode:?}");
+            assert_eq!(npc.owed_burst, None, "{mode:?}: no hold, no burst");
         }
+    }
+
+    #[test]
+    fn a_ship_whose_hold_at_its_gate_ends_owes_its_emerges_burst_by_the_engine_only() {
+        // The hold leaves +0x34 at the emerge's -30.0, or -15.0 when the
+        // player leads it (@0x895aa-0x895bd): nothing writes it while
+        // +0x4c runs (`_LowLevelAIHandler` @0x851e9-0x8520d).
+        let held = |led_out| Npc {
+            mode: Mode::HeldAtGate { ticks_left: 15 },
+            goal: Goal::Attack(ShipRef::Player),
+            led_out,
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        for (led_out, owed) in [(false, 30.0), (true, 15.0)] {
+            let mut npc = held(led_out);
+            npc.end_wait(RuleSource::Engine);
+            assert_eq!(npc.owed_burst, Some(owed), "led out: {led_out}");
+            assert_eq!(npc.mode, Mode::Flying);
+            let mut npc = held(led_out);
+            npc.end_wait(RuleSource::Bible);
+            assert_eq!(npc.owed_burst, None, "led out: {led_out}");
+            assert_eq!(npc.mode, Mode::Flying);
+        }
+    }
+
+    #[test]
+    fn coming_out_of_a_gate_drops_an_owed_burst() {
+        // Its own -30.0 or -15.0 is the burst `Mode::LeavingGate` flies.
+        let mut npc = Npc {
+            owed_burst: Some(12.0),
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.owed_burst, None);
     }
 
     #[test]

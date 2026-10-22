@@ -70,7 +70,7 @@
 //!   (+0x68), and `_HandleShip` turns the ship to it
 //!   ([`flight::turn_to`], @0x34460-0x3458e): by its turn while it is off
 //!   by more than that, whole degrees, and onto it otherwise. Sub 1's stop
-//!   still turns by [`autopilot::steer`]'s reading, which isn't
+//!   still turns by [`autopilot::steer`](crate::traffic::autopilot::steer)'s reading, which isn't
 //!   `_HandleShip`'s (see its docs).
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
 //!   (@0x3443f-0x34454, @0x34a54-0x34a72): it moves on at the velocity
@@ -92,8 +92,8 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
-use crate::traffic::autopilot;
 use crate::traffic::formation_flight;
+use crate::traffic::held_burst::{self, Word};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
@@ -290,7 +290,14 @@ pub fn fly(
             flight::turn_to(&mut npc.state, wanted, handling.turn_rate)
         });
         let controls = Controls { turn, ..controls };
-        autopilot::step(npc, &flown, controls, flight, inertia);
+        // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
+        // bursts an owed burst out.
+        let word = if docking.sub == DockSub::Stop {
+            Word::stop(controls, &flown, inertia)
+        } else {
+            Word::Writes
+        };
+        held_burst::step(npc, &flown, controls, flight, inertia, word);
     }
     outcome
 }

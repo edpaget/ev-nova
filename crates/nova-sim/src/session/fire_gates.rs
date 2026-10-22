@@ -100,6 +100,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_held_gate_burst() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::HeldGateBurst, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().held_burst, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.held_burst));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {

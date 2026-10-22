@@ -42,7 +42,9 @@
 //!   ([`formation_flight`](crate::traffic::formation_flight), which flies
 //!   [`stop`] with `refuelling` false). Its cut of +0x48, the speed along
 //!   the heading, with the velocity is
-//!   rdm:task/ai-drags-scale-the-npc-speed's. Nothing here plays a sound.
+//!   rdm:task/ai-drags-scale-the-npc-speed's. Sub 1 writes the thrust word
+//!   +0x30 alone, so a ship owing its gate burst bursts out on this brake
+//!   instead ([`held_burst`]). Nothing here plays a sound.
 //! - [`Leg::Jump`] (sub 4): it begins its warp out where it is, with no
 //!   move that tick ([`Npc::begin_own_jump`]). Sub 4 itself, the warp out
 //!   (`_LowLevelAIHandler` @0x8585e-0x859c5), is
@@ -56,7 +58,8 @@ use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
-use crate::traffic::autopilot::{self, Outcome, steer};
+use crate::traffic::autopilot::{Outcome, steer};
+use crate::traffic::held_burst::{self, Flight};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use crate::trig;
@@ -90,15 +93,19 @@ pub fn fly(
     flight: FlightRules,
     inertia: Inertia,
 ) -> Outcome {
-    let (controls, flown) = match (leg, inertia) {
-        (Leg::Jump, _) => {
+    let (flown, chosen) = match leg {
+        Leg::Jump => {
             npc.begin_own_jump();
             return Outcome::Flying;
         }
-        (Leg::RunOut, _) => (run_out(&npc.state, handling), *handling),
-        (Leg::Brake, _) => stop(&mut npc.state, handling, inertia, false),
+        Leg::RunOut => (*handling, Flight::from(run_out(&npc.state, handling))),
+        // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
+        Leg::Brake => {
+            let (controls, flown) = stop(&mut npc.state, handling, inertia, false);
+            (flown, Flight::stop(controls, &flown, inertia))
+        }
     };
-    autopilot::step(npc, &flown, controls, flight, inertia);
+    held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
     Outcome::Flying
 }
 
@@ -464,7 +471,7 @@ mod tests {
     use crate::fuel::OutfitMod;
     use crate::handling::ShipFields;
     use crate::stats::{HYPERSPACE_DISTANCE, INERTIALESS_HULL, ShipStats};
-    use crate::traffic::autopilot::{Readings, TopSpeeds};
+    use crate::traffic::autopilot::{self, Readings, TopSpeeds};
     use crate::traffic::npc::NpcPerson;
     use nova_sim_base::fixture::{Draws, FAST};
     use std::collections::BTreeMap;

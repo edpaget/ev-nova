@@ -31,7 +31,9 @@
 //!   (`_AIShipBoardedByPlayer` @0x897e6-0x8980f, `_AIShipCapturedByPlayer`
 //!   @0x896c5-0x896fa); and every victim the player's hit turns on it
 //!   (`_AIMakeShipAttackPlayer` @0x89d47, from `_DamageShip` @0x3be69;
-//!   the traffic's reaction), an assister included. The
+//!   the traffic's reaction), an assister included; and the end of a
+//!   held ship's burst (`_AIMakeShipStopJumping` @0x82eaa, see
+//!   [`held_burst`](crate::traffic::held_burst)). The
 //!   `_AIMakeShipStopRefuelling` that follows it (@0x3bec7, its -1
 //!   @0x833ba) never acts, as it needs goal 9 or 0xf and finds goal 4.
 //! - **Kept**: the head drop (@0x8c32a-0x8c330), the disabled-warship drop

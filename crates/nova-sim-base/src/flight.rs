@@ -326,15 +326,30 @@ pub fn step(
     rules: FlightRules,
     flyer: Flyer,
 ) {
+    state.heading = npc_turn(state, handling, controls, rules);
+    let caps = Caps::top(handling.max_speed);
+    advance(state, handling, controls.thrust, caps, rules, flyer);
+}
+
+/// The heading an inertial NPC at `state` turns to this tick under
+/// `controls`, as `handling` allows under `rules`: [`step`]'s turn. The
+/// turn keys turn it ([`turned`]); with neither held, reverse turns it
+/// toward its retro heading while it moves faster than
+/// [`FlightRules::at_rest_speed`] ([`turn_toward`]).
+#[must_use]
+pub fn npc_turn(
+    state: &ShipState,
+    handling: &Handling,
+    controls: Controls,
+    rules: FlightRules,
+) -> f32 {
     let rate = handling.turn_rate;
-    state.heading = match controls.turn {
+    match controls.turn {
         Turn::None if controls.reverse && state.velocity.length() > rules.at_rest_speed() => {
             turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
         }
         turn => turned(state.heading, turn, rate),
-    };
-    let caps = Caps::top(handling.max_speed);
-    advance(state, handling, controls.thrust, caps, rules, flyer);
+    }
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying

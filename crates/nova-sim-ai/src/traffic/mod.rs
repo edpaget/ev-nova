@@ -189,6 +189,9 @@ pub mod fly_pass;
 pub mod formation_flight;
 pub mod gate_entry;
 pub mod gone;
+pub mod held_burst;
+#[cfg(test)]
+mod held_burst_tests;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod in_turn;
@@ -649,6 +652,12 @@ pub struct World<'a> {
     /// ([`RuleKey::SuccessorRepairer`](crate::RuleKey::SuccessorRepairer),
     /// see [`succession`]).
     pub successor_repairer: RuleSource,
+    /// Whether a ship held at its gate owes its gate burst once its hold
+    /// ends ([`Npc::end_wait`]): by the engine, as the original; by the
+    /// other reading it owes none
+    /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), see
+    /// [`held_burst`]).
+    pub held_burst: RuleSource,
 }
 
 /// Nova's disable rule, a world's default.
@@ -707,6 +716,7 @@ impl<'a> World<'a> {
             escort_order_reach: RuleSource::Engine,
             npc_escort_ai: RuleSource::Engine,
             successor_repairer: RuleSource::Engine,
+            held_burst: RuleSource::Engine,
         }
     }
 
@@ -1264,7 +1274,7 @@ impl Traffic {
         }
         let plunders = plunder::plunders(&decisions);
         let entering = jump_with_leader::entering(&decisions);
-        self.take_goals(decisions, world.player.map(|player| player.state.position));
+        self.take_goals(decisions, world);
         jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
         board_wait::lapse(&mut self.npcs, &due);
         self.plunder(plunders, world, chance);
@@ -2286,8 +2296,8 @@ impl Traffic {
         &self.departed
     }
 
-    /// Gives each NPC the goal of its decision, if any, the player at
-    /// `player_at` if there is one: one that stops inspecting a ship
+    /// Gives each NPC the goal of its decision, if any, the player where
+    /// `world` has it, if anywhere: one that stops inspecting a ship
     /// remembers it, and has scanned the player when it was inspecting the
     /// player within its reach, unless an interceptor's re-pick gave the
     /// new goal ([`Decision::re_picked`]); its provocation takes the
@@ -2304,14 +2314,16 @@ impl Traffic {
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
     /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`] and ends a hold at
-    /// its gate ([`Npc::end_wait`]), so it flies this tick; it, and one that
+    /// its gate ([`Npc::end_wait`], owing its burst as
+    /// [`World::held_burst`] reads), so it flies this tick; it, and one that
     /// leaves its fleet, gives up its warp stage ([`Warp::give_up`](warp_out::Warp::give_up)),
     /// as `_EscortAI` writes +0x50 = -1.0 with them (see
     /// [`jump_with_leader`]); and one that
     /// writes an order word ([`Decision::order_word`]) sets
     /// [`Npc::order_word`]. Each decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
-    fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
+    fn take_goals(&mut self, decisions: Vec<Option<Decision>>, world: &World) {
+        let player_at = world.player.map(|player| player.state.position);
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
             let Some(decision) = decision else {
                 continue;
@@ -2372,7 +2384,7 @@ impl Traffic {
                 npc.warp.give_up();
             }
             if ends_wait {
-                npc.end_wait();
+                npc.end_wait(world.held_burst);
             }
             if let Some(word) = order_word {
                 npc.order_word = word;
@@ -2667,6 +2679,7 @@ impl Traffic {
                 // berth's.
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
+                owed_burst: None,
                 fleet_slot: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,

@@ -30,8 +30,10 @@
 //!   of its lead's gate with its lead's heading, waiting
 //!   [`EMERGE_TICKS`] + [`ESCORT_EMERGE_EXTRA`] + `Rand(`
 //!   [`ESCORT_EMERGE_SPREAD`] `)` ticks (@0x42534-0x4255e). While the
-//!   timer runs the ship neither moves (`_HandleShip` @0x34a54) nor
-//!   decides (`_HighLevelAIHandler` @0x8d4b9), and no ship sees it
+//!   timer runs the ship neither steers nor thrusts (`_HandleShip`
+//!   @0x34a54), moving only on its velocity (@0x34274-0x342aa), none
+//!   unless a hit pushed it, nor decides (`_HighLevelAIHandler` @0x8d4b9),
+//!   and no ship sees it
 //!   (`_ShipVisibleToShip` @0x972d): not the AI, not Target Select or
 //!   Closest Target (@0xa801, @0x9330), and not a mission's
 //!   `_MissionObjectivesCheck` (@0x9ea5c).
@@ -86,8 +88,9 @@
 //!   `_AIFireTurret` (@0x80e98, @0x80b0d); its trigger is released as it
 //!   bursts out. A hit by the player, or a Good Samaritan's answer, holds
 //!   the ship at its gate instead ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)):
-//!   seen and deciding, but still and firing only that point defence
-//!   until its wait is out.
+//!   seen and deciding, but unsteered and firing only that point defence
+//!   until its wait is out, then owing its burst by the engine's reading
+//!   (see [`held_burst`](crate::traffic::held_burst)).
 //!
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.
