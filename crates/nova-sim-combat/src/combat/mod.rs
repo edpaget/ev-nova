@@ -929,6 +929,11 @@ pub struct Fighter<'a> {
     /// at other ships are its weapons' own ([`plunder`]). Never the
     /// player.
     pub docked: bool,
+    /// Whether it is an NPC mining asteroid slot 0, the original's state
+    /// 16 (`_AIShipIsAttackingAsteroid` @0x8982b): its shots and beams
+    /// pass through every ship ([`Ties::mining`], see
+    /// [`sides`](self::sides)). Never the player.
+    pub mining: bool,
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
@@ -3344,6 +3349,7 @@ impl Fighter<'_> {
             leader: self.leader,
             govt: self.govt,
             booty: self.booty,
+            mining: self.mining,
         }
     }
 
@@ -3845,6 +3851,7 @@ mod tests {
         threatens_player: bool,
         plundering: bool,
         docked: bool,
+        mining: bool,
         emerging: bool,
         cloak_scanner: bool,
         has_cloak: bool,
@@ -3911,6 +3918,7 @@ mod tests {
                 threatens_player: false,
                 plundering: false,
                 docked: false,
+                mining: false,
                 emerging: false,
                 cloak_scanner: false,
                 has_cloak: false,
@@ -3991,6 +3999,7 @@ mod tests {
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
+                mining: self.mining,
                 sprite: self.sprite,
                 slot: self.slot,
                 resists: self.resists,

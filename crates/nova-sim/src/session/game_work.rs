@@ -449,6 +449,7 @@ impl Session {
             attacking: None,
             threatens_player: false,
             plundering: false,
+            mining: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,

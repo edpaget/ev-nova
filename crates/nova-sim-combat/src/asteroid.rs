@@ -33,6 +33,11 @@
 //!   @0x3fbb7); otherwise it spawns in place `Asteroids` times
 //!   (@0x3fa45-0x3fa75), then places every active slot afresh
 //!   (@0x3fa77-0x3fbaf).
+//! - **The slot-0 refill** ([`Asteroids::refill_slot_0`],
+//!   `_HandleAsteroids` @0x361b5-0x3624b, before its step): while
+//!   `_miningShipsActive` is set and slot 0 is empty, the first active
+//!   asteroid of slots 1-15 moves into slot 0, the one every miner works.
+//!   The session derives the flag (see its `mining` module).
 //! - **The step** ([`Asteroids::step`], `_HandleAsteroids` @0x361ac):
 //!   each active asteroid moves by its velocity and turns by its spin
 //!   (@0x36300-0x3636f), its frame wrapped once, up by the frame count
@@ -59,9 +64,6 @@
 //!
 //! Left out:
 //!
-//! - The slot-0 refill while `_miningShipsActive` is set
-//!   (@0x361b5-0x3624b), which moves the first active asteroid into slot
-//!   0: rdm:phase/asteroids/phase-5-ai-mining.
 //! - The cull of an asteroid whose strength is −32000 or less
 //!   (@0x362c4): nothing in the original writes that marker to an
 //!   asteroid's strength. The compare in `_HandleAsteroids` (@0x362ca) is
@@ -605,6 +607,23 @@ impl Asteroids {
             let (offset, velocity) = placed(area, chance);
             asteroid.position = player + offset;
             asteroid.velocity = velocity;
+        }
+    }
+
+    /// Refills an empty slot 0 from the first active slot of 1-15, as
+    /// `_HandleAsteroids` does first while `_miningShipsActive` is set
+    /// (@0x361b5-0x3624b): it copies the asteroid's position, velocity,
+    /// type, frame, spin and strength into slot 0, marks slot 0 active and
+    /// frees the slot it came from, so the asteroid moves rather than
+    /// doubles. Nothing while slot 0 is live or the field is empty. The
+    /// caller runs it only while miners are active, before
+    /// [`Asteroids::step`].
+    pub fn refill_slot_0(&mut self) {
+        if self.slots[0].is_some() {
+            return;
+        }
+        if let Some(first) = self.slots[1..].iter_mut().find(|slot| slot.is_some()) {
+            self.slots[0] = first.take();
         }
     }
 
@@ -1675,5 +1694,32 @@ mod tests {
         assert_eq!(field.active(), SLOTS - 1);
         assert_eq!(field.first_free(), Some(0));
         assert!(field.iter().all(|made| made.kind == 0));
+    }
+
+    #[test]
+    fn the_refill_moves_the_first_live_asteroid_of_1_to_15_into_slot_0() {
+        let first = Asteroid {
+            strength: 7,
+            ..rock(3, Vec2::new(10.0, 20.0))
+        };
+        let mut field = holding(4, first);
+        field.slots[9] = Some(rock(5, PLAYER));
+        field.refill_slot_0();
+        assert_eq!(field.get(0), Some(&first), "every field moved");
+        assert_eq!(field.get(4), None, "its old slot freed");
+        assert_eq!(field.get(9), Some(&rock(5, PLAYER)), "the rest left");
+        assert_eq!(field.active(), 2);
+    }
+
+    #[test]
+    fn the_refill_leaves_a_live_slot_0_and_an_empty_field() {
+        let mut field = holding(0, rock(1, PLAYER));
+        field.slots[2] = Some(rock(2, PLAYER));
+        let before = field.clone();
+        field.refill_slot_0();
+        assert_eq!(field, before);
+        let mut empty = Asteroids::default();
+        empty.refill_slot_0();
+        assert_eq!(empty, Asteroids::default());
     }
 }

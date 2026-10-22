@@ -775,6 +775,7 @@ impl FightTerms {
             threatens_player: self.threatens_player,
             plundering,
             docked,
+            mining: npc.goal == Goal::Mine,
             emerging,
             cloak_scanner,
             has_cloak: cloak_device,

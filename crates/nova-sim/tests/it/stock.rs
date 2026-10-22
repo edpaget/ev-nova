@@ -1419,6 +1419,7 @@ impl Combatant {
             attacking: self.attacking,
             threatens_player: self.threatens_player,
             plundering: false,
+            mining: false,
             emerging: false,
             cloak_scanner: false,
             has_cloak: false,
