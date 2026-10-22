@@ -2412,6 +2412,9 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off_unaborted(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+        }
         let _ = shown(&mut session);
         jump_to(&mut session, &catalog, 131);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
