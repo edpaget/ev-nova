@@ -559,11 +559,24 @@ impl Space {
     /// How close the ship must be to `site`, one of the stellars shown, to
     /// land on it, by [`RuleKey::LandingDistance`]: the original's box
     /// reads what the last rebuild point and the flight frames since left
-    /// of its sprite slot and its `Type` master (see the module docs).
-    pub(super) fn landing_reach(&self, setup: &Setup, site: &LandingSite) -> LandingReach {
+    /// of its sprite slot and its `Type` master (see the module docs). A
+    /// stellar not `held_here` ([`Chart::held_here`]) reads the unloaded
+    /// width, 150, whatever its master, as `_GetStellarSpriteXSize`'s owner
+    /// test comes before its master tests (@0xacb9-0xacc1, @0xacc3).
+    pub(super) fn landing_reach(
+        &self,
+        setup: &Setup,
+        site: &LandingSite,
+        held_here: bool,
+    ) -> LandingReach {
+        let type_width = if held_here {
+            self.rebuilt.type_width(site)
+        } else {
+            TypeWidth::Unloaded
+        };
         let shown = StellarShown {
             frame: self.rebuilt.shows_frame(site.id),
-            type_width: self.rebuilt.type_width(site),
+            type_width,
         };
         landing_reach(
             site,
@@ -2657,7 +2670,7 @@ mod tests {
         let site = session.chart.sites[0];
         assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
-            session.space.landing_reach(&session.setup, &site),
+            session.space.landing_reach(&session.setup, &site, true),
             crate::landing::LandingReach::Box(175.0)
         );
     }
@@ -3372,5 +3385,106 @@ mod tests {
         catalog.sites[0].1.reverse();
         let session = quiet(&catalog);
         assert_eq!(shown(&session), [200, 129, 128]);
+    }
+
+    // A stellar shown outside the system that holds it.
+
+    /// [`twice_listed`] with 200's `Type` frame 60 wide: a reach of
+    /// trunc(60 × 1.75) = 105 where it is held.
+    fn twice_listed_60() -> FakePilotCatalog {
+        let mut catalog = twice_listed();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(200)) {
+                site.frame_size = Some((60, 60));
+            }
+        }
+        catalog
+    }
+
+    /// A session of `catalog` with `rules`, started in 130, which owns
+    /// 200, with the player's system then set to `system` and 200 kept
+    /// among the sites: the original's state for a slot between a galaxy
+    /// refresh and the next rebuild point.
+    fn kept_200(catalog: &FakePilotCatalog, rules: &Rulebook, system: i16) -> Session {
+        let mut session = quiet(catalog).with_rules(*rules);
+        session.pilot.system = SystemId(system);
+        session
+    }
+
+    /// 200 as the session keeps it among the sites.
+    fn site_200(session: &Session) -> LandingSite {
+        *session
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(200))
+            .expect("kept")
+    }
+
+    /// 200's landing reach in `session`, held where the session reads it.
+    fn reach_of_200(session: &Session) -> crate::landing::LandingReach {
+        let site = site_200(session);
+        let held = session
+            .chart
+            .held_here(&session.pilot, &session.statics, site.id);
+        session.space.landing_reach(&session.setup, &site, held)
+    }
+
+    /// The land key pressed in [`kept_200`], with 200 targeted and
+    /// cleared and the ship at rest at `offset` from its centre: the
+    /// stellar landed on, or the refusal, and the sounds the press raised.
+    fn land_on_200(
+        catalog: &FakePilotCatalog,
+        system: i16,
+        offset: Vec2,
+    ) -> (Result<StellarId, LandingRefusal>, Vec<crate::SimSound>) {
+        let mut session = kept_200(catalog, &engine(), system);
+        session.ship.player = ShipState {
+            position: site_200(&session).position + offset,
+            ..ShipState::default()
+        };
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(200)));
+        session.port.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(200),
+            permission: crate::clearance::CLEARED,
+        });
+        let _ = session.take_sounds();
+        let landed = session.land().map(|press| match press {
+            LandPress::Outcome(LandOutcome::Landed(stellar)) => stellar,
+            other => panic!("not a landing: {other:?}"),
+        });
+        (landed, session.take_sounds())
+    }
+
+    #[test]
+    fn a_stellar_two_visible_systems_list_reaches_by_its_frame_in_its_owner_and_150_elsewhere() {
+        use crate::landing::LandingReach;
+        let catalog = twice_listed_60();
+        assert_eq!(
+            land_on_200(&catalog, 130, Vec2::new(104.0, 0.0)).0,
+            Ok(StellarId(200))
+        );
+        assert!(matches!(
+            land_on_200(&catalog, 130, Vec2::new(105.0, 0.0)).0,
+            Err(LandingRefusal::TooFar { .. })
+        ));
+        assert_eq!(
+            reach_of_200(&kept_200(&catalog, &engine(), 130)),
+            LandingReach::Box(105.0),
+            "130 owns 200: its frame"
+        );
+        assert_eq!(
+            reach_of_200(&kept_200(&catalog, &engine(), 131)),
+            LandingReach::Box(262.0),
+            "131 lists 200 but 130 owns it: trunc(150 × 1.75) (@0xacb2-0xacc1)"
+        );
+        for system in [130, 131] {
+            let session = kept_200(&catalog, &other_reading(), system);
+            assert_eq!(
+                reach_of_200(&session),
+                LandingReach::Circle(crate::landing::landing_radius(&site_200(&session))),
+                "{system}: the other reading ignores the owner"
+            );
+        }
     }
 }

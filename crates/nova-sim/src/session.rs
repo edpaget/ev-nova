@@ -430,6 +430,7 @@ mod cargo_boxes;
 #[cfg(test)]
 mod carrier_lead;
 mod chart;
+mod chart_ownership;
 mod clearance;
 mod cloaks;
 mod collision_order;
@@ -3389,7 +3390,10 @@ impl Session {
             &self.ship.player,
             &self.chart.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
-            |site| self.space.landing_reach(&self.setup, site),
+            |site| {
+                let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
+                self.space.landing_reach(&self.setup, site, held)
+            },
             self.setup.rules.source_for(RuleKey::LandingSpeed),
         );
         if disabled {
