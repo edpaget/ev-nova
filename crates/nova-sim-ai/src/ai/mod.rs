@@ -674,6 +674,10 @@ pub struct Surroundings<'a> {
     /// ([`gone`](crate::traffic::gone)): what a brave trader reads of a
     /// gone attacker ([`Surroundings::held_gone`]).
     pub gone: &'a [GoneShip],
+    /// The player's warp stage, +0x50: above 0 from the brake of its jump
+    /// on, when every ship it leads takes its jump (`_EscortAI`
+    /// @0x83a41-0x83a5f, [`EscortAi`]).
+    pub player_warp_stage: f32,
 }
 
 /// No government marked by an IFF scrambler.
@@ -713,6 +717,7 @@ impl<'a> Surroundings<'a> {
             led_speed: 1.0,
             weapons: &NO_WEAPONS,
             gone: &[],
+            player_warp_stage: 0.0,
         }
     }
 
@@ -983,10 +988,14 @@ pub struct Decision {
     pub re_picked: bool,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
-    /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) for a ship under an NPC parent
-    /// ([`fleet_escort`]), so a ship a pirate took into its fleet ends its
+    /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) whoever the parent, an NPC
+    /// ([`fleet_escort`]) or the player ([`EscortAi`]), so a ship a pirate
+    /// took into its fleet ends its
     /// [`CAPTURED_WAIT`](plunder_contents::CAPTURED_WAIT) at its first
-    /// think. The traffic zeroes [`Npc::ai_wait`] as it takes the goal.
+    /// think. The traffic zeroes [`Npc::ai_wait`] as it takes the goal, and
+    /// gives up its warp stage, as the blocks write +0x50 = -1.0 with it
+    /// (see [`jump_with_leader`](crate::traffic::jump_with_leader)); the
+    /// high level's hold zeroes the stage again in the same tick.
     pub ends_wait: bool,
     /// The order word the think writes to the ship, if any: a fighter of
     /// the player's escort writes the order it takes from its parent
@@ -997,8 +1006,17 @@ pub struct Decision {
     /// Whether the think takes the ship out of its fleet: `_EscortAI`'s
     /// lost parent (@0x83917-0x8397b, its AI type @0x83c4a), for a ship
     /// whose NPC lead is gone or not intact ([`fleet_escort`]). The traffic
-    /// runs [`Npc::leave_fleet`] as it takes the goal.
+    /// runs [`Npc::leave_fleet`] as it takes the goal, and gives up its
+    /// warp stage, as the branch writes +0x50 = -1.0 (@0x83974).
     pub leaves_fleet: bool,
+    /// Whether the think puts the ship on its leader's jump: `_EscortAI`'s
+    /// entry into goal 0xb (@0x839fd-0x83a92, @0x83be3-0x83c51), for an
+    /// NPC's escort whose lead draws it ([`fleet_escort`]) and for every
+    /// ship the player leads from the player's brake on ([`EscortAi`]).
+    /// The traffic resolves it right after taking the goal: the ship
+    /// follows the jump, or an inertialess NPC's escort detaches
+    /// ([`jump_with_leader`](crate::traffic::jump_with_leader)).
+    pub follows_jump: bool,
 }
 
 /// How NPCs decide what to do.

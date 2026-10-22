@@ -337,6 +337,7 @@ impl Behaviour for NovaAi {
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
+                follows_jump: false,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -1919,6 +1920,7 @@ mod tests {
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
+                follows_jump: false,
             }
         }
     }
@@ -1952,6 +1954,7 @@ mod tests {
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
+                follows_jump: false,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

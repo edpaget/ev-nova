@@ -230,9 +230,8 @@ impl Npc {
     pub fn follow_player_jump(&mut self, stage: f32, since: u32) {
         self.warp.stage = stage;
         self.warp.since = since;
-        self.target = None;
         self.provoked = 0.0;
-        self.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        self.follow_leaders_jump(ShipRef::Player);
         if self.warp.stage <= 0.0 {
             self.warp.stage = 1.0;
             self.warp.stamp();
@@ -387,9 +386,8 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
         return FollowStep::Formation;
     }
     if npc.warp.stage > DETACH_STAGE && !player {
-        npc.leader = None;
         npc.warp.aim = leader.aim;
-        npc.begin_own_jump();
+        npc.detach_for_own_jump();
         return FollowStep::Detached;
     }
     let off = i32::from(angular_difference(whole(leader.heading), leader.aim)).abs();

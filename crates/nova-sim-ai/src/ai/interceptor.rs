@@ -825,6 +825,7 @@ mod tests {
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
+                follows_jump: false,
             },
             "@0x8cb8f-0x8cb9d"
         );

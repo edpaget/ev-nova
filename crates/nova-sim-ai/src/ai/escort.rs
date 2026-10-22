@@ -111,6 +111,9 @@ impl Behaviour for EscortAi {
             // (@0x83917-0x8397b): goal 0, its target kept.
             return Goal::Idle;
         }
+        if takes_players_jump(around) {
+            return Goal::Formation { guard: None };
+        }
         let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
             // Target and +0x6c -1, goal 6 (@0x83e59-0x83e74).
@@ -157,7 +160,19 @@ impl Behaviour for EscortAi {
     /// (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not holding or
     /// returning to its hangar: a launched fighter told to hold or return
     /// coasts out its glide (`_LaunchFighter` @0x3d843-0x3d85b).
+    ///
+    /// From the player's brake on it takes the player's jump instead
+    /// ([`takes_players_jump`]): its target dropped, following the jump
+    /// ([`Decision::follows_jump`]), its wait kept, as no order block runs.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        if !player_breaking_up(around) && takes_players_jump(around) {
+            return Decision {
+                goal: self.decide(npc, around, chance),
+                clears_target: true,
+                follows_jump: true,
+                ..Decision::default()
+            };
+        }
         let order = npc.escort_order();
         let keeps_wait = order == Some(EscortOrder::Hold)
             || (order == Some(EscortOrder::Dock) && npc.carrier.is_some())
@@ -224,6 +239,16 @@ impl Behaviour for EscortAi {
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::victim(npc, strike, around)
     }
+}
+
+/// Whether every ship the player leads takes its jump, its +0x50 above 0
+/// (`_EscortAI` @0x83a41-0x83a5f): from its brake on (+0x50 = 1.0,
+/// `_HandlePlayer` @0x6b6aa), before `_MakeEscortsHyperWithParent` puts
+/// them on its warp stage. Goal 0xb's block (@0x83be3) then returns the
+/// player's escort with no order block, so it keeps formation and fights
+/// no more. The entry runs after the lost parent.
+fn takes_players_jump(around: &Surroundings) -> bool {
+    around.player_warp_stage > 0.0
 }
 
 /// Whether the player in `around` is breaking up or destroyed, as
@@ -1209,6 +1234,51 @@ mod tests {
                 ai.escort_ai
             );
         }
+    }
+
+    #[test]
+    fn from_the_players_brake_on_every_escort_stops_fighting_and_takes_its_jump() {
+        // `_EscortAI` @0x83a41-0x83a5f: the player's +0x50 above 0, its
+        // brake's 1.0 included; target -1, goal 0xb, no order block.
+        let govts = govts(0, 0);
+        let decided = |order: Option<EscortOrder>, stage: f32| {
+            let mut fighting = escort(order);
+            fighting.target = Some(ShipRef::Npc(NpcId(2)));
+            let npcs = [fighting, pirate(2, 0.0, 100.0)];
+            let around = Surroundings {
+                player: Some(player(0.0, 0.0)),
+                govts: &govts,
+                player_warp_stage: stage,
+                ..Surroundings::new(&[], &npcs)
+            };
+            let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+            assert_eq!(
+                decision.goal,
+                ENGINE.decide(&npcs[0], &around, &mut Draws::of(&[0])),
+                "{order:?} {stage}"
+            );
+            decision
+        };
+        for order in [
+            None,
+            Some(EscortOrder::Defend),
+            Some(EscortOrder::Attack),
+            Some(EscortOrder::Hold),
+            Some(EscortOrder::Dock),
+        ] {
+            let decision = decided(order, 1.0);
+            assert_eq!(decision.goal, Goal::Formation { guard: None }, "{order:?}");
+            assert!(decision.clears_target, "{order:?}");
+            assert!(decision.follows_jump, "{order:?}");
+            assert!(!decision.ends_wait, "{order:?}");
+            let decision = decided(order, 0.0);
+            assert!(!decision.follows_jump, "{order:?}: no jump");
+            assert!(!decision.clears_target, "{order:?}: no jump");
+        }
+        assert_eq!(
+            decided(Some(EscortOrder::Attack), 0.0).goal,
+            Goal::Attack(ShipRef::Npc(NpcId(2)))
+        );
     }
 
     #[test]

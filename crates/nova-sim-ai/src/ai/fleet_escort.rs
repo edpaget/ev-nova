@@ -116,6 +116,7 @@ use crate::escort::{
     DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, Parent, fight_threats, nearest_threat,
 };
 use crate::fleet::OrderWord;
+use crate::traffic::jump_with_leader;
 use crate::traffic::npc::Npc;
 
 /// The AI of a ship with an NPC parent (see the module docs).
@@ -174,6 +175,20 @@ pub fn decide_by(
     };
     let target = escort::valid_target(npc, npc.order_word.order(), around);
     let writes = lead.escorts_player().then(|| OrderWord::of(order));
+    if jump_with_leader::draws_followers(lead) {
+        // The entry (@0x839fd-0x83a92), then goal 0xb's block
+        // (@0x83be3): no order block runs.
+        return Decision {
+            goal: Goal::Follow {
+                lead: lead.id,
+                guard: None,
+            },
+            clears_target: true,
+            follows_jump: true,
+            order_word: writes,
+            ..Decision::default()
+        };
+    }
     let goal = |goal: Goal, ends_wait: bool| Decision {
         order_word: writes,
         ..goal_of(goal, ends_wait)
@@ -557,6 +572,90 @@ mod tests {
             (decision.goal, decision.leaves_fleet),
             (Goal::Dock(n(1)), false)
         );
+    }
+
+    /// What the escort, targeting NPC 3 under Attack, decides under a lead
+    /// in goal 2 at the centre that `setup` set.
+    fn entering(setup: impl Fn(&mut Npc)) -> (Decision, Vec<u32>) {
+        let mut first = lead(Goal::JumpOut);
+        setup(&mut first);
+        let npcs = [
+            first,
+            targeting(escort(), n(3)),
+            raider(3, 0.0, 100.0, n(1)),
+        ];
+        decided_with(&npcs, Some(EscortOrder::Attack), (0.0, 5000.0), &[0])
+    }
+
+    #[test]
+    fn it_follows_a_lead_on_a_jump_braking_for_one_or_under_way() {
+        // @0x839fd-0x83a92: sub 4 or 0xd, goal 2 sub 1, or +0x50 above 0.
+        use crate::traffic::warp_out::WarpGoal;
+        let far_off =
+            |lead: &mut Npc| lead.state.position = crate::geometry::Vec2::new(3000.0, 0.0);
+        for (name, setup) in [
+            (
+                "sub 4",
+                &(|lead: &mut Npc| lead.begin_own_jump()) as &dyn Fn(&mut Npc),
+            ),
+            ("sub 0xd", &|lead: &mut Npc| {
+                lead.goal = Goal::Formation { guard: None };
+                lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            }),
+            ("goal 2 sub 1", &|lead: &mut Npc| {
+                far_off(lead);
+                lead.state.velocity = crate::geometry::Vec2::new(2.0, 0.0);
+            }),
+            ("+0x50 above 0", &|lead: &mut Npc| {
+                lead.goal = Goal::Idle;
+                lead.warp.stage = 0.5;
+            }),
+        ] {
+            let (decision, asked) = entering(setup);
+            assert_eq!(decision.goal, follow(None), "{name}");
+            assert!(decision.clears_target, "target -1 (@0x83a71): {name}");
+            assert!(decision.follows_jump, "{name}");
+            assert!(!decision.ends_wait, "no order block runs: {name}");
+            assert_eq!(decision.order_word, None, "{name}");
+            assert!(asked.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn it_keeps_formation_with_a_lead_running_out_inside_1000_or_at_rest() {
+        // Goal 2 sub 3 draws no one: its escort fights on until it brakes.
+        for setup in [
+            &(|_: &mut Npc| {}) as &dyn Fn(&mut Npc),
+            &|lead: &mut Npc| {
+                lead.goal = Goal::Idle;
+                lead.warp.stage = -1.0;
+            },
+        ] {
+            let (decision, _) = entering(setup);
+            assert_eq!(decision.goal, Goal::Attack(n(3)));
+            assert!(!decision.follows_jump);
+        }
+    }
+
+    #[test]
+    fn a_fighter_of_the_players_escort_on_its_jump_follows_and_still_writes_its_order() {
+        // The order word (@0x83b36-0x83b7f) runs after the entry.
+        let mut first = lead(Goal::Formation { guard: None });
+        first.warp.goal = Some(crate::traffic::warp_out::WarpGoal::Follow(ShipRef::Player));
+        first.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: Some(EscortOrder::Attack),
+        });
+        let npcs = [first, fighter(n(1)), raider(3, 0.0, 100.0, n(1))];
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = FleetEscortAi::default().decision(&npcs[1], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, follow(None));
+        assert!(decision.follows_jump);
+        assert_eq!(decision.order_word, Some(OrderWord(3)), "Return: in form");
     }
 
     #[test]

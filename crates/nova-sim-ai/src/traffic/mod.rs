@@ -758,6 +758,7 @@ impl<'a> World<'a> {
             led_speed: self.led_speed,
             weapons: self.weapons,
             gone: &[],
+            player_warp_stage: self.warp.player.stage,
         }
     }
 }
@@ -1210,21 +1211,7 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) -> LaunchRoom {
         let picked: Vec<bool> = self.npcs.iter().map(&thinks).collect();
-        let due: Vec<bool> = self
-            .npcs
-            .iter()
-            .zip(&picked)
-            .map(|(npc, &picked)| {
-                picked
-                    && matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
-                    && npc.condition == Condition::Intact
-                    && !npc.no_ai
-                    && !pod_flight::is_pod(npc)
-                    && !assist_think::type_think_returns(npc)
-                    && !regroup::paused(npc)
-                    && decision_due(self.ticks, npc.id, self.interval)
-            })
-            .collect();
+        let due = self.thinks_due(&picked);
         // The decisions are the last thinks that can read a gone ship's
         // slot ([`gone`]).
         let gone = self.gone.take();
@@ -1260,7 +1247,9 @@ impl Traffic {
             self.ask_quote_gate(id, dropped_target, view);
         }
         let plunders = plunder::plunders(&decisions);
+        let entering = jump_with_leader::entering(&decisions);
         self.take_goals(decisions, world.player.map(|player| player.state.position));
+        jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
         board_wait::lapse(&mut self.npcs, &due);
         self.plunder(plunders, world, chance);
         // `_AIDispatch`'s swarm check (@0x8ff26-0x8ff35) comes before the
@@ -1326,6 +1315,27 @@ impl Traffic {
         let player = world.player.map(|player| player.state);
         self.think_cloaks(player, &picked);
         room
+    }
+
+    /// Whether each NPC `picked` says (one flag an NPC) thinks this tick:
+    /// flying or held at its gate, intact, with AI, not a pod, not one
+    /// whose type's think returns at once, not paused, and on its own tick
+    /// of the AI timer.
+    fn thinks_due(&self, picked: &[bool]) -> Vec<bool> {
+        self.npcs
+            .iter()
+            .zip(picked)
+            .map(|(npc, &picked)| {
+                picked
+                    && matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
+                    && npc.condition == Condition::Intact
+                    && !npc.no_ai
+                    && !pod_flight::is_pod(npc)
+                    && !assist_think::type_think_returns(npc)
+                    && !regroup::paused(npc)
+                    && decision_due(self.ticks, npc.id, self.interval)
+            })
+            .collect()
     }
 
     /// Each NPC `picked` says (one flag an NPC) that waits at its gate
@@ -2274,7 +2284,10 @@ impl Traffic {
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
-    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`], and one that
+    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`]; it, and one that
+    /// leaves its fleet, gives up its warp stage ([`Warp::give_up`](warp_out::Warp::give_up)),
+    /// as `_EscortAI` writes +0x50 = -1.0 with them (see
+    /// [`jump_with_leader`]); and one that
     /// writes an order word ([`Decision::order_word`]) sets
     /// [`Npc::order_word`]. Each decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
@@ -2333,6 +2346,10 @@ impl Traffic {
             crate::ai::travel::take(npc, travel, goal);
             if let Some(stellar) = visits {
                 npc.visited = Some(stellar);
+            }
+            if ends_wait || decision.leaves_fleet {
+                // +0x50 = -1.0 beside +0x4c (`jump_with_leader`).
+                npc.warp.give_up();
             }
             if ends_wait {
                 npc.ai_wait = 0;
@@ -4905,6 +4922,7 @@ mod tests {
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,
+            follows_jump: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

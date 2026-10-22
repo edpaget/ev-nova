@@ -21,14 +21,38 @@
 //! ([`warp_out::follow_check`]) or push ([`warp_out::send_leaders_out`]).
 //! So through sub 0xd's 180 wait (@0x85bc3) a follower keeps sub 0xd, and
 //! a stage it starts runs past 30.0 to the detach (@0x85a8f).
+//!
+//! **The entry** (`_EscortAI` @0x839fd-0x83a92, @0x83be3-0x83c51). A
+//! ship's think decides it follows its leader's jump
+//! ([`Decision::follows_jump`]): an NPC's escort while its lead
+//! [draws its followers](draws_followers)
+//! ([`fleet_escort`](crate::ai::fleet_escort)), and every ship the player
+//! leads while the player's +0x50 is above 0, its brake included
+//! ([`EscortAi`](crate::ai::EscortAi)). Its target goes, and right after
+//! the goals are taken ([`enter`]) it follows the jump (sub 0xd,
+//! [`Npc::follow_leaders_jump`]), or, an NPC's escort that flies
+//! inertialess ([`Npc::flies_inertialess`]), leaves its fleet to jump on
+//! its own ([`Npc::detach_for_own_jump`], +0x50 = 0).
+//!
+//! **`_EscortAI`'s -1.0 writes.** Its Defend, Attack and formation blocks
+//! write +0x50 = -1.0 beside +0x4c (@0x83c6b-0x83c73, @0x83d62-0x83d6a,
+//! @0x83ea8-0x83eb0), whoever the parent, the player or an NPC, and its
+//! lost parent writes it too (@0x83974). The traffic gives up the stage
+//! ([`Warp::give_up`](crate::traffic::warp_out::Warp::give_up)) as it takes
+//! such a decision ([`Decision::ends_wait`], [`Decision::leaves_fleet`]),
+//! for the player's escorts and the NPCs' alike. The hold then zeroes it
+//! in the same tick (@0x8d513), as the original's does in the same
+//! dispatch, so an escort rests at 0 between ticks.
 
-use crate::ai::Goal;
-#[cfg(doc)]
-use crate::ai::dispatch_gate;
 use crate::ai::leave::{self, Leg};
 #[cfg(doc)]
+use crate::ai::{Decision, dispatch_gate};
+use crate::ai::{Goal, sight};
+use crate::combat::ShipRef;
+use crate::flight::FlightRules;
+#[cfg(doc)]
 use crate::traffic::Traffic;
-use crate::traffic::npc::Npc;
+use crate::traffic::npc::{Npc, NpcId};
 #[cfg(doc)]
 use crate::traffic::warp_out;
 use crate::traffic::warp_out::WarpGoal;
@@ -58,6 +82,101 @@ impl Npc {
             && (self.follows_leaders_jump()
                 || !(self.goal.flies_in_form() || self.goal == Goal::Drift))
     }
+
+    /// It follows `leader`'s jump, sub 0xd: the one writer of
+    /// [`WarpGoal::Follow`], letting go of its target (`_EscortAI`
+    /// @0x83a71, `_MakeEscortsHyperWithParent` @0x3fd89-0x3fdd0).
+    pub fn follow_leaders_jump(&mut self, leader: ShipRef) {
+        self.warp.goal = Some(WarpGoal::Follow(leader));
+        self.target = None;
+    }
+
+    /// It leaves its fleet to jump on its own: no leader, its class's AI
+    /// type ([`Npc::leave_fleet`]), goal 2 and sub 4 (`_EscortAI`
+    /// @0x83c11-0x83c51, sub 0xd's detach @0x85ab6-0x85af1). Its stage
+    /// and desired heading are its caller's.
+    pub fn detach_for_own_jump(&mut self) {
+        self.leave_fleet();
+        self.goal = Goal::JumpOut;
+        self.warp.goal = Some(WarpGoal::Own);
+    }
+}
+
+/// Whether `lead` draws its escorts onto its jump (`_EscortAI`
+/// @0x83a1a-0x83a5f): in sub 4 or 0xd, in goal 2 braking for its jump
+/// (sub 1, [`Leg::Brake`]), or with its +0x50 above 0. A lead running out
+/// inside 1000 (sub 3) draws no one: its escorts keep formation until it
+/// brakes or jumps.
+#[must_use]
+pub fn draws_followers(lead: &Npc) -> bool {
+    lead.warp.goal.is_some() || brakes_for_jump(lead) || lead.warp.stage > 0.0
+}
+
+/// Whether `npc` is in goal 2 with no warp goal, braking for its jump
+/// (sub 1).
+fn brakes_for_jump(npc: &Npc) -> bool {
+    npc.goal == Goal::JumpOut
+        && npc.warp.goal.is_none()
+        && leave::leg(&npc.state, leave::expedites(npc)) == Leg::Brake
+}
+
+/// How a ship whose think decided to follow its leader's jump enters it
+/// (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry {
+    /// It follows the jump of this leader.
+    Follow(ShipRef),
+    /// It leaves its fleet to jump on its own.
+    Detach,
+}
+
+/// The ships among `decisions` (one an NPC) that decided to follow their
+/// leader's jump ([`Decision::follows_jump`]), by their place.
+pub(super) fn entering(decisions: &[Option<crate::ai::Decision>]) -> Vec<usize> {
+    decisions
+        .iter()
+        .enumerate()
+        .filter(|(_, decision)| decision.is_some_and(|decision| decision.follows_jump))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// The ships of `npcs` at `entering` enter their leader's jump under
+/// `flight` (see the module docs).
+pub(super) fn enter(npcs: &mut [Npc], entering: &[usize], flight: FlightRules) {
+    let entries: Vec<(usize, Entry)> = entering
+        .iter()
+        .filter_map(|&at| entry(&npcs[at], npcs, flight).map(|entry| (at, entry)))
+        .collect();
+    for (at, entry) in entries {
+        let npc = &mut npcs[at];
+        match entry {
+            Entry::Follow(leader) => npc.follow_leaders_jump(leader),
+            Entry::Detach => {
+                npc.detach_for_own_jump();
+                npc.warp.stage = 0.0;
+            }
+        }
+    }
+}
+
+/// How `npc` enters its leader's jump among `npcs` under `flight`: the
+/// player's when the player leads it; else its NPC lead's, or a detach
+/// when it flies inertialess beside it; none with no lead there.
+fn entry(npc: &Npc, npcs: &[Npc], flight: FlightRules) -> Option<Entry> {
+    if npc.escorts_player() {
+        return Some(Entry::Follow(ShipRef::Player));
+    }
+    let lead = npc
+        .leader
+        .and_then(|id: NpcId| npcs.iter().find(|other| other.id == id))?;
+    Some(
+        if npc.flies_inertialess(Some(&lead.state), sight::npc_sees(npc, lead), flight) {
+            Entry::Detach
+        } else {
+            Entry::Follow(ShipRef::Npc(lead.id))
+        },
+    )
 }
 
 /// Whether `npc`, a leader, is on its way out by its substate, as goal
@@ -67,10 +186,7 @@ impl Npc {
 /// (sub 0xd), is not, so its followers give it up.
 #[must_use]
 pub fn leaves_by_substate(npc: &Npc) -> bool {
-    npc.warp.goal == Some(WarpGoal::Own)
-        || (npc.goal == Goal::JumpOut
-            && npc.warp.goal.is_none()
-            && leave::leg(&npc.state, leave::expedites(npc)) == Leg::Brake)
+    npc.warp.goal == Some(WarpGoal::Own) || brakes_for_jump(npc)
 }
 
 /// Whether each of `npcs`, whose think is `due`, makes its type's think:
@@ -331,6 +447,240 @@ mod tests {
         inside.state.position = Vec2::new(500.0, 0.0);
         inside.state.velocity = Vec2::new(2.0, 0.0);
         assert!(!leaves_by_substate(&inside), "sub 3");
+    }
+
+    // The entry.
+
+    #[test]
+    fn a_lead_draws_its_followers_on_a_jump_braking_for_one_or_under_way() {
+        let mut lead = far(1);
+        assert!(!draws_followers(&lead), "idle");
+        lead.goal = Goal::JumpOut;
+        lead.state.position = Vec2::new(500.0, 0.0);
+        lead.state.velocity = Vec2::new(2.0, 0.0);
+        assert!(!draws_followers(&lead), "sub 3");
+        lead.state.position = Vec2::new(3000.0, 0.0);
+        assert!(draws_followers(&lead), "sub 1");
+        let mut own = far(1);
+        own.begin_own_jump();
+        assert!(draws_followers(&own), "sub 4");
+        let mut following = far(1);
+        following.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert!(draws_followers(&following), "sub 0xd");
+        let mut under_way = far(1);
+        under_way.warp.stage = 0.5;
+        assert!(draws_followers(&under_way), "+0x50 above 0");
+        under_way.warp.stage = 0.0;
+        assert!(!draws_followers(&under_way));
+    }
+
+    /// A lead NPC 0, 3000 out, and the ship it leads beside it at
+    /// (3000, 300), targeting the player, inertialess when `inertialess`,
+    /// a fighter of the lead when `fighter`.
+    fn led_pair(inertialess: bool, fighter: bool) -> Vec<Npc> {
+        let mut follower = far(1);
+        follower.state.position = Vec2::new(3000.0, 300.0);
+        follower.leader = Some(NpcId(0));
+        follower.goal = Goal::Follow {
+            lead: NpcId(0),
+            guard: None,
+        };
+        follower.target = Some(ShipRef::Player);
+        follower.hull.inherent_ai = 3;
+        follower.stats.inertialess_hull = inertialess;
+        if fighter {
+            follower.carrier = Some(crate::bay::Carrier {
+                ship: ShipRef::Npc(NpcId(0)),
+                window: 100.0,
+                reach: 40.0,
+            });
+        }
+        vec![far(0), follower]
+    }
+
+    #[test]
+    fn an_npcs_escort_enters_its_leads_jump() {
+        let mut npcs = led_pair(false, false);
+        npcs[1].warp.stage = 0.5;
+        enter(&mut npcs, &[1], crate::flight::FlightRules::default());
+        assert_eq!(
+            npcs[1].warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(NpcId(0))))
+        );
+        assert_eq!(npcs[1].target, None);
+        assert_eq!(npcs[1].leader, Some(NpcId(0)));
+        assert_eq!(npcs[1].warp.stage, 0.5, "no +0x50 write");
+        assert_eq!(npcs[0].warp.goal, None, "only the ships entering");
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_enters_the_players_jump() {
+        let mut npcs = led_pair(true, false);
+        npcs[1].leader = None;
+        npcs[1].escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        enter(&mut npcs, &[1], crate::flight::FlightRules::default());
+        assert_eq!(npcs[1].warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(npcs[1].target, None);
+    }
+
+    #[test]
+    fn an_inertialess_npcs_escort_leaves_its_fleet_to_jump_on_its_own() {
+        for fighter in [false, true] {
+            let mut npcs = led_pair(true, fighter);
+            npcs[1].warp.stage = 0.5;
+            enter(&mut npcs, &[1], crate::flight::FlightRules::default());
+            let led = &npcs[1];
+            assert_eq!(led.leader, None, "+0x9a -1 (@0x83c11)");
+            assert_eq!(led.carrier, None, "{fighter}");
+            assert_eq!(
+                led.ai_type,
+                crate::traffic::npc::AiType::Warship,
+                "its class's InherentAI"
+            );
+            assert_eq!(
+                (led.goal, led.warp.goal),
+                (Goal::JumpOut, Some(WarpGoal::Own))
+            );
+            assert_eq!(led.warp.stage, 0.0, "+0x50 0");
+        }
+    }
+
+    #[test]
+    fn a_think_that_follows_a_jump_enters_it_in_the_same_tick() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.begin_own_jump();
+        let lead = traffic.add_npc(lead);
+        let mut escort = far(0);
+        escort.state.position = Vec2::new(3000.0, 300.0);
+        escort.leader = Some(lead);
+        escort.target = Some(ShipRef::Player);
+        let escort = traffic.add_npc(escort);
+        traffic.tick_in(
+            &crate::ai::FleetEscortAi::default(),
+            jumping_world(0.0),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(lead))));
+        assert_eq!(ship.goal, Goal::Follow { lead, guard: None });
+        assert_eq!(ship.target, None);
+    }
+
+    #[test]
+    fn every_ship_the_player_leads_takes_its_jump_from_its_brake_on() {
+        // A hired escort fighting, and a launched fighter, routed by
+        // `NovaAi` to `EscortAi`.
+        let duty = || {
+            Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: Some(crate::escort::EscortOrder::Attack),
+            })
+        };
+        let entered = |stage: f32| {
+            let mut traffic = Traffic::with_interval(1);
+            let raider = traffic.add_npc(far(0));
+            let mut hired = far(0);
+            hired.escort = duty();
+            hired.goal = Goal::Attack(ShipRef::Npc(raider));
+            hired.target = Some(ShipRef::Npc(raider));
+            let hired = traffic.add_npc(hired);
+            let mut fighter = far(0);
+            fighter.escort = duty();
+            fighter.carrier = Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            });
+            fighter.target = Some(ShipRef::Npc(raider));
+            let fighter = traffic.add_npc(fighter);
+            let mut world = jumping_world(stage);
+            world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+            traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+            [hired, fighter].map(|id| {
+                let ship = of(&traffic, id);
+                (ship.warp.goal, ship.target)
+            })
+        };
+        for (ship, target) in entered(1.0) {
+            assert_eq!(ship, Some(WarpGoal::Follow(ShipRef::Player)));
+            assert_eq!(target, None);
+        }
+        for (ship, target) in entered(0.0) {
+            assert_eq!(ship, None);
+            assert!(target.is_some());
+        }
+    }
+
+    // `_EscortAI`'s -1.0 writes.
+
+    /// The stages of the ships `ships` sets up, after the think half and
+    /// then after the fly half of a tick that `behaviour` decides.
+    fn stages(behaviour: &impl Behaviour, ships: Vec<Npc>) -> (Vec<f32>, Vec<f32>) {
+        let mut traffic = Traffic::with_interval(1);
+        for ship in ships {
+            traffic.add_npc(ship);
+        }
+        let mut world = jumping_world(0.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        let read = |traffic: &Traffic| traffic.npcs().iter().map(|npc| npc.warp.stage).collect();
+        traffic.think_holding(behaviour, world, &[], &mut NeverFires);
+        let thought = read(&traffic);
+        traffic.fly_holding(world, &std::collections::BTreeSet::new(), &mut NeverFires);
+        (thought, read(&traffic))
+    }
+
+    #[test]
+    fn a_fleet_escort_in_formation_or_leaving_its_fleet_gives_up_its_stage_until_the_hold() {
+        // Formation's +0x50 = -1.0 (@0x83ea8-0x83eb0), the lost parent's
+        // (@0x83974); the hold zeroes it in the same dispatch (@0x8d52e).
+        // The lead thinks nothing of its own here.
+        let mut lead = far(0);
+        lead.no_ai = true;
+        let mut escort = far(1);
+        escort.leader = Some(NpcId(0));
+        let mut lost = far(2);
+        lost.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(NpcId(0)),
+            window: 100.0,
+            reach: 40.0,
+        });
+        let (thought, flown) = stages(
+            &crate::ai::FleetEscortAi::default(),
+            vec![lead, escort, lost],
+        );
+        assert_eq!(thought, vec![0.0, -1.0, -1.0]);
+        assert_eq!(flown, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_players_escort_under_defend_attack_or_formation_gives_up_its_stage_until_the_hold() {
+        // @0x83c6b-0x83c73, @0x83d62-0x83d6a, @0x83ea8-0x83eb0, whoever
+        // the parent; Hold Position writes none (@0x83e59-0x83e74).
+        use crate::escort::{EscortDuty, EscortOrder, FormationSlot};
+        let escort = |order: Option<EscortOrder>| {
+            let mut ship = far(0);
+            ship.escort = Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order,
+            });
+            ship
+        };
+        let (thought, flown) = stages(
+            &crate::ai::EscortAi::default(),
+            vec![
+                escort(Some(EscortOrder::Defend)),
+                escort(Some(EscortOrder::Attack)),
+                escort(None),
+                escort(Some(EscortOrder::Hold)),
+            ],
+        );
+        assert_eq!(thought, vec![-1.0, -1.0, -1.0, 0.0]);
+        assert_eq!(flown, vec![0.0; 4]);
     }
 
     // The jump path skips the type think.
