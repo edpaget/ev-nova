@@ -494,7 +494,14 @@ impl Session {
                 hold: false,
             },
         };
-        self.enter_system(Entry::ScriptStay, arrival, catalog, catalog, chance);
+        self.enter_system(
+            Entry::ScriptStay,
+            self.pilot.system,
+            arrival,
+            catalog,
+            catalog,
+            chance,
+        );
     }
 
     /// Moves the player to `system`, keeping the position when `keep`
@@ -536,6 +543,7 @@ impl Session {
         };
         self.enter_system(
             Entry::ScriptMove { landed },
+            self.pilot.system,
             arrival,
             catalog,
             catalog,

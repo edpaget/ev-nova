@@ -221,7 +221,14 @@ impl Session {
                 hold: false,
             },
         };
-        self.enter_system(Entry::Rescue, arrival, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Rescue,
+            self.pilot.system,
+            arrival,
+            catalog,
+            catalog,
+            chance,
+        );
         self.ship
             .fill_reserves_for_rescue(&mut self.pilot, &self.setup);
         let days = RESCUE_DAYS + u32::from(chance.roll(RESCUE_EXTRA_DAYS));

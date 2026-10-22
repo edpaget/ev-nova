@@ -670,10 +670,17 @@ impl Session {
     /// populating from `catalog` on `chance` where it says so (see the
     /// module docs). A chain head made visible makes a save due and tells
     /// [`SessionEvent::GalaxyChanged`].
+    ///
+    /// `left` is the system the entry leaves: the player's system before
+    /// the entry for most ways in, and a jump's departure for a jump,
+    /// whose hops and arrival have already been written as the player's
+    /// system ([`Session::arrive`]). The system changes, the grudges held
+    /// and the traffic brought in read it, never the player's system.
     #[allow(clippy::too_many_lines)] // the Chart calls' explicit parameters wrap
     pub(super) fn enter_system<S, C, R>(
         &mut self,
         how: Entry,
+        left: SystemId,
         arrival: Arrival,
         stellars: &S,
         catalog: &C,
@@ -691,9 +698,8 @@ impl Session {
         let system = self
             .chart
             .show_entry(&mut self.pilot, &self.setup, &mut self.out, asked);
-        let left = self.pilot.system;
         let facts = EntryFacts {
-            system_changed: system != self.pilot.system,
+            system_changed: system != left,
             jump_pending: self.mode.jump().is_some(),
         };
         let resets = resets(how, &self.setup.rules, facts);
@@ -702,8 +708,8 @@ impl Session {
             // their grudges are held first, against the system left, its
             // NPCs and the player as they stand before the entry moves
             // either.
-            let left = std::mem::take(&mut self.space.strikes);
-            self.hold_left_grudges(&left);
+            let strikes = std::mem::take(&mut self.space.strikes);
+            self.hold_left_grudges(&strikes, left);
         }
         // A way in that docks docks at a stellar of the system asked for.
         let dock = if resets.has(Reset::Dock) {
@@ -1531,6 +1537,7 @@ mod tests {
         };
         session.enter_system(
             Entry::ScriptMove { landed: false },
+            session.pilot.system,
             arrival,
             &catalog(),
             &catalog(),

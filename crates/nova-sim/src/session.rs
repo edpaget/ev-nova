@@ -1788,7 +1788,7 @@ impl Session {
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
         let left = std::mem::take(&mut self.space.strikes);
-        self.hold_left_grudges(&left);
+        self.hold_left_grudges(&left, self.pilot.system);
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
@@ -2068,13 +2068,21 @@ impl Session {
     /// gate's width is known: only the traffic's tick fires and flies, and
     /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
-        let system_govt = self.chart.galaxy.govt(self.pilot.system);
+        self.world_in(self.pilot.system)
+    }
+
+    /// [`Session::world`] as it stands in `system`: its government, the
+    /// player's legal record there and the reinforcements coming to it,
+    /// whatever the player's system. What an entry reads of the system it
+    /// leaves, once a jump has written its arrival as the player's.
+    fn world_in(&self, system: SystemId) -> World<'_> {
+        let system_govt = self.chart.galaxy.govt(system);
         World {
             sites: &self.chart.sites,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
-            record: self.chart.system_record(&self.pilot, &self.setup),
+            record: self.chart.record_in(&self.pilot, &self.setup, system, None),
             persons: PersonWorld {
                 rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -2105,7 +2113,7 @@ impl Session {
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
-            reinforcements: self.reinforcements_coming(),
+            reinforcements: self.reinforcements_coming_to(system),
             iff_marked: &self.space.iff_marked,
             stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.setup.rules.source_for(RuleKey::IndependentKin),
@@ -3246,12 +3254,12 @@ impl Session {
         // resolve it to, as the refresh's move left +0x74.
         self.explore_now(catalog, &mut &mut *chance, moved_to);
         self.pilot.jumped_from = Some(from);
-        // The entry writes the player's system itself, reading the one
-        // left as it was before the jump (`set_player_system`): the
-        // departure handed back, with nothing run in between.
-        self.pilot.system = departure;
+        // The entry leaves the departure, handed in: the player's system
+        // is the one the jump wrote, and the entry writes its own
+        // (`set_player_system`).
         self.enter_system(
             Entry::Jump { hops, natural_end },
+            departure,
             entered,
             catalog,
             catalog,
@@ -3725,7 +3733,14 @@ impl Session {
                 hold: false,
             },
         };
-        self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Gate,
+            self.pilot.system,
+            entered,
+            catalog,
+            catalog,
+            chance,
+        );
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);

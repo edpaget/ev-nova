@@ -175,6 +175,7 @@ impl Session {
         };
         self.enter_system(
             Entry::Relocate,
+            self.pilot.system,
             arrival,
             catalog,
             &NoTraffic,
