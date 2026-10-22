@@ -534,7 +534,7 @@ impl Space {
     /// with no record): when it is 0 and no other ship of the player's is
     /// in the system, a kept Return to Hangar for the fighters' class is
     /// none (`_LaunchFighter` @0x3db0f-0x3db4d: the fighters' order,
-    /// 0x3b5394[0], becomes -1 when it is 3 and no other active slot has
+    /// `0x3b5394[0]`, becomes -1 when it is 3 and no other active slot has
     /// the player as its parent).
     fn clear_lone_return(&mut self, escort_type: Option<i16>) {
         let alone = self.player_led().next().is_none();
