@@ -16,7 +16,7 @@
 //! 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]):
 //! the player's bay attempts a copy only while one is free, spending,
 //! counting, sounding and reloading nothing for the rest
-//! ([`Session::count_player_berths`], `_FirePlayerWeapon`
+//! ([`Space::count_player_berths`], `_FirePlayerWeapon`
 //! @0x62c61-0x62c72), and an NPC's launch has its slot already, as the
 //! traffic counts the free slots as its NPCs fire (see
 //! `nova_sim::traffic`'s room ledger). A fighter whose ship type has no
@@ -63,7 +63,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Outbox, PlayerShip, Session, Space, Statics};
+use super::{Outbox, PlayerShip, Session, Setup, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, leave};
 #[cfg(doc)]
@@ -194,19 +194,6 @@ impl Session {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),
         }
-    }
-
-    /// Tells the fight how many ship berths are free below the spawn
-    /// reserve for the fighters the player's next trigger launches, as
-    /// `_FirePlayerWeapon` attempts a bay's copy only once `_LaunchFighter`
-    /// finds a slot (@0x62c61-0x62c72; see the fight's `player_berths`
-    /// module).
-    pub(super) fn count_player_berths(&mut self) {
-        let free = self
-            .space
-            .traffic
-            .free_berths(self.setup.spawn_reserve(SPAWN_RESERVE));
-        self.space.combat.set_player_berths(free);
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -530,6 +517,16 @@ impl PlayerShip {
 }
 
 impl Space {
+    /// Tells the fight how many ship berths are free below `setup`'s spawn
+    /// reserve for the fighters the player's next trigger launches, as
+    /// `_FirePlayerWeapon` attempts a bay's copy only once `_LaunchFighter`
+    /// finds a slot (@0x62c61-0x62c72; see the fight's `player_berths`
+    /// module).
+    pub(super) fn count_player_berths(&mut self, setup: &Setup) {
+        let free = self.traffic.free_berths(setup.spawn_reserve(SPAWN_RESERVE));
+        self.combat.set_player_berths(free);
+    }
+
     /// The player launches a fighter of `EscortType` `escort_type` (none
     /// with no record): when it is 0 and no other ship of the player's is
     /// in the system, a kept Return to Hangar for the fighters' class is
@@ -566,7 +563,7 @@ impl Space {
     /// Puts the fighter of `sortie` back into its bay, a round again: one
     /// whose ship type has no record. A launch never finds the system
     /// full: the fight attempts the player's copy only into a free berth
-    /// ([`Session::count_player_berths`]), and the traffic's room ledger
+    /// ([`Space::count_player_berths`]), and the traffic's room ledger
     /// gives an NPC's sortie its berth.
     fn put_back(&mut self, pilot: &mut Pilot, statics: &Statics, sortie: &Sortie) {
         match sortie.carrier {
