@@ -52,8 +52,10 @@ mod tests {
     use crate::combat::CombatEvent;
     use crate::control::SetExpr;
     use crate::pilot::Pilot;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::crons::tests::scripted;
+    use crate::session::kept_rescues::tests::by;
     use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, catalog, jump, life, planet};
 
@@ -125,6 +127,30 @@ mod tests {
         let mut session = flown(&catalog);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         assert_eq!(explosions(&mut session), 1);
+    }
+
+    #[test]
+    fn a_stay_on_a_jumps_day_kills_its_explosions_by_the_engine() {
+        // `N`'s tail out of range, which a move to a system with no record
+        // reaches too, sets `_killExplods` with no move (@0x1596e-0x15993);
+        // by the other readings neither does anything.
+        for (script, key) in [
+            ("Y140 N3000", RuleKey::OutOfRangeMove),
+            ("Y140 M999", RuleKey::MissingSystemMove),
+        ] {
+            for source in RuleSource::ALL {
+                let catalog = exploding(vec![scripted(128, 1, script, "")]);
+                let rules = Rulebook::default().with_override(key, source);
+                let mut session = flown(&catalog).with_rules(rules);
+                assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+                assert_eq!(
+                    explosions(&mut session),
+                    by(source, 0, 1),
+                    "{script} {source:?}"
+                );
+                assert_eq!(sounded(&mut session), 1, "{script} {source:?}: heard");
+            }
+        }
     }
 
     fn run_and_settle(session: &mut Session, catalog: &FakePilotCatalog, script: &str) {
