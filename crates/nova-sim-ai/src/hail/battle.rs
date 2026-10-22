@@ -772,6 +772,38 @@ mod tests {
     }
 
     #[test]
+    fn a_paid_helper_counts_a_vacated_berth_by_battle_help_gone_slots() {
+        // The paid route's pick (@0x96440-0x96454, @0x964d7-0x964ee) is
+        // `_AIFightEnemyThreatToPlayer`, under both keys.
+        let govts = rivals();
+        let npcs = [pirate()];
+        let npc = helper(AiType::Warship);
+        let vacated = [swapped_out()];
+        let hail = Hail {
+            vacated: &vacated,
+            ..threatened(&npc, &npcs, &govts)
+        };
+        let (answer, asked) = pressed(engine(), &hail, &[1]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(7)), "by the engine");
+        assert_eq!(asked, [2]);
+        let gone_bible = RequestAssistance {
+            battle_help_gone: BIBLE,
+            ..engine()
+        };
+        let (answer, asked) = pressed(gone_bible, &hail, &[0]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(2)), "gone by the Bible");
+        assert_eq!(asked, [1]);
+        // The enemy berth counts whichever reading of the target.
+        let target_bible = RequestAssistance {
+            battle_help_target: BIBLE,
+            ..engine()
+        };
+        let (answer, asked) = pressed(target_bible, &hail, &[1]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(7)), "target by the Bible");
+        assert_eq!(asked, [2]);
+    }
+
+    #[test]
     fn by_the_engine_the_enemy_pick_takes_any_threat_enemy_or_not() {
         // @0x82c9f-0x82d99 read no government.
         let npcs = [
