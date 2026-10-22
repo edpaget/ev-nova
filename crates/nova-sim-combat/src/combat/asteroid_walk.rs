@@ -22,7 +22,7 @@
 //!   fragment seated in the same passes, in a higher slot of the walk in
 //!   progress or in a later layer's walk. The walks visit the slots active
 //!   as the passes begin, less each one destroyed in an earlier walk
-//!   ([`Shown`]). The proximity pass reads only the slot's +0x20 and
+//!   (`Shown`). The proximity pass reads only the slot's +0x20 and
 //!   position (@0x376dd-0x37744), so a fuse there is set off by a
 //!   fragment seated earlier in the passes, and never by a destroyed slot.
 //! - **A destroyed asteroid goes on meeting its walk.** The walk reads the
@@ -44,8 +44,8 @@
 //! # The engine
 //!
 //! The session lends the passes the field ([`AsteroidField`]), as it lends
-//! it to the beams. Each walk takes its turns from [`Shown`], in slot
-//! order; a turn ([`WalkTurn`]) keeps the asteroid's contact circle as the
+//! it to the beams. Each walk takes its turns from `Shown`, in slot
+//! order; a turn (`WalkTurn`) keeps the asteroid's contact circle as the
 //! turn began, and once the asteroid is destroyed, a copy of its struct,
 //! the ghost, which the rest of the walk's hits wear and destroy again.
 //! The boxes are left for the session ([`Combat::take_asteroid_remains`]).

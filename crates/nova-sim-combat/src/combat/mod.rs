@@ -147,7 +147,7 @@
 //!    first move in step 5.
 //!
 //!    2a. Each shot meets the asteroids of the field the session lends the
-//!    tick ([`AsteroidField`](asteroid_walk::AsteroidField)), slot by slot,
+//!    tick ([`AsteroidField`]), slot by slot,
 //!    where the last pass's step left them, as the original collides them
 //!    (`_DoPlayGameWork` @0x43e70-0x43ffa, then `_CheckShotProximities`
 //!    @0x44015): a ship it touched first, then an asteroid it touched,
