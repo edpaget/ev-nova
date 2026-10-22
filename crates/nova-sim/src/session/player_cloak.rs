@@ -448,6 +448,39 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_shot_striking_the_cloaked_player_in_the_fight_uncloaks_it_only_if_its_cloak_decloaks_when_hit()
+     {
+        for (mod_val, uncloaks) in [(CLOAK_DECLOAKS_WHEN_HIT, true), (0, false)] {
+            let catalog = cloaking(mod_val);
+            let mut session = owning(&catalog);
+            session.ship.cloak.cloak = FULL;
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.trigger = crate::session::tests::FIRE;
+            npc.target = Some(ShipRef::Player);
+            let mut sounds = Vec::new();
+            for _ in 0..30 {
+                sounds.extend(cloak_sounds(&tick(&mut session, false)));
+            }
+            let what = format!("{mod_val:#x}");
+            assert!(
+                session
+                    .space
+                    .strikes
+                    .iter()
+                    .any(|strike| strike.direct && strike.ship == ShipRef::Player),
+                "{what}: the NPC's shot struck the player"
+            );
+            if uncloaks {
+                assert_eq!(session.player_cloak().direction, -1, "{what}");
+                assert_eq!(sounds, [SimSound::Uncloaked], "{what}");
+            } else {
+                assert_eq!(session.player_cloak(), FULL, "{what}");
+                assert_eq!(sounds, [], "{what}");
+            }
+        }
+    }
+
+    #[test]
     fn double_time_toggles_once_a_press_and_pays_the_upkeep_on_both_passes() {
         let catalog = cloaking(0x0030);
         let mut session = owning(&catalog);
