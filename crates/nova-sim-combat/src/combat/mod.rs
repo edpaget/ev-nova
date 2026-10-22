@@ -6312,12 +6312,12 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let planet_type = WeaponRecord {
-            flags2: 0x0400,
+        let exclusive = WeaponRecord {
+            flags3: 0x0020,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(planet_type)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(exclusive)];
         for _ in 0..3 {
             tick(&mut combat, &mut ships, &NovaDisable);
         }
