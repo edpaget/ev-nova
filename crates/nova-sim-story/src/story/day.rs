@@ -99,8 +99,9 @@ impl Stay {
     pub(crate) const OUTFIT_DAYS: u32 = 1;
     /// The days a ship bought passes (`_DoPortDialog` @0x6020e).
     pub(crate) const SHIP_DAYS: u32 = 4;
-    /// The day every take-off passes (`_PlayerLandOnStellar` @0x63440).
-    pub(crate) const TAKE_OFF_DAYS: u32 = 1;
+    /// The day every take-off passes, after its placement
+    /// (`_PlayerLandOnStellar` @0x63440), whatever the stay.
+    pub const TAKE_OFF_DAYS: u32 = 1;
 
     /// The days the escorts sold or upgraded pass: half as many, rounded
     /// down (`_DoEscortLand` @0x407ed-0x40851), before their pay.
@@ -111,10 +112,10 @@ impl Stay {
 
     /// The days that pass as the stay is left, after the escorts' days and
     /// pay: the port's ([`Stay::port_days`]), then the take-off's
-    /// ([`Stay::take_off_days`]).
+    /// ([`Stay::TAKE_OFF_DAYS`]).
     #[must_use]
     pub const fn leaving_days(self) -> u32 {
-        self.port_days() + self.take_off_days()
+        self.port_days() + Self::TAKE_OFF_DAYS
     }
 
     /// The days the port passes as it closes, after the escorts' days and
@@ -129,13 +130,6 @@ impl Stay {
         };
         let ship = if self.ship_bought { Self::SHIP_DAYS } else { 0 };
         outfit + ship
-    }
-
-    /// The take-off's own day, after its placement
-    /// (`_PlayerLandOnStellar` @0x63440): one, whatever the stay.
-    #[must_use]
-    pub const fn take_off_days(self) -> u32 {
-        Self::TAKE_OFF_DAYS
     }
 }
 
@@ -219,8 +213,7 @@ mod tests {
         };
         assert_eq!(Stay::default().port_days(), 0);
         assert_eq!(both.port_days(), 5);
-        assert_eq!(Stay::default().take_off_days(), 1);
-        assert_eq!(both.take_off_days(), 1);
+        assert_eq!(both.leaving_days(), 5 + Stay::TAKE_OFF_DAYS);
     }
 
     #[test]

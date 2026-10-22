@@ -3924,7 +3924,7 @@ impl Session {
         self.chart.mark_take_off_placed();
         // The take-off's own day, after the placement (@0x63440).
         if stay_days {
-            self.pass_days(stay.take_off_days(), chance);
+            self.pass_days(Stay::TAKE_OFF_DAYS, chance);
         }
         // At level 2, with its place's head, by the engine
         // (`_PlayerLandOnStellar` @0x6346d-0x6349e; see the `explored`
