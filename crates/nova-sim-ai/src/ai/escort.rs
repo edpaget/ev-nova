@@ -47,6 +47,14 @@
 //! through `_EscortAI` as AI type 6, and the player's commands reach it
 //! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
+//! While the player breaks up (`_IsDying`), `_EscortAI`'s lost parent
+//! frees every ship it leads at that ship's think (@0x83917-0x8397b): the
+//! session frees its hired and captured escorts and launched fighters
+//! first (`nova_sim`'s `dying_player_escorts` module), so only its mission
+//! escorts are flown here then, and each idles with its target kept, its
+//! mission's still, as the dispatch leads it again each frame
+//! (@0x8fbcd-0x8fc22).
+//!
 //! An escort hit takes its attacker as its target, as any ship does
 //! ([`react::victim`]), but never comes to another ship's help. Attacking,
 //! it fires as any ship does ([`fire::trigger`]), launching the fighters
@@ -98,6 +106,11 @@ impl EscortAi {
 
 impl Behaviour for EscortAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        if player_breaking_up(around) {
+            // `_EscortAI`'s lost parent with `_IsDying(player)`
+            // (@0x83917-0x8397b): goal 0, its target kept.
+            return Goal::Idle;
+        }
         let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
             // Target and +0x6c -1, goal 6 (@0x83e59-0x83e74).
@@ -147,7 +160,8 @@ impl Behaviour for EscortAi {
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let order = npc.escort_order();
         let keeps_wait = order == Some(EscortOrder::Hold)
-            || (order == Some(EscortOrder::Dock) && npc.carrier.is_some());
+            || (order == Some(EscortOrder::Dock) && npc.carrier.is_some())
+            || player_breaking_up(around);
         Decision {
             goal: self.decide(npc, around, chance),
             ends_wait: !keeps_wait,
@@ -178,9 +192,12 @@ impl Behaviour for EscortAi {
     }
 
     /// Keeping formation, its guard, unless [`unprovoked`] drops it
-    /// (+0x70 = -1, @0x80e9d), so its next think draws again.
+    /// (+0x70 = -1, @0x80e9d), so its next think draws again; idle under a
+    /// player breaking up, the target it has, as the lost parent writes
+    /// none.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
+            Goal::Idle if player_breaking_up(around) => npc.target,
             Goal::Attack(target) => Some(target),
             Goal::Formation { guard } => {
                 guard.filter(|_| !unprovoked(npc, guard, around, self.fire).drops_target)
@@ -207,6 +224,19 @@ impl Behaviour for EscortAi {
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::victim(npc, strike, around)
     }
+}
+
+/// Whether the player in `around` is breaking up or destroyed, as
+/// `_IsDying` reads it (@0x253d: its death timer set, or its armour at or
+/// below none, [`Condition::is_dying`]): `_EscortAI`'s lost parent then
+/// frees every ship it leads at that ship's think (@0x83917-0x8397b). The
+/// session frees the player's own (`nova_sim`'s `dying_player_escorts`
+/// module); a mission escort, which the dispatch leads again each frame
+/// (@0x8fbcd-0x8fc22), idles here, its mission's still.
+fn player_breaking_up(around: &Surroundings) -> bool {
+    around.player.is_some_and(|player| {
+        player.condition == Condition::Destroyed || player.condition.is_dying(player.reserves.armor)
+    })
 }
 
 /// What `npc`, an escort or fighter (AI type above 4, @0x80e59), holds
@@ -339,6 +369,7 @@ fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Sh
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::PlayerSide;
     use crate::ai::fixture::{PIRATES, govts, n, player, ship};
     use crate::catalog::WeaponId;
     use crate::combat::armament::Armament;
@@ -581,6 +612,76 @@ mod tests {
             mark.order = Some(order);
         }
         npc
+    }
+
+    #[test]
+    fn under_a_player_breaking_up_or_destroyed_it_idles_keeping_its_target() {
+        // `_EscortAI`'s lost parent with `_IsDying(player)`
+        // (@0x83917-0x8397b): goal 0, its target kept, no +0x4c write.
+        let dying = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        let mut armourless = player(0.0, 0.0);
+        armourless.reserves.armor.now = 0.0;
+        for order in [
+            None,
+            Some(EscortOrder::Attack),
+            Some(EscortOrder::Hold),
+            Some(EscortOrder::Defend),
+        ] {
+            for side in [
+                PlayerSide {
+                    condition: dying,
+                    ..player(0.0, 0.0)
+                },
+                PlayerSide {
+                    condition: Condition::Destroyed,
+                    ..player(0.0, 0.0)
+                },
+                armourless,
+            ] {
+                let npcs = [
+                    having(
+                        ordered_mission_escort_or(order),
+                        Goal::Formation { guard: None },
+                        Some(n(2)),
+                    ),
+                    pirate(2, 100.0, 0.0),
+                ];
+                let govts = govts(0, 0);
+                let around = Surroundings {
+                    player: Some(side),
+                    govts: &govts,
+                    ..Surroundings::new(&[], &npcs)
+                };
+                let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+                assert_eq!(decision.goal, Goal::Idle, "{order:?} {:?}", side.condition);
+                assert!(!decision.ends_wait, "{order:?}");
+                let idle = having(npcs[0].clone(), Goal::Idle, Some(n(2)));
+                assert_eq!(ENGINE.target(&idle, &around), Some(n(2)), "{order:?}");
+            }
+        }
+        // Intact or disabled, it flies its order.
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let npcs = [mission_escort(), pirate(2, 100.0, 0.0)];
+            let govts = govts(0, 0);
+            let around = Surroundings {
+                player: Some(PlayerSide {
+                    condition,
+                    ..player(0.0, 0.0)
+                }),
+                govts: &govts,
+                ..Surroundings::new(&[], &npcs)
+            };
+            let goal = ENGINE.decide(&npcs[0], &around, &mut Draws::of(&[0]));
+            assert_ne!(goal, Goal::Idle, "{condition:?}");
+        }
+    }
+
+    /// [`mission_escort`], with standing order `order` if any.
+    fn ordered_mission_escort_or(order: Option<EscortOrder>) -> Npc {
+        order.map_or_else(mission_escort, ordered_mission_escort)
     }
 
     #[test]

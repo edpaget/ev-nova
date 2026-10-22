@@ -96,9 +96,13 @@
 //! `_ShipShieldCapacity`, `_ShipArmorCapacity` and
 //! `_ShipShieldRechargeRate` scale nothing (AI type 5 alone,
 //! @0x2a91, @0x2cbc, @0x2b96). The engine takes the release and that
-//! think as one step before the frame is drawn: the fighter leaves its
-//! carrier ([`Npc::leave_carrier`]), its shield and armour holding and
-//! recharging as its class's, what they hold now kept.
+//! think as one step before the frame is drawn: every ship released
+//! leaves its fleet with its class's `InherentAI`
+//! ([`Npc::leave_fleet`](crate::traffic::npc::Npc::leave_fleet), shared
+//! with the player's death, `Session::release_led`), so a captured escort
+//! of another type takes its class's, and the fighter leaves its carrier
+//! ([`Npc::leave_carrier`]), its shield and armour holding and recharging
+//! as its class's, what they hold now kept.
 //!
 //! The walk's second half, a threat whose +0x6c is 0 pointed at the hulk
 //! (@0x6f6ff-0x6f70d), is left out. For a ship +0x6c is the destination
@@ -394,27 +398,16 @@ impl Session {
     }
 
     /// NPC `id`, a ship the player leads, is released as the pod releases
-    /// it (+0x9a = -1): out of the fleet or the formation, with no
-    /// carrier ([`Npc::leave_carrier`]: no longer a fighter, see the
-    /// module docs), deciding afresh.
+    /// it (+0x9a = -1): a mission escort out of the formation, its mark
+    /// kept, and each out of the fleet with its class's `InherentAI` and no
+    /// carrier, deciding afresh ([`Session::release_led`]), as its think
+    /// that frame takes `_EscortAI`'s lost-parent branch (see the module
+    /// docs).
     fn release_for_the_pod(&mut self, id: NpcId) {
-        self.unfleet(id);
-        let inherent = self
-            .space
-            .npc(id)
-            .and_then(|npc| self.statics.ship_record(npc.ship))
-            .map(|record| AiType::from_raw(record.inherent_ai));
-        if let Some(npc) = self.space.npc_mut(id) {
-            if let Some(mark) = &mut npc.mission
-                && mark.formation.take().is_some()
-                && let Some(ai_type) = inherent
-            {
-                npc.ai_type = ai_type;
-            }
-            npc.leave_carrier();
-            npc.goal = Goal::Idle;
+        if let Some(mark) = self.space.npc_mut(id).and_then(|npc| npc.mission.as_mut()) {
+            mark.formation = None;
         }
-        self.reform();
+        self.release_led(id);
     }
 
     /// The player's ship becomes class `record`, keeping only its
@@ -1634,6 +1627,26 @@ mod tests {
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
         assert_eq!(session.space.escorts.fleet, []);
+    }
+
+    #[test]
+    fn the_pods_release_gives_a_captured_escort_its_classs_inherent_ai() {
+        // The pod writes +0x9a = -1 (@0x6f732), and the escort's think that
+        // frame takes `_EscortAI`'s lost-parent branch, its AI type its
+        // class's `InherentAI` (@0x83917-0x8397b, @0x83c4a).
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        let captured = escort(&mut session);
+        let ship = session.space.npc_mut(captured).expect("here");
+        ship.ai_type = AiType::Interceptor;
+        ship.hull.inherent_ai = 3;
+        session.ship.condition = Condition::Disabled;
+        fight(&mut session, true);
+        assert!(in_the_pod(&session));
+        let released = session.space.npc(captured).expect("here");
+        assert!(!released.escorts_player());
+        assert_eq!(released.ai_type, AiType::Warship);
+        assert_eq!(released.goal, Goal::Idle);
     }
 
     #[test]

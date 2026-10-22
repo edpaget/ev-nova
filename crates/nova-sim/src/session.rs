@@ -441,6 +441,7 @@ mod deadly_stellars;
 mod derelicts;
 mod display_step;
 mod double_time;
+mod dying_player_escorts;
 mod edit;
 mod eject;
 mod entry;
@@ -1907,7 +1908,9 @@ impl Session {
 
     /// The session's work before the traffic's AI, reading `catalog` and
     /// drawing on `chance`: the mission ships' arrivals, the inactive ones
-    /// unmarked, the mission escorts joined; then the strikes left for the
+    /// unmarked, the mission escorts joined, and the player's own ships
+    /// freed while it breaks up (the `dying_player_escorts` module); then
+    /// the strikes left for the
     /// traffic to answer, taken, and what the traffic's motion is read
     /// against ([`TrafficMarks`]); then the escorts that attack with a
     /// swarm leader leave the player's formation
@@ -1920,6 +1923,7 @@ impl Session {
         self.mission_ship_arrivals(catalog, None, chance);
         self.unmark_inactive_mission_ships();
         self.join_mission_escorts();
+        self.free_dying_players_escorts();
         let strikes = std::mem::take(&mut self.space.strikes);
         let marks = TrafficMarks {
             last: self.space.last_npc(),
