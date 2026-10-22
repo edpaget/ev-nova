@@ -518,9 +518,9 @@ pub enum AmmoLeft {
 /// [`AmmoLeft::Dry`] to refuse a new target; the warship's and
 /// interceptor's out-of-ammo retreat reads anything but
 /// [`AmmoLeft::Armed`], and the warship's fully-dry drop
-/// [`AmmoLeft::Dry`] (see [`out_of_ammo`](crate::ai::out_of_ammo)). The
-/// escort's fallback that reads them (`_EscortAI` @0x83bb5) stays with
-/// rdm:task/escorts-follow-up.
+/// [`AmmoLeft::Dry`], and the escort's fallback (`_EscortAI` @0x83bb5)
+/// anything but [`AmmoLeft::Armed`] (see
+/// [`out_of_ammo`](crate::ai::out_of_ammo)).
 #[must_use]
 pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     let mut held = 0_usize;
