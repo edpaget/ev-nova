@@ -3162,7 +3162,7 @@ impl Session {
         self.place_jump_arrival(departure, first);
         // The hop loop (@0x6bd67-0x6bdfc; see the `jump_hops` module).
         let Chain {
-            hops,
+            on_course,
             jumps,
             from,
             at,
@@ -3171,7 +3171,7 @@ impl Session {
         // last hop's stand-in on the multi-jump branch, else the raw Con
         // target, by the engine's `arrival_system`.
         let multi_jump =
-            hops > 0 && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
+            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
         let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
         // The arrival written as the player's system and explored at once
         // (@0x6be0b, @0x6be12). The written system shares its stand-in's
@@ -3240,7 +3240,7 @@ impl Session {
         let system = self.pilot.system;
         self.explore_now(catalog, &mut &mut *chance, system);
         self.pilot.jumped_from = Some(from);
-        let course_hops = self.jump_course_hops(hops, multi_jump);
+        let course_hops = self.jump_course_hops(on_course, multi_jump);
         self.enter_jump_system(
             Entry::Jump {
                 hops: course_hops,

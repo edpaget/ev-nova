@@ -36,9 +36,11 @@ use crate::rulebook::RuleSource;
 /// What a jump's hop loop made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Chain {
-    /// The hops made along the course: none when the jump left it, one
-    /// for a single jump along it.
-    pub(super) hops: usize,
+    /// Whether the jump made its hops along the course: its first hop
+    /// the course's next (@0x6bd5b-0x6bd83). The hops passed on the way
+    /// are spooled off as they are made, so how many there were matters
+    /// to nothing after.
+    pub(super) on_course: bool,
     /// The hops whose fuel the jump takes (@0x6be31) and whose days pass
     /// (@0x6c144): one, or by `PerHop` every hop.
     pub(super) jumps: u16,
@@ -65,7 +67,7 @@ impl Session {
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         let mut made = Chain {
-            hops: 0,
+            on_course: false,
             jumps: 1,
             from: departure,
             at: first,
@@ -77,7 +79,7 @@ impl Session {
         if !on_course {
             return made;
         }
-        made.hops = 1;
+        made.on_course = true;
         for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
             // The hop after the one being made: the hops passed are
             // spooled off already.
@@ -95,7 +97,6 @@ impl Session {
                 }
                 made.jumps += 1;
             }
-            made.hops += 1;
             // Each system passed on the way, written as the player's
             // (@0x6bdd4) and explored at once (@0x6bddb).
             self.chart
@@ -111,15 +112,16 @@ impl Session {
     }
 
     /// The hops of the course the jump's entry steps over
-    /// ([`Entry::Jump`](super::entry::Entry::Jump)), after `hops` made, on
-    /// the `multi_jump` branch or not (see the module docs): the hops passed
-    /// are spooled already, so at most the arrival's; none off the
-    /// multi-jump branch by the engine's reading, whose entry clears a
-    /// course standing elsewhere and else drops its next hop.
-    pub(super) fn jump_course_hops(&self, hops: usize, multi_jump: bool) -> usize {
+    /// ([`Entry::Jump`](super::entry::Entry::Jump)), the jump made
+    /// `on_course` or not, on the `multi_jump` branch or not (see the
+    /// module docs): the hops passed are spooled already, so at most the
+    /// arrival's; none off the multi-jump branch by the engine's reading,
+    /// whose entry clears a course standing elsewhere and else drops its
+    /// next hop.
+    pub(super) fn jump_course_hops(&self, on_course: bool, multi_jump: bool) -> usize {
         match self.setup.route_rewrite() {
             RuleSource::Engine if !multi_jump => 0,
-            RuleSource::Engine | RuleSource::Bible => hops.min(1),
+            RuleSource::Engine | RuleSource::Bible => usize::from(on_course),
         }
     }
 }
