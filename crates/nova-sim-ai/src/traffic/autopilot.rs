@@ -43,8 +43,13 @@
 //!   [`warp_out`](crate::traffic::warp_out)'s). The 1000 is every NPC's: its outfits' hyperspace
 //!   distance is the player's alone ([`Npc::stats`]' `jump_distance` is
 //!   not read).
-//! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
-//!   matching its lead's velocity there.
+//! - [`Goal::Follow`]: a fleet escort keeps its slot in its lead's
+//!   formation ([`Npc::fleet_slot`]) as [`Goal::Formation`] keeps the
+//!   player's, below, by the engine's reading of
+//!   [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation); by the
+//!   other, it keeps within [`FOLLOW_DISTANCE`] of its lead, matching its
+//!   lead's velocity there, as [`Goal::Inspect`] keeps with the ship it
+//!   inspects.
 //! - [`Goal::Assist`]: its docking flies it
 //!   ([`repair_dock`](crate::traffic::repair_dock),
 //!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
@@ -227,8 +232,8 @@ use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
-    self, AT_REST_SPEED, Controls, FlightRules, Flyer, FormationFlight, ShipState, Turn,
-    heading_of, shortest_turn,
+    self, AT_REST_SPEED, Controls, FlightRules, Flyer, FormationFlight, NpcFormation, ShipState,
+    Turn, heading_of, shortest_turn,
 };
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
@@ -248,7 +253,10 @@ use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
 
-/// How far from its lead, in pixels, an escort keeps.
+/// How far from its lead, in pixels, a fleet escort keeps by the port's
+/// earlier follow (the other reading of
+/// [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation)), and how
+/// far from the ship it inspects an inspector keeps.
 pub const FOLLOW_DISTANCE: f32 = 100.0;
 /// How far off its course, in degrees, a ship still thrusts.
 pub const ALIGNED: f32 = 5.0;
@@ -295,13 +303,14 @@ pub struct Beside {
     /// frame its step has not worked out and for sub-goal 0xb's swarm
     /// branch.
     pub swarm: Option<SwarmLead>,
-    /// Where the guard of a [`Goal::Formation`] escort is, the ship its
-    /// turrets fire at (+0x70), when it is there: its approach steers at
-    /// it ([`formation_flight`]).
+    /// Where the guard of a [`Goal::Formation`] or [`Goal::Follow`]
+    /// escort is, the ship its turrets fire at (+0x70), when it is there:
+    /// its approach steers at it ([`formation_flight`]).
     pub guard: Option<ShipState>,
-    /// Whether a [`Goal::Formation`] escort sees its leader
-    /// (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): with its leader
-    /// unseen it brakes near it ([`formation_flight`]).
+    /// Whether a [`Goal::Formation`] or [`Goal::Follow`] escort sees its
+    /// leader (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): with its
+    /// leader unseen it brakes near it ([`formation_flight`]) and is not
+    /// in close formation ([`Npc::keeps_close_formation`]).
     pub leader_seen: bool,
 }
 
@@ -441,7 +450,7 @@ fn fly_mobile(
 ) -> Outcome {
     let snipe_lead = readings.snipe_lead;
     let handling = npc.flying_handling(speeds.own, flight);
-    let inertia = Inertia::of(npc, other, flight);
+    let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc, &handling);
         step(npc, &handling, controls, flight, inertia);
@@ -474,10 +483,12 @@ fn fly_mobile(
             }
         }
         Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
-        Goal::Follow { .. } | Goal::Inspect(_) => match other {
-            Some(other) => follow(&state, &handling, other, inertia),
-            None => brake(&state, &handling, inertia),
-        },
+        Goal::Inspect(_) => follow_or_brake(&state, &handling, other, inertia),
+        // By the earlier follow, a fleet escort follows its lead as an
+        // inspector does; by the original's, it keeps formation below.
+        Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
+            follow_or_brake(&state, &handling, other, inertia)
+        }
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
@@ -520,14 +531,18 @@ fn fly_mobile(
             }
             None => brake(&state, &handling, inertia),
         },
-        Goal::Formation { .. } if flight.formation_flight == FormationFlight::Original => {
+        Goal::Formation { .. } | Goal::Follow { .. }
+            if flight.formation_flight == FormationFlight::Original =>
+        {
             formation_flight::fly(npc, other, beside, &handling, flight, inertia);
             return Outcome::Flying;
         }
-        Goal::Formation { .. } => match formation(npc, other, &handling, inertia) {
-            Ok(controls) => controls,
-            Err(outcome) => return outcome,
-        },
+        Goal::Formation { .. } | Goal::Follow { .. } => {
+            match formation(npc, other, &handling, inertia) {
+                Ok(controls) => controls,
+                Err(outcome) => return outcome,
+            }
+        }
         Goal::Dock(_) => match dock(npc, other, &handling, flight, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
@@ -612,7 +627,7 @@ fn formation(
     handling: &Handling,
     inertia: Inertia,
 ) -> Result<Controls, Outcome> {
-    let (Some(leader), Some(place)) = (leader, npc.formation()) else {
+    let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
         return Ok(brake(&npc.state, handling, inertia));
     };
     let slot = place.position(leader);
@@ -1077,13 +1092,18 @@ fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
 /// into a later slot of the ship loop (`_LaunchFighter` @0x3c90b,
 /// @0x3d680). An [`immobile`](Npc::immobile) ship's velocity goes to none
 /// and it stays put (@0x34209-0x3423b).
-pub(crate) fn coast_unsteered(npc: &mut Npc, other: Option<&ShipState>, flight: FlightRules) {
+pub(crate) fn coast_unsteered(
+    npc: &mut Npc,
+    other: Option<&ShipState>,
+    leader_seen: bool,
+    flight: FlightRules,
+) {
     if npc.immobile {
         npc.state.velocity = Vec2::ZERO;
         return;
     }
     let handling = flight.handling(npc.stats.handling);
-    let inertia = Inertia::of(npc, other, flight);
+    let inertia = Inertia::of(npc, other, leader_seen, flight);
     position_step(npc, &handling, inertia);
 }
 
@@ -1204,6 +1224,19 @@ pub(crate) fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) ->
         turn: Turn::None,
         reverse: true,
         ..Controls::default()
+    }
+}
+
+/// [`follow`]s a lead at `lead`, or brakes with none there.
+fn follow_or_brake(
+    state: &ShipState,
+    handling: &Handling,
+    lead: Option<&ShipState>,
+    inertia: Inertia,
+) -> Controls {
+    match lead {
+        Some(lead) => follow(state, handling, lead, inertia),
+        None => brake(state, handling, inertia),
     }
 }
 
@@ -1385,6 +1418,30 @@ mod tests {
             formation_flight: FormationFlight::Earlier,
             ..rules
         }
+    }
+
+    /// `rules` but the port's earlier NPC follow
+    /// ([`NpcFormation::Earlier`]), under which a fleet escort
+    /// ([`Goal::Follow`]) follows its lead within [`FOLLOW_DISTANCE`].
+    fn earlier_follow(rules: FlightRules) -> FlightRules {
+        FlightRules {
+            npc_formation: NpcFormation::Earlier,
+            ..rules
+        }
+    }
+
+    /// Flies `npc` at its own top speed, with no lead, among `sites`
+    /// beside `other`, under the original's rules but the port's earlier
+    /// NPC follow.
+    fn fly_following(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
+        let own = TopSpeeds::own_of(npc);
+        fly_under(
+            npc,
+            sites,
+            other,
+            own,
+            earlier_follow(FlightRules::default()),
+        )
     }
 
     /// Flies `npc` at its own top speed, with no lead, beside `other`,
@@ -2938,8 +2995,10 @@ mod tests {
             },
             at(0.0, 0.0, 0.0, 0.0, 45.0),
         );
+        // By the earlier NPC follow: by the original's formation a follower
+        // with no slot brakes.
         for _ in 0..300 {
-            fly(&mut follower, &sites, Some(&lead));
+            fly_following(&mut follower, &sites, Some(&lead));
         }
         let off = follower.state.velocity - lead.velocity;
         assert!(
@@ -3038,11 +3097,16 @@ mod tests {
             for tick in 0..30 {
                 // A ship that may move, at rest where this one is: its
                 // velocity after a tick is only that tick's thrust.
+                // By the earlier NPC follow, as a follower with no slot
+                // brakes by the original's formation.
                 let mut at_rest = ship.clone();
                 at_rest.immobile = false;
                 at_rest.state.velocity = Vec2::ZERO;
-                fly(&mut at_rest, &sites, Some(&lead));
-                assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
+                fly_following(&mut at_rest, &sites, Some(&lead));
+                assert_eq!(
+                    fly_following(&mut ship, &sites, Some(&lead)),
+                    Outcome::Flying
+                );
                 assert_eq!(ship.state.position, Vec2::new(10.0, 20.0), "{goal:?}");
                 assert_eq!(
                     ship.state.velocity, at_rest.state.velocity,
@@ -3093,7 +3157,7 @@ mod tests {
     }
 
     #[test]
-    fn an_escort_catches_up_with_its_lead_and_keeps_with_it() {
+    fn by_the_earlier_follow_an_escort_catches_up_with_its_lead_and_keeps_with_it() {
         let mut lead = at(0.0, 0.0, 2.0, 0.0, 90.0);
         let mut ship = npc(
             FAST,
@@ -3105,7 +3169,7 @@ mod tests {
         );
         for _ in 0..600 {
             lead.position = lead.position + lead.velocity;
-            assert_eq!(fly(&mut ship, &[], Some(&lead)), Outcome::Flying);
+            assert_eq!(fly_following(&mut ship, &[], Some(&lead)), Outcome::Flying);
         }
         let apart = (ship.state.position - lead.position).length();
         assert!(apart <= FOLLOW_DISTANCE * 1.5, "{apart}");
@@ -3114,6 +3178,35 @@ mod tests {
             "{:?}",
             ship.state
         );
+    }
+
+    #[test]
+    fn a_fleet_escort_catches_up_with_its_lead_and_keeps_its_slot() {
+        let mut lead = at(0.0, 0.0, 2.0, 0.0, 90.0);
+        let slot = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+        };
+        let mut ship = Npc {
+            fleet_slot: Some(slot),
+            ..npc(
+                FAST,
+                Goal::Follow {
+                    lead: NpcId(0),
+                    guard: None,
+                },
+                at(-600.0, 400.0, 0.0, 0.0, 0.0),
+            )
+        };
+        for _ in 0..600 {
+            lead.position = lead.position + lead.velocity;
+            assert_eq!(fly(&mut ship, &[], Some(&lead)), Outcome::Flying);
+        }
+        assert_eq!(ship.state.velocity, lead.velocity, "{:?}", ship.state);
+        let off = ship.state.position - slot.position(&lead);
+        let slack = FORMATION_SLACK + FORMATION_NUDGE * ship.stats.handling.accel;
+        assert!(off.x.abs() <= slack && off.y.abs() <= slack, "{off:?}");
     }
     // The helpers, exactly.
 

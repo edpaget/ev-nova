@@ -33,6 +33,7 @@
 //! None of this plays a sound.
 
 use super::{Chart, PlayerShip, Session, Setup};
+use crate::ai::sight;
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -54,12 +55,22 @@ impl Session {
     }
 
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
-    /// hull or its inertialess flight, never its outfits.
+    /// hull or its inertialess flight, never its outfits. Whether it keeps
+    /// close formation reads its leader's place and its sight of it
+    /// (`_ShipVisibleToShip` @0x8ed5f): an NPC leader by
+    /// [`sight::npc_sees`], the player always seen.
     fn npc_resists_gravity(&self, npc: &Npc) -> bool {
         let leader = self.leader_state(npc);
+        let seen = match npc.leader_ref() {
+            Some(ShipRef::Npc(id)) => self
+                .space
+                .npc(id)
+                .is_none_or(|leader| sight::npc_sees(npc, leader)),
+            _ => true,
+        };
         resists_gravity(
             npc.hull.stellar_immune,
-            npc.flies_inertialess(leader.as_ref(), self.setup.flight_rules()),
+            npc.flies_inertialess(leader.as_ref(), seen, self.setup.flight_rules()),
             npc.stats.gravity_resistance,
             Flyer::Npc,
         )
@@ -387,6 +398,58 @@ mod tests {
                 "not inertialess there"
             );
         }
+    }
+
+    /// `catalog`'s session under `rules` with NPC 0 an inertialess fleet
+    /// escort in close formation 50 left of a lead of its own, which is
+    /// cloaked when `cloaked`: the escort's velocity after the fight, and
+    /// the pull it would take.
+    fn fleet_escort_after_the_fight(rules: Rulebook, cloaked: bool) -> (Vec2, Vec2) {
+        use crate::ai::Goal;
+        use crate::escort::FormationSlot;
+        let catalog = armed();
+        let mut session = among(rules, &catalog, &[east()], 1);
+        let mut lead = npc(&session).clone();
+        lead.state.position.x += 50.0;
+        lead.hull.stellar_immune = true;
+        if cloaked {
+            lead.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+        }
+        let lead = session.space.traffic.add_npc(lead);
+        let escort = npc_mut(&mut session);
+        escort.leader = Some(lead);
+        escort.goal = Goal::Follow { lead, guard: None };
+        escort.fleet_slot = Some(FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+        });
+        escort.stats.inertialess_hull = true;
+        let at = escort.state.position;
+        fight(&mut session);
+        (
+            npc(&session).state.velocity,
+            pull(at, Vec2::new(2000.0, 0.0), 40, 1.0),
+        )
+    }
+
+    #[test]
+    fn an_inertialess_fleet_escort_in_close_formation_on_a_lead_it_sees_is_pulled() {
+        for rules in readings() {
+            let (velocity, pulled) = fleet_escort_after_the_fight(rules, false);
+            assert!(
+                near(velocity, pulled),
+                "not inertialess there: {velocity:?}"
+            );
+            let (velocity, _) = fleet_escort_after_the_fight(rules, true);
+            assert_eq!(velocity, Vec2::ZERO, "its lead unseen: inertialess");
+        }
+        let earlier = Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible);
+        let (velocity, _) = fleet_escort_after_the_fight(earlier, false);
+        assert_eq!(velocity, Vec2::ZERO, "by the earlier follow: inertialess");
     }
 
     #[test]

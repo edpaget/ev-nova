@@ -1,8 +1,14 @@
-//! An escort keeping formation, goal 0xa ([`Goal::Formation`]), as the
-//! `EV Nova` executable flies it: `_HighLevelAIHandler`'s goal 0xa
-//! (@0x8ed15-0x8ef37), which picks the substate ([`sub`]), and the
-//! substates of `_LowLevelAIHandler` it leaves the escort in, with
-//! `_AIMaintainFormation` (@0x84f04-0x8503f, [`maintain`]). It flies by
+//! An escort keeping formation, goal 0xa, as the `EV Nova` executable
+//! flies it: `_HighLevelAIHandler`'s goal 0xa (@0x8ed15-0x8ef37), which
+//! picks the substate ([`sub`]), and the substates of `_LowLevelAIHandler`
+//! it leaves the escort in, with `_AIMaintainFormation`
+//! (@0x84f04-0x8503f, [`maintain`]). It flies the player's escort
+//! ([`Goal::Formation`]) and, by the engine's reading of
+//! [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation), a fleet
+//! escort keeping with its NPC lead ([`Goal::Follow`]), each on the slot
+//! its goal keeps ([`Npc::formation_slot`]): the player's formation's,
+//! or the NPC parent's, which the formation pass works out
+//! ([`fleet_formation`](crate::traffic::fleet_formation)). It flies by
 //! the engine's reading of
 //! [`RuleKey::FormationFlight`](crate::RuleKey::FormationFlight)
 //! ([`FormationFlight::Original`](crate::flight::FormationFlight::Original));
@@ -56,7 +62,8 @@
 //!     [`HEADING_LIMIT`] with a skill of none or less; otherwise its
 //!     leader's whole heading. Then it is nudged toward its slot
 //!     ([`maintain`], @0x87dbb-0x87dc9) and copies its leader's glow
-//!     (@0x87dce-0x87deb).
+//!     (@0x87dce-0x87deb): the player's, or a fleet escort's NPC lead's
+//!     as the fly pass began (see [`fly_pass`](crate::traffic::fly_pass)).
 //!   - `_HandleShip` then turns it to the heading it wants ([`flight::turn_to`],
 //!     @0x34460-0x3458e): by its turn while it is off by more than that,
 //!     whole degrees, and onto it otherwise. So it steps a degree a
@@ -70,7 +77,10 @@
 //!   past. Nothing moves while its warp stage runs. The nudge comes
 //!   before `_HandleShip`'s move, so it is nudged, then moves.
 //! - The slot is where the engine puts it ([`FormationSlot::position`]),
-//!   from the leader as the fly pass found it, after the player's move.
+//!   from the leader as the fly pass found it, after the player's move
+//!   (an NPC lead's, as the fly half began; see
+//!   [`fleet_formation`](crate::traffic::fleet_formation) for how that
+//!   differs from the original).
 //!   The original works the player's escorts' slots out in
 //!   `_HandlePlayer`, after the player's move
 //!   (`_AICalcFormationPositions(player, 0)` @0x6f1df), which runs before
@@ -296,7 +306,7 @@ pub(crate) fn fly(
     flight: FlightRules,
     inertia: Inertia,
 ) {
-    let (Some(leader), Some(place)) = (leader, npc.formation()) else {
+    let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
         let controls = autopilot::brake(&npc.state, handling, inertia);
         autopilot::step(npc, handling, controls, flight, inertia);
         return;
@@ -389,6 +399,17 @@ mod tests {
     /// `npc` flown a tick by the autopilot beside its leader at `leader`,
     /// with `beside`, under the original's rules.
     fn flown(npc: &mut Npc, leader: Option<&ShipState>, beside: Beside) -> Outcome {
+        flown_under(npc, leader, beside, FlightRules::default())
+    }
+
+    /// `npc` flown a tick by the autopilot beside its leader at `leader`,
+    /// with `beside`, under `rules`.
+    fn flown_under(
+        npc: &mut Npc,
+        leader: Option<&ShipState>,
+        beside: Beside,
+        rules: FlightRules,
+    ) -> Outcome {
         autopilot::fly(
             npc,
             &[],
@@ -397,7 +418,7 @@ mod tests {
             false,
             beside,
             TopSpeeds::own_of(npc),
-            FlightRules::default(),
+            rules,
             Readings::default(),
             &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
@@ -689,7 +710,7 @@ mod tests {
         let leader = at(0.0, 0.0, 0.0, 0.0, 90.0);
         let mut ship = escort_of(raven, 30.0, at(50.0, 0.0, 3.0, 0.0, 90.0));
         assert_eq!(
-            Inertia::of(&ship, Some(&leader), FlightRules::default()),
+            Inertia::of(&ship, Some(&leader), true, FlightRules::default()),
             Inertia::Inertial
         );
         keep(
@@ -871,6 +892,153 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let nudge = (f64::from(handling.accel * 10.0) * 0.5) as f32;
         assert_eq!(ship.state.position.x, slot.x + 20.0 - nudge);
+    }
+
+    // A fleet escort ([`Goal::Follow`]).
+
+    /// A [`FAST`] fleet escort following NPC 7 from `start`, in slot 2 of
+    /// 3 of its lead's formation, spaced `spacing` apart; it holds a place
+    /// in the player's formation too (slot 3, spaced 60), which it doesn't
+    /// keep.
+    fn fleet_escort_of(spacing: f32, start: ShipState) -> Npc {
+        let lead = crate::traffic::npc::NpcId(7);
+        Npc {
+            goal: Goal::Follow { lead, guard: None },
+            leader: Some(lead),
+            fleet_slot: Some(FormationSlot {
+                slot: 2,
+                ships: 3,
+                spacing,
+            }),
+            escort: Some(EscortDuty {
+                formation: FormationSlot {
+                    slot: 3,
+                    ships: 3,
+                    spacing: 60.0,
+                },
+                order: None,
+            }),
+            ..escort(start)
+        }
+    }
+
+    /// The original's flight rules but the port's earlier NPC follow.
+    fn earlier_follow() -> FlightRules {
+        FlightRules {
+            npc_formation: crate::flight::NpcFormation::Earlier,
+            ..FlightRules::default()
+        }
+    }
+
+    #[test]
+    fn a_matched_fleet_escort_takes_its_leads_velocity_steps_its_heading_and_is_nudged_to_its_fleet_slot()
+     {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_of(&leader);
+        let mut ship = fleet_escort_of(30.0, at(slot.x + 20.0, slot.y, 1.0, -2.0, 27.0));
+        flown(&mut ship, Some(&leader), Beside::default());
+        assert_eq!(ship.state.velocity, leader.velocity);
+        assert_eq!(ship.state.heading, 28.0);
+        assert_eq!(ship.display.drive.glow, GlowCopy::Leader);
+        // FAST: 0.18 a tick, a nudge of 1.8 on x alone, then its move.
+        let nudged = Vec2::new(slot.x + 20.0 - 0.18 * 10.0, slot.y);
+        assert!(
+            near(ship.state.position, nudged + leader.velocity),
+            "{:?}",
+            ship.state
+        );
+    }
+
+    #[test]
+    fn a_fleet_escort_450_off_closes_at_its_guard_and_beyond_600_approaches() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let start = at(450.0, 0.0, 0.0, 0.0, 250.0);
+        let mut ship = fleet_escort_of(300.0, start);
+        flown(&mut ship, Some(&leader), Beside::default());
+        assert_eq!(ship.state.heading, 253.0, "toward 270, its lead");
+        let guarding = Beside {
+            guard: Some(at(450.0, 1000.0, 0.0, 0.0, 0.0)),
+            ..Beside::default()
+        };
+        let mut ship = fleet_escort_of(300.0, start);
+        flown(&mut ship, Some(&leader), guarding);
+        assert_eq!(ship.state.heading, 247.0, "toward its guard");
+        // Moving up at 3, half its top speed, its guard 90 above: capped
+        // closing in, not approaching beyond 600.
+        let start = at(450.0, 0.0, 0.0, -3.0, 0.0);
+        let guarding = Beside {
+            guard: Some(at(450.0, -90.0, 0.0, 0.0, 0.0)),
+            ..Beside::default()
+        };
+        let mut ship = fleet_escort_of(30.0, start);
+        flown(&mut ship, Some(&leader), guarding);
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, -3.0), "capped");
+        let mut ship = fleet_escort_of(30.0, start);
+        flown(&mut ship, Some(&at(0.0, 700.0, 0.0, 0.0, 0.0)), guarding);
+        assert!(ship.state.velocity.y < -3.0, "{:?}", ship.state);
+    }
+
+    #[test]
+    fn a_fleet_escort_beside_a_lead_it_cannot_see_brakes_then_settles() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let unseen = Beside {
+            leader_seen: false,
+            ..Beside::default()
+        };
+        let mut ship = fleet_escort_of(30.0, at(100.0, 100.0, 0.0, 2.0, 0.0));
+        flown(&mut ship, Some(&leader), unseen);
+        assert!(ship.state.velocity.y < 2.0, "{:?}", ship.state);
+        assert_eq!(ship.display.drive.glow, GlowCopy::None);
+        let mut ship = fleet_escort_of(30.0, at(100.0, 100.0, 0.2, -0.1, 45.0));
+        flown(&mut ship, Some(&leader), unseen);
+        #[allow(clippy::cast_possible_truncation)]
+        let settled = |axis: f32| (f64::from(axis) * 0.95) as f32;
+        assert_eq!(ship.state.velocity, Vec2::new(settled(0.2), settled(-0.1)));
+        assert_eq!(ship.state.heading, 45.0);
+    }
+
+    #[test]
+    fn by_the_earlier_follow_a_fleet_escort_follows_within_100_of_its_lead() {
+        // It flies as a ship inspecting its lead does, and not as the
+        // original's formation does.
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let start = at(250.0, 0.0, 0.0, 0.0, 0.0);
+        let mut follower = fleet_escort_of(30.0, start);
+        let mut inspector = Npc {
+            goal: Goal::Inspect(crate::combat::ShipRef::Npc(crate::traffic::npc::NpcId(7))),
+            ..follower.clone()
+        };
+        let mut formation = follower.clone();
+        flown(&mut formation, Some(&leader), Beside::default());
+        let mut closest = f32::MAX;
+        for tick in 0..300 {
+            flown_under(
+                &mut follower,
+                Some(&leader),
+                Beside::default(),
+                earlier_follow(),
+            );
+            flown_under(
+                &mut inspector,
+                Some(&leader),
+                Beside::default(),
+                earlier_follow(),
+            );
+            assert_eq!(follower.state, inspector.state, "tick {tick}");
+            closest = closest.min((follower.state.position - leader.position).length());
+        }
+        assert!(
+            closest <= autopilot::FOLLOW_DISTANCE,
+            "never closed: {closest}"
+        );
+        let mut first = fleet_escort_of(30.0, start);
+        flown_under(
+            &mut first,
+            Some(&leader),
+            Beside::default(),
+            earlier_follow(),
+        );
+        assert_ne!(first.state, formation.state, "not the formation flight");
     }
 
     #[test]

@@ -14,8 +14,8 @@
 //!   ships are entering a gate; and snapshots what each flight reads of
 //!   the others: every ship's state before any moves, the player's, the
 //!   top speeds, the disabled ships, the leaders' warps (sending each
-//!   leader out on the advance pass), the tractors' holders and each
-//!   swarmer's lead. The original's steering reads come from
+//!   leader out on the advance pass), the tractors' holders, each
+//!   swarmer's lead and the ships that don't see their NPC leader. The original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
 //!   so every flight reads the others where the last tick left them.
 //! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
@@ -50,13 +50,13 @@ use super::{
     DockNotes, Traffic, World, ionization, plunder, repair_dock, ship_display, tractor_hold,
     warp_out,
 };
-use crate::ai::Goal;
 use crate::ai::swarm::{self, SwarmLead};
+use crate::ai::{Goal, sight};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::flight::ShipState;
+use crate::flight::{NpcFormation, ShipState};
 
 /// Which pass's fly half a [`FlyPass`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +100,8 @@ pub struct FlyPass {
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
     leads: BTreeMap<NpcId, SwarmLead>,
+    /// The NPCs that don't see their NPC leader, as the half began.
+    unseen: BTreeSet<NpcId>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
     /// Each dock started and each repair completed.
@@ -175,6 +177,19 @@ impl Traffic {
             .iter()
             .filter_map(|npc| swarm::lead(npc, &around).map(|lead| (npc.id, lead)))
             .collect();
+        let unseen = self
+            .npcs
+            .iter()
+            .filter(|npc| {
+                npc.leader.is_some_and(|lead| {
+                    self.npcs
+                        .iter()
+                        .find(|other| other.id == lead)
+                        .is_some_and(|leader| !sight::npc_sees(npc, leader))
+                })
+            })
+            .map(|npc| npc.id)
+            .collect();
         self.departed.clear();
         FlyPass {
             half,
@@ -192,6 +207,7 @@ impl Traffic {
             leaders,
             holders,
             leads,
+            unseen,
             first: self.first_class,
             docks: DockNotes::default(),
             reached: Vec::new(),
@@ -245,7 +261,8 @@ impl Traffic {
             return;
         };
         let (other, _) = other_of(pass, npc);
-        autopilot::coast_unsteered(npc, other.as_ref(), world.flight);
+        let seen = beside_of(pass, npc).leader_seen;
+        autopilot::coast_unsteered(npc, other.as_ref(), seen, world.flight);
     }
 
     /// Ends the fly half `pass` (see the module docs).
@@ -313,21 +330,28 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 
 /// What `npc`'s flight reads beside the ship it is about, in the fly
 /// half `pass` ([`Beside`]): its swarm lead, its guard where the half
-/// found it while it keeps formation ([`Goal::Formation`]), and its
-/// leader seen. Every formation escort's leader is the player, whom no
-/// ship fails to see until the player has a cloak
-/// (rdm:phase/cloaking-fidelity/phase-8-cloaking-device, which passes
-/// the player's sight here; an NPC leader's is
-/// rdm:phase/escort-fleet-fidelity/phase-6-npc-formations').
+/// found it while it keeps formation ([`Goal::Formation`]) or keeps with
+/// a lead ([`Goal::Follow`]), and whether it sees its leader. A fleet
+/// escort sees its NPC lead as the half began (`_ShipVisibleToShip(leader,
+/// ship)` @0x8ed5f, [`sight::npc_sees`]); the player is always seen, as
+/// no ship fails to see it until the player has a cloak
+/// (rdm:phase/cloaking-fidelity/phase-8-cloaking-device, which passes the
+/// player's sight here).
+///
+/// The original reads the sight in the escort's own high level, so a
+/// cloak its lead changed earlier in the same think half shows here a
+/// tick later than there: a one-tick lag settled before the frame is
+/// drawn, crossing no boundary.
 fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
-    let guard = match npc.goal {
-        Goal::Formation { guard: Some(guard) } => state_of(pass, guard),
-        _ => None,
+    let (guard, leader_seen) = match npc.goal {
+        Goal::Formation { guard } => (guard, true),
+        Goal::Follow { guard, .. } => (guard, !pass.unseen.contains(&npc.id)),
+        _ => (None, true),
     };
     Beside {
         swarm: pass.leads.get(&npc.id).copied(),
-        guard,
-        leader_seen: true,
+        guard: guard.and_then(|guard| state_of(pass, guard)),
+        leader_seen,
     }
 }
 
@@ -377,8 +401,22 @@ fn fly_one(
         speeds,
         &mut *chance,
     );
-    ship_display::bank_and_glow(npc, held, derelict, Some(world.warp.player.glow));
+    ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
     outcome
+}
+
+/// The glow close formation copies to `npc` (nav's +0xc8d4,
+/// @0x87dce-0x87deb), in `world` and the fly half `pass`: by the engine's
+/// reading of [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation), a
+/// fleet escort's ([`Goal::Follow`]) its NPC lead's as the half began,
+/// none with its lead gone; otherwise the player's.
+fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
+    match npc.goal {
+        Goal::Follow { lead, .. } if world.flight.npc_formation == NpcFormation::Original => {
+            pass.leaders.get(&lead).map(|leader| leader.glow)
+        }
+        _ => Some(world.warp.player.glow),
+    }
 }
 
 /// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
@@ -885,6 +923,108 @@ mod tests {
         assert_eq!(closing_escort_heading(guarded, vec![below.clone()]), 247.0);
         assert_eq!(closing_escort_heading(None, vec![below]), 253.0);
         assert_eq!(closing_escort_heading(guarded, vec![]), 253.0, "gone");
+    }
+
+    /// A lead (NPC 1, at the centre, moving right at 1) and its fleet
+    /// escort (NPC 2), 50 to its left in slot 2 of its formation, moving
+    /// with it and facing left, guarding NPC 3, 1000 below; the lead
+    /// cloaked when `cloaked`.
+    fn fleet(cloaked: bool) -> Traffic {
+        let mut lead = at(1, 0.0, 0.0);
+        lead.state.velocity = Vec2::new(1.0, 0.0);
+        if cloaked {
+            lead.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+        }
+        let mut escort = at(2, -50.0, 0.0);
+        escort.state.velocity = Vec2::new(1.0, 0.0);
+        // Facing against its motion, where a brake thrusts.
+        escort.state.heading = 270.0;
+        escort.leader = Some(NpcId(1));
+        escort.goal = Goal::Follow {
+            lead: NpcId(1),
+            guard: Some(ShipRef::Npc(NpcId(3))),
+        };
+        escort.fleet_slot = Some(crate::escort::FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+        });
+        Traffic {
+            npcs: vec![lead, escort, at(3, 0.0, 1000.0)],
+            ..Traffic::default()
+        }
+    }
+
+    #[test]
+    fn a_fleet_escort_reads_its_guard_and_its_sight_of_its_lead_as_the_half_began() {
+        let world = World::new(&[]);
+        let mut seen = fleet(false);
+        let pass = seen.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        let beside = beside_of(&pass, &seen.npcs[1]);
+        assert!(beside.leader_seen);
+        assert_eq!(beside.guard, Some(seen.npcs[2].state), "its guard");
+        let mut cloaked = fleet(true);
+        let pass = cloaked.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        // Its lead uncloaked after the half began: still unseen.
+        cloaked.npcs[0].cloak = crate::cloak::Cloak::default();
+        assert!(!beside_of(&pass, &cloaked.npcs[1]).leader_seen, "unseen");
+        let mut own_cloak = fleet(true);
+        own_cloak.npcs[1].cloak_gear.device = true;
+        let pass = own_cloak.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        assert!(
+            beside_of(&pass, &own_cloak.npcs[1]).leader_seen,
+            "a cloak of its own sees its cloaked lead"
+        );
+    }
+
+    #[test]
+    fn a_fleet_escort_beside_a_cloaked_lead_it_cannot_see_brakes_and_one_that_sees_it_keeps_with_it()
+     {
+        let world = World::new(&[]);
+        let escort = |traffic: &Traffic| traffic.npcs[1].state.velocity;
+        let mut unseen = fleet(true);
+        unseen.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        assert!(escort(&unseen).x < 1.0, "braking: {:?}", escort(&unseen));
+        let mut seen = fleet(true);
+        seen.npcs[1].cloak_gear.device = true;
+        seen.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        assert_eq!(escort(&seen), Vec2::new(1.0, 0.0), "matched with it");
+    }
+
+    /// [`fleet`]'s escort's glow after a fly half under `rules`, its lead
+    /// glowing 9 and the player 4.
+    fn fleet_escort_glow(rules: crate::flight::FlightRules) -> i16 {
+        let mut traffic = fleet(false);
+        traffic.npcs[0].display.glow = 9;
+        traffic.npcs[1].display.glow = 2;
+        let mut world = World::new(&[]);
+        world.flight = rules;
+        world.warp.player.glow = 4;
+        let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        // Its lead's glow changed after the half began: not read.
+        traffic.npcs[0].display.glow = 15;
+        traffic.fly_npc(&mut pass, NpcId(2), &world, &mut NeverFires);
+        traffic.end_fly(pass);
+        traffic.npcs[1].display.glow
+    }
+
+    #[test]
+    fn a_fleet_escort_in_close_formation_ends_the_tick_with_its_leads_glow() {
+        let rules = crate::flight::FlightRules::default();
+        // Its lead's 9 copied, then faded a step with no thrust: not the
+        // player's 4.
+        assert_eq!(fleet_escort_glow(rules), 8);
+        // The glow copy is the formation flight's: by the earlier follow
+        // there is none, and the escort's own glow goes its own way.
+        let earlier = crate::flight::FlightRules {
+            npc_formation: NpcFormation::Earlier,
+            ..rules
+        };
+        let glow = fleet_escort_glow(earlier);
+        assert!(glow != 8 && glow != 3, "{glow}");
     }
 
     /// [`busy`] with a ship launched after its fly half began, at

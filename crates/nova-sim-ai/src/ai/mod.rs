@@ -278,12 +278,18 @@ pub enum Goal {
     /// [`leave`]).
     JumpOut,
     /// Keep with `lead`, its fleet's lead: the original's goal 0xa under
-    /// an NPC parent, flown within
+    /// an NPC parent. By the engine's reading of
+    /// [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation) it keeps
+    /// its slot in the lead's formation
+    /// ([`Npc::fleet_slot`](crate::traffic::npc::Npc::fleet_slot)) by goal
+    /// 0xa's formation flight, as [`Goal::Formation`] keeps the player's
+    /// (see [`formation_flight`](crate::traffic::formation_flight)); by
+    /// the other, it follows within
     /// [`FOLLOW_DISTANCE`](crate::traffic::autopilot::FOLLOW_DISTANCE) of
     /// the lead. A fleet escort flying `_EscortAI`'s formation (see
     /// [`fleet_escort`]) holds the ship it guards in `guard`, its +0x70,
-    /// at which it fires its turret pick. It fights nothing: its quarry
-    /// is none.
+    /// at which it fires its turret pick and toward which it closes in.
+    /// It fights nothing: its quarry is none.
     Follow {
         /// The lead it keeps with.
         lead: NpcId,

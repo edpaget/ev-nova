@@ -70,11 +70,17 @@ pub enum Inertia {
 }
 
 impl Inertia {
-    /// How `npc` flies this tick, its leader at `leader` and whose
-    /// dampener counts as `flight` says ([`Npc::flies_inertialess`]).
+    /// How `npc` flies this tick, its leader at `leader` and seen as
+    /// `leader_seen` says, and whose dampener counts as `flight` says
+    /// ([`Npc::flies_inertialess`]).
     #[must_use]
-    pub fn of(npc: &Npc, leader: Option<&ShipState>, flight: crate::flight::FlightRules) -> Self {
-        if npc.flies_inertialess(leader, flight) {
+    pub fn of(
+        npc: &Npc,
+        leader: Option<&ShipState>,
+        leader_seen: bool,
+        flight: crate::flight::FlightRules,
+    ) -> Self {
+        if npc.flies_inertialess(leader, leader_seen, flight) {
             Self::Inertialess { speed: npc.speed }
         } else {
             Self::Inertial
@@ -274,10 +280,10 @@ mod tests {
     fn an_inertialess_hull_flies_inertialess_and_a_dampener_only_by_the_bible() {
         let plain = npc(FAST, Goal::Hold, ShipState::default(), 0.0);
         let rules = FlightRules::default();
-        assert_eq!(Inertia::of(&plain, None, rules), Inertia::Inertial);
+        assert_eq!(Inertia::of(&plain, None, true, rules), Inertia::Inertial);
         let raven = npc(RAVEN, Goal::Hold, ShipState::default(), 2.0);
         assert_eq!(
-            Inertia::of(&raven, None, rules),
+            Inertia::of(&raven, None, true, rules),
             Inertia::Inertialess { speed: 2.0 }
         );
         let dampened = Npc {
@@ -296,7 +302,7 @@ mod tests {
             &Rulebook::default().with_override(RuleKey::InertialDampener, RuleSource::Bible),
         );
         assert_eq!(
-            Inertia::of(&dampened, None, bible),
+            Inertia::of(&dampened, None, true, bible),
             Inertia::Inertialess { speed: 0.0 }
         );
     }
@@ -329,22 +335,22 @@ mod tests {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_position(&leader, 2, 3, 30.0);
         let original = FlightRules::default();
-        let reading = original.formation_flight;
+        let reading = original;
         let on = escort(at(400.0 + 300.0, -200.0 - 300.0, 0.0, 0.0, 0.0), 0.0);
-        assert!(on.keeps_close_formation(Some(&leader), reading));
-        assert!(!on.flies_inertialess(Some(&leader), original));
+        assert!(on.keeps_close_formation(Some(&leader), true, reading));
+        assert!(!on.flies_inertialess(Some(&leader), true, original));
         let off = escort(at(400.0 + 301.0, -200.0, 0.0, 0.0, 0.0), 0.0);
-        assert!(!off.keeps_close_formation(Some(&leader), reading));
-        assert!(off.flies_inertialess(Some(&leader), original));
+        assert!(!off.keeps_close_formation(Some(&leader), true, reading));
+        assert!(off.flies_inertialess(Some(&leader), true, original));
         // 290 from its leader on each axis, beyond 300 from its slot: by
         // the leader.
         let aside = escort(at(400.0 + 290.0, -200.0 - 290.0, 0.0, 0.0, 0.0), 0.0);
         let from_slot = aside.state.position - slot;
         assert!(from_slot.x > 300.0 || -from_slot.y > 300.0, "{from_slot:?}");
-        assert!(aside.keeps_close_formation(Some(&leader), reading));
-        assert!(!aside.keeps_close_formation(Some(&leader), earlier().formation_flight));
+        assert!(aside.keeps_close_formation(Some(&leader), true, reading));
+        assert!(!aside.keeps_close_formation(Some(&leader), true, earlier()));
         assert!(
-            !on.keeps_close_formation(None, reading),
+            !on.keeps_close_formation(None, true, reading),
             "with its leader gone"
         );
         let idle = Npc {
@@ -352,7 +358,7 @@ mod tests {
             ..on.clone()
         };
         assert!(
-            !idle.keeps_close_formation(Some(&leader), reading),
+            !idle.keeps_close_formation(Some(&leader), true, reading),
             "not in formation"
         );
         let dutiless = Npc {
@@ -360,7 +366,7 @@ mod tests {
             ..on.clone()
         };
         assert!(
-            !dutiless.keeps_close_formation(Some(&leader), reading),
+            !dutiless.keeps_close_formation(Some(&leader), true, reading),
             "with no slot"
         );
     }
@@ -370,15 +376,15 @@ mod tests {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_position(&leader, 2, 3, 30.0);
         let rules = earlier();
-        let reading = rules.formation_flight;
+        let reading = rules;
         let on = escort(at(slot.x + 300.0, slot.y - 300.0, 0.0, 0.0, 0.0), 0.0);
-        assert!(on.keeps_close_formation(Some(&leader), reading));
-        assert!(!on.flies_inertialess(Some(&leader), rules));
+        assert!(on.keeps_close_formation(Some(&leader), true, reading));
+        assert!(!on.flies_inertialess(Some(&leader), true, rules));
         let off = escort(at(slot.x + 301.0, slot.y, 0.0, 0.0, 0.0), 0.0);
-        assert!(!off.keeps_close_formation(Some(&leader), reading));
-        assert!(off.flies_inertialess(Some(&leader), rules));
+        assert!(!off.keeps_close_formation(Some(&leader), true, reading));
+        assert!(off.flies_inertialess(Some(&leader), true, rules));
         assert!(
-            !on.keeps_close_formation(None, reading),
+            !on.keeps_close_formation(None, true, reading),
             "with its leader gone"
         );
         let idle = Npc {
@@ -386,9 +392,91 @@ mod tests {
             ..on.clone()
         };
         assert!(
-            !idle.keeps_close_formation(Some(&leader), reading),
+            !idle.keeps_close_formation(Some(&leader), true, reading),
             "not in formation"
         );
+    }
+
+    #[test]
+    fn an_escort_whose_leader_is_unseen_does_not_keep_close_formation() {
+        // `_ShipVisibleToShip(leader, ship)` false: sub 1, not 0xc.
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let on = escort(at(400.0 + 30.0, -200.0, 0.0, 0.0, 0.0), 0.0);
+        let rules = FlightRules::default();
+        assert!(on.keeps_close_formation(Some(&leader), true, rules));
+        assert!(!on.keeps_close_formation(Some(&leader), false, rules));
+        assert!(on.flies_inertialess(Some(&leader), false, rules));
+    }
+
+    /// An inertialess fleet escort following NPC 7, in slot 2 of 3 of its
+    /// formation, spaced 30 apart, from `start`.
+    fn fleet_escort(start: ShipState) -> Npc {
+        let lead = crate::traffic::npc::NpcId(7);
+        Npc {
+            leader: Some(lead),
+            fleet_slot: Some(FormationSlot {
+                slot: 2,
+                ships: 3,
+                spacing: 30.0,
+            }),
+            ..npc(RAVEN, Goal::Follow { lead, guard: None }, start, 0.0)
+        }
+    }
+
+    /// The original's flight rules but the earlier NPC follow.
+    fn earlier_follow() -> FlightRules {
+        FlightRules::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible),
+        )
+    }
+
+    #[test]
+    fn a_fleet_escort_within_300_of_a_lead_it_sees_keeps_close_formation() {
+        let lead = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let rules = FlightRules::default();
+        let on = fleet_escort(at(400.0 + 300.0, -200.0 - 300.0, 0.0, 0.0, 0.0));
+        assert!(on.keeps_close_formation(Some(&lead), true, rules));
+        assert!(!on.flies_inertialess(Some(&lead), true, rules));
+        let off = fleet_escort(at(400.0 + 301.0, -200.0, 0.0, 0.0, 0.0));
+        assert!(!off.keeps_close_formation(Some(&lead), true, rules));
+        assert!(off.flies_inertialess(Some(&lead), true, rules));
+        // Its lead unseen (cloaked, and it has no cloak or scanner).
+        assert!(!on.keeps_close_formation(Some(&lead), false, rules));
+        assert!(on.flies_inertialess(Some(&lead), false, rules));
+        // With no slot (its formation pass hasn't run), none.
+        let unslotted = Npc {
+            fleet_slot: None,
+            ..on.clone()
+        };
+        assert!(!unslotted.keeps_close_formation(Some(&lead), true, rules));
+    }
+
+    #[test]
+    fn by_the_earlier_follow_a_fleet_escort_never_keeps_close_formation() {
+        let lead = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_position(&lead, 2, 3, 30.0);
+        let on = fleet_escort(at(slot.x, slot.y, 0.0, 0.0, 30.0));
+        for rules in [
+            earlier_follow(),
+            FlightRules {
+                formation_flight: earlier().formation_flight,
+                ..earlier_follow()
+            },
+        ] {
+            assert!(!on.keeps_close_formation(Some(&lead), true, rules));
+            assert!(on.flies_inertialess(Some(&lead), true, rules));
+        }
+        assert!(
+            on.keeps_close_formation(Some(&lead), true, earlier()),
+            "by the earlier formation flight and the original's NPC formation: on its slot"
+        );
+    }
+
+    #[test]
+    fn by_the_earlier_follow_a_player_escort_still_keeps_close_formation() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let on = escort(at(400.0 + 30.0, -200.0, 0.0, 0.0, 0.0), 0.0);
+        assert!(on.keeps_close_formation(Some(&leader), true, earlier_follow()));
     }
 
     #[test]
@@ -435,7 +523,7 @@ mod tests {
             );
             let rejoined = (0..2000).any(|_| {
                 fly_at(&mut ship, &[], Some(&leader), speeds, rules);
-                ship.keeps_close_formation(Some(&leader), rules.formation_flight)
+                ship.keeps_close_formation(Some(&leader), true, rules)
             });
             assert!(
                 rejoined,

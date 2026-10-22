@@ -584,7 +584,8 @@ pub fn fly_jump(
     let handling = npc
         .ionization()
         .slows(world.flight.handling(npc.own_handling()));
-    let inertia = Inertia::of(npc, None, world.flight);
+    // No leader passed: close formation needs one, so the sight is moot.
+    let inertia = Inertia::of(npc, None, true, world.flight);
     fly(npc, &handling, world.flight, inertia);
     warp_block(npc, led(npc, leaders), &world.warp);
     Some(Outcome::Flying)

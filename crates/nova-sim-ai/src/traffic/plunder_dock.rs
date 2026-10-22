@@ -259,7 +259,8 @@ pub fn fly(
     let Some(docking) = npc.docking else {
         return DockOutcome::Flying;
     };
-    let inertia = Inertia::of(npc, Some(victim), flight);
+    // A plunderer holds no formation goal, so the sight is moot.
+    let inertia = Inertia::of(npc, Some(victim), true, flight);
     let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, true);
