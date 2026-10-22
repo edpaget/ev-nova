@@ -291,7 +291,7 @@ mod tests {
             (RLED, 1100, None, sheet(0)),
         ]);
         let entry = data.ship(ShipId(130));
-        let none = "the rlëD sheet has no frames";
+        let none = "the sprite sheet has no frames";
         assert_eq!(entry.sprite, Err(format!("rlëD 1000: {none}")));
         assert_eq!(entry.glow, Some(Err(format!("glow rlëD 1100: {none}"))));
     }

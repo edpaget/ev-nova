@@ -12,7 +12,10 @@
 //! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`] | a [`SpriteSheet`] of equal-sized frames |
 //!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
-//! its mask, as Nova masks its button caps.
+//! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
+//! decoded sprites picture and its mask into a [`SpriteSheet`], as the
+//! original does for a `spïn` with no `rlëD`; its mask has the opposite
+//! polarity.
 //!
 //! A sprite sheet's header gives frame size and count but not how the frames
 //! are arranged. That comes from the `spïn` or `shän` record pointing at the
@@ -100,6 +103,7 @@ mod mask;
 mod packbits;
 mod pattern;
 mod pict;
+mod pict_sheet;
 mod pixmap;
 mod reader;
 mod rled;
@@ -117,6 +121,7 @@ pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
+pub use pict_sheet::{SheetMask, cut_pict_sheet};
 pub use rled::{RLED, decode_rled, decode_rled_as};
 pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

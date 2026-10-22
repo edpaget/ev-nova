@@ -1157,7 +1157,7 @@ mod tests {
         let look = empty.boom_look(BoomId(128)).expect("there").expect("reads");
         assert_eq!(
             look.sheet,
-            Err("rlëD 400: the rlëD sheet has no frames".to_owned())
+            Err("rlëD 400: the sprite sheet has no frames".to_owned())
         );
     }
 

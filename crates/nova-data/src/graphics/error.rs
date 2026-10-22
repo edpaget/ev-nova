@@ -111,9 +111,25 @@ pub enum GraphicsError {
         /// The header's depth.
         depth: u16,
     },
-    /// An `rlëD` sheet whose header claims no frames.
-    #[error("the rlëD sheet has no frames")]
+    /// An `rlëD` sheet whose header claims no frames, or a `PICT` sprite
+    /// grid smaller than one frame.
+    #[error("the sprite sheet has no frames")]
     NoFrames,
+    /// A `PICT` sprite grid whose width or height is not a whole number of
+    /// frames.
+    #[error(
+        "the {width}x{height} picture is not a whole grid of {frame_width}x{frame_height} frames"
+    )]
+    PartialGrid {
+        /// The picture's width.
+        width: u32,
+        /// The picture's height.
+        height: u32,
+        /// The width of each frame.
+        frame_width: u32,
+        /// The height of each frame.
+        frame_height: u32,
+    },
     /// An `rlëD` token this decoder does not know.
     #[error("unsupported rlëD token {token} at byte {offset:#x}")]
     UnsupportedToken {
@@ -199,6 +215,7 @@ impl GraphicsError {
             | Self::UnsupportedPatternType { .. }
             | Self::UnsupportedDepth { .. }
             | Self::NoFrames
+            | Self::PartialGrid { .. }
             | Self::MissingColour { .. }
             | Self::MaskSizeMismatch { .. } => None,
         }
@@ -260,6 +277,15 @@ mod tests {
             (E::UnsupportedPatternType { pat_type: 2 }, None),
             (E::UnsupportedDepth { depth: 32 }, None),
             (E::NoFrames, None),
+            (
+                E::PartialGrid {
+                    width: 5,
+                    height: 4,
+                    frame_width: 2,
+                    frame_height: 2,
+                },
+                None,
+            ),
             (
                 E::UnsupportedToken {
                     token: 5,
@@ -383,7 +409,16 @@ mod tests {
                 GraphicsError::UnsupportedDepth { depth: 32 },
                 "unsupported rlëD depth 32",
             ),
-            (GraphicsError::NoFrames, "the rlëD sheet has no frames"),
+            (GraphicsError::NoFrames, "the sprite sheet has no frames"),
+            (
+                GraphicsError::PartialGrid {
+                    width: 5,
+                    height: 4,
+                    frame_width: 2,
+                    frame_height: 2,
+                },
+                "the 5x4 picture is not a whole grid of 2x2 frames",
+            ),
             (
                 GraphicsError::UnsupportedToken {
                     token: 5,
