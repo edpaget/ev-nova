@@ -184,9 +184,10 @@ impl Painter for Rled8 {
 
     fn frame_end(&mut self) {
         let mut frame = Image::transparent(self.width, self.height);
-        let mut solid = self
-            .has_run
-            .then(|| Image::transparent(self.width, self.height));
+        let (width, height) = (self.width, self.height);
+        // The next frame starts with no run.
+        let mut solid =
+            std::mem::take(&mut self.has_run).then(|| Image::transparent(width, height));
         for y in 0..self.height {
             for x in 0..self.width {
                 let Some((colour, run)) = self.pixel(x, y) else {
@@ -201,7 +202,6 @@ impl Painter for Rled8 {
         self.frames.push(frame);
         self.solids.push(solid);
         self.cells.fill(None);
-        self.has_run = false;
     }
 }
 
