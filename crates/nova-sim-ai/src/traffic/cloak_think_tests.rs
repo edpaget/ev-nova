@@ -179,3 +179,88 @@ fn the_players_escort_out_of_close_formation_takes_no_parent_rule() {
         Cloak::default()
     );
 }
+
+/// A ship with a cloak, keeping slot 0 of a formation beside NPC 2 at the
+/// centre with `leader`'s cloak and mode, `own_leader` its leader or not,
+/// escorting the player or not as `escorts_player` says; the player
+/// cloaked at the centre. Its cloak after one think half.
+fn led_thought(leader: Npc, own_leader: bool, escorts_player: bool) -> Cloak {
+    use crate::escort::{EscortDuty, FormationSlot};
+    let slot = FormationSlot {
+        slot: 0,
+        ships: 1,
+        spacing: 30.0,
+    };
+    let mut ship = npc(1, ShipStats::default());
+    ship.cloak_gear = CloakGear {
+        device: true,
+        ..CloakGear::default()
+    };
+    if own_leader {
+        ship.leader = Some(leader.id);
+        ship.fleet_slot = Some(slot);
+    }
+    if escorts_player {
+        ship.goal = Goal::Formation { guard: None };
+        ship.escort = Some(EscortDuty {
+            formation: slot,
+            order: None,
+        });
+    } else {
+        ship.goal = Goal::Follow {
+            lead: leader.id,
+            guard: None,
+        };
+    }
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship, leader];
+    let mut player = crate::ai::fixture::player(0.0, 0.0);
+    player.cloak = CLOAKED;
+    let world = World {
+        player: Some(player),
+        ..World::new(&[])
+    };
+    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    traffic.npcs()[0].cloak
+}
+
+/// NPC 2 at the centre, its cloak `cloak`.
+fn leader_npc(cloak: Cloak) -> Npc {
+    let mut leader = npc(2, ShipStats::default());
+    leader.cloak = cloak;
+    leader
+}
+
+#[test]
+fn the_players_escort_with_an_npc_leader_reads_that_leader_not_the_player() {
+    // The parent rule reads the ship's parent, +0x9a (@0x83633-0x8366d):
+    // the player only when it has no NPC leader.
+    assert_eq!(
+        led_thought(leader_npc(Cloak::default()), true, true),
+        Cloak::default(),
+        "its NPC leader uncloaked"
+    );
+    assert_eq!(
+        led_thought(leader_npc(Cloak::default()), false, true),
+        CLOAKING,
+        "no NPC leader: the cloaked player"
+    );
+}
+
+#[test]
+fn a_fleet_escort_takes_no_parent_rule_from_a_cloaked_leader_it_cannot_see() {
+    // A leader waiting in its gate is unseen (`_ShipVisibleToShip`
+    // @0x972d), so its escort brakes rather than keeping close formation.
+    assert_eq!(
+        led_thought(leader_npc(CLOAKED), true, false),
+        CLOAKING,
+        "seen: its cloak shows it its cloaked leader"
+    );
+    let mut emerging = leader_npc(CLOAKED);
+    emerging.mode = Mode::Emerging { ticks_left: 5 };
+    assert_eq!(
+        led_thought(emerging, true, false),
+        Cloak::default(),
+        "unseen"
+    );
+}

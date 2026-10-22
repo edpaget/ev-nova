@@ -236,6 +236,20 @@ fn requested(station: bool) -> LandPress {
 }
 
 #[test]
+fn a_cloaked_player_is_told_to_disengage_its_cloak_first() {
+    // `_HandlePlayerDockRequest`'s `_ShipIsCloaked` (@0x66a8e).
+    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
+    let full = nova_sim::cloak::Cloak {
+        fade: nova_sim::cloak::FADE_FULL,
+        direction: 0,
+    };
+    nova_sim::fixture::set_player_cloak(&mut session, full);
+    assert_eq!(session.player_cloak(), full);
+    assert_eq!(session.land(), Err(LandingRefusal::Cloaked));
+    assert_eq!(session.landed(), None);
+}
+
+#[test]
 fn the_first_l_requests_clearance_and_the_second_lands_after_a_tick() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
     assert_eq!(session.land(), Ok(requested(false)));

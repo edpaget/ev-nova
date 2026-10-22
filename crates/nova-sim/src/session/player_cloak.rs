@@ -286,6 +286,18 @@ mod tests {
     }
 
     #[test]
+    fn the_cloak_key_uncloaks_a_cloaked_player_with_the_uncloak_sound() {
+        let catalog = cloaking(0);
+        let mut session = owning(&catalog);
+        session.ship.cloak.cloak = FULL;
+        assert_eq!(
+            cloak_sounds(&tick(&mut session, true)),
+            [SimSound::Uncloaked]
+        );
+        assert_eq!(session.player_cloak(), at(FADE_FULL - 0.75, -1));
+    }
+
+    #[test]
     fn the_cloak_key_without_a_cloak_beeps_refused_once_a_press() {
         let catalog = cloaking(0);
         let mut session = owning(&catalog);

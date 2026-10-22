@@ -507,6 +507,12 @@ exclude_re = [
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
     "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
+    # The player's cloak jitter needs only a seed of its own: seed 0, which
+    # `Default` gives, is no NPC's cloak seed (`0x434c_4f41_4b00_0000`
+    # plus an ID) nor any glow's (1 for the player's, 2 + 2n for NPC n's),
+    # so it jitters as independently as the chosen one; which jitter a
+    # seed draws is no behaviour of the original's.
+    "nova-view/src/flight/cloak_fade\\.rs:[0-9]+:[0-9]+: replace player_cloak_rolls -> HashedRolls with Default::default\\(\\)$",
     # The lightning rolls' seed joins a high word shifted past 32 bits and
     # a low word below 2^32, and a trail colour joins channels shifted to
     # their own 8 bits: their bits never overlap, so `|` and `^` give the
