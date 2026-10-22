@@ -510,6 +510,7 @@ mod player_info;
 mod player_led;
 mod player_repair;
 mod player_ship;
+mod players_hits;
 mod plunder_loop;
 mod port;
 mod precalced;
@@ -2496,11 +2497,12 @@ impl Session {
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
     /// before it: weighing whether each is answered, rolling on `chance`
     /// (see the `answer_flag` module), refilling the invincible, convicting
-    /// the player by `law`, crediting kills by the fleet as it stood before
-    /// each of the escort `losses` the strikes made, and letting each hit
-    /// NPC's cloak take its hit; then keeps them for the traffic to answer
-    /// and the app. The persons' grudges are held as the traffic answers
-    /// them, in turn (`Session::step_traffic`).
+    /// the player by `law` and crediting it with kills, for its own hits
+    /// and those of the ships it leads, as the fleet stood before each of
+    /// the escort `losses` the strikes made ([`Space::players_hit`]), and
+    /// letting each hit NPC's cloak take its hit; then keeps them for the
+    /// traffic to answer and the app. The persons' grudges are held as the
+    /// traffic answers them, in turn (`Session::step_traffic`).
     fn settle_strikes(
         &mut self,
         (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
@@ -2510,7 +2512,7 @@ impl Session {
     ) {
         self.weigh_strikes(&mut strikes, chance);
         self.space.refill_invincible(&mut strikes);
-        self.punish(&strikes, was, law);
+        self.punish(&strikes, &losses, was, law);
         self.space
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
         self.space.cloak_hits(&self.statics, &strikes);
@@ -2572,7 +2574,10 @@ impl Session {
     }
 
     /// Convicts the player of its crimes among `strikes`, as `law` says:
-    /// disabling an NPC, and breaking one up, which is disabling it too
+    /// those by itself and by the ships it leads, as the fleet stood
+    /// before each of the escort `losses` the strikes made
+    /// ([`Space::players_hit`]). Its crimes are disabling an NPC, and
+    /// breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
     /// victim's condition, government and mission mark are as it `was`
     /// before the fight's tick. A mission's special ship, of any mark,
@@ -2581,10 +2586,23 @@ impl Session {
     /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
     /// then takes the ranks its crime reaches (see [`rank`](crate::rank)'s
     /// **Crimes**).
-    fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
-        for strike in strikes
+    ///
+    /// The original convicts and credits each hit as it lands; here every
+    /// strike's convictions come first, then every strike's credit
+    /// ([`Space::credit_kills`]). Nothing between reads the records, the
+    /// ranks or the rating, and both settle in the same phase, before the
+    /// frame is drawn.
+    fn punish(
+        &mut self,
+        strikes: &[Strike],
+        losses: &[EscortLoss],
+        was: &[NpcBefore],
+        law: &dyn LegalCode,
+    ) {
+        for (_, strike) in strikes
             .iter()
-            .filter(|strike| strike.by == Some(ShipRef::Player))
+            .enumerate()
+            .filter(|&(index, strike)| self.space.players_hit(index, strike, losses))
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -6221,16 +6239,11 @@ impl Space {
 
     /// Credits the player's combat rating for each NPC among `strikes`
     /// that a hit started breaking up, when the kill counts (see
-    /// [`rating`](crate::rating)): the shooter is the player or a ship of
-    /// its fleet, its escorts and fighters, and the victim's government,
-    /// from `was`, is not derelict. As the original's `_DamageShip`
-    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
-    /// victim is taken out, and reads the shooter's leader as the hit
-    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
-    /// a kill it scored before the strike that lost it, among `losses`
-    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
-    /// before the escort block clears the leader, @0x3afdd), and not for
-    /// one after.
+    /// [`rating`](crate::rating)): the player answers for the hit
+    /// ([`Space::players_hit`], which reads the escorts the strikes lost,
+    /// `losses`), and the victim's government, from `was`, is not
+    /// derelict. As the original's `_DamageShip` (@0x3ad4f-0x3ae53), the
+    /// credit comes with the hit, before the victim is taken out.
     fn credit_kills(
         &mut self,
         pilot: &mut Pilot,
@@ -6250,21 +6263,7 @@ impl Space {
             else {
                 continue;
             };
-            let by_players_fleet = match strike.by {
-                None => false,
-                Some(ShipRef::Player) => true,
-                Some(ShipRef::Npc(by)) => {
-                    let lost_since = losses
-                        .iter()
-                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
-                    lost_since
-                        || self
-                            .traffic
-                            .npcs()
-                            .iter()
-                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
-                }
-            };
+            let by_players_fleet = self.players_hit(index, strike, losses);
             if !rating::counts(by_players_fleet, statics.govts.derelict(govt)) {
                 continue;
             }
@@ -18033,7 +18032,7 @@ pub(super) mod tests {
     }
 
     /// [`armed`], with [`lawful_govts`].
-    fn lawful() -> FakePilotCatalog {
+    pub(super) fn lawful() -> FakePilotCatalog {
         FakePilotCatalog {
             govts: lawful_govts(),
             ..armed()
@@ -18049,8 +18048,8 @@ pub(super) mod tests {
     /// government, and each system a walk starts from, and changes
     /// nothing.
     #[derive(Debug, Default)]
-    struct Witness {
-        seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+    pub(super) struct Witness {
+        pub(super) seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
         from: std::cell::RefCell<Vec<(Crime, SystemId)>>,
     }
 
@@ -19422,7 +19421,7 @@ pub(super) mod tests {
             session
                 .space
                 .credit_kills(&mut session.pilot, &session.statics, &[by_none], &[], &was);
-            session.punish(&[by_none], &was, &witness);
+            session.punish(&[by_none], &[], &was, &witness);
         }
         assert_eq!(session.pilot().combat_rating(), rating);
         assert_eq!(witness.seen.take(), []);
