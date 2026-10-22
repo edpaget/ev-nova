@@ -1448,6 +1448,44 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fighter_the_game_work_pass_launches_finds_no_slot_once_fifty_five_ships_are_in_the_system()
+    {
+        // The game's pass fires the player's trigger in its own step
+        // (`Session::player_fires`), which counts the free berths again.
+        let catalog = carrying();
+        let crowded = |ships: u32| {
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            for n in 0..ships {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            assert_eq!(session.secondary(), Some(BAY));
+            session.hold_fire(false, true);
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &Sitting,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session
+        };
+        let session = crowded(54);
+        assert_eq!(session.pilot().owned(VIPERS), 1, "the last berth taken");
+        assert_eq!(session.npcs().len(), 55);
+        let mut session = crowded(55);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "no round leaves");
+        assert_eq!(session.npcs().len(), 55, "no fighter");
+        assert_eq!(session.pilot().escorts(), []);
+        let heard = session
+            .take_combat_events()
+            .into_iter()
+            .any(|event| matches!(event, CombatEvent::Fired { weapon, .. } if weapon == BAY));
+        assert!(!heard, "no bay heard");
+        let reload = session.ship.fit.armament.mounts()[0].reload;
+        assert_eq!(reload, 0.0, "no reload");
+    }
+
+    #[test]
     fn a_volley_of_two_bays_with_one_berth_left_launches_one_fighter_spending_one_round() {
         // Two bays firing together (`Flags` 0x0040): the first copy finds
         // the last berth below the reserve, the second none, and is
