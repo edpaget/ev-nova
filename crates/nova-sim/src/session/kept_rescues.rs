@@ -36,11 +36,10 @@
 //!   opens. By `visibility_refresh = bible` the refresh after a settled
 //!   script does the same, as a refresh point with its rebuild.
 //! - A jump's arrival (`Session::arrive`) forgets them as it writes its
-//!   refresh, and its entry's rebuild rescues for the arrival system. The
-//!   original forgets them before the jump's days (@0x6bf3f, the days
-//!   @0x6c144); the engine forgets them after, and in between derives the
-//!   rescue for the departure system as the holder's last case does
-//!   (filed as crons-news-ranks-fidelity phase 38).
+//!   refresh, before the jump's days, as the original does (@0x6bf3f, the
+//!   days @0x6c144), and its entry's rebuild rescues for the arrival
+//!   system. In between the owners are left unset, so the holder derives
+//!   no rescue (see the `owners_unset` module).
 //! - The developer tools' galaxy change (`Session::change_galaxy`) is no
 //!   refresh, and forgets nothing.
 //!
@@ -76,16 +75,18 @@ impl Chart {
     /// reading of [`RuleKey::RescueUntilRefresh`], every rescue kept so far
     /// is forgotten, as the session was built by the default rulebook, whose
     /// rebuilds keep them, and the holder reads no kept rescue by that
-    /// reading.
+    /// reading; nor are the owners left unset (see the `owners_unset`
+    /// module).
     pub(super) fn read_rescue_rule(&mut self, rules: &Rulebook) {
         if rules.source_for(RuleKey::RescueUntilRefresh) == RuleSource::Bible {
             self.forget_rescues();
+            self.galaxy.stop_awaiting_rebuild();
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
@@ -99,10 +100,10 @@ mod tests {
     };
 
     /// The stellar both 130 and 131 list.
-    const SHARED: StellarId = StellarId(150);
+    pub(in crate::session) const SHARED: StellarId = StellarId(150);
 
     /// What `engine` and `other` give by `source`.
-    fn by<T>(source: RuleSource, engine: T, other: T) -> T {
+    pub(in crate::session) fn by<T>(source: RuleSource, engine: T, other: T) -> T {
         match source {
             RuleSource::Engine => engine,
             RuleSource::Bible => other,
@@ -112,7 +113,7 @@ mod tests {
     /// [`gated`] with 129 at 130's place, visible, so 130 is shadowed and
     /// claims nothing, 131's planet 140 under hypergate 310, and planet 150
     /// listed by both 130 and 131; every system hideable.
-    fn shared() -> FakePilotCatalog {
+    pub(in crate::session) fn shared() -> FakePilotCatalog {
         let mut catalog = gated();
         catalog.star_map.push(star(129, (0.0, 0.0), &[]));
         for (system, sites) in &mut catalog.sites {
@@ -136,7 +137,10 @@ mod tests {
     /// nothing, with no refresh: the galaxy change stands in for the move's
     /// reveal, so 131 is the hypergate's stand-in for 310 and still claims
     /// nothing.
-    fn rescued_in_130(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+    pub(in crate::session) fn rescued_in_130(
+        catalog: &FakePilotCatalog,
+        source: RuleSource,
+    ) -> Session {
         let mut pilot = Pilot::new(catalog, "").expect("starts");
         pilot.bits_mut().set(hiding_bit(131));
         let mut session = Session::fly(catalog, pilot)
@@ -172,7 +176,7 @@ mod tests {
 
     /// `session`'s L pressed over hypergate 300, the dock approach run, L
     /// pressed again, then the exit into 131 taken.
-    fn gate_to_131(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn gate_to_131(session: &mut Session, catalog: &FakePilotCatalog) {
         assert!(session.land().is_ok());
         session.dock_approach();
         assert_eq!(

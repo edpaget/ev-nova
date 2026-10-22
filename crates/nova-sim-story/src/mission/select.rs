@@ -130,6 +130,16 @@ fn index_govt(
 /// rescued holder; a stellar no visible system holds is left out, and
 /// `_StellarsAreDistant`'s refusal of a stellar that does not exist
 /// (@0x9cea-0x9cee) is never reached.
+///
+/// While the owners are left unset awaiting a rebuild
+/// ([`OverlaidGalaxy::await_rebuild`]), a stellar neither owned nor
+/// rescued has no holder and is left out. The original's active byte is
+/// stale there (only `_HandleStellarSystemVisibility` writes it), so for
+/// such a stellar rescued at the last rebuild its draws
+/// (@0x9a392-0x9a3aa, through @0x9a9e7) read the visible byte (+0x1eb) of
+/// system -1, 0x11 bytes before the system table. That read of memory
+/// outside the table can't be replicated: the engine skips the stellar,
+/// as the original skips one whose active byte is clear.
 #[must_use]
 pub fn stellars_of(
     galaxy: &OverlaidGalaxy,

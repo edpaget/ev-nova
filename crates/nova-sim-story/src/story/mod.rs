@@ -751,8 +751,11 @@
 //! makes it to the next refresh ([`OverlaidGalaxy::keep_rescues`],
 //! [`OverlaidGalaxy::forget_rescues`]), so a stellar rescued in one system
 //! stays that system's, unshown, after a gate's exit or an `M` into
-//! another that lists it; by the other reading the rescue is derived for
-//! the player's system alone. The session
+//! another that lists it. Between a refresh, or a landed `M` or `N`, and
+//! the next rebuild point the owners are left unset
+//! ([`OverlaidGalaxy::await_rebuild`]): a stellar neither owned nor
+//! rescued has no holder there. By the other reading the rescue is
+//! derived for the player's system alone. The session
 //! derives the stellars shown at the original's rebuild points, and the
 //! flight view draws only those. A reader that turns a stellar into a
 //! system goes owner-first, as the original's do: the holder, else

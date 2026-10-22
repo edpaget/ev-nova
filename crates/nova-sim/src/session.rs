@@ -496,6 +496,7 @@ mod npc_escape;
 mod npc_kinds;
 mod outbox;
 mod outfits;
+mod owners_unset;
 mod person_offers;
 mod persons;
 mod pilot_panel;
@@ -3035,10 +3036,13 @@ impl Session {
     /// every system's `Visibility`, and every nebula's `ActiveOn`,
     /// evaluated after the explorations, so it reads the bits their
     /// `OnExplore`s set, and before the days, so a bit the days' scripts
-    /// set shows only at the next refresh; and written once the days
-    /// have passed, with the hops and the systems explored resolved by the
-    /// flags as they stood, before the system is entered, telling
-    /// [`SessionEvent::GalaxyChanged`] when it changed anything.
+    /// set shows only at the next refresh; and written at once, before
+    /// the days, with the hops and the systems explored resolved by the
+    /// flags as they stood, telling [`SessionEvent::GalaxyChanged`] when
+    /// it changed anything. So the days read the refreshed ownership and
+    /// visibility, and a stellar the refresh leaves with no owner has none
+    /// through the days and the entry's population, until the entry's
+    /// rebuild (see the `owners_unset` module).
     ///
     /// After its explorations' scripts, its first draw on `chance` arms
     /// the escort-strength timer (see [`strength`]). The original's order
@@ -3159,6 +3163,26 @@ impl Session {
         // it.
         let refresh = self.refresh_now();
         self.propagate_cached_tests();
+        // The refresh written at once, before the days (@0x6bf3f, the days
+        // @0x6c144), with the hops and the systems explored resolved by
+        // the flags as they stood (@0x6bd67-0x6bdd4, @0x6be0b). It forgets
+        // every rescue kept, and the owners it leaves unset stay so through
+        // the days and the entry's population, until the entry's rebuild
+        // rescues for the arrival system (see the `kept_rescues` and
+        // `owners_unset` modules). The stellars shown stay the departure's
+        // until the entry: nothing is drawn before the original's rebuild
+        // (@0x6c203), so that crosses no boundary.
+        self.chart.forget_rescues();
+        if self
+            .chart
+            .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
+                refresh.write(overlay);
+            })
+            .is_some()
+        {
+            self.out.emit(SessionEvent::GalaxyChanged);
+        }
+        self.chart.leave_owners_unset(&self.setup);
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);
@@ -3178,25 +3202,10 @@ impl Session {
                 hold: false,
             },
         };
-        // The refresh written, with the hops and the systems explored
-        // resolved by the flags as they stood (@0x6bd67-0x6bdd4,
-        // @0x6be0b). The entry then moves the player only out of a system
-        // the refresh left hidden, by the engine's `arrival_system`, as the
-        // refresh's move does (@0x99918); by its other reading it resolves
-        // the arrival by place. The refresh forgets every rescue kept, and
-        // the entry's rebuild rescues for the arrival system; the original
-        // forgets them before the days (@0x6bf3f, the days @0x6c144), the
-        // engine after them (see the `kept_rescues` module).
-        self.chart.forget_rescues();
-        if self
-            .chart
-            .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
-                refresh.write(overlay);
-            })
-            .is_some()
-        {
-            self.out.emit(SessionEvent::GalaxyChanged);
-        }
+        // The entry moves the player only out of a system the refresh left
+        // hidden, by the engine's `arrival_system`, as the refresh's move
+        // does (@0x99918); by its other reading it resolves the arrival by
+        // place.
         // The arrival explored again, with the activity the refresh wrote,
         // before the setup populates it (`_AutoSetExploration` @0x6c1db,
         // `_SetupShipsInSystem` @0x6c1f9): the system the entry will

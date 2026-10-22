@@ -401,6 +401,10 @@ pub struct OverlaidGalaxy {
     /// original never saves +0x14 (`_WritePilotData` @0x72580, @0x72ae2):
     /// a load refreshes first.
     rescued: BTreeMap<StellarId, SystemId>,
+    /// Whether a rebuild point is awaited with the owner words left unset
+    /// ([`OverlaidGalaxy::await_rebuild`]): the holder then derives no
+    /// rescue for the player's system. Never saved, as the rescues are not.
+    awaiting_rebuild: bool,
 }
 
 impl OverlaidGalaxy {
@@ -422,6 +426,7 @@ impl OverlaidGalaxy {
             colocated,
             map,
             rescued: BTreeMap::new(),
+            awaiting_rebuild: false,
         }
     }
 
@@ -686,7 +691,9 @@ impl OverlaidGalaxy {
     /// [`RuleKey::RescueUntilRefresh`](crate::RuleKey::RescueUntilRefresh)'s
     /// other reading the session never calls it, and the rescue is
     /// derived for the player's system alone ([`holder`](Self::holder)).
+    /// It ends a wait for the rebuild ([`await_rebuild`](Self::await_rebuild)).
     pub fn keep_rescues(&mut self, listed: &[ListedStellar], player: SystemId) {
+        self.awaiting_rebuild = false;
         for stellar in listed {
             if stellar.systems.contains(&player)
                 && self.owner(&stellar.systems).is_none()
@@ -704,6 +711,29 @@ impl OverlaidGalaxy {
         self.rescued.clear();
     }
 
+    /// Leaves the owner words unset until the next rebuild point's rescue
+    /// ([`keep_rescues`](Self::keep_rescues)): until then the
+    /// [`holder`](Self::holder) derives no rescue for the player's system,
+    /// so a stellar neither owned nor rescued is held by no one, as the
+    /// original leaves +0x14 at -1 between a refresh, or a landed `M` or
+    /// `N`, and the next `_HandleStellarSystemVisibility`.
+    pub fn await_rebuild(&mut self) {
+        self.awaiting_rebuild = true;
+    }
+
+    /// Ends a wait for the rebuild ([`await_rebuild`](Self::await_rebuild))
+    /// with no rescue kept.
+    pub fn stop_awaiting_rebuild(&mut self) {
+        self.awaiting_rebuild = false;
+    }
+
+    /// Whether a rebuild point is awaited with the owner words left unset
+    /// ([`await_rebuild`](Self::await_rebuild)).
+    #[must_use]
+    pub fn awaits_rebuild(&self) -> bool {
+        self.awaiting_rebuild
+    }
+
     /// The system that holds `stellar`, which `listers` list, with the
     /// player in `player`: its [`owner`](Self::owner), else the system
     /// kept as its rescuer ([`rescued`](Self::rescued)), else `player`
@@ -716,10 +746,28 @@ impl OverlaidGalaxy {
     /// lasts until the next galaxy refresh clears every owner
     /// (`_PropagateMissionBitEffects` @0x9968c); the kept rescue is that.
     /// The last case is the rescue the next rebuild point would write, so
-    /// in every gap between a write of the player's system and its rebuild
-    /// this gives what the original holds once that rebuild has run.
+    /// in a gap between a write of the player's system and its rebuild
+    /// this gives what the original holds once that rebuild has run. While
+    /// a rebuild is awaited ([`await_rebuild`](Self::await_rebuild)) it is
+    /// left out: the original's owner-first readers find +0x14 unset there
+    /// and fall back to `_FindSystemFromStellar` ([`Whereabouts::system`]).
     #[must_use]
     pub fn holder(
+        &self,
+        stellar: StellarId,
+        listers: &[SystemId],
+        player: SystemId,
+    ) -> Option<SystemId> {
+        if self.awaiting_rebuild {
+            return self.owner(listers).or_else(|| self.rescued(stellar));
+        }
+        self.rebuilt_holder(stellar, listers, player)
+    }
+
+    /// The [`holder`](Self::holder) once the next rebuild point has run:
+    /// the owner, else the kept rescue, else `player` when it lists the
+    /// stellar, whether or not a rebuild is awaited.
+    fn rebuilt_holder(
         &self,
         stellar: StellarId,
         listers: &[SystemId],
@@ -782,7 +830,10 @@ impl OverlaidGalaxy {
     }
 
     /// Whether `system`, the player's, shows `stellar`, which `listers`
-    /// list: it is the stellar's [`active_holder`](Self::active_holder).
+    /// list: it is the stellar's [`active_holder`](Self::active_holder) as
+    /// the next rebuild point leaves it, a rescue for `system` derived even
+    /// while that rebuild is awaited ([`await_rebuild`](Self::await_rebuild)),
+    /// as the stellars shown are what each rebuild derives.
     ///
     /// `_HandleStellarSystemVisibility`'s sprite pass shows each active
     /// stellar whose owner is the player's system (@0x32cef-0x32d4c,
@@ -790,7 +841,9 @@ impl OverlaidGalaxy {
     /// keeps rescued, is never shown, though `system` lists it.
     #[must_use]
     pub fn shows(&self, stellar: StellarId, listers: &[SystemId], system: SystemId) -> bool {
-        self.active_holder(stellar, listers, system) == Some(system)
+        self.rebuilt_holder(stellar, listers, system)
+            .filter(|&holder| self.visible(holder))
+            == Some(system)
     }
 
     /// The stellars of `listed` that `system`, the player's, shows
@@ -1899,6 +1952,72 @@ mod tests {
         assert!(galaxy.set_overlay(overlay));
         assert_eq!(rescued(&galaxy, 128), Some(5), "only a refresh forgets");
         assert_eq!(active(&galaxy), None, "5 is hidden");
+    }
+
+    #[test]
+    fn holder_leaves_the_player_out_while_a_rebuild_is_awaited() {
+        // 2 shadows 3 and 5, so neither claims; 1 and 4 claim their own.
+        let mut galaxy = hiding(&[]);
+        galaxy.keep_rescues(&[listing(129, &[3, 5])], SystemId(5));
+        galaxy.await_rebuild();
+        assert!(galaxy.awaits_rebuild());
+        let holder = |galaxy: &OverlaidGalaxy, id, listers: &[i16], player| {
+            galaxy
+                .holder(StellarId(id), &ids(listers), SystemId(player))
+                .map(|id| id.0)
+        };
+        assert_eq!(
+            holder(&galaxy, 128, &[3, 5], 5),
+            None,
+            "unowned and not rescued: +0x14 stays -1 until the rebuild"
+        );
+        assert_eq!(
+            galaxy
+                .whereabouts(StellarId(128), &ids(&[3, 5]), SystemId(5))
+                .system(),
+            Some(SystemId(3)),
+            "the owner-first readers fall back to _FindSystemFromStellar's 3"
+        );
+        assert_eq!(
+            galaxy.active_holder(StellarId(128), &ids(&[3, 5]), SystemId(5)),
+            None
+        );
+        assert_eq!(holder(&galaxy, 130, &[1, 5], 5), Some(1), "an owner");
+        assert_eq!(holder(&galaxy, 129, &[3, 5], 3), Some(5), "a kept rescue");
+    }
+
+    #[test]
+    fn keeping_rescues_ends_the_wait() {
+        let mut galaxy = hiding(&[]);
+        galaxy.await_rebuild();
+        galaxy.keep_rescues(&[], SystemId(5));
+        assert!(!galaxy.awaits_rebuild());
+        assert_eq!(
+            galaxy.holder(StellarId(128), &ids(&[3, 5]), SystemId(5)),
+            Some(SystemId(5)),
+            "the rebuild's rescue derived again"
+        );
+        galaxy.await_rebuild();
+        galaxy.stop_awaiting_rebuild();
+        assert!(!galaxy.awaits_rebuild());
+    }
+
+    #[test]
+    fn shows_still_derives_the_players_rescue_while_a_rebuild_is_awaited() {
+        let mut galaxy = hiding(&[]);
+        galaxy.await_rebuild();
+        assert!(
+            galaxy.shows(StellarId(128), &ids(&[3, 5]), SystemId(5)),
+            "what the rebuild leaves shown"
+        );
+        assert_eq!(
+            galaxy.shown(&[listing(128, &[3, 5])], SystemId(5)),
+            BTreeSet::from([StellarId(128)])
+        );
+        assert!(
+            !galaxy.shows(StellarId(128), &ids(&[3, 5]), SystemId(4)),
+            "4 does not list it"
+        );
     }
 
     #[test]

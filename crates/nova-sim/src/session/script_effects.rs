@@ -541,6 +541,12 @@ impl Session {
             catalog,
             chance,
         );
+        // Landed, the owners wait for the take-off's rebuild (@0x674c7),
+        // as `_EvalSetExp`'s landed tail runs none (see the `owners_unset`
+        // module).
+        if landed {
+            self.chart.leave_owners_unset(&self.setup);
+        }
     }
 }
 

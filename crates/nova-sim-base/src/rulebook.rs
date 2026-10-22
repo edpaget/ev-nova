@@ -149,7 +149,7 @@
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see `nova_sim::story`) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`ArrivalSystem`](RuleKey::ArrivalSystem) | `arrival_system` | an arrival enters the system it is given as it is, a visible one shadowed at its place too, and only a system hidden after its refresh moves the player (@0x99918); a jump's system is decided before its refresh (@0x6bf3f): the last hop's stand-in on the multi-jump branch (@0x6bdc1-0x6bdd4), else the raw Con target of the slot selected (+0x6c, @0x6bd3a, @0x6be0b); a wormhole's exit its owner as it is (@0x642a7) (see `nova_sim::session`'s `arrival_system` module) | every arrival resolved by place after the refresh, a jump into the stand-in J took¶¶¶¶¶¶¶ |
 //! | [`ExchangeEvents`](RuleKey::ExchangeEvents) | `exchange_events` | the exchange shows only the first `öops` event by ID at the docked stellar with days left above 0, as "<name> has raised/lowered the price of <cargo>."; a first event of commodity -1 shows nothing (`_TradeDialogUpdate` @0x4dcc3-0x4dfba; see `nova_sim::exchange_events`) | the name of every local event that moves a commodity |
-//! | [`RescueUntilRefresh`](RuleKey::RescueUntilRefresh) | `rescue_until_refresh` | a stellar no visible system claims is kept by the system that rescued it, the player's when it lists it, until the next refresh clears every owner (`_HandleStellarSystemVisibility` @0x32c58-0x32ca1, `_PropagateMissionBitEffects` @0x9968a): a gate exit, a wormhole exit or an `M`/`N` leaves it with the old system (see `nova_sim::story`) | the rescue is derived for the player's current system only, so a rescued stellar follows the player |
+//! | [`RescueUntilRefresh`](RuleKey::RescueUntilRefresh) | `rescue_until_refresh` | a stellar no visible system claims is kept by the system that rescued it, the player's when it lists it, until the next refresh clears every owner (`_HandleStellarSystemVisibility` @0x32c58-0x32ca1, `_PropagateMissionBitEffects` @0x9968a): a gate exit, a wormhole exit or an `M`/`N` leaves it with the old system; a stellar neither owned nor rescued has no owner between a refresh or a landed `M`/`N` and the next rebuild point, so the owner-first readers fall back to `_FindSystemFromStellar` (`_RandomizeOneMission` @0xa15a8, `_MungeBriefing` @0x9c8de, `_MapDialogUpdate` @0x10c03; see `nova_sim::story`) | the rescue is derived for the player's current system only, so a rescued stellar follows the player |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see `nova_sim::cron`) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see `nova_sim::cron`) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronZeroDurationNoHoldoff`](RuleKey::CronZeroDurationNoHoldoff) | `cron_zero_duration_no_holdoff` | a `Duration` 0 crön with no holdoffs runs `OnStart` and `OnEnd`, sets its days to -1 and stays active (`_CronEventHandler` @0x388cb-0x388ff), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and it goes inactive (see `nova_sim::cron`) | `OnEnd` once, inactive at once |
@@ -2198,10 +2198,15 @@ rule_keys! {
     /// overwrites a set owner, so the rescue lasts until the next refresh
     /// clears every owner (`_PropagateMissionBitEffects` @0x9968a): a
     /// jump, a landing or a load. A gate exit, a wormhole exit or an `M`
-    /// or `N` with no refresh between leaves it with the old system. By
-    /// the other reading (crons-news-ranks phase 13's), the rescue is
-    /// derived for the player's current system only, so a rescued
-    /// stellar follows the player.
+    /// or `N` with no refresh between leaves it with the old system. A
+    /// stellar neither owned nor rescued has no owner between a refresh,
+    /// or a landed `M` or `N`, and the next rebuild point, so the
+    /// owner-first readers fall back to `_FindSystemFromStellar`
+    /// (`_RandomizeOneMission` @0xa15a8, `_MungeBriefing` @0x9c8de,
+    /// `_MapDialogUpdate` @0x10c03; see the session's `owners_unset`
+    /// module). By the other reading (crons-news-ranks phase 13's), the
+    /// rescue is derived for the player's current system only, so a
+    /// rescued stellar follows the player, and no owner is left unset.
     RescueUntilRefresh => "rescue_until_refresh",
     /// What a `Duration` 0 crön does on the day its `PreHoldoff` ends: by
     /// the engine, `OnStart` and `OnEnd` run but nothing more is written
