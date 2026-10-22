@@ -53,65 +53,64 @@ use crate::escort::{self, FormationSlot};
 /// parent.
 #[must_use]
 pub fn slots(npcs: &[Npc]) -> Vec<(NpcId, FormationSlot)> {
-    let parents: Vec<Option<usize>> = npcs.iter().map(|npc| parent_of(npc, npcs)).collect();
-    let mut slots = Vec::new();
-    for (at, parent) in npcs.iter().enumerate() {
-        let mut followers: Vec<&Npc> = npcs
-            .iter()
-            .zip(&parents)
-            .enumerate()
-            .filter(|&(of, (_, &parent))| of != at && parent == Some(at))
-            .map(|(_, (npc, _))| npc)
-            .collect();
-        if followers.is_empty() {
-            continue;
-        }
-        followers.sort_by_key(|npc| npc.berth);
-        let ships = u8::try_from(followers.len() + 1).unwrap_or(u8::MAX);
-        let widths: Vec<Option<f32>> = followers.iter().map(|npc| npc.hull.sprite_size).collect();
-        let spacing = escort::spacing(parent.hull.sprite_size, &widths);
-        slots.extend(followers.iter().enumerate().map(|(place, npc)| {
+    let parents = parents(npcs);
+    (0..npcs.len())
+        .flat_map(|at| formation(npcs, &parents, at))
+        .collect()
+}
+
+/// Where among `npcs` each one's formation parent is: its leader by its
+/// number, its swarm leader by its berth; none for the player, or a
+/// parent not here.
+fn parents(npcs: &[Npc]) -> Vec<Option<usize>> {
+    npcs.iter()
+        .map(|npc| match swarm::formation_parent(npc)? {
+            FormationParent::Player => None,
+            FormationParent::Leader(id) => npcs.iter().position(|other| other.id == id),
+            FormationParent::Berth(berth) => npcs.iter().position(|other| other.berth == berth),
+        })
+        .collect()
+}
+
+/// The slots of the formation of `npcs[at]`, whose followers are the
+/// others whose parent, among `parents`, it is (see the module docs).
+fn formation(npcs: &[Npc], parents: &[Option<usize>], at: usize) -> Vec<(NpcId, FormationSlot)> {
+    let mut followers: Vec<&Npc> = npcs
+        .iter()
+        .zip(parents)
+        .enumerate()
+        .filter(|&(of, (_, &parent))| of != at && parent == Some(at))
+        .map(|(_, (npc, _))| npc)
+        .collect();
+    followers.sort_by_key(|npc| npc.berth);
+    let ships = u8::try_from(followers.len() + 1).unwrap_or(u8::MAX);
+    let widths: Vec<Option<f32>> = followers.iter().map(|npc| npc.hull.sprite_size).collect();
+    let spacing = escort::spacing(npcs[at].hull.sprite_size, &widths);
+    followers
+        .iter()
+        .enumerate()
+        .map(|(place, npc)| {
             let slot = FormationSlot {
                 slot: u8::try_from(place + 2).unwrap_or(u8::MAX),
                 ships,
                 spacing,
             };
             (npc.id, slot)
-        }));
-    }
-    slots
+        })
+        .collect()
 }
 
-/// Where among `npcs` the formation parent of `npc` is: its leader by its
-/// number, its swarm leader by its berth; none for the player, or a
-/// parent not here.
-fn parent_of(npc: &Npc, npcs: &[Npc]) -> Option<usize> {
-    match swarm::formation_parent(npc)? {
-        FormationParent::Player => None,
-        FormationParent::Leader(id) => npcs.iter().position(|other| other.id == id),
-        FormationParent::Berth(berth) => npcs.iter().position(|other| other.berth == berth),
-    }
-}
-
-/// Works `lead`'s formation out among `npcs` ([`slots`]) and puts each of
-/// its followers on its slot as a fleet arrives (see the module docs):
-/// each writes its [`Npc::fleet_slot`], and each not still out of a gate
-/// ([`Mode::Emerging`]) is moved onto its slot's place from `lead`'s
-/// state, its heading and velocity left as they are.
+/// Works `lead`'s formation out among `npcs` (as [`slots`] does) and
+/// puts each of its followers on its slot as a fleet arrives (see the
+/// module docs): each writes its [`Npc::fleet_slot`], and each not still
+/// out of a gate ([`Mode::Emerging`]) is moved onto its slot's place from
+/// `lead`'s state, its heading and velocity left as they are.
 pub fn snap(npcs: &mut [Npc], lead: NpcId) {
-    let Some(state) = npcs.iter().find(|npc| npc.id == lead).map(|npc| npc.state) else {
+    let Some(at) = npcs.iter().position(|npc| npc.id == lead) else {
         return;
     };
-    let formation: Vec<(NpcId, FormationSlot)> = slots(npcs)
-        .into_iter()
-        .filter(|&(id, _)| {
-            npcs.iter()
-                .find(|npc| npc.id == id)
-                .and_then(|npc| parent_of(npc, npcs))
-                .is_some_and(|at| npcs[at].id == lead)
-        })
-        .collect();
-    for (id, slot) in formation {
+    let state = npcs[at].state;
+    for (id, slot) in formation(npcs, &parents(npcs), at) {
         if let Some(npc) = npcs.iter_mut().find(|npc| npc.id == id) {
             npc.fleet_slot = Some(slot);
             if !matches!(npc.mode, Mode::Emerging { .. }) {
@@ -286,6 +285,240 @@ mod tests {
                 })
             };
             assert_eq!(slots, [None, at(2), at(3), None]);
+        }
+    }
+
+    mod arriving {
+        use super::*;
+        use crate::catalog::{EscortRecord, FleetId, FleetRecord, ShipId};
+        use crate::control::Test;
+        use crate::flight::{FlightRules, NpcFormation, ShipState};
+        use crate::geometry::Vec2;
+        use crate::traffic::spawn::FleetCall;
+        use crate::traffic::table::SpawnTable;
+        use crate::traffic::tests::{gated, table};
+        use crate::traffic::{Leave, World};
+        use nova_sim_base::fixture::Draws;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn a_snap_puts_each_follower_not_out_of_a_gate_on_its_slot_by_the_leads_state() {
+            let mut lead = ship(0, 5, None, None);
+            lead.state = ShipState {
+                position: Vec2::new(100.0, -200.0),
+                velocity: Vec2::new(3.0, 4.0),
+                heading: 37.0,
+            };
+            let lead_state = lead.state;
+            let follower = |id, berth, off: Vec2, mode| {
+                let mut ship = ship(id, berth, Some(0), None);
+                ship.state = ShipState {
+                    position: lead_state.position + off,
+                    ..lead_state
+                };
+                ship.mode = mode;
+                ship
+            };
+            let jumping = Mode::JumpingIn { tick: 0 };
+            let mut other = ship(4, 2, Some(9), None);
+            other.state.position = Vec2::new(7.0, 7.0);
+            let mut npcs = vec![
+                lead,
+                follower(1, 9, Vec2::new(-150.0, 149.0), jumping),
+                follower(2, 7, Vec2::new(120.0, -30.0), jumping),
+                follower(3, 8, Vec2::ZERO, Mode::Emerging { ticks_left: 68 }),
+                ship(9, 1, None, None),
+                other,
+            ];
+            snap(&mut npcs, NpcId(0));
+            // 64 wide with no sprite: spaced 38, four ships, by berth.
+            let slot = |slot| FormationSlot {
+                slot,
+                ships: 4,
+                spacing: 38.0,
+            };
+            for (at, number) in [(1, 4), (2, 2), (3, 3)] {
+                assert_eq!(npcs[at].fleet_slot, Some(slot(number)), "NPC {at}");
+            }
+            for at in [1, 2] {
+                let on = slot(npcs[at].fleet_slot.map_or(0, |slot| slot.slot));
+                assert_eq!(
+                    npcs[at].state,
+                    ShipState {
+                        position: on.position(&lead_state),
+                        ..lead_state
+                    },
+                    "NPC {at}: position only"
+                );
+            }
+            assert_eq!(npcs[3].state.position, lead_state.position, "out of a gate");
+            assert_eq!(npcs[5].state.position, Vec2::new(7.0, 7.0), "not its");
+            assert_eq!(npcs[5].fleet_slot, None);
+        }
+
+        /// [`table`] of `avg_ships`, with fleet 141: ship 200 leading
+        /// `escorts` more, linked here when `linked`, and named among the
+        /// arrivals when `named`.
+        fn fleet_table(avg_ships: u32, escorts: i16, linked: bool, named: bool) -> SpawnTable {
+            let mut fleets = table(avg_ships);
+            if linked {
+                fleets.link_fleets.insert(FleetId(141));
+            }
+            if named {
+                fleets.dude_fleets = vec![(FleetId(141), 100)];
+            }
+            fleets.fleets.insert(
+                FleetId(141),
+                FleetRecord {
+                    id: FleetId(141),
+                    lead: Some(ShipId(200)),
+                    escorts: vec![EscortRecord {
+                        ship: ShipId(200),
+                        min: escorts,
+                        max: escorts,
+                    }],
+                    govt: None,
+                    link_syst: -1,
+                    appear_on: Test::default(),
+                    quote: None,
+                    flags: 0,
+                },
+            );
+            fleets
+        }
+
+        /// A world among `sites` by `reading` of the NPC formation.
+        fn by(reading: NpcFormation, sites: &[crate::catalog::LandingSite]) -> World<'_> {
+            World {
+                flight: FlightRules {
+                    npc_formation: reading,
+                    ..FlightRules::default()
+                },
+                ..World::new(sites)
+            }
+        }
+
+        /// Each escort of the fleet `traffic` holds (its first NPC the
+        /// lead): its fleet slot and its place off its lead.
+        fn arrived(traffic: &Traffic) -> Vec<(Option<FormationSlot>, Vec2)> {
+            let lead = &traffic.npcs()[0];
+            traffic.npcs()[1..]
+                .iter()
+                .map(|escort| {
+                    assert_eq!(escort.leader, Some(lead.id));
+                    assert_eq!(
+                        (escort.state.heading, escort.state.velocity),
+                        (lead.state.heading, lead.state.velocity)
+                    );
+                    (
+                        escort.fleet_slot,
+                        escort.state.position - lead.state.position,
+                    )
+                })
+                .collect()
+        }
+
+        /// Slot `slot` of the three of a fleet of ship 200 (no sprite:
+        /// spaced 38), and its place off its lead at `lead`.
+        fn on_slot(slot: u8, lead: &ShipState) -> (Option<FormationSlot>, Vec2) {
+            let slot = FormationSlot {
+                slot,
+                ships: 3,
+                spacing: 38.0,
+            };
+            (Some(slot), slot.position(lead) - lead.position)
+        }
+
+        /// Where the ±150 draws left each escort (the draws run out: 299,
+        /// so 149 each way).
+        const SCATTERED: (Option<FormationSlot>, Vec2) = (None, Vec2::new(149.0, 149.0));
+
+        /// `traffic` arrived as `reading` says: on its slots, or scattered.
+        fn assert_arrived(traffic: &Traffic, reading: NpcFormation) {
+            let lead = traffic.npcs()[0].state;
+            assert_eq!(traffic.npcs().len(), 3);
+            let expected = match reading {
+                NpcFormation::Original => vec![on_slot(2, &lead), on_slot(3, &lead)],
+                NpcFormation::Earlier => vec![SCATTERED; 2],
+            };
+            assert_eq!(arrived(traffic), expected, "{reading:?}");
+        }
+
+        const READINGS: [NpcFormation; 2] = [NpcFormation::Original, NpcFormation::Earlier];
+
+        #[test]
+        fn a_fleet_set_up_jumping_in_arrives_on_its_slots() {
+            for reading in READINGS {
+                let mut traffic = Traffic::new();
+                // Not a person, a fleet, slot 13.
+                traffic.enter_in(
+                    fleet_table(1, 2, true, false),
+                    by(reading, &[]),
+                    &mut Draws::of(&[6, 0, 13]),
+                );
+                assert!(matches!(traffic.npcs()[0].mode, Mode::JumpingIn { .. }));
+                assert_arrived(&traffic, reading);
+            }
+        }
+
+        #[test]
+        fn a_fleet_arriving_by_the_arrivals_pass_arrives_on_its_slots() {
+            for reading in READINGS {
+                let mut traffic = Traffic::new();
+                traffic.retarget(
+                    fleet_table(1, 2, false, true),
+                    &BTreeSet::new(),
+                    Leave::Dropped,
+                );
+                // A fleet's arrival, the 100 % fleet named, fleet 141.
+                traffic.enter_more_ships(by(reading, &[]), &mut Draws::of(&[1, 0, 0]));
+                assert_arrived(&traffic, reading);
+            }
+        }
+
+        #[test]
+        fn a_strength_or_reinforcement_fleet_arrives_on_its_slots() {
+            for reading in READINGS {
+                let mut traffic = Traffic::new();
+                traffic.retarget(
+                    fleet_table(0, 2, false, false),
+                    &BTreeSet::new(),
+                    Leave::Dropped,
+                );
+                let world = by(reading, &[]);
+                traffic.bring_fleet(
+                    FleetId(141),
+                    FleetCall::ANNOUNCED_INTERCEPTOR,
+                    &world,
+                    world.persons.gate(),
+                    &mut Draws::of(&[]),
+                );
+                assert_arrived(&traffic, reading);
+            }
+        }
+
+        #[test]
+        fn a_fleet_out_of_a_gate_takes_its_slots_at_the_gates_centre() {
+            let sites = gated();
+            for reading in READINGS {
+                let mut traffic = Traffic::new();
+                // Not a person, a fleet, slot 13, the gate, the lead's
+                // aggression, its escort's offsets and extra wait.
+                traffic.enter_in(
+                    fleet_table(1, 1, true, false),
+                    by(reading, &sites),
+                    &mut Draws::of(&[6, 0, 13, 1, 0, 0, 0, 3]),
+                );
+                let (lead, escort) = (&traffic.npcs()[0], &traffic.npcs()[1]);
+                assert!(matches!(escort.mode, Mode::Emerging { .. }));
+                assert_eq!(escort.state, lead.state, "at the gate's centre");
+                let slot = (reading == NpcFormation::Original).then_some(FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 38.0,
+                });
+                assert_eq!(escort.fleet_slot, slot, "{reading:?}");
+            }
         }
     }
 }

@@ -241,7 +241,7 @@ use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::{Condition, DisableRule, NovaDisable};
 use crate::combat::{ShipRef, Strike};
 use crate::control::Gate;
-use crate::flight::ShipState;
+use crate::flight::{NpcFormation, ShipState};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
@@ -977,6 +977,7 @@ impl Traffic {
             Some(world.spawn_reserve),
             None,
             world.govts,
+            world.flight.npc_formation,
             &mut *chance,
         );
         let mut draw = PersonDraw::new(world.persons);
@@ -994,6 +995,7 @@ impl Traffic {
             Some(world.spawn_reserve),
             Some(AfterburnerRoll::of(&world)),
             world.govts,
+            world.flight.npc_formation,
             &mut *chance,
         );
     }
@@ -1014,13 +1016,14 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) -> usize {
         // Neither `_SpecificDudeSpawn` nor `_MissionDudeSpawn` rolls an
-        // afterburner.
+        // afterburner, and neither places a fleet, so no formation snaps.
         self.add(
             ships,
             &BTreeSet::new(),
             Some(reserve),
             None,
             govts,
+            NpcFormation::Original,
             &mut *chance,
         )
     }
@@ -1483,6 +1486,7 @@ impl Traffic {
             Some(world.spawn_reserve),
             Some(AfterburnerRoll::of(&world)),
             world.govts,
+            world.flight.npc_formation,
             &mut *chance,
         );
         self.escort_strength(&world, draw.world.gate(), chance);
@@ -1736,6 +1740,7 @@ impl Traffic {
             Some(world.spawn_reserve),
             Some(AfterburnerRoll::of(world)),
             world.govts,
+            world.flight.npc_formation,
             &mut *chance,
         );
     }
@@ -2448,7 +2453,15 @@ impl Traffic {
     /// beeps for none. The ships were rolled whole beforehand
     /// ([`spawn::fleet`]), the cap applied only here as they are placed, in
     /// the same call and before any frame.
-    #[allow(clippy::too_many_lines)] // one line for each of the NPC's fields
+    ///
+    /// By `formation`'s engine reading, once every ship is placed each
+    /// lead placed with escorts has its formation worked out and its
+    /// escorts put on their slots ([`fleet_formation::snap`]), as
+    /// `_HyperSpawnFleet` calls `_AICalcFormationPositions(lead, 1)` after
+    /// its escorts (@0x425e4-0x42602).
+    // One input each: the ships, the grudges, the cap, the afterburner
+    // and skill rolls, the governments and the formation reading.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn add(
         &mut self,
         ships: Vec<NewShip>,
@@ -2456,9 +2469,11 @@ impl Traffic {
         reserve: Option<u32>,
         afterburners: Option<AfterburnerRoll>,
         govts: &Governments,
+        formation: NpcFormation,
         chance: &mut (impl Chance + ?Sized),
     ) -> usize {
         let mut placed: Vec<Option<NpcId>> = Vec::with_capacity(ships.len());
+        let mut leads: Vec<NpcId> = Vec::new();
         for ship in ships {
             let person = ship.person.and_then(|id| self.table.persons.get(&id));
             let kind = person
@@ -2490,6 +2505,9 @@ impl Traffic {
             let skill = random_skill_level(kind.skill_var, &mut *chance);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
+            if let Some(lead) = leader.filter(|lead| !leads.contains(lead)) {
+                leads.push(lead);
+            }
             let (mut display, fold) = ship_display::NpcDisplay::spawned(
                 &kind.hull.frames,
                 ship_display::Spawn::of(&ship),
@@ -2583,6 +2601,11 @@ impl Traffic {
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);
             self.npcs.push(npc);
+        }
+        if formation == NpcFormation::Original {
+            for lead in leads {
+                fleet_formation::snap(&mut self.npcs, lead);
+            }
         }
         placed.iter().flatten().count()
     }
@@ -3245,7 +3268,7 @@ mod tests {
 
     /// A planet at the centre and a hypergate at (300, -400) heading ships
     /// out on 90°.
-    fn gated() -> [LandingSite; 2] {
+    pub(super) fn gated() -> [LandingSite; 2] {
         [
             planet(128, 0.0, 0.0),
             LandingSite {
@@ -7114,6 +7137,7 @@ mod tests {
             Some(SPAWN_RESERVE),
             None,
             &crate::govt::Governments::empty(),
+            NpcFormation::Original,
             &mut crate::chance::NeverFires,
         );
         assert_eq!(traffic.npcs().len(), 55);
@@ -7129,6 +7153,7 @@ mod tests {
             Some(SPAWN_RESERVE),
             None,
             &crate::govt::Governments::empty(),
+            NpcFormation::Original,
             &mut crate::chance::NeverFires,
         );
         let npcs = &traffic.npcs()[53..];
@@ -7155,6 +7180,7 @@ mod tests {
             None,
             None,
             &crate::govt::Governments::empty(),
+            NpcFormation::Original,
             &mut crate::chance::NeverFires,
         );
         let npcs = traffic.npcs();
@@ -7173,6 +7199,7 @@ mod tests {
             None,
             None,
             &crate::govt::Governments::empty(),
+            NpcFormation::Original,
             &mut crate::chance::NeverFires,
         );
         assert_eq!(traffic.npcs(), [], "no lead, no escort");

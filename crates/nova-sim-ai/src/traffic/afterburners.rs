@@ -162,6 +162,7 @@ mod tests {
             None,
             Some(AfterburnerRoll::of(&world)),
             world.govts,
+            crate::flight::NpcFormation::Original,
             &mut chance,
         );
         traffic.npcs().iter().map(|npc| npc.afterburner).collect()
@@ -252,6 +253,7 @@ mod tests {
                 None,
                 Some(AfterburnerRoll::of(&world)),
                 world.govts,
+                crate::flight::NpcFormation::Original,
                 &mut chance,
             );
             assert!(chance.asked.is_empty(), "no roll");

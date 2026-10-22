@@ -103,7 +103,10 @@
 //!   rdm:task/ai-drags-scale-the-npc-speed.
 //! - `_AIMaintainFormation`'s snap (snap 1) is passed only by
 //!   `_AICalcFormationPositions(parent, 1)` from `_SetupShipsInSystem`
-//!   and `_HyperSpawnFleet`, which the session's arrival places cover.
+//!   and `_HyperSpawnFleet`, which the session's arrival places and the
+//!   traffic's arrival snap
+//!   ([`fleet_formation::snap`](crate::traffic::fleet_formation::snap))
+//!   cover.
 //!   Its formation-parent gate (+0xc92e above 63) stands as the slot:
 //!   a ship with none is never nudged.
 //!
