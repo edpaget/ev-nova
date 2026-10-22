@@ -505,6 +505,7 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+mod player_cloak;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -2354,7 +2355,7 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
             combat.regenerate_player(fighters, arena);
         });
-        self.player_display_step(pass, rules, start.player_dying(), chance);
+        self.player_display_step(pass, rules, start.player_head(), chance);
         // The traffic tick's work on the line, after `_HandlePlayer`'s
         // lines (the sabotage's, the eject's), as the AI loop's calls
         // follow them (see the `comm_calls` module).
@@ -2531,6 +2532,8 @@ impl Session {
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
         let reserves = self.setup.rules.source_for(RuleKey::CloakReserves);
         self.space.cloak_hits(&self.statics, reserves, &strikes);
+        self.ship
+            .cloak_hits(&self.pilot, &self.statics, &strikes, &mut self.out);
         self.space.strikes.extend(strikes);
     }
 
@@ -3628,7 +3631,10 @@ impl Session {
     ) {
         // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
         // @0x64743: before the old ships go, so before the escorts' cloaks
-        // are carried.
+        // are carried. The player's slot always passes the display's
+        // system test (@0x2b7d8-0x2b7e0), so its fade steps first,
+        // whatever the exit.
+        self.ship.step_cloak_fade(&self.pilot, &self.statics);
         self.space
             .step_fades_at_gate_entry(system, self.pilot.system);
         let ship = match self.setup.gate_arrival {

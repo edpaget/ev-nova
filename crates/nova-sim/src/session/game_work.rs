@@ -132,31 +132,44 @@ use crate::flight::Controls;
 use crate::traffic::npc::NpcId;
 
 /// What a pass's fight reads of the session as it began: every NPC, and
-/// whether the player was dying.
+/// the player as `_HandlePlayer` read it at its top.
 pub(super) struct PassStart {
     /// Every NPC.
     npcs: Vec<NpcBefore>,
-    /// Whether the player was dying or destroyed, as `_HandlePlayer`
-    /// computes `_IsDying` at its top (-0x2ca, @0x68aba-0x68ac6), which
-    /// the self-destruct reads (see the `self_destruct` module).
-    player_dying: bool,
+    /// The player as the pass began.
+    player: PlayerHead,
+}
+
+/// What `_HandlePlayer` computes of the player at its top
+/// (@0x68aba-0x68ac6), before the pass's display settles a new
+/// condition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct PlayerHead {
+    /// Whether the player was dying or destroyed, `_IsDying` (-0x2ca),
+    /// which the self-destruct reads (see the `self_destruct` module).
+    pub(super) dying: bool,
+    /// Whether the player was disabled or breaking up, `_IsDisabled`
+    /// (-0x2cb), which the cloak key and upkeep read (see the
+    /// `player_cloak` module).
+    pub(super) disabled: bool,
 }
 
 impl PassStart {
     /// `session` as its pass's fight begins.
     pub(super) fn of(session: &Session) -> Self {
+        let condition = session.ship.condition;
         Self {
             npcs: session.space.npcs_before(),
-            player_dying: matches!(
-                session.ship.condition,
-                Condition::Dying { .. } | Condition::Destroyed
-            ),
+            player: PlayerHead {
+                dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
+                disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
+            },
         }
     }
 
-    /// Whether the player was dying or destroyed as the pass began.
-    pub(super) fn player_dying(&self) -> bool {
-        self.player_dying
+    /// The player as the pass began.
+    pub(super) fn player_head(&self) -> PlayerHead {
+        self.player
     }
 
     /// Every NPC as the pass's fight began.
@@ -256,7 +269,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         // The end of `_HandlePlayer` and its display (@0x43e29).
-        self.player_display_step(pass, rules, start.player_dying(), chance);
+        self.player_display_step(pass, rules, start.player_head(), chance);
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(pass, rules, chance);
         self.answer_strikes(behaviour);
@@ -419,6 +432,7 @@ impl Session {
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
         let knockback = self.afterburner_knockback();
+        let has_cloak = self.ship.cloak_gear(&self.pilot, &self.statics).device;
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -445,13 +459,17 @@ impl Session {
             reserves: &mut pilot.reserves,
             condition: &mut self.ship.condition,
             held_disabled: false,
-            cloaked: false,
+            // A cloaked player fires only its weapons that fire cloaked
+            // (`_FirePlayerWeapon` @0x627f5-0x62814, point defence
+            // @0x3931c-0x3932f), and NPCs' point defence and homing shots
+            // see it as they see any cloaked ship (@0x3955f, @0x322d8).
+            cloaked: self.ship.cloak.cloak.is_cloaked(),
             attacking: None,
             threatens_player: false,
             plundering: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
-            has_cloak: false,
+            has_cloak,
             jamming: player_terms.jamming,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,

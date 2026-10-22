@@ -440,6 +440,30 @@ mod tests {
         assert_eq!(hired_cloak(&session, before), stepped(3));
     }
 
+    /// The player's own slot always passes the display's system test
+    /// (@0x2b7d8-0x2b7e0: ship 0's +0x74 against itself), so the gate
+    /// entry's `_PrepareAllSprites` (@0x63e91, @0x64743) steps its fade
+    /// once whatever the exit, and the exit's two calls twice after.
+    #[test]
+    fn a_gate_entry_steps_the_players_fade_whatever_the_exit() {
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let catalog = catalog();
+            let mut session = flying(&catalog, Rulebook::default());
+            session.ship.cloak.cloak = FADING_IN;
+            exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
+            assert_eq!(session.player_cloak(), stepped(3), "{kind:?}");
+        }
+        let catalog = gated_into_130();
+        let mut session = flying(&catalog, Rulebook::default());
+        session.ship.cloak.cloak = FADING_IN;
+        exit_into_130(&mut session, &catalog);
+        assert_eq!(
+            session.player_cloak(),
+            stepped(3),
+            "into the system gone in"
+        );
+    }
+
     /// One advance pass of the game's work, no keys held.
     fn pass(session: &mut Session, catalog: &FakePilotCatalog) {
         session.game_work(

@@ -51,15 +51,18 @@
 //! record is never carried into another session: every entry into flight
 //! runs `_PrepareAllSprites` again.
 //!
-//! **The fade.** Each [`Session::prepare_all_sprites`] steps every NPC's
-//! cloak fade once (`Traffic::step_fades`), so before the first frame a
-//! take-off and a gate exit step it twice (`Session::lift_off`, and
-//! `Session::come_out`) and a jump's arrival once ([`Session::arrive`]).
-//! A gate entry whose exit is in the system gone in steps the old ships'
-//! fades once more first ([`Space::step_fades_at_gate_entry`]), which an
-//! escort's respawn then carries; any other gate entry steps none. Every
-//! NPC in the traffic is of the player's system and active, so each
-//! passes the system test there.
+//! **The fade.** Each [`Session::prepare_all_sprites`] steps the player's
+//! cloak fade (slot 0) and then every NPC's once (`Traffic::step_fades`),
+//! so before the first frame a take-off and a gate exit step it twice
+//! (`Session::lift_off`, and `Session::come_out`) and a jump's arrival
+//! once ([`Session::arrive`]). A gate entry steps the player's fade once
+//! more first, whatever the exit, as the player's slot always passes the
+//! display's system test (@0x2b7d8-0x2b7e0); and when its exit is in the
+//! system gone in, the old ships' fades too
+//! ([`Space::step_fades_at_gate_entry`]), which an escort's respawn then
+//! carries; any other gate entry steps no NPC's. Every NPC in the traffic
+//! is of the player's system and active, so each passes the system test
+//! there.
 //!
 //! **The hover and click box** (rdm weapons-fidelity phase 47).
 //! `_HandleMouse`'s loop (@0x380e3-0x381ec) and the click block
@@ -86,8 +89,6 @@
 //! run (`_InitSprites`' clone rect @0x1f135, here no box), and
 //! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c):
 //! rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47.
-//! The player's own fade step (slot 0), until the player has a cloak:
-//! rdm:phase/cloaking-fidelity/phase-8-cloaking-device.
 
 use super::player_led::slot_of;
 use super::{Session, Setup, Space};
@@ -169,13 +170,12 @@ impl Session {
     /// leads it, else the ships' one, and is displayed from now; a hidden
     /// ship's slot keeps its place and displays nothing; a slot with no
     /// ship displays nothing. Each shown slot clones its type's frames
-    /// (`Session::lay_out_ships`). Every NPC's cloak fade steps once
+    /// (`Session::lay_out_ships`). The player's cloak fade steps first, as
+    /// slot 0's display steps it, then every NPC's once
     /// (`Traffic::step_fades`), as each slot's display steps it
     /// (@0x2d088-0x2d17e): the step reads only its own ship, so one pass
-    /// over the traffic is the slot loop's. The player's own fade step
-    /// (slot 0) waits for the player's cloak
-    /// (rdm:phase/cloaking-fidelity/phase-8-cloaking-device). See the
-    /// module docs for where it runs.
+    /// over the traffic is the slot loop's. See the module docs for where
+    /// it runs.
     pub fn prepare_all_sprites(&mut self) {
         let mut slots = vec![(
             ShipRef::Player,
@@ -210,6 +210,7 @@ impl Session {
                     .put(slot, ShipLayer::of(disabled, led));
             }
         }
+        self.ship.step_cloak_fade(&self.pilot, &self.statics);
         self.space.traffic.step_fades();
         self.lay_out_ships();
     }
@@ -224,8 +225,11 @@ impl Space {
     /// old ships pass the display's system test (@0x2b7d8-0x2b7ed) only
     /// when the exit is in the system gone in. Then every NPC's fade
     /// steps once (`Traffic::step_fades`), before an escort's respawn
-    /// carries it; otherwise none does. The rest of that display (layers,
-    /// visibility) is redone by the exit's own two calls after the setup.
+    /// carries it; otherwise none does. The player's own slot passes that
+    /// test whatever the exit, so the session steps its fade on its own
+    /// first (`PlayerShip::step_cloak_fade`). The rest of that display
+    /// (layers, visibility) is redone by the exit's own two calls after
+    /// the setup.
     pub(super) fn step_fades_at_gate_entry(
         &mut self,
         exit: crate::catalog::SystemId,
@@ -572,13 +576,37 @@ mod tests {
     }
 
     #[test]
-    fn prepare_all_sprites_steps_every_npcs_fade_once() {
+    fn prepare_all_sprites_steps_the_players_fade_and_every_npcs_once() {
         // `_HandleShipDisplay`'s fade step (@0x2d088-0x2d164) and dying
         // direction (@0x2d169-0x2d17e) run for every active ship of the
-        // system (@0x3a776-0x3a78e), the frozen flag gating only the
-        // freeing (@0x2ded6-0x2dee7).
+        // system (@0x3a776-0x3a78e), the player's slot 0 first, the
+        // frozen flag gating only the freeing (@0x2ded6-0x2dee7).
         use crate::cloak::Cloak;
         use crate::combat::hull::Condition;
+        let (_, mut session) = flying(Rulebook::default());
+        session.ship.cloak.cloak = Cloak {
+            fade: 4.0,
+            direction: 1,
+        };
+        session.prepare_all_sprites();
+        let player = Cloak {
+            fade: 4.75,
+            direction: 1,
+        };
+        assert_eq!(session.player_cloak(), player, "the player's");
+        session.ship.condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        session.prepare_all_sprites();
+        assert_eq!(
+            session.player_cloak(),
+            Cloak {
+                fade: 5.5,
+                direction: crate::cloak::DYING_DIRECTION
+            },
+            "the player's, dying"
+        );
         let (_, mut session) = flying(Rulebook::default());
         let cloaks = [
             (
