@@ -127,7 +127,10 @@
 //! reads. Its key and upkeep are [`player_cloak`](crate::player_cloak)'s,
 //! held through `nova_sim::Session::hold_cloak`; at a full fade it is
 //! always drawn faint ([`shown`] with [`SEEN_AT_FULL_FADE`],
-//! @0x2d199-0x2d1a1), and it alone hears its cloak's sounds.
+//! @0x2d199-0x2d1a1), and it alone hears its cloak's sounds. NPCs see it
+//! by [`visible`] with the player the target (`nova_sim_ai::ai::sight`):
+//! a cloaked player is no target, scan or hail for an NPC that can't see
+//! it, and point defence and homing shots ask [`seen`].
 //!
 //! # Not modelled
 //!
@@ -136,10 +139,7 @@
 //! which no NPC pays (`_CloakFuelUsage` @0x3e25 is 0 for one,
 //! @0x3e31-0x3e39); `_DoShipCloak`'s `_statusRedraw[1]` (@0xdf35-0xdf4b),
 //! player-only, as the HUD is drawn every frame; area cloaks
-//! (rdm:phase/cloaking-fidelity/phase-10-area-cloaks); NPCs' own sight of
-//! the cloaked player for their targeting
-//! (rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player;
-//! point defence and homing shots already ask [`seen`]).
+//! (rdm:phase/cloaking-fidelity/phase-10-area-cloaks).
 //!
 //! Left out of `_HandleShipDisplay`'s drawing (@0x2d088-0x2d72e): the
 //! 8-bit depth, its hull at translucency 0x10 (@0x2d341-0x2d34c) and its
