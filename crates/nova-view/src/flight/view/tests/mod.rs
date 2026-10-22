@@ -17,7 +17,7 @@ use crate::draw::fill_command;
 use crate::draw::lights_tint;
 use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
 use crate::flight::catalog::{
-    Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
+    Blink, BoomLook, GovtId, LayerSheet, StarSheet, StatusBarLayout, TargetCard, WeaponLook,
 };
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS};
@@ -167,6 +167,8 @@ struct FakeCatalog {
     box_sheet: Result<EffectSheet, String>,
     /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
     cursor_sheet: Result<EffectSheet, String>,
+    /// The stars' sheet: `rlëD` 700 of 16 frames of 5 × 5, by default.
+    star_sheet: Result<StarSheet, String>,
     /// The asteroid types: none, by default.
     asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
@@ -355,6 +357,11 @@ fn catalog() -> FakeCatalog {
             frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
+        }),
+        star_sheet: Ok(StarSheet {
+            image_id: 700,
+            frames: NonZeroU16::new(16).expect("non-zero"),
+            size: (5, 5),
         }),
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
@@ -948,6 +955,10 @@ impl CombatLooks for FakeCatalog {
         (set < 2).then(|| crate::flight::catalog::SmokeSheet {
             first_icon: 1000 + 8 * i16::from(set),
         })
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        self.star_sheet.clone()
     }
 }
 

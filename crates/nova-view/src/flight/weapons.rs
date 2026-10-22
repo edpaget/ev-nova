@@ -780,6 +780,7 @@ mod tests {
             asteroids: BTreeMap::new(),
             cursor: None,
             pod: None,
+            stars: None,
         }
     }
 

@@ -86,8 +86,8 @@ pub mod weapon_glow;
 pub mod weapons;
 
 pub use catalog::{
-    BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBarLayout,
-    StatusBars, TargetCard, WeaponLook,
+    BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StarSheet,
+    StatusBarLayout, StatusBars, TargetCard, WeaponLook,
 };
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};

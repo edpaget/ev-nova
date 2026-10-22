@@ -23,8 +23,8 @@ use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
-    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StatusBarLayout, StatusBars,
-    TargetCard, WeaponId, WeaponLook,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarSheet, StatusBarLayout,
+    StatusBars, TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
@@ -148,6 +148,9 @@ pub const FIRST_BOX_SPIN: i16 = 500;
 /// The mouse cursor's `spïn`, which `_InitSprites` loads with
 /// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
 pub const CURSOR_SPIN: i16 = 650;
+/// The stars' `spïn`, which `_LoadSprites` makes the master star sprite
+/// from with `_GetSpriteInfo(0x2bc)` (@0x21037).
+pub const STAR_SPIN: i16 = 700;
 /// The first target picture, `PICT` 3000 for `shïp` 128
 /// (`_LoadSprites`).
 pub const FIRST_TARGET_PICTURE: i16 = 3000;
@@ -257,6 +260,17 @@ impl CombatLooks for GameData {
             image_id: sheet.image_id,
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
+        })
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        let spin = self.spin_sheet(STAR_SPIN).map_err(|err| err.to_string())?;
+        // The decoder refuses a sheet without frames.
+        let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
+        Ok(StarSheet {
+            image_id: spin.image_id,
+            frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
+            size: (spin.sheet.frame_width(), spin.sheet.frame_height()),
         })
     }
 
@@ -1087,6 +1101,23 @@ mod tests {
             named_store(&[]).cursor_sheet(),
             Err("no spïn 650".to_owned())
         );
+    }
+
+    #[test]
+    fn the_stars_sheet_is_spin_700_with_its_frames_width_and_height() {
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, spin(701)),
+            (RLED, 701, None, sheet(16)),
+        ]);
+        assert_eq!(
+            data.star_sheet(),
+            Ok(StarSheet {
+                image_id: 701,
+                frames: NonZeroU16::new(16).expect("non-zero"),
+                size: (3, 2),
+            })
+        );
+        assert_eq!(named_store(&[]).star_sheet(), Err("no spïn 700".to_owned()));
     }
 
     #[test]
