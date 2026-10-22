@@ -49,6 +49,8 @@ pub mod control;
 pub mod data;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+#[cfg(test)]
+mod pict_sheet_sites;
 pub mod sound;
 pub mod strings;
 pub mod voice;
