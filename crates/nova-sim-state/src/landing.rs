@@ -481,7 +481,9 @@ pub fn npc_box(turn_rate: f32) -> f32 {
 /// offset from the centre truncated to whole pixels on each axis, each at
 /// most [`npc_box`] of its turn, inclusive; an offset that is not a number
 /// reads as 0, inside. By the other reading, the port's earlier circle:
-/// within [`landing_radius`] of the centre.
+/// within [`landing_radius`] of the centre, whatever the turn. The one
+/// place either region is decided: the traffic's landing flight asks it by
+/// both readings, for the landing and for the unfold.
 #[must_use]
 pub fn npc_over(site: &LandingSite, position: Vec2, turn_rate: f32, source: RuleSource) -> bool {
     if source == RuleSource::Bible {

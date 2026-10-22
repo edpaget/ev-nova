@@ -12,15 +12,17 @@
 //!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)
 //!   ([`Readings::npc_landing`]), as `_HighLevelAIHandler` state 1 flies
 //!   it ([`land_flight`]): outside its box (40 pixels a side, wider below
-//!   a turn rate of 8, [`landing::npc_box`](crate::landing::npc_box)) it
+//!   a turn rate of 8, [`landing::npc_box`]) it
 //!   approaches by sub 2 ([`approach_flight`](crate::traffic::approach_flight));
 //!   inside, a folding ship unfolds, and moving 0.35 or more on an axis it
 //!   cuts its velocity and speed × 0.98 and brakes by sub 1; otherwise it
 //!   lands. By the other reading, the port's earlier landing: it heads for
 //!   the stellar at full speed, steering out any sideways drift, brakes
 //!   (Down and thrust) once its stopping distance reaches the distance
-//!   left, unfolds within the stellar's [`landing_radius`], and lands
-//!   within it at or below [`LANDING_SPEED`]. Neither is the player's
+//!   left, unfolds within the stellar's
+//!   [`landing_radius`](landing::landing_radius), and lands within it at
+//!   or below [`LANDING_SPEED`]; [`landing::npc_over`] decides the box or
+//!   the circle by the reading, for both. Neither is the player's
 //!   landing distance
 //!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)); the
 //!   quarter of the `Type` width at @0x8dbdf is state 20's gate entry,
@@ -252,7 +254,7 @@ use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing::TypeWidth;
-use crate::landing::{LANDING_SPEED, landing_radius};
+use crate::landing::{self, LANDING_SPEED};
 use crate::rulebook::RuleSource;
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::formation_flight;
@@ -314,8 +316,9 @@ pub struct Readings {
     /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
     pub held_burst: RuleSource,
     /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
-    /// the engine ([`land_flight`]), within [`landing_radius`] by the other
-    /// reading ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)).
+    /// the engine ([`land_flight`]), within
+    /// [`landing_radius`](landing::landing_radius) by the other reading
+    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)).
     pub npc_landing: RuleSource,
 }
 
@@ -644,11 +647,11 @@ fn land(
             npc, site, handling, flight, inertia, chance,
         ));
     }
-    if over(&npc.state, site) {
+    if over(&npc.state, site, handling, reading) {
         land_flight::stay(npc, stellar, chance);
         return Err(Outcome::Landed(stellar));
     }
-    Ok(land_approach(npc, site, handling, inertia).into())
+    Ok(land_approach(npc, site, handling, inertia, reading).into())
 }
 
 /// State 1's hand-off (@0x8d8b8-0x8d8fe): a landing goal whose stellar
@@ -1288,28 +1291,34 @@ fn count_down(npc: &mut Npc, ticks_left: u32) {
     };
 }
 
-/// Whether a ship at `state` can land on `site` by the other reading of
-/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding): within its
-/// [`landing_radius`], at or below [`LANDING_SPEED`].
-fn over(state: &ShipState, site: &LandingSite) -> bool {
-    (site.position - state.position).length() <= landing_radius(site)
+/// Whether a ship at `state`, turning on `handling`, can land on `site`
+/// by `reading` of [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding):
+/// over it ([`landing::npc_over`], which owns the reading's region; the
+/// other reading's circle, within its
+/// [`landing_radius`](landing::landing_radius), ignores the turn) and at
+/// or below [`LANDING_SPEED`]. [`land`] asks it only by the other
+/// reading: the engine's flies [`land_flight::fly`].
+fn over(state: &ShipState, site: &LandingSite, handling: &Handling, reading: RuleSource) -> bool {
+    landing::npc_over(site, state.position, handling.turn_rate, reading)
         && state.velocity.length() <= LANDING_SPEED
 }
 
-/// How `npc`, landing on `site` by the other reading of
-/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) but not over it,
-/// flies on `handling` as `inertia` says: toward it ([`approach`]), a
-/// folding ship unfolding once within its landing radius (the engine's
-/// reading unfolds in its box, `_HighLevelAIHandler` state 1
-/// @0x8da0c-0x8da38, see [`land_flight`]).
+/// How `npc`, landing on `site` by `reading` of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (the other, from
+/// [`land`]) but not [`over`] it, flies on `handling` as `inertia` says:
+/// toward it ([`approach`]), a folding ship unfolding once over it by
+/// [`landing::npc_over`], within its landing radius (the engine's reading
+/// unfolds in its box, `_HighLevelAIHandler` state 1 @0x8da0c-0x8da38,
+/// see [`land_flight`]).
 fn land_approach(
     npc: &mut Npc,
     site: &LandingSite,
     handling: &Handling,
     inertia: Inertia,
+    reading: RuleSource,
 ) -> Controls {
     let state = npc.state;
-    if (site.position - state.position).length() <= landing_radius(site) {
+    if landing::npc_over(site, state.position, handling.turn_rate, reading) {
         ship_display::landing_unfold(npc);
     }
     approach(&state, handling, site.position, inertia)
