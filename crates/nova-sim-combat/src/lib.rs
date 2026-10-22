@@ -94,6 +94,7 @@ pub mod combat;
 pub mod comm_line;
 pub mod fleet;
 pub mod message;
+pub mod player_cloak;
 pub mod player_fate;
 pub mod sabotage;
 pub mod self_destruct;

@@ -430,6 +430,7 @@ pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
 pub use nova_sim_base::skill;
 pub use nova_sim_base::speed_cap;
+pub use nova_sim_combat::player_cloak;
 pub use nova_sim_combat::sabotage;
 pub use nova_sim_combat::self_destruct;
 pub mod save;
