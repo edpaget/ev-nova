@@ -32,8 +32,17 @@
 //!    [`valid_target`](escort::valid_target)): a target gone is dropped,
 //!    and a disabled one unless its stored word ([`Npc::order_word`],
 //!    @0x83ac8) is Attack.
-//! 4. **By its order** (+0xc90a, [`order_of`]). Under a lead that is the
-//!    player's escort (@0x83b36-0x83b7f), the lead's Defend or Attack
+//! 4. **Out of ammunition** (@0x83b88-0x83bda,
+//!    [`out_of_ammo::escort_word`]): on Defend or Attack with `Flags2`
+//!    0x0080, a fighter short of any ammunition takes Return (word 3) and
+//!    any other ship fully dry formation (word 0). It writes the word under
+//!    any lead ([`Decision::order_word`]): under one the player doesn't
+//!    lead it stands as [`Npc::order_word`] until that lead's next order
+//!    frame. It runs before the jump's return, so a ship taking its
+//!    leader's jump writes it too.
+//! 5. **By its order** (+0xc90a, [`order_of`], then the fallback's
+//!    word if it wrote one). Under a lead that is the player's escort
+//!    (@0x83b36-0x83b7f), the lead's Defend or Attack
 //!    while the lead's goal isn't 0xa ([`Goal::flies_in_form`]), else
 //!    Return: the player's escort carrier's fighters fight with it and
 //!    dock once it keeps formation or holds any other order; it writes
@@ -89,9 +98,9 @@
 //! or the lost-parent branch writes none, so it keeps the one it had. In
 //! its gate it fires unprovoked ([`escort::fire_unprovoked`], substate 0,
 //! @0x85236), and a hit makes it take its attacker as any ship does
-//! ([`react::victim`]): it is no Good Samaritan, which is AI types 3 and 4
-//! only (@0x8289f-0x828bb). Keeping the hit's attacker by order is
-//! rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
+//! ([`react::victim`]), which its next think keeps by its order as any
+//! target ([`escort::kept_by_order`]): it is no Good Samaritan, which is
+//! AI types 3 and 4 only (@0x8289f-0x828bb).
 //!
 //! **Jumping with the parent** (@0x839fd-0x83a92, @0x83be3-0x83c51):
 //! after the lost parent, a lead that draws its followers
@@ -105,7 +114,6 @@
 //! whoever the parent ([`Decision::ends_wait`]).
 //!
 //! **Not built here**, each a later phase's:
-//! - out of ammunition (@0x83b88-0x83bda): phase 9's;
 //! - formation flight on slots, steering at the guard: phase 6's; until
 //!   then [`Goal::Follow`] flies within the follow distance of the lead;
 //! - the voice: phase 10's.
@@ -117,7 +125,9 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::regroup::Kept;
-use crate::ai::{Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, react};
+use crate::ai::{
+    Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, out_of_ammo, react,
+};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -140,12 +150,19 @@ pub struct FleetEscortAi {
 /// ([`Goal::flies_in_form`]), else Return (3), which docks a fighter;
 /// under any other lead, its stored word ([`Npc::order_word`]), which its
 /// lead issues ([`escort_orders`](crate::ai::escort_orders)).
+///
+/// The lead's order is the one after the lead's own out-of-ammunition
+/// fallback ([`out_of_ammo::escort_order`], @0x83b56): an escort carrier
+/// fully dry keeps formation, so it sends its fighters home. The original
+/// reads the word the lead's last think left; this works it out from the
+/// lead's state at the fighter's think. The lag is at most one think
+/// interval and crosses no boundary the player sees.
 #[must_use]
 pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     let Some(lead) = players_escort_lead(npc, around) else {
         return npc.order_word.order();
     };
-    Some(match lead.escort_order() {
+    Some(match out_of_ammo::escort_order(lead, lead.escort_order()) {
         Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !lead.goal.flies_in_form() => {
             order
         }
@@ -182,7 +199,12 @@ pub fn decide_by(
         };
     };
     let target = escort::valid_target(npc, npc.order_word.order(), around);
-    let writes = lead.escorts_player().then(|| OrderWord::of(order));
+    // The fallback writes its word under any lead (@0x83bc9, @0x83bda);
+    // under one the player doesn't lead, the lead's next order frame
+    // overwrites it.
+    let fallback = out_of_ammo::escort_word(npc, order);
+    let order = fallback.map_or(order, OrderWord::order);
+    let writes = fallback.or_else(|| lead.escorts_player().then(|| OrderWord::of(order)));
     if jump_with_leader::draws_followers(lead) {
         // The entry (@0x839fd-0x83a92), then goal 0xb's block
         // (@0x83be3): no order block runs.
@@ -354,9 +376,8 @@ impl Behaviour for FleetEscortAi {
 
     /// [`react::victim`]: `_DamageShip`'s reaction block reads no AI type,
     /// and `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
-    /// Its next think may set another target by its order; keeping the
-    /// hit's attacker is
-    /// rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
+    /// Its next think keeps the hit's attacker by its order as any target
+    /// ([`escort::kept_by_order`]), or sets another.
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::victim(npc, strike, around)
     }
@@ -366,6 +387,7 @@ impl Behaviour for FleetEscortAi {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{PIRATES, TRADERS, govts, n, player, ship};
     use crate::ai::{Help, escort, fire, react};
     use crate::bay::Carrier;
@@ -1088,6 +1110,137 @@ mod tests {
         let decision = decision_holding(2, true, Some(EscortOrder::Hold));
         assert_eq!(decision.goal, Goal::Dock(n(1)), "Return: it docks");
         assert_eq!(decision.order_word, Some(OrderWord(3)));
+    }
+
+    /// `npc` short of ammunition as `left` says, its hull of `Flags2`
+    /// 0x0080.
+    fn short(npc: Npc, left: AmmoLeft) -> Npc {
+        crate::ai::fixture::short_of_ammo(npc, left, true)
+    }
+
+    #[test]
+    fn a_carriers_fighter_on_attack_out_of_ammunition_docks_and_writes_word_3() {
+        // `_EscortAI`'s fallback, for every parent: AI type 5 takes word 3
+        // (@0x83bc9), and the Return block docks it, +0x4c kept
+        // (@0x83e79-0x83ea3).
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            for left in [AmmoLeft::OnlyUnlimited, AmmoLeft::Dry] {
+                let dry = short(targeting(fighter(n(1)), n(3)), left);
+                let npcs = [lead(Goal::Attack(n(3))), dry, raider(3, 0.0, 100.0, n(1))];
+                let (decision, _) = decided_with(&npcs, Some(order), (0.0, 5000.0), &[0]);
+                assert_eq!(decision.goal, Goal::Dock(n(1)), "{order:?} {left:?}");
+                assert_eq!(
+                    decision.order_word,
+                    Some(OrderWord(3)),
+                    "{order:?} {left:?}"
+                );
+                assert!(!decision.ends_wait, "{order:?} {left:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_escort_with_no_firepower_follows_and_writes_word_0() {
+        // Any other type takes word 0 fully dry (@0x83bda), and the
+        // formation block ends its wait (@0x83ea8-0x83eb0); with unlimited
+        // weapons left it keeps its order and writes nothing.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let dry = short(targeting(escort(), n(3)), AmmoLeft::Dry);
+            let npcs = [lead(Goal::Attack(n(3))), dry, raider(3, 0.0, 100.0, n(1))];
+            let (decision, _) = decided_with(&npcs, Some(order), (0.0, 5000.0), &[0]);
+            assert!(
+                matches!(decision.goal, Goal::Follow { lead: LEAD, .. }),
+                "{order:?}: {:?}",
+                decision.goal
+            );
+            assert_eq!(decision.order_word, Some(OrderWord(0)), "{order:?}");
+            assert!(decision.ends_wait, "{order:?}");
+            let unlimited = short(targeting(escort(), n(3)), AmmoLeft::OnlyUnlimited);
+            let npcs = [
+                lead(Goal::Attack(n(3))),
+                unlimited,
+                raider(3, 0.0, 100.0, n(1)),
+            ];
+            let (decision, _) = decided_with(&npcs, Some(order), (0.0, 5000.0), &[0]);
+            assert_eq!(decision.goal, Goal::Attack(n(3)), "{order:?}");
+            assert_eq!(decision.order_word, None, "{order:?}");
+        }
+    }
+
+    #[test]
+    fn on_its_leaders_jump_the_fallback_still_writes_its_word() {
+        // The fallback (@0x83b88-0x83bda) runs before goal 0xb's return
+        // (@0x83be3).
+        let mut first = lead(Goal::JumpOut);
+        first.begin_own_jump();
+        for (npc, word) in [(fighter(n(1)), 3), (escort(), 0)] {
+            let npcs = [
+                first.clone(),
+                short(targeting(npc, n(3)), AmmoLeft::Dry),
+                raider(3, 0.0, 100.0, n(1)),
+            ];
+            let (decision, _) = decided_with(&npcs, Some(EscortOrder::Attack), (0.0, 5000.0), &[0]);
+            assert!(decision.follows_jump, "{word}");
+            assert_eq!(decision.goal, follow(None), "{word}");
+            assert_eq!(decision.order_word, Some(OrderWord(word)));
+            assert!(!decision.ends_wait, "{word}");
+        }
+    }
+
+    /// The lead as the player's escort following `order`, attacking NPC 3.
+    fn players_escort(order: EscortOrder) -> Npc {
+        let mut first = lead(Goal::Attack(n(3)));
+        first.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: Some(order),
+        });
+        first
+    }
+
+    #[test]
+    fn a_fighter_of_the_players_escort_writes_the_fallback_over_its_leads_order() {
+        // @0x83b36-0x83b7f writes the lead's Attack, then the fallback
+        // overwrites it with 3 (@0x83bc9).
+        let npcs = [
+            players_escort(EscortOrder::Attack),
+            short(fighter(n(1)), AmmoLeft::Dry),
+            raider(3, 0.0, 500.0, n(1)),
+        ];
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = FleetEscortAi::default().decision(&npcs[1], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Dock(n(1)));
+        assert_eq!(decision.order_word, Some(OrderWord(3)));
+    }
+
+    #[test]
+    fn a_fighter_of_a_players_escort_out_of_ammunition_returns_home() {
+        // The fighter reads its lead's word (@0x83b56), which the lead's
+        // fallback wrote: 0 for an escort fully dry, so Return (@0x83b7f).
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let order_with = |left: AmmoLeft| {
+                let npcs = [
+                    short(players_escort(order), left),
+                    fighter(n(1)),
+                    raider(3, 0.0, 500.0, n(1)),
+                ];
+                order_of(&npcs[1], &Surroundings::new(&[], &npcs))
+            };
+            assert_eq!(
+                order_with(AmmoLeft::Dry),
+                Some(EscortOrder::Dock),
+                "{order:?}"
+            );
+            assert_eq!(
+                order_with(AmmoLeft::OnlyUnlimited),
+                Some(order),
+                "{order:?}: unlimited weapons left"
+            );
+            assert_eq!(order_with(AmmoLeft::Armed), Some(order), "{order:?}");
+        }
     }
 
     #[test]
