@@ -198,7 +198,7 @@
 //! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see `nova_sim::combat::projectile::BombLaunch`) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
 //! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see `nova_sim::combat::defence`) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
 //! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see `nova_sim::combat::jamming`) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
-//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5 (`_HandleShotGuidance` @0x323ac-0x323ed; see `nova_sim::combat::projectile::LockAngle`) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
+//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5, and a `Seeker` 0x0002 missile locks onto an asteroid within ±199 pixels only at 15 or less by the same measure (`_HandleShotGuidance` @0x323ac-0x323ed, @0x325b9-0x325fb; see `nova_sim::combat::projectile::LockAngle`) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
 //! | [`ShipDebris`](RuleKey::ShipDebris) | `ship_debris` | a destroyed ship scatters no debris: `_HandleShipDisplay` sets off only its `Explode2` (@0x2d7ef-0x2dee7), with no `_SpawnParticles` call on the death branch | the view's `DEBRIS_COUNT` pieces of debris: **the default — a deliberate departure from the original**†††††††††††††† |
 //! | [`QuadrantTurretBlindSpots`](RuleKey::QuadrantTurretBlindSpots) | `quadrant_turret_blind_spots` | the player's quadrant turrets (7 and 8) test no blind spot: a 7 or 8 fires at a target in its arc whatever its weapon's or its ship's blind-spot flags, while a 3 or 4 holds fire in one (`_FirePlayerWeapon` @0x62aeb-0x62c38; see `nova_sim::combat::aim`); an NPC's turret pick (an escort's formation fire among them) is tested for them under both readings as `_AIFireTurret` picks it (@0x80d0b) | a blind spot holds a 7 or 8 as it holds a 3 or 4 (the Bible: "Turreted weapon has a blind spot") |
 //! | [`PlayerForwardRecoil`](RuleKey::PlayerForwardRecoil) | `player_forward_recoil` | a player's weapon recoils only for a `Recoil` above none (`_FirePlayerWeapon` @0x62eb2-0x62eb5, a signed `jle`), so a negative one pushes it nowhere (see `nova_sim::combat::Combat`) | a negative `Recoil` but -1 pushes the player forward, as an NPC's does (the Bible: "Negative values thrust the ship forwards") |
@@ -2729,14 +2729,17 @@ rule_keys! {
     /// share. The player is never halved.
     JamHalving => "jam_halving",
     /// How a `Seeker` 0x4000 homing shot measures how far off ahead a
-    /// target within its ±249-pixel box is (see
+    /// target within its ±249-pixel box is, and a `Seeker` 0x0002 one an
+    /// asteroid within its ±199-pixel box (see
     /// `nova_sim::combat::projectile::LockAngle`). By the
-    /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed): the
-    /// truncated bearing less the heading, absolute and mod 360 with no
-    /// fold, so a shot heading 355 at a bearing of 5 is 350 off and drops
-    /// its lock. By the other reading (the Bible: "Loses lock if target not
-    /// directly ahead"), the short way round. Either way it drops its lock
-    /// above 45. The other reading is the default (see the module docs).
+    /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed,
+    /// @0x325b9-0x325fb): the truncated bearing less the heading, absolute
+    /// and mod 360 with no fold, so a shot heading 355 at a bearing of 5 is
+    /// 350 off: it drops its lock, or never locks onto the asteroid. By the
+    /// other reading (the Bible: "Loses lock if target not directly
+    /// ahead"), the short way round. Either way it drops its lock above 45
+    /// and locks onto an asteroid at 15 or less. The other reading is the
+    /// default (see the module docs).
     SeekerLockAngle => "seeker_lock_angle",
     /// Whether a destroyed ship scatters debris particles (the view's
     /// `effects` module). By the engine, none: `_HandleShipDisplay` sets

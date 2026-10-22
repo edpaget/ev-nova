@@ -380,6 +380,7 @@ pub mod aim;
 pub mod armament;
 pub mod asteroid_beam;
 pub mod asteroid_hit;
+pub mod asteroid_seek;
 pub mod beam;
 mod collision;
 pub mod damage;
@@ -3827,6 +3828,7 @@ mod tests {
 
     mod ai_dispatch;
     mod asteroid_beams;
+    mod asteroid_seekers;
     mod collision_walk;
     mod display_step;
     mod escort_lost_in_place;
@@ -8149,7 +8151,7 @@ mod tests {
             guidance: 1,
             count: 50,
             speed: 500,
-            seeker: 0x0002,
+            flags: 0x0040,
             ..weapon(148)
         });
         let mut combat = Combat::default();
@@ -8166,8 +8168,8 @@ mod tests {
             combat.take_diagnostics(),
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(148),
-                field: flags::FlagField::Seeker,
-                bit: 0x0002,
+                field: flags::FlagField::Flags,
+                bit: 0x0040,
             }]
         );
     }

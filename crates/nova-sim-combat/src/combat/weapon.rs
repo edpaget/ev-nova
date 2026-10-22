@@ -454,6 +454,10 @@ pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
 /// `Interference` (`_SpawnShot` @0x3eac5; see
 /// [`projectile`](super::projectile)).
 pub const SENSOR_INTERFERENCE: u16 = 0x0008;
+/// `Seeker`: a homing shot of it seeks asteroids: one ahead and near may
+/// lock it (`_HandleShotGuidance` @0x32546; see
+/// [`asteroid_seek`](super::asteroid_seek)).
+pub const SEEKS_ASTEROIDS: u16 = 0x0002;
 /// `Seeker`: a homing shot of it jammed turns away from its target
 /// (`_HandleShotGuidance` @0x3221d), where any other stops turning.
 pub const TURNS_AWAY_JAMMED: u16 = 0x0010;

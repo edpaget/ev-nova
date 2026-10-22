@@ -16,6 +16,7 @@ use super::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::ship_layer::Slot;
 
@@ -287,10 +288,27 @@ impl Combat {
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
     /// have already tested and let it go (`Combat::test_hidden`).
+    ///
+    /// It lends the guidance no asteroids: it is [`Combat::fly_shots_in`]
+    /// with none.
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.fly_shots_in(fighters, arena, &[], chance);
+    }
+
+    /// [`Combat::fly_shots`] with the guidance lent where each asteroid
+    /// slot's asteroid is, by slot, as `_HandleShot` meets them: a homing
+    /// `Seeker` 0x0002 shot may lock onto one, and a locked one steers at
+    /// its slot's ([`asteroid_seek`](super::asteroid_seek)).
+    pub fn fly_shots_in(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        asteroids: &[Option<Vec2>],
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -298,7 +316,7 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
-        self.handle_shots(fighters, terms, arena.rules.disable, chance);
+        self.handle_shots(fighters, terms, arena.rules.disable, asteroids, chance);
         self.hold_reloads(fighters);
     }
 
