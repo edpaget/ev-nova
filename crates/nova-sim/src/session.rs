@@ -3554,6 +3554,11 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
+        // @0x64743: before the old ships go, so before the escorts' cloaks
+        // are carried.
+        self.space
+            .step_fades_at_gate_entry(system, self.pilot.system);
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
@@ -3589,8 +3594,9 @@ impl Session {
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
-        // out (`_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
-        // @0x64743).
+        // out, and again after the stellars' visibility (@0x67658): every
+        // NPC's fade steps twice.
+        self.prepare_all_sprites();
         self.prepare_all_sprites();
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
@@ -3793,6 +3799,9 @@ impl Session {
         self.run.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
+        // Its second `_PrepareAllSprites` (@0x67658), `populate`'s being
+        // the first (@0x6764e): every NPC's fade steps again.
+        self.prepare_all_sprites();
         // Its tail: the dock request dropped (@0x6374a-0x63759; see the
         // `clearance` module), the nav selection let go, the mode kept,
         // then the course cued (@0x674d2-0x674d8; see the `nav` module).
@@ -5263,10 +5272,11 @@ impl Session {
     /// NPC `id`, captured, joins the fleet where it is: no longer its
     /// person, who lives on or is gone for good as
     /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
-    /// intact, its armour at half its most, and then as
-    /// [`Session::fleet_up`] says: a mission's special ship keeps its mark
-    /// and joins as a mission escort (`_DoPlunderDialog`
-    /// @0x9459b-0x947cf; see the `captured_mission_ship` module).
+    /// intact, its armour at half its most, its cloak's fade and direction
+    /// zeroed (@0x946e3, @0x946f9), and then as [`Session::fleet_up`]
+    /// says: a mission's special ship keeps its mark and joins as a
+    /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
+    /// `captured_mission_ship` module).
     fn join_fleet(&mut self, id: NpcId) {
         self.space.lose_captured(
             &mut self.pilot,
@@ -5285,6 +5295,7 @@ impl Session {
         };
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
+        npc.cloak = crate::cloak::Cloak::default();
         self.fleet_up(id, None);
     }
 

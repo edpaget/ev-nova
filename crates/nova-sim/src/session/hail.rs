@@ -3169,6 +3169,27 @@ mod tests {
         );
     }
 
+    /// A hail's join is not `_DoPlunderDialog`'s escort path, whose
+    /// writes zero a captured ship's fade and direction (@0x946e3,
+    /// @0x946f9): the person joins with its cloak as it was.
+    #[test]
+    fn a_person_joining_by_hail_keeps_its_cloak() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        let fading = crate::cloak::Cloak {
+            fade: 12.0,
+            direction: -1,
+        };
+        session.space.npc_mut(NpcId(0)).expect("here").cloak = fading;
+        opened(&mut session, &catalog, &bible);
+        session
+            .answer(2, &catalog, &bible, &mut Draws::of(&[]))
+            .expect("open");
+        assert!(session.is_escort(NpcId(0)), "joined");
+        assert_eq!(session.space.npc(NpcId(0)).expect("here").cloak, fading);
+    }
+
     #[test]
     fn by_the_other_reading_a_person_whose_mission_is_unavailable_lists_no_way_to_join() {
         let mut catalog = merchants();

@@ -19,7 +19,10 @@
 //!   0x1, @0x2d0aa). Going down it stops at 0, and going up at
 //!   [`FADE_FULL`] (32), the direction then 0. With no direction a fade
 //!   between 0 and 32 drifts down by [`DRIFT`] (1) a tick. A ship starts
-//!   at 0, with no direction.
+//!   at 0, with no direction. `_PrepareAllSprites` (@0x3a776-0x3a78e)
+//!   steps it too, for every ship, before the first frame of an entry
+//!   (`nova_sim::Session::prepare_all_sprites`): twice at a take-off or
+//!   gate exit, once at a jump's arrival.
 //! - **`_DoShipCloak`** ([`Cloak::cloak`], @0xde73): nothing when cloaked;
 //!   else a fade at or below 0 starts fading in, and a fade going down
 //!   stops (direction 0, so it drifts down). **`_DoShipUncloak`**

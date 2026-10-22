@@ -23,8 +23,15 @@
 //! (@0x2bf8a), so no frame shows it and no dose ORs into it. Each keeps
 //! its cloak, fade and direction, as `_RespawnEscort` writes neither
 //! +0x64 nor +0xc8d8, so an escort cloaked or fading when the player
-//! leaves arrives the same way and decides from there on its first
-//! think. At a hypergate or wormhole exit each is placed on its slot
+//! leaves arrives the same way, its fade then stepped by the entry's
+//! `_PrepareAllSprites` calls before the first frame (once at a jump's
+//! arrival, twice at a take-off or gate exit; see the `slot_visibility`
+//! module), and decides from there on its first think. Through a jump's
+//! warp it goes on thinking its cloak and stepping its fade, in goal
+//! 0xb, to the warp's end. A ship captured into the fleet joins with
+//! neither fade nor direction (`_DoPlunderDialog` @0x946e3, @0x946f9;
+//! see [`Session::join_fleet`]); a person joining by hail keeps its
+//! cloak. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -1703,8 +1710,9 @@ mod tests {
     }
 
     /// Checks that, once the fleet has entered a new system, the first
-    /// escort is a new NPC carrying `cloak` exactly, and the second has
-    /// the default.
+    /// escort is a new NPC carrying `cloak` exactly (the cloak it left
+    /// with, as the entry's `_PrepareAllSprites` steps left it), and the
+    /// second has the default.
     fn assert_cloak_kept(session: &Session, before: NpcId, cloak: Cloak) {
         let escorts: Vec<NpcId> = session
             .space
@@ -1756,9 +1764,36 @@ mod tests {
         assert_cloak_kept(&session, before, FULLY_CLOAKED);
     }
 
+    /// A take-off steps each ship's fade twice before the first tick:
+    /// `_HandlePlayerDockRequest` runs `_PrepareAllSprites` after the
+    /// setup (@0x6764e) and again after the stellars' visibility
+    /// (@0x67658), and each displays every ship, its fade step included
+    /// (@0x2d088-0x2d164). An escort fading in at 10 takes off at 11.5.
+    #[test]
+    fn a_take_off_steps_each_ships_fade_twice_before_the_first_tick() {
+        let catalog = crate::testkit::far_129_reachable(fleeted());
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let fading = Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        let before = cloak_first_escort(&mut session, fading);
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let stepped = Cloak {
+            fade: 10.0 + 2.0 * crate::cloak::FADE_RATE,
+            direction: 1,
+        };
+        assert_cloak_kept(&session, before, stepped);
+    }
+
     /// The carried direction, not just the fade, comes through: an escort
-    /// fading in when the player jumps arrives with the same fade and
-    /// direction.
+    /// fading in when the player jumps arrives with the same direction,
+    /// its fade stepped once on by the arrival's `_PrepareAllSprites`
+    /// (`_HandlePlayer` @0x6c59c), which displays it before the first
+    /// frame.
     #[test]
     fn an_escort_fading_in_when_the_player_jumps_arrives_fading_in() {
         let catalog = fleeted();
@@ -1769,7 +1804,11 @@ mod tests {
         };
         let before = cloak_first_escort(&mut session, fading);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_cloak_kept(&session, before, fading);
+        let stepped = Cloak {
+            fade: 10.0 + crate::cloak::FADE_RATE,
+            direction: 1,
+        };
+        assert_cloak_kept(&session, before, stepped);
     }
 
     /// An escort's first think in the new system works from the cloak it
@@ -1801,6 +1840,160 @@ mod tests {
             }
         );
         assert!(cloak.is_cloaked());
+    }
+
+    /// How many passes before the warp's end the escort is cloaked: few
+    /// enough that its fade, falling 0.75 a pass from 32, is not yet out
+    /// as the warp ends.
+    const CLOAKED_BEFORE_THE_END: u16 = 20;
+
+    /// [`fleeted`]'s session by the engine, its warship escort given a
+    /// cloak of `Flags2` `flags2`, its jump to 131 begun and run through
+    /// its lead-in and on until [`CLOAKED_BEFORE_THE_END`] passes are left
+    /// to the warp's end, the escort then fully cloaked: the session and
+    /// the escort.
+    fn cloaked_near_the_warp_end(catalog: &FakePilotCatalog, flags2: u16) -> (Session, NpcId) {
+        let (mut session, escort) = past_the_lead_in(catalog, flags2);
+        let mut to_the_end = 0;
+        let mut ahead = session.clone();
+        while !ahead.warp_end_due() {
+            warp_pass(&mut ahead, catalog);
+            to_the_end += 1;
+            assert!(to_the_end < 1000, "the warp never ended");
+        }
+        assert!(
+            to_the_end > CLOAKED_BEFORE_THE_END,
+            "{to_the_end} passes past the lead-in"
+        );
+        for _ in CLOAKED_BEFORE_THE_END..to_the_end {
+            warp_pass(&mut session, catalog);
+        }
+        assert!(!session.in_warp_lead_in());
+        cloak_first_escort(&mut session, FULLY_CLOAKED);
+        (session, escort)
+    }
+
+    /// [`fleeted`]'s session by the engine, its warship escort given a
+    /// cloak of `Flags2` `flags2`, its jump to 131 begun and run through
+    /// its lead-in: the session and the escort.
+    fn past_the_lead_in(catalog: &FakePilotCatalog, flags2: u16) -> (Session, NpcId) {
+        let mut session = flying(catalog, RuleSource::Engine);
+        let first = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(first).expect("there").cloak_gear = crate::cloak::CloakGear {
+            device: true,
+            flags2,
+            ..crate::cloak::CloakGear::default()
+        };
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mut passes = 0;
+        while session.in_warp_lead_in() {
+            warp_pass(&mut session, catalog);
+            passes += 1;
+            assert!(passes < 1000, "the lead-in never ended");
+        }
+        (session, first)
+    }
+
+    /// One advance pass of the game's work, no keys held.
+    fn warp_pass(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.game_work(
+            Controls::default(),
+            catalog,
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// The escort's cloak, checking it still flies, following the
+    /// player's jump (goal 0xb).
+    fn following_cloak(session: &Session, escort: NpcId) -> Cloak {
+        let npc = session.space.npc(escort).expect("still in the system");
+        assert_eq!(npc.mode, crate::traffic::npc::Mode::Flying);
+        assert!(
+            matches!(
+                npc.warp.goal,
+                Some(crate::traffic::warp_out::WarpGoal::Follow(_))
+            ),
+            "{:?}",
+            npc.warp
+        );
+        npc.cloak
+    }
+
+    /// An escort cloaked once the warp is past its lead-in thinks its
+    /// cloak and steps its fade on every pass to the warp's end, as
+    /// `_DoPlayGameWork` runs `_AIDispatch` (@0x4429d, `_AIHandleCloaking`
+    /// @0x8fcaa) and the display (@0x444ad, the fade @0x2d088-0x2d164)
+    /// for every ship with no test of the player's jump. Following the
+    /// player's jump (goal 0xb) it reads only the jump's term (`Flags2`
+    /// 0x0400, @0x834e6-0x8350b), which its type lacks, though it would
+    /// stay cloaked in formation (0x0800): so it uncloaks on its first
+    /// think (`_DoShipUncloak` @0xdf55) and fades out at 0.75 a pass. It
+    /// arrives with the fade it had at the warp's end, stepped once more
+    /// by the arrival's `_PrepareAllSprites` (@0x6c59c).
+    #[test]
+    fn a_cloaked_escort_fades_out_through_the_warp_and_arrives_with_that_fade() {
+        use crate::cloak::{CLOAK_TRAVELLING, FADE_FULL, FADE_RATE};
+        let catalog = fleeted();
+        let (mut session, escort) = cloaked_near_the_warp_end(&catalog, CLOAK_TRAVELLING);
+        let mut passes: u16 = 0;
+        while !session.warp_end_due() {
+            warp_pass(&mut session, &catalog);
+            passes += 1;
+            assert_eq!(
+                following_cloak(&session, escort),
+                Cloak {
+                    fade: FADE_FULL - FADE_RATE * f32::from(passes),
+                    direction: -1,
+                },
+                "pass {passes}"
+            );
+        }
+        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
+        let at_the_end = FADE_FULL - FADE_RATE * f32::from(passes);
+        assert_eq!(at_the_end, 17.0);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_cloak_kept(
+            &session,
+            escort,
+            Cloak {
+                fade: at_the_end - FADE_RATE,
+                direction: -1,
+            },
+        );
+    }
+
+    /// With the jump's term (`Flags2` 0x0400), which holds in goal 0xb
+    /// (@0x834e6-0x8350b), the escort stays fully cloaked through the
+    /// warp and arrives so.
+    #[test]
+    fn a_cloaked_escort_with_the_jump_cloak_stays_cloaked_through_the_warp() {
+        use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING};
+        let catalog = fleeted();
+        let (mut session, escort) =
+            cloaked_near_the_warp_end(&catalog, CLOAK_JUMPING | CLOAK_TRAVELLING);
+        let mut passes = 0;
+        while !session.warp_end_due() {
+            warp_pass(&mut session, &catalog);
+            passes += 1;
+            assert_eq!(
+                following_cloak(&session, escort),
+                FULLY_CLOAKED,
+                "pass {passes}"
+            );
+        }
+        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_cloak_kept(&session, escort, FULLY_CLOAKED);
     }
 
     #[test]
