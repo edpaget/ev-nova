@@ -63,6 +63,7 @@ fn mid_fight() -> View {
     catalog.weapons[0].flags = 0x0020;
     catalog.weapons[0].explod_type = -1;
     catalog.sheet = Ok(layered_sheet());
+    catalog.star_sheet = Ok(star_sheet());
     let draws = [placed(750, 650, 180), placed(700, 750, 0)].concat();
     let mut view = fighting(catalog, &draws).with_overlays(TITLED);
     view.input(&key(Key::Up, true));
@@ -100,8 +101,8 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
     assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
     // The stars, the stellars, the explosion and its debris, the NPC, the
     // player's ship and its ORed lights, and the shots.
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
-    for id in [1128, 1129, 400, 2001, 2000, 2200, 3500] {
+    assert!(list.iter().next().is_some_and(is_star));
+    for id in [700, 1128, 1129, 400, 2001, 2000, 2200, 3500] {
         let found = layers_of(&list, sprite_of(id));
         assert!(!found.is_empty(), "sprite {id} drawn");
         assert!(found.iter().all(|&found| found == world), "{id}: {found:?}");
@@ -137,7 +138,8 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
 
 #[test]
 fn the_message_line_is_overlay_text_drawn_among_the_world() {
-    let mut view = flight();
+    let mut view = FlightView::new(starry());
+    view.tick(Duration::ZERO);
     plot(&mut view, 131);
     view.input(&key(JUMP, true));
     let list = drawn(&view);
@@ -158,6 +160,7 @@ fn the_message_line_is_overlay_text_drawn_among_the_world() {
         "the box in the world"
     );
     assert_eq!(layers[message - 2], DrawLayer::World, "over the stars");
+    assert!(is_star(list.iter().nth(message - 2).expect("drawn")));
     assert_eq!(layers[message + 1], DrawLayer::World, "under the stellars");
     assert!(sprite_of(1128)(
         list.iter().nth(message + 1).expect("drawn")

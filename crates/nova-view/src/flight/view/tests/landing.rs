@@ -422,12 +422,11 @@ fn the_refusal_is_drawn_until_its_ticks_have_passed() {
 
 #[test]
 fn the_message_draws_over_the_starfield_and_under_the_ships() {
-    let mut view = flight();
+    let mut view = FlightView::new(starry());
     land_now(&mut view);
     let list = drawn(&view);
     let commands: Vec<&DrawCommand> = list.iter().collect();
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     let stars: Vec<&DrawCommand> = stars.iter().collect();
     assert!(!stars.is_empty());
     assert_eq!(commands[..stars.len()], stars[..], "the starfield first");
@@ -443,7 +442,7 @@ fn the_message_draws_over_the_starfield_and_under_the_ships() {
     );
     let sprite = commands
         .iter()
-        .position(|c| matches!(c, DrawCommand::Sprite { .. }))
+        .position(|c| matches!(c, DrawCommand::Sprite { .. }) && !is_star(c))
         .expect("the player's sprite");
     assert!(stars.len() < sprite, "the ship over it");
 }

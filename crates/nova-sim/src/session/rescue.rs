@@ -71,8 +71,7 @@
 //!
 //! Left out, with no counterpart in the engine: the fades, paints and
 //! cursor calls (@0x68de3-0x68e7b, @0x68eb1-0x68eef, @0x691cb-0x69253),
-//! `_RandomizeStars` (@0x690d0; the starfield is drawn the same each
-//! time), and of `_ResetPlayer`'s writes the price flux
+//! and of `_ResetPlayer`'s writes the price flux
 //! (`_globalPriceFlux`, `_localPriceFlux`), the bribe roll
 //! (`_bribeRandom`), the advice roll (`_adviceRandom`), the docking globals
 //! (`_dockTarget`, `_dockPermission`: the engine's clearance is its nav

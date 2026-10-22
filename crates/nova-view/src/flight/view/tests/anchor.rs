@@ -2,8 +2,8 @@
 //! [`RuleKey::FlightAnchor`]: the original's `_screenCenter`, the play
 //! area's centre left of the status bar (`_SetupWind` @0x1b720-0x1b78a),
 //! or the view's centre. The play area the session is told, the
-//! brackets, clicks in space and the starfield are placed from the same
-//! anchor.
+//! brackets, clicks in space and the starfield (the original's stars and
+//! the stand-in's dots) are placed from the same anchor.
 
 use super::*;
 use crate::flight::brackets;
@@ -160,20 +160,25 @@ fn a_click_where_a_ship_is_drawn_targets_it_and_its_brackets_frame_it() {
 }
 
 #[test]
-fn the_starfield_is_drawn_about_the_anchor_and_covers_the_view() {
+fn the_stand_in_starfield_is_drawn_about_the_anchor_and_covers_the_view() {
     for source in [RuleSource::Engine, RuleSource::Bible] {
         for size in [VIEW_SIZE, WIDE] {
-            let view = sized(source, size);
+            let rules = reading(source).with_override(RuleKey::FlightStarfield, RuleSource::Bible);
+            let mut view = FlightView::new(starry()).with_rules(rules);
+            view.set_view_size(size);
+            view.tick(Duration::ZERO);
             let camera = view.camera();
             assert_eq!(camera.anchor(), anchor_for(source, size));
             let mut field = DrawList::new();
             starfield::draw(&mut field, &camera);
             let field: Vec<DrawCommand> = field.iter().cloned().collect();
             let list: Vec<DrawCommand> = drawn(&view).iter().cloned().collect();
-            assert!(
-                list.windows(field.len()).any(|run| run == field),
-                "{source:?} {size:?}: the starfield through the flight's camera"
+            assert_eq!(
+                list[..field.len()],
+                field[..],
+                "{source:?} {size:?}: the starfield through the flight's camera, first"
             );
+            assert!(!list.iter().any(is_star), "{source:?} {size:?}");
             let xs: Vec<f32> = field
                 .iter()
                 .filter_map(|command| match command {
@@ -188,6 +193,35 @@ fn the_starfield_is_drawn_about_the_anchor_and_covers_the_view() {
                 right > size.0 - 50.0,
                 "{source:?} {size:?}: rightmost star at {right}"
             );
+        }
+    }
+}
+
+#[test]
+fn the_originals_stars_are_scattered_over_the_play_area_and_placed_about_the_anchor() {
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        for size in [VIEW_SIZE, WIDE] {
+            let mut view = FlightView::new(starry()).with_rules(reading(source));
+            view.set_view_size(size);
+            view.tick(Duration::ZERO);
+            let anchor = anchor_for(source, size);
+            // The default chance draws the last of each range: each star
+            // W − 1 − trunc(W / 2) right of the ship and H − 1 − trunc(H /
+            // 2) below it, placed at the anchor less its whole size and
+            // drawn about its rect's centre.
+            let width = size.0 - 194.0;
+            let right = width - 1.0 - (width / 2.0).trunc();
+            let below = size.1 - 1.0 - (size.1 / 2.0).trunc();
+            let centre = at(anchor.x + right - 2.5, anchor.y + below - 2.5);
+            let stars: Vec<Point> = drawn(&view)
+                .iter()
+                .filter(|command| is_star(command))
+                .filter_map(|command| match command {
+                    DrawCommand::Sprite { center, .. } => Some(*center),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(stars, [centre; 20], "{source:?} {size:?}");
         }
     }
 }

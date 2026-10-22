@@ -565,12 +565,15 @@ fn the_help_line_draws_when_turned_on() {
 
 #[test]
 fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
-    let view = flight();
+    let mut view = FlightView::new(starry());
+    view.tick(Duration::ZERO);
     let list = drawn(&view);
     let mut expected = DrawList::new();
     // The stars, the stellars and the ship are the world, the HUD over it.
     expected.world(|expected| {
-        starfield::draw(expected, &view.camera());
+        for star in drawn_stars(&view) {
+            expected.push(star);
+        }
         scene::draw_stellars(
             expected,
             view.scene().expect("a scene"),
@@ -615,7 +618,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     target::draw_target_panel(&mut expected, &bar.layout, origin, None, None);
     target::draw_secondary(&mut expected, &bar.layout, origin, None, None);
     assert_eq!(list, expected);
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
+    assert_eq!(list.iter().take_while(|c| is_star(c)).count(), 20);
     assert_eq!(
         sprites(&list),
         [
@@ -633,7 +636,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
 
 #[test]
 fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
-    let mut view = flight();
+    let mut view = FlightView::new(starry());
     view.input(&key(Key::Up, true));
     view.input(&key(Key::Right, true));
     view.tick(Duration::from_millis(1500));
@@ -650,12 +653,9 @@ fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
     assert_ne!(view.frame(), Some(0));
     assert_eq!(shown[0].1, camera.world_to_screen(at(0.0, -600.0)));
     assert_ne!(shown[0].1, at(415.0, -216.0), "the stellars moved");
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &camera);
-    assert!(
-        list.iter().take(stars.len()).eq(stars.iter()),
-        "stars under the camera"
-    );
+    let stars = drawn_stars(&view);
+    assert_eq!(stars.len(), 20);
+    assert!(list.iter().take(stars.len()).eq(stars.iter()), "the stars");
 }
 
 #[test]
@@ -700,7 +700,6 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
             Color::ERROR
         ))
     );
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
 }
 
 // The engine glow and running lights.

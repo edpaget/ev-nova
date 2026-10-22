@@ -19,13 +19,13 @@ use crate::galaxy::GalaxyCatalog;
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, SystemScene};
-use crate::system::starfield;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
 };
 
+use super::stars;
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, TITLE, TITLE_SIZE, ZOOM_IN_KEY,
@@ -403,7 +403,10 @@ impl<
     /// background ([`message_background`]), in the world; its text is
     /// overlay among the world ([`DrawList::world`]).
     fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        starfield::draw(list, camera);
+        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::FlightStarfield)
+        });
+        stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
             let background = message_background(

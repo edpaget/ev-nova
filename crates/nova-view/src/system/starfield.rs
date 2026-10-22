@@ -16,9 +16,11 @@
 //! anchor is the camera's ([`Camera::anchor`]) and the layer's offset is
 //! the camera's centre times the layer's factor.
 //!
-//! This stands in for the original's sprite starfield (`_RandomizeStars`
-//! @0x0b1b5, `_HandleStars` @0x2f886 in `EV Nova.app`), filed as
-//! rdm:phase/display-modes-fidelity/phase-2-original-starfield.
+//! It is the system viewer's own starfield, which has a free camera and no
+//! ship, and flight's by the other reading of
+//! [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield). By
+//! the original's, flight draws the sprite starfield `_RandomizeStars` and
+//! `_HandleStars` build ([`flight::stars`](crate::flight::stars)).
 
 use std::ops::RangeInclusive;
 

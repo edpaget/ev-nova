@@ -2,8 +2,9 @@
 //! as the fight raises it, scatters 5 of `bööm` 129 and 23 of `bööm` 128
 //! about its main explosion through the stock looks; the stock shots'
 //! fades and trails, the graviton beam's zig-zag and a weapon glow layer
-//! (rdm weapons-fidelity phase 24); and a dying ship's escape pod draws on
-//! shän 895's sheet of 36 rotations. Skips, passing, when `NOVA_DATA` is
+//! (rdm weapons-fidelity phase 24); a dying ship's escape pod draws on
+//! shän 895's sheet of 36 rotations; and the stars are `spïn` 700's 16
+//! frames of 5 × 5. Skips, passing, when `NOVA_DATA` is
 //! unset.
 
 use crate::common;
@@ -198,4 +199,19 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         })
         .count();
     assert_eq!(drawn, 1);
+}
+
+#[test]
+fn the_stock_stars_are_spin_700s_16_frames_of_5_by_5() {
+    use nova_view::flight::CombatLooks;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sheet = data.star_sheet().expect("spïn 700 reads");
+    assert_eq!(
+        (sheet.image_id, sheet.frames.get(), sheet.size),
+        (700, 16, (5, 5)),
+        "rlëD 700, 4 × 4 tiles of 5 × 5"
+    );
 }

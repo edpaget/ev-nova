@@ -57,9 +57,11 @@
 //! keyed click's 601, which the click's end raised: inaudible, and before
 //! any boundary the player sees.
 //!
-//! Left out, with the starfield's clear and re-randomising at entry, the
-//! display-mode check and the text's movie:
-//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs.
+//! Left out, the display-mode check and the text's movie:
+//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs. The starfield's
+//! re-randomising at entry, and its clear in a system of negative murk,
+//! are the flight's (`nova_view::flight::FlightView`), which scatters its
+//! stars when it is first caught up with.
 
 use std::time::Duration;
 

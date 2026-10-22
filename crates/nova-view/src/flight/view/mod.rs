@@ -1,5 +1,5 @@
 //! The flight screen: the player's ship flying from its starting system,
-//! over the parallax starfield and among the system's stellars, with the
+//! over the original's starfield and among the system's stellars, with the
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
@@ -75,8 +75,8 @@
 //!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s other
 //!   reading at the view's centre ([`FlightView::camera`],
 //!   [`Anchor`](crate::system::camera::Anchor)); the play area, the
-//!   brackets, clicks in space and the starfield are placed from the same
-//!   anchor;
+//!   brackets, clicks in space and the starfield (see the `stars` module)
+//!   are placed from the same anchor;
 //! - the status bar against the right edge
 //!   ([`bar_origin`](super::hud::bar_origin)), the message box across the
 //!   bottom ([`message_box`](super::hud::message_box)), the Red Alert
@@ -88,8 +88,10 @@
 //!   width less [`STATUS_BAR_WIDTH`], for cloaks, scanners, observed
 //!   goals, brackets and the asteroid field; a click in space, which the
 //!   bar's [`STATUS_BAR_WIDTH`] at the right edge doesn't take; the
-//!   starfield, which covers the whole view; and the fades, which cover
-//!   it.
+//!   original's stars, scattered and wrapped over the play area, or by
+//!   [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield)'s
+//!   other reading the stand-in's dots, which cover the whole view; and
+//!   the fades, which cover it.
 //!
 //! The course map, the bar's and the mission dialogs' included, is drawn
 //! in its 1024 x 768 frame, centred over a widened flight and taking the
@@ -638,6 +640,7 @@ use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
+use super::stars::Starfield;
 use super::target::TargetPanel;
 use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
@@ -660,6 +663,7 @@ mod readouts;
 mod screen;
 mod shots;
 mod sprites;
+mod stars;
 mod travel;
 
 pub use dialog_map::MapOpener;
@@ -1168,6 +1172,12 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// The original's starfield (see the `stars` module), rolled on the
+    /// effects' chance.
+    stars: Starfield,
+    /// Whether the stars are yet to be scattered: until the flight is
+    /// first caught up with, when its chance and view are set.
+    stars_due: bool,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// Each ship's alt layer as last drawn, which a disabled 0x0020 ship
@@ -1320,6 +1330,8 @@ struct Redrawn {
     /// are dead since it: the stellars were drawn again, and read again
     /// when they are others.
     rebuilt: bool,
+    /// The stars were scattered afresh.
+    stars: bool,
 }
 
 /// Draws each stellar of `scene` as `session` holds it: by whether its

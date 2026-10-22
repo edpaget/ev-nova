@@ -25,6 +25,7 @@ use crate::system::catalog::SystemCatalog;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
+use super::stars;
 use super::{
     CLOAK_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
     HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
@@ -576,6 +577,7 @@ impl<
     /// and double time are held as the keys say, and a pass whose ship
     /// tick brings the escape pod's rescue ends the stepping there, the
     /// view laid out afresh where the rescue put the ship.
+    #[allow(clippy::too_many_lines)] // each pass's steps, in the original's order
     pub(super) fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
         let controls = self.controls();
         let HeldTriggers {
@@ -671,6 +673,9 @@ impl<
                     let trails = self.smoke_trails;
                     self.shot_looks
                         .step(session, &self.looks, effects, trails, chance);
+                    let first = (!again).then_some(self.previous.position);
+                    let place = (self.view, anchor, &self.looks);
+                    stars::step(&mut self.stars, session, place, first, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -911,7 +916,7 @@ impl<
                 SessionEvent::StellarChanged => redrawn.stellar = true,
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
-                SessionEvent::StarfieldReset => {}
+                SessionEvent::StarfieldReset => redrawn.stars = true,
             }
         }
         if redrawn.galaxy {
@@ -947,6 +952,9 @@ impl<
         if redrawn.system {
             self.redraw_status();
         }
+        if std::mem::take(&mut self.stars_due) || redrawn.stars {
+            self.reset_stars();
+        }
         // The open map's drawing follows the galaxy, the explored and known
         // sets, the course and the nav. The flight is paused while it is
         // open, so this is rare: a set expression or the developer tools.
@@ -957,6 +965,19 @@ impl<
             self.redraw_map();
         }
         redrawn
+    }
+
+    /// Scatters the stars afresh about the ship and places them once, on
+    /// the effects' chance, when the session draws the original's
+    /// starfield (see the `stars` module).
+    fn reset_stars(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        if stars::original(session, &self.looks) {
+            let at = stars::surroundings(session, self.view, self.anchor(), &self.looks);
+            stars::reset(&mut self.stars, &at, &mut self.effects_chance);
+        }
     }
 
     /// Draws each stellar of the scene shown as the session holds it

@@ -919,6 +919,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         weapons: vec![planet_type],
         hulls: vec![hull],
         looks: vec![(181, Ok(WeaponLook::default()))],
+        star_sheet: Ok(star_sheet()),
         ..trafficked(&[130], 1, 129, 3)
     };
     let mut view = FlightView::new(catalog)
@@ -953,6 +954,7 @@ fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
             sound: None,
         }),
     ));
+    catalog.star_sheet = Ok(star_sheet());
     let mut view = fighting(catalog, &[]);
     assert_eq!(
         view.take_diagnostics(),

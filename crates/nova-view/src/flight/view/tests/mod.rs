@@ -82,6 +82,7 @@ mod pilot;
 mod self_destruct;
 mod ship_drawing;
 mod shots;
+mod stars;
 mod stellars;
 mod widescreen;
 
@@ -167,7 +168,8 @@ struct FakeCatalog {
     box_sheet: Result<EffectSheet, String>,
     /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
     cursor_sheet: Result<EffectSheet, String>,
-    /// The stars' sheet: `rlëD` 700 of 16 frames of 5 × 5, by default.
+    /// The stars' sheet: none, by default, so no star is drawn
+    /// ([`star_sheet`] draws them).
     star_sheet: Result<StarSheet, String>,
     /// The asteroid types: none, by default.
     asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
@@ -358,11 +360,7 @@ fn catalog() -> FakeCatalog {
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
-        star_sheet: Ok(StarSheet {
-            image_id: 700,
-            frames: NonZeroU16::new(16).expect("non-zero"),
-            size: (5, 5),
-        }),
+        star_sheet: Err("no spïn 700".to_owned()),
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
         strings: Vec::new(),
@@ -1153,8 +1151,52 @@ fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
     }
 }
 
+/// The stars' sheet, `rlëD` 700 of 16 frames of 5 × 5, as stock's.
+fn star_sheet() -> StarSheet {
+    StarSheet {
+        image_id: 700,
+        frames: NonZeroU16::new(16).expect("non-zero"),
+        size: (5, 5),
+    }
+}
+
+/// [`catalog`] with the stars' sheet, so flight draws its stars.
+fn starry() -> FakeCatalog {
+    FakeCatalog {
+        star_sheet: Ok(star_sheet()),
+        ..catalog()
+    }
+}
+
+/// The stars `view` draws first in its world: its starfield's, `alpha` of
+/// the way between its last two snapshots, by its rules' reading of
+/// [`RuleKey::FlightStarfield`].
+fn drawn_stars(view: &View) -> Vec<DrawCommand> {
+    let source = view.session().map_or(RuleSource::Engine, |session| {
+        session.rules().source_for(RuleKey::FlightStarfield)
+    });
+    let mut list = DrawList::new();
+    let stars = (&view.stars, &view.looks);
+    super::stars::draw(&mut list, stars, source, &view.camera(), view.alpha);
+    list.iter().cloned().collect()
+}
+
+/// Whether `command` is one of the stars [`star_sheet`] draws.
+fn is_star(command: &DrawCommand) -> bool {
+    matches!(
+        command,
+        DrawCommand::Sprite {
+            image,
+            blend: Blend::Or,
+            ..
+        } if image.id == 700
+    )
+}
+
+/// The sprites drawn, the stars left out.
 fn sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
     list.iter()
+        .filter(|command| !is_star(command))
         .filter_map(|command| match command {
             DrawCommand::Sprite { image, center, .. } => Some((*image, *center)),
             _ => None,

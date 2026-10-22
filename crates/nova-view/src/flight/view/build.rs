@@ -254,6 +254,8 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            stars: crate::flight::stars::Starfield::new(),
+            stars_due: true,
             flashes: BTreeMap::new(),
             held_alts: std::cell::RefCell::default(),
             glows: crate::flight::weapon_glow::WeaponGlows::default(),

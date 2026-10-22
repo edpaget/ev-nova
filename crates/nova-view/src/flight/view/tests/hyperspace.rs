@@ -720,8 +720,7 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     assert_eq!(view.jump_effect(), None);
     let list = drawn(&view);
     assert_eq!(fade(&list), None);
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     assert!(list.iter().take(stars.len()).eq(stars.iter()));
     let flying = player(&view);
     view.input(&key(Key::Up, true));
