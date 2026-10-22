@@ -186,7 +186,7 @@ use super::layout::{
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, port_key_item,
     service_item,
 };
-use super::missions::{MissionComputerScreen, MissionInfoScreen};
+use super::missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::outfitter::{NO_ITEMS, OutfitterCatalog, OutfitterScreen};
 use super::port_map::PortMap;
@@ -1528,10 +1528,11 @@ impl SpaceportView {
     }
 
     /// Shows `row`, loaded, in the mission computer open while its offer
-    /// is selected.
-    pub fn show_computer_row(&mut self, row: &ComputerRow) {
+    /// is selected, its cut name filled by `names`
+    /// ([`MissionComputerScreen::show_row`]).
+    pub fn show_computer_row(&mut self, row: &ComputerRow, names: &impl OfferNames) {
         if let Some(Open::Computer(screen)) = &mut self.open {
-            screen.show_row(row);
+            screen.show_row(row, names);
         }
     }
 
@@ -4820,6 +4821,7 @@ mod tests {
             rows: vec![ComputerRow {
                 mission: MissionId(130),
                 name: "Run".to_owned(),
+                raw_name: "Run".to_owned(),
                 text: "Go.".to_owned(),
             }],
             today: "June 23rd, 1177 NC".to_owned(),
@@ -5751,6 +5753,15 @@ mod tests {
         assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoClosed)]);
     }
 
+    /// Fills nothing: the stored name as it is.
+    struct AsStored;
+
+    impl OfferNames for AsStored {
+        fn munged(&self, _: MissionId, raw: &str) -> Option<String> {
+            Some(raw.to_owned())
+        }
+    }
+
     #[test]
     fn the_mission_screens_ask_for_their_selected_texts_and_show_them_loaded() {
         let mut view = missioned();
@@ -5760,11 +5771,15 @@ mod tests {
         view.open_mission_computer(Ok(offers()));
         assert_eq!(view.take_computer_text_request(), Some(MissionId(130)));
         assert_eq!(view.take_computer_text_request(), None, "once");
-        view.show_computer_row(&ComputerRow {
-            mission: MissionId(130),
-            name: "Run, loaded".to_owned(),
-            text: "Go, loaded.".to_owned(),
-        });
+        view.show_computer_row(
+            &ComputerRow {
+                mission: MissionId(130),
+                name: "Run, loaded".to_owned(),
+                raw_name: "Run <DST>".to_owned(),
+                text: "Go, loaded.".to_owned(),
+            },
+            &AsStored,
+        );
         let computer = view.mission_computer().expect("open");
         let item = |item| {
             computer
@@ -5775,6 +5790,7 @@ mod tests {
                 .join(" ")
         };
         assert_eq!(item(crate::spaceport::missions::TEXT_ITEM), "Go, loaded.");
+        assert_eq!(item(crate::spaceport::missions::NAME_ITEM), "Run <DST>");
         view.open_mission_info(actives(2));
         assert_eq!(view.take_info_text_request(), Some(0));
         view.show_info_text(0, "Text 0, loaded.");

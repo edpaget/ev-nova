@@ -1,4 +1,5 @@
 use super::*;
+use crate::spaceport::OfferNames;
 
 // The mission screens.
 
@@ -39,6 +40,20 @@ fn the_mission_screens_go_through_the_session() {
         Some(computer.rows[1].clone()),
         "loaded through the session"
     );
+    let munged = OfferNames::munged(&view, MissionId(130), "Run <PAY>");
+    assert_eq!(
+        munged,
+        view.session()
+            .ok()
+            .and_then(|session| session.offer_text(MissionId(130), "Run <PAY>")),
+        "the session's munge"
+    );
+    assert!(munged.is_some_and(|name| !name.contains("<PAY>")), "filled");
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(999), "Run"),
+        None,
+        "not offered"
+    );
     assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
     assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
     let texts: Vec<_> = view
@@ -70,6 +85,7 @@ fn the_mission_screens_go_through_the_session() {
         Err(ComputerRefusal::NoneAvailable)
     );
     assert_eq!(broken.show_computer_row(MissionId(130)), None);
+    assert_eq!(OfferNames::munged(&broken, MissionId(130), "Run"), None);
     assert_eq!(
         broken.accept_mission(MissionId(130)),
         Err(AcceptError::NotOffered)

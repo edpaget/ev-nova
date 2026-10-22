@@ -56,8 +56,13 @@ use crate::sound::SimSound;
 pub struct ComputerRow {
     /// The mission.
     pub mission: MissionId,
-    /// Its name, its tags filled for the offer.
+    /// Its name, its tags filled for the offer: the list's.
     pub name: String,
+    /// Its name as the `mïsn` stores it, its tags unfilled: the offer's
+    /// name above its text is cut to its box from this, and filled after
+    /// (`_MissionDialogUpdate` @0x9f37d-0x9f40c), so the view fills the
+    /// cut name through [`Session::offer_text`].
+    pub raw_name: String,
     /// Its offer text, its tags filled for the offer: empty with none.
     pub text: String,
 }
@@ -520,6 +525,7 @@ impl Session {
                 ComputerRow {
                     mission: offer.mission,
                     name: self.offer_text(offer.mission, name).unwrap_or_default(),
+                    raw_name: name.to_owned(),
                     text: self
                         .offer_text_reading(offer.mission, &text, loaded)
                         .unwrap_or_default(),
@@ -594,6 +600,7 @@ impl Session {
             mission,
             text: self.offer_text(mission, &raw)?,
             name: self.offer_text(mission, &name)?,
+            raw_name: name,
         })
     }
 
@@ -1022,6 +1029,7 @@ mod tests {
             ("Run captain", "Go, captain."),
             "selected: its text loaded (@0x9f9bd), then its name munged again (@0x9f40c)"
         );
+        assert_eq!(shown.raw_name, "Run <PRK128>", "the name as stored");
         assert_eq!(
             session.plain_text("<PRK128>"),
             "captain",
@@ -1542,11 +1550,13 @@ mod tests {
                     ComputerRow {
                         mission: MissionId(131),
                         name: "Walk".to_owned(),
+                        raw_name: "Walk".to_owned(),
                         text: String::new(),
                     },
                     ComputerRow {
                         mission: MissionId(130),
                         name: "Run to Mars".to_owned(),
+                        raw_name: "Run to <DST>".to_owned(),
                         text: "Take this to Mars for 900.".to_owned(),
                     },
                 ],

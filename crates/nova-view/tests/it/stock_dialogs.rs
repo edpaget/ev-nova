@@ -796,6 +796,7 @@ fn the_mission_computer_lays_out_with_its_items_where_recorded() {
                 rows: vec![ComputerRow {
                     mission: MissionId(128),
                     name: "Run".to_owned(),
+                    raw_name: "Run".to_owned(),
                     text: "Go.".to_owned(),
                 }],
                 today: "June 23rd, 1177 NC".to_owned(),

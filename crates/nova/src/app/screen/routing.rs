@@ -164,9 +164,11 @@ impl AppScreen {
     /// The texts the spaceport's mission computer and mission info screen
     /// have shown selected, loaded through flight as the original loads a
     /// selected row's (`_MissionFilter` @0x9f9bd, `_MissionInfoFilter`
-    /// @0x9d89f) and shown while still selected. The screens themselves
-    /// open as they are asked for, earlier in the input
-    /// (`open_port_dialogs`).
+    /// @0x9d89f) and shown while still selected, the computer's offer name
+    /// cut by the screen and filled by flight's session. The screens
+    /// themselves open as they are asked for, earlier in the input
+    /// (`open_port_dialogs`, and the computer again after an accept), so
+    /// a selection's blank name is filled before the next frame.
     fn serve_mission_screens(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
@@ -174,7 +176,7 @@ impl AppScreen {
         if let Some(mission) = spaceport.take_computer_text_request()
             && let Some(row) = flight.show_computer_row(mission)
         {
-            spaceport.show_computer_row(&row);
+            spaceport.show_computer_row(&row, &*flight);
         }
         load_info_text(spaceport, flight);
         if let Some(mission) = spaceport.take_offer_reload() {
