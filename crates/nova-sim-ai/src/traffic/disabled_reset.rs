@@ -11,7 +11,7 @@
 //!
 //! **The reset** (@0x8fece-0x8ff13), reached only by a ship whose dispatch
 //! passes the gates ([`dispatch_gate::reaches_think`]) and that is not held
-//! in the regroup pause ([`regroup`](super::regroup), @0x8fe73-0x8febb):
+//! in the regroup pause ([`regroup`], @0x8fe73-0x8febb):
 //! `_IsDisabled` → its parent +0x9a, target +0x70, travel stellar +0x6c and
 //! defended stellar +0x8c = -1, its provocation +0x96 = 0, goal and
 //! substate 0. Here:
