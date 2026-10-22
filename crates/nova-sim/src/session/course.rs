@@ -38,7 +38,7 @@ impl Session {}
 
 impl Setup {
     /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
-    fn route_rewrite(&self) -> RuleSource {
+    pub(super) fn route_rewrite(&self) -> RuleSource {
         self.rules.source_for(RuleKey::RouteRewrite)
     }
 }

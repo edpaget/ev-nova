@@ -12,12 +12,26 @@
 //!
 //! Each system passed is the visible system that stands for its hop
 //! (@0x6bd67-0x6bdc1), written as the player's (@0x6bdd4) and explored at
-//! once (@0x6bddb), as the `jump_exploration` module says.
+//! once (@0x6bddb), as the `jump_exploration` module says, then spooled
+//! off the course (`_SpoolNextHyperRouteDest` @0x6bde0), so a move an
+//! `OnExplore` or a day makes (see the `jump_moves` module) rewrites the
+//! course the original holds there, without the hops passed.
+//!
+//! **The course's step.** The arrival's tail (@0x6c472-0x6c4c8) spools
+//! once more. Off the multi-jump branch it first clears a course whose
+//! next hop stands elsewhere than the player's system, as the moves left
+//! it. So by [`RuleKey::RouteRewrite`]'s engine reading the entry drops
+//! the arrival's hop on the multi-jump branch, and otherwise steps as an
+//! arrival off the course does (see the `course` module); by the other
+//! reading it drops the hop made, if any ([`Session::jump_course_hops`]).
 
 use super::Session;
 use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::hyperspace::{JUMP_FUEL, MultiJumpRule, hops_per_jump};
+#[cfg(doc)]
+use crate::rulebook::RuleKey;
+use crate::rulebook::RuleSource;
 
 /// What a jump's hop loop made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +79,9 @@ impl Session {
         }
         made.hops = 1;
         for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
-            let next = self.pilot.course.get(made.hops);
+            // The hop after the one being made: the hops passed are
+            // spooled off already.
+            let next = self.pilot.course.get(1);
             let Some(next) = next.and_then(|&hop| self.chart.galaxy.same_place(hop)) else {
                 break;
             };
@@ -85,8 +101,25 @@ impl Session {
             self.chart
                 .write_jump_system(&mut self.pilot, &self.setup, made.at);
             self.explore_now(catalog, chance, made.at);
+            // Spooled off the course (@0x6bde0).
+            let at = made.at;
+            self.chart
+                .course_after_arrival(&mut self.pilot, &self.setup, 1, at);
             (made.from, made.at) = (made.at, next);
         }
         made
+    }
+
+    /// The hops of the course the jump's entry steps over
+    /// ([`Entry::Jump`](super::entry::Entry::Jump)), after `hops` made, on
+    /// the `multi_jump` branch or not (see the module docs): the hops passed
+    /// are spooled already, so at most the arrival's; none off the
+    /// multi-jump branch by the engine's reading, whose entry clears a
+    /// course standing elsewhere and else drops its next hop.
+    pub(super) fn jump_course_hops(&self, hops: usize, multi_jump: bool) -> usize {
+        match self.setup.route_rewrite() {
+            RuleSource::Engine if !multi_jump => 0,
+            RuleSource::Engine | RuleSource::Bible => hops.min(1),
+        }
     }
 }

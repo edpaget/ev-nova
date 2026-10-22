@@ -32,8 +32,10 @@
 //! **Here.** [`Session::explore_now`] raises a system's
 //! [`StoryEvent::Explored`] and dispatches it at once, through the story
 //! dispatcher with the moves and a `Q`'s leave held back, so an
-//! `OnExplore`'s `M`, `N` and `Q` wait for the caller's settling, as a
-//! crön `OnStart`'s do (see the `crons` module). The events an `OnExplore`
+//! `OnExplore`'s `Q` waits for the caller's settling, as a crön
+//! `OnStart`'s does (see the `crons` module). An `OnExplore`'s `M` or `N`
+//! during a jump is the jump's own, applied at its operator (see the
+//! `jump_moves` module). The events an `OnExplore`
 //! raises are dispatched with it, as [`RuleKey::StoryReentry`] reads; the
 //! events raised before it stay queued, in order, for the next settling.
 //! `Session::arrive` explores each system passed and the arrival with it
@@ -76,7 +78,13 @@
 //! events settle at the caller's settling, after the hook: the original
 //! polls the deadlines per frame after the arrival, so that matches, and
 //! the first goal check, which comes before that settling, checks each
-//! slot's deadline itself before its goals.
+//! slot's deadline itself before its goals. A move an `OnExplore`, a day,
+//! the hook or the re-explore makes no longer waits for the settling
+//! after the entry (crons-news-ranks-fidelity phase 44): it is the jump's
+//! own, the system it leaves entered and populated once. A hop's
+//! `OnExplore` move is written over by the next hop's write (@0x6bdd4) or
+//! the arrival's (@0x6be0b), keeping only its placement, its rebuild, its
+//! hook and its kill flags (see the `jump_moves` module).
 //!
 //! [`RuleKey::StoryReentry`]: crate::RuleKey::StoryReentry
 
@@ -798,7 +806,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn events_raised_before_a_jump_wait_and_an_on_explores_move_waits_for_the_settling() {
+    fn events_raised_before_a_jump_wait_and_an_on_explores_move_is_the_jumps_own() {
+        // The arrival's `OnExplore` (@0x6be12) moves at its operator, and
+        // the jump enters the system it moved to (see the `jump_moves`
+        // module).
         let mut catalog = nebulous(vec![nebula(128, (500, -100, 200, 200), "", "b7 M133")]);
         catalog.systems.push(SystemId(133));
         let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
@@ -818,7 +829,7 @@ pub(super) mod tests {
             stellar: StellarId(128),
         };
         session.run.raise(landed);
-        jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(133)));
         assert!(on(&session, 7), "the OnExplore ran");
         assert!(!on(&session, 20), "the landing waits");
         let raised = session.story_raised();
@@ -829,9 +840,9 @@ pub(super) mod tests {
                 .any(|event| event.kind() == StoryEventKind::Explored),
             "{raised:?}"
         );
-        assert_eq!(session.system(), SystemId(131), "M133 waits");
+        assert_eq!(session.system(), SystemId(133), "M133, the jump's own");
         let settled = session.settle_script(&catalog, &mut NeverFires);
-        assert_eq!(settled.moved, Some(SystemId(133)));
+        assert_eq!(settled.moved, None, "nothing waits");
         assert!(on(&session, 20));
     }
 

@@ -378,22 +378,24 @@ impl PilotCatalog for FakePilotCatalog {
         self.place_names.clone()
     }
 
+    /// Every stellar given a mark, then each other one listed, at its
+    /// first site's position, as a `spöb`'s `xPos` and `yPos` place it.
     fn stellar_marks(&self) -> Vec<StellarMark> {
         let given = |id: StellarId| {
             self.marks.iter().any(|mark| mark.id == id) || self.unloaded.contains(&id)
         };
-        let listed = self
-            .sites
-            .iter()
-            .flat_map(|(_, sites)| sites.iter().map(|site| site.id))
-            .filter(|&id| !given(id))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .map(|id| StellarMark {
-                id,
-                place: (0, 0),
-                name: format!("#{}", id.0),
-            });
+        let mut listed = std::collections::BTreeMap::new();
+        for site in self.sites.iter().flat_map(|(_, sites)| sites) {
+            if !given(site.id) {
+                listed.entry(site.id).or_insert(site.position);
+            }
+        }
+        let listed = listed.into_iter().map(|(id, position)| StellarMark {
+            id,
+            #[allow(clippy::cast_possible_truncation)] // a fixture's small positions
+            place: (position.x as i16, position.y as i16),
+            name: format!("#{}", id.0),
+        });
         self.marks.iter().cloned().chain(listed).collect()
     }
 

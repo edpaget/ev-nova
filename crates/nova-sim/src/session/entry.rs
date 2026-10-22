@@ -99,10 +99,13 @@ use crate::traffic::{Leave, Traffic};
 /// How the player enters a system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Entry {
-    /// A hyperspace jump's arrival, having made `hops` hops along the
-    /// course, at its natural end, both warp-ups finished or halted by the
-    /// fallback's pass before it, or not, a warp-up still playing with no
-    /// fallback pass first (see [`Session::arrive`]).
+    /// A hyperspace jump's arrival, its course stepping over `hops` hops
+    /// still on it (the hops passed on the way are spooled as they are
+    /// made: see the `jump_hops` module), at its natural end, both
+    /// warp-ups finished or halted by the fallback's pass before it, or
+    /// not, a warp-up still playing with no fallback pass first (see
+    /// [`Session::arrive`]). The system entered is the player's as the
+    /// jump and its in-flight moves left it (see the `jump_moves` module).
     Jump { hops: usize, natural_end: bool },
     /// Out of a hypergate or wormhole.
     Gate,
@@ -194,6 +197,12 @@ pub(super) enum ShipPlacement {
     },
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
+    /// At this position with its velocity zeroed, its heading and its
+    /// speed along its heading kept: an in-flight `M`, which writes the
+    /// position (+0x18/+0x1c) and the velocity (+0x20/+0x24) but never
+    /// the speed (+0x48) an inertialess ship's velocity follows
+    /// (`_EvalSetExp` @0x157a6-0x157da; see the `inertialess` module).
+    Stopped(Vec2),
     /// Where it is, as it is.
     Keep,
 }
@@ -921,6 +930,10 @@ impl Session {
                 self.ship.player.velocity = Vec2::ZERO;
                 self.ship.player_speed = 0.0;
             }
+            ShipPlacement::Stopped(position) => {
+                self.ship.player.position = position;
+                self.ship.player.velocity = Vec2::ZERO;
+            }
             ShipPlacement::Keep => {}
         }
         self.port.hold_position |= placement.hold;
@@ -1623,6 +1636,39 @@ mod tests {
         };
         placed(&mut session, ShipPlacement::Arrive(moving), false);
         assert_eq!(session.player_speed(), 5.0, "the velocity's length");
+    }
+
+    #[test]
+    fn a_stop_zeroes_the_velocity_and_keeps_the_speed_along_the_heading() {
+        // An in-flight `M` writes +0x18 to +0x24 and never +0x48
+        // (`_EvalSetExp` @0x157a6-0x157da).
+        let mut session = Session::start(&catalog()).expect("starts");
+        let moving = ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: Vec2::new(3.0, -4.0),
+            heading: 1.5,
+        };
+        placed(&mut session, ShipPlacement::Arrive(moving), false);
+        placed(
+            &mut session,
+            ShipPlacement::Stopped(Vec2::new(-5.0, 6.0)),
+            false,
+        );
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                position: Vec2::new(-5.0, 6.0),
+                velocity: Vec2::ZERO,
+                heading: 1.5,
+            }
+        );
+        assert_eq!(session.player_speed(), 5.0, "kept");
+        placed(
+            &mut session,
+            ShipPlacement::AtRest(Vec2::new(-5.0, 6.0)),
+            false,
+        );
+        assert_eq!(session.player_speed(), 0.0, "at rest, none");
     }
 
     #[test]

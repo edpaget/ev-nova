@@ -45,7 +45,9 @@
 //! runs the move's tail with no move, as an `N` out of range does below,
 //! by [`ScriptEffectRules::missing_system_move`]'s engine reading, and
 //! does nothing by the other. Each move makes a save
-//! due. In flight a move gives up a jump being prepared.
+//! due. In flight a move gives up a jump being prepared. From a jump's end
+//! to its entry an in-flight move does not queue: it is the jump's own,
+//! applied at its operator with no catalog (see the `jump_moves` module).
 //!
 //! [`Session::run_set`] stays catalog-free, so a script it runs in the
 //! middle of something else (a record's hook) always queues.
@@ -520,22 +522,8 @@ impl Session {
             let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
             (site.position, dock)
         });
-        let rules = self.setup.script_effect_rules();
         let landed = self.mode.landed().is_some();
-        let ship = match first {
-            _ if keep => ShipPlacement::Keep,
-            Some((position, _)) => ShipPlacement::AtRest(position),
-            None if landed || rules.starless == RuleSource::Bible => {
-                ShipPlacement::AtRest(Vec2::ZERO)
-            }
-            None => ShipPlacement::Keep,
-        };
-        let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
-        let placement = Placement {
-            ship,
-            stellar,
-            hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
-        };
+        let placement = move_placement(first, keep, landed, self.setup.script_effect_rules());
         let arrival = Arrival {
             system,
             sites,
@@ -555,6 +543,37 @@ impl Session {
         if landed {
             self.chart.leave_owners_unset(&self.setup);
         }
+    }
+}
+
+/// Where a move puts the ship (see the module docs), the system's first
+/// stellar at `first`, with the stellar to dock at landed, if any, kept
+/// when `keep` (`N`), `landed` or not, by `rules`: `M` puts it at rest
+/// there landed, and in flight stops it there, its speed along its
+/// heading kept (`_EvalSetExp` @0x157a6-0x157da); with no stellar it
+/// stays as it is in flight, unless [`ScriptEffectRules::starless`] stops
+/// it at the centre, and landed it rests at the centre. `N` keeps the
+/// ship, and holds the next take-off's landing position landed, or in
+/// flight by [`ScriptEffectRules::keep_flag`]'s engine reading.
+pub(super) fn move_placement(
+    first: Option<(Vec2, Option<StellarId>)>,
+    keep: bool,
+    landed: bool,
+    rules: ScriptEffectRules,
+) -> Placement {
+    let ship = match first.map(|(position, _)| position) {
+        _ if keep => ShipPlacement::Keep,
+        Some(position) if landed => ShipPlacement::AtRest(position),
+        Some(position) => ShipPlacement::Stopped(position),
+        None if landed => ShipPlacement::AtRest(Vec2::ZERO),
+        None if rules.starless == RuleSource::Bible => ShipPlacement::Stopped(Vec2::ZERO),
+        None => ShipPlacement::Keep,
+    };
+    let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
+    Placement {
+        ship,
+        stellar,
+        hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
     }
 }
 
@@ -995,6 +1014,19 @@ mod tests {
             Vec2::new(300.0, 0.0),
             "a gate as any stellar"
         );
+    }
+
+    #[test]
+    fn m_in_flight_keeps_the_speed_along_the_heading() {
+        // `_EvalSetExp` zeroes +0x20/+0x24 (@0x157d1, @0x157da) and never
+        // writes +0x48, which an inertialess ship's velocity follows from
+        // the next frame (`_AdjustInertialessShipVelocity` @0x6d43a).
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.ship.player_speed = 4.0;
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        assert_eq!(session.player_speed(), 4.0, "kept");
     }
 
     /// `pilot` saved and loaded, then flown.

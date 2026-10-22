@@ -175,6 +175,7 @@ impl Session {
 
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
+        let queued = self.run.queued.moves.len();
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
             SetOp::RemoveOutfit(outfit) => {
@@ -235,6 +236,9 @@ impl Session {
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
         }
+        // A move during a jump's window is the jump's own, applied at its
+        // operator (see the `jump_moves` module).
+        self.absorb_moves(queued, chance);
     }
 
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`

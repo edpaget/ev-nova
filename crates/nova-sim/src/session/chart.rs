@@ -15,6 +15,7 @@ use crate::story::OverlaidGalaxy;
 use crate::traffic::npc::NpcId;
 
 use super::LastRefresh;
+use super::jump_moves::JumpWindow;
 use super::nav::NavSlot;
 
 /// What the player sees of the galaxy and has selected in it, in
@@ -77,6 +78,11 @@ pub(super) struct Chart {
     /// What a session earlier in the run left, which a new pilot's
     /// neighbour pass reads by the engine; `None` at launch.
     pub(super) carried_refresh: Option<LastRefresh>,
+    /// A jump's window, from its end to its entry, while one is open: an
+    /// in-flight move in it is the jump's own (see the `jump_moves`
+    /// module). It sits with the jump's other writes of the player's
+    /// system ([`Chart::write_jump_system`]).
+    pub(super) jump_window: Option<JumpWindow>,
 }
 
 impl Chart {
@@ -101,6 +107,7 @@ impl Chart {
             galaxy_stale: false,
             last_refresh: LastRefresh::default(),
             carried_refresh: None,
+            jump_window: None,
         }
     }
 }

@@ -10,6 +10,7 @@ use crate::catalog::{
     StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::market::Goods;
 use crate::mission::StellarMarks;
@@ -101,6 +102,17 @@ pub(super) struct Statics {
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     pub(super) stellar_marks: StellarMarks,
+}
+
+impl Statics {
+    /// `stellar`'s own position, its `spöb`'s raw `xPos` and `yPos`
+    /// ([`StellarMarks::place`]): what `_EvalSetExp`'s `M` (@0x157a6,
+    /// @0x157c4) and `Y` (@0x15a8b) read; the centre for one with no
+    /// record.
+    pub(super) fn stellar_position(&self, stellar: StellarId) -> Vec2 {
+        let (x, y) = self.stellar_marks.place(stellar).unwrap_or_default();
+        Vec2::new(f32::from(x), f32::from(y))
+    }
 }
 
 #[cfg(test)]

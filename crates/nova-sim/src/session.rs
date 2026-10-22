@@ -473,6 +473,7 @@ mod jump_arrival;
 mod jump_collapse;
 mod jump_exploration;
 mod jump_hops;
+mod jump_moves;
 mod kept_berths;
 mod kept_rescues;
 mod last_refresh;
@@ -3009,13 +3010,14 @@ impl Session {
     /// so a crön on any of the jump's days reads the bits its
     /// `OnExplore`s set (the original has no per-hop days to place).
     ///
-    /// The systems hopped are taken off the course. Those passed through
-    /// on the way are not entered; only the last is: explored, its
-    /// stellars read from `catalog`, the nav system off and then the
-    /// course's next hop cued, and the ship placed just outside its
-    /// no-jump zone, at rest on the side facing the system it last left
-    /// (see [`arrival`]), with its reserves as they were, so it can jump
-    /// on at once. It raises
+    /// The systems hopped are taken off the course, each passed through
+    /// as it is made, the last at the entry (see the `jump_hops` module).
+    /// Those passed through on the way are not entered; only the last is:
+    /// explored, its stellars read from `catalog`, the nav system off and
+    /// then the course's next hop cued, with its reserves as they were.
+    /// The ship is placed as the jump ends, before its explorations, by
+    /// [`RuleKey::JumpArrival`]'s engine reading, and else at the entry
+    /// (see the `jump_arrival` module). It raises
     /// [`SimMessage::Arrived`] for that last system, or the system's
     /// message buoy, [`SimMessage::Buoy`], in its place (see the `buoys`
     /// module). The system arrived in
@@ -3042,16 +3044,22 @@ impl Session {
     /// (@0x6bddb), then the one arrived in (@0x6be12), each
     /// [`StoryEvent::Explored`] dispatched there and then with the
     /// activity of the last refresh, so a nebula's `OnExplore` runs before
-    /// the refresh and the days, its `M`, `N` and `Q` waiting for the
-    /// caller's settling. Once the refresh is written it explores the
-    /// arrival again (@0x6c1db), the system the entry will resolve it to,
-    /// with the activity the refresh wrote, before it is entered and
-    /// populated. [`StoryEvent::EnteredSystem`] follows the days and is
-    /// dispatched at once, before the re-explore and the population
-    /// (@0x6c15d), its moves and a `Q`'s leave waiting for the caller's
-    /// settling with the days' events; the ship goals are checked once
-    /// the system is set up, each slot's deadline first (see the
-    /// `jump_exploration` module).
+    /// the refresh and the days, its `Q` waiting for the caller's
+    /// settling. Once the refresh is written it explores the arrival
+    /// again (@0x6c1db), the system the entry will resolve it to, with
+    /// the activity the refresh wrote, before it is entered and populated.
+    /// [`StoryEvent::EnteredSystem`] follows the days and is dispatched at
+    /// once, before the re-explore and the population (@0x6c15d), a `Q`'s
+    /// leave waiting for the caller's settling with the days' events; the
+    /// ship goals are checked once the system is set up, each slot's
+    /// deadline first (see the `jump_exploration` module).
+    ///
+    /// From the jump's end to its entry an in-flight `M` or `N` is the
+    /// jump's own, applied at its operator: an `OnExplore`'s, a day's, the
+    /// hook's or the re-explore's (see the `jump_moves` module). The
+    /// refresh's move, the hook, the re-explore and the entry read the
+    /// player's system as the moves left it, and the system is entered and
+    /// populated once.
     ///
     /// Each system explored is first written as the player's system, as
     /// the original writes +0x74 (@0x6bdd4, @0x6be0b), and after the
@@ -3122,6 +3130,9 @@ impl Session {
         // `arrival_system` module).
         let raw = self.chart.selected_con_target(&self.pilot, first);
         self.mode.end_jump();
+        // From here to the entry an in-flight move is the jump's own (see
+        // the `jump_moves` module).
+        self.chart.open_jump_window();
         self.ship.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
         // module).
@@ -3199,10 +3210,11 @@ impl Session {
         }
         self.chart.leave_owners_unset(&self.setup);
         // The refresh's move out of a system it hid (@0x99918), as the
-        // entry will resolve it: the player's system from here on.
-        let moved_to =
-            self.chart
-                .jump_refresh_move(&mut self.pilot, &self.setup, &mut self.out, written);
+        // entry will resolve it, of the system the jump wrote or an
+        // `OnExplore`'s move left: the player's system from here on.
+        let left = self.pilot.system;
+        self.chart
+            .jump_refresh_move(&mut self.pilot, &self.setup, &mut self.out, left);
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);
@@ -3217,33 +3229,21 @@ impl Session {
         // and the setup (@0x6c15d): its events settled at once, the days'
         // left for the caller's settling.
         self.enter_jump_hook_now(catalog, &mut &mut *chance);
-        let entered = Arrival {
-            system: written,
-            sites: self.chart.read_sites(catalog, written),
-            placement: Placement {
-                ship: self.jump_entry_placement(from, at),
-                stellar: None,
-                hold: false,
-            },
-        };
-        // The entry moves the player only out of a system the refresh left
-        // hidden, by the engine's `arrival_system`, as the refresh's move
-        // does (@0x99918); by its other reading it resolves the arrival by
-        // place.
         // The arrival explored again, with the activity the refresh wrote,
         // before the setup populates it (`_AutoSetExploration` @0x6c1db,
         // `_SetupShipsInSystem` @0x6c1f9): the system the entry will
-        // resolve it to, as the refresh's move left +0x74.
-        self.explore_now(catalog, &mut &mut *chance, moved_to);
+        // resolve it to, as the refresh's move and the moves since left
+        // +0x74.
+        let system = self.pilot.system;
+        self.explore_now(catalog, &mut &mut *chance, system);
         self.pilot.jumped_from = Some(from);
-        // The entry leaves the departure, handed in: the player's system
-        // is the one the jump wrote, and the entry writes its own
-        // (`set_player_system`).
-        self.enter_system(
-            Entry::Jump { hops, natural_end },
-            departure,
-            entered,
-            catalog,
+        let course_hops = self.jump_course_hops(hops, multi_jump);
+        self.enter_jump_system(
+            Entry::Jump {
+                hops: course_hops,
+                natural_end,
+            },
+            (departure, from, at),
             catalog,
             chance,
         );

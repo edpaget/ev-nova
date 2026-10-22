@@ -28,7 +28,10 @@
 //! rescue and derives none for a hop or the arrival; it writes the
 //! refresh, forgets the rescues and leaves the owners unset again before
 //! the days, so the wait lasts through the entry's population and ends at
-//! its rebuild. A landed `M` or `N` (`Session::move_to`) leaves them unset
+//! its rebuild. An in-flight `M` or `N` during the jump ends it early, as
+//! its HSSV (@0x159a3) rescues for the system it moves to (see the
+//! `jump_moves` module); the next write of a hop or the arrival, or the
+//! refresh, starts it again. A landed `M` or `N` (`Session::move_to`) leaves them unset
 //! until the take-off's rebuild, which follows its population, or until a
 //! landing's refresh: a land check's `M` settles before the `REOFFER`
 //! refresh under `story_reentry = engine`, so it leaves no window, as in

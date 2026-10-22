@@ -378,9 +378,13 @@ impl Session {
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                // A jump's hook runs before the setup, so its first check
-                // waits for the setup (`Session::arrive`).
-                if self.mode.landed().is_none() && how != Entrance::Jump {
+                // A jump's hook, and a move's during the jump, run before
+                // the setup, so their first check waits for the setup
+                // (`Session::arrive`; see the `jump_moves` module).
+                if self.mode.landed().is_none()
+                    && how != Entrance::Jump
+                    && !self.chart.in_jump_window()
+                {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
@@ -1577,7 +1581,7 @@ pub(super) mod tests {
     use crate::mission::FailedBy;
     use crate::mission::aux_ships::AuxShips;
     use crate::session::mission_screens::MissionTextKind;
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, ship};
+    use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, planet, ship};
     use crate::traffic::npc::{Mode, Npc};
 
     /// `STR#` 7000 names; 7001 subtitles.
@@ -2417,6 +2421,42 @@ pub(super) mod tests {
         jump_to(&mut session, &catalog, 131);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert_eq!(session.npcs().len(), 2, "set up");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+    }
+
+    #[test]
+    fn a_move_on_a_jumps_day_checks_no_goal_before_the_setup() {
+        // As above, its ships in 133, where a crön's `M133` on the jump's
+        // day takes the player: the move's hook (@0x159a8) checks no goal,
+        // as the check is per frame (@0x9edb5), and the jump's setup brings
+        // the ships and auto-aborts first.
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 133;
+        catalog.systems.push(SystemId(133));
+        catalog
+            .sites
+            .push((SystemId(133), vec![planet(150, 300.0, -200.0)]));
+        let mut on_the_day = crate::session::crons::tests::scripted(128, 1, "M133", "");
+        on_the_day.enable_on = crate::control::Test::parse("b30");
+        catalog.crons.push(on_the_day);
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+        }
+        session.run_set(&SetExpr::parse("b30").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        let _ = shown(&mut session);
+        session.ship.player.position = Vec2::ZERO;
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(133)));
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert!(
             !shown(&mut session)
                 .iter()

@@ -171,11 +171,8 @@ impl Session {
     /// them are dead since it, then the sprite pool handed out (see the
     /// `stale_sprites` module). Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
-        self.chart.rewrite_course(&mut self.pilot, &self.setup);
-        self.chart.share_explored(&mut self.pilot, &self.setup);
-        self.chart.rework_known(&self.pilot);
         self.chart
-            .keep_rescues(&self.pilot, &self.statics, &self.setup);
+            .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(
@@ -485,6 +482,19 @@ impl Space {
 }
 
 impl Chart {
+    /// A rebuild point's catalog-free parts, docked or not (see the module
+    /// docs): the course rewritten, the exploration shared by place, the
+    /// known set worked out afresh and the rescue kept for `pilot`'s
+    /// system, which ends a wait for the rebuild. `Session::rebuild_quietly`
+    /// runs them before its stellars, and a jump's in-flight move alone
+    /// (see the `jump_moves` module).
+    pub(super) fn rebuild_chart(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup) {
+        self.rewrite_course(pilot, setup);
+        self.share_explored(pilot, setup);
+        self.rework_known(pilot);
+        self.keep_rescues(pilot, statics, setup);
+    }
+
     /// Destroys a new pilot's stellars that start the game destroyed
     /// (`Flags2` 0x0040), within the original's slots, each with the
     /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
