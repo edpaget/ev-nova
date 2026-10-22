@@ -841,10 +841,10 @@ fn centred(x: f32, y: f32, w: f32, h: f32) -> Rect {
 }
 
 /// Where the stellar at (0, -300) is drawn with the camera on the ship as
-/// drawn.
+/// drawn, at the play area's centre, (415, 384).
 fn stellar_drawn(harness: &Harness) -> Rect {
     let shown = harness.flight().shown_position();
-    centred(512.0 - shown.x, 384.0 - 300.0 - shown.y, 8.0, 8.0)
+    centred(415.0 - shown.x, 384.0 - 300.0 - shown.y, 8.0, 8.0)
 }
 
 fn date(harness: &Harness) -> (u8, u8, i32) {

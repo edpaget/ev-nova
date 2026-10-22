@@ -60,6 +60,7 @@ use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
+mod anchor;
 mod boarding;
 mod cloak;
 mod combat;
@@ -998,6 +999,11 @@ impl StatusBars for FakeCatalog {
 fn flight() -> View {
     FlightView::new(catalog())
 }
+
+/// Where flight draws the player's ship in Nova's own 1024 x 768 by the
+/// original's reading of [`RuleKey::FlightAnchor`]: the play area's
+/// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
+const PLAYER_AT: Point = Point::new(415.0, 384.0);
 
 fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)

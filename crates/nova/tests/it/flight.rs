@@ -461,9 +461,10 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
         ]
     );
     let start = quads(&first);
-    assert_eq!(start[0].dest, centred(512.0, -216.0, 8.0, 8.0));
-    assert_eq!(start[1].dest, centred(812.0, 184.0, 6.0, 6.0));
-    assert_eq!(start[2].dest, centred(512.0, 384.0, 1.0, 1.0), "the ship");
+    // The ship at the play area's centre, (415, 384).
+    assert_eq!(start[0].dest, centred(415.0, -216.0, 8.0, 8.0));
+    assert_eq!(start[1].dest, centred(715.0, 184.0, 6.0, 6.0));
+    assert_eq!(start[2].dest, centred(415.0, 384.0, 1.0, 1.0), "the ship");
     for expected in ["Alpha Prime", "Alpha Station", "Alpha (sÿst 128)"] {
         assert!(
             texts(&first).contains(&expected.to_owned()),
@@ -811,10 +812,11 @@ fn the_player_can_fly_to_every_stellar_in_the_system() {
         let ship = point(harness.ship().position);
         assert!(distance(ship, target) < 50.0, "{ship:?} from {target:?}");
         // The camera is on the ship, so the stellar is drawn near the
-        // middle of the screen (the ship is drawn up to a step behind).
+        // play area's centre, (415, 384) (the ship is drawn up to a step
+        // behind).
         let drawn = centre(quads(&arrived)[index].dest);
         assert!(
-            distance(drawn, Point::new(512.0, 384.0)) < 55.0,
+            distance(drawn, Point::new(415.0, 384.0)) < 55.0,
             "stellar {index} drawn at {drawn:?}"
         );
     }

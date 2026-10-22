@@ -13,7 +13,7 @@ fn a_and_b() -> View {
     flight_among(vec![
         site(128, (10.0, 0.0), StellarFlags::CAN_LAND),
         wide,
-        site(130, (330.0, 0.0), StellarFlags::CAN_LAND),
+        site(130, (427.0, 0.0), StellarFlags::CAN_LAND),
     ])
 }
 
@@ -119,14 +119,14 @@ fn a_right_click_or_a_release_selects_nothing() {
 fn a_click_on_the_status_panel_keeps_the_target_even_over_a_stellar() {
     let mut view = a_and_b();
     tap(&mut view, LAND);
-    let c = on_screen(&view, (330.0, 0.0));
+    let c = on_screen(&view, (427.0, 0.0));
     let edge = VIEW_SIZE.0 - STATUS_BAR_WIDTH;
     assert!(c.x > edge, "{c:?} is under the panel");
     click(&mut view, c);
     assert_eq!(nav_target(&view), Some(StellarId(128)), "over C");
     // C's box reaches 26 pixels either side of it, across the panel's
     // edge, which decides.
-    let left_of_c = on_screen(&view, (330.0 - 26.0, 0.0)).x;
+    let left_of_c = on_screen(&view, (427.0 - 26.0, 0.0)).x;
     assert!(left_of_c < edge && edge < c.x);
     view.take_sounds();
     click(&mut view, at(edge, c.y));

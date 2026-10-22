@@ -564,8 +564,8 @@ fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     let trader = session.npcs()[0].clone();
     assert_eq!(trader.ship, ShipId(129));
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
-    // The player is at the centre of the screen, (512, 384).
-    assert_eq!(traders(&first), [centred(612.0, 284.0, 2.0, 2.0)]);
+    // The player is at the play area's centre, (415, 384).
+    assert_eq!(traders(&first), [centred(515.0, 284.0, 2.0, 2.0)]);
     // The planet's 2 x 2 oval on the radar; the trader joins it at the
     // radar's next refresh, within 8 ticks (16 frames), a dim pixel where
     // it is then: (100, -100) is 3.125 radar pixels each way from the

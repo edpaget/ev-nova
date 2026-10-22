@@ -174,7 +174,7 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
     let view = FlightView::new(sheetless);
     let list = drawn(&view);
     let mut placeholder = DrawList::new();
-    crossed_box(&mut placeholder, VIEW_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut placeholder, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
     for line in &placeholder {
         assert_all_in(&list, DrawLayer::World, |command| command == line);
     }

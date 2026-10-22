@@ -101,16 +101,20 @@ struct Star {
 }
 
 /// The columns and rows of the cells overlapping a view `view` logical
-/// units in size, for a layer offset by `offset`: at most
-/// [`cell_counts`].
-fn visible_cells(offset: Point, view: (f32, f32)) -> (RangeInclusive<i32>, RangeInclusive<i32>) {
-    let (half_width, half_height) = (view.0 / 2.0, view.1 / 2.0);
+/// units in size, for a layer offset by `offset` and drawn about the
+/// screen point `anchor`: the layer points from `offset − anchor` to
+/// `offset + (view − anchor)` on each axis, at most [`cell_counts`].
+fn visible_cells(
+    offset: Point,
+    anchor: Point,
+    view: (f32, f32),
+) -> (RangeInclusive<i32>, RangeInclusive<i32>) {
     // The cells from the one holding `low` to the one holding `high`.
     let cells =
         |low: f32, high: f32| (low / CELL_SIZE).floor() as i32..=(high / CELL_SIZE).floor() as i32;
     (
-        cells(offset.x - half_width, offset.x + half_width),
-        cells(offset.y - half_height, offset.y + half_height),
+        cells(offset.x - anchor.x, offset.x + (view.0 - anchor.x)),
+        cells(offset.y - anchor.y, offset.y + (view.1 - anchor.y)),
     )
 }
 
@@ -122,7 +126,7 @@ fn stars(camera: &Camera) -> Vec<Star> {
     let (max_columns, max_rows) = cell_counts(view);
     for (index, layer) in LAYERS.iter().enumerate() {
         let offset = layer_offset(camera, layer);
-        let (columns, rows) = visible_cells(offset, view);
+        let (columns, rows) = visible_cells(offset, anchor, view);
         // Never more cells than can overlap the view, so the work per
         // frame is bounded whatever the camera does.
         for y in rows.take(max_rows) {
@@ -181,7 +185,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::geometry::Bounds;
-    use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
+    use crate::system::camera::{Anchor, VIEW_CENTER, VIEW_SIZE};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -432,7 +436,7 @@ mod tests {
             at(8250.5, -7124.25),
         ];
         for offset in offsets {
-            let (columns, rows) = visible_cells(offset, VIEW_SIZE);
+            let (columns, rows) = visible_cells(offset, VIEW_CENTER, VIEW_SIZE);
             let (max_columns, max_rows) = cell_counts(VIEW_SIZE);
             assert!(
                 columns.clone().count() <= max_columns,
@@ -485,6 +489,56 @@ mod tests {
                     n <= (max_columns * max_rows) as u32 * LAYERS[layer].stars_per_cell,
                     "{n} on layer {layer}"
                 );
+            }
+        }
+    }
+
+    /// Every star of every cell within a wide margin of `camera`'s centre
+    /// that lands on screen, as (layer, layer point) to screen point.
+    fn every_star_on_screen(camera: &Camera) -> BTreeMap<(usize, (u32, u32)), Point> {
+        let (view, anchor) = (camera.view_size(), camera.anchor());
+        let mut every = BTreeMap::new();
+        for (index, layer) in LAYERS.iter().enumerate() {
+            let offset = layer_offset(camera, layer);
+            let (cx, cy) = (
+                (offset.x / CELL_SIZE).floor() as i32,
+                (offset.y / CELL_SIZE).floor() as i32,
+            );
+            for y in cy - 8..=cy + 8 {
+                for x in cx - 8..=cx + 8 {
+                    for point in cell_stars(index, x, y) {
+                        let screen = at(
+                            anchor.x + (point.x - offset.x),
+                            anchor.y + (point.y - offset.y),
+                        );
+                        if (0.0..=view.0).contains(&screen.x) && (0.0..=view.1).contains(&screen.y)
+                        {
+                            every.insert((index, key(point)), screen);
+                        }
+                    }
+                }
+            }
+        }
+        every
+    }
+
+    #[test]
+    fn a_play_area_anchored_camera_draws_every_star_on_screen_and_no_more() {
+        for view in [VIEW_SIZE, (1365.0, 768.0), (1367.0, 769.0)] {
+            for (x, y) in [
+                (0.0, 0.0),
+                (128.0, 64.0),
+                (-5000.0, 7777.0),
+                (300.0, -130.0),
+            ] {
+                for anchor in [Anchor::PlayAreaCentre, Anchor::ViewCentre] {
+                    let camera = Camera::centred_on_in(at(x, y), view).with_anchor(anchor);
+                    assert_eq!(
+                        by_layer_point(&camera),
+                        every_star_on_screen(&camera),
+                        "{anchor:?} {view:?} at ({x}, {y})"
+                    );
+                }
             }
         }
     }

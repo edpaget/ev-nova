@@ -44,12 +44,12 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
-            (ImageKey::sprite(1129, 1), at(812.0, 184.0)),
-            (ImageKey::sprite(2001, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2101, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2201, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1128, 0), at(415.0, -216.0)),
+            (ImageKey::sprite(1129, 1), at(715.0, 184.0)),
+            (ImageKey::sprite(2001, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2101, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2201, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ],
         "after the stellars, before the player, its glow and lights over it"
     );
@@ -133,9 +133,18 @@ fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
 
 #[test]
 fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
-    let area = play_area(VIEW_SIZE);
+    let area = play_area(VIEW_SIZE, crate::system::camera::Anchor::PlayAreaCentre);
     assert_eq!(
         area,
+        nova_sim::cloak::Area {
+            left: -415.0,
+            top: -384.0,
+            right: 1024.0 - 194.0 - 415.0,
+            bottom: 384.0,
+        }
+    );
+    assert_eq!(
+        play_area(VIEW_SIZE, crate::system::camera::Anchor::ViewCentre),
         nova_sim::cloak::Area {
             left: -512.0,
             top: -384.0,
@@ -599,7 +608,7 @@ fn an_npc_whose_sheet_cannot_be_read_is_a_crossed_box() {
     view.tick(TICK);
     let list = drawn(&view);
     let mut boxed = DrawList::new();
-    crossed_box(&mut boxed, at(612.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut boxed, at(515.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
     let commands: Vec<_> = list.iter().cloned().collect();
     let expected: Vec<_> = boxed.iter().cloned().collect();
     assert!(

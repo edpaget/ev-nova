@@ -577,7 +577,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
             &view.camera(),
             Duration::ZERO,
         );
-        expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+        expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
     hud::draw(
         &mut expected,
@@ -619,9 +619,9 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
-            (ImageKey::sprite(1129, 0), at(812.0, 184.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1128, 0), at(415.0, -216.0)),
+            (ImageKey::sprite(1129, 0), at(715.0, 184.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ]
     );
     assert_eq!(
@@ -632,7 +632,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
 }
 
 #[test]
-fn the_ship_stays_at_the_screens_centre_as_the_stellars_go_by() {
+fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
     let mut view = flight();
     view.input(&key(Key::Up, true));
     view.input(&key(Key::Right, true));
@@ -644,12 +644,12 @@ fn the_ship_stays_at_the_screens_centre_as_the_stellars_go_by() {
         shown[2],
         (
             ImageKey::sprite(2000, view.frame().expect("a sheet")),
-            VIEW_CENTER
+            PLAYER_AT
         )
     );
     assert_ne!(view.frame(), Some(0));
     assert_eq!(shown[0].1, camera.world_to_screen(at(0.0, -600.0)));
-    assert_ne!(shown[0].1, at(512.0, -216.0), "the stellars moved");
+    assert_ne!(shown[0].1, at(415.0, -216.0), "the stellars moved");
     let mut stars = DrawList::new();
     starfield::draw(&mut stars, &camera);
     assert!(
@@ -678,7 +678,7 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
     let list = drawn(&view);
     assert_eq!(sprites(&list).len(), 2, "the stellars only");
     let mut expected = DrawList::new();
-    crossed_box(&mut expected, VIEW_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut expected, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
     assert_eq!(
         lines(&list)[..expected.len()],
         *lines(&expected),
@@ -693,8 +693,8 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
         Some(overlay(
             "Sprite unavailable: no shän 128 for shïp 128",
             at(
-                VIEW_CENTER.x - PLACEHOLDER_SIZE / 2.0,
-                VIEW_CENTER.y + PLACEHOLDER_SIZE / 2.0 + MESSAGE_GAP
+                PLAYER_AT.x - PLACEHOLDER_SIZE / 2.0,
+                PLAYER_AT.y + PLACEHOLDER_SIZE / 2.0 + MESSAGE_GAP
             ),
             OVERLAY_SIZE,
             Color::ERROR
@@ -724,8 +724,8 @@ fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
     assert_eq!(
         ship_sprites(&view),
         [
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
-            (ImageKey::sprite(2200, 0), VIEW_CENTER),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
+            (ImageKey::sprite(2200, 0), PLAYER_AT),
         ]
     );
     view.input(&key(Key::Up, true));
@@ -1031,7 +1031,7 @@ fn lights_commands(view: &View) -> Vec<DrawCommand> {
 fn lights_at(tint: Color) -> DrawCommand {
     DrawCommand::Sprite {
         image: ImageKey::sprite(2200, 0),
-        center: VIEW_CENTER,
+        center: PLAYER_AT,
         tint,
         blend: Blend::Or,
     }

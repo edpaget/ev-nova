@@ -587,8 +587,9 @@ impl<
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
+        let anchor = self.anchor();
         if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area(self.view));
+            session.set_play_area(play_area(self.view, anchor));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.hold_self_destruct(self_destruct);

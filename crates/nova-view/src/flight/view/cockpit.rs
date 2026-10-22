@@ -35,13 +35,14 @@ use nova_sim::sprite_layer::SpriteLayer;
 use super::sprites::{Sprite, sprite_stack};
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::{Camera, VIEW_SIZE};
+use crate::system::camera::{Anchor, Camera, VIEW_SIZE};
 use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Input, Key, Point, UiSound};
+use nova_sim::RuleSource;
 
 use super::{
     AFTERBURNER_KEY, BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
@@ -335,10 +336,21 @@ impl<C> FlightView<C> {
         self.flashes.get(&ship).and_then(ShieldFlash::drawn)
     }
 
-    /// The camera, on the ship as drawn, in the view's size.
+    /// The camera, on the ship as drawn, in the view's size, drawing it at
+    /// the flight's [`anchor`](FlightView::anchor).
     #[must_use]
     pub fn camera(&self) -> Camera {
-        Camera::centred_on_in(self.shown_position(), self.view)
+        Camera::centred_on_in(self.shown_position(), self.view).with_anchor(self.anchor())
+    }
+
+    /// Where flight draws the player's ship, as the session's rules read
+    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), the
+    /// original's play area centre with no session.
+    pub(super) fn anchor(&self) -> Anchor {
+        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(nova_sim::RuleKey::FlightAnchor)
+        });
+        Anchor::in_flight(source)
     }
 
     /// The view's size in logical units: Nova's 1024 x 768 until

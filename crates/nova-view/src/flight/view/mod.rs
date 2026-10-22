@@ -70,10 +70,13 @@
 //! (`_SetupWind` @0x1b720, `_InitSprites`, `_SetupSpriteWorld` @0x21b54),
 //! so each place here takes the view's size:
 //!
-//! - the camera keeps the ship at the view's centre
-//!   ([`FlightView::camera`]; the original's `_screenCenter` is the play
-//!   area's, filed as
-//!   rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre);
+//! - the camera keeps the ship at the play area's centre, the original's
+//!   `_screenCenter`, (415, 384) at 1024 x 768, or by
+//!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s other
+//!   reading at the view's centre ([`FlightView::camera`],
+//!   [`Anchor`](crate::system::camera::Anchor)); the play area, the
+//!   brackets, clicks in space and the starfield are placed from the same
+//!   anchor;
 //! - the status bar against the right edge
 //!   ([`bar_origin`](super::hud::bar_origin)), the message box across the
 //!   bottom ([`message_box`](super::hud::message_box)), the Red Alert
@@ -640,7 +643,7 @@ use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::Camera;
+use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
@@ -1656,11 +1659,11 @@ const HEAVY_MASS: f32 = 99.0;
 /// The play area about the ship, in world units, in a view `view` in size:
 /// the view left of the status bar, x from 0 to width − 194 as
 /// `_SetupSpriteWorld` makes the sprite world (@0x21b54-0x21ba4), the ship
-/// drawn at the camera's anchor. The session reads it to tell whether a
-/// ship is on screen, for cloaks, scanners and observed goals, the
-/// brackets and the asteroid field.
-fn play_area(view: (f32, f32)) -> nova_sim::cloak::Area {
-    let camera = Camera::centred_on_in(Point::default(), view);
+/// drawn at `anchor`, as the flight's camera draws it. The session reads it
+/// to tell whether a ship is on screen, for cloaks, scanners and observed
+/// goals, the brackets and the asteroid field.
+fn play_area(view: (f32, f32), anchor: Anchor) -> nova_sim::cloak::Area {
+    let camera = Camera::centred_on_in(Point::default(), view).with_anchor(anchor);
     let top_left = camera.screen_to_world(Point::default());
     let bottom_right = camera.screen_to_world(Point::new(view.0 - STATUS_BAR_WIDTH, view.1));
     nova_sim::cloak::Area {

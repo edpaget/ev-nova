@@ -218,14 +218,14 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
     let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let over = npc_on_screen(&view, id);
     assert!(
-        (over.x - VIEW_CENTER.x).abs() > 64.0 || (over.y - VIEW_CENTER.y).abs() > 64.0,
+        (over.x - PLAYER_AT.x).abs() > 64.0 || (over.y - PLAYER_AT.y).abs() > 64.0,
         "the NPC at {over:?} sits clear of the player's ship"
     );
     tap(&mut view, TARGET_KEY);
     assert_eq!(target_of(&view), Some(id));
     view.take_sounds();
     // The camera centres on the player, so its ship is drawn at the centre.
-    click(&mut view, VIEW_CENTER);
+    click(&mut view, PLAYER_AT);
     assert_eq!(target_of(&view), None);
     assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
 }
@@ -234,7 +234,7 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
 fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
     let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     view.take_sounds();
-    click(&mut view, VIEW_CENTER);
+    click(&mut view, PLAYER_AT);
     assert_eq!(target_of(&view), None);
     assert_eq!(view.take_sounds(), []);
 }
@@ -366,15 +366,15 @@ fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
 fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
     let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let frame = |view: &mut View| {
-        view.input(&Input::PointerMoved(VIEW_CENTER));
+        view.input(&Input::PointerMoved(PLAYER_AT));
         ticks(view, 2);
         cursor_sprites(&drawn(view))
     };
-    assert_eq!(frame(&mut view), [(0, VIEW_CENTER)], "no target");
+    assert_eq!(frame(&mut view), [(0, PLAYER_AT)], "no target");
     view.input(&key(TARGET_KEY, true));
     view.input(&key(TARGET_KEY, false));
     assert!(view.session().expect("flying").target().is_some());
-    assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
+    assert_eq!(frame(&mut view), [(1, PLAYER_AT)], "a target");
 }
 
 #[test]
@@ -477,7 +477,7 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
         view.input(&key(TARGET_KEY, true));
         view.input(&key(TARGET_KEY, false));
         assert!(view.session().expect("flying").target().is_some());
-        hovers(&mut view, Point::new(VIEW_CENTER.x, VIEW_CENTER.y + off))
+        hovers(&mut view, Point::new(PLAYER_AT.x, PLAYER_AT.y + off))
     };
     let engine = Rulebook::default;
     assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
