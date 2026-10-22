@@ -554,4 +554,84 @@ mod tests {
         session.ship.cloak.cloak = at(12.0, 1);
         assert_eq!(session.player_cloak_shown(), CloakShown::Fading(12.0));
     }
+
+    // The land key's cloak refusal (`_HandlePlayerDockRequest`
+    // @0x66a85-0x66ae9).
+
+    /// `catalog`'s session over planet 128, fully cloaked, its sounds
+    /// taken.
+    fn cloaked_at_start(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.ship.cloak.cloak = FULL;
+        session.take_sounds();
+        session
+    }
+
+    #[test]
+    fn a_cloaked_player_is_refused_landing_with_one_beep_and_requests_no_clearance() {
+        use crate::catalog::StellarId;
+        use crate::landing::LandingRefusal;
+        use crate::session::StellarPick;
+        let catalog = nova_sim_catalog::fixture::catalog();
+        let mut session = cloaked_at_start(&catalog);
+        assert_eq!(session.land(), Err(LandingRefusal::Cloaked));
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "selected");
+        assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x67e8f");
+        session.select_stellar(StellarPick::Slot(0));
+        session.take_sounds();
+        assert_eq!(session.land(), Err(LandingRefusal::Cloaked));
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.port.dock, None, "no clearance request");
+        session.select_stellar(StellarPick::Slot(1));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Cloaked),
+            "too far: the reach comes after (@0x66c23)"
+        );
+        session.ship.cloak.cloak = at(10.0, 1);
+        session.select_stellar(StellarPick::Slot(0));
+        assert!(
+            session.land().is_ok(),
+            "still fading in: it lands as before"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_player_over_a_hostile_stellar_is_refused_as_not_landable_first() {
+        use crate::catalog::StellarId;
+        use crate::landing::LandingRefusal;
+        use crate::session::StellarPick;
+        let mut catalog = nova_sim_catalog::fixture::catalog();
+        catalog.sites[0].1[0].flags = 0;
+        let mut session = cloaked_at_start(&catalog);
+        session.select_stellar(StellarPick::Slot(0));
+        session.take_sounds();
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            }),
+            "@0x66977 comes first"
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    }
+
+    #[test]
+    fn a_disabled_cloaked_player_is_refused_as_cloaked() {
+        use crate::landing::LandingRefusal;
+        use crate::session::StellarPick;
+        let catalog = nova_sim_catalog::fixture::catalog();
+        let mut session = cloaked_at_start(&catalog);
+        session.ship.condition = Condition::Disabled;
+        session.select_stellar(StellarPick::Slot(0));
+        session.take_sounds();
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Cloaked),
+            "the cloak (@0x66a8e) before the disabled test (@0x66aee)"
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    }
 }

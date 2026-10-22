@@ -166,7 +166,7 @@ impl Session {
     /// The [`HailRefusal`] that applies, drawing nothing:
     /// [`HailRefusal::NoTarget`] with no ship target (the comm key hails
     /// the navigation stellar then, [`Session::hail_key`]), or while
-    /// landed, breaking up, or while a jump is under way, the pre-jump
+    /// cloaked, landed, breaking up, or while a jump is under way, the pre-jump
     /// stage included (@0x61f87); [`HailRefusal::InHyperspace`] for a
     /// target still jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
     /// for a disabled or mute one, a mute one still jumping in being in
@@ -222,8 +222,8 @@ impl Session {
 
     /// What the comm key hails, Option held as `option` says, drawing
     /// nothing, in `_HandlePlayerCommunication`'s order (@0x61f48-0x6209c):
-    /// [`HailRefusal::NoTarget`] while landed, jumping (the pre-jump stage
-    /// included) or breaking up; then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
+    /// [`HailRefusal::NoTarget`] while cloaked, landed, jumping (the
+    /// pre-jump stage included) or breaking up; then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
     /// @0x61f91-0x61fa6), the navigation stellar
     /// ([`Session::nav_target`]) when it is shown in the system (its
     /// active byte, +0x44 @0x62009) and [answers](landing::answers_hail),
@@ -248,7 +248,8 @@ impl Session {
 
     /// The player's ship target, when it answers a hail, drawing nothing:
     /// otherwise [`HailRefusal::NoTarget`] with no ship target, or while
-    /// landed, jumping (the pre-jump stage included) or breaking up; [`HailRefusal::InHyperspace`] for a
+    /// cloaked, landed, jumping (the pre-jump stage included) or breaking
+    /// up; [`HailRefusal::InHyperspace`] for a
     /// target still jumping in, unless it is disabled; and
     /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
     /// or a mute one that has arrived, an escort answering whatever its
@@ -671,9 +672,11 @@ impl Outbox {
 
 impl PlayerShip {
     /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
-    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
-    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
-    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
+    /// while cloaked, first (`_ShipIsCloaked` @0x61f65, a cloak still
+    /// fading in not yet cloaked), then while landed, jumping (+0x50
+    /// @0x61f87, which spans the pre-jump's brake) or breaking up
+    /// (`_IsDying` @0x61f75). Every refusal reads the same, so the order
+    /// shows only in the original.
     fn player_hails(
         &self,
         landed: Option<StellarId>,
@@ -683,7 +686,7 @@ impl PlayerShip {
             self.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        if landed.is_some() || jump.is_some() || !flying {
+        if self.cloak.cloak.is_cloaked() || landed.is_some() || jump.is_some() || !flying {
             return Err(HailRefusal::NoTarget);
         }
         Ok(())
@@ -1278,6 +1281,52 @@ mod tests {
                 assert_eq!(sounds, [crate::SimSound::Refused]);
             }
         }
+    }
+
+    /// A full cloak, which reads cloaked.
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_cloaked_player_hails_no_ship_and_beeps_once() {
+        // `_ShipIsCloaked` @0x61f65, before every other test, and the
+        // shared `_beepSnd[3]` @0x626cf.
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.ship.cloak.cloak = CLOAKED;
+        session.take_sounds();
+        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(hailed, Err(HailRefusal::NoTarget));
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
+        let (hailed, _, sounds) = key_with(&mut session, &catalog, false);
+        assert_eq!(hailed, Err(HailRefusal::NoTarget));
+        assert_eq!(sounds, [crate::SimSound::Refused]);
+        session.ship.cloak.cloak = crate::cloak::Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        assert!(
+            hail_with(&mut session, &catalog, &opening(0)).0.is_ok(),
+            "still fading in"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_player_hails_no_stellar_with_option_or_no_ship_target_and_beeps_once() {
+        let catalog = hailable();
+        let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
+        session.ship.cloak.cloak = CLOAKED;
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
+        assert_eq!(hailed, Err(HailRefusal::NoTarget), "no ship target");
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(sounds, [crate::SimSound::Refused]);
+        session.chart.target = Some(NpcId(0));
+        let (hailed, _, sounds) = key_with(&mut session, &catalog, true);
+        assert_eq!(hailed, Err(HailRefusal::NoTarget), "Option held");
+        assert_eq!(sounds, [crate::SimSound::Refused]);
     }
 
     #[test]

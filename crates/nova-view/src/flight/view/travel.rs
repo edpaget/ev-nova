@@ -1315,7 +1315,8 @@ impl<
                     LandingRefusal::Jumping
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable
-                    | LandingRefusal::Disabled => None,
+                    | LandingRefusal::Disabled
+                    | LandingRefusal::Cloaked => None,
                 };
                 let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
                 let name = stellar.map_or("", |stellar| stellar_name(self.scene.as_ref(), stellar));

@@ -3350,6 +3350,11 @@ impl Session {
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
     ///
+    /// A cloaked ship's press goes as far as a disabled ship's, and the
+    /// dock request's `_ShipIsCloaked` (@0x66a8e), before its
+    /// `_IsDisabled`, refuses it [`LandingRefusal::Cloaked`] with a beep,
+    /// disabled or not; a cloak still fading in lands as before.
+    ///
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
     /// @0x676fe), once a press, a disabled ship's not-landable target
@@ -3389,7 +3394,10 @@ impl Session {
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.space.landing_reach(&self.setup, site),
         );
-        if disabled {
+        // The cloak's refusal (@0x66a8e) comes before the disabled one
+        // (@0x66aee), each after the landability (@0x66977-0x669ae).
+        let cloaked = self.ship.cloak.cloak.is_cloaked();
+        if cloaked || disabled {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
                 Err(
@@ -3397,6 +3405,7 @@ impl Session {
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
+                Ok(_) | Err(_) if cloaked => Err(LandingRefusal::Cloaked),
                 Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
             };
         }
@@ -4863,7 +4872,9 @@ impl Session {
     /// The [`BoardRefusal`] that applies, and nothing changes but the
     /// refusal's beep, [`SimSound::Refused`], for each refusal said (not
     /// for [`BoardRefusal::silent`] ones); [`BoardRefusal::NoTarget`],
-    /// silently, while landed. A jump under way refuses
+    /// silently, while landed; [`BoardRefusal::Cloaked`], silently, for a
+    /// cloaked player with a target, before every check
+    /// (`_ShipIsCloaked` @0x6503f). A jump under way refuses
     /// nothing up front: `_HandlePlayerBoardAttempt` (0x65000-0x66064)
     /// reads no jump state, so the checks run on the ship as it brakes, or
     /// in the hyperspace stage on the session as it was when the jump
@@ -4899,6 +4910,11 @@ impl Session {
             return Err(BoardRefusal::NoTarget);
         }
         let target = self.target().map(|npc| self.statics.board_target(npc));
+        // With a target (@0x65031), a cloaked player is refused before
+        // every check (@0x6503f → 0x6605a).
+        if target.is_some() && self.ship.cloak.cloak.is_cloaked() {
+            return Err(BoardRefusal::Cloaked);
+        }
         let crewless = self.setup.rules.source_for(RuleKey::CrewlessMissionShip);
         check_board(&self.ship.player, self.ship.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
