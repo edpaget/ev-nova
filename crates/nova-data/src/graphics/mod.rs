@@ -39,8 +39,8 @@
 //!   Pixel Pattern Resource".
 //! - `rlëD`: the EV Nova Bible for meaning, and the open-source ResForge
 //!   editor's (MIT) decoder as a second reading of the byte layout and
-//!   token semantics, including the pixel-run token (see [`decode_rled`]).
-//!   No code was copied.
+//!   token semantics. The pixel-run token follows the original's blitter
+//!   instead (see [`decode_rled`]). No code was copied.
 //! - Layouts: the Bible's `spïn` (`xTiles`, "Horizontal grid dimension")
 //!   and `shän` (`FramesPer`, "The number of frames for one rotation";
 //!   `BaseSetCount`, "The number of sprite sets").

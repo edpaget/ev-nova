@@ -44,9 +44,14 @@ const COUNT_MASK: u32 = 0x00FF_FFFF;
 /// - `2` draws `count / 2` opaque 16-bit pixels from the data that follows,
 ///   padded to a 4-byte boundary.
 /// - `3` skips `count / 2` transparent pixels.
-/// - `4` draws `count / 2` pixels of one colour: the high half of the `u32`
-///   that follows. The low half is ignored, as ResForge does; stock data
-///   (always `0x7FFF7FFF`) cannot tell this from alternating halves.
+/// - `4` draws `count / 2` pixels from the `u32` that follows, as the
+///   original fills it: the word's **low** half on the run's even pixels
+///   (counting from the run's start) and its **high** half on the odd
+///   ones. `_BlitPixieRLESwap` byte-swaps the word to native little-endian
+///   (@0xbe440), and `_BlitPixieRLE`'s op 4 (@0xbde2a-0xbde45) hands it to
+///   `_BlitPixieMemSet` (@0xc0452-0xc049a), which stores it from the run's
+///   first byte in 4-byte chunks, then a 2-byte and a 1-byte tail. Stock
+///   runs are all `0x7FFF7FFF`, so stock cannot tell the halves apart.
 ///
 /// A sheet with any run also keeps its runs alone, as a second set of
 /// frames ([`SpriteSheet::solid_frames`]): each run's texels in its
@@ -141,9 +146,12 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
                         r.skip(bytes.len() % 4)?;
                     }
                     RUN => {
-                        let colour = rgb555((r.u32()? >> 16) as u16);
+                        let word = r.u32()?;
+                        // Low half on even pixels, high half on odd ones.
+                        let colours = [rgb555(word as u16), rgb555((word >> 16) as u16)];
                         let solid = solid.get_or_insert_with(|| Image::transparent(width, height));
                         for i in 0..len {
+                            let colour = colours[(i % 2) as usize];
                             frame.put(x + i, y, colour);
                             solid.put(x + i, y, colour);
                         }
@@ -224,7 +232,7 @@ mod tests {
             // Frame 1.
             &[0x01, 0x00, 0x00, 0x08], // line: 8 bytes follow
             &[0x04, 0x00, 0x00, 0x06], // run of three pixels
-            &[0x7F, 0xFF, 0x7C, 0x00], // colours: white, red
+            &[0x7F, 0xFF, 0x7C, 0x00], // colours: red (low half), white
             &[0x01, 0x00, 0x00, 0x00], // empty line
             &[0x00, 0x00, 0x00, 0x00], // frame end
         ]
@@ -241,7 +249,7 @@ mod tests {
             frames(&sheet),
             [
                 vec![red, green, CLEAR, CLEAR, blue, CLEAR],
-                vec![white, white, white, CLEAR, CLEAR, CLEAR],
+                vec![red, white, red, CLEAR, CLEAR, CLEAR],
             ]
         );
     }
@@ -296,18 +304,21 @@ mod tests {
         );
     }
 
-    /// ResForge reads op 4 as `count / 2` copies of the high 16 bits of the
-    /// colour word; the low half is ignored. Stock data cannot tell this
-    /// from alternating colours (both halves are always `0x7FFF`).
+    /// `_BlitPixieMemSet` stores the byte-swapped run word from the run's
+    /// first pixel, so in the little-endian 16-bit world the run starts with
+    /// the word's low half: file word `0x7C00_03E0` draws green, red, green.
     #[test]
-    fn a_run_repeats_the_first_colour_of_its_pair() {
+    fn a_run_alternates_the_low_and_high_halves_of_its_word() {
         let bytes = RledBuilder::new(5, 1)
-            .frame(|f| f.line().skip(1).run(3, RED, BLUE))
+            .frame(|f| f.line().skip(1).run(3, RED, GREEN))
             .build();
-        let red = rgb555(RED);
+        let (red, green) = (rgb555(RED), rgb555(GREEN));
+        let sheet = decode(&bytes).unwrap();
+        assert_eq!(frames(&sheet), [vec![CLEAR, green, red, green, CLEAR]]);
+        let solid = sheet.solid_frames().expect("it has a run");
         assert_eq!(
-            frames(&decode(&bytes).unwrap()),
-            [vec![CLEAR, red, red, red, CLEAR]]
+            solid.iter().map(rgba).collect::<Vec<_>>(),
+            [vec![CLEAR, green, red, green, CLEAR]]
         );
     }
 
