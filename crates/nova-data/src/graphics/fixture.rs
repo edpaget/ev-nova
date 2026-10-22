@@ -213,6 +213,17 @@ impl PictBuilder {
     }
 }
 
+/// A `width` x `height` version 2 `PICT` of these 8-bit `[r, g, b]`
+/// pixels, row by row, in one `DirectBitsRect` covering the whole frame.
+#[must_use]
+pub fn rgb888_pict(width: i16, height: i16, pixels: &[[u8; 3]]) -> Vec<u8> {
+    let frame = [0, 0, height, width];
+    PictBuilder::new(frame)
+        .direct_bits(&DirectBits::rgb888(frame, pixels))
+        .end()
+        .build()
+}
+
 /// A QuickDraw rectangle's 8 bytes.
 fn rect_bytes(rect: [i16; 4]) -> Vec<u8> {
     rect.iter().flat_map(|v| v.to_be_bytes()).collect()

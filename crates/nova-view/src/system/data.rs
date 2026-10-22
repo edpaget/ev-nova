@@ -514,7 +514,7 @@ mod tests {
         resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1000));
         assert_eq!(
             store(&resources).system(SystemId(130)).type_zero_sprite,
-            Err("spïn 1000: no rlëD 1000 for its sprites".to_owned())
+            Err("spïn 1000: no rlëD or PICT 1000 for its sprites".to_owned())
         );
     }
 }

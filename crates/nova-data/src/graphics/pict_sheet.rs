@@ -141,7 +141,7 @@ pub fn cut_pict_sheet(
 mod tests {
     use super::*;
     use crate::graphics::decode_pict;
-    use crate::graphics::fixture::{DirectBits, PictBuilder};
+    use crate::graphics::fixture::{DirectBits, PictBuilder, rgb888_pict};
 
     const CLEAR: [u8; 4] = [0; 4];
     const WHITE: [u8; 3] = [0xFF; 3];
@@ -149,12 +149,7 @@ mod tests {
 
     /// A `width` x `height` picture of these pixels, row by row.
     fn picture(width: i16, height: i16, pixels: &[[u8; 3]]) -> Image {
-        let frame = [0, 0, height, width];
-        let bytes = PictBuilder::new(frame)
-            .direct_bits(&DirectBits::rgb888(frame, pixels))
-            .end()
-            .build();
-        decode_pict(&bytes).expect("decodes")
+        decode_pict(&rgb888_pict(width, height, pixels)).expect("decodes")
     }
 
     /// Pixel `i` of a [`distinct`] picture: (`i`·8, 0x40, 0x80), distinct

@@ -163,11 +163,13 @@
 //! [`GameData::stellar_sprite`] follows a `spöb`'s graphic type to `spïn`
 //! 1000 + type ([`stellar_spin_id`]; the Bible gives `spïn` 1000 to 1255 to
 //! stellar objects), then to the `rlëD` named by the `spïn`'s sprites,
-//! decoded with the `spïn`'s `xTiles` as the sheet's columns. Each missing
-//! or bad link is its own [`StellarSpriteError`]; a `PICT` sprite grid is
-//! not supported and reports [`StellarSpriteError::NoSheet`]. The decoded
-//! frames are authoritative: the `spïn`'s frame size is not checked
-//! against them.
+//! decoded with the `spïn`'s `xTiles` as the sheet's columns. With no such
+//! `rlëD`, the `spïn`'s sprites and mask `PICT`s are read instead and cut
+//! into frames of its `xSize` x `ySize`, as the original does
+//! ([`GameData::spin_sheet`], [`SheetKind::PictPair`]). Each missing or bad
+//! link is its own [`StellarSpriteError`]. An `rlëD`'s decoded frames are
+//! authoritative: the `spïn`'s frame size is not checked against them.
+//! Ship sprites ([`GameData::ship_sprite`]) still read `rlëD`s only.
 //!
 //! # Ship descriptions
 //!
@@ -207,7 +209,7 @@ pub use self::interface::{
 };
 pub use self::ship_desc::ship_desc_id;
 pub use self::shot_spin::shot_spin_id;
-pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
+pub use self::spin_sprite::{SheetKind, SpinSheet, SpinSpriteError};
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 
