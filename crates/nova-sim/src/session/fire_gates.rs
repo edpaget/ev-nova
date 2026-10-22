@@ -126,6 +126,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_escort_order_reach() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_escort_ai() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().npc_escort_ai, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.npc_escort_ai));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_pass_frame() {
     let catalog = armed();
     let mut session = Session::start(&catalog).expect("starts");

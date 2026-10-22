@@ -336,6 +336,7 @@ impl Behaviour for NovaAi {
                 re_picked: false,
                 ends_wait: false,
                 order_word: None,
+                leaves_fleet: false,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -1917,6 +1918,7 @@ mod tests {
                 re_picked: false,
                 ends_wait: false,
                 order_word: None,
+                leaves_fleet: false,
             }
         }
     }
@@ -1949,6 +1951,7 @@ mod tests {
                 re_picked: false,
                 ends_wait: false,
                 order_word: None,
+                leaves_fleet: false,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

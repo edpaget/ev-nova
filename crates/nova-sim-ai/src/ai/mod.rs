@@ -991,6 +991,11 @@ pub struct Decision {
     /// target check, and a stray beam, then read. The traffic sets
     /// [`Npc::order_word`] as it takes the goal; none leaves it as it was.
     pub order_word: Option<crate::fleet::OrderWord>,
+    /// Whether the think takes the ship out of its fleet: `_EscortAI`'s
+    /// lost parent (@0x83917-0x8397b, its AI type @0x83c4a), for a ship
+    /// whose NPC lead is gone or not intact ([`fleet_escort`]). The traffic
+    /// runs [`Npc::leave_fleet`] as it takes the goal.
+    pub leaves_fleet: bool,
 }
 
 /// How NPCs decide what to do.

@@ -2053,6 +2053,7 @@ impl Session {
             weapons: &self.statics.arsenal,
             frame: self.space.pass_frame,
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
+            npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2130,6 +2131,7 @@ impl Session {
             weapons: &self.statics.arsenal,
             frame: self.space.pass_frame,
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
+            npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
         }
     }
 

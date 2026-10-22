@@ -16,13 +16,18 @@
 //! 1. A count wait (goal 0x16, @0x838e4-0x838ef) or an assist (goals 9
 //!    and 0xf under a parent other than the player, @0x838f5-0x83911) is
 //!    kept.
-//! 2. **Lost parent** (@0x83917-0x8397b): its lead gone from the system or
-//!    not intact (or, for a fighter, its carrier), it idles (goal 0). The
-//!    session takes it out of the fleet with its class's `InherentAI`
-//!    (`nova_sim`'s `lost_lead` module), a stand-in for
-//!    `_AICheckParentExists`, which runs first on every frame for an NPC
-//!    parent (`_DoPlayGameWork` @0x440c6-0x44101) and is
-//!    rdm:phase/escort-fleet-fidelity/phase-7-leader-succession's.
+//! 2. **Lost parent** (@0x83917-0x8397b): with no lead, or its lead gone
+//!    from the system or not intact, it idles (goal 0) and leaves its fleet
+//!    with its class's `InherentAI` (@0x83c4a, [`Decision::leaves_fleet`]),
+//!    its target kept. A fighter's lead is its carrier. The succession
+//!    (`_AICheckParentExists`,
+//!    [`traffic::succession`](crate::traffic::succession)) runs before
+//!    every think and gives every ship of a lost lead another lead or
+//!    none, so this meets only a ship with no leader: one the disabled
+//!    reset left ([`traffic::disabled_reset`](crate::traffic::disabled_reset)),
+//!    whole again, such as a former fighter, whose AI type 5 lasts until
+//!    this think. Its +0x50 write (-1.0) is
+//!    rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
 //! 3. **Target validity** (@0x83a9b-0x83ad2,
 //!    [`valid_target`](escort::valid_target)): a target gone is dropped,
 //!    and a disabled one unless its stored word ([`Npc::order_word`],
@@ -93,7 +98,6 @@
 //! - out of ammunition (@0x83b88-0x83bda): phase 9's;
 //! - formation flight on slots, steering at the guard: phase 6's; until
 //!   then [`Goal::Follow`] flies within the follow distance of the lead;
-//! - the player's death and `_AICheckParentExists`: phase 7's;
 //! - the voice: phase 10's.
 //!
 //! The thinks read the tick's start, so an escort whose lead thinks later
@@ -163,7 +167,10 @@ pub fn decide_by(
         return goal_of(npc.goal, false);
     }
     let Some(lead) = parent(npc, around) else {
-        return goal_of(Goal::Idle, false);
+        return Decision {
+            leaves_fleet: true,
+            ..goal_of(Goal::Idle, false)
+        };
     };
     let target = escort::valid_target(npc, npc.order_word.order(), around);
     let writes = lead.escorts_player().then(|| OrderWord::of(order));
@@ -222,17 +229,12 @@ fn goal_of(goal: Goal, ends_wait: bool) -> Decision {
     }
 }
 
-/// `npc`'s lead among `around`, while it is there and intact, and, for a
-/// fighter, its carrier too: `_EscortAI`'s lost-parent test
-/// (@0x83917-0x8397b), with `_AICheckParentExists`'s disabled parent
-/// (see the module docs).
+/// `npc`'s lead among `around`, while it is there and intact:
+/// `_EscortAI`'s lost-parent test (@0x83917-0x8397b), its leader alone, as
+/// a fighter's leader is its carrier. With the succession run first it
+/// meets only a ship with no leader: one the disabled reset left
+/// (`traffic::disabled_reset`), whole again (see the module docs).
 fn parent<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<&'a Npc> {
-    let intact = |ship: ShipRef| around.condition_of(ship) == Some(Condition::Intact);
-    if let Some(bay) = npc.carrier
-        && !intact(bay.ship)
-    {
-        return None;
-    }
     npc.leader
         .and_then(|id| around.npc(id))
         .filter(|lead| lead.condition == Condition::Intact)
@@ -518,9 +520,9 @@ mod tests {
     }
 
     #[test]
-    fn with_its_lead_gone_or_not_intact_it_idles_drawing_nothing() {
-        // The lost-parent branch (@0x83917-0x8397b): goal 0; the session
-        // clears the lead and gives it its class's `InherentAI`.
+    fn with_its_lead_gone_or_not_intact_it_idles_and_leaves_its_fleet_drawing_nothing() {
+        // The lost-parent branch (@0x83917-0x8397b): parent -1, goal 0 and
+        // its class's `InherentAI` (@0x83c4a), its target kept.
         let threat = raider(3, 0.0, 100.0, n(2));
         let mut disabled = lead(Goal::Idle);
         disabled.condition = Condition::Disabled;
@@ -535,15 +537,25 @@ mod tests {
             for order in ORDERS {
                 let (decision, asked) = decided_with(&npcs, order, (0.0, 300.0), &[0]);
                 assert_eq!(decision.goal, Goal::Idle, "{:?} {order:?}", first.condition);
+                assert!(decision.leaves_fleet, "{:?} {order:?}", first.condition);
                 assert!(!decision.ends_wait);
+                assert!(!decision.clears_target);
                 assert!(asked.is_empty());
             }
         }
-        // A fighter whose carrier is gone, its lead still there.
-        let npcs = [lead(Goal::Idle), fighter(n(4)), threat];
+        // A fighter the disabled reset left with no leader, whole again:
+        // its carrier is read through its leader alone.
+        let mut orphan = fighter(n(1));
+        orphan.leader = None;
+        let npcs = [lead(Goal::Idle), orphan, threat.clone()];
+        let (decision, _) = decided_with(&npcs, Some(EscortOrder::Dock), (0.0, 300.0), &[0]);
+        assert_eq!((decision.goal, decision.leaves_fleet), (Goal::Idle, true));
+        // With its lead there and intact it stays.
+        let npcs = [lead(Goal::Idle), fighter(n(1)), threat];
+        let (decision, _) = decided_with(&npcs, Some(EscortOrder::Dock), (0.0, 300.0), &[0]);
         assert_eq!(
-            decided(&npcs, Some(EscortOrder::Dock), &[0]),
-            (Goal::Idle, vec![])
+            (decision.goal, decision.leaves_fleet),
+            (Goal::Dock(n(1)), false)
         );
     }
 

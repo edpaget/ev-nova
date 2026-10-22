@@ -825,8 +825,8 @@ mod tests {
         busy.berth = 6;
         busy.goal = Goal::Attack(ShipRef::Player);
         busy.target = Some(ShipRef::Player);
-        // Disabled, so no think of its own rewrites its target.
-        busy.condition = Condition::Disabled;
+        // With no AI, so no think of its own rewrites its target.
+        busy.no_ai = true;
         let mut docked = pirate(1000);
         docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         docked.target = Some(ShipRef::Npc(VICTIM));

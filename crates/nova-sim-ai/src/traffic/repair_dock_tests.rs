@@ -219,12 +219,16 @@ fn a_repairer_coasting_or_disabled_flies_no_high_level() {
     coasting.npcs[0].mode = Mode::Coasting { ticks_left: 30 };
     let mut disabled = repairing(1000.0, 0.0);
     disabled.npcs[0].condition = Condition::Disabled;
-    for (name, mut traffic) in [("coasting", coasting), ("disabled", disabled)] {
+    // A disabled one is reset to goal 0 by its dispatch (@0x8fece).
+    for (name, mut traffic, goal) in [
+        ("coasting", coasting, Goal::Assist(Help::Repair)),
+        ("disabled", disabled, Goal::Idle),
+    ] {
         let recording = Recording::default();
         tick(&mut traffic, &recording, Condition::Disabled, &[]);
         let ship = helper(&traffic);
         assert_eq!(ship.docking, None, "{name}");
-        assert_eq!(ship.goal, Goal::Assist(Help::Repair), "{name}");
+        assert_eq!(ship.goal, goal, "{name}");
     }
 }
 

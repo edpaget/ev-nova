@@ -164,6 +164,7 @@ mod comm_call_tests;
 #[cfg(test)]
 mod count_wait_turn_tests;
 pub mod destination;
+pub mod disabled_reset;
 #[cfg(test)]
 mod display_tests;
 pub mod docked;
@@ -218,6 +219,7 @@ mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
+pub mod succession;
 pub mod table;
 pub mod tractor_hold;
 pub mod warp_out;
@@ -624,6 +626,10 @@ pub struct World<'a> {
     /// ([`RuleKey::EscortOrderReach`](crate::RuleKey::EscortOrderReach), see
     /// [`ai::escort_orders`](crate::ai::escort_orders)).
     pub escort_order_reach: RuleSource,
+    /// Whether a fleet's lead lost is succeeded and a disabled ship drops
+    /// its leader ([`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi),
+    /// see [`succession`] and [`disabled_reset`]).
+    pub npc_escort_ai: RuleSource,
 }
 
 /// Nova's disable rule, a world's default.
@@ -680,6 +686,7 @@ impl<'a> World<'a> {
             weapons: bare.weapons,
             frame: 0,
             escort_order_reach: RuleSource::Engine,
+            npc_escort_ai: RuleSource::Engine,
         }
     }
 
@@ -1156,10 +1163,10 @@ impl Traffic {
         self.on_line.next_frame();
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
-        self.forget_provocations();
         self.form_fleets();
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
+        self.reset_disabled(world.npc_escort_ai);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
         self.launch_room = Some(left);
@@ -1369,15 +1376,6 @@ impl Traffic {
                     && decision_due(self.ticks, npc.id, self.interval))
             })
             .collect()
-    }
-
-    /// Every NPC that is not intact forgets what provoked it.
-    fn forget_provocations(&mut self) {
-        for npc in &mut self.npcs {
-            if npc.condition != Condition::Intact {
-                npc.provoked = 0.0;
-            }
-        }
     }
 
     /// Each NPC whose decision is `due` takes its high level and pursuit in
@@ -2320,6 +2318,9 @@ impl Traffic {
             }
             if let Some(word) = order_word {
                 npc.order_word = word;
+            }
+            if decision.leaves_fleet {
+                npc.leave_fleet();
             }
             npc.goal = goal;
         }
@@ -3427,7 +3428,11 @@ mod tests {
         assert_eq!(traffic.npcs[0].warp.stage, 5.0, "not on the second pass");
         traffic.tick(&Keep, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs[0].warp.stage, 0.0, "the high level's hold");
-        assert_eq!(traffic.npcs[1].warp.stage, 5.0, "none for a disabled ship");
+        assert_eq!(
+            traffic.npcs[1].warp.stage,
+            disabled_reset::CANCELLED_STAGE,
+            "none for a disabled ship, whose dispatch cancels its warp (@0x8fcc8)"
+        );
     }
 
     #[test]
@@ -3580,7 +3585,11 @@ mod tests {
             expected = expected + velocity;
         }
         assert_eq!(traffic.npcs()[0].state.position, expected);
-        assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
+        assert_eq!(
+            traffic.npcs()[1].goal,
+            Goal::Idle,
+            "the disabled reset (@0x8fece)"
+        );
         traffic.npcs_mut()[0].condition = Condition::Dying {
             ticks_left: 2,
             starting: false,
@@ -4870,6 +4879,7 @@ mod tests {
             re_picked: false,
             ends_wait: false,
             order_word: None,
+            leaves_fleet: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
@@ -5622,16 +5632,13 @@ mod tests {
     }
 
     #[test]
-    fn provocation_clears_when_disabled_and_is_kept_by_an_idle_or_inspecting_think() {
-        let mut traffic = populated(2, 1);
-        for npc in traffic.npcs_mut() {
-            npc.provoked = 9.0;
-        }
-        traffic.npcs[1].condition = Condition::Disabled;
+    fn provocation_is_kept_by_an_idle_or_inspecting_think() {
+        // A disabled ship's is the disabled reset's (`disabled_reset`).
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].provoked = 9.0;
         let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
         traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].provoked, 9.0, "still fighting");
-        assert_eq!(traffic.npcs()[1].provoked, 0.0, "disabled (@0x8feef)");
         let calm = Fighting::deciding(Goal::Idle);
         traffic.tick_in(&calm, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].provoked, 9.0, "idle keeps it");
