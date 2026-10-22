@@ -393,6 +393,24 @@ fn game_data_fork(
         .resource(Spin::TYPE, 650, None, &spin)
         .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
         .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
+        .resource(PICT, 8518, None, &upper_cap_picture())
+}
+
+/// The player info's upper cap's size in [`game_data_fork`]: not the
+/// stock 413 x 40, so a layout from the stock sizes shows.
+const UPPER_CAP_SIZE: (i16, i16) = (300, 30);
+
+/// A grey `PICT` [`UPPER_CAP_SIZE`]: the player info's upper cap
+/// (`PICT` 8518), the only one of its background pictures the fixture
+/// data holds.
+fn upper_cap_picture() -> Vec<u8> {
+    let (width, height) = UPPER_CAP_SIZE;
+    let bounds = [0, 0, height, width];
+    let count = usize::try_from(width * height).expect("positive");
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &vec![0x4210; count]))
+        .end()
+        .build()
 }
 
 /// `fork` with the main menu's art, so the menu draws the original's

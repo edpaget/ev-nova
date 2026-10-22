@@ -13,7 +13,9 @@ use nova_view::spaceport::offer::{
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::MissionDialogs;
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
+use nova_view::ui::player_info::{
+    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
+};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{
@@ -433,7 +435,8 @@ impl AppScreen {
     /// opens ([`FlightView::open_player_info`], which resets the session
     /// first; nothing opens in a jump or while the ship breaks up): laid out by
     /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
-    /// saying why not. The screen below lets go of its keys. With no
+    /// saying why not, over the game data's background pictures
+    /// ([`BackgroundSizes::read`]). The screen below lets go of its keys. With no
     /// dialogs, nothing opens, as the mission info does not.
     fn open_flight_player_info(&mut self) {
         let Some(dialogs) = &self.dialogs else {
@@ -454,6 +457,7 @@ impl AppScreen {
             confirm,
             info,
             self.data.button_style(),
+            BackgroundSizes::read(&self.data),
         ));
     }
 

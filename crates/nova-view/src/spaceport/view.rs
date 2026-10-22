@@ -213,7 +213,7 @@ use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::ui::player_info::{PlayerInfoScreen, is_player_info_press};
+use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen, is_player_info_press};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
@@ -455,6 +455,18 @@ struct Missioning {
     info_requested: bool,
 }
 
+/// What the player info screen is laid out from
+/// ([`SpaceportView::with_player_info`]).
+#[derive(Clone, Debug)]
+struct PlayerInfoDialogs {
+    /// `DLOG` 1017, or why there is none.
+    template: Result<DialogTemplate, String>,
+    /// The Yes/No dialog, `DLOG` 3002, or why there is none.
+    confirm: Result<DialogTemplate, String>,
+    /// The background pictures' sizes.
+    background: BackgroundSizes,
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
@@ -499,12 +511,9 @@ pub struct SpaceportView {
     /// since the texts closed were last taken
     /// ([`SpaceportView::take_texts_closed`]).
     texts_dropped: usize,
-    /// The player info screen's dialog and its Yes/No dialog, once given.
-    #[allow(clippy::type_complexity)] // Two templates.
-    player_info_dialogs: Option<(
-        Result<DialogTemplate, String>,
-        Result<DialogTemplate, String>,
-    )>,
+    /// The player info screen's dialog, its Yes/No dialog and its
+    /// background pictures' sizes, once given.
+    player_info_dialogs: Option<PlayerInfoDialogs>,
     /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen in the
     /// spaceport itself.
     player_info_requested: bool,
@@ -1627,15 +1636,21 @@ impl SpaceportView {
 
     /// The spaceport with the player info screen's dialog, `template`
     /// (`DLOG` 1017), and its Yes/No dialog, `confirm` (`DLOG` 3002), or
-    /// why there are none.
+    /// why there are none, and its background pictures' sizes,
+    /// `background`.
     #[must_use]
     pub fn with_player_info(
         self,
         template: Result<DialogTemplate, String>,
         confirm: Result<DialogTemplate, String>,
+        background: BackgroundSizes,
     ) -> Self {
         Self {
-            player_info_dialogs: Some((template, confirm)),
+            player_info_dialogs: Some(PlayerInfoDialogs {
+                template,
+                confirm,
+                background,
+            }),
             ..self
         }
     }
@@ -1669,12 +1684,28 @@ impl SpaceportView {
         let Ok(port) = &self.port else {
             return;
         };
-        let (template, confirm) = self.player_info_dialogs.clone().unwrap_or_else(|| {
+        let dialogs = self.player_info_dialogs.clone().unwrap_or_else(|| {
             let none = || Err("the player info dialog was not given".to_owned());
-            (none(), none())
+            PlayerInfoDialogs {
+                template: none(),
+                confirm: none(),
+                background: BackgroundSizes {
+                    upper: None,
+                    middle: None,
+                    lower: None,
+                },
+            }
         });
-        let layout = template.map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.player_info = Some(PlayerInfoScreen::new(layout, confirm, info, port.style));
+        let layout = dialogs
+            .template
+            .map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.player_info = Some(PlayerInfoScreen::new(
+            layout,
+            dialogs.confirm,
+            info,
+            port.style,
+            dialogs.background,
+        ));
     }
 
     /// The player info screen open, if it is.
@@ -5739,7 +5770,8 @@ mod tests {
     // Player info.
 
     use crate::ui::player_info::{
-        PLAYER_INFO_KEY, PlayerInfoButton, PlayerInfoScreen as InfoScreen, Tab,
+        BACKGROUND, BackgroundSizes, PLAYER_INFO_KEY, PictureSize, PlayerInfoButton,
+        PlayerInfoScreen as InfoScreen, Tab,
     };
     use nova_sim::PlayerInfo;
 
@@ -5793,10 +5825,26 @@ mod tests {
         }
     }
 
+    /// The stock background pictures' sizes.
+    fn stock_background() -> BackgroundSizes {
+        let size = |width, height| Some(PictureSize { width, height });
+        BackgroundSizes {
+            upper: size(413.0, 40.0),
+            middle: size(413.0, 215.0),
+            lower: size(413.0, 40.0),
+        }
+    }
+
     /// `view` with the player info screen's dialogs given, its Yes/No
-    /// dialog the text's shape.
+    /// dialog the text's shape, and its background `sizes`.
+    fn informed_with(view: SpaceportView, sizes: BackgroundSizes) -> SpaceportView {
+        view.with_player_info(Ok(player_info_template()), Ok(text_template()), sizes)
+    }
+
+    /// `view` with the player info screen's dialogs given, its Yes/No
+    /// dialog the text's shape, over the stock pictures.
     fn informed(view: SpaceportView) -> SpaceportView {
-        view.with_player_info(Ok(player_info_template()), Ok(text_template()))
+        informed_with(view, stock_background())
     }
 
     /// Presses P on `view`, which asked nothing before: whether it asks.
@@ -6280,6 +6328,33 @@ mod tests {
         assert!(view.mission_computer().is_some(), "and nothing below");
         view.input(&key(PLAYER_INFO_KEY));
         assert!(view.take_player_info_request(), "asked again");
+    }
+
+    #[test]
+    fn the_player_info_draws_its_background_from_the_sizes_given() {
+        let sizes = BackgroundSizes {
+            middle: None,
+            ..stock_background()
+        };
+        let mut view = informed_with(missioned(), sizes);
+        view.open_player_info(pilot_info());
+        let screen = view.player_info().expect("open");
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let pictures: Vec<i16> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match **command {
+                    DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::Picture { image, .. } => Some(image),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .filter(|image| BACKGROUND.contains(image))
+            .map(|image| image.id)
+            .collect();
+        assert_eq!(pictures, [8518, 8520], "no middle given, none drawn");
     }
 
     #[test]

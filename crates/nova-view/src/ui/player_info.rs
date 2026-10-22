@@ -10,11 +10,12 @@
 //! Honors tabs (2-5), the content box (6) and Jettison Cargo (7), each
 //! labelled from `STR#` 150 (#5, #36-#39, #61). It is painted black, then
 //! `PICT` 8519 between the upper cap 8518 and the lower cap 8520
-//! ([`BACKGROUND`], [`draw_background`]): a span between the caps under
-//! the middle's own [`MIDDLE_HEIGHT`] crops it, drawn at its own size and
-//! cut by the dialog under the lower cap, and a taller one stretches it
-//! (@0x52581-0x525a8). The layout reads the stock pictures' heights, not
-//! a plug-in's. Every text is Geneva 9
+//! ([`BACKGROUND`], [`draw_background`]), each at its own width and laid
+//! out by its own height ([`BackgroundSizes`], read from the game data):
+//! a span between the caps under the middle's own height crops it, drawn
+//! at its own size and cut by the dialog under the lower cap, and a
+//! taller one stretches it (@0x52581-0x525a8). A missing picture is left
+//! out of the layout (@0x524a0, @0x524df, @0x5252e). Every text is Geneva 9
 //! ([`TEXT_SIZE`]), the labels light grey ([`LABEL_COLOR`]) and the values
 //! white. Every `STR#` 2002 string it draws, the labels, words and
 //! messages, is the info's [`Words`], read with the texts, so a plug-in
@@ -75,6 +76,7 @@ use nova_sim::PlayerInfo;
 use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+use super::catalog::PictureSizes;
 use super::desc::DONE_LABEL;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate};
 use super::text_box::TextBox;
@@ -98,11 +100,46 @@ pub const BACKGROUND: [ImageKey; 3] = [
     ImageKey::picture(8519),
     ImageKey::picture(8520),
 ];
-/// The upper and lower caps' height.
-pub const CAP_HEIGHT: f32 = 40.0;
-/// The middle picture's own height (stock `PICT` 8519): a span between
-/// the caps shorter than this crops it rather than stretching it.
-pub const MIDDLE_HEIGHT: f32 = 215.0;
+
+/// A picture's own width and height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PictureSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+/// The [`BACKGROUND`] pictures' own sizes, each none when the picture is
+/// missing or does not decode, as `_PlayerInfoDialogUpdate` finds them
+/// before laying the background out (@0x5248a-0x524d0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackgroundSizes {
+    /// The upper cap's, `PICT` 8518.
+    pub upper: Option<PictureSize>,
+    /// The middle's, `PICT` 8519.
+    pub middle: Option<PictureSize>,
+    /// The lower cap's, `PICT` 8520.
+    pub lower: Option<PictureSize>,
+}
+
+impl BackgroundSizes {
+    /// The three pictures' sizes, read from `pictures`.
+    #[must_use]
+    pub fn read(pictures: impl PictureSizes) -> Self {
+        let read = |image: ImageKey| {
+            pictures
+                .picture_size(image.id)
+                .map(|(width, height)| PictureSize {
+                    width: width as f32,
+                    height: height as f32,
+                })
+        };
+        Self {
+            upper: read(BACKGROUND[0]),
+            middle: read(BACKGROUND[1]),
+            lower: read(BACKGROUND[2]),
+        }
+    }
+}
 /// The Yes/No dialog Jettison asks in (`DLOG` 3002).
 pub const YES_NO_DIALOG: i16 = 3002;
 /// The Yes/No dialog's OK, its yes.
@@ -428,37 +465,59 @@ pub fn general_texts(
     texts
 }
 
-/// Paints the dialog's background over `bounds` (@0x524a6-0x5271c):
-/// black, then the middle, then the upper cap at the top and the lower
-/// cap at the bottom, the caps [`CAP_HEIGHT`] high and stretched across.
-/// The middle fills the span between the caps; when the span is less than
-/// [`MIDDLE_HEIGHT`] it is drawn at its own height from below the upper
-/// cap, cut by `bounds`, so its bottom runs under the lower cap rather
-/// than being squashed (@0x52581-0x525a8). Otherwise it is stretched over
-/// the span.
-pub fn draw_background(list: &mut DrawList, bounds: Bounds) {
+/// Paints the dialog's background over `bounds` from the pictures'
+/// `sizes` (@0x524a6-0x5271c): black, then the middle, then the upper cap
+/// at the top-left and the lower cap at the bottom-left, every picture
+/// at its own width and cut by `bounds`, as the window cuts it.
+///
+/// - The middle (@0x524af-0x525f9) starts below the upper cap, or at the
+///   top without one (@0x524df-0x5251e). It ends above the lower cap
+///   (@0x52530-0x52568), or at its own height without one. A span under
+///   its own height draws it at its own size, its bottom running under
+///   the lower cap rather than being squashed (@0x52581-0x525a8);
+///   otherwise it is stretched down the span. Without a middle, none is
+///   drawn (@0x524a0).
+/// - The upper cap (@0x5260a-0x52680) and the lower cap (@0x52696-0x5271c)
+///   are drawn at their own sizes, when they are there.
+pub fn draw_background(list: &mut DrawList, bounds: Bounds, sizes: &BackgroundSizes) {
     fill_rect(list, bounds, Color::BLACK);
-    let width = bounds.width();
-    let middle_at = Point::new(bounds.min.x, bounds.min.y + CAP_HEIGHT);
-    let span = bounds.height() - 2.0 * CAP_HEIGHT;
-    if span < MIDDLE_HEIGHT {
+    let picture = |list: &mut DrawList, image: ImageKey, top_left: Point, width, height| {
         list.clipped(
             bounds,
-            DrawCommand::Picture {
-                image: BACKGROUND[1],
-                top_left: middle_at,
+            DrawCommand::StretchedPicture {
+                image,
+                top_left,
+                width,
+                height,
             },
         );
-    } else {
-        list.stretched_picture(BACKGROUND[1], middle_at, width, span);
+    };
+    if let Some(middle) = sizes.middle {
+        let top = bounds.min.y + sizes.upper.map_or(0.0, |upper| upper.height);
+        let bottom = sizes
+            .lower
+            .map_or(top + middle.height, |lower| bounds.max.y - lower.height);
+        let middle_at = Point::new(bounds.min.x, top);
+        let span = bottom - top;
+        if span < middle.height {
+            list.clipped(
+                bounds,
+                DrawCommand::Picture {
+                    image: BACKGROUND[1],
+                    top_left: middle_at,
+                },
+            );
+        } else {
+            picture(list, BACKGROUND[1], middle_at, middle.width, span);
+        }
     }
-    list.stretched_picture(BACKGROUND[0], bounds.min, width, CAP_HEIGHT);
-    list.stretched_picture(
-        BACKGROUND[2],
-        Point::new(bounds.min.x, bounds.max.y - CAP_HEIGHT),
-        width,
-        CAP_HEIGHT,
-    );
+    if let Some(upper) = sizes.upper {
+        picture(list, BACKGROUND[0], bounds.min, upper.width, upper.height);
+    }
+    if let Some(lower) = sizes.lower {
+        let at = Point::new(bounds.min.x, bounds.max.y - lower.height);
+        picture(list, BACKGROUND[2], at, lower.width, lower.height);
+    }
 }
 
 /// How much the dialog grows for texts `heights` high in a content box
@@ -508,6 +567,8 @@ pub struct PlayerInfoScreen {
     confirm: Option<Dialog>,
     info: PlayerInfo,
     style: ButtonStyle,
+    /// The background pictures' own sizes.
+    background: BackgroundSizes,
     tab: Tab,
     /// The button a click is held on, and its tracking.
     tracked: Option<PlayerInfoButton>,
@@ -522,13 +583,15 @@ impl PlayerInfoScreen {
     /// `info`, laid out by `layout`: the screen's template and the
     /// metrics its text is measured by, or why there are none; Jettison
     /// asking in the `confirm` Yes/No dialog, or answering no without
-    /// one; its buttons labelled in `style`. It opens on General.
+    /// one; its buttons labelled in `style`; its background laid out from
+    /// the pictures' `background` sizes. It opens on General.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
         confirm: Result<DialogTemplate, String>,
         info: PlayerInfo,
         style: ButtonStyle,
+        background: BackgroundSizes,
     ) -> Self {
         let laid = layout.and_then(|(template, metrics)| lay_out(&template, &info, metrics));
         Self {
@@ -537,6 +600,7 @@ impl PlayerInfoScreen {
             confirm: None,
             info,
             style,
+            background,
             tab: Tab::General,
             tracked: None,
             tracker: ButtonTracker::default(),
@@ -819,7 +883,7 @@ impl Screen for PlayerInfoScreen {
                 return;
             }
         };
-        draw_background(list, laid.bounds);
+        draw_background(list, laid.bounds, &self.background);
         for (which, button) in &laid.buttons {
             if *which == PlayerInfoButton::Jettison && !self.jettison_shown() {
                 continue;
@@ -1008,13 +1072,31 @@ mod tests {
         }
     }
 
-    fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
+    fn sized(width: f32, height: f32) -> PictureSize {
+        PictureSize { width, height }
+    }
+
+    /// The stock pictures' sizes: 413 x 40, 413 x 215 and 413 x 40.
+    fn stock() -> BackgroundSizes {
+        BackgroundSizes {
+            upper: Some(sized(413.0, 40.0)),
+            middle: Some(sized(413.0, 215.0)),
+            lower: Some(sized(413.0, 40.0)),
+        }
+    }
+
+    fn screen_with(info: PlayerInfo, background: BackgroundSizes) -> PlayerInfoScreen {
         PlayerInfoScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
             Ok(yes_no()),
             info,
             ButtonStyle::STOCK,
+            background,
         )
+    }
+
+    fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
+        screen_with(info, stock())
     }
 
     fn screen() -> PlayerInfoScreen {
@@ -1330,8 +1412,8 @@ mod tests {
         assert_eq!(screen.problem(), None);
     }
 
-    /// The background pictures among `commands`, in order: a clipped one
-    /// as its clip and its picture.
+    /// The background pictures among `commands`, in order, each with the
+    /// clip it is drawn in.
     fn background(commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
         let ours = |image: &ImageKey| BACKGROUND.contains(image);
         commands
@@ -1341,19 +1423,25 @@ mod tests {
                 | DrawCommand::Picture { image, .. } => ours(image),
                 DrawCommand::Clipped { command, .. } => matches!(
                     **command,
-                    DrawCommand::Picture { ref image, .. } if ours(image)
+                    DrawCommand::Picture { ref image, .. }
+                    | DrawCommand::StretchedPicture { ref image, .. } if ours(image)
                 ),
                 _ => false,
             })
             .collect()
     }
 
-    fn stretched(id: i16, top_left: Point, width: f32, height: f32) -> DrawCommand {
-        DrawCommand::StretchedPicture {
-            image: ImageKey::picture(id),
-            top_left,
-            width,
-            height,
+    /// Picture `id` stretched to `width` x `height` at `top_left`, cut by
+    /// the window `clip`.
+    fn stretched(clip: Bounds, id: i16, top_left: Point, width: f32, height: f32) -> DrawCommand {
+        DrawCommand::Clipped {
+            clip,
+            command: Box::new(DrawCommand::StretchedPicture {
+                image: ImageKey::picture(id),
+                top_left,
+                width,
+                height,
+            }),
         }
     }
 
@@ -1367,47 +1455,51 @@ mod tests {
         }
     }
 
-    fn background_in(bounds: Bounds) -> Vec<DrawCommand> {
+    fn painted(bounds: Bounds, sizes: &BackgroundSizes) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        draw_background(&mut list, bounds);
-        background(list.iter().cloned().collect())
+        draw_background(&mut list, bounds, sizes);
+        list.iter().cloned().collect()
+    }
+
+    fn background_in(bounds: Bounds, sizes: &BackgroundSizes) -> Vec<DrawCommand> {
+        background(painted(bounds, sizes))
+    }
+
+    fn black_first(commands: &[DrawCommand]) -> bool {
+        matches!(
+            commands[0],
+            DrawCommand::Line {
+                color: Color::BLACK,
+                ..
+            }
+        )
     }
 
     #[test]
     fn it_paints_black_then_the_middle_then_the_caps() {
-        assert_eq!(MIDDLE_HEIGHT, 215.0);
         let window = Bounds::at(ORIGIN, 413.0, 227.0);
         assert_eq!(
             background(drawn(&screen())),
             [
                 cropped_middle(window, Point::new(305.0, 310.0)),
-                stretched(8518, ORIGIN, 413.0, 40.0),
-                stretched(8520, Point::new(305.0, 457.0), 413.0, 40.0),
+                stretched(window, 8518, ORIGIN, 413.0, 40.0),
+                stretched(window, 8520, Point::new(305.0, 457.0), 413.0, 40.0),
             ],
             "the stock dialog's span of 147 is under the middle's 215: drawn \
              at its own size from below the upper cap, cut by the window"
         );
-        assert!(
-            matches!(
-                drawn(&screen())[0],
-                DrawCommand::Line {
-                    color: Color::BLACK,
-                    ..
-                }
-            ),
-            "black first"
-        );
+        assert!(black_first(&drawn(&screen())), "black first");
     }
 
     #[test]
     fn a_dialog_shorter_than_the_middle_crops_it_rather_than_squashing_it() {
         let short = Bounds::at(Point::new(10.0, 20.0), 413.0, 200.0);
         assert_eq!(
-            background_in(short),
+            background_in(short, &stock()),
             [
                 cropped_middle(short, Point::new(10.0, 60.0)),
-                stretched(8518, Point::new(10.0, 20.0), 413.0, 40.0),
-                stretched(8520, Point::new(10.0, 180.0), 413.0, 40.0),
+                stretched(short, 8518, Point::new(10.0, 20.0), 413.0, 40.0),
+                stretched(short, 8520, Point::new(10.0, 180.0), 413.0, 40.0),
             ],
             "200 rows: the 120-row span still draws the middle 215 high, clipped"
         );
@@ -1422,10 +1514,11 @@ mod tests {
         let screen = screen_of(tall);
         let bounds = screen.bounds().expect("laid out");
         let span = bounds.height() - 80.0;
-        assert!(span > MIDDLE_HEIGHT, "{span}");
+        assert!(span > 215.0, "{span}");
         assert_eq!(
             background(drawn(&screen))[0],
             stretched(
+                bounds,
                 8519,
                 Point::new(bounds.min.x, bounds.min.y + 40.0),
                 413.0,
@@ -1433,16 +1526,144 @@ mod tests {
             )
         );
         let at = Point::new(0.0, 0.0);
+        let window = Bounds::at(at, 413.0, 295.0);
         assert_eq!(
-            background_in(Bounds::at(at, 413.0, 295.0))[0],
-            stretched(8519, Point::new(0.0, 40.0), 413.0, 215.0),
+            background_in(window, &stock())[0],
+            stretched(window, 8519, Point::new(0.0, 40.0), 413.0, 215.0),
             "a span of exactly 215 stretches 1:1"
         );
         let window = Bounds::at(at, 413.0, 294.0);
         assert_eq!(
-            background_in(window)[0],
+            background_in(window, &stock())[0],
             cropped_middle(window, Point::new(0.0, 40.0)),
             "a span of 214 crops"
+        );
+    }
+
+    #[test]
+    fn without_the_middle_only_the_caps_are_drawn_over_the_black() {
+        let window = Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0);
+        let sizes = BackgroundSizes {
+            middle: None,
+            ..stock()
+        };
+        let commands = painted(window, &sizes);
+        assert!(black_first(&commands), "black first");
+        assert_eq!(
+            background(commands),
+            [
+                stretched(window, 8518, Point::new(0.0, 0.0), 413.0, 40.0),
+                stretched(window, 8520, Point::new(0.0, 187.0), 413.0, 40.0),
+            ],
+            "no PICT 8519 (@0x524a0)"
+        );
+    }
+
+    #[test]
+    fn without_the_upper_cap_the_middle_starts_at_the_top() {
+        let window = Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0);
+        let sizes = BackgroundSizes {
+            upper: None,
+            ..stock()
+        };
+        assert_eq!(
+            background_in(window, &sizes),
+            [
+                cropped_middle(window, Point::new(0.0, 0.0)),
+                stretched(window, 8520, Point::new(0.0, 187.0), 413.0, 40.0),
+            ],
+            "a span of 187 from row 0 to the lower cap, under 215: cropped"
+        );
+        let tall = Bounds::at(Point::new(0.0, 0.0), 413.0, 300.0);
+        assert_eq!(
+            background_in(tall, &sizes)[0],
+            stretched(tall, 8519, Point::new(0.0, 0.0), 413.0, 260.0),
+            "a span of 260 from row 0 stretches"
+        );
+    }
+
+    #[test]
+    fn without_the_lower_cap_the_middle_keeps_its_own_height() {
+        let window = Bounds::at(Point::new(0.0, 0.0), 413.0, 400.0);
+        let sizes = BackgroundSizes {
+            lower: None,
+            ..stock()
+        };
+        assert_eq!(
+            background_in(window, &sizes),
+            [
+                stretched(window, 8519, Point::new(0.0, 40.0), 413.0, 215.0),
+                stretched(window, 8518, Point::new(0.0, 0.0), 413.0, 40.0),
+            ],
+            "drawn 215 high below the upper cap, not stretched to the bottom"
+        );
+    }
+
+    #[test]
+    fn a_plug_ins_pictures_are_laid_out_at_their_own_sizes() {
+        let sizes = BackgroundSizes {
+            upper: Some(sized(300.0, 30.0)),
+            middle: Some(sized(380.0, 100.0)),
+            lower: Some(sized(320.0, 50.0)),
+        };
+        let window = Bounds::at(Point::new(10.0, 20.0), 413.0, 227.0);
+        assert_eq!(
+            background_in(window, &sizes),
+            [
+                stretched(window, 8519, Point::new(10.0, 50.0), 380.0, 147.0),
+                stretched(window, 8518, Point::new(10.0, 20.0), 300.0, 30.0),
+                stretched(window, 8520, Point::new(10.0, 197.0), 320.0, 50.0),
+            ],
+            "each at its own width; the middle stretched over 227 - 30 - 50"
+        );
+        let short = Bounds::at(Point::new(10.0, 20.0), 413.0, 150.0);
+        assert_eq!(
+            background_in(short, &sizes)[0],
+            cropped_middle(short, Point::new(10.0, 50.0)),
+            "a span of 70, under the middle's 100: drawn at its own 380 x 100, cut"
+        );
+    }
+
+    #[test]
+    fn the_screen_draws_the_background_from_the_sizes_it_is_given() {
+        let sizes = BackgroundSizes {
+            upper: None,
+            middle: None,
+            lower: Some(sized(320.0, 50.0)),
+        };
+        let screen = screen_with(info(), sizes);
+        let window = Bounds::at(ORIGIN, 413.0, 227.0);
+        assert_eq!(
+            background(drawn(&screen)),
+            [stretched(
+                window,
+                8520,
+                Point::new(305.0, 447.0),
+                320.0,
+                50.0
+            )]
+        );
+    }
+
+    /// Each picture is its ID less 8000 wide and 30 high; 8519 is
+    /// missing.
+    struct Pictures;
+
+    impl PictureSizes for Pictures {
+        fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+            (id != 8519).then(|| ((id - 8000).unsigned_abs().into(), 30))
+        }
+    }
+
+    #[test]
+    fn the_sizes_are_read_from_the_three_pictures() {
+        assert_eq!(
+            BackgroundSizes::read(&Pictures),
+            BackgroundSizes {
+                upper: Some(sized(518.0, 30.0)),
+                middle: None,
+                lower: Some(sized(520.0, 30.0)),
+            }
         );
     }
 
@@ -1697,6 +1918,7 @@ mod tests {
             Err("no DLOG 3002".to_owned()),
             info(),
             ButtonStyle::STOCK,
+            stock(),
         );
         screen.input(&press(Key::Tab));
         click_button(&mut screen, PlayerInfoButton::Jettison);
@@ -1935,6 +2157,7 @@ mod tests {
             Ok(yes_no()),
             info(),
             ButtonStyle::STOCK,
+            stock(),
         );
         assert_eq!(screen.problem(), Some("no DLOG 1017"));
         assert_eq!(screen.bounds(), None);
@@ -1954,6 +2177,7 @@ mod tests {
             Ok(yes_no()),
             info(),
             ButtonStyle::STOCK,
+            stock(),
         );
         assert_eq!(screen.problem(), Some("its dialog has no item 7"));
     }

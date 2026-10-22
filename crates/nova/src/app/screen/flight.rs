@@ -23,7 +23,7 @@ use nova_view::spaceport::{ListLooks, OutfitterCatalog, ShipyardCatalog};
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG, YES_NO_DIALOG};
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
@@ -109,7 +109,11 @@ impl AppScreen {
                 );
         }
         spaceport = spaceport
-            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_player_info(
+                template_of(PLAYER_INFO_DIALOG),
+                template_of(YES_NO_DIALOG),
+                BackgroundSizes::read(&self.data),
+            )
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());

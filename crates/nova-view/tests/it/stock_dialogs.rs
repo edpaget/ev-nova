@@ -1010,12 +1010,39 @@ fn the_picture_variants_frames_decode_at_their_sizes() {
     assert_eq!(size(PICTURE_BACKGROUND), (266, 306), "Bar + pict");
 }
 
+/// A player info with nothing in it but the pilot's name.
+fn blank_player_info() -> nova_sim::PlayerInfo {
+    nova_sim::PlayerInfo {
+        pilot_name: "Ada".to_owned(),
+        date: String::new(),
+        system: String::new(),
+        legal_status: String::new(),
+        ship_name: String::new(),
+        ship_class: String::new(),
+        turn_rate: 0,
+        accel: 0,
+        max_speed: 0,
+        credits: 0,
+        shield: None,
+        armor: None,
+        energy: None,
+        income: None,
+        fleet: false,
+        cargo: None,
+        extras: None,
+        honors: None,
+        jettisonable: false,
+        words: nova_sim::player_info::Words::STOCK,
+        cheat_ids: nova_sim::player_info::CheatIds::default(),
+        cheats: false,
+    }
+}
+
 #[test]
 fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
-    use nova_sim::PlayerInfo;
     use nova_view::ui::player_info::{
-        BACKGROUND, CAP_HEIGHT, MIDDLE_HEIGHT, PLAYER_INFO_DIALOG, PlayerInfoButton,
-        PlayerInfoScreen, Tab, YES_NO_DIALOG,
+        BACKGROUND, BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
+        YES_NO_DIALOG,
     };
     for (dir, path) in builds() {
         let ui = interface(&path);
@@ -1040,32 +1067,14 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert!(!template.items[5].enabled, "the content box is disabled");
         let confirm = ui.dialog_template(YES_NO_DIALOG);
         assert!(confirm.is_ok(), "{confirm:?}");
-        let info = PlayerInfo {
-            pilot_name: "Ada".to_owned(),
-            date: String::new(),
-            system: String::new(),
-            legal_status: String::new(),
-            ship_name: String::new(),
-            ship_class: String::new(),
-            turn_rate: 0,
-            accel: 0,
-            max_speed: 0,
-            credits: 0,
-            shield: None,
-            armor: None,
-            energy: None,
-            income: None,
-            fleet: false,
-            cargo: None,
-            extras: None,
-            honors: None,
-            jettisonable: false,
-            words: nova_sim::player_info::Words::STOCK,
-            cheat_ids: nova_sim::player_info::CheatIds::default(),
-            cheats: false,
-        };
-        let screen =
-            PlayerInfoScreen::new(Ok((template, mono())), confirm, info, ButtonStyle::STOCK);
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let screen = PlayerInfoScreen::new(
+            Ok((template, mono())),
+            confirm,
+            blank_player_info(),
+            ButtonStyle::STOCK,
+            BackgroundSizes::read(&data),
+        );
         assert_eq!(screen.problem(), None);
         assert_eq!(screen.tab(), Tab::General);
         let bounds = screen.bounds().expect("laid out");
@@ -1074,6 +1083,50 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             screen.button_bounds(PlayerInfoButton::Done),
             Some(ltrb(598.0, 465.0, 697.0, 490.0))
         );
+        let window = ltrb(305.0, 270.0, 718.0, 497.0);
+        let clipped = |command| DrawCommand::Clipped {
+            clip: window,
+            command: Box::new(command),
+        };
+        let stretched = |id, top_left, height| {
+            clipped(DrawCommand::StretchedPicture {
+                image: ImageKey::picture(id),
+                top_left,
+                width: 413.0,
+                height,
+            })
+        };
+        let background: Vec<DrawCommand> = drawn(&screen)
+            .into_iter()
+            .filter(|command| match command {
+                DrawCommand::Clipped { command, .. } => matches!(
+                    **command,
+                    DrawCommand::Picture { ref image, .. }
+                    | DrawCommand::StretchedPicture { ref image, .. }
+                        if BACKGROUND.contains(image)
+                ),
+                _ => false,
+            })
+            .collect();
+        assert_eq!(
+            background,
+            [
+                clipped(DrawCommand::Picture {
+                    image: BACKGROUND[1],
+                    top_left: Point::new(305.0, 310.0),
+                }),
+                stretched(8518, Point::new(305.0, 270.0), 40.0),
+                stretched(8520, Point::new(305.0, 457.0), 40.0),
+            ],
+            "the stock span of 147 crops the 215-high middle under the lower cap"
+        );
+    }
+}
+
+#[test]
+fn the_player_infos_background_pictures_are_read_at_their_stock_sizes() {
+    use nova_view::ui::player_info::{BACKGROUND, BackgroundSizes, PictureSize};
+    for (dir, _) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let size = |key: ImageKey| {
             let image = picture(&data, key.id);
@@ -1082,11 +1135,15 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(size(BACKGROUND[0]), (413, 40), "upper");
         assert_eq!(size(BACKGROUND[1]), (413, 215), "middle");
         assert_eq!(size(BACKGROUND[2]), (413, 40), "lower");
-        assert_eq!(CAP_HEIGHT, 40.0);
+        let own = |width, height| Some(PictureSize { width, height });
         assert_eq!(
-            f32::from(u16::try_from(size(BACKGROUND[1]).1).expect("fits")),
-            MIDDLE_HEIGHT,
-            "the middle crops under its own height"
+            BackgroundSizes::read(&data),
+            BackgroundSizes {
+                upper: own(413.0, 40.0),
+                middle: own(413.0, 215.0),
+                lower: own(413.0, 40.0),
+            },
+            "read through the port"
         );
     }
 }

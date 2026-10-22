@@ -2008,8 +2008,14 @@ mod tests {
 
     #[test]
     fn the_player_infos_middle_picture_is_cropped_not_squashed() {
-        use nova_view::ui::player_info::draw_background;
+        use nova_view::ui::player_info::{BackgroundSizes, PictureSize, draw_background};
         let page = 512.0;
+        let sized = |width, height| Some(PictureSize { width, height });
+        let stock = BackgroundSizes {
+            upper: sized(413.0, 40.0),
+            middle: sized(413.0, 215.0),
+            lower: sized(413.0, 40.0),
+        };
         let images = FakeImages::default()
             .with(
                 ImageKind::Pict,
@@ -2029,7 +2035,7 @@ mod tests {
         let mut renderer = Renderer::with_page_size(images, 512);
         let mut gpu = RecordingGpu::new();
         let mut list = DrawList::new();
-        draw_background(&mut list, Bounds::at(at(0.0, 0.0), 413.0, 227.0));
+        draw_background(&mut list, Bounds::at(at(0.0, 0.0), 413.0, 227.0), &stock);
         let viewport = Viewport::new(LogicalSize { w: 512, h: 384 }, (512, 384), 1.0);
 
         assert_eq!(
