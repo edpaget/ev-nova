@@ -35,13 +35,16 @@ use std::rc::Rc;
 
 use crate::ai::travel::TravelWrite;
 use crate::ai::{Behaviour, Decision, Goal, Surroundings, fire};
-use crate::catalog::LandingSite;
+use crate::catalog::{LandingSite, WeaponId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::combat::armament::Mount;
+use crate::combat::armament::{Mount, Trigger};
 use crate::combat::weapon::{Guidance, WeaponSpec};
+use crate::flight::ShipState;
 use crate::gate::GateKind;
+use crate::geometry::Vec2;
 use crate::traffic::npc::Npc;
+use crate::trig;
 
 /// The stellar-attacking AI (see the module docs), the warship's think
 /// running in its place when it has no stellar to attack.
@@ -181,6 +184,115 @@ pub fn planet_weapon(npc: &Npc, around: &Surroundings) -> Option<WeaponSpec> {
                 && planet_guidance(spec.guidance)
                 && fire::has_ammo(npc, &own_mount(npc, spec))
         })
+}
+
+/// `_HighLevelAIHandler`'s goal-0x12 band (@0x8f906-0x8faeb): the
+/// substate a stellar attacker flies by its squared distance d² from its
+/// stellar against its planet weapon's squared range r².
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Band {
+    /// Sub 2: beyond 0.75 r, it closes in.
+    Approach,
+    /// Sub 3: inside 0.25 r, it runs out.
+    RunOut,
+    /// Sub 1: in band and moving, it brakes.
+    Brake,
+    /// Sub 0x16: in band and at rest, it aims and fires.
+    Aim,
+}
+
+/// d² above this times r² approaches (the double 0.5625 @0xddaa0).
+pub const APPROACH_BAND: f32 = 0.5625;
+/// d² below this times r² runs out (the double 0.0625 @0xddaa8).
+pub const RUN_OUT_BAND: f32 = 0.0625;
+/// In band, a speed on either axis of at least this brakes (0.35
+/// @0xdda68).
+pub const BRAKE_SPEED: f32 = 0.35;
+/// The sub 0x16 fires within its turn rate and this many degrees of the
+/// stellar's bearing, strictly (15.0 @0xdda30).
+pub const AIM_FACING: f32 = 15.0;
+/// r² with no planet weapon: the float 1.0 (@0xdd068), not a range
+/// squared.
+pub const NO_GUN_RANGE_SQ: f32 = 1.0;
+
+/// The band a ship at `at` flies attacking a stellar at `stellar` with a
+/// planet weapon reaching `range`, if any (see [`Band`]): beyond 0.75 r
+/// it approaches, inside 0.25 r it runs out, each strictly; in between it
+/// brakes while either axis of its velocity is at least [`BRAKE_SPEED`],
+/// and aims otherwise.
+#[must_use]
+pub fn band(at: &ShipState, stellar: Vec2, range: Option<f32>) -> Band {
+    let reach = range.map_or(NO_GUN_RANGE_SQ, |range| range * range);
+    let off = stellar - at.position;
+    let squared = off.x * off.x + off.y * off.y;
+    if squared > APPROACH_BAND * reach {
+        Band::Approach
+    } else if squared < RUN_OUT_BAND * reach {
+        Band::RunOut
+    } else if at.velocity.x.abs() >= BRAKE_SPEED || at.velocity.y.abs() >= BRAKE_SPEED {
+        Band::Brake
+    } else {
+        Band::Aim
+    }
+}
+
+/// The band `npc` flies attacking its stellar among `around`, and the
+/// stellar, while it is in [`Goal::AttackStellar`]: by the range of the
+/// planet weapon its think takes ([`planet_weapon`],
+/// [`WeaponSpec::range`], the weapon's +0x5c), or with none by
+/// [`NO_GUN_RANGE_SQ`].
+#[must_use]
+pub fn attack_band<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<(Band, &'a LandingSite)> {
+    let Goal::AttackStellar(stellar) = npc.goal else {
+        return None;
+    };
+    let site = around.sites.iter().find(|site| site.id == stellar)?;
+    let range = planet_weapon(npc, around).map(|spec| spec.range());
+    Some((band(&npc.state, site.position, range), site))
+}
+
+/// The weapon `_AIFirePlanetGun` (@0x80536-0x805c9) picks for `npc`: the
+/// **highest** index among its own mounts it carries, of a guidance
+/// [`planet_guidance`] passes, with its ammunition ([`fire::has_ammo`])
+/// and its reload at or below none. It does not test the planet-type bit,
+/// so a ready ordinary gun above the planet gun wins. None when nothing
+/// is ready.
+#[must_use]
+pub fn planet_gun_pick(npc: &Npc) -> Option<WeaponId> {
+    npc.armament
+        .mounts()
+        .iter()
+        .filter(|mount| {
+            mount.count > 0
+                && planet_guidance(mount.spec.guidance)
+                && fire::has_ammo(npc, mount)
+                && mount.reload <= 0.0
+        })
+        .map(|mount| mount.spec.id)
+        .max()
+}
+
+/// What a stellar attacker fires among `around`: its planet gun pick
+/// ([`planet_gun_pick`]) as its pick and its flag (+0x72, +0xba), only in
+/// the [`Band::Aim`] substate (0x16, @0x88645-0x886f4) and while it faces
+/// its stellar's bearing (`_CalcInterceptAngle`) within its turn rate and
+/// [`AIM_FACING`] degrees, strictly. Otherwise it fires nothing and keeps
+/// the pick it had, as the low level's preamble clears only the flag
+/// (@0x851e6-0x851f6). It never asks for its point defence or its bays.
+/// While its AI wait runs the fight holds it ([`fire::gated`]).
+#[must_use]
+pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
+    let Some((Band::Aim, site)) = attack_band(npc, around) else {
+        return Trigger::default();
+    };
+    let bearing = trig::intercept_angle(npc.state.position, site.position);
+    let facing = fire::off_by(npc.state.heading, bearing) < npc.turn_rate() + AIM_FACING;
+    let pick = planet_gun_pick(npc).filter(|_| facing);
+    Trigger {
+        only: pick,
+        keep: pick,
+        ..Trigger::default()
+    }
 }
 
 /// `npc`'s mount of `spec`, or one of none when it carries none, which
@@ -615,5 +727,185 @@ mod tests {
             death_star.target(&npc, &around),
             Some(ShipRef::Npc(crate::traffic::npc::NpcId(77)))
         );
+    }
+
+    // The high level's band and the planet gun.
+
+    /// A ship at (`x`, 0) moving (`vx`, `vy`).
+    fn at(x: f32, (vx, vy): (f32, f32)) -> ShipState {
+        ShipState {
+            position: Vec2::new(x, 0.0),
+            velocity: Vec2::new(vx, vy),
+            heading: 0.0,
+        }
+    }
+
+    #[test]
+    fn the_band_approaches_beyond_three_quarters_runs_out_inside_a_quarter_and_brakes_or_aims_between()
+     {
+        let band_at = |x: f32, v: (f32, f32)| band(&at(x, v), Vec2::ZERO, Some(100.0));
+        assert_eq!(band_at(75.01, (0.0, 0.0)), Band::Approach);
+        assert_eq!(
+            band_at(75.0, (0.0, 0.0)),
+            Band::Aim,
+            "exactly 0.75 r is in band"
+        );
+        assert_eq!(
+            band_at(25.0, (0.0, 0.0)),
+            Band::Aim,
+            "exactly 0.25 r is in band"
+        );
+        assert_eq!(band_at(24.99, (0.0, 0.0)), Band::RunOut);
+        assert_eq!(band_at(50.0, (0.35, 0.0)), Band::Brake);
+        assert_eq!(band_at(50.0, (0.0, -0.35)), Band::Brake);
+        assert_eq!(band_at(50.0, (0.349, -0.349)), Band::Aim);
+        assert_eq!(
+            band_at(80.0, (5.0, 0.0)),
+            Band::Approach,
+            "speed counts only in band"
+        );
+        assert_eq!(band_at(10.0, (5.0, 0.0)), Band::RunOut);
+        let no_gun = |x: f32| band(&at(x, (0.0, 0.0)), Vec2::ZERO, None);
+        assert_eq!(no_gun(0.75), Band::Aim, "r² 1.0, not squared");
+        assert_eq!(no_gun(0.76), Band::Approach);
+        assert_eq!(no_gun(0.24), Band::RunOut);
+        assert_eq!(
+            (
+                APPROACH_BAND,
+                RUN_OUT_BAND,
+                BRAKE_SPEED,
+                AIM_FACING,
+                NO_GUN_RANGE_SQ
+            ),
+            (0.5625, 0.0625, 0.35, 15.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn the_band_reads_the_range_of_the_planet_weapon_the_think_takes() {
+        let gun = WeaponRecord {
+            count: 50,
+            speed: 400,
+            ..planet_gun(131, -1)
+        };
+        let armed = arsenal(&[gun], &[(131, 1)]);
+        let range = armed.weapon(WeaponId(131)).map(WeaponSpec::range);
+        assert!(range.is_some_and(|range| range > 100.0), "{range:?}");
+        let mut npc = attacker(&[gun]);
+        npc.goal = Goal::AttackStellar(StellarId(131));
+        let sites = sites();
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            weapons: &armed,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let (band, site) = attack_band(&npc, &around).expect("attacking 131");
+        assert_eq!(site.id, StellarId(131));
+        let range = range.unwrap_or_default();
+        assert_eq!(band, super::band(&npc.state, site.position, Some(range)));
+        let unarmed = arsenal(&[gun], &[]);
+        let around = Surroundings {
+            weapons: &unarmed,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let (band, _) = attack_band(&npc, &around).expect("attacking 131");
+        assert_eq!(band, super::band(&npc.state, site.position, None));
+        let idle = Npc {
+            goal: Goal::Idle,
+            ..npc
+        };
+        assert_eq!(attack_band(&idle, &around), None);
+    }
+
+    /// A gun of `guidance` and `flags2`, `wëap` `id`, reloading 30.
+    fn gun(id: i16, guidance: i16, flags2: u16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            flags2,
+            reload: 30,
+            ..weapon(id)
+        }
+    }
+
+    #[test]
+    fn the_planet_gun_pick_takes_the_highest_ready_weapon_planet_type_or_not() {
+        let planet = gun(130, -1, PLANET_TYPE);
+        let ordinary = gun(132, 4, 0);
+        let npc = attacker(&[planet, ordinary]);
+        assert_eq!(planet_gun_pick(&npc), Some(WeaponId(132)), "the highest");
+        let mut reloading = npc.clone();
+        reloading.armament.hold(WeaponId(132));
+        assert_eq!(planet_gun_pick(&reloading), Some(WeaponId(130)));
+        for guidance in [0, 3, 8, 9, 10] {
+            let npc = attacker(&[planet, gun(132, guidance, 0)]);
+            assert_eq!(planet_gun_pick(&npc), Some(WeaponId(130)), "{guidance}");
+        }
+        let launcher = WeaponRecord {
+            ammo_type: 10,
+            ..gun(132, -1, 0)
+        };
+        let dry = attacker(&[planet, launcher]);
+        assert_eq!(planet_gun_pick(&dry), Some(WeaponId(130)), "no rounds");
+        let mut all_held = npc;
+        all_held.armament.hold(WeaponId(130));
+        all_held.armament.hold(WeaponId(132));
+        assert_eq!(planet_gun_pick(&all_held), None);
+        assert_eq!(planet_gun_pick(&attacker(&[])), None);
+    }
+
+    /// The trigger of a ship at the centre facing `off` degrees off its
+    /// bearing to 131, at (60, 0), moving `velocity`, attacking it with a
+    /// planet gun of range 100.
+    fn aimed(off: i16, velocity: (f32, f32), goal: Goal) -> Trigger {
+        let planet_gun = WeaponRecord {
+            count: 25,
+            speed: 400,
+            ..gun(130, -1, PLANET_TYPE)
+        };
+        let armed = arsenal(&[planet_gun], &[(130, 1)]);
+        let mut npc = attacker(&[planet_gun]);
+        npc.goal = goal;
+        let site = LandingSite {
+            govt: Some(PIRATES),
+            ..planet(131, 60.0, 0.0)
+        };
+        let bearing = crate::trig::intercept_angle(npc.state.position, site.position);
+        npc.state.heading = f32::from(bearing + off);
+        npc.state.velocity = Vec2::new(velocity.0, velocity.1);
+        let sites = [site];
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            weapons: &armed,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let range = armed.weapon(WeaponId(130)).map_or(0.0, WeaponSpec::range);
+        assert!(
+            range * 0.75 > 60.0 && range * 0.25 < 60.0,
+            "in band: {range}"
+        );
+        trigger(&npc, &around)
+    }
+
+    #[test]
+    fn the_trigger_fires_the_pick_aiming_within_its_turn_and_15_degrees() {
+        let npc = attacker(&[]);
+        let limit = npc.turn_rate() + AIM_FACING;
+        let inside = limit.ceil() as i16 - 1;
+        let attack = Goal::AttackStellar(StellarId(131));
+        let fired = Trigger {
+            only: Some(WeaponId(130)),
+            keep: Some(WeaponId(130)),
+            ..Trigger::default()
+        };
+        assert_eq!(aimed(0, (0.0, 0.0), attack), fired);
+        assert_eq!(aimed(inside, (0.0, 0.0), attack), fired);
+        assert_eq!(aimed(-inside, (0.0, 0.0), attack), fired);
+        assert_eq!(
+            aimed(limit.ceil() as i16, (0.0, 0.0), attack),
+            Trigger::default(),
+            "strictly"
+        );
+        assert_eq!(aimed(0, (1.0, 0.0), attack), Trigger::default(), "braking");
+        assert_eq!(aimed(0, (0.0, 0.0), Goal::Idle), Trigger::default());
     }
 }
