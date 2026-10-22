@@ -613,6 +613,16 @@ pub struct Npc {
     /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
     pub owed_burst: Option<f32>,
+    /// Whether its last flight kept close formation: the original's stored
+    /// sub-goal +0xc8ca == 0xc, which `_IsShipInCloseForm` (@0x82f54)
+    /// reads. Each flight writes it ([`Npc::keeps_close_formation`] from
+    /// where the flight starts, false in any goal but formation), and it
+    /// starts `false`. An NPC held still, or one whose flight a fly half
+    /// never reaches, keeps it, as the original's sub-goal survives a glide
+    /// in (`_AIMakeShipJumpIn` @0x82ebb writes the goal, not the sub-goal).
+    /// Sight and the cloak think read it, as they run before the frame's
+    /// flight (see `nova_sim_combat::area_cloak`). Never saved.
+    pub close_form: bool,
 }
 
 /// The commodities 0-5 the original's ship records count.

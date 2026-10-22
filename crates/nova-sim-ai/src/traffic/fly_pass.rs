@@ -422,6 +422,9 @@ fn fly_flown(
     let beside = beside_of(pass, npc);
     // What its flight flies by, and what it owed of a gate burst before it.
     let inertia = Inertia::of(npc, other.as_ref(), beside.leader_seen, world.flight);
+    // The sub-goal this flight picks, stored for the next frame's sight and
+    // cloak think (`_HighLevelAIHandler` writes +0xc8ca).
+    npc.close_form = npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
     let owed = npc.owed_burst;
     let outcome = fly_steered(
         npc,
@@ -1142,6 +1145,46 @@ mod tests {
             Vec2::new(1.0, 0.0),
             "matched with it (sub 0xc)"
         );
+    }
+
+    #[test]
+    fn an_escort_flying_close_formation_is_marked_in_close_formation_and_any_other_flight_clears_it()
+     {
+        let mut close = player_escort(Vec2::new(-250.0, 0.0), false, false);
+        assert!(!close.npcs[0].close_form, "it starts unmarked");
+        close.fly_holding(with_player(false), &BTreeSet::new(), &mut NeverFires);
+        assert!(close.npcs[0].close_form, "within 300: sub 0xc");
+        let mut far = player_escort(Vec2::new(-700.0, 0.0), false, false);
+        far.npcs[0].close_form = true;
+        far.fly_holding(with_player(false), &BTreeSet::new(), &mut NeverFires);
+        assert!(!far.npcs[0].close_form, "beyond 600: sub 9");
+        let mut unseen = player_escort(Vec2::new(-250.0, 0.0), false, false);
+        unseen.npcs[0].close_form = true;
+        unseen.fly_holding(with_player(true), &BTreeSet::new(), &mut NeverFires);
+        assert!(!unseen.npcs[0].close_form, "its leader unseen: sub 1");
+        let mut other = player_escort(Vec2::new(-250.0, 0.0), false, false);
+        other.npcs[0].goal = Goal::JumpOut;
+        other.npcs[0].close_form = true;
+        other.fly_holding(with_player(false), &BTreeSet::new(), &mut NeverFires);
+        assert!(!other.npcs[0].close_form, "no formation goal");
+        let mut fleet_escort = fleet(false);
+        fleet_escort.fly_holding(World::new(&[]), &BTreeSet::new(), &mut NeverFires);
+        assert!(
+            fleet_escort.npcs[1].close_form,
+            "a fleet escort by its lead"
+        );
+    }
+
+    #[test]
+    fn an_npc_held_still_keeps_its_close_formation_mark() {
+        let still = BTreeSet::from([NpcId(1)]);
+        let mut marked = player_escort(Vec2::new(-700.0, 0.0), false, false);
+        marked.npcs[0].close_form = true;
+        marked.fly_holding(with_player(false), &still, &mut NeverFires);
+        assert!(marked.npcs[0].close_form);
+        let mut unmarked = player_escort(Vec2::new(-250.0, 0.0), false, false);
+        unmarked.fly_holding(with_player(false), &still, &mut NeverFires);
+        assert!(!unmarked.npcs[0].close_form);
     }
 
     /// [`fleet`]'s escort's glow after a fly half under `rules`, its lead

@@ -362,6 +362,7 @@ impl Session {
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             owed_burst: None,
+            close_form: false,
             fleet_slot: None,
             order_word: crate::fleet::OrderWord::NONE,
             marines: kind.marines,
