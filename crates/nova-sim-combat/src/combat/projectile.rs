@@ -2181,9 +2181,9 @@ mod tests {
         pass_through: PassThrough,
     ) -> Option<ShipRef> {
         let sides = Sides {
-            targets,
             govts,
             pass_through,
+            ..crate::combat::fixture::among(targets)
         };
         shot.hit(Vec2::ZERO, &sides, ProximityFuse::Swept)
             .map(|met| met.ship)

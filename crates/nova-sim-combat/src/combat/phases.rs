@@ -341,10 +341,12 @@ impl Combat {
             // (`_HandleBeams` @0x316a1), so a later beam's filter reads the
             // escort an earlier one took out of the player's fleet.
             for index in 0..self.beams.len() {
+                let (pass_through, beam_planet_flag) = self.hit_readings();
                 let sides = Sides {
                     targets: &targets,
                     govts: arena.govts,
-                    pass_through: self.pass_through,
+                    pass_through,
+                    beam_planet_flag,
                 };
                 let Some(hit) = self.beam_hit(index, fighters, &sides, pass.beam_damage()) else {
                     continue;

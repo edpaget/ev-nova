@@ -21,11 +21,32 @@
 //!   every ship. By the Bible's planet-type weapon, which "can only hit
 //!   planet-type ships or destroyable stellars", every blast reaches only
 //!   the ships whose planet type matches its weapon's.
+//! - **Beams** ([`beam_may_hit`]), as the rulebook's
+//!   [`RuleKey::BeamPlanetFlag`](crate::RuleKey::BeamPlanetFlag) says
+//!   ([`BeamPlanetFlag`]). The original's beam filter (`_HandleBeams`
+//!   @0x30d34-0x30d82) matches the ship's bit against its weapon's
+//!   `Flags` 0x0400 (the "big smoke" bit), not `Flags2`: a beam without
+//!   that bit never hits a planet-type ship, and one with it hits only
+//!   planet-type ships. The Bible's reads `Flags2` 0x0400, as a shot
+//!   does. No stock beam has `Flags` 0x0400, so stock play is the same.
 //!
 //! None of these rules plays a sound.
 
+use super::Combat;
 use super::weapon::WeaponSpec;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+
+impl Combat {
+    /// Has the fight read the planet-type rules as `rules` says:
+    /// [`RuleKey::PlanetBlasts`] ([`Combat::set_planet_blasts`]) and
+    /// [`RuleKey::BeamPlanetFlag`] ([`Combat::set_beam_planet_flag`]).
+    pub fn set_planet_type_rules(&mut self, rules: &Rulebook) {
+        self.set_planet_blasts(PlanetBlasts::from(rules.source_for(RuleKey::PlanetBlasts)));
+        self.set_beam_planet_flag(BeamPlanetFlag::from(
+            rules.source_for(RuleKey::BeamPlanetFlag),
+        ));
+    }
+}
 
 /// Which blast a ship may be reached by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +113,45 @@ pub const fn matches(weapon: bool, ship: bool) -> bool {
 #[must_use]
 pub fn shot_may_hit(weapon: &WeaponSpec, ship: bool) -> bool {
     matches(weapon.planet_type(), ship)
+}
+
+/// `wëap` `Flags` 0x0400, the "big smoke" bit, which the original's beam
+/// filter reads as a beam's planet-type bit (@0x30d34-0x30d82).
+pub const BEAM_PLANET_FLAG: u16 = 0x0400;
+
+/// Which of its weapon's bits makes a beam planet-type, as the rulebook's
+/// [`RuleKey::BeamPlanetFlag`](crate::RuleKey::BeamPlanetFlag) says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BeamPlanetFlag {
+    /// The original's: its `Flags` 0x0400 ([`BEAM_PLANET_FLAG`]), as
+    /// `_HandleBeams` reads the weapon's +0x20, which `_LoadObjectData`
+    /// fills from the resource's `Flags` (@0x793ca-0x793ce).
+    #[default]
+    Flags,
+    /// The Bible's: its `Flags2` 0x0400, the planet-type bit, as a shot
+    /// reads it.
+    Flags2,
+}
+
+impl From<RuleSource> for BeamPlanetFlag {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Flags,
+            RuleSource::Bible => Self::Flags2,
+        }
+    }
+}
+
+/// Whether a beam of `weapon` may hit a ship whose class is planet-type
+/// when `ship` holds, by `_HandleBeams`' filter (@0x30d34-0x30d82): the
+/// beam's planet-type bit, which `reading` says, matches the ship's.
+#[must_use]
+pub fn beam_may_hit(weapon: &WeaponSpec, reading: BeamPlanetFlag, ship: bool) -> bool {
+    let planet = match reading {
+        BeamPlanetFlag::Flags => weapon.flags & BEAM_PLANET_FLAG != 0,
+        BeamPlanetFlag::Flags2 => weapon.planet_type(),
+    };
+    matches(planet, ship)
 }
 
 #[cfg(test)]
@@ -176,5 +236,55 @@ mod tests {
             PlanetBlasts::Matching
         );
         assert_eq!(PlanetBlasts::default(), PlanetBlasts::Original);
+    }
+
+    fn beam(flags: u16, flags2: u16) -> WeaponSpec {
+        WeaponSpec::new(&WeaponRecord {
+            guidance: 0,
+            flags,
+            flags2,
+            ..weapon(128)
+        })
+    }
+
+    #[test]
+    fn a_beams_planet_type_bit_is_its_flags_0x0400_by_the_original_and_flags2_by_the_bible() {
+        for (flags, flags2) in [
+            (0, 0),
+            (0x0400, 0),
+            (0, 0x0400),
+            (0x0400, 0x0400),
+            (!0x0400, !0x0400),
+        ] {
+            let by_flags = flags & 0x0400 != 0;
+            let by_flags2 = flags2 & 0x0400 != 0;
+            for ship in [false, true] {
+                let weapon = beam(flags, flags2);
+                assert_eq!(
+                    beam_may_hit(&weapon, BeamPlanetFlag::Flags, ship),
+                    by_flags == ship,
+                    "{flags:#x} {flags2:#x} {ship}"
+                );
+                assert_eq!(
+                    beam_may_hit(&weapon, BeamPlanetFlag::Flags2, ship),
+                    by_flags2 == ship,
+                    "{flags:#x} {flags2:#x} {ship}"
+                );
+            }
+        }
+        assert_eq!(BEAM_PLANET_FLAG, 0x0400);
+    }
+
+    #[test]
+    fn the_engine_reads_a_beams_flags_and_the_bible_its_flags2() {
+        assert_eq!(
+            BeamPlanetFlag::from(RuleSource::Engine),
+            BeamPlanetFlag::Flags
+        );
+        assert_eq!(
+            BeamPlanetFlag::from(RuleSource::Bible),
+            BeamPlanetFlag::Flags2
+        );
+        assert_eq!(BeamPlanetFlag::default(), BeamPlanetFlag::Flags);
     }
 }

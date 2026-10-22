@@ -2,6 +2,7 @@
 //! behind the `fixture` feature: a fight's sides with no governments
 //! ([`among`]), and a plain strike ([`strike`]).
 
+use super::planet_type::BeamPlanetFlag;
 use super::projectile::Target;
 use super::sides::{PassThrough, Sides};
 use super::{Nominal, ShipRef, Strike};
@@ -11,13 +12,14 @@ use crate::govt::Governments;
 static NO_GOVERNMENTS: Governments = Governments::empty();
 
 /// The fight's sides as `targets` alone make them: no governments, and
-/// the original's pass-through.
+/// the original's pass-through and beam planet-type bit.
 #[must_use]
 pub fn among(targets: &[Target]) -> Sides<'_> {
     Sides {
         targets,
         govts: &NO_GOVERNMENTS,
         pass_through: PassThrough::default(),
+        beam_planet_flag: BeamPlanetFlag::default(),
     }
 }
 

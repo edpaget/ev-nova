@@ -73,8 +73,12 @@
 //! stop on one breaking up, and tests no government; it never hits its
 //! firer, its firer's leader, a ship its firer leads, a led ship allied
 //! with the player when its firer is too (@0x30ba0-0x30c05, @0x30d10), the
-//! `Booty` 0x0100 pairs as a shot's (@0x30c3c-0x30cf2), or class 0x2ff
-//! itself, a later class being hit (@0x30dd2-0x30dd8).
+//! `Booty` 0x0100 pairs as a shot's (@0x30c3c-0x30cf2), a ship whose
+//! planet-type bit differs from the beam's (@0x30d34-0x30d82), which the
+//! fight's [`BeamPlanetFlag`] reads from its weapon's `Flags` by the
+//! original and its `Flags2` by the Bible
+//! ([`planet_type::beam_may_hit`]), or class 0x2ff itself, a later class
+//! being hit (@0x30dd2-0x30dd8).
 //!
 //! The flag rules (6g-6j, 9 and the beam's pairs) count the player as the
 //! fight's [`PassThrough`] says: the original's whole player side, or the
@@ -107,15 +111,15 @@
 //! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
 //! shot's +0x8c clause (@0x44a81), task `planet-domination`; a miner's
 //! shots and beams (6k, @0x44a54; @0x30f4c), asteroids phase 5; the
-//! beam's planet-type match (@0x30d4f); the beam's system test (@0x30dc1), as only the player's system
-//! is simulated. None of these functions draws or plays a sound.
+//! beam's system test (@0x30dc1), as only the player's system is
+//! simulated. None of these functions draws or plays a sound.
 
 use super::ShipRef;
 use super::beam::Beam;
 #[cfg(doc)]
 use super::hull::Condition;
 use super::hull::ESCAPE_POD_SHIP;
-use super::planet_type;
+use super::planet_type::{self, BeamPlanetFlag};
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
@@ -177,8 +181,9 @@ impl From<RuleSource> for PassThrough {
 }
 
 /// What the hit rules read beyond the shot or beam and the ship: every
-/// ship in the fight this tick, the governments' flags, and who counts as
-/// the player for the pass-through flags.
+/// ship in the fight this tick, the governments' flags, who counts as
+/// the player for the pass-through flags, and which bit makes a beam
+/// planet-type.
 #[derive(Clone, Copy, Debug)]
 pub struct Sides<'a> {
     /// Every ship in the fight.
@@ -187,6 +192,8 @@ pub struct Sides<'a> {
     pub govts: &'a Governments,
     /// Who counts as the player for the pass-through flags.
     pub pass_through: PassThrough,
+    /// Which of its weapon's bits makes a beam planet-type.
+    pub beam_planet_flag: BeamPlanetFlag,
 }
 
 impl Sides<'_> {
@@ -285,6 +292,9 @@ impl Sides<'_> {
             && firer == ShipRef::Player
             && self.govts.flag(theirs.govt, NEVER_ATTACKS_PLAYER)
         {
+            return false;
+        }
+        if !planet_type::beam_may_hit(&beam.weapon, self.beam_planet_flag, theirs.planet_type) {
             return false;
         }
         target.ship_type != ESCAPE_POD_SHIP

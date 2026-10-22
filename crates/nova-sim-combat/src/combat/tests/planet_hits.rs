@@ -1,9 +1,10 @@
 //! The fight's planet-type rules (stellar-fidelity phase 2, see the
 //! [`planet_type`](crate::combat::planet_type) module): a planet-type
-//! weapon's shots and blasts against planet-type and ordinary ships.
+//! weapon's shots, blasts and beams against planet-type and ordinary
+//! ships.
 
 use super::*;
-use crate::combat::planet_type::PlanetBlasts;
+use crate::combat::planet_type::{BeamPlanetFlag, PlanetBlasts};
 use crate::combat::weapon::DETONATES;
 
 /// `ship`, its class planet-type.
@@ -26,7 +27,16 @@ fn through(
     b: impl Fn(Ship) -> Ship,
     d: impl Fn(Ship) -> Ship,
 ) -> (bool, bool) {
-    let mut combat = Combat::default();
+    through_in(Combat::default(), record, b, d)
+}
+
+/// As [`through`], in `combat`.
+fn through_in(
+    mut combat: Combat,
+    record: WeaponRecord,
+    b: impl Fn(Ship) -> Ship,
+    d: impl Fn(Ship) -> Ship,
+) -> (bool, bool) {
     let mut ships = [
         Ship::at(1, 0.0, 0.0).armed(record),
         b(Ship::at(2, 100.0, 0.0)),
@@ -298,4 +308,71 @@ fn by_the_bible_every_blast_reaches_the_ships_of_its_weapons_planet_type() {
     );
     assert_eq!(asteroid_blasts(0, RuleSource::Bible), [B]);
     assert_eq!(asteroid_blasts(PLANET_TYPE, RuleSource::Bible), [d]);
+}
+
+// Beams.
+
+/// `wëap` `Flags` 0x0400, the "big smoke" bit, which the original's beam
+/// filter reads as the planet-type bit (@0x30d34-0x30d82).
+const BIG_SMOKE: u16 = 0x0400;
+
+/// [`laser`] with `flags` and `flags2`.
+fn beam_of(flags: u16, flags2: u16) -> WeaponRecord {
+    WeaponRecord {
+        flags,
+        flags2,
+        ..laser()
+    }
+}
+
+/// [`through`] for a beam of `flags` and `flags2`, by `reading` of
+/// [`BeamPlanetFlag`].
+fn beam_through(
+    (flags, flags2): (u16, u16),
+    reading: RuleSource,
+    b: fn(Ship) -> Ship,
+    d: fn(Ship) -> Ship,
+) -> (bool, bool) {
+    let mut combat = Combat::default();
+    combat.set_beam_planet_flag(BeamPlanetFlag::from(reading));
+    through_in(combat, beam_of(flags, flags2), b, d)
+}
+
+/// Each of a beam of `bits` by `reading`: whether it hits an ordinary B
+/// before D, a planet-type one; and whether it passes a planet-type B to
+/// hit D, ordinary.
+fn beam_hits(bits: (u16, u16), reading: RuleSource) -> [(bool, bool); 2] {
+    [
+        beam_through(bits, reading, |ship| ship, planet),
+        beam_through(bits, reading, planet, |ship| ship),
+    ]
+}
+
+/// An ordinary beam hits the ordinary B and passes the planet-type B to
+/// the ordinary D behind it.
+const ORDINARY_HITS: [(bool, bool); 2] = [(true, false), (false, true)];
+/// A planet-type beam passes the ordinary B to the planet-type D behind
+/// it, and hits the planet-type B.
+const PLANET_HITS: [(bool, bool); 2] = [(false, true), (true, false)];
+
+#[test]
+fn by_the_engine_a_beam_matches_its_flags_0x0400_against_the_ships_planet_type() {
+    let engine = RuleSource::Engine;
+    assert_eq!(beam_hits((BIG_SMOKE, 0), engine), PLANET_HITS);
+    assert_eq!(beam_hits((0, 0), engine), ORDINARY_HITS);
+    assert_eq!(
+        beam_hits((0, PLANET_TYPE), engine),
+        ORDINARY_HITS,
+        "Flags2 does nothing for a beam"
+    );
+    assert_eq!(beam_hits((BIG_SMOKE, PLANET_TYPE), engine), PLANET_HITS);
+}
+
+#[test]
+fn by_the_bible_a_beam_matches_its_flags2_0x0400_against_the_ships_planet_type() {
+    let bible = RuleSource::Bible;
+    assert_eq!(beam_hits((0, PLANET_TYPE), bible), PLANET_HITS);
+    assert_eq!(beam_hits((0, 0), bible), ORDINARY_HITS);
+    assert_eq!(beam_hits((BIG_SMOKE, 0), bible), ORDINARY_HITS);
+    assert_eq!(beam_hits((BIG_SMOKE, PLANET_TYPE), bible), PLANET_HITS);
 }

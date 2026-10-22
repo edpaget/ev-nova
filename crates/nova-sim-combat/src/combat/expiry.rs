@@ -101,7 +101,7 @@ impl Combat {
         // life meet as the collision passes do, and each ship where it is
         // now, which the moves and the locks meet.
         let now_at = self.stand_where_they_stood(fighters);
-        let mut lineup = Lineup::new(fighters, &now_at, govts, self.pass_through);
+        let mut lineup = Lineup::new(fighters, &now_at, govts, self.hit_readings());
         place(fighters, &lineup.seen);
         let mut visit = 0;
         while visit < self.slot_bound() {

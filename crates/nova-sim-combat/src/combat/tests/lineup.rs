@@ -20,7 +20,7 @@ fn a_lineup_reads_each_ship_where_it_stands_and_again_where_it_is_seen() {
     let fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let govts = Governments::default();
     let seen_at = [Vec2::new(5.0, 5.0), Vec2::new(50.0, 50.0)];
-    let lineup = Lineup::new(&fighters, &seen_at, &govts, PassThrough::default());
+    let lineup = Lineup::new(&fighters, &seen_at, &govts, Default::default());
     for (index, fighter) in fighters.iter().enumerate() {
         assert_eq!(lineup.stood[index], fighter.as_target());
         let seen = Target {
@@ -40,7 +40,7 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let govts = Governments::default();
     let seen_at = [Vec2::new(5.0, 5.0), Vec2::new(50.0, 50.0)];
-    let mut lineup = Lineup::new(&fighters, &seen_at, &govts, PassThrough::default());
+    let mut lineup = Lineup::new(&fighters, &seen_at, &govts, Default::default());
     // A landing pushes E, takes its armour under the line and takes it
     // out of the player's fleet; the fighter has been put elsewhere for it.
     let struck = &mut fighters[1];

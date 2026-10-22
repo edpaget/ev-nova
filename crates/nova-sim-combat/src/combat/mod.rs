@@ -435,7 +435,7 @@ use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use lineup::Lineup;
 pub use phases::Arena;
-use planet_type::{BlastKind, PlanetBlasts};
+use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
 use projectile::{
     BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
@@ -1177,6 +1177,8 @@ pub struct Combat {
     pass_through: PassThrough,
     /// Which ships a blast reaches by their planet type.
     planet_blasts: PlanetBlasts,
+    /// Which of its weapon's bits makes a beam planet-type.
+    beam_planet_flag: BeamPlanetFlag,
     /// How often a decaying shot takes a step.
     decay: DecayStep,
     /// Whether an NPC's pick spends on a copy that spawns nothing
@@ -1567,6 +1569,19 @@ impl Combat {
     /// (see [`planet_type`]): by default, [`PlanetBlasts::Original`].
     pub fn set_planet_blasts(&mut self, reading: PlanetBlasts) {
         self.planet_blasts = reading;
+    }
+
+    /// Has a beam read its planet type from the bit `reading` says (see
+    /// [`planet_type`]): by default, [`BeamPlanetFlag::Flags`].
+    pub fn set_beam_planet_flag(&mut self, reading: BeamPlanetFlag) {
+        self.beam_planet_flag = reading;
+    }
+
+    /// The readings the hit rules take ([`Sides`]): who counts as the
+    /// player for the pass-through flags, and which bit makes a beam
+    /// planet-type.
+    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag) {
+        (self.pass_through, self.beam_planet_flag)
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -2490,7 +2505,7 @@ impl Combat {
                 _ => fighter.state.position,
             })
             .collect();
-        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.pass_through);
+        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
         let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
         let first_strike = self.strikes.len();
         let mut gone = vec![false; self.shots.len()];
@@ -10392,8 +10407,21 @@ mod tests {
         let massless = of_mass(Ship::at(2, 100.0, 100.0), 0.0);
         let mut planet = of_mass(Ship::at(2, 100.0, 100.0), 100.0);
         planet.hull.planet_type = true;
-        for target in [massless, planet] {
-            let mut ships = [tractor_firer(200.0, 135.0), target];
+        // Only a beam of `Flags` 0x0400 may hit a planet-type ship
+        // (`_HandleBeams` @0x30d34-0x30d82).
+        let mut planet_tractor = tractor_firer(200.0, 135.0);
+        planet_tractor.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                flags: planet_type::BEAM_PLANET_FLAG,
+                ..tractor_beam()
+            }),
+            1,
+        )]);
+        for (firer, target) in [
+            (tractor_firer(200.0, 135.0), massless),
+            (planet_tractor, planet),
+        ] {
+            let mut ships = [firer, target];
             let shoves = tractored(&mut ships);
             assert_eq!(shoves, []);
             assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
