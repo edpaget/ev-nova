@@ -1138,12 +1138,12 @@
 //! type when destroyed" and the original's reading between rebuilds
 //! (after one it draws graphic type 0; see "Built by phase 9"). Its
 //! animation follows the live state: one whose `Flags2` has 0x0080
-//! animates only while destroyed, any other only while not. Since phase
-//! 12 each stellar steps its own frame tick by tick, keeps the frame it
-//! shows across a swap while it is in range, and animates over the frame
-//! count of the sheet its slot held at the last rebuild point (see "Built
-//! by phase 12"); before, every stellar's frame came from the view's one
-//! clock.
+//! animates only while destroyed, any other only while not. Since
+//! stellar-fidelity phase 1 each stellar steps its own frame tick by
+//! tick, keeps the frame it shows across a swap while it is in range, and
+//! animates over the frame count of the sheet its slot held at the last
+//! rebuild point (see "Built by stellar-fidelity phase 1"); before, every
+//! stellar's frame came from the view's one clock.
 //!
 //! No Rulebook key is added. The original's other readings are filed as
 //! their own phases, each to add a key with the original's reading as
@@ -1151,8 +1151,9 @@
 //! `spïn` 1000 after a rebuild; built, see "Built by phase 9"), phase 10
 //! (the original's landing distance and its 150 fallback; built, see
 //! "Built by phase 10"), phase 11 (clicking a destroyed
-//! stellar by its `DeadType` sheet) and phase 12 (the frame count kept
-//! from the last rebuild).
+//! stellar by its `DeadType` sheet) and stellar-fidelity phase 1 (the
+//! frame count kept from the last rebuild; built, see "Built by
+//! stellar-fidelity phase 1").
 //!
 //! ## Checked for phase 7
 //!
@@ -1179,7 +1180,7 @@
 //!   not animate shows frame 0 (@0x2ee20). The frame count it animates
 //!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9),
 //!   so the animation follows the live state but not the live sheet's
-//!   frame count (see "Checked for phase 12").
+//!   frame count (see "Checked for stellar-fidelity phase 1").
 //! - **The rebuild** (`_HandleStellarSystemVisibility` @0x32aa5) makes
 //!   the same choice for each stellar of the player's system
 //!   (@0x32f0f-0x32f2f), frees each master no stellar there uses
@@ -1403,7 +1404,7 @@
 //!   stellar shot down in a frame is destroyed at that frame's look. So
 //!   `Y`, `U`, `Y` with no frame between keeps graphic type 0, and with a
 //!   frame while whole draws `Type` until the next rebuild point.
-//! - **The sheet rule** is the session's since phase 12
+//! - **The sheet rule** is the session's since stellar-fidelity phase 1
 //!   (`Session::drawn_sheet`, a [`DrawnSheet`]): a destroyed stellar
 //!   draws its `DeadType` sheet when that can be read; otherwise graphic
 //!   type 0's while dead since the last rebuild, by the engine's reading;
@@ -1428,7 +1429,8 @@
 //!   (@0x33256-0x3329c), then given graphic type 0's master, loaded first
 //!   if missing (`_LoadMasterStellarSprite(0)` @0x332ae, `spïn` 1000),
 //!   cloned in (`_SWCloneFramesFromMaster` @0x332be), and frame 0
-//!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is phase 12's).
+//!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is
+//!   stellar-fidelity phase 1's).
 //!   This is any empty slot, whether its `Type` or its `DeadType` is the
 //!   missing one; a whole stellar with an unreadable `Type` is
 //!   story-runtime phase 14. When `spïn` 1000 cannot be loaded either,
@@ -1618,7 +1620,8 @@
 //!   frame size drawn for each site from its caller; `None` still gives
 //!   the 64-pixel placeholder.
 //! - **The sheet drawn** is decided once, by `Session::drawn_sheet` (the
-//!   session's `stellars` module; one owner since phase 12): the
+//!   session's `stellars` module; one owner since stellar-fidelity
+//!   phase 1): the
 //!   `DeadType` sheet while destroyed, when there is one
 //!   (`LandingSite::dead_frame_size`); graphic type 0's while destroyed
 //!   and dead since the last rebuild point, by
@@ -1668,7 +1671,7 @@
 //!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are phase
 //!   20.
 //!
-//! ## Built by phase 12
+//! ## Built by stellar-fidelity phase 1
 //!
 //! The sheet a stellar draws is decided once, in the session, and a
 //! stellar animates over the frame count of the sheet its sprite slot
@@ -1737,7 +1740,7 @@
 //! shows needs no key: the original wraps it modulo the drawn sheet's
 //! count, and no other source gives a reading.
 //!
-//! ## Checked for phase 12
+//! ## Checked for stellar-fidelity phase 1
 //!
 //! - **The state is the stellar's.** The `spöb` record (0x498 bytes,
 //!   behind 0x3b5010) holds the frame count (+0x474), the current frame

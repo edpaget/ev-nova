@@ -887,7 +887,7 @@ rule_keys! {
     /// sheet's count; by the Bible, whose `Flags2` 0x0080 is "the
     /// stellar's graphic is animated after it's been destroyed", that of
     /// the sheet it draws, from the moment it is swapped (see the
-    /// `nova_sim::story` module's "Built by phase 12").
+    /// `nova_sim::story` module's "Built by stellar-fidelity phase 1").
     StellarFrameCount => "stellar_frame_count",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut

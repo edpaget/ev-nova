@@ -1,6 +1,6 @@
 //! A stellar's animation: which frame of its sheet shows, stepped tick by
 //! tick, as the original's sprite tick steps it every play frame
-//! (`_HandleStellarSprites` @0x2e77b-0x2ee35, story-runtime phase 12).
+//! (`_HandleStellarSprites` @0x2e77b-0x2ee35, stellar-fidelity phase 1).
 //!
 //! A stellar animates when the frame count it animates over (its
 //! counted sheet's) is above 1, its `AnimDelay` is above 0, and its

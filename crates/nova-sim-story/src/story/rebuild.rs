@@ -32,7 +32,7 @@
 //!   read and fills its slot. So a destroyed stellar's `Type` master is
 //!   unloaded from a rebuild point until a frame finds it whole, unless
 //!   another stellar shown keeps it loaded;
-//! - story-runtime phase 12: the frame count a stellar animates over, the
+//! - stellar-fidelity phase 1: the frame count a stellar animates over, the
 //!   count of the sheet its slot held at the last rebuild point
 //!   (@0x331c9), kept here as that sheet ([`DrawnSheet`]) and read through
 //!   `Session::counted_sheet`
@@ -47,7 +47,8 @@ use crate::catalog::{LandingSite, StellarId};
 use crate::landing::TypeWidth;
 
 /// Which of its sheets a stellar shown draws (see the `story` module's
-/// "Built by phase 11" and "Built by phase 12"): decided once, by
+/// "Built by phase 11" and "Built by stellar-fidelity phase 1"): decided
+/// once, by
 /// `Session::drawn_sheet`, and read by the click box and the views.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DrawnSheet {
@@ -456,7 +457,7 @@ mod tests {
         assert_eq!(frames(&rebuilt, &[128]), [true], "keeps its frames");
     }
 
-    // The counted sheet (story-runtime phase 12).
+    // The counted sheet (stellar-fidelity phase 1).
 
     fn counted(rebuilt: &Rebuilt, ids: &[i16]) -> Vec<DrawnSheet> {
         ids.iter()

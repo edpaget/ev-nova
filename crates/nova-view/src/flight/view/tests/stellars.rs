@@ -533,7 +533,7 @@ fn a_system_entered_by_a_jump_with_a_stellar_destroyed_draws_type_zero_from_its_
     assert_eq!(moon(&view), Moon::TypeZero);
 }
 
-// The sheet drawn and the click box agree (story-runtime phase 12).
+// The sheet drawn and the click box agree (stellar-fidelity phase 1).
 
 /// A flight in Sol whose Moon (129) can be destroyed, 50 square, with
 /// a `DeadType` sheet 70 square when `dead`, and graphic type 0's
@@ -618,8 +618,8 @@ fn the_sheet_drawn_and_the_click_box_agree_through_y_a_rebuild_point_and_u() {
     );
 }
 
-// The frame count kept from the last rebuild point (story-runtime
-// phase 12).
+// The frame count kept from the last rebuild point (stellar-fidelity
+// phase 1).
 
 /// A flight in Sol, by `rules`, whose Moon (129) can be destroyed and
 /// animates a frame a tick only while destroyed (`Flags2` 0x0080), over

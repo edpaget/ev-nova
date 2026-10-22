@@ -1319,9 +1319,9 @@ struct Redrawn {
 /// How `session` holds stellar `id`: destroyed as its galaxy holds it,
 /// with the sheet the session says it draws ([`Session::drawn_sheet`]:
 /// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
-/// story-runtime phases 7, 9 and 12), which the click box reads too, and
-/// animating over the frame count the session says
-/// ([`Session::counted_sheet`], phase 12).
+/// story-runtime phases 7 and 9, stellar-fidelity phase 1), which the
+/// click box reads too, and animating over the frame count the session
+/// says ([`Session::counted_sheet`], stellar-fidelity phase 1).
 fn look(session: &Session, id: StellarId) -> StellarLook {
     StellarLook {
         destroyed: session.galaxy().destroyed(id),

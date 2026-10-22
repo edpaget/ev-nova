@@ -62,7 +62,8 @@
 //! [`RuleKey::LandingDistance`]; "Built by phase 10"), and the sheet whose
 //! frame count each stellar shown animates over
 //! ([`Session::counted_sheet`], by [`RuleKey::StellarFrameCount`];
-//! "Built by phase 12"). Each point rebuilds after the transition's own
+//! "Built by stellar-fidelity phase 1"). Each point rebuilds after the
+//! transition's own
 //! writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
 //! when the set or a counted sheet changed:
@@ -2637,7 +2638,7 @@ mod tests {
         assert_eq!(click(&mut session, 34.0, 0.0), Some(StellarId(128)));
     }
 
-    // The sheet drawn (story-runtime phase 12's one owner).
+    // The sheet drawn (stellar-fidelity phase 1's one owner).
 
     /// The sheet stellar 128 draws.
     fn sheet_128(session: &Session) -> DrawnSheet {
