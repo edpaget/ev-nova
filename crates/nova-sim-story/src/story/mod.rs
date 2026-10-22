@@ -455,7 +455,7 @@
 //!
 //! | Event | Its one source | The original's |
 //! |---|---|---|
-//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] but a jump's; a jump's arrival, after its days, dispatched at once | the enter-system hook |
+//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] but a jump's and an in-flight move's; a jump's arrival, after its days, dispatched at once; an in-flight `M` or `N`, at its operator, dispatched at once (@0x159a8) | the enter-system hook |
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as `nova_sim::Session::land` docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | `nova_sim::Session::take_off`, after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
@@ -585,15 +585,18 @@
 //!   the enter-system subscriptions there (@0x159a3, @0x159a8).
 //!
 //! **Where it nests.** `nova_sim::Session::run_set`
-//! stays catalog-free: `apply_op` only queues a move or a `Q`, since a
-//! script has no catalog to read the new system from (see
-//! `script_effects`). The one place that dispatches is
+//! stays catalog-free. `apply_op` applies a move's catalog-free part at
+//! its operator, as `_EvalSetExp` does: the system written, the ship
+//! placed, and in flight the rebuild and its `EnteredSystem` dispatched
+//! there, events only (see the session's `operator_moves` module). The
+//! move's entry, which needs the catalog (the stellars shown, the scene
+//! and the traffic), waits, as does a `Q`. The place that settles is
 //! `nova_sim::Session::settle_script`, which holds
 //! the catalog and which the program calls after every input and tick.
 //! The landing, the take-off, the daily step, combat and boarding have no
 //! catalog, so the events they raise wait there. It settles in a loop:
-//! the moves queued (and the `EnteredSystem` an `enter_system` they cause
-//! raises), then the next event raised, first in, first out, dispatched,
+//! the entry the moves owe, then the next event raised, first in, first
+//! out, dispatched,
 //! and once none is left a `Q`'s leave in flight, whose events dispatch
 //! in the same settling. A `Q` run while landed is held instead, as the
 //! original holds `_absquatulateStr`
@@ -604,9 +607,9 @@
 //! off and settles again at once itself, so the take-off's events
 //! dispatch before its save and its first frame. The
 //! subscriptions' scripts run through the dispatcher's
-//! runner, which, after each operator handed to `apply_op`, settles the
-//! moves it queued, dispatches the events raised, depth first, and only
-//! then runs the next operator. So for the scripts the dispatcher runs,
+//! runner, which, after each operator handed to `apply_op`, completes the
+//! entry its moves owe, dispatches the events raised, depth first, and
+//! only then runs the next operator. So for the scripts the dispatcher runs,
 //! the original's nesting in the middle of a script is matched. A `Q`
 //! only sets the message (@0x15bee), as the original's does, so it is
 //! never settled in the middle of a script.
@@ -626,8 +629,10 @@
 //!   `nova_sim::Session::assign`.
 //!
 //! `C`, `E` and `H` change ships and run no hook. The deferred effects
-//! queue. At the caller's next safe point, its `settle_script`, they
-//! settle, and the events they raise dispatch, nested from there. So
+//! (a move's entry, the events raised but an in-flight move's
+//! `EnteredSystem`) wait. At the caller's next safe point, its
+//! `settle_script`, they settle, and the events they raise dispatch,
+//! nested from there. So
 //! under the default, nesting means depth first from the nearest safe
 //! point.
 //!
@@ -636,9 +641,10 @@
 //! has finished and the script has settled, then dispatches in the order
 //! raised, first in, first out; never in the middle of a script:
 //!
-//! 1. a dispatch runs its subscriptions' scripts, in order;
-//! 2. `settle_script` applies the queued moves, and an `enter_system` they
-//!    cause raises `EnteredSystem`;
+//! 1. a dispatch runs its subscriptions' scripts, in order, an in-flight
+//!    move raising its `EnteredSystem` at its operator without
+//!    dispatching it;
+//! 2. `settle_script` completes the entry the moves owe;
 //! 3. the dispatcher takes the next pending event, that one among them;
 //! 4. and so on until none is pending.
 //!

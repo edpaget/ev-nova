@@ -500,6 +500,7 @@ mod nebulae;
 mod news;
 mod npc_escape;
 mod npc_kinds;
+mod operator_moves;
 mod outbox;
 mod outfits;
 mod owners_unset;
@@ -3128,6 +3129,9 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
+        // A move's entry still owed comes before the jump's window opens
+        // (see the `operator_moves` module).
+        self.settle_pending_move(catalog, catalog, chance);
         let Some(Jump::Hyperspace { to: first, .. }) = self.mode.jump() else {
             return None;
         };
@@ -3884,6 +3888,9 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
+        // A docked move's entry still owed comes before the take-off's
+        // window opens (see the `operator_moves` module).
+        self.settle_pending_move(catalog, catalog, chance);
         let stellar = self.mode.take_landed()?;
         // `_playerIsLanded` stays set to @0x6358e: the moves until then
         // are landed ones (see the `take_off_moves` module).

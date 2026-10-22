@@ -124,7 +124,7 @@ pub(super) trait SettlingCatalog {
     );
     /// The landing's galaxy refresh and re-offer (`missions::REOFFER`).
     fn reoffer(&self, session: &mut Session, chance: &mut dyn Chance);
-    /// Applies the moves queued ([`Session::settle_moves`]).
+    /// Completes the entry the moves owe ([`Session::settle_moves`]).
     fn settle_moves(&self, session: &mut Session, chance: &mut dyn Chance, settled: &mut Settled);
 }
 
@@ -151,8 +151,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> SettlingCatalog for C {
 /// No catalog: an events-only settling's that has none, as a map grant's
 /// and a take-off's explorations dispatch (see [`Session::grant_outfit`]
 /// and the `map_walk` module). An events-only
-/// settling holds the moves (a take-off's are applied at their operator
-/// instead, see the `take_off_moves` module), and it only ever dispatches the
+/// settling holds the entry the moves owe (every move is applied at its
+/// operator, see the `operator_moves` module), and it only ever dispatches the
 /// [`StoryEvent::Explored`] events taken and what their scripts raise,
 /// never a [`StoryEvent::Landed`], which only a landing raises: so none of
 /// this is reached, and a debug build says so if it is.
@@ -296,7 +296,8 @@ impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
         });
     }
 
-    /// Applies the moves queued; nothing when only the events settle.
+    /// Completes the entry the moves owe; nothing when only the events
+    /// settle.
     fn settle_moves(&mut self) {
         if self.settling == Settling::EventsOnly {
             return;
@@ -452,8 +453,8 @@ impl Session {
 
     /// Dispatches now the [`StoryEvent::Explored`] events raised since
     /// `mark` ([`MissionRun::story_mark`]), in order, and the events their
-    /// subscriptions raise, as [`RuleKey::StoryReentry`] reads: the
-    /// moves and a `Q`'s leave they queue wait for the next settling
+    /// subscriptions raise, as [`RuleKey::StoryReentry`] reads: the entry
+    /// their moves owe and a `Q`'s leave wait for the next settling
     /// ([`Session::settle_story`]), and so does every event raised before
     /// `mark`, and every other kind raised since, kept in order. Events
     /// dropped past the limit are told, as [`ScriptNote::EventsDropped`].
@@ -1517,17 +1518,21 @@ mod tests {
         assert_eq!(session.story_raised(), expected, "like a jump");
     }
 
-    /// `session` after running `M131` and settling its move.
-    fn moved(mut session: Session, catalog: &FakePilotCatalog) -> Vec<StoryEvent> {
+    /// What `session` raises and leaves undispatched running `M131` and
+    /// completing its move's entry.
+    fn moved(session: Session, catalog: &FakePilotCatalog) -> Vec<StoryEvent> {
+        let mut session = quiet(session);
         let expr = SetExpr::parse("M131").expect("parses");
         session.run_set(&expr, &mut NeverFires);
-        let mut session = quiet(session);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
         session.story_raised()
     }
 
     #[test]
     fn a_move_raises_entered_system_and_as_an_arrival_explored() {
+        // As an arrival the operator raises `Explored`; in flight the
+        // operator dispatches its `EnteredSystem` (@0x159a8), and docked the
+        // entry raises its engine-only one.
         let catalog = testkit::catalog();
         for (reading, landed) in [
             (RuleSource::Engine, true),
@@ -1540,9 +1545,12 @@ mod tests {
             if landed {
                 land_now(&mut session).expect("lands");
             }
-            let mut expected = vec![entered(131, Entrance::ScriptMove { landed })];
+            let mut expected = Vec::new();
             if reading == RuleSource::Bible {
                 expected.push(explored(131));
+            }
+            if landed {
+                expected.push(entered(131, Entrance::ScriptMove { landed }));
             }
             assert_eq!(moved(session, &catalog), expected, "{reading:?} {landed}");
         }
@@ -1851,17 +1859,29 @@ mod tests {
     }
 
     #[test]
-    fn a_hooks_move_dispatches_its_events_at_the_next_settling() {
+    fn an_in_flight_moves_enter_system_dispatches_at_its_operator() {
+        // `_MissionHandlePlayerEnteredNewSystem` @0x159a8, inside the
+        // operator; by the other reading of `story_reentry` it waits for
+        // the next settling.
         let catalog = testkit::catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        register(
-            &mut session,
-            [sub(1, EventFilter::EnteredSystem(SystemId(131)), "", "b3")],
-        );
-        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
-        assert_eq!(bits(&session), [0_u16; 0], "deferred");
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert_eq!(bits(&session), [3]);
+        for reading in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::StoryReentry, reading));
+            register(
+                &mut session,
+                [sub(1, EventFilter::EnteredSystem(SystemId(131)), "", "b3")],
+            );
+            session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+            let at_once: &[u16] = if reading == RuleSource::Engine {
+                &[3]
+            } else {
+                &[]
+            };
+            assert_eq!(bits(&session), at_once, "{reading:?}");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(bits(&session), [3], "{reading:?}: once");
+        }
     }
 
     // The writer's catalog-free entry.

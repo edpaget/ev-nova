@@ -147,10 +147,12 @@ impl Entry {
     /// announces it: none for a jump, whose [`Session::arrive`] raised and
     /// dispatched its [`StoryEvent::EnteredSystem`] before the re-explore
     /// and the setup (@0x6c15d; see the `jump_exploration` module), nor
-    /// for the rescue, which runs none.
+    /// for an in-flight move or its tail with no move, whose operator
+    /// dispatched it (@0x159a8; see the `operator_moves` module), nor for
+    /// the rescue, which runs none.
     pub(super) fn hook_pending(self) -> Option<Entrance> {
         match self {
-            Self::Jump { .. } => None,
+            Self::Jump { .. } | Self::ScriptMove { landed: false } | Self::ScriptStay => None,
             _ => self.entrance(),
         }
     }
@@ -409,7 +411,7 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
     match how {
         Entry::Jump { hops, .. } => jump(hops, placed),
         Entry::Gate => gate(),
-        Entry::ScriptMove { landed: true } => script_move_landed(arrival),
+        Entry::ScriptMove { landed: true } => script_move_landed(),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
         Entry::ScriptStay => script_move_in_flight(false, facts),
         Entry::Relocate => relocate(),
@@ -542,35 +544,35 @@ fn gate() -> Resets {
     )
 }
 
-/// A landed `M` or `N` (`_EvalSetExp` @0x1570e-0x158d4 and
-/// @0x158d9-0x159ad): landed, the original empties `_dockedPortMissions`
-/// (@0x1584b, @0x15949) and does nothing more, so only the pilot's
-/// system and stellar change, the offers are emptied (the stellar they
-/// were rolled at kept) and the stellars wait for the take-off. As an
-/// `arrival` (the Bible's reading of `MoveArrival`) the system is
-/// explored and the course cleared at once. The nav is kept: the
-/// operator already wrote it, as `_EvalSetExp` does (`M` in mode 2 its
-/// destination's first stellar, @0x156f2-0x15705; otherwise the selection
-/// let go, @0x15733, @0x158fd; see the `nav` module), and the take-off
-/// lets go of it (@0x674d2).
-fn script_move_landed(arrival: bool) -> Resets {
-    let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
-    let course = if arrival {
-        set.push(Reset::Explore);
-        CourseStep::Clear
-    } else {
-        CourseStep::Keep
-    };
-    Resets::of(&set, course, NavStep::Keep, TrafficStep::None)
+/// A landed `M` or `N`'s entry, after its operator (`_EvalSetExp`
+/// @0x1570e-0x158d4 and @0x158d9-0x159ad; see the `operator_moves`
+/// module): landed, the original empties `_dockedPortMissions` (@0x1584b,
+/// @0x15949) and does nothing more, and the operator has emptied the
+/// offers, written the system and placed the ship, so only the pilot's
+/// stellar changes and the stellars wait for the take-off. The offers
+/// are not emptied again, so a landing's re-offer after the operator
+/// keeps its offers. As an `arrival` (the Bible's reading of
+/// `MoveArrival`) the operator explored the system and cleared the
+/// course. The nav is kept: the operator already wrote it, as
+/// `_EvalSetExp` does (`M` in mode 2 its destination's first stellar,
+/// @0x156f2-0x15705; otherwise the selection let go, @0x15733, @0x158fd;
+/// see the `nav` module), and the take-off lets go of it (@0x674d2).
+fn script_move_landed() -> Resets {
+    Resets::of(
+        &[Reset::Stellar, Reset::SaveDue],
+        CourseStep::Keep,
+        NavStep::Keep,
+        TrafficStep::None,
+    )
 }
 
 /// An `M` or `N` in flight (`_EvalSetExp` @0x158a4): the shots are
 /// killed and the stellars rebuilt; here the whole scene is let go of
 /// with them, and a jump given up, the thrust stopping only when there
 /// was one. The pilot's stellar is forgotten only in another system. As
-/// an `arrival` the system is explored, the course cleared, the fighters
-/// out dealt with and the system populated, even within the same
-/// system; otherwise only into another system does the traffic go on,
+/// an `arrival` the fighters out are dealt with and the system populated,
+/// even within the same system, the operator having explored the system
+/// and cleared the course (see the `operator_moves` module); otherwise only into another system does the traffic go on,
 /// with the ships the player leads alone (`_EvalSetExp` @0x15807,
 /// @0x1590b), the rest left behind as
 /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says. The
@@ -598,15 +600,15 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     if facts.jump_pending {
         set.push(Reset::Thrust);
     }
-    let (course, traffic) = if arrival {
-        set.extend([Reset::Explore, Reset::FightersOut]);
-        (CourseStep::Clear, TrafficStep::Populate)
+    let traffic = if arrival {
+        set.push(Reset::FightersOut);
+        TrafficStep::Populate
     } else if facts.system_changed {
-        (CourseStep::Keep, TrafficStep::Retarget)
+        TrafficStep::Retarget
     } else {
-        (CourseStep::Keep, TrafficStep::None)
+        TrafficStep::None
     };
-    Resets::of(&set, course, NavStep::Deselect, traffic)
+    Resets::of(&set, CourseStep::Keep, NavStep::Deselect, traffic)
 }
 
 /// The developer tools' move of a landed pilot, and the walker's landing
@@ -718,6 +720,9 @@ impl Session {
         C: TrafficCatalog + ?Sized,
         R: Chance + ?Sized,
     {
+        // A move's entry still owed comes first, so no entry straddles
+        // another (see the `operator_moves` module).
+        self.settle_pending_move(stellars, catalog, chance);
         let Arrival {
             system: asked,
             sites,
@@ -1374,32 +1379,21 @@ mod tests {
 
     #[test]
     fn a_landed_move_changes_where_the_pilot_is_and_defers_the_stellars() {
+        // The operator emptied the offers and, as an arrival, explored the
+        // system and cleared the course (see the `operator_moves` module).
         let landed = Entry::ScriptMove { landed: true };
-        assert_eq!(
-            resets(landed, &arrival(RuleSource::Engine), facts(true, false)),
-            Resets::of(
-                &[Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers],
-                CourseStep::Keep,
-                NavStep::Keep,
-                TrafficStep::None,
-            ),
-            "by the engine"
-        );
-        assert_eq!(
-            resets(landed, &arrival(RuleSource::Bible), facts(true, false)),
-            Resets::of(
-                &[
-                    Reset::Stellar,
-                    Reset::Explore,
-                    Reset::SaveDue,
-                    Reset::EmptyOffers,
-                ],
-                CourseStep::Clear,
-                NavStep::Keep,
-                TrafficStep::None,
-            ),
-            "as an arrival"
-        );
+        for reading in READINGS {
+            assert_eq!(
+                resets(landed, &arrival(reading), facts(true, false)),
+                Resets::of(
+                    &[Reset::Stellar, Reset::SaveDue],
+                    CourseStep::Keep,
+                    NavStep::Keep,
+                    TrafficStep::None,
+                ),
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]
@@ -1424,17 +1418,19 @@ mod tests {
                     if pending {
                         set.push(Reset::Thrust);
                     }
-                    let (course, traffic) = match (reading, changed) {
+                    // As an arrival the operator explored the system and
+                    // cleared the course (see the `operator_moves` module).
+                    let traffic = match (reading, changed) {
                         (RuleSource::Bible, _) => {
-                            set.extend([Reset::Explore, Reset::FightersOut]);
-                            (CourseStep::Clear, TrafficStep::Populate)
+                            set.push(Reset::FightersOut);
+                            TrafficStep::Populate
                         }
-                        (RuleSource::Engine, true) => (CourseStep::Keep, TrafficStep::Retarget),
-                        (RuleSource::Engine, false) => (CourseStep::Keep, TrafficStep::None),
+                        (RuleSource::Engine, true) => TrafficStep::Retarget,
+                        (RuleSource::Engine, false) => TrafficStep::None,
                     };
                     assert_eq!(
                         resets(in_flight, &arrival(reading), facts(changed, pending)),
-                        Resets::of(&set, course, NavStep::Deselect, traffic),
+                        Resets::of(&set, CourseStep::Keep, NavStep::Deselect, traffic),
                         "{reading:?} changed {changed} pending {pending}"
                     );
                 }
@@ -1487,11 +1483,11 @@ mod tests {
         };
         let (engine, bible) = (rows(RuleSource::Engine), rows(RuleSource::Bible));
         assert_eq!(
-            engine[..4],
-            bible[..4],
-            "a jump, a gate, a relocation and a rescue"
+            engine[..5],
+            bible[..5],
+            "a jump, a gate, a relocation, a rescue and a landed move, whose \
+             operator made the arrival"
         );
-        assert_ne!(engine[4], bible[4], "a landed move");
         assert_ne!(engine[5], bible[5], "a move in flight");
         let every_other = RuleKey::ALL
             .into_iter()
@@ -1542,16 +1538,21 @@ mod tests {
     }
 
     #[test]
-    fn every_way_in_but_a_jump_leaves_its_enter_system_hook_to_the_entry() {
+    fn every_way_in_but_a_jump_and_an_in_flight_move_leaves_its_enter_system_hook_to_the_entry() {
         for how in [
             Entry::Gate,
             Entry::ScriptMove { landed: true },
-            Entry::ScriptMove { landed: false },
-            Entry::ScriptStay,
             Entry::Relocate,
             Entry::Rescue,
         ] {
             assert_eq!(how.hook_pending(), how.entrance(), "{how:?}");
+        }
+        for how in [Entry::ScriptMove { landed: false }, Entry::ScriptStay] {
+            assert_eq!(
+                how.hook_pending(),
+                None,
+                "{how:?}: its operator's (@0x159a8)"
+            );
         }
         for (hops, natural_end) in [(0, true), (3, false)] {
             assert_eq!(

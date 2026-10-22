@@ -32,9 +32,10 @@
 //!
 //! **Here.** [`Session::arrive`] opens a window as it ends the jump and
 //! closes it once it has entered the system ([`JumpWindow`], on the
-//! [`Chart`]). While it is open, `Session::apply_op` hands each move a
-//! set operator queues to [`Session::move_in_jump`], at the operator,
-//! with no catalog:
+//! [`Chart`]). While it is open, `Session::apply_moves_at_operator` hands
+//! each move to [`Session::move_in_jump`], at the operator, with no
+//! catalog. It runs the in-flight tail every move outside a window runs
+//! too (`Session::in_flight_tail`, see the `script_move` module):
 //!
 //! - A move to a system the galaxy holds writes the player's system and
 //!   lets go of the nav selection. `M` stops the ship on the system's first
@@ -42,7 +43,7 @@
 //!   `spöb`'s `xPos`, `yPos`), or by [`ScriptEffectRules::starless`] at
 //!   the centre with none; `N` keeps it, holding the next take-off's
 //!   landing position by [`ScriptEffectRules::keep_flag`]'s engine
-//!   reading, as a queued move does.
+//!   reading.
 //! - A move to a system with no record, or an `N` out of range, is the
 //!   tail with no move, by [`ScriptEffectRules::missing_system_move`]'s and
 //!   [`ScriptEffectRules::out_of_range_move`]'s engine readings; by the
@@ -59,10 +60,14 @@
 //!   jump made (see the `killed_explosions` module).
 //! - [`StoryEvent::EnteredSystem`], entered by an in-flight move, is
 //!   raised for the player's system and dispatched at once, events only,
-//!   with no catalog; the ship goals wait for the jump's check after its
+//!   with no catalog (`Session::dispatch_move_entry`, shared with every
+//!   in-flight move); the ship goals wait for the jump's check after its
 //!   setup (see the `mission_ships` module). A move a script of that
 //!   dispatch runs only raises its own, which the running dispatch takes
 //!   within its budget, so scripts that move each other end.
+//!
+//! Unlike a move outside the window, it owes no entry of its own (see the
+//! `operator_moves` module): the jump's entry is its entry.
 //!
 //! The jump's tail then reads the player's system as the moves left it:
 //! the refresh's move, the hook, the re-explore and the entry, which
@@ -86,15 +91,14 @@
 //! [`ScriptEffectRules::missing_system_move`]: super::ScriptEffectRules::missing_system_move
 //! [`ScriptEffectRules::out_of_range_move`]: super::ScriptEffectRules::out_of_range_move
 //! [`ScriptEffectRules::arrival`]: super::ScriptEffectRules::arrival
+//! [`StoryEvent::Explored`]: crate::story::StoryEvent::Explored
+//! [`StoryEvent::EnteredSystem`]: crate::story::StoryEvent::EnteredSystem
 
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use super::script_effects::{ScriptMove, move_placement};
-use super::script_move::{MoveTarget, resolve_move};
-use super::story::NoCatalog;
+use super::script_effects::ScriptMove;
 use super::{Chart, Session};
 use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::story::{Entrance, StoryEvent, StoryEventKind};
 
 /// A jump's window, from its end to its entry (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,8 +111,6 @@ pub(super) struct JumpWindow {
     pub(super) placed: bool,
     /// Whether a move or a move's tail ran in it, setting the kill flags.
     pub(super) killed: bool,
-    /// Whether a move's own enter-system dispatch is running.
-    dispatching: bool,
 }
 
 impl Chart {
@@ -172,79 +174,18 @@ impl Session {
         self.kill_jump_explosions(window);
     }
 
-    /// Applies at once each move queued from `from` on: as the jump's
-    /// own while a jump's window is open (see the module docs), drawing on
-    /// `chance` for what the moves' dispatch runs, or as a take-off's
-    /// landed move while a take-off's window is (see the `take_off_moves`
-    /// module). Otherwise the moves stay queued for the caller's settling.
-    pub(super) fn absorb_moves(&mut self, from: usize, chance: &mut dyn Chance) {
-        if self.run.queued.moves.len() <= from {
-            return;
-        }
-        if self.chart.in_jump_window() {
-            for step in self.run.queued.moves.split_off(from) {
-                self.move_in_jump(step, chance);
-            }
-        } else if self.chart.in_take_off_window() {
-            for step in self.run.queued.moves.split_off(from) {
-                self.move_at_take_off(step);
-            }
-        }
-    }
-
     /// An in-flight `M` or `N`, `step`, during a jump's window (see the
-    /// module docs).
-    fn move_in_jump(&mut self, step: ScriptMove, chance: &mut dyn Chance) {
-        let rules = self.setup.script_effect_rules();
-        let to = match resolve_move(step, |system| self.chart.galaxy.exists(system), rules) {
-            MoveTarget::To { system, keep } => Some((system, keep)),
-            MoveTarget::Stay => None,
-            MoveTarget::Nothing => return,
+    /// module docs): the in-flight tail, the window's notes, then the
+    /// enter-system hook dispatched at once.
+    pub(super) fn move_in_jump(&mut self, step: ScriptMove, chance: &mut dyn Chance) {
+        let Some(tail) = self.in_flight_tail(step) else {
+            return;
         };
-        let mut placed = false;
-        if let Some((system, keep)) = to {
-            self.pilot.system = system;
-            self.chart.deselect();
-            let first = self.statics.first_stellar(system);
-            let placement = move_placement(first, keep, false, rules);
-            placed = placement.ship != ShipPlacement::Keep;
-            self.place(placement);
-        }
-        self.chart
-            .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
-        if to.is_some() {
-            self.arrive_by_move(self.pilot.system, rules);
-        }
         if let Some(window) = &mut self.chart.jump_window {
-            window.placed |= placed;
+            window.placed |= tail.placed;
             window.killed = true;
         }
-        self.enter_in_jump(chance);
-    }
-
-    /// Raises the move's [`StoryEvent::EnteredSystem`] for the player's
-    /// system and dispatches it at once, events only and with no catalog,
-    /// unless a move's own dispatch is running already, which takes it
-    /// (see the module docs).
-    fn enter_in_jump(&mut self, chance: &mut dyn Chance) {
-        let event = StoryEvent::EnteredSystem {
-            system: self.pilot.system,
-            how: Entrance::ScriptMove { landed: false },
-        };
-        let Some(window) = &mut self.chart.jump_window else {
-            return;
-        };
-        if window.dispatching {
-            self.run.raise(event);
-            return;
-        }
-        window.dispatching = true;
-        let mark = self.run.story_mark();
-        self.run.raise(event);
-        self.dispatch_since(&NoCatalog, chance, mark, StoryEventKind::EnteredSystem);
-        if let Some(window) = &mut self.chart.jump_window {
-            window.dispatching = false;
-        }
+        self.dispatch_move_entry(chance);
     }
 }
 
@@ -706,14 +647,15 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_move_out_of_a_jump_still_waits_for_the_settling() {
+    fn a_move_out_of_a_jump_owes_its_entry_to_the_settling() {
         let catalog = moving(Vec::new(), Vec::new());
         let mut session = flown(&catalog, Rulebook::default());
         session.run_set(
             &crate::control::SetExpr::parse("M133").expect("parses"),
             &mut NeverFires,
         );
-        assert_eq!(session.system(), SystemId(130), "queued");
+        assert_eq!(session.system(), SystemId(133), "at the operator");
+        assert!(session.chart.pending_move.is_some());
         assert_eq!(settle(&mut session, &catalog), Some(SystemId(133)));
     }
 }

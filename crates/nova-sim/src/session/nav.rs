@@ -89,10 +89,11 @@
 //! - A hypergate (`_PlayerEnterHypergate`): off on every outcome
 //!   (@0x637e4-0x637f2, @0x63fa2-0x63faa), and when it has no links.
 //! - `M` or `N` in flight (`_EvalSetExp` @0x157e3, @0x158fd): the
-//!   selection let go, the mode kept, as the move settles (the `entry`
-//!   module's table). The developer tools' relocation, which has no
-//!   original, does the same.
-//! - `M` or `N` landed, at its operator, before its move is queued
+//!   selection let go, the mode kept, at its operator (the
+//!   `operator_moves` module), and again as its entry completes (the
+//!   `entry` module's table). The developer tools' relocation, which has
+//!   no original, does the same.
+//! - `M` or `N` landed, at its operator, before its move is applied
 //!   (`Chart::select_for_landed_move`; `M` @0x1570e-0x157f5, `N`
 //!   @0x158d9-0x158fd): `M` in mode 2 selects the destination's first
 //!   stellar that can be read (+0x6c, @0x156f2-0x15705), or none with
@@ -623,15 +624,13 @@ impl Chart {
 
     /// A landed `M` (`first`) or `N` into `system` writes the selection
     /// at its operator, as `_EvalSetExp` does (`M` @0x1570e-0x157f5, `N`
-    /// @0x158d9-0x158fd), before its move is queued: `M` in mode 2 selects
+    /// @0x158d9-0x158fd), before its move is applied: `M` in mode 2 selects
     /// the system's first stellar that can be read, or none with none;
     /// any other `M`, and every `N`, lets go of the selection and keeps
     /// the mode, so Off stays off. Nothing is written for a system that
     /// doesn't exist, as the move skips it too, nor in flight, where the
-    /// move's settling lets go of the selection (the `entry` module's
-    /// table). The original lets go of it in flight at the operator too
-    /// (@0x157e3, @0x158fd); ours' settling comes later in the same input
-    /// or tick, before any frame is drawn, so the player never sees it.
+    /// in-flight tail lets go of the selection at the operator too
+    /// (@0x157e3, @0x158fd; see the `operator_moves` module).
     /// Why the first stellar that can be read and a system that doesn't
     /// exist are the original's, as far as it can be modelled, is in the
     /// module docs.
@@ -1510,13 +1509,15 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_the_operator_leaves_the_selection_to_the_settling() {
+    fn in_flight_the_operator_lets_go_of_the_selection() {
+        // @0x157e3, @0x158fd, inside the operator (see the
+        // `operator_moves` module).
         let catalog = catalog();
         for expr in ["M131", "N131"] {
             let mut session = Session::start(&catalog).expect("starts");
             session.chart.nav = stellar(128);
             run(&mut session, expr);
-            assert_eq!(session.nav_mode(), stellar(128), "{expr}");
+            assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
             let _ = session.settle_script(&catalog, &mut NeverFires);
             assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
         }

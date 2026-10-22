@@ -25,8 +25,8 @@
 //! step. Each system's `Explored` is dispatched as the walk reaches it,
 //! before its level is raised and before its neighbours are walked,
 //! through an events-only settling with no catalog
-//! ([`NoCatalog`]), the moves and a `Q`'s leave they queue held for the
-//! caller's settling; the events raised before stay queued. So an
+//! ([`NoCatalog`]), the entry their moves owe and a `Q`'s leave held for
+//! the caller's settling; the events raised before stay queued. So an
 //! `OnExplore` that paints is painted over by the grant's own paint, the
 //! script that ran `G` reads the `OnExplore`'s bits at its next operator,
 //! and a crön later in the day's pass reads them too. A grant run inside

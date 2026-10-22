@@ -18,6 +18,7 @@ use super::LastRefresh;
 use super::jump_moves::JumpWindow;
 use super::map_walk::MapWalk;
 use super::nav::NavSlot;
+use super::operator_moves::PendingMove;
 use super::take_off_moves::TakeOffWindow;
 
 /// What the player sees of the galaxy and has selected in it, in
@@ -90,6 +91,15 @@ pub(super) struct Chart {
     /// tail, applied at its operator (see the `take_off_moves` module).
     /// Not saved: no save falls inside it.
     pub(super) take_off_window: Option<TakeOffWindow>,
+    /// The entry an `M` or `N` applied at its operator outside both
+    /// windows still owes, for the next settling with a catalog (see the
+    /// `operator_moves` module). Not saved: every driver settles before a
+    /// save.
+    pub(super) pending_move: Option<PendingMove>,
+    /// Whether an in-flight move's own enter-system dispatch is running,
+    /// so a move inside it only raises its event (see the
+    /// `operator_moves` module).
+    pub(super) move_dispatching: bool,
     /// The exploration walk's visited set and reach, shared by every walk
     /// as the original's globals are (see the `map_walk` module); not
     /// saved.
@@ -120,6 +130,8 @@ impl Chart {
             carried_refresh: None,
             jump_window: None,
             take_off_window: None,
+            pending_move: None,
+            move_dispatching: false,
             walk: MapWalk::default(),
         }
     }

@@ -56,9 +56,12 @@
 //!
 //! **Here.** [`Session::lift_off`] opens a window ([`TakeOffWindow`], on
 //! the [`Chart`]) as it takes the ship out of the spaceport and closes it
-//! after the @0x634da pass. While it is open, `Session::apply_op` hands
-//! each move a set operator queues to [`Session::move_at_take_off`], at
-//! the operator, with no catalog:
+//! after the @0x634da pass. While it is open,
+//! `Session::apply_moves_at_operator` hands each move to
+//! [`Session::move_at_take_off`], at the operator, with no catalog. It
+//! runs the landed tail every docked move runs too
+//! (`Session::landed_tail`, see the `script_move` module), then its own
+//! placement:
 //!
 //! - A move to a system the galaxy holds writes the player's system and
 //!   leaves the owner words unset for the take-off's rebuild (see the
@@ -89,6 +92,10 @@
 //! before it restocks, restarts the auxiliary ships and populates, so
 //! those act on the target once.
 //!
+//! A docked move made before the take-off, outside the window, owes its
+//! entry (see the `operator_moves` module): the take-off completes it
+//! before it opens the window, so the two never overlap.
+//!
 //! **Ordering.** The pilot's stellar and the stellars shown are written
 //! at the window's close rather than at the operator: nothing between the
 //! two is drawn or saved.
@@ -109,10 +116,9 @@
 
 use super::entry::Dock;
 use super::script_effects::{ScriptMove, move_placement};
-use super::script_move::{MoveTarget, resolve_move};
+use super::script_move::first_site;
 use super::{Chart, Session, SessionEvent};
 use crate::catalog::{PilotCatalog, SystemId};
-use crate::landing::is_dockable_destroyed_or_not;
 use crate::rulebook::RuleSource;
 
 /// The last move a take-off's window absorbed.
@@ -162,20 +168,10 @@ impl Session {
     /// A move, `step`, during a take-off's window: `_EvalSetExp`'s landed
     /// tail, at its operator, with no catalog (see the module docs).
     pub(super) fn move_at_take_off(&mut self, step: ScriptMove) {
-        let rules = self.setup.script_effect_rules();
-        let to = match resolve_move(step, |system| self.chart.galaxy.exists(system), rules) {
-            MoveTarget::To { system, keep } => Some((system, keep)),
-            MoveTarget::Stay => None,
-            MoveTarget::Nothing => return,
-        };
-        // `_dockedPortMissions` filled with -1 (@0x1584b, @0x15949).
-        self.run.empty_offers();
-        let Some((system, keep)) = to else {
+        let Some((system, keep)) = self.landed_tail(step) else {
             return;
         };
-        self.pilot.system = system;
-        // The owners wait for the take-off's rebuild (@0x674c7).
-        self.chart.leave_owners_unset(&self.setup);
+        let rules = self.setup.script_effect_rules();
         let placed = self
             .chart
             .take_off_window
@@ -206,10 +202,7 @@ impl Session {
             return;
         };
         let sites = self.chart.read_sites(catalog, moved.system);
-        let first = sites.first().map(|site| {
-            let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
-            (site.position, dock)
-        });
+        let first = first_site(&sites);
         let rules = self.setup.script_effect_rules();
         self.pilot.stellar = move_placement(first, moved.keep, true, rules).stellar;
         if self.set_player_system(moved.system, sites, Dock::AsItWas) {

@@ -31,15 +31,14 @@
 //! its rebuild. An in-flight `M` or `N` during the jump ends it early, as
 //! its HSSV (@0x159a3) rescues for the system it moves to (see the
 //! `jump_moves` module); the next write of a hop or the arrival, or the
-//! refresh, starts it again. A landed `M` or `N` (`Session::move_to`) leaves them unset
+//! refresh, starts it again. A landed `M` or `N` leaves them unset at its
+//! operator (`Session::landed_tail`; see the `operator_moves` module)
 //! until the take-off's rebuild, which follows its population, or until a
-//! landing's refresh: a land check's `M` settles before the `REOFFER`
-//! refresh under `story_reentry = engine`, so it leaves no window, as in
-//! the original (@0xa1a92, @0xa1af2). Under `story_reentry = bible` it
-//! settles after that refresh and keeps the wait to the take-off. An
-//! `N` out of range moves nowhere and writes no system
-//! (`Session::stay`), so it leaves nothing unset; nor do the developer
-//! tools' moves, which are not the original's.
+//! landing's refresh: a land check's `M` runs before the `REOFFER`
+//! refresh under either reading of `story_reentry`, so it leaves no
+//! window, as in the original (@0xa1a92, @0xa1af2). An `N` out of range
+//! moves nowhere and writes no system, so it leaves nothing unset; nor do
+//! the developer tools' moves, which are not the original's.
 //!
 //! The stellars shown keep deriving the player's rescue
 //! ([`OverlaidGalaxy::shows`](crate::story::OverlaidGalaxy::shows)), as
@@ -393,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn a_land_check_move_leaves_no_wait_unless_it_settles_after_the_refresh() {
+    fn a_land_check_move_leaves_no_wait_past_the_landings_refresh() {
         let mut catalog = listed_by_125_and_131();
         catalog.missions.push(MissionRecord {
             on_success: Script::parse("M131"),
@@ -406,15 +405,10 @@ mod tests {
             let _ = session.settle_script(&catalog, &mut NeverFires);
             assert_eq!(session.system(), SystemId(131), "{reentry:?}: moved");
             assert!(session.pilot().missions().get(0).is_none(), "{reentry:?}");
-            // By the engine the move settles before the `REOFFER` refresh,
-            // whose rescue keeps 150 in 131 (@0xa1a92, @0xa1af2); by the
-            // other reading of `story_reentry` it settles after, so the
-            // owners wait for the take-off.
-            assert_eq!(
-                holding_150(&session),
-                by(reentry, Some(SystemId(131)), None),
-                "{reentry:?}"
-            );
+            // The move leaves the owners unset at its operator, before the
+            // `REOFFER` refresh, whose rescue keeps 150 in 131 (@0xa1a92,
+            // @0xa1af2), under either reading of `story_reentry`.
+            assert_eq!(holding_150(&session), Some(SystemId(131)), "{reentry:?}");
             session.take_off(&catalog, &mut NeverFires);
             assert_eq!(holding_150(&session), Some(SystemId(131)), "{reentry:?}");
         }

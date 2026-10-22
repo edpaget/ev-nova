@@ -456,13 +456,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_crons_move_waits_for_the_settling() {
+    fn a_crons_move_writes_the_system_at_once_and_enters_it_at_the_settling() {
         let catalog = timing(vec![scripted(128, 2, "M131", "")]);
         let mut session = quiet(&catalog);
         session.let_days_pass(1, &mut NeverFires);
-        assert_eq!(session.system(), SystemId(130), "not yet");
+        assert_eq!(session.system(), SystemId(131), "at the operator");
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(128), StellarId(129)],
+            "130's until the entry"
+        );
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(140)]
+        );
     }
 
     #[test]

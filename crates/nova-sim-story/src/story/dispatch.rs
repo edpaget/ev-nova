@@ -128,7 +128,8 @@ pub trait Stage {
     fn effect(&mut self, id: SubscriptionId, event: &StoryEvent);
     /// Runs `script`, calling `between` after each operator it applies.
     fn run(&mut self, script: &Script, between: &mut dyn FnMut(&mut dyn Stage));
-    /// Applies the moves queued, which may raise events.
+    /// Settles what the moves applied at their operators left (the
+    /// session completes their entry), which may raise events.
     fn settle_moves(&mut self);
     /// Applies a pending leave, which may raise events: whether one was.
     fn settle_leave(&mut self) -> bool;

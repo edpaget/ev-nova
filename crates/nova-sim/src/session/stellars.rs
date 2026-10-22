@@ -1417,13 +1417,18 @@ mod tests {
     }
 
     #[test]
-    fn an_on_destroys_move_waits_for_the_settling() {
+    fn an_on_destroys_move_writes_the_system_at_once_and_enters_it_at_the_settling() {
         let catalog = shooting([destroying("M131")]);
         let mut session = quiet(&catalog);
         fire(&mut session, 3);
-        assert_eq!(session.system(), SystemId(130), "not yet");
+        assert_eq!(session.system(), SystemId(131), "at the operator");
+        assert!(
+            session.stellars_shown().any(|id| id == StellarId(128)),
+            "130's until the entry"
+        );
         let _ = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(session.system(), SystemId(131));
+        assert!(!session.stellars_shown().any(|id| id == StellarId(128)));
     }
 
     /// Fines government 140 a `kill` penalty of -3 for a killing, and
