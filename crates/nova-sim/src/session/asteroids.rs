@@ -83,8 +83,10 @@ impl Session {
 
     /// Runs one game-work pass's asteroid work, drawing on `chance`: an
     /// asteroid spawned at the field's edge, on the ring
-    /// [`RuleKey::AsteroidRespawnRing`] says, and every asteroid stepped
-    /// and culled in the play area (see the module docs). Nothing while
+    /// [`RuleKey::AsteroidRespawnRing`] says, slot 0 refilled while miners
+    /// are active (`_HandleAsteroids` @0x361b5-0x3624b, see the `mining`
+    /// module), and every asteroid stepped and culled in the play area
+    /// (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
     pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.mode.landed().is_some() {
@@ -112,6 +114,9 @@ impl Session {
             self.space.play_area,
             chance,
         );
+        if self.space.miners_active() {
+            self.space.asteroids.refill_slot_0();
+        }
         self.space
             .asteroids
             .step(&self.statics.asteroid_types, player, self.space.play_area);

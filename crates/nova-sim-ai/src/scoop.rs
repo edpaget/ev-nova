@@ -26,8 +26,9 @@
 //! - **The scoop branch of `_ShipCollisionHandler`** (@0x370ab-0x371ac).
 //!   The other sprite must be in `_boxLayer`. The ship must be scooping:
 //!   for the player its +0xc3 (@0x370c2); for an NPC
-//!   `_AIShipIsScooping` (@0x88727, the goal 0x11; see
-//!   [`Npc::is_scooping`]), with no +0xc3 test (@0x370cb-0x370d5). The
+//!   `_AIShipIsScooping` (@0x88727, the goal 0x11, a miner's state 17,
+//!   [`Goal::Scoop`](crate::ai::Goal::Scoop); see [`Npc::is_scooping`]),
+//!   with no +0xc3 test (@0x370cb-0x370d5). The
 //!   box must be scoopable (@0x370fb) and must pass `_SWRLECollision`
 //!   (@0x3710c), which the engine stands in for with [`touches`]. Then the
 //!   box's life becomes −1 and its sprite is hidden (@0x37119-0x3712e);

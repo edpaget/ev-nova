@@ -485,6 +485,7 @@ mod map_borders;
 mod map_click;
 mod map_panel;
 mod map_search;
+mod mining;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_map;

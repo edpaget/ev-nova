@@ -779,8 +779,8 @@ impl Npc {
     }
 
     /// Whether it is scooping up asteroid boxes, `_AIShipIsScooping`
-    /// (@0x88727): by its goal ([`Goal::scooping`]), so never until
-    /// rdm:phase/asteroids/phase-5-ai-mining.
+    /// (@0x88727): by its goal ([`Goal::scooping`]), a miner's state 17,
+    /// [`Goal::Scoop`].
     #[must_use]
     pub fn is_scooping(&self) -> bool {
         self.goal.scooping()
