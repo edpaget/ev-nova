@@ -182,6 +182,11 @@ mod tests {
             ..miner(1, MINES)
         };
         assert!(refills(vec![escort]));
+        let not_a_miner = Npc {
+            condition: Condition::Disabled,
+            ..npc(1, ShipStats::default())
+        };
+        assert!(!refills(vec![not_a_miner]), "no miner bits");
     }
 
     #[test]

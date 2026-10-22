@@ -187,6 +187,7 @@ mod tests {
             (Goal::Inspect(T), Kept::Stop),
             (Goal::Dock(T), Kept::Stop),
             (Goal::Mine, Kept::Stop),
+            (Goal::Scoop, Kept::Stop),
             (plunder, Kept::Stop),
             (Goal::CountWait, Kept::Stop),
             (
