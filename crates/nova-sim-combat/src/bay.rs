@@ -19,16 +19,25 @@
 //! slot below the 8 of the
 //! `nova_sim::board::MAX_SHIPS_IN_SYSTEM` it leaves
 //! free (@0x3d648), so none once 55 NPCs are in the system by the engine
-//! ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)), or the round
-//! is put back. It leaves from the
+//! ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)): with none, a
+//! copy is not attempted, spending, counting and reloading nothing
+//! (`_FirePlayerWeapon` @0x62c61-0x62c72, `_AILaunchFighter`
+//! @0x81421-0x81423). It leaves from the
 //! carrier's position along the carrier's heading, the bay's
 //! `Inaccuracy` drawn as a shot's, at the carrier's velocity plus the
 //! bay's `Speed`/100 pixels a tick along that heading
 //! ([`launch_velocity`]: `_AdjustedAccel` @0x3dc70-0x3dca3, @0x2ae4b),
-//! with its shield and armour full and its class's stock weapons and
-//! rounds. An NPC launches from the first bay (lowest weapon ID) holding
+//! with its class's stock weapons and rounds, its shield and armour full
+//! at a fighter's capacities ([`fighter_capacity`]: 1.333 × its class's,
+//! as `_ShipShieldCapacity` and `_ShipArmorCapacity` read AI type 5,
+//! @0x2a91-0x2aa7, @0x2cb9-0x2cd2; its shield recharge likewise,
+//! @0x2b96-0x2bac), led by its carrier (@0x3d866-0x3d870), and gliding
+//! the bay's `Count` (+0x4c, @0x3d843-0x3d85b) until a think ends it.
+//! An NPC launches from the first bay (lowest weapon ID) holding
 //! rounds, while it attacks (`_AILaunchFighter` @0x81372); a later bay
-//! waits until that one is empty.
+//! waits until that one is empty. An NPC with no target holds every bay
+//! at its full `Reload` (`_HandleShip` @0x3390a-0x3394e), so its first
+//! launch comes `Reload` ticks after it takes one.
 //!
 //! **Docking** (`_HighLevelAIHandler` state 5 @0x8ebd7,
 //! `_LowLevelAIHandler` sub 8 @0x87e06-0x880fa): a fighter returning

@@ -11,14 +11,17 @@
 //! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
 //! fighter in a slot above its carrier's thinks then and takes its turn
 //! in the rest of the loop, and every later slot's point defence can
-//! choose it, as [`RuleKey::LaunchFrameAi`] reads. With no ship slot
-//! free below the reserve `_LaunchFighter` leaves (8 @0x3d648, so it
-//! stops at 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]), or no record of its ship type, it goes
-//! back into its bay, a round again. An NPC's launch has its slot
-//! already: the traffic counts the free slots as its NPCs fire, and a
-//! carrier finding none launches nothing (see `nova_sim::traffic`'s room
-//! ledger), so for an NPC this only guards a missing record. The player's
-//! glow bay lights the weapon glow only for a fighter put in the system.
+//! choose it, as [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
+//! a ship slot free below the reserve it leaves (8 @0x3d648, so none at
+//! 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]):
+//! the player's bay attempts a copy only while one is free, spending,
+//! counting, sounding and reloading nothing for the rest
+//! ([`Session::count_player_berths`], `_FirePlayerWeapon`
+//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as the
+//! traffic counts the free slots as its NPCs fire (see
+//! `nova_sim::traffic`'s room ledger). A fighter whose ship type has no
+//! record goes back into its bay, a round again. The player's glow bay
+//! lights the weapon glow only for a fighter put in the system.
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
 //!   ([`Escort::carried`]), of no government, on its formation slot, as
@@ -191,6 +194,19 @@ impl Session {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),
         }
+    }
+
+    /// Tells the fight how many ship berths are free below the spawn
+    /// reserve for the fighters the player's next trigger launches, as
+    /// `_FirePlayerWeapon` attempts a bay's copy only once `_LaunchFighter`
+    /// finds a slot (@0x62c61-0x62c72; see the fight's `player_berths`
+    /// module).
+    pub(super) fn count_player_berths(&mut self) {
+        let free = self
+            .space
+            .traffic
+            .free_berths(self.setup.spawn_reserve(SPAWN_RESERVE));
+        self.space.combat.set_player_berths(free);
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -547,7 +563,11 @@ impl Space {
         Some(self.traffic.add_npc(npc))
     }
 
-    /// Puts the fighter of `sortie` back into its bay, a round again.
+    /// Puts the fighter of `sortie` back into its bay, a round again: one
+    /// whose ship type has no record. A launch never finds the system
+    /// full: the fight attempts the player's copy only into a free berth
+    /// ([`Session::count_player_berths`]), and the traffic's room ledger
+    /// gives an NPC's sortie its berth.
     fn put_back(&mut self, pilot: &mut Pilot, statics: &Statics, sortie: &Sortie) {
         match sortie.carrier {
             ShipRef::Player => OutfitRounds {
@@ -1408,16 +1428,59 @@ pub(super) mod tests {
             launch(&mut session);
             session
         };
-        let session = crowded(55, RuleSource::Engine);
-        assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
+        // `_FirePlayerWeapon` attempts the copy only once `_LaunchFighter`
+        // finds a slot (@0x62c61-0x62c72): with none, nothing is spent,
+        // counted, heard or reloaded (@0x62d82-0x62d87).
+        let mut session = crowded(55, RuleSource::Engine);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "no round leaves");
         assert_eq!(session.npcs().len(), 55, "no fighter");
         assert_eq!(session.pilot().escorts(), []);
+        let heard = session
+            .take_combat_events()
+            .into_iter()
+            .any(|event| matches!(event, CombatEvent::Fired { weapon, .. } if weapon == BAY));
+        assert!(!heard, "no bay heard");
+        let reload = session.ship.fit.armament.mounts()[0].reload;
+        assert_eq!(reload, 0.0, "no reload");
         let session = crowded(54, RuleSource::Engine);
         assert_eq!(session.npcs().len(), 55, "the last slot below 56 taken");
         let session = crowded(55, RuleSource::Bible);
         assert_eq!(session.npcs().len(), 56, "by the Bible, any slot");
         let session = crowded(63, RuleSource::Bible);
         assert_eq!(session.npcs().len(), 63, "by the Bible, the table full");
+    }
+
+    #[test]
+    fn a_volley_of_two_bays_with_one_berth_left_launches_one_fighter_spending_one_round() {
+        // Two bays firing together (`Flags` 0x0040): the first copy finds
+        // the last berth below the reserve, the second none, and is
+        // neither spent nor counted (@0x62c66-0x62c72); the volley reloads
+        // as one that spawned one copy (@0x62f42-0x62f96).
+        let mut catalog = carrying();
+        catalog.weapons[0].flags |= crate::combat::weapon::SIMULTANEOUS;
+        catalog.hulls[0].weapons[0].count = 2;
+        let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine);
+        for n in 0..54 {
+            pirate(&mut session, 1000.0 + n as f32, 1000.0);
+        }
+        session.take_combat_events();
+        launch(&mut session);
+        assert_eq!(session.npcs().len(), 55, "one fighter");
+        assert_eq!(session.pilot().escorts().len(), 1);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "one round spent");
+        let heard = session
+            .take_combat_events()
+            .into_iter()
+            .filter(|event| matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == BAY))
+            .count();
+        assert_eq!(heard, 1, "one copy fired");
+        let mount = session.ship.fit.armament.mounts()[0];
+        assert_eq!(mount.count, 2);
+        assert_eq!(
+            mount.reload,
+            crate::combat::ai_fire::reload(&mount.spec, 1, 2) - 1.0,
+            "reloading as one copy, a tick counted down"
+        );
     }
 
     /// [`carrying`] with the Viper Bay a glow weapon (`Flags2` 0x0200).

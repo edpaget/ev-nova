@@ -317,6 +317,7 @@ impl Session {
             combat.defend_player(fighters, arena, chance);
         });
         self.sabotage_tick(rules, chance);
+        self.count_player_berths();
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fire_player(fighters, arena, chance);
         });
