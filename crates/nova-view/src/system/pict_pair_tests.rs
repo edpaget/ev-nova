@@ -166,6 +166,25 @@ fn a_destroyed_stellar_whose_dead_type_is_a_pict_pair_draws_it() {
 }
 
 #[test]
+fn graphic_type_0_of_a_pict_pair_keys_its_sheet_by_the_spin() {
+    let data = store(&[
+        (System::TYPE, 131, system(&[])),
+        (Spin::TYPE, 1000, spin(2000, 2100, 4, 2)),
+        (PICT, 2000, rgb888_pict(8, 4, &[[0x80, 0x40, 0x20]; 32])),
+        (PICT, 2100, rgb888_pict(8, 4, &[[0xFF; 3]; 32])),
+    ]);
+    assert_eq!(
+        data.system(SystemId(131)).type_zero_sprite,
+        Ok(StellarSheet {
+            image: SheetImage::Spin(1000),
+            frames: NonZeroU16::new(2).expect("non-zero"),
+            frame_width: 4,
+            frame_height: 4,
+        })
+    );
+}
+
+#[test]
 fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
     let data = store(&[
         (System::TYPE, 131, system(&[140])),

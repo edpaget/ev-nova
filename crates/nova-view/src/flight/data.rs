@@ -1163,6 +1163,45 @@ mod tests {
     }
 
     #[test]
+    fn an_explosion_whose_spin_is_a_pict_pair_keys_its_sheet_by_the_spin() {
+        use nova_data::graphics::fixture::rgb888_pict;
+
+        // `spïn` 402 has no `rlëD`: sprites `PICT` 2402 and mask 2502, two
+        // 4 x 4 frames cut from the 8 x 4 picture.
+        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x00, 2402),
+            (0x02, 2502),
+            (0x04, 4),
+            (0x06, 4),
+            (0x08, 2),
+            (0x0A, 1),
+        ] {
+            put_i16(&mut pict_pair, at, value);
+        }
+        let data = named_store(&[
+            (Boom::TYPE, 128, None, boom(100, -1, 2)),
+            (Spin::TYPE, 402, None, pict_pair),
+            (
+                PICT,
+                2402,
+                None,
+                rgb888_pict(8, 4, &[[0x80, 0x40, 0x20]; 32]),
+            ),
+            (PICT, 2502, None, rgb888_pict(8, 4, &[[0xFF; 3]; 32])),
+        ]);
+        let look = data.boom_look(BoomId(128)).expect("there").expect("reads");
+        assert_eq!(
+            look.sheet,
+            Ok(EffectSheet {
+                image: crate::SheetImage::Spin(402),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                frame_width: 4,
+            })
+        );
+    }
+
+    #[test]
     fn an_explosion_that_cannot_be_read_says_why_and_one_not_there_is_none() {
         let mut short = boom(100, 0, 0);
         short.pop();
