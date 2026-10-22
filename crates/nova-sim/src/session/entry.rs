@@ -72,7 +72,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Session, SessionEvent, story};
+use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -656,6 +656,7 @@ impl Session {
     /// populating from `catalog` on `chance` where it says so (see the
     /// module docs). A chain head made visible makes a save due and tells
     /// [`SessionEvent::GalaxyChanged`].
+    #[allow(clippy::too_many_lines)] // the Chart calls' explicit parameters wrap
     pub(super) fn enter_system<S, C, R>(
         &mut self,
         how: Entry,
@@ -673,24 +674,24 @@ impl Session {
             sites,
             placement,
         } = arrival;
-        let resolved = self.galaxy.arrival(asked);
-        if story::show(&mut self.pilot, &mut self.galaxy, resolved) {
-            self.save_due = true;
-            self.emit(SessionEvent::GalaxyChanged);
+        let resolved = self.chart.galaxy.arrival(asked);
+        if story::show(&mut self.pilot, &mut self.chart.galaxy, resolved) {
+            self.out.save_due = true;
+            self.out.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
         let left = self.pilot.system;
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
-            jump_pending: self.jump.is_some(),
+            jump_pending: self.mode.jump().is_some(),
         };
-        let resets = resets(how, &self.rules, facts);
+        let resets = resets(how, &self.setup.rules, facts);
         if resets.has(Reset::Strikes) {
             // The strikes still unanswered are dropped (`leave_behind`):
             // their grudges are held first, against the system left, its
             // NPCs and the player as they stand before the entry moves
             // either.
-            let left = std::mem::take(&mut self.strikes);
+            let left = std::mem::take(&mut self.space.strikes);
             self.hold_left_grudges(&left);
         }
         // A way in that docks docks at a stellar of the system asked for.
@@ -702,7 +703,7 @@ impl Session {
         let sites = if system == asked {
             sites
         } else {
-            self.read_sites(stellars, system)
+            self.chart.read_sites(stellars, system)
         };
         self.place(placement);
         if resets.has(Reset::Stellar) {
@@ -711,21 +712,34 @@ impl Session {
         if resets.has(Reset::Explore) {
             // At level 1, with its place's head, by the engine (see the
             // `explored` module).
-            self.explore_place(system, ExploredLevel::Explored);
+            self.chart.explore_place(
+                &mut self.pilot,
+                &self.setup,
+                system,
+                ExploredLevel::Explored,
+            );
         }
         match resets.course {
             CourseStep::Keep => {}
-            CourseStep::Arrival { hops } => self.course_after_arrival(hops, system),
+            CourseStep::Arrival { hops } => {
+                self.chart
+                    .course_after_arrival(&mut self.pilot, &self.setup, hops, system);
+            }
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
-            self.touchdown = self.player.position;
+            self.port.touchdown = self.ship.player.position;
         }
         if resets.has(Reset::Dock) {
-            self.landed = placement.stellar;
-            self.bar_news = None;
-            self.bar_nav = None;
-            self.warp_ups.clear();
+            match placement.stellar {
+                Some(stellar) => self.mode = Mode::Landed(stellar),
+                None => {
+                    self.mode.take_landed();
+                }
+            }
+            self.port.bar_news = None;
+            self.chart.bar_nav = None;
+            self.ship.warp.warp_ups.clear();
             // The warp-out needs no clearing here: a relocation from
             // flight docks after (`Session::land_at`), and one already
             // landed has none playing, as landing ended it.
@@ -738,10 +752,10 @@ impl Session {
             self.open_port_prices();
         }
         // The fighter notes this entry queues, which a buoy drops.
-        let notes = self.fighter_notes.len();
+        let notes = self.out.fighter_notes.len();
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
-            self.offers.redraw(&mut &mut *chance);
+            self.run.offers.redraw(&mut &mut *chance);
         }
         self.bring_in_traffic(
             resets.traffic,
@@ -754,17 +768,17 @@ impl Session {
             self.place_asteroids(chance);
         }
         if resets.has(Reset::ShopRolls) {
-            self.land_day_rolls();
-            self.open_outfit_visit();
+            self.port.land_day_rolls(&self.setup);
+            self.port.open_outfit_visit(&self.pilot);
         }
         if resets.has(Reset::SaveDue) {
-            self.save_due = true;
+            self.out.save_due = true;
         }
         if resets.has(Reset::ForgetOffers) {
-            self.forget_offers();
+            self.run.forget_offers();
         }
         if resets.has(Reset::EmptyOffers) {
-            self.empty_offers();
+            self.run.empty_offers();
         }
         let heard = Heard {
             system,
@@ -778,7 +792,7 @@ impl Session {
         // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
         // module).
         if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate) {
-            self.raise(StoryEvent::Explored { system });
+            self.run.raise(StoryEvent::Explored { system });
         }
         if resets.has(Reset::Rebuild) {
             self.rebuild_stellars();
@@ -801,37 +815,37 @@ impl Session {
         listed: Vec<LandingSite>,
         dock: Dock,
     ) -> bool {
-        let before = self.shown;
+        let before = self.chart.shown;
         self.pilot.system = system;
         let (docked_in, docked_listed) = match dock {
-            Dock::AsItWas => (self.shown, None),
+            Dock::AsItWas => (self.chart.shown, None),
             Dock::At(at, at_listed) => (at, Some(at_listed)),
         };
-        if self.landed.is_none() || docked_in == system {
+        if self.mode.landed().is_none() || docked_in == system {
             self.show(system, listed);
-            self.next_sites = None;
+            self.chart.next_sites = None;
         } else {
             if let Some(docked_listed) = docked_listed {
                 self.show(docked_in, docked_listed);
             }
-            self.shown = docked_in;
-            self.next_sites = Some(listed);
+            self.chart.shown = docked_in;
+            self.chart.next_sites = Some(listed);
         }
-        self.shown != before
+        self.chart.shown != before
     }
 
     /// Shows the stellars of `listed`, every one `system` lists, that it
     /// shows ([`shown_sites`](super::shown_sites)).
     fn show(&mut self, system: SystemId, listed: Vec<LandingSite>) {
-        self.sites = super::shown_sites(
-            &self.galaxy,
-            &self.listed_stellars,
+        self.chart.sites = super::shown_sites(
+            &self.chart.galaxy,
+            &self.statics.listed_stellars,
             system,
             &listed,
-            self.landed,
+            self.mode.landed(),
         );
-        self.listed = listed;
-        self.shown = system;
+        self.chart.listed = listed;
+        self.chart.shown = system;
         self.keep_gate_sprites();
     }
 
@@ -848,33 +862,19 @@ impl Session {
     /// rebuild point lets go of the navigation target first, so it never
     /// names a stellar no longer shown.
     pub(super) fn reshow(&mut self) -> bool {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             return false;
         }
-        let listed = std::mem::take(&mut self.listed);
+        let listed = std::mem::take(&mut self.chart.listed);
         let before: Vec<StellarId> = self.stellars_shown().collect();
-        self.show(self.shown, listed);
+        self.show(self.chart.shown, listed);
         !self.stellars_shown().eq(before)
     }
 
     /// The stellars shown, in navigation order (their system's `NavDefs`
     /// order): what the flight view draws.
     pub fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
-        self.sites.iter().map(|site| site.id)
-    }
-
-    /// Checks the invariant [`Session::set_player_system`] keeps: docked,
-    /// the stellar the ship is docked at is among the stellars shown.
-    #[cfg(test)]
-    pub(crate) fn assert_docked_among_shown(&self) {
-        if let Some(stellar) = self.landed {
-            let shown: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
-            assert!(
-                shown.contains(&stellar),
-                "docked at {stellar:?}, showing {shown:?} of {:?}",
-                self.shown
-            );
-        }
+        self.chart.stellars_shown()
     }
 
     /// Puts the ship where `placement` says, its speed along its heading
@@ -882,21 +882,21 @@ impl Session {
     fn place(&mut self, placement: Placement) {
         match placement.ship {
             ShipPlacement::Arrive(state) => {
-                self.player = state;
-                self.arrive_at_speed();
+                self.ship.player = state;
+                self.ship.arrive_at_speed();
             }
             ShipPlacement::ArriveAtSpeed { ship, speed } => {
-                self.player = ship;
-                self.player_speed = speed;
+                self.ship.player = ship;
+                self.ship.player_speed = speed;
             }
             ShipPlacement::AtRest(position) => {
-                self.player.position = position;
-                self.player.velocity = Vec2::ZERO;
-                self.player_speed = 0.0;
+                self.ship.player.position = position;
+                self.ship.player.velocity = Vec2::ZERO;
+                self.ship.player_speed = 0.0;
             }
             ShipPlacement::Keep => {}
         }
-        self.hold_position |= placement.hold;
+        self.port.hold_position |= placement.hold;
     }
 
     /// Lets go of what `resets` says of the system left: the held sound,
@@ -905,48 +905,48 @@ impl Session {
     /// fighters out.
     fn leave_behind(&mut self, resets: &Resets) {
         if resets.has(Reset::HeldSound) {
-            self.queued.sound = None;
+            self.run.queued.sound = None;
         }
         if resets.has(Reset::Jump) {
-            self.jump = None;
+            self.mode.end_jump();
         }
         if resets.has(Reset::Thrust) {
-            self.stop_thrust();
+            self.ship.stop_thrust(&mut self.out);
         }
         match resets.nav {
             NavStep::Keep => {}
-            NavStep::Deselect => self.deselect(),
+            NavStep::Deselect => self.chart.deselect(),
             NavStep::OffThenCue => {
-                self.set_nav(NavMode::Off);
+                self.chart.set_nav(NavMode::Off);
                 self.cue_course();
             }
         }
         if resets.has(Reset::GateEntry) {
-            self.gate = None;
+            self.ship.warp.gate = None;
         }
         if resets.has(Reset::Combat) {
-            self.combat.clear();
+            self.space.combat.clear();
         }
         if resets.has(Reset::Boxes) {
-            self.clear_boxes();
+            self.space.clear_boxes();
         }
         if resets.has(Reset::Asteroids) {
-            self.kill_asteroids();
+            self.space.kill_asteroids();
         }
         if resets.has(Reset::Strikes) {
-            self.strikes.clear();
+            self.space.strikes.clear();
         }
         if resets.has(Reset::Target) {
-            self.target = None;
+            self.chart.target = None;
         }
         if resets.has(Reset::DockRequest) {
-            self.dock = None;
+            self.port.dock = None;
         }
         if resets.has(Reset::Boarding) {
-            self.aboard = None;
+            self.space.escorts.aboard = None;
         }
         if resets.has(Reset::Hail) {
-            self.talk = None;
+            self.space.escorts.talk = None;
         }
         if resets.has(Reset::FightersOut) {
             self.leave_with_fighters(false);
@@ -972,58 +972,105 @@ impl Session {
             TrafficStep::None => {}
             TrafficStep::Populate => self.populate_as(catalog, chance, how),
             TrafficStep::Retarget => {
-                let table = self.spawn_table(catalog);
+                let table =
+                    self.chart
+                        .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
                 // Every ship the player leads, as `_EvalSetExp`
                 // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
                 let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
                 // By the engine the rest stay in the ship table until the
                 // display pass frees them, nothing given back
                 // (`_HandleShipDisplay` @0x2ded6-0x2dee7).
-                let leave = if self.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine
-                {
-                    Leave::Held { from, to }
-                } else {
-                    self.give_back_aux_ships(&led);
-                    Leave::Dropped
-                };
-                self.traffic.retarget(table, &led, leave);
+                let leave =
+                    if self.setup.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine {
+                        Leave::Held { from, to }
+                    } else {
+                        self.give_back_aux_ships(&led);
+                        Leave::Dropped
+                    };
+                self.space.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
                 // The berths' odds, search timers and persons outlast the
                 // traffic, as the original's ship table does (see the
                 // `kept_berths` module).
-                let kept = self.traffic.kept_berths();
-                self.traffic = Traffic::new();
+                let kept = self.space.traffic.kept_berths();
+                self.space.traffic = Traffic::new();
                 // A new traffic reads reused slots' picks, exit cursors and
                 // blink timers and search timers by the rulebook.
-                self.traffic
-                    .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
-                self.traffic
-                    .set_reused_slot_exits(self.rules.source_for(RuleKey::ReusedSlotExits));
-                self.traffic.set_reused_slot_blink_timer(
-                    self.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
+                self.space
+                    .traffic
+                    .set_reused_slot_pick(self.setup.rules.source_for(RuleKey::ReusedSlotPick));
+                self.space
+                    .traffic
+                    .set_reused_slot_exits(self.setup.rules.source_for(RuleKey::ReusedSlotExits));
+                self.space.traffic.set_reused_slot_blink_timer(
+                    self.setup.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
                 );
-                self.traffic.set_spawn_anim_rolls_first_class(
-                    self.rules.source_for(RuleKey::SpawnAnimRollsFirstClass),
+                self.space.traffic.set_spawn_anim_rolls_first_class(
+                    self.setup
+                        .rules
+                        .source_for(RuleKey::SpawnAnimRollsFirstClass),
                 );
-                self.traffic
-                    .set_reused_slot_search(self.rules.source_for(RuleKey::ReusedSlotSearch));
-                self.traffic.keep_berths(kept);
-                self.set_first_class();
-                self.traffic_due = true;
-                self.fleet.clear();
-                self.story.watched.clear();
+                self.space
+                    .traffic
+                    .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
+                self.space.traffic.keep_berths(kept);
+                self.space.set_first_class(&self.statics);
+                self.space.traffic_due = true;
+                self.space.escorts.fleet.clear();
+                self.run.story.watched.clear();
             }
         }
     }
 
+    /// Sounds and raises the arrival in `heard`'s system, as `resets`
+    /// says, tells its event, if any ([`scene_event`]), and raises
+    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
+    /// names an entrance ([`Entry::entrance`]). The arrival message is the
+    /// system's buoy, its strings read from `catalog`, or the arrival line
+    /// ([`Chart::arrival_message`]); a buoy replaces the
+    /// abandoned-fighters suffix too, so it drops the fighter notes this
+    /// entry queued (see the `buoys` module).
+    fn announce<S>(&mut self, how: Entry, resets: &Resets, heard: Heard, catalog: &S)
+    where
+        S: PilotCatalog + ?Sized,
+    {
+        let Heard {
+            system,
+            event,
+            notes,
+        } = heard;
+        if resets.has(Reset::ArrivalSound) && self.ship.sounds_warp_out(how) {
+            self.ship.sound_warp_out(&self.statics, &mut self.out);
+        }
+        if resets.has(Reset::ArrivalMessage) {
+            let message = self.chart.arrival_message(&self.setup, system, catalog);
+            if matches!(message, SimMessage::Buoy(_)) {
+                self.out.fighter_notes.truncate(notes);
+            }
+            self.space.say(&mut self.out, message);
+            // The hyperspace arrival leaves the pilot past the tutorial
+            // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
+            self.tutorial.jumped();
+        }
+        if let Some(event) = event {
+            self.out.emit(event);
+        }
+        if let Some(how) = how.entrance() {
+            self.run.raise(StoryEvent::EnteredSystem { system, how });
+        }
+    }
+}
+
+impl PlayerShip {
     /// Plays the warp-out, `snd ` 130 ([`SimSound::Arrived`]), its
     /// countdown started: on an arrival ([`Session::announce`]) or on the
     /// warp end's fallback pass (see the `warp_stage` module).
-    pub(super) fn sound_warp_out(&mut self) {
-        self.warp_out.start(self.warp_out_sound);
-        self.sounds.push(SimSound::Arrived);
+    pub(super) fn sound_warp_out(&mut self, statics: &Statics, out: &mut Outbox) {
+        self.warp.warp_out.start(statics.warp_out_sound);
+        out.sounds.push(SimSound::Arrived);
     }
 
     /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
@@ -1039,44 +1086,28 @@ impl Session {
                 natural_end: true,
                 ..
             }
-        ) || !self.warp_out.playing()
+        ) || !self.warp.warp_out.playing()
+    }
+}
+
+impl Chart {
+    /// The stellars shown, in navigation order (their system's `NavDefs`
+    /// order): what the flight view draws.
+    fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
+        self.sites.iter().map(|site| site.id)
     }
 
-    /// Sounds and raises the arrival in `heard`'s system, as `resets`
-    /// says, tells its event, if any ([`scene_event`]), and raises
-    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
-    /// names an entrance ([`Entry::entrance`]). The arrival message is the
-    /// system's buoy, its strings read from `catalog`, or the arrival line
-    /// ([`Session::arrival_message`]); a buoy replaces the
-    /// abandoned-fighters suffix too, so it drops the fighter notes this
-    /// entry queued (see the `buoys` module).
-    fn announce<S>(&mut self, how: Entry, resets: &Resets, heard: Heard, catalog: &S)
-    where
-        S: PilotCatalog + ?Sized,
-    {
-        let Heard {
-            system,
-            event,
-            notes,
-        } = heard;
-        if resets.has(Reset::ArrivalSound) && self.sounds_warp_out(how) {
-            self.sound_warp_out();
-        }
-        if resets.has(Reset::ArrivalMessage) {
-            let message = self.arrival_message(system, catalog);
-            if matches!(message, SimMessage::Buoy(_)) {
-                self.fighter_notes.truncate(notes);
-            }
-            self.say(message);
-            // The hyperspace arrival leaves the pilot past the tutorial
-            // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
-            self.tutorial.jumped();
-        }
-        if let Some(event) = event {
-            self.emit(event);
-        }
-        if let Some(how) = how.entrance() {
-            self.raise(StoryEvent::EnteredSystem { system, how });
+    /// Checks the invariant [`Session::set_player_system`] keeps: docked,
+    /// the stellar the ship is docked at is among the stellars shown.
+    #[cfg(test)]
+    pub(super) fn assert_docked_among_shown(&self, landed: Option<StellarId>) {
+        if let Some(stellar) = landed {
+            let shown: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
+            assert!(
+                shown.contains(&stellar),
+                "docked at {stellar:?}, showing {shown:?} of {:?}",
+                self.shown
+            );
         }
     }
 }
@@ -1475,7 +1506,7 @@ mod tests {
     fn placed(session: &mut Session, ship: ShipPlacement, hold: bool) {
         let arrival = Arrival {
             system: session.pilot.system,
-            sites: session.sites.clone(),
+            sites: session.chart.sites.clone(),
             placement: Placement {
                 ship,
                 stellar: None,
@@ -1549,10 +1580,10 @@ mod tests {
     fn a_placements_hold_is_added_to_the_take_offs_never_taken_away() {
         let mut session = Session::start(&catalog()).expect("starts");
         placed(&mut session, ShipPlacement::Keep, false);
-        assert!(!session.hold_position);
+        assert!(!session.port.hold_position);
         placed(&mut session, ShipPlacement::Keep, true);
-        assert!(session.hold_position);
+        assert!(session.port.hold_position);
         placed(&mut session, ShipPlacement::Keep, false);
-        assert!(session.hold_position, "kept");
+        assert!(session.port.hold_position, "kept");
     }
 }

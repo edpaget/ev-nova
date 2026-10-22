@@ -10,7 +10,7 @@
 //! ([`Session::see_stellars`]), as `_HandleStellarSprites` (@0x444d2)
 //! moves the owned slots each pass. A slot is placed at its stellar's
 //! place less half the frame it is drawn with
-//! ([`Session::drawn_frame_size`]). The pool outlives the session: the
+//! ([`Space::drawn_frame_size`]). The pool outlives the session: the
 //! app hands it to the next pilot's session in the same run
 //! ([`Session::stellar_sprite_pool`],
 //! [`Session::carry_stellar_sprite_pool`]), as the original never clears
@@ -22,7 +22,7 @@
 //! @0x39d1d), shown or not:
 //!
 //! - **shown:** its own, the frame it is drawn with
-//!   ([`Session::drawn_frame_size`]): its `DeadType` sheet while
+//!   ([`Space::drawn_frame_size`]): its `DeadType` sheet while
 //!   destroyed, graphic type 0's while destroyed and dead since the last
 //!   rebuild point with no `DeadType` sheet, its `Type` sheet otherwise;
 //! - **hidden, its last slot owned by a stellar shown now:** that
@@ -43,7 +43,7 @@
 //! the original compares masks: see rdm
 //! phase/ship-handling-fidelity-followups/phase-1-deadly-stellars-pixel-masks.
 
-use super::Session;
+use super::{Chart, PlayerShip, Session, Setup, Space, Statics};
 use crate::catalog::LandingSite;
 use crate::combat::stellar_hazards::DeadlyDisc;
 use crate::deadly_stellar::{is_deadly, sprite_radius};
@@ -55,8 +55,9 @@ impl Session {
     /// A rebuild point's sprite pool: the stellars shown take its slots,
     /// each placed where it is drawn (see the module docs).
     pub(super) fn rebuild_sprite_pool(&mut self) {
-        self.stellar_sprites
-            .rebuild(self.sites.iter().map(|site| site.id));
+        self.space
+            .stellar_sprites
+            .rebuild(self.chart.sites.iter().map(|site| site.id));
         self.place_stellar_sprites();
     }
 
@@ -64,15 +65,22 @@ impl Session {
     /// now (see the module docs).
     pub(super) fn place_stellar_sprites(&mut self) {
         let placed: Vec<_> = self
+            .chart
             .sites
             .iter()
             .map(|site| {
-                let frame = self.drawn_frame_size(site).unwrap_or((0, 0));
-                (site.id, offset(site.position, self.player.position, frame))
+                let frame = self
+                    .space
+                    .drawn_frame_size(&self.statics, &self.setup, site)
+                    .unwrap_or((0, 0));
+                (
+                    site.id,
+                    offset(site.position, self.ship.player.position, frame),
+                )
             })
             .collect();
         for (stellar, top_left) in placed {
-            self.stellar_sprites.place(stellar, top_left);
+            self.space.stellar_sprites.place(stellar, top_left);
         }
     }
 
@@ -80,47 +88,53 @@ impl Session {
     /// in slot order, by [`RuleKey::StaleStellarSprite`] (see the module
     /// docs).
     pub(super) fn deadly_discs(&self) -> Vec<DeadlyDisc> {
-        let stale = self.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
-        self.listed
+        let stale = self.setup.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
+        self.chart
+            .listed
             .iter()
             .filter(|site| is_deadly(site.flags2))
             .filter_map(|listed| {
-                let shown = self.shown_site(listed);
+                let shown = self.chart.shown_site(listed);
                 let sprite = match shown {
                     Some(_) => SlotSprite::Own,
-                    None if stale => self.stellar_sprites.sprite_of(listed.id, false),
+                    None if stale => self.space.stellar_sprites.sprite_of(listed.id, false),
                     None => SlotSprite::None,
                 };
                 match sprite {
-                    SlotSprite::Own => self.drawn_disc(shown?),
+                    SlotSprite::Own => self.space.drawn_disc(&self.statics, &self.setup, shown?),
                     SlotSprite::Owner(owner) => {
-                        let owner = self.sites.iter().find(|site| site.id == owner)?;
-                        self.drawn_disc(owner)
+                        let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
+                        self.space.drawn_disc(&self.statics, &self.setup, owner)
                     }
-                    SlotSprite::Ghost { top_left } => self.ghost_disc(top_left),
+                    SlotSprite::Ghost { top_left } => self.ship.ghost_disc(&self.statics, top_left),
                     SlotSprite::None => None,
                 }
             })
             .collect()
     }
 
-    /// `listed` among the stellars shown, as they hold it now.
-    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
-        self.sites.iter().find(|site| site.id == listed.id)
+    /// The stellar sprite pool, to hand to the next pilot's session in the
+    /// same run (see the module docs).
+    #[must_use]
+    pub fn stellar_sprite_pool(&self) -> &StellarSpritePool {
+        self.space.stellar_sprite_pool()
     }
 
-    /// The disc of `site`, shown, as it is drawn: none when nothing is.
-    fn drawn_disc(&self, site: &LandingSite) -> Option<DeadlyDisc> {
-        Some(DeadlyDisc {
-            at: site.position,
-            radius: sprite_radius(self.drawn_frame_size(site)?),
-        })
+    /// Takes on `pool`, the last session's in the same run, and hands it
+    /// out again to the stellars shown now, as this session's first
+    /// rebuild point would have, had the pool been its own then (see the
+    /// module docs).
+    pub fn carry_stellar_sprite_pool(&mut self, pool: StellarSpritePool) {
+        self.space.stellar_sprites = pool;
+        self.rebuild_sprite_pool();
     }
+}
 
+impl PlayerShip {
     /// The disc of an unowned slot placed at `top_left` from the player:
     /// graphic type 0's frame there, none when it cannot be read.
-    fn ghost_disc(&self, top_left: (i32, i32)) -> Option<DeadlyDisc> {
-        let frame = self.fallback_frame?;
+    fn ghost_disc(&self, statics: &Statics, top_left: (i32, i32)) -> Option<DeadlyDisc> {
+        let frame = statics.fallback_frame?;
         // A screen offset and a sprite's side are far within a float's
         // exact range.
         #[allow(clippy::cast_precision_loss)]
@@ -133,21 +147,34 @@ impl Session {
             radius: sprite_radius(frame),
         })
     }
+}
+
+impl Space {
+    /// The disc of `site`, shown, as it is drawn: none when nothing is.
+    fn drawn_disc(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<DeadlyDisc> {
+        Some(DeadlyDisc {
+            at: site.position,
+            radius: sprite_radius(self.drawn_frame_size(statics, setup, site)?),
+        })
+    }
 
     /// The stellar sprite pool, to hand to the next pilot's session in the
     /// same run (see the module docs).
     #[must_use]
-    pub fn stellar_sprite_pool(&self) -> &StellarSpritePool {
+    fn stellar_sprite_pool(&self) -> &StellarSpritePool {
         &self.stellar_sprites
     }
+}
 
-    /// Takes on `pool`, the last session's in the same run, and hands it
-    /// out again to the stellars shown now, as this session's first
-    /// rebuild point would have, had the pool been its own then (see the
-    /// module docs).
-    pub fn carry_stellar_sprite_pool(&mut self, pool: StellarSpritePool) {
-        self.stellar_sprites = pool;
-        self.rebuild_sprite_pool();
+impl Chart {
+    /// `listed` among the stellars shown, as they hold it now.
+    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
+        self.sites.iter().find(|site| site.id == listed.id)
     }
 }
 
@@ -175,20 +202,20 @@ mod tests {
     /// graphic type 0's frame 100 x 100.
     fn among(catalog: &FakePilotCatalog, listed: &[LandingSite], rules: Rulebook) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.listed = listed.to_vec();
-        session.sites = Vec::new();
-        session.fallback_frame = Some((100, 100));
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.listed = listed.to_vec();
+        session.chart.sites = Vec::new();
+        session.statics_mut().fallback_frame = Some((100, 100));
         session
     }
 
     /// Two rebuild points: `first` shown at the first, `then` at the
     /// second, from the player's place.
     fn shown_then(session: &mut Session, first: &[LandingSite], then: &[LandingSite]) {
-        session.sites = first.to_vec();
+        session.chart.sites = first.to_vec();
         session.rebuild_sprite_pool();
-        session.sites = then.to_vec();
+        session.chart.sites = then.to_vec();
         session.rebuild_sprite_pool();
     }
 
@@ -230,8 +257,8 @@ mod tests {
         let ghost_on = |player: Vec2, npc: Vec2| {
             let mut session = among(&catalog, &[hidden], Rulebook::default());
             shown_then(&mut session, &[hidden], &[]);
-            session.player.position = player;
-            session.traffic.npcs_mut()[0].state.position = npc;
+            session.ship.player.position = player;
+            session.space.traffic.npcs_mut()[0].state.position = npc;
             fight(&mut session);
             session.npcs().len()
         };
@@ -262,7 +289,7 @@ mod tests {
         let mut session = among(&catalog, &[hidden], Rulebook::default());
         // Graphic type 0 a 300 x 40 sheet: its top left (-50, -200) from
         // the player, its centre (100, -180), half its larger side 150.
-        session.fallback_frame = Some((300, 40));
+        session.statics_mut().fallback_frame = Some((300, 40));
         shown_then(&mut session, &[hidden], &[]);
         assert_eq!(
             session.deadly_discs(),
@@ -279,7 +306,7 @@ mod tests {
         let hidden = deadly_at(140, 0.0, -150.0);
         let mut session = among(&catalog, &[hidden], Rulebook::default());
         shown_then(&mut session, &[hidden], &[]);
-        session.fallback_frame = None;
+        session.statics_mut().fallback_frame = None;
         assert_eq!(session.deadly_discs(), []);
         fight(&mut session);
         assert_eq!(session.npcs().len(), 1);
@@ -328,15 +355,15 @@ mod tests {
             ..deadly_at(140, 0.0, -150.0)
         };
         let mut session = among(&catalog, &[dead], Rulebook::default());
-        session.sites = vec![dead];
-        session.rebuilt.rebuild(&[dead], |_| true, true);
+        session.chart.sites = vec![dead];
+        session.space.rebuilt.rebuild(&[dead], |_| true, true);
         assert!(session.dead_since_rebuild(dead.id));
         fight(&mut session);
         assert_eq!(session.npcs(), [], "graphic type 0's frame reaches");
         // Not dead since the rebuild: its slot keeps its `Type` frames.
         let mut whole_then = among(&catalog, &[dead], Rulebook::default());
-        whole_then.sites = vec![dead];
-        whole_then.rebuilt.rebuild(&[dead], |_| false, true);
+        whole_then.chart.sites = vec![dead];
+        whole_then.space.rebuilt.rebuild(&[dead], |_| false, true);
         fight(&mut whole_then);
         assert_eq!(whole_then.npcs().len(), 1, "its Type frame");
     }
@@ -352,7 +379,11 @@ mod tests {
             let mut session = among(&catalog, &[hidden], rules);
             shown_then(&mut session, &[hidden], &[]);
             fight(&mut session);
-            assert!(session.player.velocity.x > 0.09, "{:?}", session.player);
+            assert!(
+                session.ship.player.velocity.x > 0.09,
+                "{:?}",
+                session.ship.player
+            );
         }
     }
 
@@ -361,16 +392,19 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.rebuild_quietly();
-        let site = *session.sites.first().expect("a stellar shown");
+        let site = *session.chart.sites.first().expect("a stellar shown");
         let pool = session.stellar_sprite_pool().clone();
         assert_eq!(pool.sprite_of(site.id, false), SlotSprite::Own);
         // A frame with the player moved places it again.
         let player = Vec2::new(30.0, -7.0);
-        session.player.position = player;
+        session.ship.player.position = player;
         session.see_stellars();
         let mut pool = session.stellar_sprite_pool().clone();
         pool.rebuild([]);
-        let frame = session.drawn_frame_size(&site).expect("drawn");
+        let frame = session
+            .space
+            .drawn_frame_size(&session.statics, &session.setup, &site)
+            .expect("drawn");
         assert_eq!(
             pool.sprite_of(site.id, false),
             SlotSprite::Ghost {
@@ -392,7 +426,7 @@ mod tests {
         // The stellars shown as it is carried take their slots again.
         let shown = planet(141, 3000.0, 0.0);
         let mut again = among(&catalog, &[hidden, shown], Rulebook::default());
-        again.sites = vec![shown];
+        again.chart.sites = vec![shown];
         again.carry_stellar_sprite_pool(first.stellar_sprite_pool().clone());
         assert_eq!(
             again.stellar_sprite_pool().sprite_of(hidden.id, false),

@@ -40,7 +40,7 @@
 //! operators `C`, `E` and `H` run no hook at all (`_EvalSetExp` never
 //! calls `_EvalMissionBitSetString`; see the `ship_change` module).
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::{PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
@@ -90,12 +90,6 @@ pub(super) enum ShipHook {
 }
 
 impl Session {
-    /// The rules the hooks follow, projected from the session's rule set
-    /// ([`Session::with_rules`]).
-    pub(super) fn hook_rules(&self) -> HookRules {
-        HookRules::from_rulebook(&self.rules)
-    }
-
     /// Runs `script` on the session (see the module docs), drawing
     /// `R(...)` on `chance`: nothing at all when its text was empty, and
     /// no operator but the reset its end runs when it did not parse
@@ -107,7 +101,7 @@ impl Session {
     /// Runs ship class `ship`'s `hook`, drawing on `chance`: nothing when
     /// the session has no record of it.
     pub(super) fn ship_hook(&mut self, ship: ShipId, hook: ShipHook, chance: &mut dyn Chance) {
-        let Some(record) = self.ship_record(ship) else {
+        let Some(record) = self.statics.ship_record(ship) else {
             return;
         };
         let script = match hook {
@@ -167,37 +161,48 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         // `_ResetPlayer(1)` (@0x18dd4, @0x1d427-0x1d441).
-        self.player.position = Vec2::new(50.0, 50.0);
-        self.player.velocity = Vec2::ZERO;
-        self.player.heading = 0.0;
-        self.player_speed = 0.0;
-        self.touchdown = self.player.position;
+        self.ship.player.position = Vec2::new(50.0, 50.0);
+        self.ship.player.velocity = Vec2::ZERO;
+        self.ship.player.heading = 0.0;
+        self.ship.player_speed = 0.0;
+        self.port.touchdown = self.ship.player.position;
         // A new pilot starts the first-flight tutorial (`_DoNewPilot`
         // @0x19254; see the `tutorial` module).
         self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;
         // `_DoNewPilot` explores its start system's nebulae while every
         // one is inactive (@0x19118; see the `nebulae` module).
-        self.withdraw_new_pilot_explored();
+        self.run.withdraw_new_pilot_explored(&self.setup);
         // `_DoNewPilot` explores the start system's neighbours
         // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
         // its `OnStart` (see the `explored` module).
-        self.explore_start_neighbours();
-        self.destroy_from_the_start();
+        self.chart
+            .explore_start_neighbours(&mut self.pilot, &self.setup);
+        self.chart.destroy_from_the_start(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            &mut self.out,
+        );
         if let Ok(start) = catalog.first_character() {
             // `_DoNewPilot`'s first `_ActivateCharResource` (@0x18e5f),
             // after `_ResetPlayerRecord` (@0x18de0) and before the
             // `OnStart`: the `chär`'s statuses spread (see the `legal`
             // module). By the Bible, `Pilot::new` and the flight's
             // derivation already keep each with its own government.
-            if self.rules.source_for(crate::RuleKey::CharacterStatusSpread) == RuleSource::Engine {
+            if self
+                .setup
+                .rules
+                .source_for(crate::RuleKey::CharacterStatusSpread)
+                == RuleSource::Engine
+            {
                 crate::legal::spread_statuses(
                     &mut self.pilot,
-                    self.galaxy.governed(),
+                    self.chart.galaxy.governed(),
                     &start.legal,
-                    &self.govts,
+                    &self.statics.govts,
                 );
             }
-            if self.hook_rules().start_ship_purchase == RuleSource::Bible {
+            if self.setup.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
             self.run_script(&start.on_start, chance);
@@ -208,8 +213,8 @@ impl Session {
         // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
         // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
         // pilot is what it saves.
-        self.pilot.stellar = nearest_stellar(self.player.position, &self.sites)
-            .or_else(|| self.listed.first().map(|site| site.id));
+        self.pilot.stellar = nearest_stellar(self.ship.player.position, &self.chart.sites)
+            .or_else(|| self.chart.listed.first().map(|site| site.id));
         // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
         self.reset_precalced();
@@ -219,7 +224,15 @@ impl Session {
         // table before its `OnStart`; nothing above reads the table, so
         // drawing it last settles the same table before the first frame
         // and the first save.
-        self.draw_offer_rolls(chance);
+        self.run.draw_offer_rolls(chance);
+    }
+}
+
+impl Setup {
+    /// The rules the hooks follow, projected from the session's rule set
+    /// ([`Session::with_rules`]).
+    pub(super) fn hook_rules(&self) -> HookRules {
+        HookRules::from_rulebook(&self.rules)
     }
 }
 
@@ -909,7 +922,7 @@ mod tests {
     /// losing its crew, so a capture joins the fleet at once.
     fn aboard_crewless(catalog: &FakePilotCatalog) -> (Session, Rc<Probe>) {
         let mut session = aboard(catalog);
-        for record in &mut session.ships {
+        for record in &mut session.statics_mut().ships {
             if record.id == ShipId(128) {
                 record.crew = 0;
             }
@@ -1050,7 +1063,10 @@ mod tests {
     #[test]
     fn an_abandoned_prize_runs_no_hook() {
         let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
-        session.ships.retain(|record| record.id != ShipId(129));
+        session
+            .statics_mut()
+            .ships
+            .retain(|record| record.id != ShipId(129));
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned)
@@ -1267,8 +1283,8 @@ mod tests {
     fn begin_puts_the_new_pilots_ship_at_50_50_at_rest_facing_up() {
         let catalog = starting_with("");
         let mut session = new_pilot(&catalog);
-        session.player.heading = 90.0;
-        session.player.velocity = Vec2::new(3.0, 4.0);
+        session.ship.player.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(3.0, 4.0);
         session.begin(&catalog, &mut Scripted::default());
         let player = session.player();
         assert_eq!(player.position, Vec2::new(50.0, 50.0));
@@ -1340,7 +1356,7 @@ mod tests {
             .push(crate::testkit::star(129, (-600.0, 600.0), &[]));
         let mut session = new_pilot(&catalog);
         session.begin(&catalog, &mut Scripted::default());
-        let shown: Vec<StellarId> = session.sites.iter().map(|site| site.id).collect();
+        let shown: Vec<StellarId> = session.chart.sites.iter().map(|site| site.id).collect();
         assert_eq!(shown, [StellarId(128), StellarId(129)], "127 not shown");
         assert_eq!(session.pilot().stellar(), Some(StellarId(127)));
     }

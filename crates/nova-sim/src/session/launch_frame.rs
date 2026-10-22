@@ -72,19 +72,20 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let stop = self.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
+        let stop = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
         let mut after = None;
         loop {
             let mut stopped = None;
             self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
                 stopped = combat.defend_npcs(fighters, arena, after, stop, chance);
             });
-            let sorties = self.combat.take_sorties();
+            let sorties = self.space.combat.take_sorties();
             let placed = self.launch_fighters(&sorties, chance);
             let Some(Slot::Berth(carrier)) = stopped else {
                 return;
             };
             let above: BTreeSet<NpcId> = self
+                .space
                 .traffic
                 .npcs()
                 .iter()
@@ -223,7 +224,7 @@ mod tests {
         npc.state.position = Vec2::new(1000.0, 1000.0);
         npc.goal = Goal::Attack(ShipRef::Npc(target));
         npc.target = Some(ShipRef::Npc(target));
-        session.traffic.add_npc_at(npc, berth)
+        session.space.traffic.add_npc_at(npc, berth)
     }
 
     /// The Vipers in the system, lowest berth first.
@@ -264,9 +265,9 @@ mod tests {
         let mut raider = crate::testkit::npc(0, crate::stats::ShipStats::default());
         raider.state.position = Vec2::new(1000.0, 1100.0);
         raider.hull.pd_target = true;
-        let raider = session.traffic.add_npc_at(raider, 20);
+        let raider = session.space.traffic.add_npc_at(raider, 20);
         let carrier = carrier_at(&mut session, carrier_berth, raider);
-        let npc = session.npc_mut(raider).expect("there");
+        let npc = session.space.npc_mut(raider).expect("there");
         npc.goal = Goal::Attack(ShipRef::Npc(carrier));
         npc.target = Some(ShipRef::Npc(carrier));
         (session, carrier, raider)
@@ -397,11 +398,12 @@ mod tests {
         let catalog = catalog();
         let mut session = session(&catalog, source);
         let low = session
+            .space
             .traffic
             .add_npc_at(armed_npc(1000.0, 1100.0, quad()), berths.low);
         let mut wing = armed_npc(1030.0, 1100.0, quad());
         wing.leader = Some(low);
-        let high = session.traffic.add_npc_at(wing, berths.high);
+        let high = session.space.traffic.add_npc_at(wing, berths.high);
         let carrier = carrier_at(&mut session, berths.carrier, low);
         let script = Scripted {
             carrier,
@@ -524,7 +526,7 @@ mod tests {
         // slot 1's turn.
         let catalog = catalog();
         let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 1);
-        let npc = session.npc_mut(carrier).expect("there");
+        let npc = session.space.npc_mut(carrier).expect("there");
         npc.armament = Armament::new([(WeaponSpec::new(&WeaponRecord { reload: 0, ..bay() }), 1)]);
         npc.rounds = LauncherRounds::from([(BAY, 3)]);
         let script = Scripted {

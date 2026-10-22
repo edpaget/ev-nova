@@ -2,7 +2,7 @@
 //! handed to `Session::apply_op`, each read from the stellar's
 //! [`StellarLife`](crate::StellarLife) the session read when it started.
 //! Each writes the galaxy overlay through the writer's catalog-free entry,
-//! `Session::set_stellar_state`, so every reader sees it at once (see the
+//! `Chart::set_stellar_state`, so every reader sees it at once (see the
 //! [`story`](crate::story) module's "Galaxy overlay").
 //!
 //! - `Yxxx` destroys the stellar with its countdown, its `DeadTime` or 1
@@ -109,7 +109,7 @@
 //! shots, as the original's sprite tick (@0x444d2) follows
 //! `_CheckShotProximities` (@0x44015).
 
-use super::Session;
+use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -118,6 +118,7 @@ use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
 use crate::legal::{Crime, LegalCode};
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
@@ -136,7 +137,7 @@ impl Session {
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
     #[must_use]
     pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
-        self.rebuilt.dead(stellar)
+        self.space.dead_since_rebuild(stellar)
     }
 
     /// A rebuild point (see the module docs): in flight the stellars shown
@@ -146,85 +147,55 @@ impl Session {
     /// when that changed either.
     pub(super) fn rebuild_stellars(&mut self) {
         if self.rebuild_quietly() {
-            self.emit(super::SessionEvent::StellarsRebuilt);
+            self.out.emit(super::SessionEvent::StellarsRebuilt);
         }
     }
 
     /// A rebuild point that tells nothing: first, docked or not, the
-    /// course rewritten (`Session::rewrite_course`, as
+    /// course rewritten (`Chart::rewrite_course`, as
     /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
-    /// the exploration shared by place (`Session::share_explored`, as
+    /// the exploration shared by place (`Chart::share_explored`, as
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
-    /// and the known set worked out afresh (`Session::rework_known`,
+    /// and the known set worked out afresh (`Chart::rework_known`,
     /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it, then the sprite pool handed out (see the
     /// `stale_sprites` module). Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
-        self.rewrite_course();
-        self.share_explored();
-        self.rework_known();
+        self.chart.rewrite_course(&mut self.pilot, &self.setup);
+        self.chart.share_explored(&mut self.pilot, &self.setup);
+        self.chart.rework_known(&self.pilot);
         let reshown = self.reshow();
-        let galaxy = &self.galaxy;
-        let rebuilt = self.rebuilt.rebuild(
-            &self.sites,
+        let galaxy = &self.chart.galaxy;
+        let rebuilt = self.space.rebuilt.rebuild(
+            &self.chart.sites,
             |id| galaxy.destroyed(id),
-            self.fallback_frame.is_some(),
+            self.statics.fallback_frame.is_some(),
         );
         self.rebuild_sprite_pool();
         reshown | rebuilt
-    }
-
-    /// The frame size of the sheet drawn for `site`, one of the stellars
-    /// shown, or `None` when no sheet is: the box a click on it reads (see
-    /// the module docs). It must match the view's `SceneStellar::drawn`
-    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
-    /// sheet while destroyed, when there is one; graphic type 0's while
-    /// destroyed and dead since the last rebuild point, by
-    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
-    /// otherwise.
-    pub(super) fn drawn_frame_size(&self, site: &LandingSite) -> Option<(u32, u32)> {
-        match site.dead_frame_size {
-            Some(dead) if site.destroyed => Some(dead),
-            _ if site.destroyed
-                && self.rebuilt.dead(site.id)
-                && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
-            {
-                self.fallback_frame
-            }
-            _ => site.frame_size,
-        }
     }
 
     /// A flight frame's sprite tick (see the module docs): every stellar
     /// it finds whole is no longer dead since the last rebuild point, and
     /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
-        let galaxy = &self.galaxy;
-        self.rebuilt.frame(&self.sites, |id| galaxy.destroyed(id));
+        let galaxy = &self.chart.galaxy;
+        self.space
+            .rebuilt
+            .frame(&self.chart.sites, |id| galaxy.destroyed(id));
         self.place_stellar_sprites();
-    }
-
-    /// How close the ship must be to `site`, one of the stellars shown, to
-    /// land on it, by [`RuleKey::LandingDistance`]: the original's box
-    /// reads what the last rebuild point and the flight frames since left
-    /// of its sprite slot and its `Type` master (see the module docs).
-    pub(super) fn landing_reach(&self, site: &LandingSite) -> LandingReach {
-        let shown = StellarShown {
-            frame: self.rebuilt.shows_frame(site.id),
-            type_width: self.rebuilt.type_width(site),
-        };
-        landing_reach(site, shown, self.rules.source_for(RuleKey::LandingDistance))
     }
 
     /// The width each hypergate and wormhole shown takes its entry box
     /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
     /// (see [`gate_entry`](crate::traffic::gate_entry)).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
-            .map(|site| (site.id, self.rebuilt.type_width(site)))
+            .map(|site| (site.id, self.space.rebuilt.type_width(site)))
             .collect()
     }
 
@@ -234,22 +205,32 @@ impl Session {
         if !wreck::in_range(stellar) {
             return;
         }
-        let Some(life) = self.lives.get(&stellar).cloned() else {
+        let Some(life) = self.statics.lives.get(&stellar).cloned() else {
             return;
         };
-        let destroyed_before = self.galaxy.destroyed(stellar);
-        let site = self.sites.iter().find(|site| site.id == stellar).copied();
-        let shown = site.is_some() && self.landed.is_none();
+        let destroyed_before = self.chart.galaxy.destroyed(stellar);
+        let site = self
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .copied();
+        let shown = site.is_some() && self.mode.landed().is_none();
         if let Some(site) = site
             && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
         {
-            self.combat.explode(site.position, explosion);
+            self.space.combat.explode(site.position, explosion);
         }
-        self.strength.remove(&stellar);
-        if wreck::destroys(&life, self.rules.source_for(RuleKey::DestroyInvincible)) {
+        self.space.strength.remove(&stellar);
+        if wreck::destroys(
+            &life,
+            self.setup.rules.source_for(RuleKey::DestroyInvincible),
+        ) {
             let countdown = wreck::countdown_on_destroy(&life);
-            self.set_stellar_state(stellar, Some(countdown));
-            if !destroyed_before && self.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
+            self.chart
+                .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
+            if !destroyed_before
+                && self.setup.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
             {
                 self.run_on_destroy(stellar, &life.on_destroy, chance);
             }
@@ -260,8 +241,9 @@ impl Session {
     /// new pilot's stellars destroy one, each within the original's
     /// slots, so any other is never destroyed.
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
-        self.strength.remove(&stellar);
-        self.set_stellar_state(stellar, None);
+        self.space.strength.remove(&stellar);
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, None);
     }
 
     /// Runs `stellar`'s `OnDestroy`, `script`, drawing on `chance`, unless
@@ -275,29 +257,32 @@ impl Session {
         script: &Script,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if !self.destroying.insert(stellar) {
-            self.script_notes
+        if !self.space.destroying.insert(stellar) {
+            self.out
+                .script_notes
                 .push(ScriptNote::OnDestroyReentered { stellar });
             return;
         }
         self.run_script(script, chance);
-        self.destroying.remove(&stellar);
+        self.space.destroying.remove(&stellar);
     }
 
     /// The stellars shown that shots can hit this tick: each whole one of
     /// `Strength` above 0 with a sprite, as big as its disc
     /// ([`landing_radius`]), with its current strength.
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
-        self.sites
+        self.chart
+            .sites
             .iter()
             .filter(|site| !site.destroyed && site.frame_size.is_some())
             .filter_map(|site| {
-                let life = self.lives.get(&site.id)?;
+                let life = self.statics.lives.get(&site.id)?;
                 wreck::destroyable(life).then(|| StellarTarget {
                     stellar: site.id,
                     position: site.position,
                     radius: landing_radius(site),
                     strength: self
+                        .space
                         .strength
                         .get(&site.id)
                         .copied()
@@ -317,14 +302,18 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         for target in stellars {
-            let full = self.lives.get(&target.stellar).map(wreck::full_strength);
+            let full = self
+                .statics
+                .lives
+                .get(&target.stellar)
+                .map(wreck::full_strength);
             if full == Some(target.strength) {
-                self.strength.remove(&target.stellar);
+                self.space.strength.remove(&target.stellar);
             } else {
-                self.strength.insert(target.stellar, target.strength);
+                self.space.strength.insert(target.stellar, target.strength);
             }
         }
-        for strike in self.combat.take_stellar_strikes() {
+        for strike in self.space.combat.take_stellar_strikes() {
             if strike.destroyed {
                 self.shoot_down(strike.stellar, strike.by, law, chance);
             }
@@ -348,27 +337,40 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let (Some(life), Some(site)) = (
-            self.lives.get(&stellar).cloned(),
-            self.sites.iter().find(|site| site.id == stellar).copied(),
+            self.statics.lives.get(&stellar).cloned(),
+            self.chart
+                .sites
+                .iter()
+                .find(|site| site.id == stellar)
+                .copied(),
         ) else {
             return;
         };
         if let Some(explosion) = life.explosion {
-            self.combat.explode(site.position, explosion);
+            self.space.combat.explode(site.position, explosion);
         }
         let countdown = wreck::countdown_on_destroy(&life);
-        self.set_stellar_state(stellar, Some(countdown));
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
         self.run_on_destroy(stellar, &life.on_destroy, chance);
-        self.set_stellar_state(stellar, Some(countdown));
-        self.strength.remove(&stellar);
+        self.chart
+            .set_stellar_state(&mut self.pilot, &mut self.out, stellar, Some(countdown));
+        self.space.strength.remove(&stellar);
         if by == Some(ShipRef::Player) {
             for _ in 0..STELLAR_KILLINGS {
-                self.convict_of(law, Crime::Kill, site.govt);
+                self.chart
+                    .convict_of(&mut self.pilot, &self.statics, law, Crime::Kill, site.govt);
             }
             // `_CheckShotProximities` slaps ten times (@0x374e9), but
             // after the first pass no rank it takes is still active, so
             // one pass takes the same ranks.
-            self.lose_ranks_to(Crime::Kill, site.govt);
+            self.run.lose_ranks_to(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                Crime::Kill,
+                site.govt,
+            );
         }
     }
 
@@ -380,45 +382,28 @@ impl Session {
     /// higher, as the original's pass by index does. A destroyed stellar
     /// with no record is left as it is.
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.strength.clear();
+        self.space.strength.clear();
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
-            let Some(life) = self.lives.get(&stellar).cloned() else {
+            let Some(life) = self.statics.lives.get(&stellar).cloned() else {
                 continue;
             };
             match wreck::day(&life, countdown) {
                 Tick::Stays(countdown) => {
-                    self.set_stellar_state(stellar, Some(countdown));
+                    self.chart.set_stellar_state(
+                        &mut self.pilot,
+                        &mut self.out,
+                        stellar,
+                        Some(countdown),
+                    );
                 }
                 Tick::Regenerates => {
-                    self.set_stellar_state(stellar, None);
+                    self.chart
+                        .set_stellar_state(&mut self.pilot, &mut self.out, stellar, None);
                     self.run_script(&life.on_regen, chance);
                 }
             }
-        }
-    }
-
-    /// Destroys a new pilot's stellars that start the game destroyed
-    /// (`Flags2` 0x0040), within the original's slots, each with the
-    /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
-    /// (@0x192d6-0x1931c); by [`RuleKey::DestroyInvincible`]'s engine
-    /// reading an invincible one starts whole, as `_StellarIsDestroyed`
-    /// holds it.
-    pub(super) fn destroy_from_the_start(&mut self) {
-        let reading = self.rules.source_for(RuleKey::DestroyInvincible);
-        let ruined: Vec<_> = self
-            .lives
-            .values()
-            .filter(|life| {
-                wreck::starts_destroyed(life)
-                    && wreck::in_range(life.id)
-                    && wreck::destroys(life, reading)
-            })
-            .map(|life| (life.id, wreck::countdown_on_destroy(life)))
-            .collect();
-        for (stellar, countdown) in ruined {
-            self.set_stellar_state(stellar, Some(countdown));
         }
     }
 
@@ -430,6 +415,92 @@ impl Session {
             .stellars()
             .filter(|&(id, _)| after.is_none_or(|after| id > after))
             .find_map(|(id, change)| Some((id, change.destroyed?)))
+    }
+}
+
+impl Space {
+    /// Whether `stellar` has been dead since the last rebuild point: it
+    /// is among the stellars shown, the last rebuild point found it
+    /// destroyed, and no flight frame has found it whole since (see the
+    /// module docs). A stellar with no `DeadType` sheet draws graphic type
+    /// 0 while this holds, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    #[must_use]
+    fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
+        self.rebuilt.dead(stellar)
+    }
+
+    /// The frame size of the sheet drawn for `site`, one of the stellars
+    /// shown, or `None` when no sheet is: the box a click on it reads (see
+    /// the module docs). It must match the view's `SceneStellar::drawn`
+    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
+    /// sheet while destroyed, when there is one; graphic type 0's while
+    /// destroyed and dead since the last rebuild point, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
+    /// otherwise.
+    pub(super) fn drawn_frame_size(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<(u32, u32)> {
+        match site.dead_frame_size {
+            Some(dead) if site.destroyed => Some(dead),
+            _ if site.destroyed
+                && self.rebuilt.dead(site.id)
+                && setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
+            {
+                statics.fallback_frame
+            }
+            _ => site.frame_size,
+        }
+    }
+
+    /// How close the ship must be to `site`, one of the stellars shown, to
+    /// land on it, by [`RuleKey::LandingDistance`]: the original's box
+    /// reads what the last rebuild point and the flight frames since left
+    /// of its sprite slot and its `Type` master (see the module docs).
+    pub(super) fn landing_reach(&self, setup: &Setup, site: &LandingSite) -> LandingReach {
+        let shown = StellarShown {
+            frame: self.rebuilt.shows_frame(site.id),
+            type_width: self.rebuilt.type_width(site),
+        };
+        landing_reach(
+            site,
+            shown,
+            setup.rules.source_for(RuleKey::LandingDistance),
+        )
+    }
+}
+
+impl Chart {
+    /// Destroys a new pilot's stellars that start the game destroyed
+    /// (`Flags2` 0x0040), within the original's slots, each with the
+    /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
+    /// (@0x192d6-0x1931c); by [`RuleKey::DestroyInvincible`]'s engine
+    /// reading an invincible one starts whole, as `_StellarIsDestroyed`
+    /// holds it.
+    pub(super) fn destroy_from_the_start(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+    ) {
+        let reading = setup.rules.source_for(RuleKey::DestroyInvincible);
+        let ruined: Vec<_> = statics
+            .lives
+            .values()
+            .filter(|life| {
+                wreck::starts_destroyed(life)
+                    && wreck::in_range(life.id)
+                    && wreck::destroys(life, reading)
+            })
+            .map(|life| (life.id, wreck::countdown_on_destroy(life)))
+            .collect();
+        for (stellar, countdown) in ruined {
+            self.set_stellar_state(pilot, out, stellar, Some(countdown));
+        }
     }
 }
 
@@ -476,6 +547,7 @@ mod tests {
     /// Whether the stellar shown `stellar` is destroyed.
     fn shown_destroyed(session: &Session, stellar: i16) -> bool {
         session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
@@ -647,7 +719,9 @@ mod tests {
             session.relocate(&catalog, SystemId(131), StellarId(140)),
             Ok(())
         );
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(140)));
     }
 
@@ -656,7 +730,12 @@ mod tests {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
         run(&mut session, "Y128");
-        session.set_stellar_state(StellarId(128), Some(left(1)));
+        session.chart.set_stellar_state(
+            &mut session.pilot,
+            &mut session.out,
+            StellarId(128),
+            Some(left(1)),
+        );
         session.take_events();
         run(&mut session, "Y128");
         assert_eq!(destroyed(&session, 128), Some(left(2)));
@@ -750,7 +829,9 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         run(&mut session, "Y128");
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.pilot().stellar, Some(StellarId(128)));
         assert_eq!(
             session.take_off(&catalog, &mut Scripted::default()),
@@ -842,7 +923,7 @@ mod tests {
     fn days_passed_together_each_count_a_day() {
         let catalog = regenerating([(129, 5, ""), (128, 0, "")]);
         let mut session = quiet(&catalog);
-        session.stats.jump_days = 3;
+        session.ship.fit.stats.jump_days = 3;
         run(&mut session, "Y129");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(destroyed(&session, 129), Some(left(2)));
@@ -887,7 +968,12 @@ mod tests {
     fn a_destroyed_stellar_with_no_record_is_left_as_it_is() {
         let catalog = regenerating([(129, 1, ""), (128, 0, "")]);
         let mut session = quiet(&catalog);
-        session.set_stellar_state(StellarId(300), Some(left(4)));
+        session.chart.set_stellar_state(
+            &mut session.pilot,
+            &mut session.out,
+            StellarId(300),
+            Some(left(4)),
+        );
         run(&mut session, "Y129");
         session.pass_days(1, &mut Scripted::default());
         assert_eq!(destroyed(&session, 300), Some(left(4)));
@@ -946,7 +1032,7 @@ mod tests {
     /// The goal of every NPC in `session`'s system after one traffic tick,
     /// each bound for 128 before it.
     fn goals_bound_for_128(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<Goal> {
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.goal = Goal::Land(StellarId(128));
         }
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
@@ -983,7 +1069,9 @@ mod tests {
         land_now(&mut session).expect("lands");
         run(&mut session, script);
         let _ = session.settle_script(catalog, &mut Scripted::default());
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.pilot().stellar, Some(StellarId(140)), "{script}");
         assert_eq!(
@@ -1005,7 +1093,7 @@ mod tests {
     fn a_landed_m_docks_at_the_first_stellar_destroyed_or_not() {
         let catalog = wrecking();
         let mut session = moved_landed(&catalog, "Y140 M131");
-        assert!(session.next_sites.as_deref().expect("waiting")[0].destroyed);
+        assert!(session.chart.next_sites.as_deref().expect("waiting")[0].destroyed);
         assert_eq!(
             session.take_off(&catalog, &mut Scripted::default()),
             Some(StellarId(128))
@@ -1490,7 +1578,7 @@ mod tests {
         let mut session = ranked(shooting([life(128, 2)]));
         let fine = Fine::default();
         fire_by(&mut session, 2, &fine);
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(30.0 - 200.0, -40.0),
             velocity: Vec2::ZERO,
             heading: 90.0,
@@ -1504,11 +1592,11 @@ mod tests {
         session.hold_trigger(Trigger::default());
         // The player moves off, and the hit pass meets it where it stood a
         // tick later, before the shot can turn on it.
-        session.player.position.y += 1000.0;
+        session.ship.player.position.y += 1000.0;
         session.tick_combat(rules, &mut NeverFires);
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
-            for shot in session.combat.shots_mut() {
+            for shot in session.space.combat.shots_mut() {
                 shot.source = Source::Other;
                 shot.target = Some(ShipRef::Player);
                 shot.aimed_at = Some(ShipRef::Player);
@@ -1600,7 +1688,7 @@ mod tests {
     fn shot_from_afar(off: f32) -> Vec<CombatEvent> {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
-        session.player = crate::flight::ShipState {
+        session.ship.player = crate::flight::ShipState {
             position: Vec2::new(30.0 - 200.0, -40.0 + off),
             velocity: Vec2::ZERO,
             heading: 90.0,
@@ -1665,10 +1753,10 @@ mod tests {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
         fire(&mut session, 1);
-        assert_eq!(session.strength.get(&StellarId(128)), Some(&50));
+        assert_eq!(session.space.strength.get(&StellarId(128)), Some(&50));
         run(&mut session, "Y128");
         assert!(
-            session.strength.is_empty(),
+            session.space.strength.is_empty(),
             "destroyed: no current strength"
         );
     }
@@ -1692,9 +1780,9 @@ mod tests {
         let catalog = shooting([life(128, 2)]);
         let mut session = quiet(&catalog);
         fire(&mut session, 1);
-        assert!(!session.strength.is_empty(), "damaged");
+        assert!(!session.space.strength.is_empty(), "damaged");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
-        assert!(session.strength.is_empty());
+        assert!(session.space.strength.is_empty());
     }
 
     // `Y`'s explosion.
@@ -1839,7 +1927,7 @@ mod tests {
             "once: a toggle run again clears it"
         );
         assert_eq!(session.take_script_notes(), [reentered(128)]);
-        assert!(session.destroying.is_empty(), "done");
+        assert!(session.space.destroying.is_empty(), "done");
         run(&mut session, "U128 Y128");
         assert!(!session.control_bit(bit(5)), "run again once it had ended");
     }
@@ -1869,7 +1957,7 @@ mod tests {
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert!(session.control_bit(bit(5)));
         assert_eq!(session.take_script_notes(), [reentered(128)]);
-        assert!(session.destroying.is_empty());
+        assert!(session.space.destroying.is_empty());
     }
 
     // Rebuild points.
@@ -1979,7 +2067,7 @@ mod tests {
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
         );
-        session.player.position = Vec2::new(2000.0, 0.0);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
         assert_eq!(land_now(&mut session), Ok(StellarId(129)));
         run(&mut session, "Y140");
         assert_eq!(
@@ -2143,7 +2231,7 @@ mod tests {
         session.hold_trigger(Trigger::default());
         assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
-        session.strength.insert(StellarId(128), 0);
+        session.space.strength.insert(StellarId(128), 0);
         // The next frame's hit pass shoots it down before the frame
         // samples it.
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -2222,12 +2310,12 @@ mod tests {
     ) -> Result<StellarId, LandingRefusal> {
         let mut session = quiet(catalog).with_rules(*rules);
         setup(&mut session);
-        session.player = ShipState {
+        session.ship.player = ShipState {
             position: offset,
             ..ShipState::default()
         };
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
-        session.dock = Some(crate::clearance::DockRequest {
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.port.dock = Some(crate::clearance::DockRequest {
             stellar: StellarId(128),
             permission: crate::clearance::CLEARED,
         });
@@ -2389,9 +2477,9 @@ mod tests {
                 crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
             npc.goal = Goal::EnterGate(StellarId(128));
             npc.state.position = Vec2::new(30.0, 0.0);
-            let id = session.traffic.add_npc(npc);
+            let id = session.space.traffic.add_npc(npc);
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
-            session.npc(id).expect("there").entering_gate()
+            session.space.npc(id).expect("there").entering_gate()
         };
         assert!(!entering(false), "30 out of 25");
         assert!(entering(true), "30 within 37");
@@ -2401,10 +2489,10 @@ mod tests {
     fn a_session_flown_has_rebuilt_its_masters_at_once() {
         let catalog = ruin(100, false);
         let session = quiet(&catalog);
-        let site = session.sites[0];
-        assert_eq!(session.rebuilt.type_width(&site), TypeWidth::Frame);
+        let site = session.chart.sites[0];
+        assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
-            session.landing_reach(&site),
+            session.space.landing_reach(&session.setup, &site),
             crate::landing::LandingReach::Box(175.0)
         );
     }
@@ -2427,7 +2515,7 @@ mod tests {
     /// The stellar a click at (`x`, `y`) picks, with none selected
     /// before it (a click passes over the one selected).
     fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
-        session.nav = crate::NavMode::Off;
+        session.chart.nav = crate::NavMode::Off;
         crate::testkit::click_stellar(session, Vec2::new(x, y))
     }
 
@@ -2525,7 +2613,9 @@ mod tests {
         assert_eq!(shown(&session), [128, 129, 200], "130 owns 200");
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(shown(&session), [140], "200 is 130's, though 131 lists it");
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
     }
 
     #[test]
@@ -2564,8 +2654,8 @@ mod tests {
             [140],
             "a galaxy change is no rebuild point"
         );
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(
             shown(&session),
@@ -2596,8 +2686,8 @@ mod tests {
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         run(&mut session, "Y200");
         crate::session::tests::hide(&mut session, &catalog, &[130]);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         session.take_events();
         session
@@ -2623,7 +2713,7 @@ mod tests {
             overlay.set_stellar_govt(StellarId(140), Some(Some(GovtId(150))));
         });
         assert_eq!(shown(&session), [140], "read again, not shown afresh");
-        assert_eq!(session.sites[0].govt, Some(GovtId(150)));
+        assert_eq!(session.chart.sites[0].govt, Some(GovtId(150)));
     }
 
     #[test]
@@ -2635,13 +2725,14 @@ mod tests {
             overlay.set_stellar_govt(StellarId(200), Some(Some(GovtId(150))));
         });
         crate::session::tests::hide(&mut session, &catalog, &[130]);
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         session
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         let site = session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(200))
@@ -2663,11 +2754,15 @@ mod tests {
             "a load resumes in its stellar's owner, whatever system was saved"
         );
         assert_eq!(shown(&session), [128, 129, 200], "130's, docked at 200");
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(200), Some(None));
         });
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session
             .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");

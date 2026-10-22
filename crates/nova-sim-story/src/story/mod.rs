@@ -872,7 +872,7 @@
 //! pilot's overlay and the galaxy's and makes a save due, and two entries:
 //! `nova_sim::Session::change_galaxy`, which takes
 //! a catalog for its follow-ups (a hidden system, a government, the
-//! spawn table), and `Session::set_stellar_state`, catalog-free, which
+//! spawn table), and `Chart::set_stellar_state`, catalog-free, which
 //! can change a stellar's destroyed state alone, so it never needs them.
 //! `apply_op` and the daily step have no catalog, and a cron's `Y` must
 //! be counted by the same day's sixth participant, so neither waits for
@@ -1121,7 +1121,7 @@
 //! sprite tick does. It samples the live state,
 //! [`OverlaidGalaxy::destroyed`], through `Session::galaxy`, on the
 //! events it already reacts to; there is no snapshot and no new event.
-//! The one writer of the destroyed state, `Session::set_stellar_state`,
+//! The one writer of the destroyed state, `Chart::set_stellar_state`,
 //! raises `GalaxyChanged` exactly when a stellar is destroyed or
 //! regenerated (by `Y`, `U`, the daily step or a new pilot), and a
 //! countdown that only ticks raises nothing, so reacting to it gives the
@@ -1252,7 +1252,7 @@
 //!   whole stellar (@0xb700): nothing damages one within a day.
 //! - **Shot down** below 0, exactly 0 being whole. In order: its
 //!   `ExplodType` explosion at its centre, the overlay's destroyed state
-//!   through `Session::set_stellar_state` with the countdown `Y` gives it
+//!   through `Chart::set_stellar_state` with the countdown `Y` gives it
 //!   (so `GalaxyChanged` is raised and the view draws its `DeadType`),
 //!   its `OnDestroy` at once through `Session::run_script`, with the
 //!   stellar already destroyed, its `M`, `N`, `Q` and `S` deferred to the
@@ -1614,7 +1614,7 @@
 //! - **The rule** is `navigation::stellar_under`, which now takes the
 //!   frame size drawn for each site from its caller; `None` still gives
 //!   the 64-pixel placeholder.
-//! - **The sheet drawn** is `Session::drawn_frame_size` (the session's
+//! - **The sheet drawn** is `Space::drawn_frame_size` (the session's
 //!   `stellars` module), the sim's copy of the view's
 //!   `SceneStellar::drawn` and `SystemScene::set_destroyed`: the
 //!   `DeadType` sheet's frame while destroyed, when there is one
@@ -1730,7 +1730,7 @@
 //! Every end (a success, a failure, `A`, an abort or an auto-abort) frees
 //! the slot and unregisters its hooks, clearing their once-fired entries,
 //! so a mission accepted into the reused slot starts fresh, and forgets
-//! the stellar the offers were rolled at (`Session::forget_offers`).
+//! the stellar the offers were rolled at (`MissionRun::forget_offers`).
 //! `EnteredSystem` moves no mission: the original's enter-system hook only
 //! restarts its ships' timers (mission-ships phase 1). Offers are rolled
 //! as the player lands, before the spaceport opens, and kept until a

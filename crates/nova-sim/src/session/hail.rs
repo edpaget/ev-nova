@@ -71,15 +71,24 @@
 //!   ([`Session::take_comm`]) with `snd ` 151 in slot order with the
 //!   frame's other lines (see the `comm_calls` module). The traffic lets an assisting ship decide
 //!   again once anything provokes it.
-//! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
-//!   it attacks the threat to the player picked
-//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
-//!   reinforcements, forced past their strength test
+//! - **Defend** (a helper sent at a threat to the player, see
+//!   [`hail::battle`](crate::hail::battle)): it attacks the threat picked
+//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f, @0x8194f), or
+//!   with none its target is cleared and nothing else changes (@0x82daa,
+//!   @0x8195e). Three callers: rank battle help
+//!   (`_AIFightEnemyThreatToPlayer` @0x82c80) then calls for
+//!   reinforcements, forced past their strength test, whatever it picked
 //!   (`_AICallForReinforcements(ship, 1)` @0x9636d; see the
-//!   `reinforcements` module).
+//!   `reinforcements` module); a paid warship, interceptor or brave
+//!   trader (`_AIFightEnemyThreatToPlayer`) calls none; a ship of AI type
+//!   0 or above 4 (`_AIFightThreatToPlayer` @0x8183c) calls none and drops
+//!   its travel stellar ([`Npc::travel_set`], +0x6c = -1, @0x81949).
+//!   The target is picked at the press, which the comm dialog makes over
+//!   the paused flight, as the original's modal dialog does, so it is
+//!   still in the system when the deed is done.
 
-use super::Session;
 use super::missions::TextSource;
+use super::{Jump, Outbox, PlayerShip, Session, Space, Statics};
 use crate::ai::Goal;
 use crate::catalog::{CommCatalog, MissionId, ShipId, StellarId};
 use crate::chance::Chance;
@@ -95,6 +104,7 @@ use crate::landing;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
+use crate::pilot::Pilot;
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
@@ -168,8 +178,9 @@ impl Session {
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
-        self.talk = None;
-        self.beep_unanswered(self.answering().map(|npc| npc.id))?;
+        self.space.escorts.talk = None;
+        self.out
+            .beep_unanswered(self.answering().map(|npc| npc.id))?;
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
         let escort = npc.escort.is_some();
@@ -189,7 +200,7 @@ impl Session {
             )
         };
         let opening = match Self::quote_of(npc) {
-            Some(index) if self.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
+            Some(index) if self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
                 Reply::Line {
                     list: COMM_QUOTES,
                     index,
@@ -197,7 +208,7 @@ impl Session {
             }
             _ => opening,
         };
-        self.talk = Some(Talk {
+        self.space.escorts.talk = Some(Talk {
             npc: npc.id,
             conversation,
             first: None,
@@ -207,19 +218,6 @@ impl Session {
             release: false,
         });
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
-    }
-
-    /// `answered`, beeping [`SimSound::Refused`] once with its
-    /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
-    /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
-    pub(super) fn beep_unanswered<T>(
-        &mut self,
-        answered: Result<T, HailRefusal>,
-    ) -> Result<T, HailRefusal> {
-        if answered.is_err() {
-            self.sounds.push(SimSound::Refused);
-        }
-        answered
     }
 
     /// What the comm key hails, Option held as `option` says, drawing
@@ -233,32 +231,19 @@ impl Session {
     /// [`HailRefusal::NoTarget`] with none (@0x6206c); else the ship
     /// target as [`Session::answering`] says.
     pub(super) fn hail_target(&self, option: bool) -> Result<HailTarget, HailRefusal> {
-        self.player_hails()?;
+        self.ship
+            .player_hails(self.mode.landed(), self.mode.jump())?;
         if self.target().is_some() && !option {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
         let stellar = self.nav_target().ok_or(HailRefusal::NoTarget)?;
-        self.sites
+        self.chart
+            .sites
             .iter()
             .find(|site| site.id == stellar)
             .filter(|site| landing::answers_hail(site))
             .map(|_| HailTarget::Stellar(stellar))
             .ok_or(HailRefusal::NoResponse)
-    }
-
-    /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
-    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
-    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
-    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
-    fn player_hails(&self) -> Result<(), HailRefusal> {
-        let flying = !matches!(
-            self.condition,
-            Condition::Dying { .. } | Condition::Destroyed
-        );
-        if self.landed.is_some() || self.jump.is_some() || !flying {
-            return Err(HailRefusal::NoTarget);
-        }
-        Ok(())
     }
 
     /// The player's ship target, when it answers a hail, drawing nothing:
@@ -270,7 +255,8 @@ impl Session {
     /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
     /// class 0x2ff, mute whoever leads it, @0x62145).
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
-        self.player_hails()?;
+        self.ship
+            .player_hails(self.mode.landed(), self.mode.jump())?;
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
         // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
@@ -311,12 +297,14 @@ impl Session {
             return None;
         }
         let wage = self
+            .space
+            .escorts
             .fleet
             .iter()
             .position(|&placed| placed == Some(npc.id))
             .and_then(|index| self.pilot.escorts.get(index))
             .filter(|escort| escort.hired())
-            .map(|escort| self.paid_wage(escort));
+            .map(|escort| self.setup.paid_wage(&self.statics, escort));
         Some(EscortStatus { wage })
     }
 
@@ -330,7 +318,7 @@ impl Session {
         let mark = npc.mission?;
         Some(match self.pilot.missions.get(mark.slot) {
             Some(active) => MissionHail {
-                goal: ShipGoal::from_code(self.lifecycle_record(active.mission).ships.goal),
+                goal: ShipGoal::from_code(self.statics.lifecycle_record(active.mission).ships.goal),
                 behav: mark.behav,
             },
             None => MissionHail {
@@ -344,25 +332,26 @@ impl Session {
     /// ranks reaching it by the session's `rank_govt_reach` rule.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
         let favour = rank::favour(
-            &self.ranks,
+            &self.statics.ranks,
             &self.pilot.ranks,
             npc.govt,
-            &self.govts,
-            self.rules.source_for(RuleKey::RankGovtReach),
+            &self.statics.govts,
+            self.setup.rules.source_for(RuleKey::RankGovtReach),
         );
-        Dispositions::of(npc, inherent, &self.govts, favour)
+        Dispositions::of(npc, inherent, &self.statics.govts, favour)
     }
 
     /// The hail of `npc` in conversation `talk`, as the options see it.
     pub(super) fn hail_of<'a>(&'a self, npc: &'a Npc, talk: &Conversation) -> Hail<'a> {
-        let need = assist::need(self.condition, self.pilot.reserves.fuel);
+        let need = assist::need(self.ship.condition, self.pilot.reserves.fuel);
         let around = self.world();
         let around = around.around(self.npcs());
         let quote = Self::quote_of(npc)
-            .filter(|_| self.rules.source_for(RuleKey::CommQuote) == RuleSource::Engine);
+            .filter(|_| self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Engine);
         Hail {
             quote,
             joins: self.joins(npc),
@@ -383,7 +372,7 @@ impl Session {
     /// (`_CanHireEscorts`, [`Session::can_hire_escorts`]).
     fn joins(&self, npc: &Npc) -> bool {
         npc.person
-            .and_then(|person| self.traffic.person(person.id))
+            .and_then(|person| self.space.traffic.person(person.id))
             .is_some_and(|person| {
                 offers_to_join(&person.record)
                     && person
@@ -401,15 +390,20 @@ impl Session {
     /// text with index -1 on each update (@0x907f7-0x9080b): its mission
     /// tags read as [`RuleKey::MissionlessTags`] says, its crossed rank
     /// tags the governments remembered, and the `l33t` munge applies. The
-    /// escort status is not filled (@0x90688-0x906ff). This changes
-    /// nothing, as the original's update does not.
+    /// escort status is not filled (@0x90688-0x906ff). Every text the
+    /// dialog shows is filled this way: the opening line, each reply
+    /// (haggle outcomes included), the line said first, the government
+    /// hail lines, specific advice and a person's comm quote. The planet
+    /// comm dialog's update (`_PlanetCommDialogUpdate` @0x90a98) munges
+    /// nothing, so its texts show as written. This changes nothing, as
+    /// the original's update does not.
     #[must_use]
     pub fn hailing(
         &self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let talk = self.talk.as_ref()?;
+        let talk = self.space.escorts.talk.as_ref()?;
         let npc = self.npcs().iter().find(|npc| npc.id == talk.npc)?;
         let hail = self.hail_of(npc, &talk.conversation);
         let buttons = options
@@ -437,12 +431,13 @@ impl Session {
             first: talk.first.map(say),
             reply,
             comm_name: self
+                .statics
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())
                 .unwrap_or_default(),
             govt_name: npc
                 .govt
-                .and_then(|govt| self.govts.get(govt))
+                .and_then(|govt| self.statics.govts.get(govt))
                 .map(|record| record.comm_name.clone()),
             hostile: hail.attitude == Attitude::Hostile,
             options: buttons,
@@ -466,7 +461,7 @@ impl Session {
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Option<HailView> {
-        let mut talk = self.talk.clone()?;
+        let mut talk = self.space.escorts.talk.clone()?;
         if talk.ask.is_some() {
             return self.hailing(catalog, options);
         }
@@ -485,7 +480,7 @@ impl Session {
             talk.ask = Some(ask);
         }
         let npc = talk.npc;
-        self.talk = Some(talk);
+        self.space.escorts.talk = Some(talk);
         if let Some(deed) = answer.deed {
             self.act(npc, deed);
         }
@@ -503,7 +498,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let mut talk = self.talk.clone()?;
+        let mut talk = self.space.escorts.talk.clone()?;
         let ask = talk.ask?;
         let settled = talk.conversation.haggle(choice, self.pilot.cash)?;
         let (said, deed) = match settled {
@@ -522,7 +517,7 @@ impl Session {
         talk.reply = said;
         talk.said = None;
         let npc = talk.npc;
-        self.talk = Some(talk);
+        self.space.escorts.talk = Some(talk);
         if let Some(deed) = deed {
             self.act(npc, deed);
         }
@@ -560,7 +555,7 @@ impl Session {
     /// Ends the hail under way, if any; an escort Release was pressed
     /// for is released now.
     pub fn hang_up(&mut self) {
-        if let Some(talk) = self.talk.take()
+        if let Some(talk) = self.space.escorts.talk.take()
             && talk.release
         {
             self.release(talk.npc);
@@ -570,7 +565,7 @@ impl Session {
     /// NPC `id` does `deed` (see the module docs).
     fn act(&mut self, id: NpcId, deed: Deed) {
         if deed == Deed::Release {
-            if let Some(talk) = &mut self.talk {
+            if let Some(talk) = &mut self.space.escorts.talk {
                 talk.release = true;
             }
             return;
@@ -583,9 +578,15 @@ impl Session {
             // `_AIMakeShipAttackPlayer` (@0x9621f) asks its quote's gate
             // before it sets the goal (@0x89c50-0x89c9b).
             let view = self.world().gate_view();
-            self.traffic.turn_with_quote(id, view);
+            self.space.traffic.turn_with_quote(id, view);
         }
-        let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+        let Some(npc) = self
+            .space
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+        else {
             return;
         };
         match deed {
@@ -599,10 +600,20 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
             }
             Deed::Release | Deed::Join => {}
-            Deed::Defend(threat) => {
-                npc.goal = Goal::Attack(ShipRef::Npc(threat));
-                npc.target = Some(ShipRef::Npc(threat));
-                self.call_for_battle_help_reinforcements(id);
+            Deed::Defend(defence) => {
+                match defence.threat {
+                    Some(threat) => {
+                        npc.goal = Goal::Attack(ShipRef::Npc(threat));
+                        npc.target = Some(ShipRef::Npc(threat));
+                        if defence.drop_travel {
+                            npc.travel_set = false;
+                        }
+                    }
+                    None => npc.target = None,
+                }
+                if defence.reinforce {
+                    self.call_for_battle_help_reinforcements(id);
+                }
             }
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);
@@ -628,28 +639,82 @@ impl Session {
         self.call_for_reinforcements(id, true, None);
     }
 
-    /// NPC `from`, of ship type `ship`, says it has `done` its help
-    /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
-    /// message line for the note's ticks, with `sound`.
-    pub(super) fn say_help_done(&mut self, from: NpcId, ship: ShipId, done: Help, sound: SimSound) {
-        let note = CommNote {
-            from,
-            comm_name: self
-                .ship_record(ship)
-                .map(|record| record.comm_name.clone())
-                .unwrap_or_default(),
-            ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
-            done,
-        };
-        self.comm_line.show(note.ticks());
-        self.comm.push(note);
-        self.sounds.push(sound);
+    /// What the NPCs assisting the player have done since this was last
+    /// taken, in order; taking it empties the list.
+    pub fn take_comm(&mut self) -> Vec<CommNote> {
+        self.out.take_comm()
+    }
+}
+
+impl Outbox {
+    /// `answered`, beeping [`SimSound::Refused`] once with its
+    /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
+    /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
+    pub(super) fn beep_unanswered<T>(
+        &mut self,
+        answered: Result<T, HailRefusal>,
+    ) -> Result<T, HailRefusal> {
+        if answered.is_err() {
+            self.sounds.push(SimSound::Refused);
+        }
+        answered
     }
 
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
-    pub fn take_comm(&mut self) -> Vec<CommNote> {
+    fn take_comm(&mut self) -> Vec<CommNote> {
         std::mem::take(&mut self.comm)
+    }
+}
+
+impl PlayerShip {
+    /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
+    /// while landed, jumping (+0x50 @0x61f87, which spans the pre-jump's
+    /// brake) or breaking up (`_IsDying` @0x61f75). The original refuses a cloaked player first
+    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
+    fn player_hails(
+        &self,
+        landed: Option<StellarId>,
+        jump: Option<Jump>,
+    ) -> Result<(), HailRefusal> {
+        let flying = !matches!(
+            self.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        );
+        if landed.is_some() || jump.is_some() || !flying {
+            return Err(HailRefusal::NoTarget);
+        }
+        Ok(())
+    }
+}
+
+impl Space {
+    /// NPC `from`, of ship type `ship`, says it has `done` its help
+    /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
+    /// message line for the note's ticks, with `sound`.
+    #[allow(clippy::too_many_arguments)] // what it reads outside Space, then its own four
+    pub(super) fn say_help_done(
+        &mut self,
+        pilot: &Pilot,
+        statics: &Statics,
+        out: &mut Outbox,
+        from: NpcId,
+        ship: ShipId,
+        done: Help,
+        sound: SimSound,
+    ) {
+        let note = CommNote {
+            from,
+            comm_name: statics
+                .ship_record(ship)
+                .map(|record| record.comm_name.clone())
+                .unwrap_or_default(),
+            ship_name: pilot.ship_name().unwrap_or_default().to_owned(),
+            done,
+        };
+        self.comm_line.show(note.ticks());
+        out.comm.push(note);
+        out.sounds.push(sound);
     }
 }
 
@@ -843,14 +908,14 @@ mod tests {
         session.populate(catalog, &mut placed(0, -300));
         // Setup starts it at its top speed: brought to rest.
         npc(&mut session).state.velocity = Vec2::ZERO;
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.pilot.cash = 100_000;
         session
     }
 
     /// NPC 0 of `session`.
     fn npc(session: &mut Session) -> &mut Npc {
-        &mut session.traffic.npcs_mut()[0]
+        &mut session.space.traffic.npcs_mut()[0]
     }
 
     /// A conversation's opening draws: variant `variant`, an even mood,
@@ -890,27 +955,27 @@ mod tests {
         let catalog = hailable();
         // Boxed: six sessions are too large for the stack together.
         let mut untargeted = Box::new(targeting(&catalog));
-        untargeted.target = None;
+        untargeted.chart.target = None;
         let mut landed = Box::new(targeting(&catalog));
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
         let mut braking = Box::new(targeting(&catalog));
-        braking.jump = Some(crate::session::Jump::PreJump {
+        braking.mode = crate::session::Mode::Jumping(crate::session::Jump::PreJump {
             to: SystemId(131),
             bearing: None,
             warp: None,
         });
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying {
+        dying.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
         let mut destroyed = Box::new(targeting(&catalog));
-        destroyed.condition = Condition::Destroyed;
+        destroyed.ship.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, braking, dying, destroyed] {
             let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
             assert_eq!(hailed, Err(HailRefusal::NoTarget));
@@ -923,7 +988,7 @@ mod tests {
     fn a_disabled_player_can_still_hail() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_ok());
     }
 
@@ -958,7 +1023,7 @@ mod tests {
         assert!(asked.is_empty());
         session.let_go_of_lost_target();
         assert_eq!(
-            session.target, None,
+            session.chart.target, None,
             "as the original lets it go (@0x686a4)"
         );
     }
@@ -1082,9 +1147,10 @@ mod tests {
     /// `Flags2` `flags2`.
     fn at_stellar(catalog: &FakePilotCatalog, flags: u32, flags2: u16) -> Session {
         let mut session = targeting(catalog);
-        session.target = None;
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.chart.target = None;
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         let site = session
+            .chart
             .sites
             .iter_mut()
             .find(|site| site.id == StellarId(128))
@@ -1098,7 +1164,7 @@ mod tests {
     fn with_no_ship_target_a_dockable_inhabited_nav_stellar_answers_silently() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.talk = Some(Talk::opened(NpcId(0)));
+        session.space.escorts.talk = Some(Talk::opened(NpcId(0)));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
         assert_eq!(
             hailed,
@@ -1119,7 +1185,7 @@ mod tests {
         let catalog = hailable();
         let land = StellarFlags::CAN_LAND;
         let mut hidden = Box::new(at_stellar(&catalog, land, 0));
-        hidden.sites.retain(|site| site.id != StellarId(128));
+        hidden.chart.sites.retain(|site| site.id != StellarId(128));
         for (mut session, why) in [
             (
                 Box::new(at_stellar(&catalog, land | StellarFlags::UNINHABITED, 0)),
@@ -1144,7 +1210,7 @@ mod tests {
     fn with_no_ship_target_and_no_nav_stellar_there_is_nothing_to_hail() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.nav = crate::navigation::NavMode::Off;
+        session.chart.nav = crate::navigation::NavMode::Off;
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
         assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
         assert!(asked.is_empty(), "{asked:?}");
@@ -1155,7 +1221,7 @@ mod tests {
     fn option_held_hails_the_nav_stellar_over_the_ship_target() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Ok(super::super::Hailed::Stellar(StellarId(128))));
         assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
@@ -1168,7 +1234,7 @@ mod tests {
         let catalog = hailable();
         let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         let mut session = at_stellar(&catalog, flags, 0);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
         assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x6261c");
         assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
@@ -1190,19 +1256,19 @@ mod tests {
     fn option_held_while_landed_jumping_or_dying_hails_nothing() {
         let catalog = hailable();
         let mut landed = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        landed.landed = Some(StellarId(128));
+        landed.mode = crate::session::Mode::Landed(StellarId(128));
         let mut jumping = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
         let mut dying = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
-        dying.condition = Condition::Dying {
+        dying.ship.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
         for mut session in [landed, jumping, dying] {
-            session.target = Some(NpcId(0));
+            session.chart.target = Some(NpcId(0));
             for option in [false, true] {
                 let (hailed, asked, sounds) = key_with(&mut session, &catalog, option);
                 assert_eq!(hailed, Err(HailRefusal::NoTarget), "option {option}");
@@ -1216,13 +1282,13 @@ mod tests {
     fn every_refusal_beeps_once() {
         let catalog = hailable();
         let mut untargeted = Box::new(targeting(&catalog));
-        untargeted.target = None;
+        untargeted.chart.target = None;
         let mut disabled = Box::new(targeting(&catalog));
         npc(&mut disabled).condition = Condition::Disabled;
         let mut arriving = Box::new(targeting(&catalog));
         npc(&mut arriving).mode = Mode::JumpingIn { tick: 0 };
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
+        jumping.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
         });
@@ -1242,7 +1308,7 @@ mod tests {
     fn a_refusal_through_hail_beeps_too() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        session.target = None;
+        session.chart.target = None;
         session.take_sounds();
         assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_err());
         assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
@@ -1313,6 +1379,29 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_attacking_a_hired_escort_is_hostile_and_an_unseen_cloaked_attacker_is_not() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let mut escort = npc(&mut session).clone();
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let escort = session.space.traffic.add_npc(escort);
+        npc(&mut session).goal = Goal::Attack(ShipRef::Npc(escort));
+        assert!(hail(&mut session, &catalog).hostile, "a raider");
+        npc(&mut session).goal = Goal::Attack(ShipRef::Player);
+        npc(&mut session).cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert!(
+            !hail(&mut session, &catalog).hostile,
+            "unseen, with no cloak scanner"
+        );
+    }
+
+    #[test]
     fn the_view_names_the_ship_and_its_government() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
@@ -1370,6 +1459,20 @@ mod tests {
         assert_eq!(greeted(&mut session, &catalog, 0), "f6");
         npc(&mut session).ai_type = AiType::WimpyTrader;
         assert_eq!(greeted(&mut session, &catalog, 1), "f2");
+    }
+
+    /// The government hail line (STR# 7000+) is filled like any comm
+    /// text: stock STR# 7022 carries `<PN>`.
+    #[test]
+    fn a_governments_hail_line_fills_its_tags() {
+        let mut catalog = hailable();
+        catalog.strings[2].1[6] = "To: Captain <PN>, off to <DST>".to_owned();
+        let mut session = targeting(&catalog);
+        session.pilot.name = "Stock".to_owned();
+        assert_eq!(
+            greeted(&mut session, &catalog, 1),
+            "To: Captain Stock, off to [Error]"
+        );
     }
 
     #[test]
@@ -1523,8 +1626,44 @@ mod tests {
     fn with_leet_mode_the_comm_text_is_munged() {
         let catalog = advising("Hello, <PN>.");
         let mut session = advised(&catalog);
-        session.leet = true;
+        session.setup.leet = true;
         assert_eq!(greeted(&mut session, &catalog, 2), "H377o, Stox0r.");
+    }
+
+    #[test]
+    fn a_comm_reply_fills_the_pilots_rank_tags() {
+        let mut catalog = advising("Yes, <PRK>. <SRK>.");
+        catalog.ranks = vec![RankRecord {
+            conv_name: "Cmdr".to_owned(),
+            short_name: "Cdr".to_owned(),
+            affil_govt: Some(GovtId(128)),
+            ..crate::testkit::rank(128)
+        }];
+        let mut session = advised(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        assert_eq!(greeted(&mut session, &catalog, 2), "Yes, Cmdr. Cdr.");
+        let mut session = advised(&catalog);
+        assert_eq!(
+            greeted(&mut session, &catalog, 2),
+            "Yes, captain. captain.",
+            "with no rank"
+        );
+    }
+
+    #[test]
+    fn the_line_said_first_is_filled_too() {
+        let mut catalog = hailable();
+        catalog.govts[0].flags2 = crate::hail::FREE_HELP;
+        catalog.strings[0].1[140] = "I'll help you, <PN>, if you pay me.".to_owned();
+        let mut session = targeting(&catalog);
+        session.pilot.name = "Stock".to_owned();
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(
+            view.first.as_deref(),
+            Some("I'll help you, Stock, if you pay me.")
+        );
     }
 
     #[test]
@@ -1638,7 +1777,7 @@ mod tests {
         other.goal = Goal::Idle;
         other.target = None;
         other.state.position.x += 200.0;
-        let other = session.traffic.add_npc(other);
+        let other = session.space.traffic.add_npc(other);
         npc(&mut session).provoked = provoked;
         npc(&mut session).target = Some(ShipRef::Npc(other));
         hail(&mut session, catalog);
@@ -1651,7 +1790,7 @@ mod tests {
 
     /// `by` hits NPC 0 for no damage, answered.
     fn hit_for_nothing(session: &mut Session, by: NpcId) {
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Npc(by)),
             damage: 0.0,
@@ -1667,7 +1806,7 @@ mod tests {
 
     /// Whether NPC 0's distress call is on the line.
     fn calls_for_help(session: &mut Session) -> bool {
-        session.traffic.take_on_line().iter().any(|work| {
+        session.space.traffic.take_on_line().iter().any(|work| {
             matches!(
                 work,
                 crate::traffic::on_line::OnLine::Call(NpcId(0), crate::ai::CommCall::Distress, _)
@@ -1739,7 +1878,7 @@ mod tests {
             assert!(!npc.goal.fights(), "{:?}", npc.goal);
             assert_ne!(npc.target, Some(ShipRef::Player));
         });
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Player),
             damage: 5.0,
@@ -1816,6 +1955,18 @@ mod tests {
     }
 
     #[test]
+    fn a_haggle_outcome_is_filled_too() {
+        let mut catalog = hailable();
+        catalog.strings[0].1[150] = "How dare you, <PN>!".to_owned();
+        let mut session = pirate(&catalog, PIRATES);
+        session.pilot.name = "Stock".to_owned();
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 36);
+        let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
+        assert_eq!(view.reply, "How dare you, Stock!");
+    }
+
+    #[test]
     fn a_person_declined_its_bribe_says_its_attack_quote() {
         // `_DoCommDialog` calls `_AIMakeShipAttackPlayer` (@0x9621f), whose
         // gate reads the ship before it sets goal 4 (@0x89c50-0x89c9b).
@@ -1845,7 +1996,7 @@ mod tests {
             }
             let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
             assert_eq!(view.reply, "What? How dare you! Prepare to die!");
-            session.traffic.take_attack_quotes()
+            session.space.traffic.take_attack_quotes()
         };
         assert_eq!(declined(false), [NpcId(0)]);
         assert_eq!(declined(true), [], "already attacking the player");
@@ -1951,7 +2102,7 @@ mod tests {
         assert_eq!(session.pilot().cash, 100_000);
         assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
         let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
-        session.rules =
+        session.setup.rules =
             Rulebook::default().with_override(RuleKey::RankGovtReach, RuleSource::Bible);
         session.pilot.reserves.fuel.now = 40.0;
         hail(&mut session, &catalog);
@@ -1976,7 +2127,7 @@ mod tests {
             goal: Goal::Attack(ShipRef::Player),
             ..session.npcs()[0].clone()
         };
-        let pirate = session.traffic.add_npc(pirate);
+        let pirate = session.space.traffic.add_npc(pirate);
         hail(&mut session, &catalog);
         let view = press(&mut session, &catalog, 1, 0);
         assert_eq!(view.reply, "Okay, I'm on my way.");
@@ -1989,8 +2140,13 @@ mod tests {
         assert_eq!(view.reply, "I'm busy.");
     }
 
-    #[test]
-    fn battle_help_calls_the_systems_reinforcements_past_their_strength_test() {
+    /// `hailable`, its pirates enemies of the Federation, a rank of
+    /// battle help with the Federation, and system 130's reinforcements a
+    /// Federation fleet: a session as `targeting` makes it, the rank
+    /// active, its warship of strength 100 at cached odds of 0.2, beside
+    /// a pirate of strength 20 attacking the player. The catalog, the
+    /// session and the pirate.
+    fn reinforced() -> (FakePilotCatalog, Session, NpcId) {
         let mut catalog = hailable();
         catalog.govts[2].enemies = [1, -1, -1, -1];
         catalog.ranks = vec![RankRecord {
@@ -2028,18 +2184,236 @@ mod tests {
             },
             ..session.npcs()[0].clone()
         };
-        session.traffic.add_npc(pirate);
+        let pirate = session.space.traffic.add_npc(pirate);
         // Its odds as the frame's pass left them: the pirate's 20 over
         // its 100 (see `odds_cache`).
         let hailed = session.npcs()[0].id;
-        session.traffic.cache_odds(hailed, 0.2);
+        session.space.traffic.cache_odds(hailed, 0.2);
+        (catalog, session, pirate)
+    }
+
+    /// The reinforcements `reinforced` calls: the Federation's.
+    const FED_COMING: Option<crate::ai::reinforcements::Coming> =
+        Some(crate::ai::reinforcements::Coming { govt: Some(FED) });
+
+    #[test]
+    fn battle_help_calls_the_systems_reinforcements_past_their_strength_test() {
+        let (catalog, mut session, _) = reinforced();
         assert_eq!(session.reinforcements_coming(), None);
         hail(&mut session, &catalog);
         press(&mut session, &catalog, 1, 0);
         assert_eq!(
             session.reinforcements_coming(),
-            Some(crate::ai::reinforcements::Coming { govt: Some(FED) }),
+            FED_COMING,
             "odds of 0.2, below half of 1, yet called (@0x9636d)"
+        );
+    }
+
+    /// An option for every ship that says "Okay, I'm on my way." and
+    /// sends it to fight as its [`Defence`](crate::hail::Defence) says.
+    #[derive(Debug)]
+    struct Sends(crate::hail::Defence);
+
+    impl HailOption for Sends {
+        fn label(&self) -> String {
+            "Defend".to_owned()
+        }
+
+        fn applies(&self, _hail: &Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+            Answer {
+                deed: Some(Deed::Defend(self.0)),
+                ..Answer::say(Reply::Comm(reply::ON_MY_WAY))
+            }
+        }
+    }
+
+    /// `reinforced`'s session, its warship idle with its travel stellar
+    /// set and its target the player, pressing [`Sends`] of the defence
+    /// `defence` makes of the pirate; and the pirate.
+    fn sent(defence: impl FnOnce(NpcId) -> crate::hail::Defence) -> (Session, NpcId) {
+        let (catalog, mut session, pirate) = reinforced();
+        let ship = npc(&mut session);
+        ship.goal = Goal::Idle;
+        ship.target = Some(ShipRef::Player);
+        ship.travel_set = true;
+        let options = HailOptions::empty().with(Rc::new(Sends(defence(pirate))));
+        session
+            .hail(&catalog, &options, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        let view = session
+            .answer(0, &catalog, &options, &mut Draws::of(&[]))
+            .expect("open");
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        (session, pirate)
+    }
+
+    #[test]
+    fn a_defence_with_no_threat_clears_the_target_and_still_calls_when_it_reinforces() {
+        // `_AIFightEnemyThreatToPlayer` with none sets +0x70 = -1 alone
+        // (@0x82daa); rank battle help calls after it whatever it found
+        // (@0x9636d).
+        let (session, _) = sent(|_| crate::hail::Defence {
+            threat: None,
+            reinforce: true,
+            drop_travel: true,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.target, None);
+        assert_eq!(helper.goal, Goal::Idle, "nothing else changes");
+        assert!(helper.travel_set, "+0x6c is dropped only with a threat");
+        assert_eq!(session.reinforcements_coming(), FED_COMING);
+    }
+
+    #[test]
+    fn a_defence_that_does_not_reinforce_attacks_and_makes_no_call() {
+        let (session, pirate) = sent(|pirate| crate::hail::Defence {
+            threat: Some(pirate),
+            reinforce: false,
+            drop_travel: false,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
+        assert!(
+            helper.travel_set,
+            "`_AIFightEnemyThreatToPlayer` keeps +0x6c"
+        );
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    #[test]
+    fn a_defence_that_drops_travel_clears_the_travel_stellar_as_it_attacks() {
+        // `_AIFightThreatToPlayer` sets +0x6c = -1 with its pick (@0x81949).
+        let (session, pirate) = sent(|pirate| crate::hail::Defence {
+            threat: Some(pirate),
+            reinforce: false,
+            drop_travel: true,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert!(!helper.travel_set);
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    /// `reinforced`'s session without the rank: its Federation warship
+    /// has no battle help, while the pirate, an enemy, attacks the
+    /// player.
+    fn unranked() -> (FakePilotCatalog, Session, NpcId) {
+        let (catalog, mut session, pirate) = reinforced();
+        session.pilot.ranks.clear();
+        (catalog, session, pirate)
+    }
+
+    /// Presses Request Assistance, the pick drawing 0 and the haggle roll
+    /// `roll`.
+    fn request_help(session: &mut Session, catalog: &FakePilotCatalog, roll: u32) -> HailView {
+        hail(session, catalog);
+        session
+            .answer(
+                1,
+                catalog,
+                &HailOptions::default(),
+                &mut Draws::of(&[0, roll]),
+            )
+            .expect("open")
+    }
+
+    #[test]
+    fn a_warship_asks_its_price_to_fight_an_enemy_threat_and_paid_attacks_it_with_no_call() {
+        // `_DoCommDialog` @0x96465-0x964ee.
+        let (catalog, mut session, pirate) = unranked();
+        let view = request_help(&mut session, &catalog, 99);
+        assert_eq!(view.reply, "You'll have to pay me first.");
+        assert_eq!(view.asking, Some(3000));
+        assert_eq!(session.npcs()[0].goal, Goal::Idle, "nothing until paid");
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(session.pilot().cash, 97_000);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
+        assert_eq!(session.reinforcements_coming(), None, "no call (@0x964b4)");
+    }
+
+    #[test]
+    fn a_warships_price_declined_is_laughed_off_and_short_is_no_money() {
+        let (catalog, mut session, _) = unranked();
+        request_help(&mut session, &catalog, 36);
+        let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
+        assert_eq!(view.reply, "Ha ha ha. What a comedian.");
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+        assert_eq!(session.pilot().cash, 100_000);
+        let (catalog, mut session, _) = unranked();
+        session.pilot.cash = 500;
+        request_help(&mut session, &catalog, 99);
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(
+            view.reply,
+            "Yeah, come back when you actually have some money."
+        );
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+        assert_eq!(session.pilot().cash, 500);
+    }
+
+    /// NPC 0 of `session` made an escort of a fleet led by NPC 9.
+    fn in_a_fleet(session: &mut Session) {
+        npc(session).leader = Some(NpcId(9));
+    }
+
+    #[test]
+    fn a_fleet_escort_fights_a_threat_for_nothing_and_drops_its_travel() {
+        // AI type 6 (`_HyperSpawnFleet` @0x421dc): @0x964f8-0x9650f and
+        // `_AIFightThreatToPlayer` (@0x81949-0x81953).
+        let (catalog, mut session, pirate) = unranked();
+        in_a_fleet(&mut session);
+        npc(&mut session).travel_set = true;
+        hail(&mut session, &catalog);
+        let mut chance = Draws::of(&[0]);
+        let view = session
+            .answer(1, &catalog, &HailOptions::default(), &mut chance)
+            .expect("open");
+        assert_eq!(chance.asked, [1], "the pick alone, no haggle roll");
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert!(!helper.travel_set);
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    /// What group `group` says in variant 0 in `hailable`'s strings.
+    fn said(group: u8) -> String {
+        format!("c{}", Reply::locate(group, 0).1)
+    }
+
+    #[test]
+    fn a_busy_fleet_escort_is_just_an_escort() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        npc(&mut session).goal = Goal::Formation { guard: None };
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn a_fleet_escort_asked_for_fuel_cannot_do_that() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::CANT_DO_THAT)
         );
     }
 
@@ -2268,17 +2642,17 @@ mod tests {
         let catalog = hailable();
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
         session.populate(&catalog, &mut placed(0, -300));
-        assert!(session.talk.is_none(), "populated afresh");
+        assert!(session.space.escorts.talk.is_none(), "populated afresh");
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
-        session.player.position = Vec2::new(30.0, -40.0);
+        session.ship.player.position = Vec2::new(30.0, -40.0);
         land_now(&mut session).expect("lands");
-        assert!(session.talk.is_none(), "landed");
+        assert!(session.space.escorts.talk.is_none(), "landed");
     }
 
     #[test]
@@ -2321,7 +2695,7 @@ mod tests {
         decide(&mut session, &catalog, 5, |npc| {
             assert_eq!(npc.goal, Goal::Assist(Help::Refuel));
         });
-        session.strikes.push(Strike {
+        session.space.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by: Some(ShipRef::Player),
             damage: 5.0,
@@ -2345,7 +2719,7 @@ mod tests {
     fn escorting(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting(catalog);
         session.join_fleet(NpcId(0));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session.take_save_due();
         session
     }
@@ -2451,7 +2825,7 @@ mod tests {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         session.pilot.escorts[0].carried = true;
-        if let Some(npc) = session.npc_mut(NpcId(0)) {
+        if let Some(npc) = session.space.npc_mut(NpcId(0)) {
             npc.carrier = Some(crate::bay::Carrier {
                 ship: ShipRef::Player,
                 window: 100.0,
@@ -2525,7 +2899,11 @@ mod tests {
         for source in RuleSource::ALL {
             let session = released(&catalog, source);
             assert_eq!(session.pilot().escorts(), [], "{source:?}");
-            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}: @0x96864");
+            assert_eq!(
+                session.ship.latches.scan_latches,
+                Latches::ARMED,
+                "{source:?}: @0x96864"
+            );
             assert_eq!(
                 session.pilot().held(Good::Commodity(0)),
                 15,
@@ -2541,14 +2919,14 @@ mod tests {
         let mut catalog = hailable();
         catalog.ship_records[0].inherent_ai = 4;
         let session = released(&catalog, RuleSource::Engine);
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert_eq!(
             session.pilot().held(Good::Commodity(0)),
             0,
             "its 20 over the player's 20: everything"
         );
         let session = released(&catalog, RuleSource::Bible);
-        assert_ne!(session.scan_latches, Latches::ARMED, "no call");
+        assert_ne!(session.ship.latches.scan_latches, Latches::ARMED, "no call");
         assert_eq!(session.pilot().held(Good::Commodity(0)), 30);
     }
 
@@ -2719,7 +3097,7 @@ mod tests {
         let bible = joining_options(RuleSource::Bible);
         let mut session = targeting_merchant(&catalog);
         session.pilot.escorts = vec![escort_of(false); 7];
-        session.fleet = (0..7)
+        session.space.escorts.fleet = (0..7)
             .map(|index| {
                 (index < 5)
                     .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
@@ -2734,7 +3112,7 @@ mod tests {
             hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "five of the seven in the system"
         );
-        session.fleet[5] = session.place_escort(5, &mut crate::chance::NeverFires);
+        session.space.escorts.fleet[5] = session.place_escort(5, &mut crate::chance::NeverFires);
         assert!(
             !hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "six in the system"
@@ -2796,7 +3174,10 @@ mod tests {
         let mut catalog = merchants();
         catalog.missions[0].avail_random = 50;
         let mut session = targeting_merchant(&catalog);
-        session.offers.set_roll(crate::catalog::MissionId(130), 51);
+        session
+            .run
+            .offers
+            .set_roll(crate::catalog::MissionId(130), 51);
         assert_eq!(
             opened(&mut session, &catalog, &joining_options(RuleSource::Bible)),
             ["Greetings", "Request Assistance"]
@@ -2811,7 +3192,7 @@ mod tests {
         let mut other = crate::testkit::npc(9, session.npcs()[0].stats);
         other.target = Some(ShipRef::Npc(NpcId(0)));
         other.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        let other = session.traffic.add_npc(other);
+        let other = session.space.traffic.add_npc(other);
         session.take_save_due();
         session
             .hail(&catalog, &bible, &mut Draws::of(&opening(0)))
@@ -2855,8 +3236,8 @@ mod tests {
         assert_eq!(merchant.condition, Condition::Intact);
         assert!(merchant.escort.is_some());
         assert!(session.is_escort(NpcId(0)));
-        assert_eq!(session.target, None, "the player's target cleared");
-        let other = session.npc(other).expect("there");
+        assert_eq!(session.chart.target, None, "the player's target cleared");
+        let other = session.space.npc(other).expect("there");
         assert_eq!((other.target, other.goal), (None, Goal::Idle), "let go");
         assert!(session.take_save_due());
         assert!(

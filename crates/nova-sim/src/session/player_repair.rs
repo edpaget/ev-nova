@@ -9,7 +9,7 @@
 //! @0x3b186-0x3b18d, see the `player_downed` module), a one-hit breakup
 //! included, and turned off by every reset ([`Session::reset_precalced`],
 //! `_ResetPlayerPrecalcedValues` @0xc998). While it holds, the player's
-//! armour does not regenerate ([`Session::player_armor_regen`], which the
+//! armour does not regenerate ([`PlayerShip::player_armor_regen`], which the
 //! fight's [`Fighter::armor_regen`](crate::combat::Fighter::armor_regen)
 //! takes) and its gear does not repair it.
 //!
@@ -48,7 +48,7 @@
 //! **Left out.** The cheat that writes the inhibit (@0x6ebdf), as the
 //! engine has no cheats.
 
-use super::Session;
+use super::{PlayerShip, Session};
 use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::hull::Condition;
@@ -61,33 +61,36 @@ impl Session {
     /// whose inhibit has run out repair itself, drawing on `chance`, its
     /// condition decided again by `rules` (see the module docs).
     pub(super) fn player_repair_tick(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.repair_inhibit.tick();
-        if self.condition != Condition::Disabled || self.repair_inhibit.holds() {
+        self.ship.repair_inhibit.tick();
+        if self.ship.condition != Condition::Disabled || self.ship.repair_inhibit.holds() {
             return;
         }
         let drawn = chance.below(REPAIR_ODDS);
-        let gear = has_gear(&self.pilot.outfits, &self.outfits);
+        let gear = has_gear(&self.pilot.outfits, &self.statics.outfits);
         let armor = &mut self.pilot.reserves.armor;
-        if !can_self_repair(drawn, self.condition, armor.now, gear) {
+        if !can_self_repair(drawn, self.ship.condition, armor.now, gear) {
             return;
         }
-        armor.now = repaired_armor(armor.max, self.hull.tough);
-        self.condition = if rules.disable.disabled(*armor, &self.hull) {
+        armor.now = repaired_armor(armor.max, self.ship.fit.hull.tough);
+        self.ship.condition = if rules.disable.disabled(*armor, &self.ship.fit.hull) {
             Condition::Disabled
         } else {
             Condition::Intact
         };
-        self.say(SimMessage::PropulsionRepaired);
-        self.sounds.push(SimSound::PropulsionRepaired);
+        self.space
+            .say(&mut self.out, SimMessage::PropulsionRepaired);
+        self.out.sounds.push(SimSound::PropulsionRepaired);
     }
+}
 
+impl PlayerShip {
     /// The armour the player regenerates a fight tick: none while the
     /// repair inhibit holds (@0x6d03e-0x6d049), else its ship's rate.
     pub(super) fn player_armor_regen(&self) -> f32 {
         if self.repair_inhibit.holds() {
             0.0
         } else {
-            self.stats.armor_regen
+            self.fit.stats.armor_regen
         }
     }
 
@@ -134,8 +137,8 @@ mod tests {
         }
         session.pilot.reserves.armor.now = 3.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.condition, Condition::Disabled);
-        assert!(!session.repair_inhibit.holds());
+        assert_eq!(session.ship.condition, Condition::Disabled);
+        assert!(!session.ship.repair_inhibit.holds());
         let _ = (session.take_sounds(), session.take_messages());
         session
     }
@@ -158,7 +161,7 @@ mod tests {
         assert_eq!(tick_on(&mut session, Rules::default(), &[0]), [REPAIR_ODDS]);
         assert_eq!(armor(&session), repaired_armor(45.0, false));
         assert!((armor(&session) - 15.9985).abs() < 1e-4, "a third plus one");
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
         assert_eq!(session.take_messages(), [SimMessage::PropulsionRepaired]);
         assert_eq!(session.take_sounds(), [SimSound::PropulsionRepaired]);
     }
@@ -179,7 +182,7 @@ mod tests {
         let mut session = disabled(&catalog, true);
         assert_eq!(tick_on(&mut session, DISABLING, &[0]), [REPAIR_ODDS]);
         assert_eq!(armor(&session), repaired_armor(45.0, false));
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         assert_eq!(session.take_messages(), [SimMessage::PropulsionRepaired]);
         assert_eq!(
             tick_on(&mut session, DISABLING, &[1]),
@@ -198,7 +201,7 @@ mod tests {
                 [REPAIR_ODDS]
             );
             assert_eq!(armor(&session), 3.0, "{draw}");
-            assert_eq!(session.condition, Condition::Disabled);
+            assert_eq!(session.ship.condition, Condition::Disabled);
             assert_eq!(
                 (session.take_messages(), session.take_sounds()),
                 (vec![], vec![])
@@ -212,7 +215,7 @@ mod tests {
         let mut session = disabled(&catalog, false);
         assert_eq!(tick_on(&mut session, Rules::default(), &[0]), [REPAIR_ODDS]);
         assert_eq!(armor(&session), 3.0);
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         assert_eq!(session.take_messages(), []);
         let mut session = disabled(&catalog, true);
         session.pilot.outfits.insert(DROIDS, 0);
@@ -224,14 +227,14 @@ mod tests {
     fn while_the_inhibit_holds_nothing_is_drawn_or_repaired() {
         let catalog = repairing(0);
         let mut session = disabled(&catalog, true);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         let mut chance = Draws::of(&[0]);
         for tick in 0..REPAIR_INHIBIT_TICKS {
             session.tick_combat(Rules::default(), &mut chance);
             assert!(chance.asked.is_empty(), "tick {tick}");
         }
         assert_eq!(armor(&session), 3.0);
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         session.tick_combat(Rules::default(), &mut chance);
         assert_eq!(chance.asked, [REPAIR_ODDS], "on the 301st");
         assert_eq!(armor(&session), repaired_armor(45.0, false));
@@ -242,12 +245,12 @@ mod tests {
     fn a_dying_player_or_one_with_no_armour_is_never_repaired() {
         let catalog = repairing(0);
         let mut session = disabled(&catalog, true);
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 9,
             starting: false,
         };
         assert!(tick_on(&mut session, Rules::default(), &[0]).is_empty());
-        assert!(matches!(session.condition, Condition::Dying { .. }));
+        assert!(matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(armor(&session), 3.0);
         for none in [0.0, -1.0] {
             let mut session = disabled(&catalog, true);
@@ -270,31 +273,31 @@ mod tests {
         session.pilot.reserves.armor.now = 30.0;
         assert!(tick_on(&mut session, Rules::default(), &[0]).is_empty());
         assert_eq!(armor(&session), 30.0);
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
     }
 
     #[test]
     fn a_disabled_player_regenerates_no_shield_inhibited_or_not() {
         let catalog = repairing(0);
         let mut session = disabled(&catalog, false);
-        session.stats.shield_regen = 1.0;
-        session.stats.armor_regen = 1.0;
+        session.ship.fit.stats.shield_regen = 1.0;
+        session.ship.fit.stats.armor_regen = 1.0;
         session.pilot.reserves.shield.now = 5.0;
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         for _ in 0..REPAIR_INHIBIT_TICKS + 20 {
             session.tick_combat(Rules::default(), &mut NeverFires);
-            assert_eq!(session.condition, Condition::Disabled);
+            assert_eq!(session.ship.condition, Condition::Disabled);
             assert_eq!(session.pilot.reserves.shield.now, 5.0);
             assert_eq!(armor(&session), 3.0);
         }
-        assert!(!session.repair_inhibit.holds(), "it has lapsed");
+        assert!(!session.ship.repair_inhibit.holds(), "it has lapsed");
     }
 
     /// An intact player regenerating a point of armour a tick, its armour
     /// at 30 of 45.
     fn regenerating(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.stats.armor_regen = 1.0;
+        session.ship.fit.stats.armor_regen = 1.0;
         session.pilot.reserves.armor.now = 30.0;
         session
     }
@@ -303,7 +306,7 @@ mod tests {
     fn an_armed_inhibit_holds_back_armour_regeneration_for_300_ticks() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         for tick in 0..REPAIR_INHIBIT_TICKS {
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(armor(&session), 30.0, "tick {tick}");
@@ -316,7 +319,7 @@ mod tests {
     fn in_double_time_both_passes_count_the_inhibit_down() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         let pass = |session: &mut Session| {
             session.tick_combat(Rules::default(), &mut NeverFires);
             session.tick_again(
@@ -346,7 +349,7 @@ mod tests {
     fn a_reset_turns_the_inhibit_off() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.arm_repair_inhibit();
+        session.ship.arm_repair_inhibit();
         session.jettison_cargo(true, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(armor(&session), 31.0);
@@ -382,7 +385,7 @@ mod tests {
         session.pilot.reserves.armor.now = 10.6;
         session.tick_traffic(&catalog, &Firing, &mut NeverFires);
         let mut ticks = 0;
-        while session.condition == Condition::Intact {
+        while session.ship.condition == Condition::Intact {
             assert!(ticks < 30, "the player was never hit");
             session.tick_combat(rules, &mut NeverFires);
             ticks += 1;
@@ -390,14 +393,14 @@ mod tests {
         assert_eq!(session.take_messages(), [SimMessage::ShipDisabled]);
         // The NPC leaves, and the player's armour is put back, so the
         // next tick finds it intact, regenerating a point a tick.
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         session.pilot.reserves.armor.now = 40.0;
-        session.stats.armor_regen = 1.0;
+        session.ship.fit.stats.armor_regen = 1.0;
         for tick in 0..REPAIR_INHIBIT_TICKS {
             session.tick_combat(rules, &mut NeverFires);
             assert!(armor(&session) <= 40.0, "tick {tick}");
         }
-        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.ship.condition, Condition::Intact);
         let before = armor(&session);
         session.tick_combat(rules, &mut NeverFires);
         assert_eq!(armor(&session), before + 1.0, "on the 301st");

@@ -46,7 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
+use super::{Outbox, PlayerShip, Session, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, leave};
 #[cfg(doc)]
@@ -63,7 +63,7 @@ use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
-use crate::pilot::Escort;
+use crate::pilot::{Escort, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::skill::random_skill_level;
 use crate::traffic::SPAWN_RESERVE;
@@ -94,19 +94,20 @@ impl Session {
         let mut placed = Vec::new();
         for sortie in sorties {
             let Some(id) = self.launch_fighter(sortie, chance) else {
-                self.put_back(sortie);
+                self.space.put_back(&mut self.pilot, &self.statics, sortie);
                 continue;
             };
             placed.push(id);
             if sortie.carrier == ShipRef::Player {
                 glows |= self
+                    .statics
                     .arsenal
                     .weapon(sortie.bay)
                     .is_some_and(WeaponSpec::glows);
             }
         }
         if glows {
-            self.combat.light_glow(ShipRef::Player);
+            self.space.combat.light_glow(ShipRef::Player);
         }
         placed
     }
@@ -123,10 +124,17 @@ impl Session {
         sortie: &Sortie,
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
-        let berth = self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
-        let record = self.ship_record(sortie.ship).cloned()?;
-        let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
-        let kind = self.ship_kind(&record);
+        let berth = self
+            .space
+            .traffic
+            .free_berth(self.setup.spawn_reserve(SPAWN_RESERVE))?;
+        let record = self.statics.ship_record(sortie.ship).cloned()?;
+        let push = self
+            .statics
+            .arsenal
+            .weapon(sortie.bay)
+            .map_or(0.0, |bay| bay.speed);
+        let kind = self.setup.ship_kind(&self.statics, &record);
         let carrier = Carrier {
             ship: sortie.carrier,
             window: dock_window(record.fields.maneuver),
@@ -135,8 +143,8 @@ impl Session {
         // It takes its carrier's speed along the heading
         // (`_LaunchFighter` @0x3d6d5-0x3d6e0).
         let speed = match sortie.carrier {
-            ShipRef::Player => self.player_speed,
-            ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
+            ShipRef::Player => self.ship.player_speed,
+            ShipRef::Npc(id) => self.space.npc(id).map_or(0.0, |npc| npc.speed),
         };
         let at = ShipState {
             position: sortie.from.position,
@@ -149,7 +157,7 @@ impl Session {
         // and factor.
         npc.skill = random_skill_level(kind.skill_var, &mut *chance);
         if let ShipRef::Npc(id) = sortie.carrier
-            && let Some(launcher) = self.npc(id)
+            && let Some(launcher) = self.space.npc(id)
         {
             npc.take_govt_of(launcher);
         }
@@ -166,7 +174,7 @@ impl Session {
         npc.afterburner = self.rolls_afterburner(&kind.hull, berth, chance);
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
-            ShipRef::Npc(id) => self.join_carrier(npc, id),
+            ShipRef::Npc(id) => self.space.join_carrier(npc, id),
         }
     }
 
@@ -174,8 +182,8 @@ impl Session {
     /// or [`NO_SPRITE`] with none.
     pub(super) fn reach_of(&self, carrier: ShipRef) -> f32 {
         let sprite = match carrier {
-            ShipRef::Player => self.hull.sprite_size,
-            ShipRef::Npc(id) => self.npc(id).and_then(|npc| npc.hull.sprite_size),
+            ShipRef::Player => self.ship.fit.hull.sprite_size,
+            ShipRef::Npc(id) => self.space.npc(id).and_then(|npc| npc.hull.sprite_size),
         };
         sprite.unwrap_or(NO_SPRITE)
     }
@@ -184,7 +192,7 @@ impl Session {
     /// player targets `target` (see the module docs): its number.
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let target = target
-            .filter(|_| self.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
+            .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
                 ShipRef::Npc(id) => !self.is_escort(id),
                 ShipRef::Player => false,
@@ -192,7 +200,8 @@ impl Session {
         let order = if target.is_some() {
             Some(EscortOrder::Attack)
         } else {
-            self.class_order(npc.class)
+            self.space
+                .class_order(&self.pilot, &self.statics, npc.class)
         };
         npc.escort = Some(EscortDuty {
             formation: FormationSlot::default(),
@@ -208,14 +217,283 @@ impl Session {
             wage: None,
             person: None,
         };
-        let id = self.traffic.add_npc(npc);
+        let id = self.space.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
-        self.fleet.resize(self.pilot.escorts.len() - 1, None);
-        self.fleet.push(Some(id));
+        self.space
+            .escorts
+            .fleet
+            .resize(self.pilot.escorts.len() - 1, None);
+        self.space.escorts.fleet.push(Some(id));
         self.reform();
         id
     }
 
+    /// Takes each fighter that docked on the last traffic tick aboard its
+    /// carrier (see the module docs): the player's leaves the fleet, its
+    /// round to its bay, and one no bay launches is lost, which makes a
+    /// save due.
+    pub(super) fn dock_fighters(&mut self) {
+        let departed = self.space.traffic.departed().to_vec();
+        for (id, outcome) in departed {
+            self.dock_fighter(id, outcome);
+        }
+    }
+
+    /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
+    /// it, as [`Session::dock_fighters`] does for each; any other outcome
+    /// is left alone. The ship loop settles each dock at the fighter's own
+    /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
+    /// (@0x87fef), so no later slot's step finds the player's fighter gone
+    /// from the system but still in the fleet.
+    pub(super) fn dock_fighter(&mut self, id: NpcId, outcome: Outcome) {
+        let Outcome::Docked { carrier, ship } = outcome else {
+            return;
+        };
+        match carrier {
+            ShipRef::Player => {
+                let mut rounds = OutfitRounds {
+                    owned: &mut self.pilot.outfits,
+                    sources: &self.statics.ammo_outfits,
+                };
+                let stowed = self.ship.fit.armament.stow(ship, &mut rounds);
+                self.unfleet(id);
+                if !stowed {
+                    self.out.save_due = true;
+                }
+            }
+            ShipRef::Npc(carrier) => {
+                if let Some(carrier) = self.space.npc_mut(carrier) {
+                    carrier.armament.stow(ship, &mut carrier.rounds);
+                }
+            }
+        }
+    }
+
+    /// The player leaves the system with its fighters out, as the
+    /// rulebook's [`RuleKey::FighterRecall`](crate::RuleKey::FighterRecall)
+    /// says (see the module docs): by the engine, on a jump's arrival
+    /// (`landing` false), those that can jump follow and the rest are
+    /// abandoned ([`Session::abandon_fighters`]); by the other reading, on arrival and on
+    /// landing, every one goes back aboard.
+    pub(super) fn leave_with_fighters(&mut self, landing: bool) {
+        match self.setup.rules.source_for(RuleKey::FighterRecall) {
+            RuleSource::Engine if !landing => self.abandon_fighters(),
+            RuleSource::Engine => {}
+            RuleSource::Bible => self.recall_fighters(),
+        }
+    }
+
+    /// Every fighter out that cannot jump is abandoned (`_HandlePlayer`
+    /// @0x6c0b9-0x6c0f9, its `_AIShipHasFuelForJump` @0x6c0ed): one in the
+    /// system by [`leave::can_jump`] (its class's `Fuel` above 99 and no
+    /// other ship's tractor beam on it; by the other reading of
+    /// [`RuleKey::NpcJumpFuel`], a jump's fuel now too), one not there by
+    /// its ship type's `Fuel` alone. Its record goes, with no round back,
+    /// and the flight is told how many; a save is due when any was.
+    fn abandon_fighters(&mut self) {
+        let reading = self.setup.rules.source_for(RuleKey::NpcJumpFuel);
+        let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| match npc {
+            Some(npc) => leave::can_jump(npc, reading),
+            None => session
+                .statics
+                .ship_record(escort.ship)
+                .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL),
+        };
+        let abandoned = self.drop_fighters(fuelled);
+        let count = u32::try_from(abandoned.len()).unwrap_or(u32::MAX);
+        if count > 0 {
+            self.out.fighter_notes.push(FighterNote::Abandoned(count));
+            self.out.save_due = true;
+        }
+    }
+
+    /// Every fighter out goes back aboard at once, a round to the bay
+    /// launching its type, as docking gives (`_InstantFighterRecall`
+    /// @0x5df3); one no bay launches is lost, which makes a save due.
+    fn recall_fighters(&mut self) {
+        for fighter in self.drop_fighters(|_, _, _| false) {
+            let mut rounds = OutfitRounds {
+                owned: &mut self.pilot.outfits,
+                sources: &self.statics.ammo_outfits,
+            };
+            if !self.ship.fit.armament.stow(fighter.ship, &mut rounds) {
+                self.out.save_due = true;
+            }
+        }
+    }
+
+    /// Every fighter out leaves the fleet but those `kept` (asked of its
+    /// record and its NPC, when it is in the system), its NPC gone from the
+    /// system and its record from the pilot; the records gone.
+    pub(super) fn drop_fighters(
+        &mut self,
+        kept: impl Fn(&Self, &Escort, Option<&Npc>) -> bool,
+    ) -> Vec<Escort> {
+        let mut dropped = Vec::new();
+        for index in (0..self.pilot.escorts.len()).rev() {
+            let escort = self.pilot.escorts[index];
+            let npc = self
+                .space
+                .escorts
+                .fleet
+                .get(index)
+                .copied()
+                .flatten()
+                .and_then(|id| self.space.npc(id));
+            if !escort.carried || kept(self, &escort, npc) {
+                continue;
+            }
+            self.pilot.escorts.remove(index);
+            if index < self.space.escorts.fleet.len()
+                && let Some(id) = self.space.escorts.fleet.remove(index)
+            {
+                self.space.traffic.remove(id);
+            }
+            dropped.push(escort);
+        }
+        dropped.reverse();
+        self.reform();
+        dropped
+    }
+
+    /// For every ammunition outfit of a fighter bay, the fighters the
+    /// player's bays can still take ([`capacity`], `_CanBuyFighter`
+    /// @0x5a82): the most its bays hold, less the fighters aboard and out
+    /// of that type; none when the ship carries no such bay.
+    pub(super) fn fighter_room(&self) -> BTreeMap<OutfitId, u32> {
+        let mut room = BTreeMap::new();
+        for &(ammo, outfit) in &self.statics.ammo_outfits {
+            let Some(bay) = self
+                .statics
+                .arsenal
+                .weapon(ammo)
+                .filter(|spec| spec.is_bay())
+            else {
+                continue;
+            };
+            let bays: u32 = self
+                .ship
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == ammo)
+                .map(|mount| mount.count)
+                .sum();
+            let max = self
+                .statics
+                .outfits
+                .iter()
+                .find(|record| record.id == outfit)
+                .map_or(0, |record| record.max);
+            let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo)
+                .saturating_add(self.fighters_out(bay.carried));
+            room.insert(
+                outfit,
+                capacity(bay.max_ammo, bays, max).saturating_sub(held),
+            );
+        }
+        room
+    }
+
+    /// The player's fighters out of type `carried`: none for `None`.
+    fn fighters_out(&self, carried: Option<ShipId>) -> u32 {
+        let out = self
+            .pilot
+            .escorts
+            .iter()
+            .filter(|escort| escort.carried && Some(escort.ship) == carried)
+            .count();
+        u32::try_from(out).unwrap_or(u32::MAX)
+    }
+
+    /// Each launcher outfit ([`Arsenal::magazines`](crate::combat::armament::Arsenal::magazines)),
+    /// with the rounds of its ammunition the player holds, a bay's
+    /// fighters out counted, as the outfitter's Sell counts them
+    /// (`_DoOutfitDialog` @0x5cadb-0x5cb8e).
+    pub(super) fn launchers(&self) -> BTreeMap<OutfitId, Launcher> {
+        self.statics
+            .arsenal
+            .magazines(&self.statics.outfits)
+            .into_iter()
+            .map(|(outfit, magazine)| {
+                let aboard = outfit_rounds(
+                    &self.pilot.outfits,
+                    &self.statics.ammo_outfits,
+                    magazine.ammo,
+                );
+                let out = if magazine.carried.is_some() {
+                    self.fighters_out(magazine.carried)
+                } else {
+                    0
+                };
+                let launcher = Launcher {
+                    max_ammo: magazine.max_ammo,
+                    rounds: aboard.saturating_add(out),
+                    ammo: magazine.ammo_outfit,
+                };
+                (outfit, launcher)
+            })
+            .collect()
+    }
+
+    /// What the player's fighters met as it left systems since this was
+    /// last taken, in order; taking it empties the list.
+    pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
+        self.out.take_fighter_notes()
+    }
+}
+
+impl Outbox {
+    /// What the player's fighters met as it left systems since this was
+    /// last taken, in order; taking it empties the list.
+    fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
+        std::mem::take(&mut self.fighter_notes)
+    }
+}
+
+impl PlayerShip {
+    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
+    /// `MaxAmmo` above 0, the most of it the player may own: that
+    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
+    /// included, as the 16-bit product the original compares
+    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
+    /// [`MOD_AMMO`] mod in a later slot is not capped, so
+    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
+    /// is not read here.
+    pub(super) fn ammo_caps(&self, statics: &Statics) -> BTreeMap<OutfitId, i16> {
+        let mut caps = BTreeMap::new();
+        for record in &statics.outfits {
+            let (kind, val) = record.mods[0];
+            if kind != MOD_AMMO {
+                continue;
+            }
+            let weapon = WeaponId(val);
+            let Some(spec) = statics
+                .arsenal
+                .weapon(weapon)
+                .filter(|spec| spec.max_ammo > 0)
+            else {
+                continue;
+            };
+            let launchers: u32 = self
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == weapon)
+                .map(|mount| mount.count)
+                .sum();
+            caps.insert(
+                record.id,
+                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
+            );
+        }
+        caps
+    }
+}
+
+impl Space {
     /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,
     /// attacking its target unless that is the carrier or of its fleet:
     /// its number, or none with its carrier gone.
@@ -238,47 +516,6 @@ impl Session {
         match ship {
             ShipRef::Player => Some(ShipRef::Player),
             ShipRef::Npc(id) => self.npc(id).map(Npc::fleet),
-        }
-    }
-
-    /// Takes each fighter that docked on the last traffic tick aboard its
-    /// carrier (see the module docs): the player's leaves the fleet, its
-    /// round to its bay, and one no bay launches is lost, which makes a
-    /// save due.
-    pub(super) fn dock_fighters(&mut self) {
-        let departed = self.traffic.departed().to_vec();
-        for (id, outcome) in departed {
-            self.dock_fighter(id, outcome);
-        }
-    }
-
-    /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
-    /// it, as [`Session::dock_fighters`] does for each; any other outcome
-    /// is left alone. The ship loop settles each dock at the fighter's own
-    /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
-    /// (@0x87fef), so no later slot's step finds the player's fighter gone
-    /// from the system but still in the fleet.
-    pub(super) fn dock_fighter(&mut self, id: NpcId, outcome: Outcome) {
-        let Outcome::Docked { carrier, ship } = outcome else {
-            return;
-        };
-        match carrier {
-            ShipRef::Player => {
-                let mut rounds = OutfitRounds {
-                    owned: &mut self.pilot.outfits,
-                    sources: &self.ammo_outfits,
-                };
-                let stowed = self.armament.stow(ship, &mut rounds);
-                self.unfleet(id);
-                if !stowed {
-                    self.save_due = true;
-                }
-            }
-            ShipRef::Npc(carrier) => {
-                if let Some(carrier) = self.npc_mut(carrier) {
-                    carrier.armament.stow(ship, &mut carrier.rounds);
-                }
-            }
         }
     }
 
@@ -307,204 +544,12 @@ impl Session {
         }
     }
 
-    /// The player leaves the system with its fighters out, as the
-    /// rulebook's [`RuleKey::FighterRecall`](crate::RuleKey::FighterRecall)
-    /// says (see the module docs): by the engine, on a jump's arrival
-    /// (`landing` false), those that can jump follow and the rest are
-    /// abandoned ([`Session::abandon_fighters`]); by the other reading, on arrival and on
-    /// landing, every one goes back aboard.
-    pub(super) fn leave_with_fighters(&mut self, landing: bool) {
-        match self.rules.source_for(RuleKey::FighterRecall) {
-            RuleSource::Engine if !landing => self.abandon_fighters(),
-            RuleSource::Engine => {}
-            RuleSource::Bible => self.recall_fighters(),
-        }
-    }
-
-    /// Every fighter out that cannot jump is abandoned (`_HandlePlayer`
-    /// @0x6c0b9-0x6c0f9, its `_AIShipHasFuelForJump` @0x6c0ed): one in the
-    /// system by [`leave::can_jump`] (its class's `Fuel` above 99 and no
-    /// other ship's tractor beam on it; by the other reading of
-    /// [`RuleKey::NpcJumpFuel`], a jump's fuel now too), one not there by
-    /// its ship type's `Fuel` alone. Its record goes, with no round back,
-    /// and the flight is told how many; a save is due when any was.
-    fn abandon_fighters(&mut self) {
-        let reading = self.rules.source_for(RuleKey::NpcJumpFuel);
-        let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| match npc {
-            Some(npc) => leave::can_jump(npc, reading),
-            None => session
-                .ship_record(escort.ship)
-                .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL),
-        };
-        let abandoned = self.drop_fighters(fuelled);
-        let count = u32::try_from(abandoned.len()).unwrap_or(u32::MAX);
-        if count > 0 {
-            self.fighter_notes.push(FighterNote::Abandoned(count));
-            self.save_due = true;
-        }
-    }
-
-    /// Every fighter out goes back aboard at once, a round to the bay
-    /// launching its type, as docking gives (`_InstantFighterRecall`
-    /// @0x5df3); one no bay launches is lost, which makes a save due.
-    fn recall_fighters(&mut self) {
-        for fighter in self.drop_fighters(|_, _, _| false) {
-            let mut rounds = OutfitRounds {
-                owned: &mut self.pilot.outfits,
-                sources: &self.ammo_outfits,
-            };
-            if !self.armament.stow(fighter.ship, &mut rounds) {
-                self.save_due = true;
-            }
-        }
-    }
-
-    /// Every fighter out leaves the fleet but those `kept` (asked of its
-    /// record and its NPC, when it is in the system), its NPC gone from the
-    /// system and its record from the pilot; the records gone.
-    pub(super) fn drop_fighters(
-        &mut self,
-        kept: impl Fn(&Self, &Escort, Option<&Npc>) -> bool,
-    ) -> Vec<Escort> {
-        let mut dropped = Vec::new();
-        for index in (0..self.pilot.escorts.len()).rev() {
-            let escort = self.pilot.escorts[index];
-            let npc = self
-                .fleet
-                .get(index)
-                .copied()
-                .flatten()
-                .and_then(|id| self.npc(id));
-            if !escort.carried || kept(self, &escort, npc) {
-                continue;
-            }
-            self.pilot.escorts.remove(index);
-            if index < self.fleet.len()
-                && let Some(id) = self.fleet.remove(index)
-            {
-                self.traffic.remove(id);
-            }
-            dropped.push(escort);
-        }
-        dropped.reverse();
-        self.reform();
-        dropped
-    }
-
-    /// For every ammunition outfit of a fighter bay, the fighters the
-    /// player's bays can still take ([`capacity`], `_CanBuyFighter`
-    /// @0x5a82): the most its bays hold, less the fighters aboard and out
-    /// of that type; none when the ship carries no such bay.
-    pub(super) fn fighter_room(&self) -> BTreeMap<OutfitId, u32> {
-        let mut room = BTreeMap::new();
-        for &(ammo, outfit) in &self.ammo_outfits {
-            let Some(bay) = self.arsenal.weapon(ammo).filter(|spec| spec.is_bay()) else {
-                continue;
-            };
-            let bays: u32 = self
-                .armament
-                .mounts()
-                .iter()
-                .filter(|mount| mount.spec.id == ammo)
-                .map(|mount| mount.count)
-                .sum();
-            let max = self
-                .outfits
-                .iter()
-                .find(|record| record.id == outfit)
-                .map_or(0, |record| record.max);
-            let held = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
-                .saturating_add(self.fighters_out(bay.carried));
-            room.insert(
-                outfit,
-                capacity(bay.max_ammo, bays, max).saturating_sub(held),
-            );
-        }
-        room
-    }
-
-    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
-    /// `MaxAmmo` above 0, the most of it the player may own: that
-    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
-    /// included, as the 16-bit product the original compares
-    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
-    /// [`MOD_AMMO`] mod in a later slot is not capped, so
-    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
-    /// is not read here.
-    pub(super) fn ammo_caps(&self) -> BTreeMap<OutfitId, i16> {
-        let mut caps = BTreeMap::new();
-        for record in &self.outfits {
-            let (kind, val) = record.mods[0];
-            if kind != MOD_AMMO {
-                continue;
-            }
-            let weapon = WeaponId(val);
-            let Some(spec) = self.arsenal.weapon(weapon).filter(|spec| spec.max_ammo > 0) else {
-                continue;
-            };
-            let launchers: u32 = self
-                .armament
-                .mounts()
-                .iter()
-                .filter(|mount| mount.spec.id == weapon)
-                .map(|mount| mount.count)
-                .sum();
-            caps.insert(
-                record.id,
-                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
-            );
-        }
-        caps
-    }
-
-    /// The player's fighters out of type `carried`: none for `None`.
-    fn fighters_out(&self, carried: Option<ShipId>) -> u32 {
-        let out = self
-            .pilot
-            .escorts
-            .iter()
-            .filter(|escort| escort.carried && Some(escort.ship) == carried)
-            .count();
-        u32::try_from(out).unwrap_or(u32::MAX)
-    }
-
-    /// Each launcher outfit ([`Arsenal::magazines`](crate::combat::armament::Arsenal::magazines)),
-    /// with the rounds of its ammunition the player holds, a bay's
-    /// fighters out counted, as the outfitter's Sell counts them
-    /// (`_DoOutfitDialog` @0x5cadb-0x5cb8e).
-    pub(super) fn launchers(&self) -> BTreeMap<OutfitId, Launcher> {
-        self.arsenal
-            .magazines(&self.outfits)
-            .into_iter()
-            .map(|(outfit, magazine)| {
-                let aboard = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, magazine.ammo);
-                let out = if magazine.carried.is_some() {
-                    self.fighters_out(magazine.carried)
-                } else {
-                    0
-                };
-                let launcher = Launcher {
-                    max_ammo: magazine.max_ammo,
-                    rounds: aboard.saturating_add(out),
-                    ammo: magazine.ammo_outfit,
-                };
-                (outfit, launcher)
-            })
-            .collect()
-    }
-
-    /// What the player's fighters met as it left systems since this was
-    /// last taken, in order; taking it empties the list.
-    pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
-        std::mem::take(&mut self.fighter_notes)
-    }
-
     /// Puts the fighter of `sortie` back into its bay, a round again.
-    fn put_back(&mut self, sortie: &Sortie) {
+    fn put_back(&mut self, pilot: &mut Pilot, statics: &Statics, sortie: &Sortie) {
         match sortie.carrier {
             ShipRef::Player => OutfitRounds {
-                owned: &mut self.pilot.outfits,
-                sources: &self.ammo_outfits,
+                owned: &mut pilot.outfits,
+                sources: &statics.ammo_outfits,
             }
             .stow(sortie.bay),
             ShipRef::Npc(id) => {
@@ -791,6 +836,8 @@ pub(super) mod tests {
     /// The fleet's NPCs, in fleet order.
     fn fleet_npcs(session: &Session) -> Vec<Npc> {
         session
+            .space
+            .escorts
             .fleet
             .iter()
             .flatten()
@@ -824,7 +871,7 @@ pub(super) mod tests {
         npc.ai_type = AiType::Interceptor;
         npc.class = EscortClass::Medium;
         npc.state.position = Vec2::new(x, y);
-        session.traffic.add_npc(npc)
+        session.space.traffic.add_npc(npc)
     }
 
     /// A tick of the player at rest, then of the traffic by `ai`, then of
@@ -889,13 +936,13 @@ pub(super) mod tests {
             launch(&mut session);
             let fighter = fleet_npcs(&session)[0].clone();
             assert_ne!(fighter.state.velocity, Vec2::ZERO, "pushed out by the bay");
-            let npc = session.npc_mut(fighter.id).expect("there");
+            let npc = session.space.npc_mut(fighter.id).expect("there");
             // Held, so the push alone could move it.
             npc.goal = Goal::Hold;
             for _ in 0..3 {
                 session.tick_traffic(&catalog, &Sitting, &mut NeverFires);
             }
-            let state = session.npc(fighter.id).expect("there").state;
+            let state = session.space.npc(fighter.id).expect("there").state;
             (fighter.immobile, fighter.state.position, state)
         };
         let (immobile, at, state) = launched(ShipFields {
@@ -1085,7 +1132,7 @@ pub(super) mod tests {
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
         let mut swarmer = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
         swarmer.swarm_leader = Some(1);
-        session.traffic.add_npc_at(swarmer, 2);
+        session.space.traffic.add_npc_at(swarmer, 2);
         launch(&mut session);
         let fighter = fleet_npcs(&session)
             .first()
@@ -1101,7 +1148,7 @@ pub(super) mod tests {
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
         let quarry = pirate(&mut session, 0.0, -300.0);
         session.select_target(TargetPick::Nearest);
-        assert_eq!(session.target, Some(quarry));
+        assert_eq!(session.chart.target, Some(quarry));
         launch(&mut session);
         let fighter = fleet_npcs(&session)[0].clone();
         assert_eq!(
@@ -1190,7 +1237,7 @@ pub(super) mod tests {
             formation: Some(FormationSlot::default()),
             order: Some(EscortOrder::Hold),
         });
-        session.traffic.add_npc(escort);
+        session.space.traffic.add_npc(escort);
         assert_eq!(launched_order(&mut session), Some(EscortOrder::Hold));
     }
 
@@ -1258,8 +1305,8 @@ pub(super) mod tests {
         launch(&mut session);
         assert_eq!(session.pilot().escorts()[0].order, None, "no target");
         assert_eq!(fleet_npcs(&session)[0].target, None);
-        let first = session.fleet[0];
-        session.target = first;
+        let first = session.space.escorts.fleet[0];
+        session.chart.target = first;
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
@@ -1278,7 +1325,7 @@ pub(super) mod tests {
         let catalog = carrying();
         let crowded = |ships: u32, reserve: RuleSource| {
             let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
             for n in 0..ships {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
@@ -1320,7 +1367,7 @@ pub(super) mod tests {
         let catalog = carrying_a_glow_bay();
         let launched = |ships: u32, reserve: RuleSource| {
             let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
             for n in 0..ships {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
@@ -1382,9 +1429,9 @@ pub(super) mod tests {
             .map(|npc| npc.id)
             .filter(|&id| id != last)
             .collect();
-        let table = session.traffic.table().clone();
+        let table = session.space.traffic.table().clone();
         let system = session.system();
-        session.traffic.retarget(
+        session.space.traffic.retarget(
             table,
             &keep,
             crate::traffic::Leave::Held {
@@ -1566,8 +1613,14 @@ pub(super) mod tests {
     fn recalled_fighters_fly_home_dock_and_are_the_bays_rounds_again() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None), out()]);
-        for id in [session.fleet[0], session.fleet[2]].into_iter().flatten() {
-            let npc = session.npc_mut(id).expect("out");
+        for id in [
+            session.space.escorts.fleet[0],
+            session.space.escorts.fleet[2],
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let npc = session.space.npc_mut(id).expect("out");
             npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         }
         session.take_save_due();
@@ -1593,8 +1646,8 @@ pub(super) mod tests {
     fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
-        let id = session.fleet[0].expect("placed");
-        session.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
+        let id = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
@@ -1640,11 +1693,11 @@ pub(super) mod tests {
     fn a_fighter_docking_in_the_ship_loop_below_another_slot_makes_no_save_due() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
-        let fighter = session.fleet[0].expect("placed");
-        let escort = session.fleet[1].expect("placed");
-        let berth = |session: &Session, id| session.npc(id).expect("here").berth;
+        let fighter = session.space.escorts.fleet[0].expect("placed");
+        let escort = session.space.escorts.fleet[1].expect("placed");
+        let berth = |session: &Session, id| session.space.npc(id).expect("here").berth;
         assert!(berth(&session, fighter) < berth(&session, escort));
-        let npc = session.npc_mut(fighter).expect("out");
+        let npc = session.space.npc_mut(fighter).expect("out");
         npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         session.take_save_due();
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
@@ -1652,7 +1705,7 @@ pub(super) mod tests {
         assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(
-            session.fleet,
+            session.space.escorts.fleet,
             [Some(escort)],
             "the fleet no longer holds it"
         );
@@ -1664,9 +1717,9 @@ pub(super) mod tests {
     fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
-        let fighter = session.fleet[0].expect("placed");
-        let escort = session.fleet[1].expect("placed");
-        let npc = session.npc_mut(fighter).expect("out");
+        let fighter = session.space.escorts.fleet[0].expect("placed");
+        let escort = session.space.escorts.fleet[1].expect("placed");
+        let npc = session.space.npc_mut(fighter).expect("out");
         npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
@@ -1682,7 +1735,7 @@ pub(super) mod tests {
         });
         assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(
-            session.fleet,
+            session.space.escorts.fleet,
             [Some(escort)],
             "the fleet no longer holds it"
         );
@@ -1694,8 +1747,8 @@ pub(super) mod tests {
     fn another_command_keeps_a_returning_fighter_out() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
-        let id = session.fleet[0].expect("placed");
-        session.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
+        let id = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
         assert_eq!(until_docked(&mut session, &catalog, 600), None);
@@ -1723,8 +1776,8 @@ pub(super) mod tests {
         for armor in [5.0, 0.0] {
             let mut session = fleet(&catalog, 1, vec![out()]);
             session.take_save_due();
-            let id = session.fleet[0].expect("placed");
-            session.npc_mut(id).expect("out").reserves.armor.now = armor;
+            let id = session.space.escorts.fleet[0].expect("placed");
+            session.space.npc_mut(id).expect("out").reserves.armor.now = armor;
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.pilot().escorts(), [], "{armor}");
             assert_eq!(session.pilot().owned(VIPERS), 1, "{armor}");
@@ -1765,7 +1818,7 @@ pub(super) mod tests {
     /// and attacking it, escorting `lead`, carrying a Viper Bay with
     /// `vipers` fighters aboard.
     fn carrier(session: &mut Session, lead: NpcId, vipers: u32) -> NpcId {
-        session.traffic.add_npc(carrier_npc(lead, vipers))
+        session.space.traffic.add_npc(carrier_npc(lead, vipers))
     }
 
     /// The pirate carrier [`carrier`] adds.
@@ -1800,6 +1853,7 @@ pub(super) mod tests {
     /// The fighters `carrier` holds.
     fn aboard(session: &Session, carrier: NpcId) -> u32 {
         session
+            .space
             .npc(carrier)
             .map_or(0, |npc| u32::try_from(npc.rounds.slot(BAY)).unwrap_or(0))
     }
@@ -1831,7 +1885,7 @@ pub(super) mod tests {
         let (mut session, raider, _) = raided(&catalog);
         let glow_bay = crate::combat::weapon::WeaponSpec::new(&catalog.weapons[0]);
         assert!(glow_bay.glows());
-        session.npc_mut(raider).expect("there").armament =
+        session.space.npc_mut(raider).expect("there").armament =
             crate::combat::armament::Armament::new([(glow_bay, 1)]);
         fight(&mut session, &catalog, &raiding_ai());
         assert_eq!(vipers(&session).len(), 1, "launched");
@@ -1889,7 +1943,7 @@ pub(super) mod tests {
             "the fighters' shots: {:?}",
             session.reserves()
         );
-        let carrier = session.npc(raider).expect("there");
+        let carrier = session.space.npc(raider).expect("there");
         assert_eq!(carrier.reserves.shield.now, 30.0, "never hit by its own");
         assert!(
             vipers(&session)
@@ -1940,7 +1994,7 @@ pub(super) mod tests {
                 mass_dmg: 1,
                 ..weapon(128)
             };
-            let npc = session.npc_mut(raider).expect("there");
+            let npc = session.space.npc_mut(raider).expect("there");
             npc.goal = Goal::Snipe(ShipRef::Player);
             npc.state.position = Vec2::new(0.0, -100.0);
             npc.state.heading = 180.0;
@@ -1957,7 +2011,7 @@ pub(super) mod tests {
         let (mut full, raider) = sniped(55);
         assert_eq!(vipers(&full), [], "no fighter");
         assert_eq!(aboard(&full, raider), 1, "drained by its pick alone");
-        let carrier = full.npc(raider).expect("there");
+        let carrier = full.space.npc(raider).expect("there");
         assert_eq!(carrier.pick, Some(BAY));
         let bay = carrier
             .armament
@@ -1975,7 +2029,7 @@ pub(super) mod tests {
         assert_eq!(vipers(&room).len(), 1);
         assert_eq!(aboard(&room, raider), 1);
         assert_eq!(
-            room.npc(raider).expect("there").pick,
+            room.space.npc(raider).expect("there").pick,
             None,
             "its gun fired and cleared"
         );
@@ -1992,7 +2046,7 @@ pub(super) mod tests {
         ships: u32,
     ) -> (Session, NpcId) {
         let (mut session, raider, _) = raided_by(catalog, spend);
-        let npc = session.npc_mut(raider).expect("there");
+        let npc = session.space.npc_mut(raider).expect("there");
         npc.goal = Goal::Snipe(ShipRef::Player);
         npc.state.position = Vec2::new(0.0, -100.0);
         npc.state.heading = 180.0;
@@ -2056,7 +2110,7 @@ pub(super) mod tests {
         assert_eq!(vipers(&one).len(), 1);
         assert_eq!(aboard(&one, raider), 2);
         assert_eq!(launches_heard(&mut one, raider), [BAY]);
-        assert_eq!(one.npc(raider).expect("there").pick, Some(BAY));
+        assert_eq!(one.space.npc(raider).expect("there").pick, Some(BAY));
         let (mut none, raider) = sniped(55);
         assert_eq!(vipers(&none), []);
         assert_eq!(aboard(&none, raider), 3);
@@ -2081,7 +2135,7 @@ pub(super) mod tests {
             [BAY, WeaponId(150)],
             "one from each"
         );
-        let carrier = session.npc(raider).expect("there");
+        let carrier = session.space.npc(raider).expect("there");
         assert_eq!(carrier.rounds.slot(BAY), 0);
         assert_eq!(carrier.rounds.slot(WeaponId(150)), 0);
     }
@@ -2146,7 +2200,7 @@ pub(super) mod tests {
         // `a_fighter_the_player_launches_moves_on_its_launch_tick`.
         let catalog = carrying();
         let (mut session, raider, _) = raided(&catalog);
-        let stood = session.npc(raider).expect("there").state.position;
+        let stood = session.space.npc(raider).expect("there").state.position;
         game_pass(&mut session, &catalog, &Launching);
         let launched = vipers(&session);
         assert_eq!(launched.len(), 1, "launched");
@@ -2162,7 +2216,7 @@ pub(super) mod tests {
         let (mut session, raider, _) = raided(&catalog);
         // A tick left: reloading as the advance pass's AI runs, ready after
         // its `_HandleShip`'s countdown (@0x33896).
-        let carrier = session.npc_mut(raider).expect("there");
+        let carrier = session.space.npc_mut(raider).expect("there");
         carrier.armament.hold(BAY);
         for _ in 0..59 {
             carrier.armament.reload();
@@ -2171,7 +2225,7 @@ pub(super) mod tests {
         game_pass(&mut session, &catalog, &Launching);
         assert_eq!(vipers(&session), [], "reloading as its AI ran");
         assert_eq!(
-            session.npc(raider).expect("there").armament.mounts()[0].reload,
+            session.space.npc(raider).expect("there").armament.mounts()[0].reload,
             0.0
         );
         session.tick_again(
@@ -2194,9 +2248,9 @@ pub(super) mod tests {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 0, Vec::new()), RuleSource::Engine);
         let lead = pirate(&mut session, 2000.0, 2000.0);
-        let high = session.traffic.add_npc_at(carrier_npc(lead, 2), 40);
-        let low = session.traffic.add_npc_at(carrier_npc(lead, 2), 20);
-        while session.traffic.free_berths(SPAWN_RESERVE) > 1 {
+        let high = session.space.traffic.add_npc_at(carrier_npc(lead, 2), 40);
+        let low = session.space.traffic.add_npc_at(carrier_npc(lead, 2), 20);
+        while session.space.traffic.free_berths(SPAWN_RESERVE) > 1 {
             pirate(&mut session, 1000.0, 1000.0);
         }
         session.take_combat_events();
@@ -2210,7 +2264,7 @@ pub(super) mod tests {
         assert_eq!(launched[0].berth, 55, "the last berth below 56");
         assert_eq!(aboard(&session, low), 1, "its round spent");
         assert_eq!(aboard(&session, high), 2, "its round kept");
-        let reload = session.npc(high).expect("there").armament.mounts()[0].reload;
+        let reload = session.space.npc(high).expect("there").armament.mounts()[0].reload;
         assert_eq!(reload, 0.0, "nor reloading");
         assert_eq!(
             bays_heard(&session.take_combat_events()),
@@ -2307,16 +2361,18 @@ pub(super) mod tests {
             ..weapon(133)
         };
         let picker = session
+            .space
             .traffic
             .add_npc_at(armed_npc(1000.0, 850.0, missile), 1);
         let low = session
+            .space
             .traffic
             .add_npc_at(armed_npc(1000.0, 1000.0, quad), 2);
-        let raider = session.traffic.add_npc_at(carrier_npc(low, 2), 3);
-        session.npc_mut(raider).expect("there").state.position = Vec2::new(1100.0, 1000.0);
+        let raider = session.space.traffic.add_npc_at(carrier_npc(low, 2), 3);
+        session.space.npc_mut(raider).expect("there").state.position = Vec2::new(1100.0, 1000.0);
         let mut wing = armed_npc(1030.0, 1000.0, quad);
         wing.leader = Some(low);
-        let high = session.traffic.add_npc_at(wing, 4);
+        let high = session.space.traffic.add_npc_at(wing, 4);
         let script = Scripted {
             defenders: [low, high],
             carrier: raider,
@@ -2430,7 +2486,7 @@ pub(super) mod tests {
         let mut catalog = carrying();
         catalog.ship_records[1].skill_var = 37;
         let (mut session, raider, _) = raided(&catalog);
-        session.npc_mut(raider).expect("there").skill_mult = 2.0;
+        session.space.npc_mut(raider).expect("there").skill_mult = 2.0;
         let from = ShipState {
             position: Vec2::ZERO,
             velocity: Vec2::new(0.0, -8.0),
@@ -2552,8 +2608,8 @@ pub(super) mod tests {
     fn a_fighter_takes_its_carriers_speed_along_its_heading() {
         let catalog = carrying();
         let (mut session, raider, _) = raided(&catalog);
-        session.player_speed = 2.5;
-        session.npc_mut(raider).expect("there").speed = 1.5;
+        session.ship.player_speed = 2.5;
+        session.space.npc_mut(raider).expect("there").speed = 1.5;
         for (carrier, speed) in [(ShipRef::Player, 2.5), (ShipRef::Npc(raider), 1.5)] {
             let sortie = Sortie {
                 carrier,
@@ -2574,12 +2630,12 @@ pub(super) mod tests {
         let mut session = flying(&catalog, pilot(&catalog, 0, Vec::new()), RuleSource::Engine);
         let lead = pirate(&mut session, 2000.0, 2000.0);
         let raider = carrier(&mut session, lead, 2);
-        let npc = session.npc_mut(raider).expect("there");
+        let npc = session.space.npc_mut(raider).expect("there");
         npc.leader = None;
         npc.target = Some(ShipRef::Npc(lead));
         npc.goal = Goal::Attack(ShipRef::Npc(lead));
         // The lead is of its fleet only once it follows the carrier.
-        session.npc_mut(lead).expect("there").leader = Some(raider);
+        session.space.npc_mut(lead).expect("there").leader = Some(raider);
         let ai = raiding_ai();
         fight(&mut session, &catalog, &ai);
         let fighter = &vipers(&session)[0];
@@ -2597,7 +2653,7 @@ pub(super) mod tests {
             fight(&mut session, &catalog, &ai);
         }
         assert_eq!(vipers(&session).len(), 2);
-        session.npc_mut(raider).expect("there").goal = Goal::Idle;
+        session.space.npc_mut(raider).expect("there").goal = Goal::Idle;
         let docked = (0..600).find(|_| {
             fight(&mut session, &catalog, &ai);
             vipers(&session).is_empty()
@@ -2614,11 +2670,17 @@ pub(super) mod tests {
         for _ in 0..61 {
             fight(&mut session, &catalog, &ai);
         }
-        session.npc_mut(raider).expect("there").reserves.armor.now = 0.0;
+        session
+            .space
+            .npc_mut(raider)
+            .expect("there")
+            .reserves
+            .armor
+            .now = 0.0;
         for _ in 0..3 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
-        assert_eq!(session.npc(raider), None, "destroyed");
+        assert_eq!(session.space.npc(raider), None, "destroyed");
         let orphans = vipers(&session);
         assert_eq!(orphans.len(), 2);
         for orphan in &orphans {
@@ -2738,8 +2800,14 @@ pub(super) mod tests {
     fn both_out(catalog: &FakePilotCatalog, recall: RuleSource) -> Session {
         let mut session = fleet(catalog, 0, vec![out(), dart_out()])
             .with_rules(kept_orders().with_override(RuleKey::FighterRecall, recall));
-        let viper = session.fleet[0].expect("placed");
-        session.npc_mut(viper).expect("out").reserves.shield.now = 10.0;
+        let viper = session.space.escorts.fleet[0].expect("placed");
+        session
+            .space
+            .npc_mut(viper)
+            .expect("out")
+            .reserves
+            .shield
+            .now = 10.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.take_save_due();
         session
@@ -2799,8 +2867,8 @@ pub(super) mod tests {
     fn by_the_engine_a_fighter_of_a_class_with_a_jumps_fuel_follows_with_an_empty_tank() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
-        let viper = session.fleet[0].expect("placed");
-        session.npc_mut(viper).expect("out").reserves.fuel.now = 0.0;
+        let viper = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(viper).expect("out").reserves.fuel.now = 0.0;
         assert_eq!(jumped_with(&mut session, &catalog), [VIPER]);
     }
 
@@ -2808,15 +2876,15 @@ pub(super) mod tests {
     fn by_the_engine_a_fighter_another_ship_tractors_is_abandoned_and_one_holding_itself_follows() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
-        let viper = session.fleet[0].expect("placed");
-        session.npc_mut(viper).expect("out").tractor = Some(
+        let viper = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(viper).expect("out").tractor = Some(
             crate::combat::impact::TractorLock::by(ShipRef::Npc(NpcId(99))),
         );
         assert_eq!(jumped_with(&mut session, &catalog), []);
         assert_eq!(session.take_fighter_notes(), [FighterNote::Abandoned(2)]);
         let mut session = both_out(&catalog, RuleSource::Engine);
-        let viper = session.fleet[0].expect("placed");
-        session.npc_mut(viper).expect("out").tractor =
+        let viper = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(viper).expect("out").tractor =
             Some(crate::combat::impact::TractorLock::by(ShipRef::Npc(viper)));
         assert_eq!(jumped_with(&mut session, &catalog), [VIPER]);
     }
@@ -2826,8 +2894,8 @@ pub(super) mod tests {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
         for index in 0..2 {
-            let id = session.fleet[index].take().expect("placed");
-            session.traffic.remove(id);
+            let id = session.space.escorts.fleet[index].take().expect("placed");
+            session.space.traffic.remove(id);
         }
         assert_eq!(
             jumped_with(&mut session, &catalog),
@@ -2840,11 +2908,12 @@ pub(super) mod tests {
     fn by_the_other_jump_fuel_reading_a_fighter_with_an_empty_tank_is_abandoned() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
-        session.rules = session
+        session.setup.rules = session
+            .setup
             .rules
             .with_override(RuleKey::NpcJumpFuel, RuleSource::Bible);
-        let viper = session.fleet[0].expect("placed");
-        session.npc_mut(viper).expect("out").reserves.fuel.now = 99.0;
+        let viper = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(viper).expect("out").reserves.fuel.now = 99.0;
         assert_eq!(jumped_with(&mut session, &catalog), []);
     }
 
@@ -2873,7 +2942,8 @@ pub(super) mod tests {
     ) -> (Vec<FighterNote>, Vec<crate::SimMessage>, usize, bool) {
         let catalog = buoyed_131(message);
         let mut session = both_out(&catalog, RuleSource::Engine);
-        session.rules = session
+        session.setup.rules = session
+            .setup
             .rules
             .with_override(RuleKey::MissingBuoyString, buoy);
         session.take_messages();
@@ -2963,7 +3033,7 @@ pub(super) mod tests {
             session.npcs().iter().all(|npc| npc.carrier.is_none()),
             "their NPCs gone"
         );
-        assert_eq!(session.fleet.len(), 1);
+        assert_eq!(session.space.escorts.fleet.len(), 1);
     }
 
     /// [`two_bays`], the ship starting over hypergate 300 at 130's
@@ -3046,11 +3116,33 @@ pub(super) mod tests {
         use crate::control::PilotFacts;
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 1, Vec::new()), RuleSource::Engine);
-        assert!(session.facts().has_outfit(VIPERS), "aboard");
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS),
+            "aboard"
+        );
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 0);
-        assert!(session.facts().has_outfit(VIPERS), "out of its bay");
-        assert!(!session.facts().has_outfit(OutfitId(159)));
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS),
+            "out of its bay"
+        );
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(159))
+        );
+        let snapshot = super::super::spawn_availability::RefreshedFacts::of(
+            &session.ship.facts(&session.pilot, &session.statics),
+        );
+        assert!(snapshot.has_outfit(VIPERS), "the snapshot counts it too");
+        assert!(!snapshot.has_outfit(OutfitId(159)));
         // A carried escort of a type no bay launches docks into nothing.
         let stray = Escort {
             ship: WARSHIP,
@@ -3061,7 +3153,12 @@ pub(super) mod tests {
             person: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
-        assert!(!session.facts().has_outfit(VIPERS));
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS)
+        );
         // Nor does an escort of the fighter's type that is not carried.
         let own = Escort {
             ship: VIPER,
@@ -3069,7 +3166,12 @@ pub(super) mod tests {
             ..stray
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![own])).expect("flies");
-        assert!(!session.facts().has_outfit(VIPERS));
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(VIPERS)
+        );
     }
 
     #[test]
@@ -3095,7 +3197,7 @@ pub(super) mod tests {
             person: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
-        let facts = session.facts();
+        let facts = session.ship.facts(&session.pilot, &session.statics);
         assert!(facts.has_outfit(OutfitId(157)));
         assert!(!facts.has_outfit(VIPERS));
         assert!(!facts.has_outfit(OutfitId(160)));
@@ -3106,8 +3208,14 @@ pub(super) mod tests {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine);
         launch(&mut session);
-        let fighter = session.fleet[0].expect("out");
-        session.npc_mut(fighter).expect("out").reserves.shield.now = 5.0;
+        let fighter = session.space.escorts.fleet[0].expect("out");
+        session
+            .space
+            .npc_mut(fighter)
+            .expect("out")
+            .reserves
+            .shield
+            .now = 5.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
         let saved = crate::save::encode(session.pilot());
         let pilot = crate::save::decode(&saved).expect("loads");
@@ -3187,7 +3295,7 @@ pub(super) mod tests {
         pilot.stellar = Some(crate::catalog::StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         land_now(&mut session).expect("lands on resuming");
-        assert!(session.fleet.is_empty(), "none placed yet");
+        assert!(session.space.escorts.fleet.is_empty(), "none placed yet");
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");

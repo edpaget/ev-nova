@@ -15,7 +15,11 @@
 //! 1. it is alive: not gone for good ([`Pilot::gone`](crate::pilot::Pilot::gone));
 //! 2. its `AIType` is above 0;
 //! 3. its `ActiveOn` holds for the player, through the [`ControlBits`](crate::control::ControlBits)
-//!    port ([`PersonWorld::allows`]); one that did not parse never holds;
+//!    port: a randomly drawn person's both for the player as the last
+//!    galaxy refresh read them and now ([`PersonWorld::drawn_active`],
+//!    @0x409b5, @0x40b5d; see [`RuleKey::SpawnAvailability`](crate::RuleKey::SpawnAvailability)),
+//!    a system's person slot's now ([`PersonWorld::slot_active`],
+//!    @0x4334d); one that did not parse never holds;
 //! 4. its `LinkSyst` allows S ([`PersonLink`]): -1 any system; 128-9998
 //!    that system; 9999-14999 a system governed by government
 //!    `LinkSyst` - 10000 + 128, so 9999 means the independent systems
@@ -622,16 +626,16 @@ mod tests {
     #[test]
     fn the_world_without_persons_tests_a_fresh_pilots_control_bits() {
         let none = PersonWorld::NONE;
-        assert!(none.allows(&Test::default()), "a blank ActiveOn");
-        assert!(!none.allows(&Test::parse("b3")), "no bit is set");
-        assert!(none.allows(&Test::parse("!b3 & g")), "male");
-        assert!(none.allows(&Test::parse("p30")), "paid");
-        assert!(!none.allows(&Test::parse("o130")), "owning nothing");
+        assert!(none.drawn_active(&Test::default()), "a blank ActiveOn");
+        assert!(!none.drawn_active(&Test::parse("b3")), "no bit is set");
+        assert!(none.drawn_active(&Test::parse("!b3 & g")), "male");
+        assert!(none.drawn_active(&Test::parse("p30")), "paid");
+        assert!(!none.drawn_active(&Test::parse("o130")), "owning nothing");
         assert!(
-            !none.allows(&Test::parse("e128")),
+            !none.drawn_active(&Test::parse("e128")),
             "having explored nowhere"
         );
-        assert!(!none.allows(&Test::parse("b1 &")), "malformed");
+        assert!(!none.drawn_active(&Test::parse("b1 &")), "malformed");
     }
 
     #[test]
@@ -652,10 +656,10 @@ mod tests {
             control_bits: &every,
             ..PersonWorld::NONE
         };
-        assert!(world.allows(&Test::parse("b3")));
-        assert_eq!(every.0.get(), 1);
-        assert!(!world.allows(&Test::parse("b1 &")), "never asked");
-        assert_eq!(every.0.get(), 1);
+        assert!(world.drawn_active(&Test::parse("b3")));
+        assert_eq!(every.0.get(), 2, "at the refresh and now");
+        assert!(!world.drawn_active(&Test::parse("b1 &")), "never asked");
+        assert_eq!(every.0.get(), 2);
     }
 
     // The ship.

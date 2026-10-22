@@ -63,7 +63,7 @@
 //!   ([`known_from`](crate::exploration::known_from));
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
 //!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
-//!   (`landing::cleared`, `mission::dominated`, `Session::markup`), and
+//!   (`landing::cleared`, `mission::dominated`, `Chart::markup`), and
 //!   the stored byte is task planet-domination's;
 //! - +0x47, the defence fleet launched, cleared for every stellar
 //!   (@0x32d5d): task planet-domination;

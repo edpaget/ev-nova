@@ -48,7 +48,7 @@
 //! @0x34a54-0x34a72, counted down @0x35026-0x35048). The pickup path sets
 //! no wait.
 
-use super::Session;
+use super::{Outbox, Session, Space, Statics};
 use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
@@ -59,6 +59,48 @@ use crate::traffic::npc::{Npc, NpcId};
 pub(super) const BOARDED_WAIT: u32 = 100;
 
 impl Session {
+    /// The comm line a failed mission's ship said as the last board
+    /// plundered it, on its pickup or assist path, once: taking it leaves
+    /// none. Any other board leaves none here: a standing mission's ship
+    /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
+    pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
+        self.out.take_board_line()
+    }
+
+    /// Puts the player's ship over NPC `id`, at its place, velocity and
+    /// heading, and targets it, for
+    /// [`fixture::put_player_over`](crate::fixture::put_player_over). An
+    /// NPC not in the system changes nothing.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn put_player_over(&mut self, id: NpcId) {
+        if let Some(state) = self.space.npc(id).map(|npc| npc.state) {
+            self.ship.player = state;
+            self.chart.target = Some(id);
+        }
+    }
+}
+
+impl Outbox {
+    /// Beeps [`SimSound::Refused`] for `refusal` when it is said, as
+    /// `_HandlePlayerBoardAttempt` plays `_beepSnd[3]` before each line
+    /// (see the module docs); a silent one ([`BoardRefusal::silent`])
+    /// plays nothing.
+    pub(super) fn beep_refusal(&mut self, refusal: BoardRefusal) {
+        if !refusal.silent() {
+            self.sounds.push(SimSound::Refused);
+        }
+    }
+
+    /// The comm line a failed mission's ship said as the last board
+    /// plundered it, on its pickup or assist path, once: taking it leaves
+    /// none. Any other board leaves none here: a standing mission's ship
+    /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
+    fn take_board_line(&mut self) -> Option<MissionBoardLine> {
+        self.board_line.take()
+    }
+}
+
+impl Statics {
     /// `npc` as the boarding checks see it: its class's `Crew` (none
     /// without a record) and whether it carries a mission's mark, failed,
     /// standing or stale.
@@ -72,17 +114,9 @@ impl Session {
             reach: npc.hull.board_reach,
         }
     }
+}
 
-    /// Beeps [`SimSound::Refused`] for `refusal` when it is said, as
-    /// `_HandlePlayerBoardAttempt` plays `_beepSnd[3]` before each line
-    /// (see the module docs); a silent one ([`BoardRefusal::silent`])
-    /// plays nothing.
-    pub(super) fn beep_refusal(&mut self, refusal: BoardRefusal) {
-        if !refusal.silent() {
-            self.sounds.push(SimSound::Refused);
-        }
-    }
-
+impl Space {
     /// Calls the NPCs to `npc`'s help as for a hit by the player: an
     /// intended strike of no damage answered on the next traffic tick
     /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
@@ -122,26 +156,6 @@ impl Session {
     pub(super) fn hold_boarded(&mut self, id: NpcId) {
         if let Some(npc) = self.npc_mut(id) {
             npc.wait_on_course(BOARDED_WAIT);
-        }
-    }
-
-    /// The comm line a failed mission's ship said as the last board
-    /// plundered it, on its pickup or assist path, once: taking it leaves
-    /// none. Any other board leaves none here: a standing mission's ship
-    /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
-    pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
-        self.board_line.take()
-    }
-
-    /// Puts the player's ship over NPC `id`, at its place, velocity and
-    /// heading, and targets it, for
-    /// [`fixture::put_player_over`](crate::fixture::put_player_over). An
-    /// NPC not in the system changes nothing.
-    #[cfg(any(test, feature = "fixture"))]
-    pub(crate) fn put_player_over(&mut self, id: NpcId) {
-        if let Some(state) = self.npc(id).map(|npc| npc.state) {
-            self.player = state;
-            self.target = Some(id);
         }
     }
 }
@@ -240,7 +254,7 @@ mod tests {
             (RuleSource::Bible, BoardRefusal::CantBoard),
         ] {
             let mut session = alongside(&catalog).with_rules(crewless_rule(source));
-            session.player.velocity = Vec2::new(0.0, 0.6);
+            session.ship.player.velocity = Vec2::new(0.0, 0.6);
             assert_eq!(
                 board_by(&mut session, &NovaLaw::default()),
                 Err(refusal),
@@ -289,22 +303,24 @@ mod tests {
         let refusals: [Refusal; 4] = [
             (
                 "boarded already",
-                |session| session.traffic.npcs_mut()[0].boarded = true,
+                |session| session.space.traffic.npcs_mut()[0].boarded = true,
                 BoardRefusal::CantBoard,
             ),
             (
                 "not disabled",
-                |session| session.traffic.npcs_mut()[0].condition = Condition::Intact,
+                |session| session.space.traffic.npcs_mut()[0].condition = Condition::Intact,
                 BoardRefusal::CantBoard,
             ),
             (
                 "too fast",
-                |session| session.player.velocity = Vec2::new(0.6, 0.0),
+                |session| session.ship.player.velocity = Vec2::new(0.6, 0.0),
                 BoardRefusal::TooFast,
             ),
             (
                 "too far",
-                |session| session.traffic.npcs_mut()[0].state.position = Vec2::new(0.0, 500.0),
+                |session| {
+                    session.space.traffic.npcs_mut()[0].state.position = Vec2::new(0.0, 500.0);
+                },
                 BoardRefusal::TooFar,
             ),
         ];
@@ -335,17 +351,19 @@ mod tests {
         let silent: [Refusal; 3] = [
             (
                 "no target",
-                |session| session.target = None,
+                |session| session.chart.target = None,
                 BoardRefusal::NoTarget,
             ),
             (
                 "not facing it",
-                |session| session.player.heading = 90.0,
+                |session| session.ship.player.heading = 90.0,
                 BoardRefusal::Misaligned,
             ),
             (
                 "landed",
-                |session| session.landed = Some(crate::catalog::StellarId(128)),
+                |session| {
+                    session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
+                },
                 BoardRefusal::NoTarget,
             ),
         ];
@@ -385,17 +403,17 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Offered(_))
         ));
-        assert_eq!(session.strikes, [], "the offer (@0x65907)");
+        assert_eq!(session.space.strikes, [], "the offer (@0x65907)");
 
         let mut unavailable = person::boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = person::alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         assert!(matches!(
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [], "its plunder (@0x65991)");
+        assert_eq!(session.space.strikes, [], "its plunder (@0x65991)");
 
         let mut hailed = person::boardable(0);
         hailed.persons[0].flags = 0;
@@ -404,7 +422,11 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [], "without 0x0200 (@0x65a21 → @0x65ede)");
+        assert_eq!(
+            session.space.strikes,
+            [],
+            "without 0x0200 (@0x65a21 → @0x65ede)"
+        );
     }
 
     /// The zero-damage strike by the player on NPC `npc` that calls the
@@ -429,7 +451,7 @@ mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         board_by(&mut session, &NovaLaw::default()).expect("boards");
-        assert_eq!(session.strikes, [samaritan_call(0)], "unnamed");
+        assert_eq!(session.space.strikes, [samaritan_call(0)], "unnamed");
 
         let mut unlinked = person::boardable(0);
         unlinked.persons[0].link_mission = None;
@@ -438,7 +460,7 @@ mod tests {
             person::board(&mut session).0,
             Ok(Boarding::Opened(_))
         ));
-        assert_eq!(session.strikes, [samaritan_call(0)], "no LinkMission");
+        assert_eq!(session.space.strikes, [samaritan_call(0)], "no LinkMission");
 
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
@@ -446,7 +468,11 @@ mod tests {
         let (boarding, _) = board_first(&mut session);
         assert!(matches!(boarding, Ok(Boarding::Opened(_))), "{boarding:?}");
         let id = session.npcs()[0].id;
-        assert_eq!(session.strikes, [samaritan_call(id.0)], "a failed mission");
+        assert_eq!(
+            session.space.strikes,
+            [samaritan_call(id.0)],
+            "a failed mission"
+        );
     }
 
     /// [`alongside`]'s trader (NPC 0) escorting the police (NPC 1), an
@@ -455,7 +481,7 @@ mod tests {
     fn board_escort_of(ai_type: AiType) -> Session {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        let npcs = session.traffic.npcs_mut();
+        let npcs = session.space.traffic.npcs_mut();
         npcs[0].leader = Some(NpcId(1));
         npcs[1].ai_type = ai_type;
         npcs[1].goal = Goal::Idle;
@@ -527,7 +553,7 @@ mod tests {
             session.take_board_line(),
             Some(MissionBoardLine::Retrieved { cargo: Some(1) })
         );
-        assert_eq!(session.player.velocity, DRIFT);
+        assert_eq!(session.ship.player.velocity, DRIFT);
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "no hold");
     }
 
@@ -561,9 +587,9 @@ mod tests {
     fn put_over_a_ship_the_player_targets_it_at_its_place_speed_and_heading() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.target = None;
-        session.player.position = Vec2::new(300.0, -40.0);
-        session.player.heading = 90.0;
+        session.chart.target = None;
+        session.ship.player.position = Vec2::new(300.0, -40.0);
+        session.ship.player.heading = 90.0;
         let police = session.npcs()[1].clone();
         crate::fixture::put_player_over(&mut session, police.id);
         assert_eq!(session.target().map(|npc| npc.id), Some(police.id));
@@ -578,7 +604,7 @@ mod tests {
         let mut session = in_flight_with(&catalog, 1);
         fail(&mut session);
         let _ = board_first(&mut session);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             session.board(
                 &NovaLaw::default(),
@@ -598,7 +624,7 @@ mod tests {
         let mut session = in_flight_with(&catalog, 1);
         // A rescue ship held disabled at its full armour, so intact once
         // boarded.
-        let armor = &mut session.traffic.npcs_mut()[0].reserves.armor;
+        let armor = &mut session.space.traffic.npcs_mut()[0].reserves.armor;
         armor.now = armor.max;
         let (boarding, _) = board_first(&mut session);
         assert_eq!(

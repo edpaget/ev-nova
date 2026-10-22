@@ -116,7 +116,7 @@
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
 use super::ship_loop::Motion;
-use super::{FightTerms, NpcBefore, Session, TrafficMarks};
+use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
 use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
@@ -141,9 +141,9 @@ impl PassStart {
     /// `session` as its pass's fight begins.
     pub(super) fn of(session: &Session) -> Self {
         Self {
-            npcs: session.npcs_before(),
+            npcs: session.space.npcs_before(),
             player_dying: matches!(
-                session.condition,
+                session.ship.condition,
                 Condition::Dying { .. } | Condition::Destroyed
             ),
         }
@@ -189,7 +189,7 @@ impl Session {
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
-        if self.landed.is_some() {
+        if self.mode.landed().is_some() {
             self.tick(controls);
             if self.rescue_if_due(catalog, chance) {
                 return true;
@@ -201,13 +201,13 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         // `_HandlePlayer` (@0x43e19), up to its move.
-        self.gate = None;
+        self.ship.warp.gate = None;
         let frame = self.pass_head();
         let pass = GamePass::Advance {
-            double_time: self.double_time,
+            double_time: self.ship.warp.double_time,
         };
         self.before_move(frame, pass);
-        self.player_exploded_this_tick = false;
+        self.ship.fate.player_exploded_this_tick = false;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
@@ -257,7 +257,7 @@ impl Session {
         let thought = if let Some(catalog) = ai {
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
-            self.hold_derelicts();
+            self.space.hold_derelicts(&self.statics);
             // `_LaunchFighter` marks each fighter's slot active in
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
@@ -311,7 +311,7 @@ impl Session {
     /// regenerate (@0x6cf86-0x6d093, [`Combat::regenerate_player`]), after
     /// its trigger and before its position step (@0x6d4b0).
     pub(super) fn player_fires(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
-        self.unboard_unless_disabled();
+        self.ship.unboard_unless_disabled();
         self.player_repair_tick(rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_player(fighters, arena, chance);
@@ -321,7 +321,7 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
         });
         self.take_shoves();
-        let sorties = self.combat.take_sorties();
+        let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, _| {
             combat.regenerate_player(fighters, arena);
@@ -344,13 +344,13 @@ impl Session {
     /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
     pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
-        self.traffic.ease_stray();
+        self.space.traffic.ease_stray();
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.handle_npcs(fighters, arena, chance);
         });
         self.lay_out_displayed();
-        self.traffic.step_fades();
-        self.traffic.after_firing(&self.arsenal);
+        self.space.traffic.step_fades();
+        self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
@@ -359,7 +359,7 @@ impl Session {
     /// from the next; otherwise the session's work before the AI and the
     /// traffic's think half ([`Traffic::think_holding`]), and the fleets
     /// it brings said and the refuel it gave landed
-    /// (`Session::after_traffic_ai`); the work it queues on the line
+    /// (`Space::after_traffic_ai`); the work it queues on the line
     /// settles after the launch frame's loop. What its motion is read
     /// against, when it thought.
     ///
@@ -370,7 +370,7 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut dyn Chance,
     ) -> Option<TrafficMarks> {
-        if self.traffic_due {
+        if self.space.traffic_due {
             // No system is set up while the jump is under way.
             if self.jumping().is_none() {
                 self.populate(catalog, chance);
@@ -381,14 +381,9 @@ impl Session {
         self.step_traffic(|traffic, world| {
             traffic.think_holding(behaviour, world, &strikes, chance);
         });
-        self.after_traffic_ai(chance);
+        self.space
+            .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
         Some(marks)
-    }
-
-    /// Every NPC as it is now, for the strikes that follow to be read
-    /// against.
-    fn npcs_before(&self) -> Vec<NpcBefore> {
-        self.traffic.npcs().iter().map(NpcBefore::of).collect()
     }
 
     /// Runs `phase` of the fight on `pass` by `rules`, drawing on
@@ -406,14 +401,14 @@ impl Session {
         let (player_terms, terms): (FightTerms, Vec<FightTerms>) = self.fight_terms();
         let field = self.field();
         let scanner = self.scanner();
-        let armor_regen = self.player_armor_regen();
+        let armor_regen = self.ship.player_armor_regen();
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
         let knockback = self.afterburner_knockback();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &self.ammo_outfits,
+            sources: &self.statics.ammo_outfits,
         };
         let mut fighters = vec![Fighter {
             ship: ShipRef::Player,
@@ -423,18 +418,18 @@ impl Session {
             leader: None,
             fleet_escort: false,
             booty: None,
-            state: self.player,
-            hull: self.hull,
-            shield_regen: self.stats.shield_regen,
+            state: self.ship.player,
+            hull: self.ship.fit.hull,
+            shield_regen: self.ship.fit.stats.shield_regen,
             armor_regen,
             trigger: if self.pod.is_some() {
                 Trigger::default()
             } else {
-                super::player_trigger(self.trigger, self.jump.is_some())
+                super::player_trigger(self.ship.trigger, self.mode.jump().is_some())
             },
-            target: self.target.map(ShipRef::Npc),
+            target: self.chart.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
-            condition: &mut self.condition,
+            condition: &mut self.ship.condition,
             held_disabled: false,
             cloaked: false,
             attacking: None,
@@ -446,13 +441,18 @@ impl Session {
             jamming: player_terms.jamming,
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
-            jumping: self.jump.is_some(),
+            jumping: self.mode.jump().is_some(),
             afterburner: knockback.shots,
             afterburner_beam: knockback.beams,
-            tractor: &mut self.tractor,
-            ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
-            ion: &mut self.ion,
-            armament: &mut self.armament,
+            tractor: &mut self.ship.tractor,
+            ion_capacity: self
+                .ship
+                .fit
+                .stats
+                .ion
+                .capacity(crate::flight::Flyer::Player),
+            ion: &mut self.ship.ion,
+            armament: &mut self.ship.fit.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
             docked: false,
@@ -460,16 +460,16 @@ impl Session {
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
         }];
-        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
+        let npcs = self.space.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
         let arena = Arena {
             pass,
-            arsenal: &self.arsenal,
-            govts: &self.govts,
+            arsenal: &self.statics.arsenal,
+            govts: &self.statics.govts,
             rules,
             field,
         };
-        phase(&mut self.combat, &mut fighters, arena, chance);
+        phase(&mut self.space.combat, &mut fighters, arena, chance);
     }
 
     /// Settles the hits a phase of the fight on `pass` landed, against
@@ -495,7 +495,7 @@ impl Session {
     /// it as each hit lands (@0x3ad72): the fight notes each escort lost
     /// with the strike that lost it ([`Combat::take_landed`]), so a kill an
     /// escort scored up to that strike in the phase still counts and one
-    /// after it does not ([`Session::credit_kills`]).
+    /// after it does not ([`Space::credit_kills`]).
     ///
     /// The original's `_DamageShip` settles each hit as it lands; here a
     /// phase's hits settle together after it, before the next phase or
@@ -510,12 +510,12 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let (strikes, losses) = self.combat.take_landed();
+        let (strikes, losses) = self.space.combat.take_landed();
         let struck = super::struck_npcs(&strikes);
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
         self.raise_disabled(was, chance);
-        self.sync_fleet();
+        self.space.sync_fleet(&mut self.pilot);
         self.lose_escorts(was, &struck);
         self.settle_strikes((strikes, losses), was, rules.law, chance);
     }
@@ -529,8 +529,8 @@ impl Session {
         chance: &mut dyn Chance,
         phase: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
     ) {
-        let was = self.npcs_before();
-        let player_was = self.condition;
+        let was = self.space.npcs_before();
+        let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, phase);
         self.settle_landed(&was, (player_was, None), rules, chance);
     }
@@ -545,8 +545,8 @@ impl Session {
     /// as a phase that lands hits settles ([`Session::settle_landed`]).
     pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         let hazards = self.stellar_hazards();
-        let was = self.npcs_before();
-        let player_was = self.condition;
+        let was = self.space.npcs_before();
+        let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.hazards(fighters, &hazards);
             combat.close_tick(fighters, arena, chance);
@@ -568,7 +568,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let mut stellars = self.stellar_targets();
-        let mut rocks = self.asteroid_targets();
+        let mut rocks = self.space.asteroid_targets(&self.statics);
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             let scenery = Scenery {
                 stellars: &mut stellars,
@@ -578,7 +578,8 @@ impl Session {
             combat.test_hits(fighters, arena, scenery, chance);
         });
         self.strike_stellars(&stellars, rules.law, chance);
-        self.settle_asteroid_hits(&rocks, chance);
+        self.space
+            .settle_asteroid_hits(&self.statics, &rocks, chance);
     }
 
     /// What a pass's fight leaves, settled once after its last phase, by
@@ -598,8 +599,8 @@ impl Session {
     /// separate parts, after the beams (`Session::fight`; see the
     /// `npc_escape` module).
     pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.traffic.keep_berth_exits();
-        let sorties = self.combat.take_sorties();
+        self.space.traffic.keep_berth_exits();
+        let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
         // The words the pass's stray beams stepped (`_HandleBeams`' among
         // them, after the ship loop). The original steps at the beam's
@@ -607,20 +608,28 @@ impl Session {
         // drawn, crosses no boundary (see the `stray_words` module). None
         // is left when nothing stepped one since the ship loop.
         self.step_stray_words(chance);
-        self.sync_fleet();
+        self.space.sync_fleet(&mut self.pilot);
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
-        self.orphan_fighters();
+        self.space.orphan_fighters();
         self.let_go_of_gone_target();
         self.see_stellars();
-        self.hold_derelicts();
+        self.space.hold_derelicts(&self.statics);
         self.lay_out_ships();
         self.display_ships(&mut *chance);
         self.note_drawn();
+    }
+}
+
+impl Space {
+    /// Every NPC as it is now, for the strikes that follow to be read
+    /// against.
+    fn npcs_before(&self) -> Vec<NpcBefore> {
+        self.traffic.npcs().iter().map(NpcBefore::of).collect()
     }
 }
 
@@ -753,7 +762,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         // Aimed at it: a stray hit the answer flag forgives.
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let behaviour = Recording::default();
         let (seen, _) = until_hit(&mut session, &catalog, &behaviour);
         let npc = seen
@@ -771,7 +780,7 @@ mod tests {
         // (@0x44483) counts the hold down.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.mode = Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
@@ -797,7 +806,7 @@ mod tests {
             };
             let mut session = facing_an_npc(&catalog, 180);
             // Its class, of no mass in the fixture, given one.
-            session.traffic.npcs_mut()[0].hull.mass = 40.0;
+            session.space.traffic.npcs_mut()[0].hull.mass = 40.0;
             let start = session.npcs()[0].state.position;
             let behaviour = Recording::default();
             until_hit(&mut session, &catalog, &behaviour);
@@ -815,7 +824,7 @@ mod tests {
         // passes: the shot that hit, life -1 (@0x36f4f), counts for none.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let behaviour = Recording::default();
         session.hold_trigger(FIRE);
         let mut flying = Vec::new();
@@ -842,7 +851,7 @@ mod tests {
         // (@0x6d4b0-0x6d4eb).
         let catalog = armed();
         let mut session = warmed(&catalog);
-        session.player.velocity = Vec2::new(3.0, 0.0);
+        session.ship.player.velocity = Vec2::new(3.0, 0.0);
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
@@ -873,7 +882,7 @@ mod tests {
         };
         let mut session = warmed(&catalog);
         // The player's class, of no mass in the fixture, given one.
-        session.hull.mass = 40.0;
+        session.ship.fit.hull.mass = 40.0;
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
@@ -971,10 +980,10 @@ mod tests {
         // beams fired this pass: 0.5 short, up to full, less 5.
         let catalog = beam_armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.stats.shield_regen = 1.0;
+        session.ship.fit.stats.shield_regen = 1.0;
         let full = session.reserves().shield.max;
         session.pilot.reserves.shield.now = full - 0.5;
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.stats.shield_regen = 1.0;
         let npc_full = npc.reserves.shield.max;
         npc.reserves.shield.now = npc_full - 0.5;
@@ -997,7 +1006,7 @@ mod tests {
         // the ship reads cloaked after.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+        session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
             fade: 15.5,
             direction: 1,
         };
@@ -1034,9 +1043,9 @@ mod tests {
             fade: 4.0,
             direction: 1,
         };
-        let id = session.traffic.add_npc(npc);
+        let id = session.space.traffic.add_npc(npc);
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.0);
+        assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.0);
     }
 
     #[test]
@@ -1055,11 +1064,11 @@ mod tests {
             fade: 4.0,
             direction: 1,
         };
-        let id = session.traffic.add_npc(npc);
+        let id = session.space.traffic.add_npc(npc);
         session.begin_jump().expect("jumps");
         assert!(session.in_warp_lead_in());
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.75);
+        assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.75);
     }
 
     #[test]
@@ -1069,8 +1078,8 @@ mod tests {
         // passes, and no later phase raises it again.
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.traffic.npcs_mut()[0].reserves.shield.now = 0.0;
-        session.traffic.npcs_mut()[0].reserves.armor.now = 16.0;
+        session.space.traffic.npcs_mut()[0].reserves.shield.now = 0.0;
+        session.space.traffic.npcs_mut()[0].reserves.armor.now = 16.0;
         session.hold_trigger(FIRE);
         let mut ticks = 0;
         while session.npcs()[0].condition == Condition::Intact {

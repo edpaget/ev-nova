@@ -220,8 +220,8 @@
 //! ([`is_dockable_destroyed_or_not`]), as the original docks there; only
 //! a gate or a stellar without the can-land flag leaves it on none.
 
-use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
+use super::{MissionRun, Outbox, Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -326,12 +326,6 @@ pub struct Departure {
 }
 
 impl Session {
-    /// The rules the moving set operators follow, projected from the
-    /// session's rule set ([`Session::with_rules`]).
-    pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
-        ScriptEffectRules::from_rulebook(&self.rules)
-    }
-
     /// Applies what the set expressions run since the last settling
     /// queued (see the module docs): first a person's swap for its
     /// mission's ship that an accept on its hail made due (see the
@@ -354,22 +348,22 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let mut settled = Settled::default();
-        if let Some(stellar) = self.offer_roll_due.take()
-            && self.landed == Some(stellar)
+        if let Some(stellar) = self.run.offer_roll_due.take()
+            && self.mode.landed() == Some(stellar)
         {
             self.roll_landing_offers(stellar, catalog, &mut &mut *chance);
         }
         loop {
-            if let Some((npc, slot)) = self.swap_due.take() {
+            if let Some((npc, slot)) = self.run.swap_due.take() {
                 self.swap_in_mission_ship(catalog, npc, slot, chance);
             }
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
-            let due = std::mem::take(&mut self.goal_checks_due);
+            let due = std::mem::take(&mut self.run.goal_checks_due);
             if due.is_empty() {
-                if std::mem::take(&mut self.galaxy_stale)
-                    && self.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
+                if std::mem::take(&mut self.chart.galaxy_stale)
+                    && self.setup.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
                 {
                     self.refresh_galaxy(catalog);
                 }
@@ -390,7 +384,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
         settled: &mut Settled,
     ) {
-        for step in std::mem::take(&mut self.queued.moves) {
+        for step in std::mem::take(&mut self.run.queued.moves) {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
                 ScriptMove::KeepPosition(system) => (system, true),
@@ -402,28 +396,10 @@ impl Session {
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
                 settled.moved = Some(self.pilot.system);
-            } else if self.script_effect_rules().missing_system_move == RuleSource::Engine {
+            } else if self.setup.script_effect_rules().missing_system_move == RuleSource::Engine {
                 self.stay(catalog, chance);
             }
         }
-    }
-
-    /// Applies a `Q`'s leave in flight, if one is pending, noting its
-    /// message on `settled`: whether one was. Landed, the leave is held,
-    /// as `_absquatulateStr` is ([`Session::leave_due`]), for
-    /// [`Session::leave_if_due`] to carry out, and nothing is applied.
-    pub(super) fn settle_leave(&mut self, settled: &mut Settled) -> bool {
-        if self.landed.is_some() {
-            return false;
-        }
-        let Some(text) = self.queued.leave.take() else {
-            return false;
-        };
-        settled.message = Some(text).filter(|text| !text.is_empty());
-        if settled.message.is_some() {
-            self.sounds.push(SimSound::ScriptMessage);
-        }
-        true
     }
 
     /// Whether a `Q` run while landed waits for the take-off: every port
@@ -433,7 +409,7 @@ impl Session {
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.landed.is_some() && self.queued.leave.is_some()
+        self.run.leave_due(self.mode.landed())
     }
 
     /// Carries out a held `Q`'s leave ([`Session::leave_due`]) as the
@@ -470,57 +446,11 @@ impl Session {
         Some(Departure { stellar, settled })
     }
 
-    /// The take-off's part of a held `Q`: it consumes the leave, keeping
-    /// its message, if it has one, for [`Session::take_leave_message`]
-    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
-    /// keeps none.
-    pub(super) fn depart(&mut self) {
-        self.queued.left_with = self.queued.leave.take().filter(|text| !text.is_empty());
-    }
-
     /// The message the last take-off left on, a held `Q`'s, once: the
     /// take-off line, shown in place of the take-off's greeting, with no
     /// beep (`_DisplayComm` @0x635cf).
     pub fn take_leave_message(&mut self) -> Option<String> {
-        self.queued.left_with.take()
-    }
-
-    /// Whether the last take-off left on a held `Q`'s message, not yet
-    /// taken: the take-off's greeting is not said, as the message shows
-    /// in its place and leaves the tutorial as it was
-    /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
-    pub(super) fn left_with_message(&self) -> bool {
-        self.queued.left_with.is_some()
-    }
-
-    /// The landing's part: a leave still pending is dropped
-    /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
-    /// opens, @0x6332a-0x63335).
-    pub(super) fn drop_leave(&mut self) {
-        self.queued.leave = None;
-    }
-
-    /// `P`: plays `sound`, held to the next flight tick or at once, as
-    /// [`ScriptEffectRules::sound`] says (see the module docs).
-    pub(super) fn play_script_sound(&mut self, sound: SoundId) {
-        match self.script_effect_rules().sound {
-            RuleSource::Engine => self.queued.sound = Some(sound),
-            RuleSource::Bible => self.sounds.push(SimSound::Script {
-                sound,
-                exclusive: false,
-            }),
-        }
-    }
-
-    /// Sounds the mission sound a `P` holds, if any, as the flight's
-    /// tick does.
-    pub(super) fn sound_script(&mut self) {
-        if let Some(sound) = self.queued.sound.take() {
-            self.sounds.push(SimSound::Script {
-                sound,
-                exclusive: true,
-            });
-        }
+        self.run.take_leave_message()
     }
 
     /// `Q`: draws the message to leave on from `STR#` `list` on `chance`
@@ -529,37 +459,13 @@ impl Session {
     /// Bible reading.
     pub(super) fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
         let picked = self
+            .setup
             .pick_string(list, chance)
-            .map(|text| match self.script_slot {
+            .map(|text| match self.run.script_slot {
                 Some(slot) => self.mission_text(slot, &text),
                 None => text,
             });
-        self.queued.leave = picked.or_else(|| self.blank_leave());
-    }
-
-    /// A blank `Q`'s leave: none, cancelling an earlier `Q`, or one with
-    /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
-    fn blank_leave(&self) -> Option<String> {
-        (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
-    }
-
-    /// A `Q` whose list is past 32767, the engine's widest ID, so names
-    /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
-    /// `_absquatulateStr` empty for a missing list (@0x72f0f).
-    pub(super) fn leave_on_no_list(&mut self) {
-        self.queued.leave = self.blank_leave();
-    }
-
-    /// A `P` whose sound is past 32767, the engine's widest ID, so names
-    /// none. By [`ScriptEffectRules::sound`]'s engine reading it replaces
-    /// a held sound with none, as `_missionSoundID` is overwritten
-    /// (@0x15a30) and `_PlayGame` plays nothing for a sound that does not
-    /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
-    /// is nothing to sound.
-    pub(super) fn drop_script_sound(&mut self) {
-        if self.script_effect_rules().sound == RuleSource::Engine {
-            self.queued.sound = None;
-        }
+        self.run.queued.leave = picked.or_else(|| self.setup.blank_leave());
     }
 
     /// An `N` out of range, or by [`ScriptEffectRules::missing_system_move`]'s
@@ -574,14 +480,14 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.landed.is_some() {
-            self.empty_offers();
+        if self.mode.landed().is_some() {
+            self.run.empty_offers();
             return;
         }
         let system = self.pilot.system;
         let arrival = Arrival {
             system,
-            sites: self.read_sites(catalog, system),
+            sites: self.chart.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Keep,
                 stellar: None,
@@ -602,13 +508,13 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let sites = self.read_sites(catalog, system);
+        let sites = self.chart.read_sites(catalog, system);
         let first = sites.first().map(|site| {
             let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
             (site.position, dock)
         });
-        let rules = self.script_effect_rules();
-        let landed = self.landed.is_some();
+        let rules = self.setup.script_effect_rules();
+        let landed = self.mode.landed().is_some();
         let ship = match first {
             _ if keep => ShipPlacement::Keep,
             Some((position, _)) => ShipPlacement::AtRest(position),
@@ -635,6 +541,127 @@ impl Session {
             catalog,
             chance,
         );
+    }
+}
+
+impl Setup {
+    /// The rules the moving set operators follow, projected from the
+    /// session's rule set ([`Session::with_rules`]).
+    pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
+        ScriptEffectRules::from_rulebook(&self.rules)
+    }
+
+    /// A blank `Q`'s leave: none, cancelling an earlier `Q`, or one with
+    /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
+    fn blank_leave(&self) -> Option<String> {
+        (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
+    }
+}
+
+impl MissionRun {
+    /// Applies a `Q`'s leave in flight, if one is pending, noting its
+    /// message on `settled`: whether one was. Landed, the leave is held,
+    /// as `_absquatulateStr` is ([`Session::leave_due`]), for
+    /// [`Session::leave_if_due`] to carry out, and nothing is applied.
+    pub(super) fn settle_leave(
+        &mut self,
+        out: &mut Outbox,
+        landed: Option<StellarId>,
+        settled: &mut Settled,
+    ) -> bool {
+        if landed.is_some() {
+            return false;
+        }
+        let Some(text) = self.queued.leave.take() else {
+            return false;
+        };
+        settled.message = Some(text).filter(|text| !text.is_empty());
+        if settled.message.is_some() {
+            out.sounds.push(SimSound::ScriptMessage);
+        }
+        true
+    }
+
+    /// Whether a `Q` run while landed waits for the take-off: every port
+    /// filter of the original leaves on its next call while
+    /// `_absquatulateStr` is set (`_PortFilter` @0x4f047-0x4f063 and the
+    /// others; see the module docs). The leave waits for the texts and
+    /// dialogs shown over the spaceport, which never read it.
+    #[must_use]
+    fn leave_due(&self, landed: Option<StellarId>) -> bool {
+        landed.is_some() && self.queued.leave.is_some()
+    }
+
+    /// The take-off's part of a held `Q`: it consumes the leave, keeping
+    /// its message, if it has one, for [`Session::take_leave_message`]
+    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). A take-off with no `Q`
+    /// keeps none.
+    pub(super) fn depart(&mut self) {
+        self.queued.left_with = self.queued.leave.take().filter(|text| !text.is_empty());
+    }
+
+    /// The message the last take-off left on, a held `Q`'s, once: the
+    /// take-off line, shown in place of the take-off's greeting, with no
+    /// beep (`_DisplayComm` @0x635cf).
+    fn take_leave_message(&mut self) -> Option<String> {
+        self.queued.left_with.take()
+    }
+
+    /// Whether the last take-off left on a held `Q`'s message, not yet
+    /// taken: the take-off's greeting is not said, as the message shows
+    /// in its place and leaves the tutorial as it was
+    /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
+    pub(super) fn left_with_message(&self) -> bool {
+        self.queued.left_with.is_some()
+    }
+
+    /// The landing's part: a leave still pending is dropped
+    /// (`_PlayerLandOnStellar` clears `_absquatulateStr` before the port
+    /// opens, @0x6332a-0x63335).
+    pub(super) fn drop_leave(&mut self) {
+        self.queued.leave = None;
+    }
+
+    /// `P`: plays `sound`, held to the next flight tick or at once, as
+    /// [`ScriptEffectRules::sound`] says (see the module docs).
+    pub(super) fn play_script_sound(&mut self, setup: &Setup, out: &mut Outbox, sound: SoundId) {
+        match setup.script_effect_rules().sound {
+            RuleSource::Engine => self.queued.sound = Some(sound),
+            RuleSource::Bible => out.sounds.push(SimSound::Script {
+                sound,
+                exclusive: false,
+            }),
+        }
+    }
+
+    /// Sounds the mission sound a `P` holds, if any, as the flight's
+    /// tick does.
+    pub(super) fn sound_script(&mut self, out: &mut Outbox) {
+        if let Some(sound) = self.queued.sound.take() {
+            out.sounds.push(SimSound::Script {
+                sound,
+                exclusive: true,
+            });
+        }
+    }
+
+    /// A `Q` whose list is past 32767, the engine's widest ID, so names
+    /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
+    /// `_absquatulateStr` empty for a missing list (@0x72f0f).
+    pub(super) fn leave_on_no_list(&mut self, setup: &Setup) {
+        self.queued.leave = setup.blank_leave();
+    }
+
+    /// A `P` whose sound is past 32767, the engine's widest ID, so names
+    /// none. By [`ScriptEffectRules::sound`]'s engine reading it replaces
+    /// a held sound with none, as `_missionSoundID` is overwritten
+    /// (@0x15a30) and `_PlayGame` plays nothing for a sound that does not
+    /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
+    /// is nothing to sound.
+    pub(super) fn drop_script_sound(&mut self, setup: &Setup) {
+        if setup.script_effect_rules().sound == RuleSource::Engine {
+            self.queued.sound = None;
+        }
     }
 }
 
@@ -799,7 +826,9 @@ mod tests {
     fn moved(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
         run(session, text);
         let _ = settle(session, catalog);
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
     }
 
     fn ids(sites: &[LandingSite]) -> Vec<i16> {
@@ -904,7 +933,7 @@ mod tests {
         moved(&mut session, &catalog, "M131 N133");
         assert_eq!(session.system(), SystemId(133));
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
-        assert_eq!(ids(&session.sites), [150, 151]);
+        assert_eq!(ids(&session.chart.sites), [150, 151]);
     }
 
     /// The rules with `MissingSystemMove` read as `reading`.
@@ -933,16 +962,16 @@ mod tests {
     fn m_in_flight_puts_the_ship_at_rest_on_the_first_stellar() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
-        session.player.heading = 1.5;
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.heading = 1.5;
         run(&mut session, "M131");
         assert_eq!(settle(&mut session, &catalog).moved, Some(SystemId(131)));
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert_eq!(session.player().velocity, Vec2::ZERO);
         assert_eq!(session.player().heading, 1.5, "heading kept");
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.landed(), None);
         assert_eq!(session.pilot().stellar(), None);
         assert!(session.take_save_due());
@@ -1003,26 +1032,26 @@ mod tests {
     fn n_in_flight_keeps_the_position_and_velocity() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
     }
 
     #[test]
     fn m_into_a_system_with_no_stellar_keeps_the_ship_moving_by_the_engine() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "M132");
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.player().position, Vec2::new(10.0, 10.0));
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0));
-        assert_eq!(session.sites, []);
+        assert_eq!(session.chart.sites, []);
     }
 
     #[test]
@@ -1030,12 +1059,12 @@ mod tests {
         let catalog = moving();
         let rules = Rulebook::default().with_override(RuleKey::MoveStarless, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "M132");
         assert_eq!(session.player().position, Vec2::ZERO);
         assert_eq!(session.player().velocity, Vec2::ZERO);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0), "N keeps");
     }
@@ -1049,15 +1078,15 @@ mod tests {
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.shots().len(), 1, "{text}");
             session.select_stellar(crate::session::StellarPick::Slot(0));
-            session.target = Some(NpcId(0));
-            session.gate = Some(StellarId(128));
-            session.strikes = session.combat.take_strikes();
+            session.chart.target = Some(NpcId(0));
+            session.ship.warp.gate = Some(StellarId(128));
+            session.space.strikes = session.space.combat.take_strikes();
             moved(&mut session, &catalog, text);
             assert_eq!(session.shots(), [], "{text}");
             assert_eq!(session.nav_target(), None, "{text}");
-            assert_eq!(session.target, None, "{text}");
-            assert_eq!(session.gate, None, "{text}");
-            assert_eq!(session.strikes, [], "{text}");
+            assert_eq!(session.chart.target, None, "{text}");
+            assert_eq!(session.ship.warp.gate, None, "{text}");
+            assert_eq!(session.space.strikes, [], "{text}");
         }
     }
 
@@ -1067,7 +1096,7 @@ mod tests {
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        session.player.velocity = Vec2::new(0.0, 5.0);
+        session.ship.player.velocity = Vec2::new(0.0, 5.0);
         session.begin_jump().expect("accepted");
         assert!(session.preparing_jump().is_some());
         session.tick(crate::flight::Controls::default());
@@ -1100,14 +1129,25 @@ mod tests {
         pilot.escorts = vec![escort(129, false), escort(130, true)];
         let mut session = flying_with(&catalog, pilot);
         assert_eq!(session.npcs().len(), 4);
-        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let fleet: Vec<NpcId> = session
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         assert_eq!(fleet.len(), 2);
         moved(&mut session, &catalog, "M131");
         let left: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
         assert_eq!(left, fleet, "the others stay behind");
         assert_eq!(session.pilot().escorts().len(), 2, "the dry fighter too");
         assert_eq!(session.take_fighter_notes(), []);
-        assert_eq!(session.traffic.ship_types(), [ShipId(129)], "131's table");
+        assert_eq!(
+            session.space.traffic.ship_types(),
+            [ShipId(129)],
+            "131's table"
+        );
         for _ in 0..3 {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
         }
@@ -1139,7 +1179,7 @@ mod tests {
             session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
             assert_eq!(berths(&session), [berth], "{reading:?}");
             assert_eq!(
-                session.traffic.berths_taken(),
+                session.space.traffic.berths_taken(),
                 1,
                 "{reading:?}: freed by the tick's end"
             );
@@ -1176,7 +1216,7 @@ mod tests {
         let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.npcs().len(), 3, "populated");
-        assert_eq!(session.traffic.berths_taken(), 3, "none held");
+        assert_eq!(session.space.traffic.berths_taken(), 3, "none held");
         assert_eq!(berths(&session), [1, 2, 3]);
     }
 
@@ -1229,7 +1269,7 @@ mod tests {
             [crate::bay::FighterNote::Abandoned(1)]
         );
         assert_eq!(session.npcs().len(), 4, "three ships and the escort");
-        assert_eq!(session.fleet.iter().flatten().count(), 1);
+        assert_eq!(session.space.escorts.fleet.iter().flatten().count(), 1);
     }
 
     // What a move lets go of and keeps, by either reading of
@@ -1344,12 +1384,12 @@ mod tests {
             assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}");
             assert_eq!(session.take_fighter_notes(), [], "{reading:?}");
             assert_eq!(
-                ids(&session.sites),
+                ids(&session.chart.sites),
                 [128, 129],
                 "the port's until the take-off: {reading:?}"
             );
             session.take_off(&catalog, &mut NeverFires);
-            assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
+            assert_eq!(ids(&session.chart.sites), [140, 141], "{reading:?}");
         }
     }
 
@@ -1365,7 +1405,7 @@ mod tests {
         assert_eq!(session.pilot().system(), SystemId(131));
         assert_eq!(session.pilot().stellar(), Some(StellarId(140)));
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
-        assert_eq!(ids(&session.sites), [128, 129], "the port's stellars");
+        assert_eq!(ids(&session.chart.sites), [128, 129], "the port's stellars");
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert!(!session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), [SystemId(131)], "kept");
@@ -1407,7 +1447,7 @@ mod tests {
             Some(StellarId(128))
         );
         assert_eq!(session.system(), SystemId(131));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert!(session.pilot().has_explored(SystemId(131)), "explored");
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
@@ -1416,14 +1456,14 @@ mod tests {
         moved(&mut session, &catalog, "M132");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.player().position, Vec2::ZERO, "the centre");
-        assert_eq!(session.sites, []);
+        assert_eq!(session.chart.sites, []);
     }
 
     #[test]
     fn the_take_off_after_a_landed_n_is_from_where_the_ship_touched_down() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         assert_eq!(session.player().position, Vec2::new(30.0, -40.0), "docked");
         moved(&mut session, &catalog, "N131");
@@ -1432,8 +1472,8 @@ mod tests {
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
-        assert_eq!(ids(&session.sites), [140, 141]);
-        session.player.position = Vec2::new(-45.0, 0.0);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
+        session.ship.player.position = Vec2::new(-45.0, 0.0);
         land_now(&mut session).expect("lands on 141");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(
@@ -1447,13 +1487,15 @@ mod tests {
     fn a_relocation_after_a_landed_n_takes_off_from_the_stellar_moved_to() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N131");
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
@@ -1483,9 +1525,11 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
     }
 
@@ -1498,7 +1542,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag);
         let mut session = flying(&catalog).with_rules(rules);
         moved(&mut session, &catalog, text);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
         session.player().position
@@ -1530,7 +1574,7 @@ mod tests {
         let catalog = moving();
         let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
-        session.player.position = Vec2::new(10.0, -10.0);
+        session.ship.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N130");
         session.take_off(&catalog, &mut NeverFires);
@@ -1742,7 +1786,7 @@ mod tests {
         let landed_on = session.date();
         run_rolling(&mut session, "Q25048", &[2]);
         let _ = settle(&mut session, &catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         assert_eq!(
             session.leave_if_due(&catalog, &mut NeverFires),
             Some(Departure {
@@ -1780,7 +1824,7 @@ mod tests {
     fn the_ports_leave_takes_off_and_settles_as_a_qs_does() {
         let catalog = moving();
         let mut session = told(landed(&catalog));
-        session.drop_raised();
+        session.run.drop_raised();
         let departure = session
             .leave_port(&catalog, &mut NeverFires)
             .expect("leaves");
@@ -1968,7 +2012,7 @@ mod tests {
         assert!(session.leave_due());
         assert_eq!(take_off(&mut session, &catalog), Some(StellarId(128)));
         assert_eq!(session.system(), SystemId(131));
-        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert_eq!(session.npcs().len(), 3, "131's ships");
     }
@@ -1987,10 +2031,12 @@ mod tests {
         catalog: &FakePilotCatalog,
         text: &str,
     ) -> Vec<crate::story::StoryEvent> {
-        session.drop_raised();
+        session.run.drop_raised();
         run(session, text);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
-        session.assert_docked_among_shown();
+        session
+            .chart
+            .assert_docked_among_shown(session.mode.landed());
         session.story_raised()
     }
 
@@ -2012,7 +2058,7 @@ mod tests {
             assert_eq!(session.pilot().explored, explored, "{text}");
             assert_eq!(session.course(), course, "{text}");
             assert_eq!(session.take_events(), [], "{text}");
-            assert!(!session.hold_position, "{text}");
+            assert!(!session.port.hold_position, "{text}");
         }
     }
 
@@ -2024,12 +2070,12 @@ mod tests {
         session.hold_fire(true, false);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.shots().len(), 1);
-        session.player.position = Vec2::new(10.0, 10.0);
-        session.player.velocity = Vec2::new(5.0, -1.0);
+        session.ship.player.position = Vec2::new(10.0, 10.0);
+        session.ship.player.velocity = Vec2::new(5.0, -1.0);
         session.select_stellar(crate::session::StellarPick::Slot(0));
-        session.target = Some(NpcId(0));
-        session.gate = Some(StellarId(128));
-        session.strikes = session.combat.take_strikes();
+        session.chart.target = Some(NpcId(0));
+        session.ship.warp.gate = Some(StellarId(128));
+        session.space.strikes = session.space.combat.take_strikes();
         session.stage_scene(NpcId(0));
         session.take_events();
         let npcs = session.npcs().to_vec();
@@ -2046,13 +2092,13 @@ mod tests {
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.player().position, position);
         assert_eq!(session.player().velocity, velocity);
-        assert!(!session.hold_position, "no take-off hold");
+        assert!(!session.port.hold_position, "no take-off hold");
         assert_eq!(session.pilot().stellar, Some(StellarId(129)), "kept");
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
-        assert_eq!(session.target, None);
-        assert_eq!(session.gate, None);
-        assert_eq!(session.strikes, []);
+        assert_eq!(session.chart.target, None);
+        assert_eq!(session.ship.warp.gate, None);
+        assert_eq!(session.space.strikes, []);
         session.assert_scene_left("N9999");
         assert_eq!(session.npcs(), npcs, "the traffic kept");
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
@@ -2068,15 +2114,17 @@ mod tests {
             session.hold_fire(true, false);
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.shots().len(), 1, "{text}");
-            session.player.position = Vec2::new(10.0, 10.0);
-            session.player.velocity = Vec2::new(5.0, -1.0);
+            session.ship.player.position = Vec2::new(10.0, 10.0);
+            session.ship.player.velocity = Vec2::new(5.0, -1.0);
             session.stage_scene(NpcId(0));
             session.take_events();
-            session.drop_raised();
+            session.run.drop_raised();
             run(&mut session, text);
             let mut settled = Settled::default();
             session.settle_moves(&catalog, &mut NeverFires, &mut settled);
-            session.assert_docked_among_shown();
+            session
+                .chart
+                .assert_docked_among_shown(session.mode.landed());
             assert_eq!(
                 session.story_raised(),
                 [crate::story::StoryEvent::EnteredSystem {
@@ -2089,7 +2137,7 @@ mod tests {
             assert_eq!(session.system(), SystemId(130), "{text}");
             assert_eq!(session.player().position, Vec2::new(10.0, 10.0), "{text}");
             assert_eq!(session.player().velocity, Vec2::new(5.0, -1.0), "{text}");
-            assert!(!session.hold_position, "{text}: no take-off hold");
+            assert!(!session.port.hold_position, "{text}: no take-off hold");
             assert_eq!(session.pilot().stellar, Some(StellarId(129)), "{text}");
             assert_eq!(session.shots(), [], "{text}");
             session.assert_scene_left(text);
@@ -2115,7 +2163,7 @@ mod tests {
             assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
             assert_eq!(session.pilot().stellar, Some(StellarId(128)), "{text}");
             assert_eq!(session.take_events(), [], "{text}");
-            assert!(!session.hold_position, "{text}");
+            assert!(!session.port.hold_position, "{text}");
         }
     }
 
@@ -2129,7 +2177,7 @@ mod tests {
         let explored = session.pilot().explored.clone();
         let course = session.course().to_vec();
         let npcs: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        session.drop_raised();
+        session.run.drop_raised();
         run(&mut session, "N9999");
         let mut chance = crate::testkit::Draws::default();
         session.settle_moves(&catalog, &mut chance, &mut Settled::default());

@@ -32,7 +32,7 @@
 //! the restart of every slot whose ships follow the player (`ShipSyst`
 //! -6, @0x6716a-0x67294), so, as the engine reads
 //! [`RuleKey::GateFollow`], the hook leaves such a slot alone there
-//! ([`Session::gate_decides`]).
+//! ([`Setup::gate_decides`](super::setup::Setup::gate_decides)).
 //!
 //! **Following through a gate** is the [`gate_follow`](super::gate_follow)
 //! module's: at a gate's exit a -6 slot of escorts is set up at once, one
@@ -71,7 +71,7 @@
 //! original aborts each slot inside setup's slot loop; here the aborts
 //! follow once the system's ships are all in, in slot order.
 //! Each mission ship takes a ship-table slot below the spawn reserve
-//! (`_MissionDudeSpawn` @0x3cd50, [`Session::spawn_reserve`]); one that
+//! (`_MissionDudeSpawn` @0x3cd50, [`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)); one that
 //! finds none does not come and changes no count: the setup goes on to
 //! the next ship (@0x43128), and the timer, spent all the same, counts
 //! as arrived only the ships that came (@0x43971), so with `ShipStart` 1
@@ -160,8 +160,11 @@
 //!
 //! **One ship type** (mission `Flags` 0x0800): at accept, before
 //! `OnAccept`, the slot draws one type from its `düde` as the session
-//! read it at start, among the types whose `AppearOn` holds then, or
-//! with none among them all ([`Session::ships_at_accept`]); every ship of
+//! read it at start, among the types whose `AppearOn` holds for the
+//! player as the last galaxy refresh read them (by the engine; now by the
+//! other reading of [`RuleKey::SpawnAvailability`]; see the
+//! `spawn_availability` module), or with none among them all
+//! ([`Session::ships_at_accept`]); every ship of
 //! the slot then flies it, on all three paths. A slot of the flag with
 //! no type (a save from before it was kept, or a `düde` the catalog
 //! could not give at start) draws it at its next spawn from the
@@ -172,8 +175,9 @@
 //! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
 //! it as their marks are cleared.
 
-use super::Session;
+use super::{Chart, MissionRun, Outbox, Session, Setup, Space, Statics};
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
 use crate::catalog::{DudeId, MissionId, MissionRecord, PilotCatalog, ShipId, TrafficCatalog};
@@ -302,77 +306,44 @@ impl Session {
     /// the overlaid map and the governments, their names from the string
     /// lists ([`Session::strings`]), drawing on `chance`. Under `Flags`
     /// 0x0800 their one type is drawn from their `düde` as the session
-    /// read it ([`dude_ship_type`]), its `AppearOn` read now, before
-    /// `OnAccept` runs.
+    /// read it ([`dude_ship_type`]), its `AppearOn` read through
+    /// [`Session::appear_gate`] (by the engine as the last galaxy refresh
+    /// cached it, @0xa0bc5), before `OnAccept` runs.
     pub(super) fn ships_at_accept(
         &self,
         record: &MissionRecord,
         active: &ActiveMission,
         chance: &mut dyn Chance,
     ) -> SpecialShips {
-        let held =
-            |stop: Option<crate::mission::Stop>| stop.map(|stop| self.holder_of(stop.stellar));
+        let held = |stop: Option<crate::mission::Stop>| {
+            stop.map(|stop| {
+                self.chart
+                    .holder_of(&self.pilot, &self.statics, stop.stellar)
+            })
+        };
         let facts = ShipFacts {
             player_system: self.pilot.system,
             destination: held(active.destination),
             return_to: held(active.return_to),
         };
         let mut draw_type = |dude: DudeId, chance: &mut dyn Chance| {
-            let dude = self.uniform_dudes.get(&dude)?;
-            dude_ship_type(dude, |ship| self.appear_on(ship), self.gate(), chance)
+            let dude = self.statics.uniform_dudes.get(&dude)?;
+            dude_ship_type(
+                dude,
+                |ship| self.statics.appear_on(ship),
+                self.appear_gate(),
+                chance,
+            )
         };
         SpecialShips::at_accept(
             &record.ships,
             record.flags,
             &facts,
-            (self.galaxy.map(), &self.govts),
+            (self.chart.galaxy.map(), &self.statics.govts),
             self.strings(),
             &mut draw_type,
             chance,
         )
-    }
-
-    /// Ship type `ship`'s `AppearOn`: none when it has no record.
-    fn appear_on(&self, ship: ShipId) -> Option<&Test> {
-        self.ships
-            .iter()
-            .find(|record| record.id == ship)
-            .map(|record| &record.appear_on)
-    }
-
-    /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
-    /// and its goal checks, each with a blank guard and no script.
-    pub(super) fn register_ship_hooks(&mut self, slot: u8) {
-        for (hook, kind) in HOOKS {
-            let subscription = Subscription::new(
-                ship_hook(slot, hook),
-                EventFilter::Any(kind),
-                Script::default(),
-            );
-            let registered = self.register_story(subscription);
-            debug_assert!(registered.is_ok(), "a slot filled registers once");
-        }
-    }
-
-    /// Whether ships in `system` are in the player's system
-    /// ([`ShipSystem::with_player`]), over the overlaid map's places.
-    fn ships_here(&self, system: ShipSystem) -> bool {
-        system.with_player(self.pilot.system, self.galaxy.map().places())
-    }
-
-    /// Whether the enter-system hook, on an entry `how`, restarts the
-    /// appear timer of `active`, a mission of `record`: an entry it runs
-    /// on, `ShipStart` 1, ships left, and the player in their system
-    /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
-    /// player while the exit decides for them
-    /// ([`Session::gate_decides`]), as the original's loop A overwrites
-    /// the restart.
-    fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission, how: Entrance) -> bool {
-        restarts_on(how)
-            && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
-            && active.ships.left > 0
-            && self.ships_here(active.ships.system)
-            && !self.gate_decides(how, active.ships.system)
     }
 
     /// Slot `id.record`'s hook `id.hook` on `event`, drawing on `chance`
@@ -390,11 +361,19 @@ impl Session {
         };
         match (id.hook, *event) {
             (ENTERED, StoryEvent::EnteredSystem { how, .. }) => {
-                self.restart_on_entry(slot, how, chance);
+                self.chart.restart_on_entry(
+                    &mut self.pilot,
+                    &self.statics,
+                    &self.setup,
+                    &mut self.out,
+                    slot,
+                    how,
+                    chance,
+                );
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                if self.landed.is_none() {
+                if self.mode.landed().is_none() {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
@@ -402,37 +381,11 @@ impl Session {
                 self.check_ship_goals(slot, false, chance);
             }
             (SHIP_FATE, StoryEvent::ShipFate { ship, fate }) => {
-                let sighted = fate == Fate::Observed && self.marked_here(ship, slot);
+                let sighted = fate == Fate::Observed && self.space.marked_here(ship, slot);
                 self.check_ship_goals(slot, sighted, chance);
             }
             _ => {}
         }
-    }
-
-    /// The enter-system hook of the mission in `slot` on an entry `how`,
-    /// drawing on `chance`: restarts its special ships' appear timer
-    /// ([`appear_timer`]) and zeroes their arrived count.
-    fn restart_on_entry(&mut self, slot: u8, how: Entrance, chance: &mut dyn Chance) {
-        let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let record = self.lifecycle_record(active.mission);
-        if !self.hook_restarts(&record, active, how) {
-            return;
-        }
-        let appear = appear_timer(&record.ships, chance);
-        if let Some(active) = self.slot_holding(slot, record.id) {
-            active.ships.appear = appear;
-            active.ships.arrived = 0;
-        }
-    }
-
-    /// Whether the NPC `ship` is in the system, a special ship of the
-    /// mission in `slot`.
-    fn marked_here(&self, ship: NpcId, slot: u8) -> bool {
-        self.npcs()
-            .iter()
-            .any(|npc| npc.id == ship && npc.mission.is_some_and(|mark| mark.slot == slot))
     }
 
     /// Checks the goals of the mission in `slot` (`_MissionObjectivesCheck`
@@ -456,7 +409,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let ships = &active.ships;
         let facts = GoalFacts {
             goal: ShipGoal::from_code(record.ships.goal),
@@ -468,7 +421,7 @@ impl Session {
             boarded: ships.boarded,
             disabled: ships.disabled,
             chased_off: ships.chased_off,
-            here: seen.here || self.ships_here(ships.system),
+            here: seen.here || self.chart.ships_here(&self.pilot, ships.system),
             escorted: self
                 .npcs()
                 .iter()
@@ -488,7 +441,7 @@ impl Session {
                 active.failed.get_or_insert(FailedBy::Marked);
             }
         }
-        let once = self.rules.source_for(RuleKey::ShipDoneOnce) == RuleSource::Bible;
+        let once = self.setup.rules.source_for(RuleKey::ShipDoneOnce) == RuleSource::Bible;
         if goals_met_moment(met_before(&facts), check, failed_before) && !(once && done_before) {
             self.ship_goals_met(slot, &record, chance);
         }
@@ -531,30 +484,9 @@ impl Session {
     /// `chance` (`_SetupShipsInSystem` @0x43169-0x4317e).
     pub(super) fn abort_set_up(&mut self, set_up: &[(u8, MissionId)], chance: &mut dyn Chance) {
         for &(slot, mission) in set_up {
-            let record = self.lifecycle_record(mission);
+            let record = self.statics.lifecycle_record(mission);
             self.abort_on_spawn(slot, &record, chance);
         }
-    }
-
-    /// The system's `NavDefs` slots: each its stellar's position, none
-    /// for an empty slot (or one whose stellar cannot be read).
-    fn nav_slots(&self) -> Vec<Option<Vec2>> {
-        let mut sites = self.sites.iter();
-        self.galaxy
-            .map()
-            .stellars(self.pilot.system)
-            .iter()
-            .map(|slot| slot.and_then(|_| sites.next()).map(|site| site.position))
-            .collect()
-    }
-
-    /// The `düde`s of the active missions' special ships, in slot order.
-    pub(super) fn mission_dudes(&self) -> Vec<DudeId> {
-        self.pilot
-            .missions
-            .iter()
-            .filter_map(|(_, active)| self.lifecycle_record(active.mission).ships.dude)
-            .collect()
     }
 
     /// The active missions' special ships set up in the system from
@@ -573,7 +505,7 @@ impl Session {
         entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
     ) -> (Vec<NewShip>, Vec<(u8, MissionId)>) {
-        let nav = self.nav_slots();
+        let nav = self.chart.nav_slots(&self.pilot);
         let mut ships = Vec::new();
         let mut set_up = Vec::new();
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
@@ -581,14 +513,17 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let state = &active.ships;
             let left = state.left;
             let expired = active.days_left == Some(0);
-            if !self.ships_here(state.system)
+            if !self.chart.ships_here(&self.pilot, state.system)
                 || left <= 0
                 || state.appear >= 0
-                || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
+                || entering.is_some_and(|how| {
+                    self.chart
+                        .hook_restarts(&self.pilot, &self.setup, &record, active, how)
+                })
             {
                 continue;
             }
@@ -608,7 +543,12 @@ impl Session {
                 preset,
                 expired,
             };
-            ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
+            ships.extend(spawn::mission_ships(
+                table,
+                &spawn,
+                self.appear_gate(),
+                chance,
+            ));
         }
         (ships, set_up)
     }
@@ -647,21 +587,18 @@ impl Session {
         if kept.is_some() {
             return kept;
         }
-        let table = table.unwrap_or_else(|| self.traffic.table());
+        let table = table.unwrap_or_else(|| self.space.traffic.table());
         let dude = table.dude_records.get(&record.ships.dude?)?;
-        let drawn = dude_ship_type(dude, |ship| table.appear_on(ship), self.gate(), chance);
+        let drawn = dude_ship_type(
+            dude,
+            |ship| table.appear_on(ship),
+            self.appear_gate(),
+            chance,
+        );
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.uniform_type = drawn;
         }
         drawn
-    }
-
-    /// The way from the player's system to the one it last jumped from,
-    /// on the map: none before a jump, or when either is not on it.
-    fn way_back(&self) -> Option<Vec2> {
-        let from = self.galaxy.position(self.pilot.jumped_from?)?;
-        let here = self.galaxy.position(self.pilot.system)?;
-        Some(from - here)
     }
 
     /// A tick of the special ships' appear timers in flight, as
@@ -709,7 +646,8 @@ impl Session {
                 self.aux_arrivals(catalog, slot, chance);
                 let freed = !self.pilot.missions.holds(slot, mission);
                 if freed
-                    && self.rules.source_for(RuleKey::AuxAbortFallThrough) == RuleSource::Engine
+                    && self.setup.rules.source_for(RuleKey::AuxAbortFallThrough)
+                        == RuleSource::Engine
                 {
                     if let Some(before) = before {
                         self.freed_special_arrivals(catalog, slot, &before, chance);
@@ -739,9 +677,12 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let active = active.clone();
-        if entering.is_some_and(|how| self.hook_restarts(&record, &active, how)) {
+        if entering.is_some_and(|how| {
+            self.chart
+                .hook_restarts(&self.pilot, &self.setup, &record, &active, how)
+        }) {
             return;
         }
         let Some(part) = self.special_part(catalog, slot, &record, &active, chance) else {
@@ -779,7 +720,7 @@ impl Session {
         before: &ActiveMission,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let record = self.lifecycle_record(before.mission);
+        let record = self.statics.lifecycle_record(before.mission);
         let Some(part) = self.special_part(catalog, slot, &record, before, chance) else {
             return;
         };
@@ -803,7 +744,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SpecialPart> {
         let state = &active.ships;
-        if !self.ships_here(state.system) {
+        if !self.chart.ships_here(&self.pilot, state.system) {
             return None;
         }
         let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
@@ -835,7 +776,7 @@ impl Session {
     /// their `düde`'s ships read from `catalog`, drawing on `chance`
     /// (@0x43821-0x43aa5): how many came, none for a mission of no
     /// `düde`. Each takes a slot below the spawn reserve
-    /// ([`Session::spawn_reserve`]), and one that finds none does not come
+    /// ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)), and one that finds none does not come
     /// and is not counted, as `_EnterMoreShips` skips the count and the
     /// placement on `_MissionDudeSpawn`'s -1 (@0x43964 → @0x43aaa).
     fn bring_in_mission_ships(
@@ -850,13 +791,13 @@ impl Session {
         let Some(dude) = record.ships.dude else {
             return 0;
         };
-        let items = self.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        let items = self.setup.npc_items();
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         let nav = Vec::new();
@@ -874,17 +815,17 @@ impl Session {
             expired: false,
         };
         let ships = spawn::arriving_mission_ships(
-            self.traffic.table(),
+            self.space.traffic.table(),
             &spawn,
-            self.way_back(),
-            self.gate(),
+            self.chart.way_back(&self.pilot),
+            self.appear_gate(),
             chance,
         );
-        let last = self.last_npc();
-        let came = self.traffic.bring_in_within(
+        let last = self.space.last_npc();
+        let came = self.space.traffic.bring_in_within(
             ships,
-            self.spawn_reserve(SPAWN_RESERVE),
-            &self.govts,
+            self.setup.spawn_reserve(SPAWN_RESERVE),
+            &self.statics.govts,
             &mut *chance,
         );
         self.mission_ships_came(last);
@@ -910,7 +851,7 @@ impl Session {
     /// timer runs on; by the other, the ship is the timer's arrival: the
     /// timer stops and, for `ShipStart` 1, the arrived count goes up by
     /// one. The ship takes its slot below the spawn reserve
-    /// ([`Session::spawn_reserve`]) while the person still holds its own,
+    /// ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)) while the person still holds its own,
     /// as the original frees the person's slot only after the spawn
     /// (@0x62520). Nothing when the NPC is no longer here, the slot no
     /// longer holds a mission of a `düde`, or the ship cannot be spawned
@@ -938,7 +879,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let Some(dude) = record.ships.dude else {
             return;
         };
@@ -947,20 +888,20 @@ impl Session {
             .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
             .unwrap_or_default();
         let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
-        let items = self.npc_items();
-        self.traffic.table_mut().add_mission_dudes(
+        let items = self.setup.npc_items();
+        self.space.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with
         // no slot nothing of the mission changes.
-        let reserve = self.spawn_reserve(SPAWN_RESERVE);
-        if self.traffic.free_berth(reserve).is_none() {
+        let reserve = self.setup.spawn_reserve(SPAWN_RESERVE);
+        if self.space.traffic.free_berth(reserve).is_none() {
             return;
         }
         let preset = if let Some(ship) = swapped {
@@ -984,33 +925,36 @@ impl Session {
             expired: false,
         };
         let Some(mut ship) = spawn::swapped_mission_ship(
-            self.traffic.table(),
+            self.space.traffic.table(),
             &spawn,
             state,
             preset,
-            self.gate(),
+            self.appear_gate(),
             chance,
         ) else {
             return;
         };
-        if self.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
             ship.held = false;
         }
-        let last = self.last_npc();
-        let came = self
-            .traffic
-            .bring_in_within(vec![ship], reserve, &self.govts, &mut *chance);
+        let last = self.space.last_npc();
+        let came = self.space.traffic.bring_in_within(
+            vec![ship],
+            reserve,
+            &self.statics.govts,
+            &mut *chance,
+        );
         if came == 0 {
             return;
         }
-        let targeted = self.target == Some(npc);
-        self.drop_quarry(npc);
-        self.traffic.remove(npc);
+        let targeted = self.chart.target == Some(npc);
+        self.space.drop_quarry(npc);
+        self.space.traffic.remove(npc);
         // The ship brought in above is numbered last.
-        let swapped_in = self.last_npc();
+        let swapped_in = self.space.last_npc();
         if targeted {
-            self.target = swapped_in;
-            self.target_fly_in.settle();
+            self.chart.target = swapped_in;
+            self.chart.target_fly_in.settle();
         }
         // The hail's dialog closes on the player's target, now the ship
         // swapped in (@0x6252f), which `_offeringShipIndex` takes
@@ -1019,10 +963,10 @@ impl Session {
         // always the target; this settling comes after, so a target the
         // player moved since is kept, and `<OSN>` names the swapped-in
         // ship all the same.
-        if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
-            self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
+        if let Some(npc) = swapped_in.and_then(|id| self.space.npc(id)) {
+            self.run.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
-        if self.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
+        if self.setup.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
             && let Some(active) = self.slot_holding(slot, record.id)
         {
             active.ships.appear = NOT_APPEARING;
@@ -1056,7 +1000,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return false;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let count = record.ships.count;
         let goal = ShipGoal::from_code(record.ships.goal);
         let meets = matches!(
@@ -1137,7 +1081,7 @@ impl Session {
         let mut failed = false;
         if let Some(active) = self.pilot.missions.get(mark.slot) {
             failed = active.failed.is_some();
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let cargo = active.cargo_type;
             let goal = ShipGoal::from_code(record.ships.goal);
             let counts = if record.pickup_mode == PICKUP_BOARDING {
@@ -1153,20 +1097,23 @@ impl Session {
                         AssistLine::Boarded => MissionBoardLine::Boarded,
                         AssistLine::Refuelled => MissionBoardLine::Refuelled { ship: npc.ship },
                     });
-                    self.hold_boarded(npc.id);
+                    self.space.hold_boarded(npc.id);
                 }
                 assist.is_some()
-                    || plain_board_counts(goal, self.rules.source_for(RuleKey::PlainBoardCounts))
+                    || plain_board_counts(
+                        goal,
+                        self.setup.rules.source_for(RuleKey::PlainBoardCounts),
+                    )
             };
             if counts && let Some(active) = self.slot_holding(mark.slot, record.id) {
                 active.ships.boarded = active.ships.boarded.saturating_add(1);
             }
         }
         if line.is_some() {
-            self.sounds.push(SimSound::MissionShipBoarded);
+            self.out.sounds.push(SimSound::MissionShipBoarded);
         }
         if failed {
-            self.board_line = line;
+            self.out.board_line = line;
             return None;
         }
         self.mark_boarded(npc.id);
@@ -1179,18 +1126,7 @@ impl Session {
     /// rescue them, its goals not yet met and the ship not yet boarded.
     /// A ship with no mark, or of a free slot, is not held.
     pub(crate) fn mission_ship_held(&self, npc: &Npc) -> bool {
-        let Some(active) = npc
-            .mission
-            .and_then(|mark| self.pilot.missions.get(mark.slot))
-        else {
-            return false;
-        };
-        let goal = self
-            .mission_record(active.mission)
-            .map_or(ShipGoal::None, |record| {
-                ShipGoal::from_code(record.ships.goal)
-            });
-        held_disabled(goal, active.goals_met, npc.boarded)
+        mission_ship_held(&self.pilot, &self.statics, npc)
     }
 
     /// The special ships just brought into the system, each numbered
@@ -1214,20 +1150,20 @@ impl Session {
             .filter(|npc| came.iter().any(|&(id, _)| id == npc.id) && self.mission_ship_held(npc))
             .map(|npc| npc.id)
             .collect();
-        for npc in self.traffic.npcs_mut() {
+        for npc in self.space.traffic.npcs_mut() {
             if held.contains(&npc.id) {
                 npc.condition = Condition::Disabled;
             }
         }
         self.join_mission_escorts();
         for (ship, slot) in came {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Arrived,
             });
             let observing = self.pilot.missions.get(slot).is_some_and(|active| {
                 !active.goals_met
-                    && ShipGoal::from_code(self.lifecycle_record(active.mission).ships.goal)
+                    && ShipGoal::from_code(self.statics.lifecycle_record(active.mission).ships.goal)
                         == ShipGoal::Observe
             });
             if observing {
@@ -1254,16 +1190,6 @@ impl Session {
         }
     }
 
-    /// The marks of the special ships in the system, each with its NPC:
-    /// what [`Session::mission_ships_left`] reads once the traffic's tick
-    /// has taken those that left out.
-    pub(super) fn mission_marks(&self) -> Vec<(NpcId, MissionMark)> {
-        self.npcs()
-            .iter()
-            .filter_map(|npc| Some((npc.id, npc.mission?)))
-            .collect()
-    }
-
     /// The special ships among those the traffic's last tick took out,
     /// marked as `marks` had them before it, in the order they left: each
     /// that left the system raises [`Fate::Departed`], then its slot
@@ -1275,9 +1201,11 @@ impl Session {
     /// [`RuleKey::GateExitCounts`]'s other reading; a docked fighter never
     /// left, nor did an escape pod freed (see `nova_sim::traffic::pod_flight`).
     pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
-        let landed_leaves = self.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
-        let gate_exit_counts = self.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
+        let landed_leaves = self.setup.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
+        let gate_exit_counts =
+            self.setup.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
         let left: Vec<(NpcId, MissionMark, bool)> = self
+            .space
             .traffic
             .departed()
             .iter()
@@ -1300,7 +1228,7 @@ impl Session {
             })
             .collect();
         for (ship, mark, counts) in left {
-            self.raise(StoryEvent::ShipFate {
+            self.run.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Departed,
             });
@@ -1321,11 +1249,11 @@ impl Session {
         let Some(active) = self.pilot.missions.get(mark.slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let counted = departure(
             ShipGoal::from_code(record.ships.goal),
             active.ships.system == ShipSystem::FollowsPlayer,
-            self.rules.source_for(RuleKey::LeftRespawn),
+            self.setup.rules.source_for(RuleKey::LeftRespawn),
         );
         if counted == Departure::default() {
             return;
@@ -1372,7 +1300,7 @@ impl Session {
         let npc = self.npcs().iter().find(|npc| npc.id == id)?;
         let (mark, boarded) = (npc.mission?, npc.boarded);
         let active = self.pilot.missions.get(mark.slot)?;
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let facts = LossFacts {
             goal: ShipGoal::from_code(record.ships.goal),
             flags: record.flags,
@@ -1382,7 +1310,8 @@ impl Session {
                 Loss::Disabled => active.ships.disabled,
             },
             boarded,
-            hidden_fails: self.rules.source_for(RuleKey::HiddenLossFails) == RuleSource::Bible,
+            hidden_fails: self.setup.rules.source_for(RuleKey::HiddenLossFails)
+                == RuleSource::Bible,
         };
         let fails = match loss {
             Loss::Destroyed => fails_on_destroyed(facts),
@@ -1390,8 +1319,8 @@ impl Session {
         };
         if fails {
             if record.flags & HIDDEN == 0 {
-                self.say(SimMessage::MissionShipLost);
-                self.sounds.push(SimSound::MissionShipLost);
+                self.space.say(&mut self.out, SimMessage::MissionShipLost);
+                self.out.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);
         }
@@ -1434,33 +1363,183 @@ impl Session {
     }
 
     /// The special ships `ids` lose their marks
-    /// ([`Session::unmark_mission_ship`]), or, while the player is
+    /// ([`Space::unmark_mission_ship`]), or, while the player is
     /// docked, are taken out of the system; the formation re-forms when a
     /// mission escort left it.
     fn unmark_mission_ships(&mut self, ids: &[NpcId]) {
         let mut reform = false;
         for &id in ids {
-            if self.landed.is_some() {
-                self.traffic.remove(id);
+            if self.mode.landed().is_some() {
+                self.space.traffic.remove(id);
             } else {
-                reform |= self.unmark_mission_ship(id);
+                reform |= self.space.unmark_mission_ship(&self.statics, id);
             }
         }
         if reform {
             self.reform();
         }
     }
+}
 
-    /// The mission ship `npc`'s name or subtitle, as `pick` takes it from
-    /// its slot's ships, while it is marked and that is not empty.
-    pub(super) fn mission_ship_text(
-        &self,
-        mark: Option<crate::traffic::npc::MissionMark>,
-        pick: impl Fn(&SpecialShips) -> &str,
-    ) -> Option<&str> {
-        let active = self.pilot.missions.get(mark?.slot)?;
-        Some(pick(&active.ships)).filter(|text| !text.is_empty())
+impl Statics {
+    /// Ship type `ship`'s `AppearOn`: none when it has no record.
+    fn appear_on(&self, ship: ShipId) -> Option<&Test> {
+        self.ships
+            .iter()
+            .find(|record| record.id == ship)
+            .map(|record| &record.appear_on)
     }
+}
+
+impl Space {
+    /// Whether the NPC `ship` is in the system, a special ship of the
+    /// mission in `slot`.
+    fn marked_here(&self, ship: NpcId, slot: u8) -> bool {
+        self.npcs()
+            .iter()
+            .any(|npc| npc.id == ship && npc.mission.is_some_and(|mark| mark.slot == slot))
+    }
+
+    /// The marks of the special ships in the system, each with its NPC:
+    /// what [`Session::mission_ships_left`] reads once the traffic's tick
+    /// has taken those that left out.
+    pub(super) fn mission_marks(&self) -> Vec<(NpcId, MissionMark)> {
+        self.npcs()
+            .iter()
+            .filter_map(|npc| Some((npc.id, npc.mission?)))
+            .collect()
+    }
+}
+
+impl Chart {
+    /// Whether ships in `system` are in the player's system
+    /// ([`ShipSystem::with_player`]), over the overlaid map's places.
+    fn ships_here(&self, pilot: &Pilot, system: ShipSystem) -> bool {
+        system.with_player(pilot.system, self.galaxy.map().places())
+    }
+
+    /// Whether the enter-system hook, on an entry `how`, restarts the
+    /// appear timer of `active`, a mission of `record`: an entry it runs
+    /// on, `ShipStart` 1, ships left, and the player in their system
+    /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
+    /// player while the exit decides for them
+    /// ([`Setup::gate_decides`](super::setup::Setup::gate_decides)), as the original's loop A overwrites
+    /// the restart.
+    fn hook_restarts(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        record: &MissionRecord,
+        active: &ActiveMission,
+        how: Entrance,
+    ) -> bool {
+        restarts_on(how)
+            && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
+            && active.ships.left > 0
+            && self.ships_here(pilot, active.ships.system)
+            && !setup.gate_decides(how, active.ships.system)
+    }
+
+    /// The enter-system hook of the mission in `slot` on an entry `how`,
+    /// drawing on `chance`: restarts its special ships' appear timer
+    /// ([`appear_timer`]) and zeroes their arrived count.
+    #[allow(clippy::too_many_arguments)] // what it reads outside Chart, then its own three
+    fn restart_on_entry(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+        slot: u8,
+        how: Entrance,
+        chance: &mut dyn Chance,
+    ) {
+        let Some(active) = pilot.missions.get(slot) else {
+            return;
+        };
+        let record = statics.lifecycle_record(active.mission);
+        if !self.hook_restarts(pilot, setup, &record, active, how) {
+            return;
+        }
+        let appear = appear_timer(&record.ships, chance);
+        if let Some(active) = super::missions::slot_holding(pilot, out, slot, record.id) {
+            active.ships.appear = appear;
+            active.ships.arrived = 0;
+        }
+    }
+
+    /// The system's `NavDefs` slots: each its stellar's position, none
+    /// for an empty slot (or one whose stellar cannot be read).
+    fn nav_slots(&self, pilot: &Pilot) -> Vec<Option<Vec2>> {
+        let mut sites = self.sites.iter();
+        self.galaxy
+            .map()
+            .stellars(pilot.system)
+            .iter()
+            .map(|slot| slot.and_then(|_| sites.next()).map(|site| site.position))
+            .collect()
+    }
+
+    /// The way from the player's system to the one it last jumped from,
+    /// on the map: none before a jump, or when either is not on it.
+    fn way_back(&self, pilot: &Pilot) -> Option<Vec2> {
+        let from = self.galaxy.position(pilot.jumped_from?)?;
+        let here = self.galaxy.position(pilot.system)?;
+        Some(from - here)
+    }
+}
+
+impl MissionRun {
+    /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
+    /// and its goal checks, each with a blank guard and no script.
+    pub(super) fn register_ship_hooks(&mut self, slot: u8) {
+        for (hook, kind) in HOOKS {
+            let subscription = Subscription::new(
+                ship_hook(slot, hook),
+                EventFilter::Any(kind),
+                Script::default(),
+            );
+            let registered = self.register_story(subscription);
+            debug_assert!(registered.is_ok(), "a slot filled registers once");
+        }
+    }
+}
+
+/// The `düde`s of the active missions' special ships, in slot order.
+pub(super) fn mission_dudes(pilot: &Pilot, statics: &Statics) -> Vec<DudeId> {
+    pilot
+        .missions
+        .iter()
+        .filter_map(|(_, active)| statics.lifecycle_record(active.mission).ships.dude)
+        .collect()
+}
+
+/// Whether `npc` is held disabled whatever its armour, as
+/// `_IsDisabled` reads it (@0x2d24-0x2d69; see [`held_disabled`]): a
+/// special ship of the mission in its slot whose `ShipGoal` is to
+/// rescue them, its goals not yet met and the ship not yet boarded.
+/// A ship with no mark, or of a free slot, is not held.
+pub(super) fn mission_ship_held(pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
+    let Some(active) = npc.mission.and_then(|mark| pilot.missions.get(mark.slot)) else {
+        return false;
+    };
+    let goal = statics
+        .mission_record(active.mission)
+        .map_or(ShipGoal::None, |record| {
+            ShipGoal::from_code(record.ships.goal)
+        });
+    held_disabled(goal, active.goals_met, npc.boarded)
+}
+
+/// The mission ship `npc`'s name or subtitle, as `pick` takes it from
+/// its slot's ships, while it is marked and that is not empty.
+pub(super) fn mission_ship_text(
+    pilot: &Pilot,
+    mark: Option<crate::traffic::npc::MissionMark>,
+    pick: impl Fn(&SpecialShips) -> &str,
+) -> Option<&str> {
+    let active = pilot.missions.get(mark?.slot)?;
+    Some(pick(&active.ships)).filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]
@@ -1489,7 +1568,7 @@ pub(super) mod tests {
     use crate::traffic::npc::{Mode, Npc};
 
     /// `STR#` 7000 names; 7001 subtitles.
-    struct Names;
+    pub(in crate::session) struct Names;
 
     impl CommCatalog for Names {
         fn string_list(&self, id: i16) -> Vec<String> {
@@ -1617,7 +1696,7 @@ pub(super) mod tests {
     /// Jumps from the centre, where `fly_out` heads straight out, to `to`,
     /// and settles.
     pub(in crate::session) fn jump_to(session: &mut Session, catalog: &FakePilotCatalog, to: i16) {
-        session.player.position = Vec2::ZERO;
+        session.ship.player.position = Vec2::ZERO;
         assert_eq!(jump(session, catalog, to), Some(SystemId(to)));
         settle(session, catalog);
     }
@@ -1918,7 +1997,7 @@ pub(super) mod tests {
             .expect("starts")
             .with_strings(Rc::new(Names));
         tick(&mut session, &catalog);
-        assert!(session.traffic.table().dude_records.is_empty());
+        assert!(session.space.traffic.table().dude_records.is_empty());
         session.run_set(&SetExpr::parse("S140").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
         assert_eq!(ships_of(&session).appear, 199);
@@ -1949,7 +2028,7 @@ pub(super) mod tests {
         while session.npcs().len() < berths {
             let mut hulk = crate::testkit::npc(0, crate::stats::ShipStats::default());
             hulk.condition = Condition::Disabled;
-            session.traffic.add_npc(hulk);
+            session.space.traffic.add_npc(hulk);
         }
     }
 
@@ -2141,7 +2220,7 @@ pub(super) mod tests {
             active.ships.appear = -1;
             active.ships.arrived = 2;
         }
-        session.raise(StoryEvent::EnteredSystem {
+        session.run.raise(StoryEvent::EnteredSystem {
             system: session.pilot.system,
             how,
         });
@@ -2277,9 +2356,9 @@ pub(super) mod tests {
 
     /// Lands at 140, at 131's centre, settles, and takes off again.
     fn land_and_take_off_in_131(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.player.position = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        session.nav = crate::navigation::NavMode::Off;
+        session.ship.player.position = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.nav = crate::navigation::NavMode::Off;
         assert_eq!(land_now(session), Ok(StellarId(140)));
         settle(session, catalog);
         take_off(session, catalog);
@@ -2464,7 +2543,7 @@ pub(super) mod tests {
         let id = session.npcs()[0].id;
         session.count_lost_mission_ship(id, &mut NeverFires);
         assert_eq!(ships_of(&session).left, 1);
-        session.traffic.remove(id);
+        session.space.traffic.remove(id);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
@@ -2480,7 +2559,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].condition = crate::combat::hull::Condition::Destroyed;
+        session.space.traffic.npcs_mut()[0].condition = crate::combat::hull::Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
         assert_eq!(ships_of(&session).left, 1);
         assert_eq!(marked(&session), [0]);
@@ -2495,23 +2574,24 @@ pub(super) mod tests {
         for (reading, left, destroyed) in [(RuleSource::Engine, 2, 0), (RuleSource::Bible, 1, 1)] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.rules = session
+            session.setup.rules = session
+                .setup
                 .rules
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             // Apart from the other ship and the player.
             let at = Vec2::new(3000.0, 3000.0);
-            let npc = &mut session.traffic.npcs_mut()[0];
+            let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.state.position = at;
             let id = npc.id;
             assert!(npc.mission.is_some(), "a mission ship");
-            session.sites = vec![crate::catalog::LandingSite {
+            session.chart.sites = vec![crate::catalog::LandingSite {
                 flags2: crate::deadly_stellar::DEADLY_STELLAR,
                 frame_size: Some((2, 2)),
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
-            session.listed = session.sites.clone();
+            session.chart.listed = session.chart.sites.clone();
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
-            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");
             let ships = ships_of(&session);
             assert_eq!(
@@ -2535,19 +2615,20 @@ pub(super) mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.rules = session
+            session.setup.rules = session
+                .setup
                 .rules
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             let id = session.npcs()[0].id;
             assert!(session.npcs()[0].mission.is_some(), "a mission ship");
             // The other ships well clear, so the player's shots meet the
             // target alone, whatever the collision walk's order.
-            for npc in session.traffic.npcs_mut().iter_mut().skip(1) {
+            for npc in session.space.traffic.npcs_mut().iter_mut().skip(1) {
                 npc.state.position = Vec2::new(20_000.0, 20_000.0);
             }
             session.story_raised();
             disabled_then_killed(&mut session, id, &Gunner::Player);
-            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(ships_of(&session).disabled, 1, "{reading:?}");
             assert!(
                 session
@@ -2566,7 +2647,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[0].mission = None;
         let id = session.npcs()[0].id;
         session.count_lost_mission_ship(id, &mut NeverFires);
         assert_eq!(ships_of(&session).left, 2);
@@ -2579,7 +2660,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         let _ = session.take_save_due();
         let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
-        session.traffic.npcs_mut()[1].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = None;
         session.count_lost_mission_ship(second, &mut NeverFires);
         assert!(!session.take_save_due(), "not a mission ship");
         session.count_lost_mission_ship(first, &mut NeverFires);
@@ -2634,7 +2715,7 @@ pub(super) mod tests {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -2680,7 +2761,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
-        session.lose_captured(id, true);
+        session.space.lose_captured(&mut session.pilot, id, true);
         assert_eq!(
             marked(&session),
             [0, 0],
@@ -2718,7 +2799,7 @@ pub(super) mod tests {
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
     pub(in crate::session) fn destroy(session: &mut Session, index: usize) {
-        session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
 
@@ -2729,7 +2810,7 @@ pub(super) mod tests {
             .iter()
             .map(crate::session::NpcBefore::of)
             .collect();
-        session.traffic.npcs_mut()[index].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[index].condition = Condition::Disabled;
         session.raise_disabled(&was, &mut NeverFires);
     }
 
@@ -2747,6 +2828,7 @@ pub(super) mod tests {
     /// with it still active, as a swap leaves them.
     fn take_off_unaborted(session: &mut Session, catalog: &FakePilotCatalog) {
         let record = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(140))
@@ -2755,6 +2837,7 @@ pub(super) mod tests {
         record.flags &= !AUTO_ABORT;
         take_off(session, catalog);
         if let Some(record) = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(140))
@@ -2840,7 +2923,7 @@ pub(super) mod tests {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
-        session.traffic.npcs_mut()[0].boarded = true;
+        session.space.traffic.npcs_mut()[0].boarded = true;
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), []);
         assert_eq!(failed(&session), None);
@@ -2948,8 +3031,8 @@ pub(super) mod tests {
         let catalog = goal_catalog(3, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
-        session.traffic.npcs_mut()[0].mission = None;
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -3080,7 +3163,7 @@ pub(super) mod tests {
     /// Puts the NPC at `index` at the end of its warp out, far out, its
     /// clock past d / w (see `nova_sim::traffic::warp_out`).
     fn warped(session: &mut Session, index: usize) {
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.state.position = Vec2::new(0.0, -100_000.0);
         npc.begin_own_jump();
         npc.warp.stage = 2.0;
@@ -3097,8 +3180,8 @@ pub(super) mod tests {
     /// Lands the NPC at `index` on the system's first stellar, from rest
     /// over it, on one traffic tick.
     fn land_ship(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
-        let site = session.sites[0];
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let site = session.chart.sites[0];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.goal = Goal::Land(site.id);
         npc.state.position = site.position;
         npc.state.velocity = Vec2::ZERO;
@@ -3108,7 +3191,7 @@ pub(super) mod tests {
     /// Takes the NPC at `index` out of the system through gate 300, its
     /// entry's wait running out on one traffic tick.
     fn gate_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
-        let npc = &mut session.traffic.npcs_mut()[index];
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.goal = Goal::EnterGate(StellarId(300));
         npc.mode = Mode::EnteringGate {
             gate: StellarId(300),
@@ -3163,7 +3246,7 @@ pub(super) mod tests {
     fn a_ship_of_no_mission_jumping_out_raises_nothing() {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
-        session.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[0].mission = None;
         let id = session.npcs()[0].id;
         jump_out(&mut session, &catalog, 0);
         assert!(!departed(&session, id));
@@ -3337,6 +3420,7 @@ pub(super) mod tests {
     /// The kinds of the mission texts shown since last taken.
     fn shown(session: &mut Session) -> Vec<(MissionTextKind, String)> {
         session
+            .out
             .take_texts_only()
             .into_iter()
             .map(|shown| (shown.kind, shown.text))
@@ -3531,7 +3615,7 @@ pub(super) mod tests {
             [ship_done("Rover done.")],
             "a second ShipDone"
         );
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
@@ -3728,7 +3812,7 @@ pub(super) mod tests {
             }
         }));
         assert!(!observed_after(|session| {
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.mission = Some(crate::traffic::npc::MissionMark {
                     order: None,
                     slot: 5,
@@ -3746,14 +3830,14 @@ pub(super) mod tests {
             direction: 0,
         };
         assert!(!observed_after(|session| {
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak = full;
             }
         }));
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
         settle(&mut session, &catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.cloak = full;
         }
         // The sighting (`_MissionHandler` @0x44214) reads the fades the
@@ -3781,14 +3865,14 @@ pub(super) mod tests {
         };
         assert!(!observed_after(|session| {
             let far = session.player().position + Vec2::new(0.0, 5000.0);
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak_gear = able;
                 npc.state.position = far;
             }
         }));
         assert!(observed_after(|session| {
             let near = session.player().position + Vec2::new(0.0, 100.0);
-            for npc in session.traffic.npcs_mut() {
+            for npc in session.space.traffic.npcs_mut() {
                 npc.cloak_gear = able;
                 npc.state.position = near;
             }
@@ -3801,13 +3885,13 @@ pub(super) mod tests {
         // this mission's is in the system, unseen.
         assert!(!observed_after(|session| {
             let first = session.npcs()[0].id;
-            session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            session.space.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
                 behav: ShipBehav::Own,
                 formation: None,
             });
-            session.story.watched.clear();
+            session.run.story.watched.clear();
             session.watch_ship(first);
         }));
     }
@@ -3816,8 +3900,8 @@ pub(super) mod tests {
     fn only_the_ships_numbered_after_the_last_before_are_taken_as_come() {
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
-        session.drop_raised();
-        session.story.watched.clear();
+        session.run.drop_raised();
+        session.run.story.watched.clear();
         let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
         session.mission_ships_came(Some(first));
         assert_eq!(
@@ -3827,14 +3911,14 @@ pub(super) mod tests {
                 fate: Fate::Arrived
             }]
         );
-        assert_eq!(session.story.watched, [second].into());
+        assert_eq!(session.run.story.watched, [second].into());
     }
 
     #[test]
     fn ships_of_an_observe_goal_met_already_or_of_another_goal_are_not_watched() {
         let catalog = returning(0, 0);
         let session = in_flight(&catalog);
-        assert!(session.story.watched.is_empty(), "a destroy goal");
+        assert!(session.run.story.watched.is_empty(), "a destroy goal");
         let mut catalog = returning(4, 0);
         catalog.missions[0].ships.syst = 131;
         let mut session = accepted(&catalog);
@@ -3844,7 +3928,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);
         assert_eq!(marked(&session), [0, 0]);
-        assert!(session.story.watched.is_empty(), "met already");
+        assert!(session.run.story.watched.is_empty(), "met already");
     }
 
     #[test]
@@ -3888,7 +3972,7 @@ pub(super) mod tests {
             Vec::<u16>::new(),
             "no OnShipDone with no goal"
         );
-        session.player = crate::flight::ShipState::default();
+        session.ship.player = crate::flight::ShipState::default();
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
@@ -4387,6 +4471,7 @@ pub(super) mod tests {
         // Unmet, with `Flags` 0x0001: the landing's leading check meets
         // its goals and auto-aborts it.
         if let Some(record) = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(145))
@@ -4445,7 +4530,7 @@ pub(super) mod tests {
     fn escort_gone(destroyed: i16) -> (FakePilotCatalog, Session) {
         let catalog = returning(3, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.mission = None;
         }
         if let Some(active) = session.pilot.missions.get_mut(0) {
@@ -4543,14 +4628,14 @@ pub(super) mod tests {
         Result<crate::board::Boarding, crate::board::BoardRefusal>,
         Vec<crate::legal::Crime>,
     ) {
-        session.player = crate::flight::ShipState::default();
-        let npc = &mut session.traffic.npcs_mut()[index];
+        session.ship.player = crate::flight::ShipState::default();
+        let npc = &mut session.space.traffic.npcs_mut()[index];
         npc.state = crate::flight::ShipState {
             velocity,
             ..crate::flight::ShipState::default()
         };
         npc.condition = Condition::Disabled;
-        session.target = Some(session.npcs()[index].id);
+        session.chart.target = Some(session.npcs()[index].id);
         let law = Witness::default();
         let boarding = session.board(
             &law,
@@ -4739,12 +4824,12 @@ pub(super) mod tests {
             );
             assert_eq!(crimes, [], "no BoardPenalty");
             assert_eq!(session.boarding(), None, "no plunder");
-            assert!(session.strikes.is_empty(), "no help called");
+            assert!(session.space.strikes.is_empty(), "no help called");
             assert!(cargo_aboard(&session), "{goal}");
             assert_eq!(ships_of(&session).boarded, 1, "{goal}");
             assert!(session.npcs()[0].boarded, "{goal}");
             assert_eq!(boarded_fates(&session), 1, "{goal}");
-            assert_eq!(session.player.velocity, DRIFT, "{goal}");
+            assert_eq!(session.ship.player.velocity, DRIFT, "{goal}");
             assert_eq!(shown(&mut session), [], "no LoadCargText");
             settle(&mut session, &catalog);
             assert_eq!(shown(&mut session), [ship_done("Rover done.")], "{goal}");
@@ -4811,13 +4896,13 @@ pub(super) mod tests {
             "the refusal's snd 153 is the board refusal's, not this line's"
         );
         assert_eq!(crimes, []);
-        assert!(session.strikes.is_empty(), "no help called");
+        assert!(session.space.strikes.is_empty(), "no help called");
         assert_eq!(session.boarding(), None);
         assert!(!cargo_aboard(&session));
         assert_eq!(ships_of(&session).boarded, 0);
         assert!(!session.npcs()[0].boarded);
         assert_eq!(boarded_fates(&session), 0);
-        assert_eq!(session.player.velocity, Vec2::ZERO, "not matched");
+        assert_eq!(session.ship.player.velocity, Vec2::ZERO, "not matched");
         assert_eq!(
             shown(&mut session),
             [(
@@ -4833,7 +4918,7 @@ pub(super) mod tests {
     fn a_ship_whose_slot_is_free_is_boarded_without_plunder() {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
-        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+        if let Some(npc) = session.space.traffic.npcs_mut().first_mut() {
             npc.mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
@@ -4872,7 +4957,7 @@ pub(super) mod tests {
         assert_eq!(airlocks(&mut session), 0, "the mission stands");
 
         let mut session = in_flight_with(&catalog, 1);
-        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+        if let Some(npc) = session.space.traffic.npcs_mut().first_mut() {
             npc.mission = Some(crate::traffic::npc::MissionMark {
                 order: None,
                 slot: 5,
@@ -4920,7 +5005,7 @@ pub(super) mod tests {
 
     /// Fills the armour of every NPC in the system.
     fn full_armour(session: &mut Session) {
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.reserves.armor.now = npc.reserves.armor.max;
         }
     }
@@ -5085,7 +5170,7 @@ pub(super) mod tests {
                 "from the ship type's base Armor"
             );
         }
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.boarded = true;
         }
         fight(&mut session, 1);
@@ -5128,9 +5213,9 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
         assert_eq!(conditions(&session), [Condition::Disabled]);
-        session.player = crate::flight::ShipState::default();
-        session.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
-        session.target = Some(session.npcs()[0].id);
+        session.ship.player = crate::flight::ShipState::default();
+        session.space.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
+        session.chart.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -5165,8 +5250,8 @@ pub(super) mod tests {
     fn a_rescue_ship_unmarked_or_of_a_freed_slot_is_released() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        session.traffic.npcs_mut()[0].mission = None;
-        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+        session.space.traffic.npcs_mut()[0].mission = None;
+        session.space.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             order: None,
             slot: 5,
             behav: ShipBehav::Own,
@@ -5181,7 +5266,7 @@ pub(super) mod tests {
     fn a_held_rescue_ship_that_repairs_itself_gets_its_armour_back_and_stays_disabled() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.self_repair = true;
         }
         let mut chance = crate::testkit::Draws::of(&[0, 0]);
@@ -5199,7 +5284,7 @@ pub(super) mod tests {
     fn a_rescue_ship_held_at_low_armour_stays_disabled_once_released() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
-        for npc in session.traffic.npcs_mut() {
+        for npc in session.space.traffic.npcs_mut() {
             npc.boarded = true;
             npc.reserves.armor.now = 1.0;
         }
@@ -5246,8 +5331,8 @@ pub(super) mod tests {
                 .all(|npc| npc.state.position.length() < 1100.0),
             "glided in to about 1000 out"
         );
-        session.player = session.npcs()[0].state;
-        session.target = Some(session.npcs()[0].id);
+        session.ship.player = session.npcs()[0].state;
+        session.chart.target = Some(session.npcs()[0].id);
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -5395,7 +5480,7 @@ pub(super) mod tests {
     /// 150, which flies ships 129 and 200; and "Ace" (`përs` 600, of
     /// `Flags` `flags`, flying ship 129) linked to it, whom system 130's
     /// first Person slot names at 100 %.
-    fn swapping(flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn swapping(flags: u16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(MissionShip {
             count: 1,
             goal: 3,
@@ -5427,14 +5512,14 @@ pub(super) mod tests {
 
     /// A pilot flying in system 130 among `catalog`'s Ace (NPC 0), at
     /// [`ACE_AT`] and targeted, hailed: Ace offers mission 140.
-    fn hailing_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn hailing_ace(catalog: &FakePilotCatalog) -> Session {
         let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_strings(Rc::new(Names));
         session.populate(catalog, &mut NeverFires);
-        session.traffic.npcs_mut()[0].state = ACE_AT;
-        session.target = Some(NpcId(0));
+        session.space.traffic.npcs_mut()[0].state = ACE_AT;
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
         session
@@ -5451,7 +5536,7 @@ pub(super) mod tests {
         session
     }
 
-    fn person_here(session: &Session) -> bool {
+    pub(in crate::session) fn person_here(session: &Session) -> bool {
         session.npcs().iter().any(|npc| npc.person.is_some())
     }
 
@@ -5465,7 +5550,7 @@ pub(super) mod tests {
         assert_eq!(ship.state, ACE_AT, "in Ace's place");
         assert_eq!(ship.ship, ShipId(129), "flying Ace's type");
         assert_eq!(ship.govt, Some(GovtId(131)), "the düde's");
-        assert_eq!(session.target, Some(ship.id), "now the target");
+        assert_eq!(session.chart.target, Some(ship.id), "now the target");
         // A new target, not Ace's id reused: the original marks the target
         // panel for redraw (`_statusRedraw[6]`, @0x62543), and ours redraws
         // it at once on the target's `NpcId` changing
@@ -5501,12 +5586,12 @@ pub(super) mod tests {
             .expect("flies")
             .with_strings(Rc::new(Names));
         session.populate(catalog, &mut NeverFires);
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = ACE_AT;
         ace.berth = 2;
-        session.traffic.set_berth_person(2, "Ace");
-        session.traffic.forget_berth_person(1);
-        session.target = Some(NpcId(0));
+        session.space.traffic.set_berth_person(2, "Ace");
+        session.space.traffic.forget_berth_person(1);
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
         assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed at berth 2");
@@ -5536,7 +5621,7 @@ pub(super) mod tests {
         let berth = swapped_in_berth(&session);
         assert_eq!(berth, 1, "the lowest free berth, not the hailed ship's");
         assert_eq!(
-            session.offering_ship,
+            session.run.offering_ship,
             Some(super::super::person_offers::OfferingShip { berth }),
             "the target swapped in (@0x6252f, @0x625a4)"
         );
@@ -5545,7 +5630,7 @@ pub(super) mod tests {
             "[Error]",
             "its slot holds no person, though Ace's old slot still names Ace"
         );
-        assert_eq!(session.traffic.berth_person(2), Some("Ace"));
+        assert_eq!(session.space.traffic.berth_person(2), Some("Ace"));
     }
 
     #[test]
@@ -5561,13 +5646,13 @@ pub(super) mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        session.target = None;
+        session.chart.target = None;
         settle(&mut session, &catalog);
         assert!(!person_here(&session), "swapped all the same");
-        assert_eq!(session.target, None, "the player's target is kept");
+        assert_eq!(session.chart.target, None, "the player's target is kept");
         let berth = swapped_in_berth(&session);
         assert_eq!(
-            session.offering_ship,
+            session.run.offering_ship,
             Some(super::super::person_offers::OfferingShip { berth }),
         );
         assert_eq!(session.plain_text("<OSN>"), "[Error]");
@@ -5726,7 +5811,7 @@ pub(super) mod tests {
     /// [`ships_catalog`] with mission 140 of `Flags` `flags` and three
     /// ships starting `start`, of düde 150 flying ship 200 at 20 and ship
     /// 129 at 17.
-    fn two_types(flags: u16, start: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn two_types(flags: u16, start: i16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(MissionShip {
             count: 3,
             ..shipping(-1, start)
@@ -5751,7 +5836,7 @@ pub(super) mod tests {
     }
 
     /// The ship types of the mission ships in the system, in order.
-    fn marked_types(session: &Session) -> Vec<ShipId> {
+    pub(in crate::session) fn marked_types(session: &Session) -> Vec<ShipId> {
         session
             .npcs()
             .iter()
@@ -5813,6 +5898,39 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_accept_draw_reads_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // `_LoadCurrentMissionData` reads shïp +0xa41 (@0xa0bc5), cached at
+        // the landing's refresh, so a bit set since is unseen.
+        let mut catalog = two_types(0x0800, 0);
+        for record in &mut catalog.ship_records {
+            match record.id.0 {
+                129 => record.appear_on = Test::parse("!b5"),
+                200 => record.appear_on = Test::parse("b5"),
+                _ => {}
+            }
+        }
+        let bit = crate::control::Bit::new(5).expect("a bit");
+        for (source, drawn) in [(RuleSource::Engine, 129), (RuleSource::Bible, 200)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_strings(Rc::new(Names))
+                .with_rules(
+                    crate::Rulebook::default().with_override(RuleKey::SpawnAvailability, source),
+                );
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            settle(&mut session, &catalog);
+            session.set_control_bit(bit, true);
+            let mut chance = Alternating::default();
+            assert_eq!(session.accept_mission(MissionId(140), &mut chance), Ok(0));
+            assert_eq!(
+                ships_of(&session).uniform_type,
+                Some(ShipId(drawn)),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_0x0800_slot_without_a_type_draws_one_at_its_next_spawn_and_keeps_it() {
         let catalog = two_types(0x0800, 0);
         let mut chance = Alternating::default();
@@ -5827,7 +5945,7 @@ pub(super) mod tests {
 
     /// Clears slot 0's kept type, as a save from before it was kept
     /// loads it.
-    fn forget_uniform_type(session: &mut Session) {
+    pub(in crate::session) fn forget_uniform_type(session: &mut Session) {
         session
             .pilot
             .missions
@@ -5988,7 +6106,7 @@ pub(super) mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         settle(&mut session, &catalog);
         assert!(session.npcs().is_empty(), "Ace left: nothing comes");
         let mut dudeless = swapping(REPLACED_BY_MISSION_SHIP);
@@ -6010,11 +6128,11 @@ pub(super) mod tests {
         session.populate(&catalog, &mut NeverFires);
         let mut state = *session.player();
         state.velocity = Vec2::ZERO;
-        session.player.velocity = Vec2::ZERO;
-        let ace = &mut session.traffic.npcs_mut()[0];
+        session.ship.player.velocity = Vec2::ZERO;
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = state;
         ace.condition = Condition::Disabled;
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let boarded = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
@@ -6053,8 +6171,8 @@ pub(super) mod tests {
         fight(&mut session, 10);
         assert_eq!(conditions(&session), [Condition::Disabled]);
         assert_eq!(disabled_fates(&session), 0);
-        session.player = ShipState::default();
-        session.traffic.npcs_mut()[0].state = ShipState::default();
+        session.ship.player = ShipState::default();
+        session.space.traffic.npcs_mut()[0].state = ShipState::default();
         let boarding = session.board(
             &Witness::default(),
             &crate::board::NovaBoarding::default(),
@@ -6092,14 +6210,14 @@ pub(super) mod tests {
         // @0x62538: the expand is set to 0 as the target moves.
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
         settle(&mut session, &catalog);
         let brackets = session.target_brackets().expect("bracketed");
-        assert_eq!(Some(brackets.npc), session.target);
+        assert_eq!(Some(brackets.npc), session.chart.target);
         assert_eq!(brackets.expand, 0.0);
     }
 
@@ -6110,7 +6228,7 @@ pub(super) mod tests {
         // 256 for a target on screen (@0x6a5c9).
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
@@ -6131,7 +6249,7 @@ pub(super) mod tests {
     fn a_hail_that_swaps_nothing_leaves_the_fly_in_running() {
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target_fly_in.start();
+        session.chart.target_fly_in.start();
         assert_eq!(
             session
                 .refuse_mission(MissionId(140), &mut NeverFires)
@@ -6139,7 +6257,7 @@ pub(super) mod tests {
             Ok(())
         );
         settle(&mut session, &catalog);
-        assert_eq!(session.target, Some(NpcId(0)));
+        assert_eq!(session.chart.target, Some(NpcId(0)));
         assert_eq!(session.target_brackets().expect("bracketed").expand, 196.0);
     }
 
@@ -6147,14 +6265,14 @@ pub(super) mod tests {
     fn the_swap_moves_no_target_but_the_persons() {
         let catalog = swapping(REPLACED_BY_MISSION_SHIP);
         let mut session = hailing_ace(&catalog);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
         settle(&mut session, &catalog);
         assert_eq!(marked(&session), [0]);
-        assert_eq!(session.target, None);
+        assert_eq!(session.chart.target, None);
     }
 
     #[test]
@@ -6164,7 +6282,7 @@ pub(super) mod tests {
         let mut hunter = crate::testkit::npc(9, session.npcs()[0].stats);
         hunter.target = Some(ShipRef::Npc(NpcId(0)));
         hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        session.traffic.add_npc(hunter);
+        session.space.traffic.add_npc(hunter);
         assert_eq!(
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
@@ -6223,7 +6341,7 @@ pub(super) mod tests {
         assert!(person_here(&session), "Ace stays (@0x62481 → @0x62593)");
         assert_eq!(session.npcs().len(), npcs);
         assert!(marked(&session).is_empty(), "no ship came");
-        assert_eq!(session.target, Some(NpcId(0)), "Ace still targeted");
+        assert_eq!(session.chart.target, Some(NpcId(0)), "Ace still targeted");
         assert_eq!(ships_of(&session), before, "no count changes");
         assert_eq!(before.left, 1);
         let active = session.pilot().missions().get(0).expect("held");
@@ -6253,7 +6371,7 @@ pub(super) mod tests {
         observed.missions[0].ships.goal = 4;
         let session = swapped(&observed);
         let ship = session.npcs()[0].id;
-        assert_eq!(session.story.watched, [ship].into(), "arrived: watched");
+        assert_eq!(session.run.story.watched, [ship].into(), "arrived: watched");
     }
 
     #[test]
@@ -6292,19 +6410,20 @@ pub(super) mod tests {
         let place = ship.formation().expect("in formation");
         assert_eq!((place.slot, place.ships), (2, 2));
         assert_eq!(ship.goal, Goal::Formation { guard: None });
-        session.player.velocity = Vec2::new(1.0, 0.0);
+        session.ship.player.velocity = Vec2::new(1.0, 0.0);
         for _ in 0..600 {
             tick(&mut session, &catalog);
-            session.player.position = session.player.position + session.player.velocity;
+            session.ship.player.position =
+                session.ship.player.position + session.ship.player.velocity;
         }
         let ship = &session.npcs()[0];
-        let off = place.position(&session.player) - ship.state.position;
+        let off = place.position(&session.ship.player) - ship.state.position;
         assert!(
             off.x.abs() <= crate::escort::KEEP_FORMATION
                 && off.y.abs() <= crate::escort::KEEP_FORMATION,
             "{off:?}"
         );
-        assert_eq!(ship.state.velocity, session.player.velocity, "with it");
+        assert_eq!(ship.state.velocity, session.ship.player.velocity, "with it");
     }
 
     #[test]
@@ -6369,7 +6488,7 @@ pub(super) mod tests {
         let pilot = crate::pilot::Pilot::new(&catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let hailed = session.open_hail(&catalog, &bible, &mut NeverFires);
         let Ok(Hailed::Comm(view)) = hailed else {
             panic!("the comm dialog: {hailed:?}");
@@ -6434,11 +6553,11 @@ pub(super) mod tests {
         take_off(&mut session, catalog);
         session.pilot.ship_name = Some("Pathfinder".to_owned());
         assert_eq!(marked(&session), [0, 0]);
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         if hostile {
             npc.goal = Goal::Attack(ShipRef::Player);
         }
-        session.target = Some(npc.id);
+        session.chart.target = Some(npc.id);
         session
     }
 

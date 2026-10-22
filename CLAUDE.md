@@ -90,21 +90,29 @@ the answer. Before disassembling a function, run `rdm search <symbol>
 
 ### When the original and another reading disagree
 
-- If the engine's behaviour has an obvious alternative (the Nova Bible
-  disagrees, the engine has a quirk, or our plan said otherwise), add a
-  `Rulebook` key (`crates/nova-sim/src/rulebook.rs`). The engine's reading is
-  the default, and tests cover both readings. Ask the user only when the
-  alternative isn't obvious, the scope grows, or the change alters a control
-  everyone uses.
-- If the engine has a bug that breaks stock missions, crons or storylines,
+The original's behaviour is the default. A deviation from it needs a reason,
+and a deviation with a reason becomes a setting, not a new default. The
+original's bugs and limits are the only exceptions.
+
+- When there's a reason to read a rule another way (the Nova Bible
+  disagrees, our engine already behaves differently, or a plan said
+  otherwise), add a `Rulebook` key (`crates/nova-sim-base/src/rulebook.rs`).
+  The original's reading (`RuleSource::Engine`, named for the original
+  executable) is the default, the other reading is opt-in, and tests cover
+  both. Ask the user only when the alternative isn't obvious, the scope
+  grows, or the change alters a control everyone uses.
+- If the original has a bug that breaks stock missions, crons or storylines,
   make the intended behaviour the default and the bug the opt-in reading.
   Check the stock data before calling something broken.
+- If the original has a resource limit (a cap on shots, beams or
+  explosions kept in memory), default to no limit and make the cap the
+  opt-in reading.
 - Don't replicate integer widths, wraps or overflows (16-bit cargo, 32-bit
   cash). Use wider numbers. Mention the width in the finding, but don't file
   a phase or key for it.
-- If a difference is practically unobservable (sub-second timing, say),
-  offer "record only" beside "build it". Don't assume either answer: the
-  user has chosen each.
+- Build what the original does even when the difference is small: a pixel,
+  sub-second timing, a click that acts on the press. Record without building
+  only what can't be replicated, such as a read of uninitialised memory.
 
 ### Where new findings go
 
@@ -159,8 +167,8 @@ leaves the developer's machine exactly as it found it.
 
 ## Large files
 
-`crates/nova-sim/src/session.rs`, `crates/nova-sim/src/combat/mod.rs` and
-`crates/nova-sim/src/rulebook.rs` run to thousands of lines. Agents read them thousands of times a week.
+`crates/nova-sim/src/session.rs`, `crates/nova-sim-combat/src/combat/mod.rs`
+and `crates/nova-sim-base/src/rulebook.rs` run to thousands of lines. Agents read them thousands of times a week.
 
 - Find the code first with `grep -n` or LSP symbols, then read only that range
   with the `Read` tool (`offset`/`limit`).
@@ -179,6 +187,33 @@ before writing it:
   (`rdm search split --type task --project ev-nova`) and file one if there
   isn't one, naming the concerns that could come out. A project hook
   (`.claude/hooks/large-file-reminder.sh`) reminds you when you edit one.
+
+## Session state
+
+`Session` (`crates/nova-sim/src/session.rs`) coordinates owned sub-states,
+each in its own module under `session/`: `Statics`, `Setup`, `Outbox`,
+`PlayerShip`, `Space`, `Chart`, `Port`, `MissionRun` and `Mode`. The module
+docs' "State" section says what each holds.
+
+`Statics` and `Setup` are read-only bundles and `Outbox` is the sink for
+events. The other six (`PlayerShip`, `Space`, `Chart`, `Port`, `MissionRun`
+and `Mode`) are stateful.
+
+- Put a new field on the sub-state it belongs to, not on `Session`.
+- Put logic that touches one stateful sub-state in a method on it. Pass what
+  else it reads as explicit parameters: `&Statics`, `&Setup`, `&mut Outbox`,
+  `&Pilot` or `&mut Pilot`, a mode value such as
+  `landed: Option<StellarId>`, or plain values the caller computes.
+- A sub-state's method never takes another stateful sub-state (`PlayerShip`,
+  `Space`, `Chart`, `Port`, `MissionRun`, `Mode`). If it needs two of those,
+  it belongs on `Session`.
+- Keep a method on `Session` only when it coordinates several stateful
+  sub-states, writes the mode (a landing, a jump, the pod, the end), or is a
+  `pub` entry point. Its body reaches the sub-states through their methods:
+  `self.space.restock_fleet(&mut self.pilot, &self.statics, &self.setup)`
+  borrows disjoint fields, where two `&mut self` calls wouldn't compile.
+- A new field on `Session` itself needs a reason in its doc comment, saying
+  why it belongs to no sub-state.
 
 ## Verification runs through cargo
 

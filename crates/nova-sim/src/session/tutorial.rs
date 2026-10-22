@@ -55,7 +55,8 @@ impl Session {
                 newbie && !matches!(self.nav_mode(), NavMode::Hyperspace(Some(_)))
             }
             JumpRefusal::NoFuel { .. } => {
-                !newbie || self.rules.source_for(RuleKey::NewbieFuelRefusal) == RuleSource::Bible
+                !newbie
+                    || self.setup.rules.source_for(RuleKey::NewbieFuelRefusal) == RuleSource::Bible
             }
         }
     }
@@ -65,21 +66,21 @@ impl Session {
     /// distance from the centre and the nearest stellar
     /// (`_FindNearestStellar`, the one F5 selects).
     pub(super) fn tutorial_tick(&mut self, frame: i16) {
-        if self.condition == Condition::Destroyed {
+        if self.ship.condition == Condition::Destroyed {
             return;
         }
-        let position = self.player.position;
+        let position = self.ship.player.position;
         let distance_squared = position.x * position.x + position.y * position.y;
-        let sites = &self.sites;
+        let sites = &self.chart.sites;
         let hints = self.tutorial.check(
             frame,
-            self.condition == Condition::Intact,
+            self.ship.condition == Condition::Intact,
             distance_squared,
             || nearest_stellar_station(position, sites),
         );
         for hint in hints {
-            self.say(SimMessage::Tutorial(hint));
-            self.sounds.push(SimSound::TutorialHint);
+            self.space.say(&mut self.out, SimMessage::Tutorial(hint));
+            self.out.sounds.push(SimSound::TutorialHint);
         }
     }
 }
@@ -157,8 +158,8 @@ mod tests {
         let catalog = catalog();
         let mut session = new_pilot(&catalog);
         tick(&mut session);
-        session.player.position = Vec2::new(1500.0, 0.0);
-        session.frame = 60;
+        session.ship.player.position = Vec2::new(1500.0, 0.0);
+        session.space.frame = 60;
         assert_eq!(
             tick(&mut session),
             (
@@ -166,12 +167,12 @@ mod tests {
                 vec![SimSound::TutorialHint]
             )
         );
-        session.player.position = Vec2::new(0.0, 3200.0);
-        session.frame = 120;
-        session.condition = Condition::Disabled;
+        session.ship.player.position = Vec2::new(0.0, 3200.0);
+        session.space.frame = 120;
+        session.ship.condition = Condition::Disabled;
         assert_eq!(tick(&mut session).0, [], "not while disabled");
-        session.condition = Condition::Intact;
-        session.frame = 120;
+        session.ship.condition = Condition::Intact;
+        session.space.frame = 120;
         assert_eq!(
             tick(&mut session).0,
             [SimMessage::Tutorial(TutorialHint::NothingOutHere)]
@@ -183,7 +184,7 @@ mod tests {
         let catalog = catalog();
         let mut session = seasoned(&catalog);
         session.take_sounds();
-        session.player.position = Vec2::new(0.0, 5000.0);
+        session.ship.player.position = Vec2::new(0.0, 5000.0);
         for _ in 0..200 {
             assert_eq!(tick(&mut session).0, []);
         }
@@ -193,7 +194,7 @@ mod tests {
     fn no_hint_while_destroyed() {
         let catalog = catalog();
         let mut session = new_pilot(&catalog);
-        session.condition = Condition::Destroyed;
+        session.ship.condition = Condition::Destroyed;
         for _ in 0..200 {
             assert_eq!(tick(&mut session), (vec![], vec![]));
         }
@@ -229,7 +230,7 @@ mod tests {
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.tutorial().flag(), -1);
         session.take_sounds();
-        session.frame = 0;
+        session.space.frame = 0;
         assert_eq!(
             tick(&mut session),
             (
@@ -312,7 +313,7 @@ mod tests {
         ] {
             let mut session = seasoned(&catalog);
             session.tutorial = Tutorial::NEW_PILOT;
-            session.condition = condition;
+            session.ship.condition = condition;
             let refusal = session.begin_jump().expect_err("refused");
             assert_eq!(refusal, JumpRefusal::Disabled, "{condition:?}");
             assert!(!session.jump_refusal_told(&refusal), "{condition:?}");
@@ -365,9 +366,9 @@ mod tests {
         }
         // The engine's own refusals.
         let mut session = seasoned(&catalog);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         assert_eq!(press_j(&mut session), (Err(JumpRefusal::Disabled), vec![]));
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 100,
             starting: false,
         };

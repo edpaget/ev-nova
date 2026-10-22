@@ -12,8 +12,10 @@
 //! (`target::dropped`, [`Surroundings::live`]) are not a search's.
 //!
 //! Its readers: an NPC's fire ([`fire`](crate::ai::fire), whose sight of
-//! its target holds its fire) and the lost-sight search
-//! ([`lost_sight`](crate::ai::lost_sight)).
+//! its target holds its fire), the lost-sight search
+//! ([`lost_sight`](crate::ai::lost_sight)) and the player's escort's pick
+//! of a nearby threat ([`escort::threat_score`](crate::escort::threat_score),
+//! `_IsShipANearbyThreatToParent` @0x8370e).
 //! rdm:phase/cloaking-fidelity/phase-4-npc-cloak-visibility asks it next,
 //! in the target picks.
 //!

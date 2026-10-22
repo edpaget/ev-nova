@@ -35,9 +35,10 @@
 //!   @0xd864-0xd8a1), and the record with the system's government (0 for
 //!   an independent one) by the Bible's.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
-use super::Session;
+use super::{Chart, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{ListedStellar, SystemId};
 use crate::exploration;
 use crate::galaxy_map::{self, HIDES_ARROW, MARKS_SHIPS, MapDrawing, MapMarks, MapState};
@@ -58,29 +59,114 @@ struct Coding<'a> {
 }
 
 impl Session {
+    /// What the galaxy map frames `system` in, as `_ColorCodeSystem`
+    /// works it out (see the module docs).
+    #[must_use]
+    pub fn system_color_code(&self, system: SystemId) -> SystemColorCode {
+        self.chart.color_code(
+            &self.pilot,
+            &self.setup,
+            &self.ship.coding(&self.pilot, &self.statics, &self.setup),
+            system,
+        )
+    }
+
+    /// The mission systems the galaxy map's red arrows mark, as
+    /// `_RecalcMissionSystsForMap` works them out (@0xe1b5-0xe2d1; see the
+    /// [`galaxy_map`] module): for each mission held,
+    /// in slot order, its travel stellar's system while the stellar is
+    /// active, else none, its return stellar's in its place once its
+    /// destination is reached, when that is another stellar and active;
+    /// pushed unless its `Flags` has [`HIDES_ARROW`]. Then, with
+    /// [`MARKS_SHIPS`] and not [`HIDES_ARROW`], ships left and a ship
+    /// system, the system standing for the ship system. At most 32.
+    ///
+    /// A stellar's system is its holder (+0x14) while that is visible
+    /// ([`OverlaidGalaxy::active_holder`](crate::story::OverlaidGalaxy::active_holder)):
+    /// active (+0x44) exactly then. The ship system is +0x10 as the accept
+    /// resolved it ([`ShipSystem`]): one that follows the player (−6) or
+    /// is nowhere (−1) is below 0 and pushes nothing (@0xe28c-0xe28f).
+    #[must_use]
+    pub fn map_mission_systems(&self) -> Vec<SystemId> {
+        self.chart.map_mission_systems(&self.pilot, &self.statics)
+    }
+
+    /// The system the floating map selects as it shows, as
+    /// `_ShowFloatingMap` sets `_selSystem` (@0x1147b-0x114c8): in mode 3
+    /// with a Con slot selected (+0x6c 0-15), that slot's system, raw,
+    /// when it is visible (+0x1eb); otherwise none. An empty slot (−1),
+    /// whose +0x1eb the original reads out of bounds, selects none. The
+    /// floating map's names read it above a zoom of 1.1 (`_DrawMap`
+    /// @0xf52b-0xf533).
+    #[must_use]
+    pub fn floating_preselection(&self) -> Option<SystemId> {
+        self.chart.floating_preselection(&self.pilot)
+    }
+
+    /// What the galaxy map draws now ([`galaxy_map::draw_map`]): on the
+    /// hypergate map when `hypergate` holds the systems its gate arrows,
+    /// with `missions` the mission systems taken as it opened
+    /// ([`Session::map_mission_systems`]) and `marks` the green mission
+    /// system and the arrow flag its opener set: a mission dialog's
+    /// ([`Session::offer_map_marks`] and its kin), or [`MapMarks::NONE`]
+    /// for every other map (see the [`galaxy_map`] module). Each system is
+    /// framed as [`Session::system_color_code`] says. The course is the
+    /// one saved, raw. The hypergate map's arrows mark their systems
+    /// known as they are drawn: the caller does that with
+    /// [`Session::mark_known`] once it has drawn them.
+    #[must_use]
+    pub fn map_drawing(
+        &self,
+        hypergate: Option<&[SystemId]>,
+        missions: &[SystemId],
+        marks: MapMarks,
+    ) -> MapDrawing {
+        let coding = self.ship.coding(&self.pilot, &self.statics, &self.setup);
+        let state = MapState {
+            galaxy: &self.chart.galaxy,
+            explored: &self.pilot.explored,
+            known: &self.chart.known,
+            current: self.pilot.system,
+            course: &self.pilot.course,
+            hyper_slot: self.chart.hyper_slot(&self.pilot),
+            hypergate,
+            missions,
+            green: marks.green,
+            multi_arrows: marks.multi_arrows,
+            pairing: self.setup.rules.source_for(RuleKey::MapLinkPairing),
+        };
+        galaxy_map::draw_map(&state, |system| {
+            self.chart
+                .color_code(&self.pilot, &self.setup, &coding, system)
+        })
+    }
+}
+
+impl PlayerShip {
     /// What the colour codes read, worked out once.
-    fn coding(&self) -> Coding<'_> {
+    fn coding<'a>(&self, pilot: &Pilot, statics: &'a Statics, setup: &Setup) -> Coding<'a> {
         let mut listed: BTreeMap<SystemId, Vec<&ListedStellar>> = BTreeMap::new();
-        for stellar in &self.listed_stellars {
+        for stellar in &statics.listed_stellars {
             for &system in &stellar.systems {
                 listed.entry(system).or_default().push(stellar);
             }
         }
         Coding {
-            blessing: self.blessing(),
+            blessing: self.blessing(pilot, statics, setup),
             listed,
         }
     }
+}
 
-    /// What the galaxy map frames `system` in, as `_ColorCodeSystem`
-    /// works it out (see the module docs).
-    #[must_use]
-    pub fn system_color_code(&self, system: SystemId) -> SystemColorCode {
-        self.color_code(&self.coding(), system)
-    }
-
+impl Chart {
     /// [`Session::system_color_code`] with `coding` read already.
-    fn color_code(&self, coding: &Coding<'_>, system: SystemId) -> SystemColorCode {
+    fn color_code(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        coding: &Coding<'_>,
+        system: SystemId,
+    ) -> SystemColorCode {
         let places = self.galaxy.map().places();
         let head = places.head(system);
         let stood = if self.galaxy.exists(system) {
@@ -88,23 +174,23 @@ impl Session {
         } else {
             None
         };
-        let explored = match self.rules.source_for(RuleKey::ExploredByPlace) {
-            RuleSource::Engine => head.is_some_and(|head| self.pilot.has_explored(head)),
-            RuleSource::Bible => self.pilot.has_explored(system),
+        let explored = match setup.rules.source_for(RuleKey::ExploredByPlace) {
+            RuleSource::Engine => head.is_some_and(|head| pilot.has_explored(head)),
+            RuleSource::Bible => pilot.has_explored(system),
         };
-        let record = match self.rules.source_for(RuleKey::LegalRecords) {
-            RuleSource::Engine => head.map_or(0, |head| self.pilot.system_record(head)),
+        let record = match setup.rules.source_for(RuleKey::LegalRecords) {
+            RuleSource::Engine => head.map_or(0, |head| pilot.system_record(head)),
             RuleSource::Bible => self
                 .galaxy
                 .govt(system)
-                .map_or(0, |govt| self.pilot.legal_record(govt)),
+                .map_or(0, |govt| pilot.legal_record(govt)),
         };
         let Some(active) = stood else {
             return iff::system_color_code(false, explored, false, record, &[]);
         };
         let inhabited = exploration::inhabited(
             self.galaxy.map().stellars(active),
-            self.rules.source_for(RuleKey::MapExplore),
+            setup.rules.source_for(RuleKey::MapExplore),
         );
         let stellars: Vec<MapStellar> = coding
             .listed
@@ -121,14 +207,14 @@ impl Session {
                 MapStellar {
                     active: self
                         .galaxy
-                        .active_holder(&stellar.systems, self.pilot.system)
+                        .active_holder(&stellar.systems, pilot.system)
                         .is_some(),
                     flags: stellar.flags,
                     flags2: stellar.flags2,
                     destroyed: self.galaxy.destroyed(stellar.id),
                     min_status: stellar.min_status,
                     standing: Standing {
-                        dominated: Self::dominated_by(stellar.flags2),
+                        dominated: Session::dominated_by(stellar.flags2),
                         blessed: coding.blessing.blesses(govt, Blessed::Landing),
                     },
                 }
@@ -153,13 +239,13 @@ impl Session {
     /// resolved it ([`ShipSystem`]): one that follows the player (−6) or
     /// is nowhere (−1) is below 0 and pushes nothing (@0xe28c-0xe28f).
     #[must_use]
-    pub fn map_mission_systems(&self) -> Vec<SystemId> {
+    fn map_mission_systems(&self, pilot: &Pilot, statics: &Statics) -> Vec<SystemId> {
         let active = |stellar| {
             self.galaxy
-                .active_holder(self.listers(stellar), self.pilot.system)
+                .active_holder(statics.listers(stellar), pilot.system)
         };
         let mut systems = Vec::new();
-        for (_, mission) in self.pilot.missions().iter() {
+        for (_, mission) in pilot.missions().iter() {
             let destination = mission.destination.map(|stop| stop.stellar);
             let mut system = destination.and_then(active);
             if let Some(back) = mission.return_to.map(|stop| stop.stellar)
@@ -169,7 +255,7 @@ impl Session {
             {
                 system = Some(holder);
             }
-            let flags = self
+            let flags = statics
                 .mission_record(mission.mission)
                 .map_or(0, |record| record.flags);
             let hidden = flags & HIDES_ARROW != 0;
@@ -199,55 +285,20 @@ impl Session {
     /// floating map's names read it above a zoom of 1.1 (`_DrawMap`
     /// @0xf52b-0xf533).
     #[must_use]
-    pub fn floating_preselection(&self) -> Option<SystemId> {
-        let slot = self.hyper_slot()?;
-        let system = *self.galaxy.con_slots(self.pilot.system).get(slot)?;
+    fn floating_preselection(&self, pilot: &Pilot) -> Option<SystemId> {
+        let slot = self.hyper_slot(pilot)?;
+        let system = *self.galaxy.con_slots(pilot.system).get(slot)?;
         (self.galaxy.exists(system) && self.galaxy.visible(system)).then_some(system)
     }
 
     /// The current system's Con slot selected in mode 3 (+0x6c), if any:
-    /// the one the raw selection stands in (`Session::selected_slot`),
+    /// the one the raw selection stands in (`Chart::selected_slot`),
     /// always one of the first 16.
-    fn hyper_slot(&self) -> Option<usize> {
+    fn hyper_slot(&self, pilot: &Pilot) -> Option<usize> {
         let NavMode::Hyperspace(Some(selected)) = self.nav else {
             return None;
         };
-        self.selected_slot(selected)
-    }
-
-    /// What the galaxy map draws now ([`galaxy_map::draw_map`]): on the
-    /// hypergate map when `hypergate` holds the systems its gate arrows,
-    /// with `missions` the mission systems taken as it opened
-    /// ([`Session::map_mission_systems`]) and `marks` the green mission
-    /// system and the arrow flag its opener set: a mission dialog's
-    /// ([`Session::offer_map_marks`] and its kin), or [`MapMarks::NONE`]
-    /// for every other map (see the [`galaxy_map`] module). Each system is
-    /// framed as [`Session::system_color_code`] says. The course is the
-    /// one saved, raw. The hypergate map's arrows mark their systems
-    /// known as they are drawn: the caller does that with
-    /// [`Session::mark_known`] once it has drawn them.
-    #[must_use]
-    pub fn map_drawing(
-        &self,
-        hypergate: Option<&[SystemId]>,
-        missions: &[SystemId],
-        marks: MapMarks,
-    ) -> MapDrawing {
-        let coding = self.coding();
-        let state = MapState {
-            galaxy: &self.galaxy,
-            explored: &self.pilot.explored,
-            known: &self.known,
-            current: self.pilot.system,
-            course: &self.pilot.course,
-            hyper_slot: self.hyper_slot(),
-            hypergate,
-            missions,
-            green: marks.green,
-            multi_arrows: marks.multi_arrows,
-            pairing: self.rules.source_for(RuleKey::MapLinkPairing),
-        };
-        galaxy_map::draw_map(&state, |system| self.color_code(&coding, system))
+        self.selected_slot(pilot, selected)
     }
 }
 
@@ -635,11 +686,13 @@ mod tests {
         let catalog = shadowed();
         let mut session = flown(&catalog, Rulebook::default());
         assert_eq!(session.floating_preselection(), None, "nav off");
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(131))));
         assert_eq!(session.floating_preselection(), Some(SystemId(131)));
-        session.set_nav(NavMode::Hyperspace(None));
+        session.chart.set_nav(NavMode::Hyperspace(None));
         assert_eq!(session.floating_preselection(), None, "no selection");
-        session.set_nav(NavMode::Stellar(None));
+        session.chart.set_nav(NavMode::Stellar(None));
         assert_eq!(session.floating_preselection(), None, "mode 2");
     }
 
@@ -650,13 +703,17 @@ mod tests {
         let mut catalog = shadowed();
         catalog.star_map[0].links = [-1, 129, 131].map(SystemId).to_vec();
         let mut session = flown(&catalog, Rulebook::default());
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(129))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(129))));
         assert_eq!(
             session.floating_preselection(),
             None,
             "129 hidden, not resolved to 131"
         );
-        session.set_nav(NavMode::Hyperspace(Some(SystemId(-1))));
+        session
+            .chart
+            .set_nav(NavMode::Hyperspace(Some(SystemId(-1))));
         assert_eq!(session.floating_preselection(), None, "the empty slot");
     }
 
@@ -673,7 +730,7 @@ mod tests {
             for system in [131, 132] {
                 session.pilot.explore(SystemId(system));
             }
-            session.rework_known();
+            session.chart.rework_known(&session.pilot);
             let links: Vec<(i16, i16)> = session
                 .map_drawing(None, &[], MapMarks::NONE)
                 .links

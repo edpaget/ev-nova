@@ -116,29 +116,30 @@ impl Session {
     /// the module docs), on double time's second pass when `again`:
     /// nothing without one.
     pub(super) fn collapse_jump(&mut self, again: bool) {
-        let warp = match self.jump {
+        let warp = match self.mode.jump() {
             Some(Jump::PreJump { warp, .. }) => warp,
             Some(Jump::Hyperspace { warp, .. }) => Some(warp),
             None => return,
         };
         let flags = self
+            .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         let speed = warp::lead_in_speed(
             collapse_ticks(warp, again),
             warp::warp_factor(flags),
-            self.warp_sound(),
+            self.ship.warp_sound(&self.statics),
         );
-        self.player.velocity = collapsed_velocity(
-            self.player.velocity,
-            self.player.heading,
+        self.ship.player.velocity = collapsed_velocity(
+            self.ship.player.velocity,
+            self.ship.player.heading,
             speed,
             self.top_speed(),
         );
-        self.jump = None;
-        self.say(SimMessage::JumpCollapsed);
-        self.halt_sounds(&WARP_UP_HALTS);
-        self.sounds.push(SimSound::JumpCollapsed);
+        self.mode.end_jump();
+        self.space.say(&mut self.out, SimMessage::JumpCollapsed);
+        self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
+        self.out.sounds.push(SimSound::JumpCollapsed);
     }
 }
 
@@ -213,7 +214,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");
-        session.warp_sounds[0] = duration;
+        session.statics_mut().warp_sounds[0] = duration;
         session.take_sounds();
         session.take_messages();
         session
@@ -222,7 +223,7 @@ mod tests {
     /// Disables the player as a fight does, then ticks.
     fn disable_and_tick(session: &mut Session) {
         session.tick_combat(DISABLING, &mut NeverFires);
-        assert_eq!(session.condition, Condition::Disabled);
+        assert_eq!(session.ship.condition, Condition::Disabled);
         session.tick(Controls::default());
     }
 
@@ -259,7 +260,7 @@ mod tests {
     fn a_player_disabled_while_turning_collapses_on_the_clock_from_the_turns_start() {
         // At rest facing up, 90 degrees off east: J turns at once.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
-        session.warp_sounds[0] = 25;
+        session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
@@ -286,7 +287,7 @@ mod tests {
         // At rest facing east, the bearing: the jump begins at once, and
         // the fight runs through it.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds[0] = 25;
+        session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         for _ in 0..3 {
             session.tick(Controls::default());
@@ -353,7 +354,7 @@ mod tests {
     fn a_dying_player_collapses_too() {
         let mut session = braking(9);
         let before = *session.player();
-        session.condition = Condition::Dying {
+        session.ship.condition = Condition::Dying {
             ticks_left: 10,
             starting: false,
         };
@@ -384,7 +385,7 @@ mod tests {
     #[test]
     fn a_disabled_player_with_no_jump_collapses_nothing() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::new(1.0, 0.0), 0.0);
-        session.warp_sounds[0] = 9;
+        session.statics_mut().warp_sounds[0] = 9;
         disable_and_tick(&mut session);
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.take_sounds(), []);

@@ -5,12 +5,16 @@
 //! the player's legal record in the system (its record with S; none in an
 //! independent system), and tol a government's `CrimeTol`. In order:
 //!
-//! 1. A ship that threatens the player or a ship the player leads does
-//!    not like it: `_ExtendedIsThreatToPlayer` @0x81b70 (called @0x8218c),
-//!    whose target test counts a ship led by the player (@0x81c2e-0x81c4a),
-//!    as [`Npc::threatens_player_among`] does. The rest of that test
-//!    (visibility, +0x8c, the ship's own escorts' threats) is
-//!    crons-news-ranks-fidelity phase 5's.
+//! 1. A ship that threatens the player does not like it:
+//!    `_ExtendedIsThreatToPlayer` @0x81b70 (called @0x8218c), read whole as
+//!    [`Npc::threatens_player_extended`] with the player's sight of it
+//!    ([`Surroundings::seen_by_player`], @0x81bc6). So a ship the player
+//!    can't see is no threat, nor is the player's own escort (@0x81b9f);
+//!    a ship attacking the player or a ship it leads (@0x81c2e-0x81c4a),
+//!    one whose hit's target is the player, and a lead whose escort
+//!    fights the player (@0x81cdd-0x81dbe) are. Its stellar-defender
+//!    clause (+0x8c, @0x81bd3) is left out, as the engine has no defence
+//!    ships (rdm:task/planet-domination).
 //! 2. The player's escorts do, hired or mission escorts (leader 0,
 //!    @0x82199). So does a ship whose government blesses the player with
 //!    peace (rank `Flags` 0x0100, `_PlayerBlessedByGovt(G, 0)` @0x821b9,
@@ -41,9 +45,14 @@
 //! byte, which the engine never sets. It is not the blessing, which is the
 //! government's byte +0x84 (see `nova_sim::rank`), read in rule 2.
 //!
-//! The [`Attitude`] (the comm status, `_CommDialogUpdate` @0x90625) is
-//! hostile while the ship threatens the player as in rule 1,
-//! friendly while it likes it, and unfriendly otherwise.
+//! The [`Attitude`] is hostile while the ship threatens the player as in
+//! rule 1, friendly while it likes it, and unfriendly otherwise. Every
+//! comm-dialog caller of `_ExtendedIsThreatToPlayer` reads it: the
+//! "Status: Hostile" line (`_CommDialogUpdate` @0x90625,
+//! `nova_sim::HailView::hostile`), the middle button, Beg for Mercy for a
+//! threat and Request Assistance otherwise (`_DrawCommDialogButtons`
+//! @0x28d5a, and its press, `_DoCommDialog` @0x960fa), the opening reply
+//! (@0x95ce1) and Greetings (@0x966da).
 
 use crate::ai::Surroundings;
 use crate::govt::NOSY;
@@ -70,7 +79,7 @@ pub enum Attitude {
 /// behaviour), none otherwise.
 #[must_use]
 pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> bool {
-    if npc.threatens_player_among(around.npcs) {
+    if around.threatens_player(npc) {
         return false;
     }
     if npc.escorts_player() || around.blessed(npc.govt) {
@@ -109,7 +118,7 @@ pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHai
 /// [`likes_player`] and the module docs).
 #[must_use]
 pub fn attitude(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> Attitude {
-    if npc.threatens_player_among(around.npcs) {
+    if around.threatens_player(npc) {
         Attitude::Hostile
     } else if likes_player(npc, around, mission) {
         Attitude::Friendly
@@ -342,6 +351,82 @@ mod tests {
         );
     }
 
+    /// `npc`'s attitude and liking among `npcs`, of government 140 at home
+    /// with a clean record, the player scanning for cloaks when `scanner`.
+    fn feels(npc: &Npc, npcs: &[Npc], scanner: bool) -> (Attitude, bool) {
+        let govts = govts(0);
+        let around = Surroundings {
+            govts: &govts,
+            system_govt: Some(ME),
+            cloak_scanner: scanner,
+            ..Surroundings::new(&[], npcs)
+        };
+        (
+            attitude(npc, &around, None),
+            likes_player(npc, &around, None),
+        )
+    }
+
+    /// A hired escort of the player, NPC `id`.
+    fn hired(id: u32) -> Npc {
+        Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]))
+        }
+    }
+
+    const HOSTILE: (Attitude, bool) = (Attitude::Hostile, false);
+    const FRIENDLY: (Attitude, bool) = (Attitude::Friendly, true);
+
+    #[test]
+    fn a_ship_attacking_a_hired_escort_is_hostile() {
+        let mut raider = ship(Some(ME));
+        raider.goal = Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(5)));
+        assert_eq!(feels(&raider, &[hired(5)], false), HOSTILE);
+    }
+
+    #[test]
+    fn a_ship_whose_hit_target_is_the_player_is_hostile() {
+        let mut hit = ship(Some(ME));
+        hit.target = Some(ShipRef::Player);
+        assert_eq!(feels(&hit, &[], false), HOSTILE);
+    }
+
+    #[test]
+    fn a_lead_whose_escort_attacks_the_player_is_hostile() {
+        let mut lead = ship(Some(ME));
+        lead.target = Some(ShipRef::Npc(crate::traffic::npc::NpcId(9)));
+        let mut escort = ship(Some(ME));
+        escort.id = crate::traffic::npc::NpcId(2);
+        escort.leader = Some(lead.id);
+        escort.goal = Goal::Attack(ShipRef::Player);
+        assert_eq!(feels(&lead, &[escort], false), HOSTILE);
+        assert_eq!(feels(&lead, &[], false), FRIENDLY, "without it");
+    }
+
+    #[test]
+    fn a_cloaked_attacker_the_player_cannot_see_falls_through_to_the_other_rules() {
+        let mut cloaked = ship(Some(ME));
+        cloaked.goal = Goal::Attack(ShipRef::Player);
+        cloaked.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert_eq!(feels(&cloaked, &[], false), FRIENDLY, "unseen");
+        assert_eq!(feels(&cloaked, &[], true), HOSTILE, "scanned on screen");
+    }
+
+    #[test]
+    fn the_players_own_escort_attacking_it_is_no_threat_and_likes_it() {
+        let mut escort = hired(1);
+        escort.govt = Some(ENEMY);
+        escort.goal = Goal::Attack(ShipRef::Player);
+        assert_eq!(feels(&escort, &[], false), FRIENDLY);
+    }
+
     // Mission ships.
 
     /// A ship of `govt` marked by slot 0's mission of `behav`, in the
@@ -506,14 +591,17 @@ mod tests {
     }
 
     #[test]
-    fn a_mission_ship_threatening_the_player_never_likes_it() {
+    fn a_mission_ship_threatening_the_player_likes_it_only_in_the_formation() {
+        // In the formation its leader (+0x9a) is the player, which
+        // `_ExtendedIsThreatToPlayer` never counts (@0x81b9f); rule 2 then
+        // likes it.
         let govts = govts(0);
         let around = among(&govts, None, 0);
         for joined in [false, true] {
             let mut npc = marked(None, ShipBehav::EscortPlayer, joined);
             npc.goal = Goal::Attack(ShipRef::Player);
             let mission = Some(of(ShipGoal::Escort, ShipBehav::EscortPlayer));
-            assert!(!likes_player(&npc, &around, mission), "{joined}");
+            assert_eq!(likes_player(&npc, &around, mission), joined, "{joined}");
         }
     }
 }

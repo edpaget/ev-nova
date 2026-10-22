@@ -66,7 +66,7 @@
 //! request on the press, between ticks, and the approach from the next
 //! tick the land key is up, so the two agree.
 
-use super::Session;
+use super::{Chart, Outbox, Port, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
 use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal};
 use crate::message::SimMessage;
@@ -78,85 +78,76 @@ impl Session {
     /// dock approach back (the original's `_dockTryFlag`, see the
     /// `clearance` module). Up until it says otherwise.
     pub fn set_land_key(&mut self, on: bool) {
-        self.land_key = on;
+        self.port.set_land_key(on);
     }
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
     #[must_use]
     pub fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
-        self.dock
+        self.port.dock_request()
     }
 
     /// Applies the land key's `press`: the stellar it selected, in mode
     /// 2 with the brackets' fly-in, the request after it, and what it
     /// said, and gives its outcome.
     pub(super) fn apply_press(&mut self, press: DockPress) -> Result<LandOutcome, LandingRefusal> {
-        self.select_pressed(press.selected);
-        self.dock = press.dock;
+        self.chart.select_pressed(press.selected);
+        self.port.dock = press.dock;
         match press.said {
-            Some(DockSaid::NoResponse) => self.say(SimMessage::NoResponse),
+            Some(DockSaid::NoResponse) => self.space.say(&mut self.out, SimMessage::NoResponse),
             Some(DockSaid::Requested) => {
                 if let Ok(LandOutcome::Requested { stellar, .. }) = press.outcome {
-                    let kind = self.dock_kind(stellar);
-                    self.sounds.push(SimSound::TrafficControl);
-                    self.say(SimMessage::DockRequested { stellar, kind });
+                    let kind = self.chart.dock_kind(stellar);
+                    self.out.sounds.push(SimSound::TrafficControl);
+                    self.space
+                        .say(&mut self.out, SimMessage::DockRequested { stellar, kind });
                 }
             }
             None => {}
         }
         if let Err(LandingRefusal::Denied { .. }) = press.outcome {
-            self.sounds.push(SimSound::TrafficControl);
+            self.out.sounds.push(SimSound::TrafficControl);
         }
         press.outcome
-    }
-
-    /// Selects the stellar the land key `selected`, if it selected one, in
-    /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
-    pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
-        if let Some(stellar) = selected {
-            self.set_nav(NavMode::Stellar(Some(stellar)));
-            self.nav_fly_in.start();
-        }
-    }
-
-    /// How the request's line and the greeting word `stellar`, one of the
-    /// system's.
-    fn dock_kind(&self, stellar: crate::catalog::StellarId) -> DockKind {
-        self.sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .map_or(DockKind::Planet, DockKind::of_site)
     }
 
     /// One frame of the dock approach, then nav mode 3's reset (see the
     /// module docs).
     pub(crate) fn dock_approach(&mut self) {
-        if !self.land_key
-            && let Some(mut request) = self.dock
+        if !self.port.land_key
+            && let Some(mut request) = self.port.dock
         {
-            match self.sites.iter().find(|site| site.id == request.stellar) {
-                None => self.dock = None,
+            match self
+                .chart
+                .sites
+                .iter()
+                .find(|site| site.id == request.stellar)
+            {
+                None => self.port.dock = None,
                 Some(site) => {
                     let blessing = self.blessing();
                     let clears =
                         approach_clears(site, self.standing(site, &blessing), request.permission);
-                    let offset = self.player.position - site.position;
+                    let offset = self.ship.player.position - site.position;
                     let done = approach(&mut request, site, offset, clears);
                     let kind = DockKind::of_site(site);
-                    self.dock = (!done.expired).then_some(request);
+                    self.port.dock = (!done.expired).then_some(request);
                     if done.greet {
-                        self.sounds.push(SimSound::TrafficControl);
-                        self.say(SimMessage::DockCleared {
-                            stellar: request.stellar,
-                            kind,
-                        });
+                        self.out.sounds.push(SimSound::TrafficControl);
+                        self.space.say(
+                            &mut self.out,
+                            SimMessage::DockCleared {
+                                stellar: request.stellar,
+                                kind,
+                            },
+                        );
                     }
                 }
             }
         }
-        if matches!(self.nav, NavMode::Hyperspace(_)) {
-            self.dock = None;
+        if matches!(self.chart.nav, NavMode::Hyperspace(_)) {
+            self.port.dock = None;
         }
     }
 
@@ -164,7 +155,7 @@ impl Session {
     /// [`Session::forget_dock_chatter`] starts forgetting.
     #[cfg(test)]
     pub(crate) fn chatter_marks(&self) -> (usize, usize) {
-        (self.messages.len(), self.sounds.len())
+        self.out.chatter_marks()
     }
 
     /// Forgets the dock request's messages and traffic control's sound
@@ -172,6 +163,23 @@ impl Session {
     /// land without pinning them.
     #[cfg(test)]
     pub(crate) fn forget_dock_chatter(&mut self, marks: (usize, usize)) {
+        self.out.forget_dock_chatter(marks);
+    }
+}
+
+impl Outbox {
+    /// How many messages and sounds are queued: where
+    /// [`Outbox::forget_dock_chatter`] starts forgetting.
+    #[cfg(test)]
+    fn chatter_marks(&self) -> (usize, usize) {
+        (self.messages.len(), self.sounds.len())
+    }
+
+    /// Forgets the dock request's messages and traffic control's sound
+    /// queued since `marks` ([`Outbox::chatter_marks`]), for fixtures that
+    /// land without pinning them.
+    #[cfg(test)]
+    fn forget_dock_chatter(&mut self, marks: (usize, usize)) {
         let (messages, sounds) = marks;
         let mut index = 0;
         self.messages.retain(|message| {
@@ -189,6 +197,42 @@ impl Session {
             index += 1;
             index <= sounds || *sound != SimSound::TrafficControl
         });
+    }
+}
+
+impl Chart {
+    /// Selects the stellar the land key `selected`, if it selected one, in
+    /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
+    pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
+        if let Some(stellar) = selected {
+            self.set_nav(NavMode::Stellar(Some(stellar)));
+            self.nav_fly_in.start();
+        }
+    }
+
+    /// How the request's line and the greeting word `stellar`, one of the
+    /// system's.
+    fn dock_kind(&self, stellar: crate::catalog::StellarId) -> DockKind {
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or(DockKind::Planet, DockKind::of_site)
+    }
+}
+
+impl Port {
+    /// Takes the land key's state: `on` while it is held, which holds the
+    /// dock approach back (the original's `_dockTryFlag`, see the
+    /// `clearance` module). Up until it says otherwise.
+    fn set_land_key(&mut self, on: bool) {
+        self.land_key = on;
+    }
+
+    /// The dock request, if any: the stellar requested and its counter
+    /// (see the `clearance` module).
+    #[must_use]
+    fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
+        self.dock
     }
 }
 
@@ -335,7 +379,7 @@ mod tests {
     #[test]
     fn a_denial_sounds_traffic_control_drops_the_request_and_the_next_press_asks_again() {
         let mut session = quiet(Session::start(&strict()).expect("starts"));
-        session.dock = request(129, CLEARED - 1);
+        session.port.dock = request(129, CLEARED - 1);
         let denied = Err(LandingRefusal::Denied {
             stellar: StellarId(128),
             station: false,
@@ -362,13 +406,13 @@ mod tests {
             Vec2::new(2000.0, -250.0),
             Vec2::new(2000.0 + 250.0, 10.0),
         ] {
-            session.player.position = at;
+            session.ship.player.position = at;
             tick(&mut session);
             assert_eq!(session.take_messages(), [], "{at:?}");
             assert_eq!(session.take_sounds(), [], "{at:?}");
             assert_eq!(session.dock_request(), request(129, 0), "{at:?}");
         }
-        session.player.position = Vec2::new(2000.0 - 249.9, 249.9);
+        session.ship.player.position = Vec2::new(2000.0 - 249.9, 249.9);
         tick(&mut session);
         assert_eq!(session.take_messages(), [cleared_at(129, DockKind::Planet)]);
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
@@ -391,14 +435,14 @@ mod tests {
         let mut session = session();
         session.land().expect("requests");
         tick(&mut session);
-        session.sites[0].min_status = 32767;
+        session.chart.sites[0].min_status = 32767;
         assert_eq!(session.land(), landed(128), "after the greeting");
 
         // A far request, then the ship moved over the stellar with no
         // tick between: too far.
         let mut session = on_129(self::session());
         session.land().expect("requests");
-        session.player.position = Vec2::new(2000.0, 0.0);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
         assert_eq!(
             session.land(),
             Err(LandingRefusal::TooFar {
@@ -500,7 +544,7 @@ mod tests {
     fn a_disabled_players_approach_still_greets() {
         let mut session = session();
         session.land().expect("requests");
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         tick(&mut session);
         assert_eq!(session.take_messages(), [cleared_at(128, DockKind::Planet)]);
     }
@@ -548,7 +592,7 @@ mod tests {
         let mut session = greeted(session());
         session.hyperspace_mode();
         assert_eq!(session.dock_request(), None, "H alone");
-        session.dock = request(128, CLEARED);
+        session.port.dock = request(128, CLEARED);
         session.set_land_key(true);
         tick(&mut session);
         assert_eq!(session.dock_request(), None, "even with L held");
@@ -563,7 +607,7 @@ mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session);
         crate::testkit::begin_jump_now(&mut session).expect("jumps");
-        session.dock = request(140, CLEARED);
+        session.port.dock = request(140, CLEARED);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -576,7 +620,7 @@ mod tests {
     fn the_take_off_drops_the_request() {
         let mut session = session();
         land_now(&mut session).expect("lands");
-        session.dock = request(128, CLEARED);
+        session.port.dock = request(128, CLEARED);
         session.take_off(&crate::session::entry::NoTraffic, &mut NeverFires);
         assert_eq!(session.dock_request(), None);
         assert_eq!(session.land(), requested(128));
@@ -702,9 +746,9 @@ mod tests {
     ) -> Result<LandPress, LandingRefusal> {
         let mut session = quiet(Session::start(catalog).expect("starts"));
         session.land().expect("requests 128");
-        session.dock = request(128, permission);
-        session.player.position = Vec2::new(2000.0, 0.0);
-        session.deselect();
+        session.port.dock = request(128, permission);
+        session.ship.player.position = Vec2::new(2000.0, 0.0);
+        session.chart.deselect();
         session.land()
     }
 

@@ -63,23 +63,23 @@ impl Session {
         exit: Vec2,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.gate_arrival == GateArrivalRule::LikeJump {
+        if self.setup.gate_arrival == GateArrivalRule::LikeJump {
             return;
         }
         let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        if self.rules.source_for(RuleKey::GateEscorts) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateEscorts) != RuleSource::Engine {
             for id in led {
                 self.snap(id);
-                if let Some(npc) = self.npc_mut(id) {
+                if let Some(npc) = self.space.npc_mut(id) {
                     npc.mode = Mode::Flying;
                 }
             }
             return;
         }
-        let heading = self.player.heading;
+        let heading = self.ship.player.heading;
         for id in led {
             let wait = chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST;
-            if let Some(npc) = self.npc_mut(id) {
+            if let Some(npc) = self.space.npc_mut(id) {
                 npc.state = ShipState {
                     position: exit,
                     velocity: Vec2::ZERO,
@@ -146,8 +146,8 @@ mod tests {
         let formation = npc.formation().expect("a slot");
         npc.state
             == ShipState {
-                position: formation.position(&session.player),
-                ..session.player
+                position: formation.position(&session.ship.player),
+                ..session.ship.player
             }
     }
 
@@ -165,7 +165,7 @@ mod tests {
                 let expected = ShipState {
                     position: exit_of(kind),
                     velocity: Vec2::ZERO,
-                    heading: session.player.heading,
+                    heading: session.ship.player.heading,
                 };
                 assert_eq!(npc.state, expected, "{kind:?}");
                 assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34 }, "{kind:?}");
@@ -183,7 +183,7 @@ mod tests {
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         for &id in &ids {
-            let npc = session.npc_mut(id).expect("here");
+            let npc = session.space.npc_mut(id).expect("here");
             npc.target = Some(crate::combat::ShipRef::Player);
             npc.trigger = Trigger {
                 primary: true,
@@ -198,7 +198,7 @@ mod tests {
             &mut NeverFires,
         );
         for &id in &ids {
-            let npc = session.npc(id).expect("here");
+            let npc = session.space.npc(id).expect("here");
             assert_eq!(npc.target, None);
             assert_eq!(npc.trigger, Trigger::default());
         }
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(draws.asked, [LEAD_OUT_DRAW; 3], "one Rand(20) a ship");
         let mut waits: Vec<u32> = ids
             .iter()
-            .map(|&id| match session.npc(id).map(|npc| npc.mode) {
+            .map(|&id| match session.space.npc(id).map(|npc| npc.mode) {
                 Some(Mode::Emerging { ticks_left }) => ticks_left,
                 other => panic!("{other:?}"),
             })
@@ -234,22 +234,22 @@ mod tests {
         let mut session = flying(&catalog, Rulebook::default());
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
-        let heading = session.player.heading;
+        let heading = session.ship.player.heading;
         let exit = exit_of(GateKind::Wormhole);
         ticks(&mut session, &catalog, 33);
         for &id in &ids {
-            let npc = session.npc(id).expect("here");
+            let npc = session.space.npc(id).expect("here");
             assert!(npc.emerging(), "still waiting");
             assert_eq!(npc.state.position, exit, "held at the exit");
         }
         tick(&mut session, &catalog);
         for &id in &ids {
-            let npc = session.npc(id).expect("here");
+            let npc = session.space.npc(id).expect("here");
             assert_eq!(npc.mode, Mode::LeavingGate { tick: 0 });
         }
         tick(&mut session, &catalog);
         for &id in &ids {
-            let npc = session.npc(id).expect("here");
+            let npc = session.space.npc(id).expect("here");
             let moved = npc.state.position - exit;
             let along = crate::flight::facing(heading) * 15.0;
             assert!((moved - along).length() < 1e-3, "{moved:?}");
@@ -281,7 +281,7 @@ mod tests {
         for _ in 0..60 {
             tick(&mut session, &catalog);
             for &id in &ids {
-                let npc = session.npc(id).expect("here");
+                let npc = session.space.npc(id).expect("here");
                 if npc.mode == Mode::Flying {
                     ended.entry(id).or_insert(npc.state.velocity.length());
                 }
@@ -289,7 +289,13 @@ mod tests {
         }
         assert_eq!(ended.len(), 3, "{ended:?}");
         for (id, speed) in ended {
-            let own = session.npc(id).expect("here").stats.handling.max_speed;
+            let own = session
+                .space
+                .npc(id)
+                .expect("here")
+                .stats
+                .handling
+                .max_speed;
             assert!((own - 8.0).abs() < 1e-4, "{id:?}: {own}");
             assert!((speed - 9.175).abs() < 1e-3, "{id:?}: {speed}");
         }
@@ -321,12 +327,16 @@ mod tests {
                 fade: crate::cloak::FADE_FULL,
                 direction: 0,
             };
-            let before = session.fleet[0].expect("placed");
-            session.npc_mut(before).expect("here").cloak = cloaked;
+            let before = session.space.escorts.fleet[0].expect("placed");
+            session.space.npc_mut(before).expect("here").cloak = cloaked;
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
-            let hired = session.fleet[0].expect("placed");
+            let hired = session.space.escorts.fleet[0].expect("placed");
             assert_ne!(hired, before, "{kind:?}: a new NPC");
-            assert_eq!(session.npc(hired).expect("here").cloak, cloaked, "{kind:?}");
+            assert_eq!(
+                session.space.npc(hired).expect("here").cloak,
+                cloaked,
+                "{kind:?}"
+            );
         }
     }
 
@@ -336,8 +346,8 @@ mod tests {
         let mut session =
             flying(&catalog, Rulebook::default()).with_gate_arrival(GateArrivalRule::LikeJump);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
-        let hired = session.fleet[0].expect("placed");
-        let npc = session.npc(hired).expect("here").clone();
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        let npc = session.space.npc(hired).expect("here").clone();
         assert!(on_slot(&session, &npc), "{:?}", npc.state);
         assert!(!npc.emerging());
         assert!(!npc.led_out);
@@ -356,8 +366,8 @@ mod tests {
         let mut session = session;
         jump_to(&mut session, &catalog, 131);
         assert_eq!(session.pilot.system, SystemId(131));
-        let hired = session.fleet[0].expect("placed");
-        let npc = session.npc(hired).expect("here").clone();
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        let npc = session.space.npc(hired).expect("here").clone();
         assert!(on_slot(&session, &npc), "jump: {:?}", npc.state);
         assert!(!npc.emerging());
     }

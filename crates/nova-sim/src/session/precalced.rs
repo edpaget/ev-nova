@@ -82,8 +82,9 @@
 //! (`_screenFaded` @0x5a013, `_fadePending` @0x5a052-0x5a064), which are
 //! the screens' state, not the session's.
 
-use super::Session;
+use super::{Outbox, PlayerShip, Session, Setup, Statics};
 use crate::market;
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::Latches;
 
@@ -106,7 +107,7 @@ impl Session {
     /// in the original's order (see the module docs): re-arms
     /// `_ScanPlayer`'s contraband latches (@0xc3ef-0xc5a3, @0xc7b0),
     /// sets the `jünk` latches, refreshes the sabotage clock
-    /// (@0xc3ff-0xc769, `Session::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
+    /// (@0xc3ff-0xc769, `PlayerShip::refresh_sabotage`), trims the commodities to the fleet's holds (@0xc7d8-0xc887), and
     /// takes the active ranks the blessing table is built from
     /// (@0xc8be-0xc981), and turns the repair inhibit off (@0xc998).
     ///
@@ -128,41 +129,52 @@ impl Session {
     /// [`RuleKey::ShipChangeCargo`], the reset at a set expression's end
     /// leaves the cargo past the holds untrimmed (see the module docs).
     pub(super) fn reset_precalced_for(&mut self, cause: ResetCause) {
-        self.scan_latches = Latches::ARMED;
-        self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
-        self.refresh_sabotage();
-        self.reset_inhibitors();
-        self.reset_iff_scramblers();
-        if self.trims(cause) {
-            self.trim_to_holds();
+        self.ship.latches.scan_latches = Latches::ARMED;
+        self.ship.latches.junk_latches =
+            market::JunkLatches::of(&self.statics.goods, &self.pilot.cargo);
+        self.ship.refresh_sabotage(&self.pilot, &self.statics);
+        self.space
+            .reset_inhibitors(&self.pilot, &self.statics, &self.setup);
+        self.space
+            .reset_iff_scramblers(&self.pilot, &self.statics, &self.setup);
+        if self.ship.trims(&self.setup, cause) {
+            self.ship
+                .trim_to_holds(&mut self.pilot, &self.statics, &mut self.out);
         }
-        self.blessing_ranks.clone_from(&self.pilot.ranks);
-        self.repair_inhibit = crate::self_repair::RepairInhibit::OFF;
+        self.ship
+            .latches
+            .blessing_ranks
+            .clone_from(&self.pilot.ranks);
+        self.ship.repair_inhibit = crate::self_repair::RepairInhibit::OFF;
         // `_ShipFuelCapacity`'s cache (`*0x3b508c`) invalidated (@0xc397;
         // see the `capture` module).
-        self.fuel_cap_cached = false;
+        self.ship.fuel_cap_cached = false;
     }
+}
 
-    /// Whether the reset for `cause` trims the commodities: never through
-    /// an outfit sale that keeps the cargo ([`Session::sell_keeps_cargo`]).
-    fn trims(&self, cause: ResetCause) -> bool {
-        if self.sale_keeps_cargo {
-            return false;
-        }
-        match cause {
-            ResetCause::SetExpr => {
-                self.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
-            }
-            ResetCause::Purchase => false,
-            ResetCause::Other => true,
-        }
-    }
-
+impl Setup {
     /// Whether the outfit sale about to run keeps the cargo past the holds
     /// through its resets, `OnSell`'s included: by the other reading of
     /// [`RuleKey::OutfitSaleCargo`].
     pub(super) fn sell_keeps_cargo(&self) -> bool {
         self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
+    }
+}
+
+impl PlayerShip {
+    /// Whether the reset for `cause` trims the commodities: never through
+    /// an outfit sale that keeps the cargo ([`Setup::sell_keeps_cargo`](super::setup::Setup::sell_keeps_cargo)).
+    fn trims(&self, setup: &Setup, cause: ResetCause) -> bool {
+        if self.latches.sale_keeps_cargo {
+            return false;
+        }
+        match cause {
+            ResetCause::SetExpr => {
+                setup.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
+            }
+            ResetCause::Purchase => false,
+            ResetCause::Other => true,
+        }
     }
 
     /// The reset's trim of the commodities (see
@@ -170,13 +182,16 @@ impl Session {
     /// `_TotalFleetHolds` works them out (@0xc24d): from the outfits owned
     /// now, so an `OnSell`'s reset sees the outfit sold gone before the
     /// sale's refit.
-    fn trim_to_holds(&mut self) {
-        let holds = market::fleet_holds(self.current_stats().capacity, self.escort_holds());
-        let total = self.pilot.total_cargo();
-        let before = self.pilot.cargo.clone();
-        market::trim_commodities(&mut self.pilot.cargo, holds, total);
-        if self.pilot.cargo != before {
-            self.save_due = true;
+    fn trim_to_holds(&mut self, pilot: &mut Pilot, statics: &Statics, out: &mut Outbox) {
+        let holds = market::fleet_holds(
+            self.current_stats(pilot, statics).capacity,
+            super::escort_holds(pilot, statics),
+        );
+        let total = pilot.total_cargo();
+        let before = pilot.cargo.clone();
+        market::trim_commodities(&mut pilot.cargo, holds, total);
+        if pilot.cargo != before {
+            out.save_due = true;
         }
     }
 }
@@ -200,7 +215,7 @@ pub(super) mod tests {
     /// Clears both of `_ScanPlayer`'s latches, as a conviction of each
     /// kind does ([`Latches::clear`]).
     pub(in crate::session) fn convicted(session: &mut Session) {
-        session.scan_latches = Latches {
+        session.ship.latches.scan_latches = Latches {
             junk: false,
             outfits: false,
         };
@@ -298,7 +313,7 @@ pub(super) mod tests {
         session.pilot.ranks.insert(RankId(200));
         assert!(!blessed(&session));
         session.reset_precalced();
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert!(blessed(&session));
     }
 
@@ -345,23 +360,31 @@ pub(super) mod tests {
         for cause in [ResetCause::Other, ResetCause::SetExpr, ResetCause::Purchase] {
             let mut session = Session::start(&flagged_junk()).expect("starts");
             assert_eq!(
-                session.junk_latches,
+                session.ship.latches.junk_latches,
                 latches(false, false),
                 "clear at the start"
             );
             session.pilot.cargo = [(JUNK, 1), (rotting, 1), (both, 1)].into();
             session.reset_precalced_for(cause);
-            assert_eq!(session.junk_latches, latches(true, true), "{cause:?}");
+            assert_eq!(
+                session.ship.latches.junk_latches,
+                latches(true, true),
+                "{cause:?}"
+            );
             session.pilot.cargo = [(both, 3)].into();
             session.reset_precalced_for(cause);
             assert_eq!(
-                session.junk_latches,
+                session.ship.latches.junk_latches,
                 latches(true, false),
                 "{cause:?}: a good of both flags alone sets only the tribbles latch"
             );
             session.pilot.cargo = [(rotting, 2), (Good::Commodity(0), 4)].into();
             session.reset_precalced_for(cause);
-            assert_eq!(session.junk_latches, latches(false, true), "{cause:?}");
+            assert_eq!(
+                session.ship.latches.junk_latches,
+                latches(false, true),
+                "{cause:?}"
+            );
         }
     }
 
@@ -370,12 +393,16 @@ pub(super) mod tests {
         let mut session = Session::start(&flagged_junk()).expect("starts");
         session.pilot.cargo = [(JUNK, 2), (Good::Junk(JunkId(151)), 3)].into();
         session.reset_precalced();
-        assert_eq!(session.junk_latches, latches(true, true));
+        assert_eq!(session.ship.latches.junk_latches, latches(true, true));
         convicted(&mut session);
         session.jettison_cargo(true, &mut NeverFires);
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x3e3b5");
         assert_eq!(
-            session.junk_latches,
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x3e3b5"
+        );
+        assert_eq!(
+            session.ship.latches.junk_latches,
             latches(false, false),
             "the reset ran after every good was gone"
         );
@@ -439,7 +466,7 @@ pub(super) mod tests {
         convicted(&mut session);
         let _ = take(&mut session, Take::Abort, &[]);
         assert_eq!(cargo(&session), trimmed, "@0x94a0b");
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
     }
 
     // The end of a set expression (@0x99a85, @0x99dea).
@@ -459,7 +486,7 @@ pub(super) mod tests {
             &mut |session, _| {
                 seen.push((
                     cargo(session) == untouched,
-                    session.scan_latches == Latches::ARMED,
+                    session.ship.latches.scan_latches == Latches::ARMED,
                     blessed(session),
                 ));
             },
@@ -470,7 +497,7 @@ pub(super) mod tests {
             "after the K200, inside the expression, nothing is reset"
         );
         assert_eq!(cargo(&session), trimmed);
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert!(blessed(&session), "the K200 taken as the expression ends");
         assert!(session.take_save_due());
     }
@@ -489,7 +516,7 @@ pub(super) mod tests {
             let untouched = cargo(&session);
             convicted(&mut session);
             session.run_script(&Script::parse(text), &mut Scripted::default());
-            let reset = session.scan_latches == Latches::ARMED;
+            let reset = session.ship.latches.scan_latches == Latches::ARMED;
             assert_eq!(reset, resets, "{text:?}");
             let want = if resets { &trimmed } else { &untouched };
             assert_eq!(&cargo(&session), want, "{text:?}");
@@ -497,7 +524,11 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         convicted(&mut session);
         session.run_script(&Script::default(), &mut Scripted::default());
-        assert_ne!(session.scan_latches, Latches::ARMED, "a blank hook");
+        assert_ne!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "a blank hook"
+        );
     }
 
     #[test]
@@ -521,7 +552,7 @@ pub(super) mod tests {
         );
         session.register_story(subscription).expect("registers");
         let trimmed = overloaded(&mut session);
-        session.raise(StoryEvent::Landed {
+        session.run.raise(StoryEvent::Landed {
             stellar: StellarId(128),
         });
         let untouched = cargo(&session);
@@ -540,7 +571,7 @@ pub(super) mod tests {
         convicted(&mut session);
         land_now(&mut session).expect("lands");
         assert_eq!(cargo(&session), trimmed, "@0x63211");
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
     }
 
     /// The outfitter's cargo pod, 10 tons.
@@ -553,12 +584,20 @@ pub(super) mod tests {
         let trimmed = overloaded(&mut session);
         convicted(&mut session);
         session.open_outfitter();
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5bb57");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x5bb57"
+        );
         assert_eq!(cargo(&session), trimmed);
         let trimmed = overloaded(&mut session);
         convicted(&mut session);
         session.close_outfitter();
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5db10");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x5db10"
+        );
         assert_eq!(cargo(&session), trimmed);
     }
 
@@ -572,16 +611,16 @@ pub(super) mod tests {
         use crate::session::tests::{outfitted, outfitting};
         let mut session = outfitted(&outfitting());
         session.enter_offer_venue(OUTFITTER);
-        session.suppress_offer(MissionId(200));
+        session.run.suppress_offer(MissionId(200));
         session.enter_offer_venue(OUTFITTER);
         assert!(
-            session.suppressed.contains(&MissionId(200)),
+            session.run.suppressed.contains(&MissionId(200)),
             "the same venue"
         );
         session.close_outfitter();
-        assert_eq!(session.offer_venue, None);
+        assert_eq!(session.run.offer_venue, None);
         session.enter_offer_venue(OUTFITTER);
-        assert!(session.suppressed.is_empty());
+        assert!(session.run.suppressed.is_empty());
     }
 
     #[test]
@@ -592,7 +631,11 @@ pub(super) mod tests {
         session
             .outfit(buy(crate::catalog::OutfitId(300)), &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5c305");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x5c305"
+        );
     }
 
     #[test]
@@ -660,7 +703,11 @@ pub(super) mod tests {
         convicted(&mut session);
         let run = session.outfit_order(buy(POD), 0, &mut NeverFires);
         assert_eq!(run.run.done, 0);
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5c305");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x5c305"
+        );
         assert_eq!(cargo(&session), trimmed);
     }
 
@@ -675,7 +722,7 @@ pub(super) mod tests {
             convicted(&mut session);
             let run = session.outfit_order(buy(POD), count, &mut NeverFires);
             assert_eq!(run.run.done, 0, "{count}");
-            assert_ne!(session.scan_latches, Latches::ARMED, "{count}");
+            assert_ne!(session.ship.latches.scan_latches, Latches::ARMED, "{count}");
             assert_eq!(cargo(&session), untouched, "{count}");
         }
     }
@@ -700,7 +747,7 @@ pub(super) mod tests {
         let run = session.outfit_order(buy(POD), 3, &mut NeverFires);
         assert_eq!(run.run.done, 1);
         assert!(run.run.stopped.is_some(), "the cash spent");
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
         assert_eq!(
             cargo(&session),
             [
@@ -738,7 +785,11 @@ pub(super) mod tests {
                 convicted(&mut session);
                 session.outfit(sell(POD), &mut NeverFires).expect("sold");
                 assert_eq!(session.capacity(), 20);
-                assert_eq!(session.scan_latches, Latches::ARMED, "@0x5cffb");
+                assert_eq!(
+                    session.ship.latches.scan_latches,
+                    Latches::ARMED,
+                    "@0x5cffb"
+                );
                 let why = format!("{source:?}, OnSell {on_sell:?}");
                 if source == RuleSource::Engine {
                     assert_eq!(cargo(&session), twenty, "{why}: 20/30 of each");
@@ -801,7 +852,11 @@ pub(super) mod tests {
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
         assert_eq!(session.capacity(), 15);
-        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5ee99, @0x5ef9f");
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            Latches::ARMED,
+            "@0x5ee99, @0x5ef9f"
+        );
         assert_eq!(
             cargo(&session),
             [(Good::Commodity(0), 6)].into(),

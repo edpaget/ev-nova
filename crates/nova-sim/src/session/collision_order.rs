@@ -75,7 +75,7 @@ mod tests {
         };
         let ships = [at(1), at(2)];
         for id in ships {
-            assert!(!session.npc(id).expect("there").escorts_player());
+            assert!(!session.space.npc(id).expect("there").escorts_player());
         }
         (session, ships)
     }
@@ -116,10 +116,12 @@ mod tests {
         assert!(rank(&at_launch, npc(first)) < rank(&at_launch, ShipRef::Player));
         // Berth 2 re-enters the layer, on top of every ship in it.
         session
+            .space
             .slot_sprites
             .layers
             .put(Slot::Berth(2), ShipLayer::Disabled);
         session
+            .space
             .slot_sprites
             .layers
             .put(Slot::Berth(2), ShipLayer::Ships);
@@ -239,7 +241,7 @@ mod tests {
     /// armour of 45 at 16: one tick of the beam disables it.
     fn facing_a_frail_npc(catalog: &FakePilotCatalog) -> (Session, ShipRef) {
         let mut session = facing_an_npc(catalog, 180);
-        let target = &mut session.traffic.npcs_mut()[0];
+        let target = &mut session.space.traffic.npcs_mut()[0];
         target.reserves.shield.now = 0.0;
         target.reserves.armor.now = 16.0;
         let id = ShipRef::Npc(target.id);
@@ -258,7 +260,7 @@ mod tests {
         work(&mut session, &catalog, &crate::ai::NovaAi::default());
         session.hold_trigger(crate::combat::armament::Trigger::default());
         assert_eq!(
-            session.npc(npc_id(a)).map(|npc| npc.condition),
+            session.space.npc(npc_id(a)).map(|npc| npc.condition),
             Some(Condition::Disabled)
         );
         assert_eq!(walked_in(&session, a), ShipLayer::Ships, "next pass's walk");
@@ -276,7 +278,7 @@ mod tests {
         session.hold_trigger(FIRE);
         work(&mut session, &catalog, &crate::ai::NovaAi::default());
         assert_eq!(
-            session.npc(npc_id(a)).map(|npc| npc.condition),
+            session.space.npc(npc_id(a)).map(|npc| npc.condition),
             Some(Condition::Disabled)
         );
         assert_eq!(drawn_in(&session, a), ShipLayer::Ships);

@@ -1,7 +1,7 @@
 //! Tests of the thrust every ship flies with and the cap on its speed:
 //! `Accel` / the [`RuleValue::ThrustDivisor`] and the
 //! [`RuleKey::SpeedCap`] reading, read from the session's rules at each
-//! use ([`Session::flight_rules`]) for the player and, through the
+//! use ([`Setup::flight_rules`](super::setup::Setup::flight_rules)) for the player and, through the
 //! traffic's world, for every NPC; the pushes' clamp, which
 //! [`Session::with_rules`] hands the fight; and an escort of an immobile
 //! class, which no push moves.
@@ -79,13 +79,13 @@ fn an_npc_gains_its_accel_over_the_divisor_a_tick_from_rest() {
         // 100 below the player, facing down, away from the centre.
         let mut session = with_an_npc_at(&catalog, 750, 850, 180).with_rules(under(divisor));
         let id = session.npcs()[0].id;
-        let npc = session.npc_mut(id).expect("there");
+        let npc = session.space.npc_mut(id).expect("there");
         npc.goal = Goal::JumpOut;
         let total = accel_total(npc.stats.handling.accel);
         assert!(total > 0.0);
         assert_eq!(npc.state.heading, 180.0);
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-        let npc = session.npc(id).expect("there");
+        let npc = session.space.npc(id).expect("there");
         let speed = npc.state.velocity.length();
         assert!(
             close(speed, total / by),
@@ -109,8 +109,8 @@ fn the_player_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c
         // The first tick's box of none holds the ship at rest.
         session.tick(Controls::default());
         let c = session.top_speed();
-        session.player.velocity = Vec2::new(c, 0.0);
-        session.player.heading = 0.0;
+        session.ship.player.velocity = Vec2::new(c, 0.0);
+        session.ship.player.heading = 0.0;
         for _ in 0..200 {
             session.tick(Controls {
                 thrust: true,
@@ -135,12 +135,12 @@ fn an_npc_coasting_past_its_top_speed_keeps_it_by_default_and_is_rescaled_under_
     for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
         let mut session = with_an_npc_at(&catalog, 750, 850, 180).with_rules(rules);
         let id = session.npcs()[0].id;
-        let npc = session.npc_mut(id).expect("there");
+        let npc = session.space.npc_mut(id).expect("there");
         npc.goal = Goal::Hold;
         let c = npc.top_speed(1.0);
         npc.state.velocity = Vec2::new(-2.0 * c, 3.0 * c);
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-        let velocity = session.npc(id).expect("there").state.velocity;
+        let velocity = session.space.npc(id).expect("there").state.velocity;
         if circled {
             assert!((velocity.length() - c).abs() < 1e-4, "{velocity:?} at {c}");
         } else {
@@ -158,10 +158,10 @@ fn the_rules_hand_the_fight_the_speed_caps_reading() {
     let circled = Session::start(&catalog)
         .expect("starts")
         .with_rules(circle());
-    let mut expected = engine.combat.clone();
-    assert_ne!(circled.combat, expected);
+    let mut expected = engine.space.combat.clone();
+    assert_ne!(circled.space.combat, expected);
     expected.set_speed_cap(RuleSource::Bible);
-    assert_eq!(circled.combat, expected);
+    assert_eq!(circled.space.combat, expected);
 }
 
 /// A class of no `Speed` and no `Accel`, ship 204.
@@ -195,6 +195,7 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         // The first tick places it on its slot.
         session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         let npc = session
+            .space
             .traffic
             .npcs_mut()
             .iter_mut()
@@ -207,7 +208,7 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         for _ in 0..3 {
             session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         }
-        let state = session.npc(id).expect("there").state;
+        let state = session.space.npc(id).expect("there").state;
         (immobile, at, state)
     };
     let (immobile, at, state) = shoved(immobile_class());

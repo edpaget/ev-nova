@@ -45,7 +45,7 @@
 //! to the main screen keeps the session as play left it, so it sweeps
 //! nothing and runs no `OnExplore`: `_DoMainScreen`'s setup, which
 //! explores the player's system, runs once a launch, as
-//! [`Session::open_at_launch`] does ([`Session::explore_here`]); Open
+//! [`Session::open_at_launch`] does ([`MissionRun::explore_here`]); Open
 //! Pilot doesn't run it. Nothing the sweep
 //! decides reads a rule, so it does not wait on task
 //! load-reads-rules-before-fly.
@@ -59,34 +59,44 @@
 //! days and crons (phase 25), and the escape pod's exploration (roadmap
 //! player-death).
 
-use super::{Session, SessionEvent};
+use super::{Chart, MissionRun, Outbox, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{NebulaId, SystemId};
 use crate::nebula::{self, nebula_hook};
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::{EventFilter, StoryEvent, StoryEventKind, Subscription};
 
 impl Session {
-    /// Registers each nebula's `OnExplore` subscription (see the module
-    /// docs). A nebula registered already is left as it is.
-    pub(super) fn register_nebulae(&mut self) {
-        for record in self.nebulae.clone().iter() {
-            let _ = self.register_story(Subscription::new(
-                nebula_hook(record.id),
-                EventFilter::Any(StoryEventKind::Explored),
-                record.on_explore.clone(),
-            ));
+    /// The load's sweep (see the module docs): `Explored` for every
+    /// catalog system visible and explored, by ascending ID.
+    pub(super) fn sweep_explored(&mut self) {
+        let swept: Vec<SystemId> = self
+            .chart
+            .galaxy
+            .catalog_systems()
+            .filter(|&system| self.chart.galaxy.visible(system) && self.pilot.has_explored(system))
+            .collect();
+        for system in swept {
+            self.run.raise(StoryEvent::Explored { system });
         }
     }
+}
 
+impl Chart {
     /// Whether `nebula`'s subscription runs on `event` now: an `Explored`
     /// of a system its inset rectangle holds while it is active and not
     /// yet explored ([`nebula::explores`]). Never for a nebula with no
     /// record.
-    pub(super) fn nebula_admits(&self, nebula: NebulaId, event: &StoryEvent) -> bool {
+    pub(super) fn nebula_admits(
+        &self,
+        statics: &Statics,
+        nebula: NebulaId,
+        event: &StoryEvent,
+    ) -> bool {
         let StoryEvent::Explored { system } = *event else {
             return false;
         };
-        let Some(record) = self.nebulae.iter().find(|record| record.id == nebula) else {
+        let Some(record) = statics.nebulae.iter().find(|record| record.id == nebula) else {
             return false;
         };
         nebula::explores(
@@ -101,26 +111,33 @@ impl Session {
     /// explored and tells [`SessionEvent::GalaxyChanged`]; by the other
     /// reading of [`RuleKey::NebulaExploreOnce`], keeps it in the
     /// once-fired record too, making a save due.
-    pub(super) fn explore_nebula(&mut self, nebula: NebulaId) {
-        self.pilot.galaxy.set_nebula_explored(nebula, true);
-        self.galaxy.set_overlay(self.pilot.galaxy.clone());
-        self.emit(SessionEvent::GalaxyChanged);
-        if self.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
-            self.pilot.story_fired.insert(nebula_hook(nebula));
-            self.save_due = true;
+    pub(super) fn explore_nebula(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+        nebula: NebulaId,
+    ) {
+        pilot.galaxy.set_nebula_explored(nebula, true);
+        self.galaxy.set_overlay(pilot.galaxy.clone());
+        out.emit(SessionEvent::GalaxyChanged);
+        if setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
+            pilot.story_fired.insert(nebula_hook(nebula));
+            out.save_due = true;
         }
     }
+}
 
-    /// The load's sweep (see the module docs): `Explored` for every
-    /// catalog system visible and explored, by ascending ID.
-    pub(super) fn sweep_explored(&mut self) {
-        let swept: Vec<SystemId> = self
-            .galaxy
-            .catalog_systems()
-            .filter(|&system| self.galaxy.visible(system) && self.pilot.has_explored(system))
-            .collect();
-        for system in swept {
-            self.raise(StoryEvent::Explored { system });
+impl MissionRun {
+    /// Registers each nebula's `OnExplore` subscription (see the module
+    /// docs). A nebula registered already is left as it is.
+    pub(super) fn register_nebulae(&mut self, statics: &Statics) {
+        for record in statics.nebulae.clone().iter() {
+            let _ = self.register_story(Subscription::new(
+                nebula_hook(record.id),
+                EventFilter::Any(StoryEventKind::Explored),
+                record.on_explore.clone(),
+            ));
         }
     }
 
@@ -129,17 +146,17 @@ impl Session {
     /// [`Session::open_at_launch`]: `Explored` for the current system,
     /// visible or not, explored or not. A nebula the load's sweep explored
     /// already is not admitted again as it settles.
-    pub(super) fn explore_here(&mut self) {
+    pub(super) fn explore_here(&mut self, pilot: &Pilot) {
         self.raise(StoryEvent::Explored {
-            system: self.pilot.system,
+            system: pilot.system,
         });
     }
 
     /// Withdraws the `Explored` events raised and not yet settled, keeping
     /// every other: a new pilot's, by the engine's reading of
     /// [`RuleKey::NebulaNewPilot`] (see the module docs).
-    pub(super) fn withdraw_new_pilot_explored(&mut self) {
-        if self.rules.source_for(RuleKey::NebulaNewPilot) == RuleSource::Engine {
+    pub(super) fn withdraw_new_pilot_explored(&mut self, setup: &Setup) {
+        if setup.rules.source_for(RuleKey::NebulaNewPilot) == RuleSource::Engine {
             self.withdraw_raised(StoryEventKind::Explored);
         }
     }
@@ -208,8 +225,8 @@ mod tests {
 
     /// Puts the ship at rest at its system's centre and lands there.
     fn land_at_centre(session: &mut Session) -> StellarId {
-        session.player.position = crate::geometry::Vec2::ZERO;
-        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.ship.player.position = crate::geometry::Vec2::ZERO;
+        session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         land_now(session).expect("lands")
     }
 
@@ -409,10 +426,16 @@ mod tests {
         let at_131 = StoryEvent::Explored {
             system: SystemId(131),
         };
-        assert!(session.nebula_admits(N128, &at_131));
-        assert!(!session.nebula_admits(NebulaId(129), &at_131), "no record");
+        assert!(session.chart.nebula_admits(&session.statics, N128, &at_131));
         assert!(
-            !session.nebula_admits(
+            !session
+                .chart
+                .nebula_admits(&session.statics, NebulaId(129), &at_131),
+            "no record"
+        );
+        assert!(
+            !session.chart.nebula_admits(
+                &session.statics,
                 N128,
                 &StoryEvent::EnteredSystem {
                     system: SystemId(131),
@@ -422,7 +445,8 @@ mod tests {
             "not an exploration"
         );
         assert!(
-            !session.nebula_admits(
+            !session.chart.nebula_admits(
+                &session.statics,
                 N128,
                 &StoryEvent::Explored {
                     system: SystemId(999),
@@ -571,7 +595,10 @@ mod tests {
     fn the_launch_runs_the_on_explore_of_a_nebula_over_the_players_system_left_unexplored() {
         let (catalog, mut session) = loaded_at_131();
         session.pilot.galaxy.set_nebula_explored(N128, false);
-        session.galaxy.set_overlay(session.pilot.galaxy.clone());
+        session
+            .chart
+            .galaxy
+            .set_overlay(session.pilot.galaxy.clone());
         session.open_at_launch(&mut NeverFires);
         assert!(!session.take_save_due(), "the launch makes no save due");
         settle(&mut session, &catalog);
@@ -615,7 +642,7 @@ mod tests {
     fn a_new_pilots_begin_keeps_its_landing() {
         let catalog = nebulous(Vec::new());
         let mut session = flown(&catalog, Rulebook::default());
-        session.raise(StoryEvent::Landed {
+        session.run.raise(StoryEvent::Landed {
             stellar: StellarId(128),
         });
         session.begin(&catalog, &mut NeverFires);

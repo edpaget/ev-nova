@@ -17,7 +17,7 @@
 //! catalog gives them, through the galaxy overlay; a `NavDefs` slot the
 //! catalog cannot read is skipped there, so it does not take up one of
 //! the first three or four places the original's scans count. Its string
-//! is `Session::legal_status_in`, which the galaxy map's panel reads for
+//! is `Chart::legal_status_in`, which the galaxy map's panel reads for
 //! the system it selects; there a stellar counts only while active, as
 //! another system's stellars may not be. The
 //! tribute counts each stellar some system lists, held as
@@ -25,13 +25,14 @@
 //! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
 //! is read from the holder's stellars in `catalog`.
 
-use super::{Session, overlaid_sites};
+use super::{Chart, PlayerShip, Session, Setup, Statics, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
 use crate::market::{DOMINATED, Good};
 use crate::news::{CARGO_NAMES, MISC_STRINGS};
 use crate::outfitter::outfit_mods;
+use crate::pilot::Pilot;
 use crate::player_info::{
     self, COMMODITIES, Domination, HeldCargo, LEGAL_STATUS_STRINGS, MissionLoad, PlayerInfo, Words,
 };
@@ -80,11 +81,11 @@ impl Session {
     /// key handler runs, so an exploded player's key is silent too: its
     /// fate's row refuses the press before it gets here.
     pub fn press_player_info(&mut self) -> bool {
-        if self.jump.is_some()
-            || self.in_takeoff_grace()
-            || matches!(self.condition, Condition::Dying { .. })
+        if self.mode.jump().is_some()
+            || self.port.in_takeoff_grace()
+            || matches!(self.ship.condition, Condition::Dying { .. })
         {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
             return false;
         }
         true
@@ -101,7 +102,7 @@ impl Session {
     /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
     /// the session does not hold.
     pub fn open_player_info(&mut self, catalog: &impl PilotCatalog) -> Option<PlayerInfo> {
-        if self.jump.is_some() || matches!(self.condition, Condition::Dying { .. }) {
+        if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }
         self.reset_precalced();
@@ -115,22 +116,24 @@ impl Session {
     /// [`Session::open_player_info`].
     #[must_use]
     pub fn player_info(&self, catalog: &impl PilotCatalog) -> PlayerInfo {
-        let words = self.player_info_words();
+        let words = self.setup.player_info_words();
         let cargo_names = self.strings().string_list(CARGO_NAMES);
-        let cargo = self.held_cargo(&cargo_names);
+        let cargo = self
+            .ship
+            .held_cargo(&self.pilot, &self.statics, &cargo_names);
         let reserves = self.reserves();
         let totals = HandlingTotals::new(
-            self.fields,
-            &outfit_mods(&self.pilot.outfits, &self.outfits),
+            self.ship.fit.fields,
+            &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         );
-        let records = &self.outfits[..];
+        let records = &self.statics.outfits[..];
         let owned = &self.pilot.outfits;
         let ranks = self.pilot_info_ranks();
         let any_rank = self
             .pilot
             .ranks
             .iter()
-            .any(|id| self.ranks.iter().any(|rank| rank.id == *id));
+            .any(|id| self.statics.ranks.iter().any(|rank| rank.id == *id));
         let honors = player_info::honors_shown(any_rank, records, owned).then(|| {
             let specials = player_info::special_groups(records, owned);
             player_info::honors_text(&ranks, &specials, records, &words).unwrap_or_default()
@@ -140,8 +143,9 @@ impl Session {
                 records,
                 owned,
                 &words,
-                self.trade_in_shown(),
-                self.rules.source_for(RuleKey::PayMillions),
+                self.ship
+                    .trade_in_shown(&self.pilot, &self.statics, &self.setup),
+                self.setup.rules.source_for(RuleKey::PayMillions),
             )
         });
         let costs: Vec<i32> = self
@@ -149,19 +153,34 @@ impl Session {
             .escorts
             .iter()
             .filter(|escort| escort.hired())
-            .filter_map(|escort| self.ship_record(escort.ship).map(|record| record.cost))
+            .filter_map(|escort| {
+                self.statics
+                    .ship_record(escort.ship)
+                    .map(|record| record.cost)
+            })
             .collect();
-        let day = player_info::daily_income(costs, self.tribute(catalog), ranks.salary);
+        let day = player_info::daily_income(
+            costs,
+            self.chart.tribute(&self.pilot, &self.statics, catalog),
+            ranks.salary,
+        );
         PlayerInfo {
             pilot_name: self.pilot.name().to_owned(),
             date: self.med_date_text(),
             system: self
+                .statics
                 .place_names
                 .systems
                 .get(&self.pilot.system)
                 .cloned()
                 .unwrap_or_default(),
-            legal_status: self.legal_status(catalog, &words),
+            legal_status: self.chart.legal_status(
+                &self.pilot,
+                &self.statics,
+                &self.setup,
+                catalog,
+                &words,
+            ),
             ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
             ship_class: self
                 .ship_name(self.pilot.ship)
@@ -171,9 +190,9 @@ impl Session {
             accel: player_info::accel_shown(&totals, self.ionization()),
             max_speed: player_info::speed_shown(&totals),
             credits: self.pilot.cash,
-            shield: player_info::reserve_shown(reserves.shield.now, self.stats.shield),
-            armor: player_info::reserve_shown(reserves.armor.now, self.stats.armor),
-            energy: player_info::energy_shown(reserves.fuel.now, self.stats.fuel as i64),
+            shield: player_info::reserve_shown(reserves.shield.now, self.ship.fit.stats.shield),
+            armor: player_info::reserve_shown(reserves.armor.now, self.ship.fit.stats.armor),
+            energy: player_info::energy_shown(reserves.fuel.now, self.ship.fit.stats.fuel as i64),
             income: player_info::income_line(day),
             fleet: cargo.fleet,
             cargo: player_info::has_any_cargo(&cargo)
@@ -184,18 +203,27 @@ impl Session {
             words,
         }
     }
+}
 
+impl Setup {
     /// The `STR#` 2002 strings the player info shows, from the session's
     /// string lists; a missing one reads empty.
     pub(super) fn player_info_words(&self) -> Words {
         Words::from_list(&self.strings().string_list(MISC_STRINGS))
     }
+}
 
+impl PlayerShip {
     /// The cargo the Cargo text lists, its types named by `cargo_names`.
-    fn held_cargo<'a>(&'a self, cargo_names: &'a [String]) -> HeldCargo<'a> {
+    fn held_cargo<'a>(
+        &'a self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        cargo_names: &'a [String],
+    ) -> HeldCargo<'a> {
         let mut commodities = [0; COMMODITIES];
         let mut junk = Vec::new();
-        for (good, tons) in self.pilot.cargo() {
+        for (good, tons) in pilot.cargo() {
             match good {
                 Good::Commodity(n) => {
                     if let Some(held) = commodities.get_mut(usize::from(n)) {
@@ -205,15 +233,14 @@ impl Session {
                 Good::Junk(id) => {
                     junk.push((
                         id,
-                        self.junk_lc_name(id).unwrap_or_default(),
+                        statics.junk_lc_name(id).unwrap_or_default(),
                         i64::from(tons),
                     ));
                 }
             }
         }
         junk.sort_by_key(|&(id, _, _)| id);
-        let missions = self
-            .pilot
+        let missions = pilot
             .missions()
             .iter()
             .filter_map(|(_, active)| {
@@ -221,13 +248,13 @@ impl Session {
                 (active.cargo_tons >= 0).then(|| MissionLoad {
                     cargo_type,
                     tons: active.cargo_tons,
-                    can_abort: self
+                    can_abort: statics
                         .mission_record(active.mission)
                         .is_some_and(|record| record.can_abort != 0),
                 })
             })
             .collect();
-        let holds = i64::from(self.capacity());
+        let holds = i64::from(self.capacity(pilot, statics));
         HeldCargo {
             commodities,
             missions,
@@ -236,36 +263,40 @@ impl Session {
                 .map(|(_, name, count)| (name, count))
                 .collect(),
             cargo_names,
-            fleet: holds > i64::from(self.stats.capacity),
-            free: holds - self.pilot.total_cargo(),
-            mission_room: self.mission_cargo_space(),
+            fleet: holds > i64::from(self.fit.stats.capacity),
+            free: holds - pilot.total_cargo(),
+            mission_room: self.mission_cargo_space(pilot, statics),
         }
     }
 
     /// What the ship flown trades in for, unfluxed, as
     /// `_PlayerShipTradeInPrice` (@0xb079-0xb144) values it for the
     /// Extras text ([`shipyard::trade_in`]).
-    fn trade_in_shown(&self) -> i64 {
+    fn trade_in_shown(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> i64 {
         shipyard::trade_in(
-            self.ship_record(self.pilot.ship)
+            statics
+                .ship_record(pilot.ship)
                 .map_or(0, |record| record.cost),
-            self.fields.mass,
-            &self.pilot.outfits,
-            &self.outfits,
-            self.rules.source_for(RuleKey::TradeInOutfits),
-            &self.rules,
+            self.fit.fields.mass,
+            &pilot.outfits,
+            &statics.outfits,
+            setup.rules.source_for(RuleKey::TradeInOutfits),
+            &setup.rules,
         )
     }
+}
 
+impl Chart {
     /// The day's tribute (@0x5352c-0x53583): each stellar some system
     /// lists that is dominated and active, its tribute read from its
     /// holder's stellars in `catalog`.
-    fn tribute(&self, catalog: &impl PilotCatalog) -> i64 {
-        self.listed_stellars
+    fn tribute(&self, pilot: &Pilot, statics: &Statics, catalog: &impl PilotCatalog) -> i64 {
+        statics
+            .listed_stellars
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
-                let holder = self.galaxy.holder(&listed.systems, self.pilot.system)?;
+                let holder = self.galaxy.holder(&listed.systems, pilot.system)?;
                 let sites = catalog.landing_sites(holder);
                 let site = sites.iter().find(|site| site.id == listed.id)?;
                 Some(player_info::tribute_of(site))
@@ -274,10 +305,17 @@ impl Session {
     }
 
     /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
-    /// [`Session::legal_status_in`]): the player's system's stellars read
+    /// [`Chart::legal_status_in`]): the player's system's stellars read
     /// from `catalog`; "N/A" in an uninhabited system.
-    pub(super) fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
-        let system = self.pilot.system;
+    pub(super) fn legal_status(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+        words: &Words,
+    ) -> String {
+        let system = pilot.system;
         let sites = overlaid_sites(&self.galaxy, catalog, system);
         let inhabited = player_info::system_is_inhabited(
             sites.iter().map(|site| (uninhabited(site), gate(site))),
@@ -285,12 +323,12 @@ impl Session {
         if !inhabited {
             return words.not_available.to_string();
         }
-        self.legal_status_in(catalog, system, words)
+        self.legal_status_in(pilot, statics, setup, catalog, system, words)
     }
 
     /// The legal status string in `system`, as `_DrawLegalStatusString`
     /// (@0xd43f-0xd66d) writes it: the record there as
-    /// [`RuleKey::LegalRecords`] reads it (`Session::record_in`), the
+    /// [`RuleKey::LegalRecords`] reads it (`Chart::record_in`), the
     /// tolerance of its government (government slot 0's for an
     /// independent one), "N/A" under a xenophobic government, and the
     /// domination of its first three stellars that count: each active
@@ -299,6 +337,9 @@ impl Session {
     /// the string lists reads empty.
     pub(super) fn legal_status_in(
         &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
         catalog: &impl PilotCatalog,
         system: SystemId,
         words: &Words,
@@ -307,20 +348,20 @@ impl Session {
         let govt = self.galaxy.govt(system);
         let counting = sites.iter().take(3).filter(|site| {
             self.galaxy
-                .active_holder(self.listers(site.id), self.pilot.system)
+                .active_holder(statics.listers(site.id), pilot.system)
                 .is_some()
                 && !uninhabited(site)
                 && is_landable(site)
                 && !gate(site)
         });
         let index = player_info::legal_status_index(
-            i64::from(self.record_in(system, None)),
-            i64::from(self.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
-            self.govts.xenophobic(govt),
+            i64::from(self.record_in(pilot, setup, system, None)),
+            i64::from(statics.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
+            statics.govts.xenophobic(govt),
             Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
         );
         match index {
-            Some(index) => self
+            Some(index) => setup
                 .nth_string(LEGAL_STATUS_STRINGS, index + 1)
                 .unwrap_or_default(),
             None => words.not_available.to_string(),
@@ -377,12 +418,13 @@ mod tests {
         let session = Session::start(&catalog())
             .expect("starts")
             .with_strings(Rc::new(Lists));
-        let words = session.player_info_words();
+        let words = session.setup.player_info_words();
         assert_eq!(&*words.and, "und");
         assert_eq!(&*words.ton, "");
         assert_eq!(
             Session::start(&catalog())
                 .expect("starts")
+                .setup
                 .player_info_words(),
             Words::from_list(&[]),
             "no lists"
@@ -637,7 +679,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let plain = session.player_info(&catalog);
         assert_eq!((plain.accel, plain.turn_rate), (450, 90));
-        session.ion.charge = 200.0;
+        session.ship.ion.charge = 200.0;
         let info = session.player_info(&catalog);
         assert_eq!((info.accel, info.turn_rate), (225, 45));
         assert_eq!(info.max_speed, plain.max_speed);
@@ -968,7 +1010,10 @@ mod tests {
         let trimmed = overloaded(&mut session);
         convicted(&mut session);
         let shown = session.open_player_info(&catalog).expect("opens");
-        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
         assert_eq!(
             session
                 .pilot()
@@ -993,7 +1038,10 @@ mod tests {
         let before = session.clone();
         let _ = session.player_info(&catalog);
         assert_eq!(session.pilot(), before.pilot());
-        assert_ne!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_ne!(
+            session.ship.latches.scan_latches,
+            crate::scan::Latches::ARMED
+        );
     }
 
     #[test]
@@ -1003,20 +1051,20 @@ mod tests {
         use crate::session::precalced::tests::{convicted, overloaded};
         let catalog = catalog();
         let jumping = |session: &mut Session| {
-            session.jump = Some(super::super::Jump::PreJump {
+            session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                 to: SystemId(131),
                 bearing: None,
                 warp: None,
             });
         };
         let hyperspace = |session: &mut Session| {
-            session.jump = Some(super::super::Jump::Hyperspace {
+            session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                 to: SystemId(131),
                 warp: 0,
             });
         };
         let dying = |session: &mut Session| {
-            session.condition = Condition::Dying {
+            session.ship.condition = Condition::Dying {
                 ticks_left: 3,
                 starting: false,
             };
@@ -1036,10 +1084,14 @@ mod tests {
             refuse(&mut session);
             assert_eq!(session.open_player_info(&catalog), None, "{why}");
             assert_eq!(session.pilot(), &untouched, "{why}");
-            assert_ne!(session.scan_latches, crate::scan::Latches::ARMED, "{why}");
+            assert_ne!(
+                session.ship.latches.scan_latches,
+                crate::scan::Latches::ARMED,
+                "{why}"
+            );
         }
         let mut disabled = Session::start(&catalog).expect("starts");
-        disabled.condition = Condition::Disabled;
+        disabled.ship.condition = Condition::Disabled;
         assert!(disabled.open_player_info(&catalog).is_some(), "disabled");
     }
 
@@ -1052,20 +1104,20 @@ mod tests {
         let catalog = catalog();
         let refusals: [Refusal; 3] = [
             ("the pre-jump, +0x50 > 0 (@0x702f7)", |session| {
-                session.jump = Some(super::super::Jump::PreJump {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                     to: SystemId(131),
                     bearing: None,
                     warp: None,
                 });
             }),
             ("hyperspace, +0x50 > 0 (@0x702f7)", |session| {
-                session.jump = Some(super::super::Jump::Hyperspace {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                     to: SystemId(131),
                     warp: 0,
                 });
             }),
             ("breaking up (@0x7031d)", |session| {
-                session.condition = Condition::Dying {
+                session.ship.condition = Condition::Dying {
                     ticks_left: 3,
                     starting: false,
                 };
@@ -1088,7 +1140,7 @@ mod tests {
         let catalog = catalog();
         for condition in [Condition::Intact, Condition::Disabled] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.condition = condition;
+            session.ship.condition = condition;
             let _ = session.take_sounds();
             assert!(session.press_player_info(), "{condition:?}");
             assert_eq!(session.take_sounds(), [], "{condition:?}");

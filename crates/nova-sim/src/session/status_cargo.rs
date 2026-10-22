@@ -2,8 +2,9 @@
 //! the status bar's cargo area is decided from, gathered from the pilot,
 //! the fleet's holds, the `jünk` records and the string lists.
 
-use super::Session;
+use super::{PlayerShip, Session, Setup, Statics};
 use crate::market::Good;
+use crate::pilot::Pilot;
 use crate::status_cargo::{
     self, CARGO_ABBREVIATIONS, COMMODITY_ROWS, CargoFacts, MissionCargo, STATUS_CARGO_STRINGS,
     StatusCargo,
@@ -14,9 +15,19 @@ impl Session {
     /// [`status_cargo::status_cargo`]).
     #[must_use]
     pub fn status_cargo(&self) -> StatusCargo {
+        self.ship
+            .status_cargo(&self.pilot, &self.statics, &self.setup)
+    }
+}
+
+impl PlayerShip {
+    /// What the status bar's cargo area lists (see
+    /// [`status_cargo::status_cargo`]).
+    #[must_use]
+    fn status_cargo(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> StatusCargo {
         let mut commodity_tons = [0; COMMODITY_ROWS];
         let mut junk = Vec::new();
-        for (good, tons) in self.pilot.cargo() {
+        for (good, tons) in pilot.cargo() {
             match good {
                 Good::Commodity(n) => {
                     if let Some(held) = commodity_tons.get_mut(usize::from(n)) {
@@ -24,19 +35,18 @@ impl Session {
                     }
                 }
                 Good::Junk(id) => junk.push((
-                    self.goods.abbrev(id).unwrap_or_default().to_owned(),
+                    statics.goods.abbrev(id).unwrap_or_default().to_owned(),
                     i64::from(tons),
                 )),
             }
         }
-        let strings = self.strings();
+        let strings = setup.strings();
         status_cargo::status_cargo(&CargoFacts {
             commodity_tons,
             commodity_labels: strings.string_list(STATUS_CARGO_STRINGS),
-            fleet_holds: i64::from(self.capacity()),
-            total_cargo: self.pilot.total_cargo(),
-            missions: self
-                .pilot
+            fleet_holds: i64::from(self.capacity(pilot, statics)),
+            total_cargo: pilot.total_cargo(),
+            missions: pilot
                 .missions()
                 .iter()
                 .map(|(_, active)| MissionCargo {
@@ -46,7 +56,7 @@ impl Session {
                 .collect(),
             cargo_names: strings.string_list(CARGO_ABBREVIATIONS),
             junk,
-            cash: self.pilot.cash(),
+            cash: pilot.cash(),
         })
     }
 }

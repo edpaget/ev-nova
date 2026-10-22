@@ -51,8 +51,8 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
 use super::hail::{HailTarget, make_leave};
+use super::{Chart, MissionRun, Session, Setup, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -116,25 +116,6 @@ pub enum Hailed {
 }
 
 impl Session {
-    /// The stellar a person's mission is offered from, as
-    /// [`RuleKey::PersonMissionStellar`] reads the player ship's stellar
-    /// target: by the engine the navigation target; by the other reading
-    /// the first stellar the player's system lists, or spöb 128 with none.
-    pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
-        match self.rules.source_for(RuleKey::PersonMissionStellar) {
-            RuleSource::Engine => self.nav_target(),
-            RuleSource::Bible => Some(self.first_listed_stellar()),
-        }
-    }
-
-    /// The first stellar the player's system lists, or spöb 128 when it
-    /// lists none, as `_RandomizeOneMission` reads the origin with
-    /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
-    /// -1, else index 0 @0xa1514).
-    pub(super) fn first_listed_stellar(&self) -> StellarId {
-        self.sites.first().map_or(StellarId(128), |site| site.id)
-    }
-
     /// The stellar whose being a mission's destination counts it reached
     /// as an offer from a ship is accepted in flight (`_DoMissionAccept`
     /// @0xa1fc5-0xa1ff8): none with no such offer open; else, as
@@ -142,17 +123,11 @@ impl Session {
     /// target, by the engine the navigation target, and by the other
     /// reading none.
     pub(super) fn ship_offer_reaches(&self) -> Option<StellarId> {
-        self.offering?;
-        match self.rules.source_for(RuleKey::PersonMissionStellar) {
+        self.run.offering?;
+        match self.setup.rules.source_for(RuleKey::PersonMissionStellar) {
             RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => None,
         }
-    }
-
-    /// The last NPC numbered in the system: every NPC the traffic brings
-    /// in after it is numbered above it.
-    pub(super) fn last_npc(&self) -> Option<NpcId> {
-        self.npcs().iter().map(|npc| npc.id).max()
     }
 
     /// Resolves the `LinkMission` of each person NPC numbered above
@@ -164,26 +139,28 @@ impl Session {
             .npcs()
             .iter()
             .filter(|npc| last.is_none_or(|last| npc.id > last))
-            .filter_map(|npc| self.traffic.person(npc.person?.id)?.record.link_mission)
+            .filter_map(|npc| {
+                self.space
+                    .traffic
+                    .person(npc.person?.id)?
+                    .record
+                    .link_mission
+            })
             .map(MissionId)
             .collect();
         for id in linked {
-            let Some(record) = self.mission_record(id).cloned() else {
+            let Some(record) = self.statics.mission_record(id).cloned() else {
                 continue;
             };
-            let origin = self.person_mission_stellar();
+            let origin = self.chart.person_mission_stellar(&self.setup);
             let today = self.pilot.date;
-            let offer = self.in_world(|world| {
-                mission::resolve(&record, Venue::Ship, origin, world, today, chance)
-            });
-            self.ship_offers.insert(id, offer);
+            let offer = self
+                .chart
+                .in_world(&self.pilot, &self.statics, &self.setup, |world| {
+                    mission::resolve(&record, Venue::Ship, origin, world, today, chance)
+                });
+            self.run.ship_offers.insert(id, offer);
         }
-    }
-
-    /// The offer from a ship of `mission`, as the last person linked to it
-    /// resolved it.
-    pub(super) fn ship_offer(&self, mission: MissionId) -> Option<&Offer> {
-        self.ship_offers.get(&mission)
     }
 
     /// Hails as the original's comm key does, Option not held: see
@@ -233,12 +210,12 @@ impl Session {
         option: bool,
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
-        self.talk = None;
+        self.space.escorts.talk = None;
         // Beeps here once: once answering, it answers in `hail` too.
-        if let HailTarget::Stellar(stellar) = self.beep_unanswered(self.hail_target(option))? {
+        if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
             return Ok(Hailed::Stellar(stellar));
         }
-        let linked = self.linked_ship(self.answering()?, OfferedBy::Hail);
+        let linked = self.space.linked_ship(self.answering()?, OfferedBy::Hail);
         // The hail names a linked person's ship before it checks the
         // mission, and keeps it after the dialog (@0x621de, @0x625a4).
         self.reach_linked(linked);
@@ -260,13 +237,13 @@ impl Session {
         if npc.escort.is_some() {
             return None;
         }
-        let person = self.traffic.person(npc.person?.id)?;
+        let person = self.space.traffic.person(npc.person?.id)?;
         let on_board = person.record.flags & MISSION_ON_BOARD != 0;
         if on_board != (by == OfferedBy::Boarding) {
             return None;
         }
         let mission = MissionId(person.record.link_mission?);
-        (self.ship_offer(mission).is_some() && self.ship_mission_available(mission)).then_some(
+        (self.run.ship_offer(mission).is_some() && self.ship_mission_available(mission)).then_some(
             Offering {
                 npc: npc.id,
                 person: person.record.id,
@@ -274,6 +251,122 @@ impl Session {
                 by,
             },
         )
+    }
+
+    /// Names `linked`'s ship for `<OSN>` and checks its mission's
+    /// `AvailBits`, writing the cache, as a hail or board of a linked
+    /// person does before it offers (@0x621de-0x6220d, @0x65882-0x658b1).
+    pub(super) fn reach_linked(&mut self, linked: Option<(OfferingShip, MissionId)>) {
+        if let Some((ship, mission)) = linked {
+            self.run.offering_ship = Some(ship);
+            self.check_avail_bits(mission);
+        }
+    }
+
+    /// The name `<OSN>` reads by the engine (`_MungeBriefing`
+    /// @0x9cebe-0x9cf28): the person of the ship last brought in at the
+    /// slot `_offeringShipIndex` names, whether or not it is still there
+    /// ([`Traffic::berth_person`](crate::Traffic::berth_person)), none
+    /// when it had none or a capture cleared it. None with no slot named.
+    pub(super) fn offering_ship_name(&self) -> Option<&str> {
+        self.space
+            .traffic
+            .berth_person(self.run.offering_ship?.berth)
+    }
+
+    /// Whether `options` list a way for `npc` to join the fleet, its hail
+    /// seen before any conversation is rolled.
+    fn joins_instead(&self, npc: &Npc, options: &HailOptions) -> bool {
+        let unrolled = Conversation::open(0, false, 0, &mut NeverFires);
+        options.lists_join(&self.hail_of(npc, &unrolled))
+    }
+
+    /// Opens the offer dialog for `offering`, drawing on `chance`: it
+    /// stays pending until the player answers it. The hail or the board
+    /// that brought it sounds first, as the original plays it before
+    /// `_OfferOneMission`, so an offer accepted at once sounds too:
+    /// [`SimSound::HailOffer`] (@0x6223d) or
+    /// [`SimSound::PersonOfferBoarded`] (@0x65907).
+    pub(super) fn offer_from_ship(
+        &mut self,
+        offering: Offering,
+        chance: &mut dyn Chance,
+    ) -> VenueOffer {
+        self.out.sounds.push(match offering.by {
+            OfferedBy::Hail => SimSound::HailOffer,
+            OfferedBy::Boarding => SimSound::PersonOfferBoarded,
+        });
+        self.run.offering = Some(offering);
+        self.offer_dialog(offering.mission, chance)
+    }
+
+    /// The person whose offer the offer dialog shows, while it does.
+    pub(super) fn offering_person(&self) -> Option<&str> {
+        let offering = self.run.offering?;
+        let person = self.space.traffic.person(offering.person)?;
+        Some(&person.record.name)
+    }
+
+    /// Ends the offer from a ship pending, `accepted` or not (see the
+    /// module docs): on its hail, an accept makes a person of `Flags`
+    /// 0x0100 gone for good (@0x622f4-0x62300), and one of 0x0800 leave
+    /// (`_AIMakeShipLeave` @0x6234d); on its boarding, an accept marks
+    /// the ship boarded (@0x65f43-0x65f6d), and 0x0100 makes it gone for
+    /// good whatever the answer (@0x65982-0x65988). Then, on its hail, an accept of
+    /// a person of `Flags` 0x0040 whose mission the first slot holding it
+    /// has one ship left of (@0x6236d-0x62445,
+    /// [`swaps_for_mission_ship`]) makes its swap for that ship due, for
+    /// the settling to come ([`Session::settle_script`]; see the
+    /// `mission_ships` module).
+    pub(super) fn end_ship_offer(&mut self, accepted: bool) {
+        let Some(offering) = self.run.offering.take() else {
+            return;
+        };
+        let flags = self
+            .space
+            .traffic
+            .person(offering.person)
+            .map_or(0, |person| person.record.flags);
+        let gone = flags & GONE_ON_ACCEPT != 0;
+        match offering.by {
+            OfferedBy::Hail if accepted => {
+                if gone {
+                    self.go(offering.person);
+                }
+                if flags & LEAVES_ON_ACCEPT != 0
+                    && let Some(npc) = self.space.npc_mut(offering.npc)
+                {
+                    make_leave(npc);
+                }
+                let held = self.pilot.missions.holding(offering.mission);
+                if let Some(&slot) = held.first()
+                    && let Some(active) = self.pilot.missions.get(slot)
+                    && swaps_for_mission_ship(flags, active.ships.left)
+                {
+                    self.run.swap_due = Some((offering.npc, slot));
+                }
+            }
+            OfferedBy::Hail => {}
+            OfferedBy::Boarding => {
+                // `_HandlePlayerBoardAttempt` names the boarded ship only
+                // around its offer (@0x65882 to @0x65a11).
+                self.run.offering_ship = None;
+                if accepted {
+                    self.mark_boarded(offering.npc);
+                }
+                if gone {
+                    self.go(offering.person);
+                }
+            }
+        }
+    }
+}
+
+impl Space {
+    /// The last NPC numbered in the system: every NPC the traffic brings
+    /// in after it is numbered above it.
+    pub(super) fn last_npc(&self) -> Option<NpcId> {
+        self.npcs().iter().map(|npc| npc.id).max()
     }
 
     /// The ship `npc` is as `_offeringShipIndex` names it, and its
@@ -299,110 +392,34 @@ impl Session {
             (ship, mission)
         })
     }
+}
 
-    /// Names `linked`'s ship for `<OSN>` and checks its mission's
-    /// `AvailBits`, writing the cache, as a hail or board of a linked
-    /// person does before it offers (@0x621de-0x6220d, @0x65882-0x658b1).
-    pub(super) fn reach_linked(&mut self, linked: Option<(OfferingShip, MissionId)>) {
-        if let Some((ship, mission)) = linked {
-            self.offering_ship = Some(ship);
-            self.check_avail_bits(mission);
+impl Chart {
+    /// The stellar a person's mission is offered from, as
+    /// [`RuleKey::PersonMissionStellar`] reads the player ship's stellar
+    /// target: by the engine the navigation target; by the other reading
+    /// the first stellar the player's system lists, or spöb 128 with none.
+    pub(super) fn person_mission_stellar(&self, setup: &Setup) -> Option<StellarId> {
+        match setup.rules.source_for(RuleKey::PersonMissionStellar) {
+            RuleSource::Engine => self.nav_target(),
+            RuleSource::Bible => Some(self.first_listed_stellar()),
         }
     }
 
-    /// The name `<OSN>` reads by the engine (`_MungeBriefing`
-    /// @0x9cebe-0x9cf28): the person of the ship last brought in at the
-    /// slot `_offeringShipIndex` names, whether or not it is still there
-    /// ([`Traffic::berth_person`](crate::Traffic::berth_person)), none
-    /// when it had none or a capture cleared it. None with no slot named.
-    pub(super) fn offering_ship_name(&self) -> Option<&str> {
-        self.traffic.berth_person(self.offering_ship?.berth)
+    /// The first stellar the player's system lists, or spöb 128 when it
+    /// lists none, as `_RandomizeOneMission` reads the origin with
+    /// `_offeringFromShip` set (@0xa14e8-0xa1518: the first nav slot not
+    /// -1, else index 0 @0xa1514).
+    pub(super) fn first_listed_stellar(&self) -> StellarId {
+        self.sites.first().map_or(StellarId(128), |site| site.id)
     }
+}
 
-    /// Whether `options` list a way for `npc` to join the fleet, its hail
-    /// seen before any conversation is rolled.
-    fn joins_instead(&self, npc: &Npc, options: &HailOptions) -> bool {
-        let unrolled = Conversation::open(0, false, 0, &mut NeverFires);
-        options.lists_join(&self.hail_of(npc, &unrolled))
-    }
-
-    /// Opens the offer dialog for `offering`, drawing on `chance`: it
-    /// stays pending until the player answers it. The hail or the board
-    /// that brought it sounds first, as the original plays it before
-    /// `_OfferOneMission`, so an offer accepted at once sounds too:
-    /// [`SimSound::HailOffer`] (@0x6223d) or
-    /// [`SimSound::PersonOfferBoarded`] (@0x65907).
-    pub(super) fn offer_from_ship(
-        &mut self,
-        offering: Offering,
-        chance: &mut dyn Chance,
-    ) -> VenueOffer {
-        self.sounds.push(match offering.by {
-            OfferedBy::Hail => SimSound::HailOffer,
-            OfferedBy::Boarding => SimSound::PersonOfferBoarded,
-        });
-        self.offering = Some(offering);
-        self.offer_dialog(offering.mission, chance)
-    }
-
-    /// The person whose offer the offer dialog shows, while it does.
-    pub(super) fn offering_person(&self) -> Option<&str> {
-        let offering = self.offering?;
-        let person = self.traffic.person(offering.person)?;
-        Some(&person.record.name)
-    }
-
-    /// Ends the offer from a ship pending, `accepted` or not (see the
-    /// module docs): on its hail, an accept makes a person of `Flags`
-    /// 0x0100 gone for good (@0x622f4-0x62300), and one of 0x0800 leave
-    /// (`_AIMakeShipLeave` @0x6234d); on its boarding, an accept marks
-    /// the ship boarded (@0x65f43-0x65f6d), and 0x0100 makes it gone for
-    /// good whatever the answer (@0x65982-0x65988). Then, on its hail, an accept of
-    /// a person of `Flags` 0x0040 whose mission the first slot holding it
-    /// has one ship left of (@0x6236d-0x62445,
-    /// [`swaps_for_mission_ship`]) makes its swap for that ship due, for
-    /// the settling to come ([`Session::settle_script`]; see the
-    /// `mission_ships` module).
-    pub(super) fn end_ship_offer(&mut self, accepted: bool) {
-        let Some(offering) = self.offering.take() else {
-            return;
-        };
-        let flags = self
-            .traffic
-            .person(offering.person)
-            .map_or(0, |person| person.record.flags);
-        let gone = flags & GONE_ON_ACCEPT != 0;
-        match offering.by {
-            OfferedBy::Hail if accepted => {
-                if gone {
-                    self.go(offering.person);
-                }
-                if flags & LEAVES_ON_ACCEPT != 0
-                    && let Some(npc) = self.npc_mut(offering.npc)
-                {
-                    make_leave(npc);
-                }
-                let held = self.pilot.missions.holding(offering.mission);
-                if let Some(&slot) = held.first()
-                    && let Some(active) = self.pilot.missions.get(slot)
-                    && swaps_for_mission_ship(flags, active.ships.left)
-                {
-                    self.swap_due = Some((offering.npc, slot));
-                }
-            }
-            OfferedBy::Hail => {}
-            OfferedBy::Boarding => {
-                // `_HandlePlayerBoardAttempt` names the boarded ship only
-                // around its offer (@0x65882 to @0x65a11).
-                self.offering_ship = None;
-                if accepted {
-                    self.mark_boarded(offering.npc);
-                }
-                if gone {
-                    self.go(offering.person);
-                }
-            }
-        }
+impl MissionRun {
+    /// The offer from a ship of `mission`, as the last person linked to it
+    /// resolved it.
+    pub(super) fn ship_offer(&self, mission: MissionId) -> Option<&Offer> {
+        self.ship_offers.get(&mission)
     }
 }
 
@@ -458,13 +475,13 @@ pub(super) mod tests {
     /// The stellar mission 130's offer from a ship, which there must be,
     /// goes to.
     fn offered_to(session: &Session) -> Option<StellarId> {
-        let offer = session.ship_offer(MissionId(130)).expect("an offer");
+        let offer = session.run.ship_offer(MissionId(130)).expect("an offer");
         offer.destination.map(|stop| stop.stellar)
     }
 
     fn populated(catalog: &FakePilotCatalog, rules: Rulebook, nav: Option<i16>) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        session.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
+        session.chart.nav = crate::navigation::NavMode::Stellar(nav.map(StellarId));
         session.populate(catalog, &mut NeverFires);
         session
     }
@@ -475,7 +492,10 @@ pub(super) mod tests {
         let session = populated(&catalog, Rulebook::default(), Some(129));
         assert_eq!(offered_to(&session), Some(StellarId(129)));
         assert_eq!(
-            session.ship_offer(MissionId(130)).map(|offer| offer.venue),
+            session
+                .run
+                .ship_offer(MissionId(130))
+                .map(|offer| offer.venue),
             Some(Venue::Ship)
         );
         let session = populated(&catalog, Rulebook::default(), None);
@@ -509,7 +529,7 @@ pub(super) mod tests {
             Rulebook::default().with_override(RuleKey::PersonMissionStellar, RuleSource::Bible);
         let session = populated(&catalog, rules, None);
         assert_eq!(session.system(), SystemId(133));
-        assert!(session.sites.is_empty());
+        assert!(session.chart.sites.is_empty());
         assert_eq!(offered_to(&session), Some(StellarId(128)));
     }
 
@@ -518,7 +538,7 @@ pub(super) mod tests {
         let catalog = in_an_empty_system(linked(0));
         let session = populated(&catalog, Rulebook::default(), None);
         assert_eq!(session.system(), SystemId(133));
-        assert!(session.sites.is_empty());
+        assert!(session.chart.sites.is_empty());
         assert_eq!(offered_to(&session), None);
     }
 
@@ -532,6 +552,7 @@ pub(super) mod tests {
         assert_eq!(chance.asked.last(), Some(&6), "{:?}", chance.asked);
         assert_eq!(
             session
+                .run
                 .ship_offer(MissionId(130))
                 .and_then(|offer| offer.cargo_type),
             Some(5)
@@ -562,7 +583,7 @@ pub(super) mod tests {
             .map(|npc| npc.id)
             .collect();
         for id in ships {
-            session.traffic.remove(id);
+            session.space.traffic.remove(id);
         }
         (catalog, session)
     }
@@ -571,7 +592,7 @@ pub(super) mod tests {
     fn a_person_jumping_in_mid_stay_resolves_and_overwrites_the_last_offer() {
         let (catalog, mut session) = awaiting_arrivals();
         assert_eq!(offered_to(&session), None, "Ace's");
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.tick_traffic(&catalog, &NovaAi::default(), &mut Draws::of(&[0, 0, 473]));
         let names: Vec<Option<i16>> = session
             .npcs()
@@ -580,7 +601,7 @@ pub(super) mod tests {
             .collect();
         assert_eq!(names, [Some(600), Some(601)], "Bee jumps in");
         assert_eq!(offered_to(&session), Some(StellarId(129)), "Bee's");
-        session.nav = crate::navigation::NavMode::Off;
+        session.chart.nav = crate::navigation::NavMode::Off;
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             offered_to(&session),
@@ -663,7 +684,7 @@ pub(super) mod tests {
             .collect();
         assert_eq!(names, [Some(601)], "Bee comes on the pass");
         assert!(
-            session.ship_offer(MissionId(130)).is_some(),
+            session.run.ship_offer(MissionId(130)).is_some(),
             "resolved before the first frame"
         );
     }
@@ -674,11 +695,11 @@ pub(super) mod tests {
         catalog.persons[0].link_mission = Some(131);
         let session = populated(&catalog, Rulebook::default(), None);
         assert_eq!(session.npcs().len(), 1, "Ace is there");
-        assert!(session.ship_offers.is_empty());
+        assert!(session.run.ship_offers.is_empty());
         let mut catalog = linked(0);
         catalog.persons[0].link_mission = None;
         let session = populated(&catalog, Rulebook::default(), None);
-        assert!(session.ship_offers.is_empty(), "no LinkMission");
+        assert!(session.run.ship_offers.is_empty(), "no LinkMission");
     }
 
     #[test]
@@ -718,7 +739,7 @@ pub(super) mod tests {
         let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.populate(catalog, &mut NeverFires);
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         session
     }
 
@@ -769,7 +790,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let (hailed, asked) = hail(&mut session, &unavailable);
         assert!(opened_comm(&hailed), "{hailed:?}");
         assert!(!asked.is_empty(), "the conversation rolled");
@@ -793,20 +814,20 @@ pub(super) mod tests {
         assert!(opened_comm(&hail(&mut session, &boarded).0), "0x0200");
         let catalog = talking();
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].escort = Some(crate::escort::EscortDuty {
+        session.space.traffic.npcs_mut()[0].escort = Some(crate::escort::EscortDuty {
             formation: crate::escort::FormationSlot::default(),
             order: None,
         });
         assert!(opened_comm(&hail(&mut session, &catalog).0), "an escort");
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].person = None;
+        session.space.traffic.npcs_mut()[0].person = None;
         assert!(opened_comm(&hail(&mut session, &catalog).0), "no person");
         let mut unresolved = talking();
         unresolved.missions.clear();
         let mut session = targeting_ace(&unresolved);
         assert!(opened_comm(&hail(&mut session, &unresolved).0), "no record");
         let mut session = targeting_ace(&catalog);
-        session.ship_offers.clear();
+        session.run.ship_offers.clear();
         assert!(session.ship_mission_available(MissionId(130)));
         assert!(
             opened_comm(&hail(&mut session, &catalog).0),
@@ -818,26 +839,26 @@ pub(super) mod tests {
     fn the_hails_refusals_come_first_drawing_nothing() {
         let catalog = talking();
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::NoResponse), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.target = None;
+        session.chart.target = None;
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::NoTarget), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        session.space.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::InHyperspace), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
-        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.space.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::NoResponse), vec![]),
@@ -911,7 +932,7 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].goal, Goal::Idle, "and stays");
         let mut quoting = catalog;
         quoting.strings = vec![(7101, vec!["Hi.".to_owned()])];
-        session.traffic.npcs_mut()[0]
+        session.space.traffic.npcs_mut()[0]
             .person
             .as_mut()
             .expect("Ace")
@@ -925,7 +946,7 @@ pub(super) mod tests {
     #[test]
     fn accepted_on_its_hail_a_person_of_0x0800_leaves() {
         let (_, mut session) = offered(LEAVES_ON_ACCEPT);
-        session.traffic.npcs_mut()[0].target = Some(crate::combat::ShipRef::Player);
+        session.space.traffic.npcs_mut()[0].target = Some(crate::combat::ShipRef::Player);
         assert_eq!(accept(&mut session), Ok(0));
         let ace = &session.npcs()[0];
         assert_eq!((ace.goal, ace.target), (Goal::JumpOut, None));
@@ -939,9 +960,13 @@ pub(super) mod tests {
         assert_eq!(accept(&mut session), Ok(0));
         assert_eq!(session.npcs()[0], before);
         assert!(!session.pilot().gone(PersonId(600)));
-        assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(0));
+        assert_eq!(session.run.offer_rolls().roll(MissionId(130)), Some(0));
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
-        assert_eq!(session.take_texts_only().len(), 0, "130 has no BriefText");
+        assert_eq!(
+            session.out.take_texts_only().len(),
+            0,
+            "130 has no BriefText"
+        );
     }
 
     #[test]
@@ -972,10 +997,10 @@ pub(super) mod tests {
         let catalog = talking();
         let rules = Rulebook::default().with_override(RuleKey::PersonMissionStellar, reading);
         let mut session = populated(&catalog, rules, Some(resolved));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(accepted)));
         assert_eq!(accept(&mut session), Ok(0));
         session.pilot().missions().get(0).expect("held").reached
     }
@@ -991,7 +1016,7 @@ pub(super) mod tests {
         let mut catalog = linked(0);
         catalog.missions[0].flags = 0x0004;
         let mut session = populated(&catalog, Rulebook::default(), Some(129));
-        session.target = Some(NpcId(0));
+        session.chart.target = Some(NpcId(0));
         let (hailed, _) = hail(&mut session, &catalog);
         assert!(
             matches!(
@@ -1024,7 +1049,7 @@ pub(super) mod tests {
         let mut session = targeting_ace(&catalog);
         let (first, _) = hail(&mut session, &catalog);
         let before = session.npcs()[0].clone();
-        let offer = session.ship_offer(MissionId(130)).cloned();
+        let offer = session.run.ship_offer(MissionId(130)).cloned();
         assert_eq!(
             session
                 .refuse_mission(MissionId(130), &mut NeverFires)
@@ -1033,6 +1058,7 @@ pub(super) mod tests {
         );
         assert!(session.control_bit(Bit::new(5).expect("a bit")));
         let texts: Vec<String> = session
+            .out
             .take_texts_only()
             .into_iter()
             .map(|text| text.text)
@@ -1043,7 +1069,7 @@ pub(super) mod tests {
         assert!(session.pilot().missions().missions().is_empty());
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
         assert_eq!(hail(&mut session, &catalog).0, first, "offered again");
-        assert_eq!(session.ship_offer(MissionId(130)).cloned(), offer);
+        assert_eq!(session.run.ship_offer(MissionId(130)).cloned(), offer);
     }
 
     #[test]
@@ -1062,6 +1088,7 @@ pub(super) mod tests {
         assert!(session.pilot().missions().missions().is_empty());
         assert_eq!(
             session
+                .out
                 .take_texts_only()
                 .into_iter()
                 .map(|text| text.kind)
@@ -1103,13 +1130,13 @@ pub(super) mod tests {
         let mut session = targeting_ace(catalog);
         let mut state = *session.player();
         state.velocity = crate::geometry::Vec2::new(0.25, 0.0);
-        let ace = &mut session.traffic.npcs_mut()[0];
+        let ace = &mut session.space.traffic.npcs_mut()[0];
         ace.state = state;
         ace.condition = Condition::Disabled;
         let mut other = crate::testkit::npc(9, ace.stats);
         other.target = Some(ShipRef::Npc(NpcId(0)));
         other.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        session.traffic.add_npc(other);
+        session.space.traffic.add_npc(other);
         session
     }
 
@@ -1269,7 +1296,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         assert!(opened_comm(&hail(&mut session, &unavailable).0));
         assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x621de");
         assert_eq!(osn(&session, RuleSource::Bible), "[Error]");
@@ -1302,13 +1329,14 @@ pub(super) mod tests {
                 .map(|_| ()),
             Ok(())
         );
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "Ace",
             "a slot left empty still holds what it last held"
         );
         let newcomer = session
+            .space
             .traffic
             .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
         assert_eq!(
@@ -1316,7 +1344,7 @@ pub(super) mod tests {
             "[Error]",
             "reused by a ship with no person (-1 @0x3cb48)"
         );
-        session.traffic.remove(newcomer);
+        session.space.traffic.remove(newcomer);
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "[Error]",
@@ -1328,25 +1356,28 @@ pub(super) mod tests {
     fn by_the_engine_a_reused_slot_names_its_newcomers_person() {
         let (_, mut session) = offered(0);
         let ace = session.npcs()[0].clone();
-        session.traffic.remove(ace.id);
+        session.space.traffic.remove(ace.id);
         let _ = session
+            .space
             .traffic
             .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
-        session.traffic.remove(NpcId(1));
-        session.traffic.add_npc(ace);
+        session.space.traffic.remove(NpcId(1));
+        session.space.traffic.add_npc(ace);
         assert_eq!(osn(&session, RuleSource::Engine), "Ace", "@0x40cef");
     }
 
     #[test]
     fn by_the_engine_a_captured_ships_slot_names_nobody() {
         let (_, mut session) = offered(0);
-        session.lose_captured(NpcId(0), true);
+        session
+            .space
+            .lose_captured(&mut session.pilot, NpcId(0), true);
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "[Error]",
             "_DoShipCapture @0x411b3"
         );
-        session.traffic.remove(NpcId(0));
+        session.space.traffic.remove(NpcId(0));
         assert_eq!(
             osn(&session, RuleSource::Engine),
             "[Error]",
@@ -1374,9 +1405,9 @@ pub(super) mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.traffic.set_berth_person(99, "Earlier");
-        session.offering_ship = Some(OfferingShip { berth: 99 });
-        session.offers.set_roll(MissionId(130), 51);
+        session.space.traffic.set_berth_person(99, "Earlier");
+        session.run.offering_ship = Some(OfferingShip { berth: 99 });
+        session.run.offers.set_roll(MissionId(130), 51);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
         assert_eq!(osn(&session, RuleSource::Engine), "[Error]");
@@ -1386,10 +1417,10 @@ pub(super) mod tests {
     fn boarding_a_linked_person_writes_its_missions_avail_bits_verdict() {
         let catalog = boardable(0);
         let mut session = alongside_ace(&catalog);
-        session.avail_cache.insert(MissionId(130), false);
+        session.run.avail_cache.insert(MissionId(130), false);
         let _ = board(&mut session);
         assert_eq!(
-            session.avail_cache.get(&MissionId(130)),
+            session.run.avail_cache.get(&MissionId(130)),
             Some(&true),
             "_IsMissionAvailable(m, 1) @0x658b1"
         );
@@ -1400,7 +1431,7 @@ pub(super) mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let (boarded, _) = board(&mut session);
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
         assert!(session.npcs()[0].boarded);
@@ -1489,7 +1520,7 @@ pub(super) mod tests {
         let mut unavailable = boardable(0);
         unavailable.missions[0].avail_random = 50;
         let mut session = alongside_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let _ = session.take_sounds();
         assert!(matches!(board(&mut session).0, Ok(Boarding::Opened(_))));
         assert_eq!(plunder_airlocks(&mut session), 1, "@0x659b3");
@@ -1506,7 +1537,7 @@ pub(super) mod tests {
         let mut unavailable = talking();
         unavailable.missions[0].avail_random = 50;
         let mut session = targeting_ace(&unavailable);
-        session.offers.set_roll(MissionId(130), 51);
+        session.run.offers.set_roll(MissionId(130), 51);
         let _ = session.take_sounds();
         assert!(opened_comm(&hail(&mut session, &unavailable).0));
         assert_eq!(offer_sounds(&mut session), [], "the comm dialog");

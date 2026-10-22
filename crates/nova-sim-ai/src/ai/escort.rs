@@ -83,7 +83,7 @@ impl EscortAi {
                 guard: guard(npc, around, chance),
             },
             RuleSource::Bible if npc.ai_type.trades() => Goal::Formation { guard: None },
-            RuleSource::Bible => attack_or_form(best_threat(npc, around.npcs, player, None)),
+            RuleSource::Bible => attack_or_form(best_threat(npc, around, player, None)),
         }
     }
 }
@@ -110,7 +110,7 @@ impl Behaviour for EscortAi {
             Some(EscortOrder::Attack) => {
                 let kept = kept.filter(|&target| around.live(target));
                 kept.map_or_else(
-                    || attack_or_form(best_threat(npc, around.npcs, &player, None)),
+                    || attack_or_form(best_threat(npc, around, &player, None)),
                     Goal::Attack,
                 )
             }
@@ -123,7 +123,7 @@ impl Behaviour for EscortAi {
                     .and_then(npc_of)
                     .filter(|target| intact(target) && near(target));
                 kept.map_or_else(
-                    || attack_or_form(best_threat(npc, around.npcs, &player, Some(DEFEND_RADIUS))),
+                    || attack_or_form(best_threat(npc, around, &player, Some(DEFEND_RADIUS))),
                     |target| Goal::Attack(ShipRef::Npc(target.id)),
                 )
             }
@@ -254,7 +254,7 @@ fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Sh
     if let Some(target) = kept {
         return Some(ShipRef::Npc(target.id));
     }
-    let threats: Vec<NpcId> = threats(npc, around.npcs).map(|threat| threat.id).collect();
+    let threats: Vec<NpcId> = threats(npc, around).map(|threat| threat.id).collect();
     if threats.is_empty() {
         return None;
     }

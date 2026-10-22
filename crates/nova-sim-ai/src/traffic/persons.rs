@@ -407,8 +407,13 @@ pub struct PersonWorld<'a> {
     pub grudges: &'a BTreeSet<PersonId>,
     /// The control-bit test of a person's `ActiveOn`.
     pub control_bits: &'a dyn ControlBits,
-    /// What the control-bit test reads about the player.
+    /// What the control-bit test reads about the player now.
     pub pilot: &'a dyn PilotFacts,
+    /// The player as the last galaxy refresh read them: what a ship
+    /// type's or fleet's `AppearOn`, and a drawn person's `ActiveOn`, are
+    /// tested against, as `_PropagateMissionBitEffects` caches them (see
+    /// [`RuleKey::SpawnAvailability`]).
+    pub refreshed: &'a dyn PilotFacts,
     /// The player's fleet: the persons among it never spawn, and their
     /// names count as in the system.
     pub fleet: &'a [Escort],
@@ -421,18 +426,39 @@ impl PersonWorld<'_> {
         self.fleet.iter().any(|escort| escort.person == Some(id))
     }
 
-    /// Whether `test` (a person's `ActiveOn`) holds for the player: never
-    /// when it did not parse.
+    /// Whether a randomly drawn person of `ActiveOn` `test` may appear:
+    /// it holds both for the player as the last refresh read them and for
+    /// the player now, as `_SpawnPerson`'s draw reads the cached verdict
+    /// (përs +0x622, @0x409b5) and then tests it again (@0x40b5d-0x40b6d).
+    /// Never when it did not parse.
     #[must_use]
-    pub fn allows(&self, test: &Test) -> bool {
-        self.gate().allows(test)
+    pub fn drawn_active(&self, test: &Test) -> bool {
+        self.gate().allows(test) && self.live_gate().allows(test)
+    }
+
+    /// Whether the person of a system's person slot, of `ActiveOn` `test`,
+    /// may appear: it holds for the player now, as `_SetupShipsInSystem`
+    /// tests it (@0x4334d-0x4335d) before spawning the person by ID, past
+    /// the cache. Never when it did not parse.
+    #[must_use]
+    pub fn slot_active(&self, test: &Test) -> bool {
+        self.live_gate().allows(test)
     }
 }
 
 impl<'a> PersonWorld<'a> {
-    /// The control bits and the pilot view, as a [`Gate`].
+    /// The control bits and the player as the last refresh read them, as
+    /// a [`Gate`]: what every `AppearOn` is tested through.
     #[must_use]
     pub fn gate(&self) -> Gate<'a> {
+        Gate {
+            control_bits: self.control_bits,
+            pilot: self.refreshed,
+        }
+    }
+
+    /// The control bits and the player now, as a [`Gate`].
+    fn live_gate(&self) -> Gate<'a> {
         Gate {
             control_bits: self.control_bits,
             pilot: self.pilot,
@@ -449,6 +475,7 @@ impl PersonWorld<'static> {
         grudges: &NO_PERSONS,
         control_bits: &NovaBits,
         pilot: &FreshPilot,
+        refreshed: &FreshPilot,
         fleet: &[],
     };
 }
@@ -703,9 +730,11 @@ mod tests {
         let none = PersonWorld::NONE;
         assert!(none.gone.is_empty() && none.grudges.is_empty());
         assert_eq!(none.rules.link_slip(), ENGINE);
-        assert!(none.allows(&Test::default()), "a blank ActiveOn");
-        assert!(!none.allows(&Test::parse("b3")), "no bit is set");
-        assert!(!none.allows(&Test::parse("b1 &")), "malformed");
+        for active in [PersonWorld::drawn_active, PersonWorld::slot_active] {
+            assert!(active(&none, &Test::default()), "a blank ActiveOn");
+            assert!(!active(&none, &Test::parse("b3")), "no bit is set");
+            assert!(!active(&none, &Test::parse("b1 &")), "malformed");
+        }
     }
 
     #[test]
@@ -726,8 +755,10 @@ mod tests {
             control_bits: &every,
             ..PersonWorld::NONE
         };
-        assert!(world.allows(&Test::parse("b3")));
-        assert_eq!(every.0.get(), 1);
+        assert!(world.drawn_active(&Test::parse("b3")));
+        assert_eq!(every.0.get(), 2, "at the refresh and now");
+        assert!(world.slot_active(&Test::parse("b3")));
+        assert_eq!(every.0.get(), 3, "now");
     }
 
     #[test]

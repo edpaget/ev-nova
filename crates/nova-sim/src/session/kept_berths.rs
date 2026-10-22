@@ -13,7 +13,7 @@
 //! start afresh with each traffic (rdm task
 //! carry-slot-picks-and-exits-across-app-life).
 
-use super::Session;
+use super::{Session, Space};
 use crate::traffic::kept_berths::KeptBerths;
 
 impl Session {
@@ -21,7 +21,7 @@ impl Session {
     /// later in the same run ([`Session::with_kept_berths`]).
     #[must_use]
     pub fn kept_berths(&self) -> KeptBerths {
-        self.traffic.kept_berths()
+        self.space.kept_berths()
     }
 
     /// The session, its traffic's berths starting from `kept`, what a
@@ -30,8 +30,17 @@ impl Session {
     /// The traffic keeps the session's readings.
     #[must_use]
     pub fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
-        self.traffic.keep_berths(kept);
+        self.space.traffic.keep_berths(kept);
         self
+    }
+}
+
+impl Space {
+    /// What its traffic's berths keep, to hand on to a session started
+    /// later in the same run ([`Session::with_kept_berths`]).
+    #[must_use]
+    fn kept_berths(&self) -> KeptBerths {
+        self.traffic.kept_berths()
     }
 }
 
@@ -56,18 +65,19 @@ mod tests {
     /// berth 9's person Ace.
     fn marked(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
-        session.traffic.refresh_odds(&World::new(&[]));
+        session.space.traffic.refresh_odds(&World::new(&[]));
         session
+            .space
             .traffic
             .write_berth_search(5, SearchTimer::Searching(40));
-        session.traffic.set_berth_person(9, "Ace");
+        session.space.traffic.set_berth_person(9, "Ace");
         session
     }
 
     /// Each berth's odds in `session`'s traffic, as bits.
     fn odds(session: &Session) -> Vec<u32> {
         (0..=LAST_SLOT + 1)
-            .map(|berth| session.traffic.berth_odds(berth).to_bits())
+            .map(|berth| session.space.traffic.berth_odds(berth).to_bits())
             .collect()
     }
 
@@ -75,9 +85,15 @@ mod tests {
     fn the_scene_marks_berth_two_and_holds_a_timer_and_a_person() {
         let catalog = armed();
         let session = marked(&catalog);
-        assert_ne!(session.traffic.berth_odds(1).to_bits(), STALE.to_bits());
-        assert_eq!(session.traffic.berth_odds(2).to_bits(), STALE.to_bits());
-        assert_eq!(session.traffic.berth_person(9), Some("Ace"));
+        assert_ne!(
+            session.space.traffic.berth_odds(1).to_bits(),
+            STALE.to_bits()
+        );
+        assert_eq!(
+            session.space.traffic.berth_odds(2).to_bits(),
+            STALE.to_bits()
+        );
+        assert_eq!(session.space.traffic.berth_person(9), Some("Ace"));
     }
 
     #[test]
@@ -86,13 +102,17 @@ mod tests {
         let mut session = marked(&catalog);
         let before = session.kept_berths();
         let held = odds(&session);
-        let stellar = session.sites[0].id;
+        let stellar = session.chart.sites[0].id;
         session
             .land_at(&catalog, session.pilot.system, stellar)
             .expect("relocates");
         assert_eq!(session.npcs(), [], "a new traffic");
         assert_eq!(odds(&session), held);
-        assert_eq!(session.traffic.berth_person(9), Some("Ace"), "for <OSN>");
+        assert_eq!(
+            session.space.traffic.berth_person(9),
+            Some("Ace"),
+            "for <OSN>"
+        );
         assert_eq!(session.kept_berths(), before);
     }
 
@@ -106,7 +126,10 @@ mod tests {
         assert_eq!(odds(&next), odds(&last), "before its first populate");
         next.populate(&catalog, &mut Draws::of(&POPULATE));
         let spawned = next.npcs()[0].berth;
-        assert_eq!(next.traffic.berth_odds(spawned).to_bits(), STALE.to_bits());
+        assert_eq!(
+            next.space.traffic.berth_odds(spawned).to_bits(),
+            STALE.to_bits()
+        );
         let (last, next) = (odds(&last), odds(&next));
         for berth in (0..=LAST_SLOT + 1).filter(|&berth| berth != spawned) {
             let at = berth as usize;
@@ -123,7 +146,7 @@ mod tests {
             .expect("loads")
             .with_kept_berths(last.kept_berths());
         assert_eq!(odds(&next), odds(&last));
-        assert_eq!(next.traffic.berth_person(9), Some("Ace"));
+        assert_eq!(next.space.traffic.berth_person(9), Some("Ace"));
         assert_eq!(next.kept_berths(), last.kept_berths());
     }
 
@@ -131,7 +154,8 @@ mod tests {
     fn a_new_pilots_ship_takes_the_search_timer_its_berth_kept_from_the_last_pilot() {
         let catalog = armed();
         let mut last = facing_an_npc(&catalog, 180);
-        last.traffic
+        last.space
+            .traffic
             .write_berth_search(1, SearchTimer::Searching(40));
         let mut next = Session::start(&catalog)
             .expect("starts")

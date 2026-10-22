@@ -37,10 +37,10 @@
 //! ([`Fighter::held_disabled`](crate::combat::Fighter::held_disabled):
 //! the turret miss, regeneration, the can't-disable floor), self-repair,
 //! and the ship's stored [`Condition`], set to disabled as it comes in
-//! ([`Session::hold_derelicts`]), which the AI, the IFF colour, the draw
+//! ([`Space::hold_derelicts`]), which the AI, the IFF colour, the draw
 //! layer and the target panel read.
 
-use super::Session;
+use super::{Session, Space, Statics};
 use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
@@ -50,9 +50,11 @@ impl Session {
     /// government (@0x2cf1-0x2d14), or a rescue mission's ship not yet
     /// boarded ([`Session::mission_ship_held`]).
     pub(crate) fn held_disabled(&self, npc: &Npc) -> bool {
-        self.govts.derelict(npc.govt) || self.mission_ship_held(npc)
+        self.statics.govts.derelict(npc.govt) || self.mission_ship_held(npc)
     }
+}
 
+impl Space {
     /// Stores each intact NPC of a Derelict government disabled, with no
     /// fate and no event: nothing ever sees it go from not disabled to
     /// disabled (`_DamageShip`'s -0x17a is set from the start).
@@ -61,8 +63,8 @@ impl Session {
     /// and as a pass's fight ends; a ship that arrives in the AI's step
     /// after the ships before it have thought is held before the frame
     /// is drawn, a lag no player sees.
-    pub(super) fn hold_derelicts(&mut self) {
-        let govts = &self.govts;
+    pub(super) fn hold_derelicts(&mut self, statics: &Statics) {
+        let govts = &statics.govts;
         for npc in self.traffic.npcs_mut() {
             if npc.condition == Condition::Intact && govts.derelict(npc.govt) {
                 npc.condition = Condition::Disabled;
@@ -131,7 +133,7 @@ mod tests {
     #[test]
     fn a_ship_of_no_government_is_not_derelict() {
         let (_, mut session) = derelict();
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.govt = None;
         npc.condition = Condition::Intact;
         assert!(!session.held_disabled(&session.npcs()[0]));
@@ -142,7 +144,7 @@ mod tests {
     #[test]
     fn a_derelict_ship_is_held_disabled_in_the_fight() {
         let (_, mut session) = derelict();
-        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         assert!(session.held_disabled(&session.npcs()[0]));
         let (_, terms) = session.fight_terms();
         assert!(terms[0].held_disabled);
@@ -158,7 +160,7 @@ mod tests {
     #[test]
     fn a_derelict_ship_regenerates_nothing() {
         let (_, mut session) = derelict();
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.stats.shield_regen = 1.0;
         npc.stats.armor_regen = 1.0;
         npc.reserves.shield.now = 1.0;
@@ -171,7 +173,7 @@ mod tests {
     #[test]
     fn a_derelict_ship_repaired_by_its_own_gear_stays_disabled() {
         let (_, mut session) = derelict();
-        let npc = &mut session.traffic.npcs_mut()[0];
+        let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.self_repair = true;
         npc.reserves.armor.now = 1.0;
         let mut chance = Draws::of(&[0]);

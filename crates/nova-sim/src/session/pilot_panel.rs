@@ -3,8 +3,9 @@
 //! [`pilot_panel`](crate::pilot_panel); see that module for the
 //! original's rules).
 
-use super::Session;
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::PilotCatalog;
+use crate::pilot::Pilot;
 use crate::pilot_panel::PilotPanel;
 use crate::rating::{RATING_STRINGS, string_index};
 
@@ -14,21 +15,35 @@ impl Session {
     /// reads taken from `catalog`. Reading it changes nothing.
     #[must_use]
     pub fn pilot_panel(&self, catalog: &impl PilotCatalog) -> PilotPanel {
-        let words = self.player_info_words();
-        let rating = string_index(self.pilot.combat_rating());
+        self.chart
+            .pilot_panel(&self.pilot, &self.statics, &self.setup, catalog)
+    }
+}
+
+impl Chart {
+    /// What the main screen's pilot panel says about the pilot (see
+    /// [`pilot_panel`](crate::pilot_panel)), the stellars the legal status
+    /// reads taken from `catalog`. Reading it changes nothing.
+    #[must_use]
+    fn pilot_panel(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+    ) -> PilotPanel {
+        let words = setup.player_info_words();
+        let rating = string_index(pilot.combat_rating());
         PilotPanel {
-            pilot_name: self.pilot.name().to_owned(),
-            ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
-            ship_class: self
-                .ship_name(self.pilot.ship)
-                .unwrap_or_default()
-                .to_owned(),
-            ship: self.pilot.ship,
-            legal_status: self.legal_status(catalog, &words),
-            combat_rating: self
+            pilot_name: pilot.name().to_owned(),
+            ship_name: pilot.ship_name().unwrap_or_default().to_owned(),
+            ship_class: statics.ship_name(pilot.ship).unwrap_or_default().to_owned(),
+            ship: pilot.ship,
+            legal_status: self.legal_status(pilot, statics, setup, catalog, &words),
+            combat_rating: setup
                 .nth_string(RATING_STRINGS, rating + 1)
                 .unwrap_or_default(),
-            date: self.med_date_text(),
+            date: super::med_date_text(pilot, statics),
         }
     }
 }
@@ -113,7 +128,14 @@ mod tests {
         );
         assert_eq!(
             panel.legal_status,
-            session.legal_status_in(&catalog, SystemId(131), &session.player_info_words())
+            session.chart.legal_status_in(
+                &session.pilot,
+                &session.statics,
+                &session.setup,
+                &catalog,
+                SystemId(131),
+                &session.setup.player_info_words()
+            )
         );
         assert!(panel.legal_status.starts_with("status "), "{panel:?}");
     }

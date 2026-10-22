@@ -101,11 +101,12 @@
 //! owner (+0x14, @0x68f87-0x68f9e), or the system it was found in when no
 //! system owns it.
 
+use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
-use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use super::hooks::ShipHook;
+use super::{Chart, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{PilotCatalog, ShipId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -155,7 +156,7 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
     }
 
     fn open(&self, system: SystemId) -> bool {
-        let galaxy = &self.session.galaxy;
+        let galaxy = &self.session.chart.galaxy;
         galaxy.exists(system)
             && galaxy.visible(system)
             && self.session.is_known(system)
@@ -168,8 +169,12 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
             .landing_sites(system)
             .into_iter()
             .map(|site| {
-                let site = self.session.galaxy.site(site);
-                let active = self.session.stellar_owner(site.id).is_some();
+                let site = self.session.chart.galaxy.site(site);
+                let active = self
+                    .session
+                    .chart
+                    .stellar_owner(&self.session.statics, site.id)
+                    .is_some();
                 (site.id, qualifies(&site, active, record))
             })
             .collect()
@@ -186,10 +191,10 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
-        if !std::mem::take(&mut self.rescue_due) {
+        if !std::mem::take(&mut self.ship.fate.rescue_due) {
             return false;
         }
-        let save_due = self.save_due;
+        let save_due = self.out.save_due;
         let from = self.pilot.system;
         self.end_every_mission_for_rescue(&mut &mut *chance);
         self.reset_player_for_rescue();
@@ -197,7 +202,7 @@ impl Session {
         let system = self.escape_destination(from, catalog);
         let arrival = Arrival {
             system,
-            sites: self.read_sites(catalog, system),
+            sites: self.chart.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Arrive(ShipState {
                     position: RESCUE_AT,
@@ -209,15 +214,17 @@ impl Session {
             },
         };
         self.enter_system(Entry::Rescue, arrival, catalog, catalog, chance);
-        self.fill_reserves_for_rescue();
+        self.ship
+            .fill_reserves_for_rescue(&mut self.pilot, &self.setup);
         let days = RESCUE_DAYS + u32::from(chance.roll(RESCUE_EXTRA_DAYS));
         self.pass_days(days, chance);
         self.rebuild_stellars();
         self.rename_for_rescue(&mut &mut *chance);
-        self.reset_records_for_rescue();
-        self.save_due = save_due;
+        self.chart
+            .reset_records_for_rescue(&mut self.pilot, &self.statics);
+        self.out.save_due = save_due;
         self.strict_play_save(catalog);
-        self.rescue_desc_due = true;
+        self.ship.fate.rescue_desc_due = true;
         true
     }
 
@@ -236,16 +243,17 @@ impl Session {
             return;
         }
         let first = self
+            .chart
             .read_sites(catalog, self.pilot.system)
             .first()
             .map_or(STRICT_SAVE_FALLBACK, |site| site.id);
         self.pilot.stellar = Some(first);
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
     pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        std::mem::take(&mut self.rescue_desc_due).then_some(RESCUE_DESC)
+        self.ship.take_rescue_desc()
     }
 
     /// Ends every active mission as `_AbortMission(slot, 1)` does, in slot
@@ -258,7 +266,7 @@ impl Session {
             .map(|(slot, active)| (slot, active.mission))
             .collect();
         for (slot, mission) in active {
-            let record = self.lifecycle_record(mission);
+            let record = self.statics.lifecycle_record(mission);
             self.end_mission(slot, &record, true, chance);
         }
     }
@@ -266,54 +274,40 @@ impl Session {
     /// `_ResetPlayer(0)`'s part of the rescue that the engine models (see
     /// the module docs), the placement and the scene left to the entry.
     fn reset_player_for_rescue(&mut self) {
-        let Some(record) = self.ship_record(RESCUE_SHIP).cloned() else {
+        let Some(record) = self.statics.ship_record(RESCUE_SHIP).cloned() else {
             return;
         };
         self.board_class(&record, &BTreeMap::new());
         // The lights' intensity and count, not their timer (@0x1d534-0x1d539;
         // see `nova_sim::combat::ship_lights`).
-        let lights = &mut self.ship_display.frames.lights;
+        let lights = &mut self.ship.ship_display.frames.lights;
         *lights = crate::combat::ship_lights::ShipLights {
             timer: lights.timer,
             ..crate::combat::ship_lights::ShipLights::default()
         };
-        self.condition = Condition::Intact;
+        self.ship.condition = Condition::Intact;
         self.pod = None;
-        self.pod_zeroed = false;
-        self.target = None;
-        self.self_destruct.reset();
+        self.ship.fate.pod_zeroed = false;
+        self.chart.target = None;
+        self.ship.fate.self_destruct.reset();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
         // modules).
-        self.set_nav(crate::navigation::NavMode::Off);
-        self.dock = None;
+        self.chart.set_nav(crate::navigation::NavMode::Off);
+        self.port.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
-        self.secondary = None;
+        self.ship.secondary = None;
         self.pilot.jumped_from = None;
         self.pilot.course.clear();
         self.pilot.cargo.clear();
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
-        self.recent_rank = None;
+        self.run.recent_rank = None;
         // The system died in: its timer cancelled and its countdown
         // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
-        self.reset_reinforcements_here();
+        self.space.reset_reinforcements_here(&mut self.pilot);
         self.reset_precalced();
-    }
-
-    /// The rescue's reserves: fuel and shield full, the armour as
-    /// [`RuleKey::RescueArmor`] reads (see the module docs).
-    fn fill_reserves_for_rescue(&mut self) {
-        let stats = self.stats;
-        let armor = match self.rules.source_for(RuleKey::RescueArmor) {
-            RuleSource::Engine => stats.shield,
-            RuleSource::Bible => stats.armor,
-        };
-        let reserves = &mut self.pilot.reserves;
-        reserves.fuel.now = stats.fuel;
-        reserves.shield.now = stats.shield;
-        reserves.armor.now = armor;
     }
 
     /// Names the rescued ship `shïp` 128's name, a space and four digits
@@ -323,22 +317,6 @@ impl Session {
             return;
         };
         self.pilot.ship_name = Some(crate::shipyard::numbered_name(name, 4, chance));
-    }
-
-    /// Every system's record, hidden ones included, and the record with
-    /// each government, its government's `InitialRec` (see the module
-    /// docs).
-    fn reset_records_for_rescue(&mut self) {
-        let govts: Vec<_> = self.govts.ids().collect();
-        for govt in govts {
-            let record = self.govts.initial_record(Some(govt));
-            self.pilot.set_legal_record(govt, record);
-        }
-        self.pilot.system_legal = Some(crate::legal::systems_from_govts(
-            self.galaxy.governed(),
-            &BTreeMap::new(),
-            &self.govts,
-        ));
     }
 
     /// The escape search's galaxy, read from `catalog` (see the module
@@ -359,15 +337,6 @@ impl Session {
         }
     }
 
-    /// The system a visible system owns `stellar` in, if any.
-    fn stellar_owner(&self, stellar: StellarId) -> Option<SystemId> {
-        let listed = self
-            .listed_stellars
-            .iter()
-            .find(|listed| listed.id == stellar)?;
-        self.galaxy.owner(&listed.systems)
-    }
-
     /// Where the rescue takes the pod from `from`, the system the player
     /// died in (see the module docs): the system of the stellar the escape
     /// search finds, or [`RESCUE_FALLBACK`].
@@ -376,10 +345,62 @@ impl Session {
         from: SystemId,
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> SystemId {
-        escape_stellar(from, &self.search_map(catalog))
-            .map_or(RESCUE_FALLBACK, |(stellar, found_in)| {
-                self.stellar_owner(stellar).unwrap_or(found_in)
-            })
+        escape_stellar(from, &self.search_map(catalog)).map_or(
+            RESCUE_FALLBACK,
+            |(stellar, found_in)| {
+                self.chart
+                    .stellar_owner(&self.statics, stellar)
+                    .unwrap_or(found_in)
+            },
+        )
+    }
+}
+
+impl PlayerShip {
+    /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
+    fn take_rescue_desc(&mut self) -> Option<i16> {
+        std::mem::take(&mut self.fate.rescue_desc_due).then_some(RESCUE_DESC)
+    }
+
+    /// The rescue's reserves: fuel and shield full, the armour as
+    /// [`RuleKey::RescueArmor`] reads (see the module docs).
+    fn fill_reserves_for_rescue(&mut self, pilot: &mut Pilot, setup: &Setup) {
+        let stats = self.fit.stats;
+        let armor = match setup.rules.source_for(RuleKey::RescueArmor) {
+            RuleSource::Engine => stats.shield,
+            RuleSource::Bible => stats.armor,
+        };
+        let reserves = &mut pilot.reserves;
+        reserves.fuel.now = stats.fuel;
+        reserves.shield.now = stats.shield;
+        reserves.armor.now = armor;
+    }
+}
+
+impl Chart {
+    /// Every system's record, hidden ones included, and the record with
+    /// each government, its government's `InitialRec` (see the module
+    /// docs).
+    fn reset_records_for_rescue(&mut self, pilot: &mut Pilot, statics: &Statics) {
+        let govts: Vec<_> = statics.govts.ids().collect();
+        for govt in govts {
+            let record = statics.govts.initial_record(Some(govt));
+            pilot.set_legal_record(govt, record);
+        }
+        pilot.system_legal = Some(crate::legal::systems_from_govts(
+            self.galaxy.governed(),
+            &BTreeMap::new(),
+            &statics.govts,
+        ));
+    }
+
+    /// The system a visible system owns `stellar` in, if any.
+    fn stellar_owner(&self, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
+        let listed = statics
+            .listed_stellars
+            .iter()
+            .find(|listed| listed.id == stellar)?;
+        self.galaxy.owner(&listed.systems)
     }
 }
 
@@ -427,7 +448,7 @@ mod tests {
         for &system in systems {
             session.pilot.explore(SystemId(system));
         }
-        session.rework_known();
+        session.chart.rework_known(&session.pilot);
         session
     }
 
@@ -436,7 +457,7 @@ mod tests {
         let catalog = galaxy();
         let mut session = explored(&catalog, &[133]);
         assert!(session.search_map(&catalog).open(SystemId(133)));
-        session.known.remove(&SystemId(133));
+        session.chart.known.remove(&SystemId(133));
         assert!(!session.search_map(&catalog).open(SystemId(133)), "unknown");
         assert_eq!(
             session.escape_destination(SystemId(130), &catalog),
@@ -545,7 +566,9 @@ mod tests {
         let session = explored(&catalog, &[133, 134]);
         assert!(session.search_map(&catalog).open(SystemId(134)));
         assert_eq!(
-            session.stellar_owner(StellarId(170)),
+            session
+                .chart
+                .stellar_owner(&session.statics, StellarId(170)),
             None,
             "133 stands for 134's place"
         );
@@ -672,7 +695,7 @@ mod tests {
         let mut session = explored(catalog, &[131]);
         session.pilot.ship = ESCAPE_POD_SHIP;
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session
     }
 
@@ -715,32 +738,36 @@ mod tests {
     fn the_rescue_puts_a_zeroed_pod_word_back_to_flying() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.pod_zeroed = true;
+        session.ship.fate.pod_zeroed = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        assert_eq!((session.pod, session.pod_zeroed), (None, false));
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
     }
 
     #[test]
     fn the_rescue_idles_the_self_destruct() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.self_destruct.step(true, false);
-        assert_eq!(session.self_destruct.count(), Some(149));
+        session.ship.fate.self_destruct.step(true, false);
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(149));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        assert_eq!(session.self_destruct.count(), None, "_ResetPlayer @0x1d764");
+        assert_eq!(
+            session.ship.fate.self_destruct.count(),
+            None,
+            "_ResetPlayer @0x1d764"
+        );
     }
 
     #[test]
     fn the_rescue_zeroes_the_players_lights_but_keeps_their_timer() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.ship_display.frames.lights = crate::combat::ship_lights::ShipLights {
+        session.ship.ship_display.frames.lights = crate::combat::ship_lights::ShipLights {
             intensity: 32.0,
             count: 2,
             timer: 7.0,
         };
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        let lights = session.ship_display.frames.lights;
+        let lights = session.ship.ship_display.frames.lights;
         assert_eq!(
             (lights.intensity, lights.count, lights.timer),
             (0.0, 0, 7.0),
@@ -771,7 +798,7 @@ mod tests {
             .pilot
             .missions
             .put(3, crate::testkit::carrying(130, 0));
-        let marked = session.traffic.add_npc(crate::traffic::npc::Npc {
+        let marked = session.space.traffic.add_npc(crate::traffic::npc::Npc {
             mission: Some(crate::traffic::npc::MissionMark {
                 slot: 0,
                 behav: crate::mission::ships::ShipBehav::Own,
@@ -783,7 +810,11 @@ mod tests {
         session.end_every_mission_for_rescue(&mut NeverFires);
         assert_eq!(session.pilot.missions.iter().count(), 0);
         assert!(session.control_bit(bit(22)), "OnAbort");
-        assert_eq!(session.npc(marked).expect("here").mission, None, "released");
+        assert_eq!(
+            session.space.npc(marked).expect("here").mission,
+            None,
+            "released"
+        );
         let mut session = due(&catalog);
         session
             .pilot
@@ -874,7 +905,7 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         let mut session = explored(&catalog, &[]);
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.system(), RESCUE_FALLBACK);
     }
@@ -905,10 +936,11 @@ mod tests {
         catalog.ship_records.push(ship(129, FAST));
         let mut session = due(&catalog);
         let hulk = session
+            .space
             .traffic
             .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
-        session.player.velocity = Vec2::new(3.0, 4.0);
-        session.player.heading = 90.0;
+        session.ship.player.velocity = Vec2::new(3.0, 4.0);
+        session.ship.player.heading = 90.0;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.landed(), None);
         assert_eq!(session.pilot().stellar, None);
@@ -920,7 +952,7 @@ mod tests {
                 heading: 0.0,
             }
         );
-        assert!(session.npc(hulk).is_none(), "the old ships gone");
+        assert!(session.space.npc(hulk).is_none(), "the old ships gone");
         assert_eq!(session.npcs().len(), 2, "the new system's set up");
         assert!(
             session
@@ -992,21 +1024,21 @@ mod tests {
         let catalog = rescuing();
         let mut session = explored(&catalog, &[]);
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session.pilot.course = vec![SystemId(131), SystemId(132)];
         session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
-        session.secondary = Some(WeaponId(128));
+        session.ship.secondary = Some(WeaponId(128));
         session.pilot.jumped_from = Some(SystemId(133));
         session.red_alert.check(true, false, true);
         session.red_alert.step(0);
         assert!(session.red_alert_icon().is_some(), "the alert is up");
-        session.recent_rank = Some(RankId(140));
-        session.queued.sound = Some(SoundId(200));
-        session.target = Some(NpcId(5));
-        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.run.recent_rank = Some(RankId(140));
+        session.run.queued.sound = Some(SoundId(200));
+        session.chart.target = Some(NpcId(5));
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
-        session.blessing_ranks.clear();
-        session.scan_latches = Latches {
+        session.ship.latches.blessing_ranks.clear();
+        session.ship.latches.scan_latches = Latches {
             junk: false,
             outfits: false,
         };
@@ -1016,15 +1048,22 @@ mod tests {
         assert!(session.pilot.has_explored(RESCUE_FALLBACK), "explored");
         assert_eq!(session.pilot.course(), []);
         assert_eq!(session.pilot.paint, None);
-        assert_eq!(session.secondary, None);
+        assert_eq!(session.ship.secondary, None);
         assert_eq!(session.pilot.jumped_from, None);
         assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
-        assert_eq!(session.recent_rank, None);
-        assert_eq!(session.queued.sound, None);
-        assert_eq!(session.target, None);
-        assert_eq!(session.nav, crate::navigation::NavMode::Off, "_ResetPlayer");
-        assert_eq!(session.blessing_ranks, session.pilot.ranks, "taken again");
-        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(session.run.recent_rank, None);
+        assert_eq!(session.run.queued.sound, None);
+        assert_eq!(session.chart.target, None);
+        assert_eq!(
+            session.chart.nav,
+            crate::navigation::NavMode::Off,
+            "_ResetPlayer"
+        );
+        assert_eq!(
+            session.ship.latches.blessing_ranks, session.pilot.ranks,
+            "taken again"
+        );
+        assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
     }
 
     #[test]
@@ -1033,11 +1072,11 @@ mod tests {
         let mut session = explored(&catalog, &[]);
         let died_in = session.system();
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         session.pilot.reinforcement_days =
             std::collections::BTreeMap::from([(died_in, 2), (SystemId(999), 3)]);
-        session.reinforcements.timers.insert(died_in, 12);
-        session.reinforcements.timers.insert(SystemId(999), 7);
+        session.space.reinforcements.timers.insert(died_in, 12);
+        session.space.reinforcements.timers.insert(SystemId(999), 7);
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(
             session.pilot.reinforcement_days.get(&died_in),
@@ -1045,18 +1084,21 @@ mod tests {
             "@0x1db30"
         );
         assert_eq!(
-            session.reinforcements.timers.get(&died_in),
+            session.space.reinforcements.timers.get(&died_in),
             None,
             "@0x1db17"
         );
-        assert_eq!(session.reinforcements.timers.get(&SystemId(999)), Some(&7));
+        assert_eq!(
+            session.space.reinforcements.timers.get(&SystemId(999)),
+            Some(&7)
+        );
     }
 
     #[test]
     fn the_rescue_raises_no_entered_system_hook() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.drop_raised();
+        session.run.drop_raised();
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let raised = session.story_raised();
         assert!(
@@ -1142,7 +1184,7 @@ mod tests {
         let catalog = rescuing();
         let mut session = strict(explored(&catalog, &[]));
         session.pod = Some(0);
-        session.rescue_due = true;
+        session.ship.fate.rescue_due = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.system(), RESCUE_FALLBACK);
         assert!(session.take_save_due());

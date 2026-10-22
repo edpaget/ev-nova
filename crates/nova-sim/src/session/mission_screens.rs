@@ -34,9 +34,9 @@
 //! None of it is saved. The next outside offer the original drops after
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
 
-use super::Session;
 #[cfg(test)]
 use super::missions::TextSource;
+use super::{Chart, MissionRun, Outbox, Session, Setup, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
@@ -45,6 +45,7 @@ use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
 };
 use crate::navigation::NavMode;
+use crate::pilot::Pilot;
 use crate::player_fate::PlayerCommand;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -304,13 +305,14 @@ impl Session {
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
     pub fn press_mission_info(&mut self) -> MissionInfoPress {
-        if self.jump.is_some() || !self.takes(PlayerCommand::MissionInfo) {
+        if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
         let info = self.mission_info();
         if info.rows.is_empty() {
-            self.sounds.push(SimSound::Refused);
-            self.say(crate::SimMessage::NoActiveMissions);
+            self.out.sounds.push(SimSound::Refused);
+            self.space
+                .say(&mut self.out, crate::SimMessage::NoActiveMissions);
             return MissionInfoPress::NoActiveMissions;
         }
         MissionInfoPress::Opens(info)
@@ -320,66 +322,25 @@ impl Session {
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
     pub fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
-        self.mission_texts.get(&id)
+        self.statics.mission_texts(id)
     }
 
     /// The mission texts and offer movies to show since they were last
     /// taken, in the order they came. Taking them lets go of the bars
     /// noted with them ([`Session::text_bars`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
-        self.text_bars.clear();
-        std::mem::take(&mut self.shown_texts)
-    }
-
-    /// The mission texts to show since they were last taken, for a test
-    /// that queues no offer movie: it panics on one.
-    #[cfg(test)]
-    pub(crate) fn take_texts_only(&mut self) -> Vec<MissionText> {
-        self.take_mission_texts()
-            .into_iter()
-            .map(|shown| match shown {
-                MissionShown::Text(text) => text,
-                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
-            })
-            .collect()
+        self.out.take_mission_texts()
     }
 
     /// Queues `mission`'s offer movie to show next, when its `dësc` names
     /// one played `after` the dialog or not, as asked.
     fn show_offer_movie(&mut self, mission: MissionId, after: bool) {
         if let Some(movie) = self
+            .statics
             .offer_movie(mission)
             .filter(|movie| movie.after == after)
         {
-            self.shown_texts.push(MissionShown::Movie(movie));
-        }
-    }
-
-    /// The movie `mission`'s offer `dësc` names, if any.
-    fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
-        self.mission_texts(mission)
-            .and_then(|texts| texts.movies.offer.clone())
-    }
-
-    /// Queues the after-movie the offer dialog of `mission` plays once its
-    /// answer has queued its texts (`_OfferOneMission` @0xa3580-0xa35b8):
-    /// only for an offer the dialog showed, at a venue or from a ship; the
-    /// mission computer (`_DoMissionDialog`) plays none. The check reads
-    /// the globals as the answer left them ([`RuleKey::DescMovieGlobals`]):
-    /// by the engine, the last `dësc` loaded's after-movie, which after an
-    /// accept is the offer's again (reloaded @0xa2e29), and after a
-    /// `RefuseText` that text's, as nothing reloads the offer after it
-    /// (@0xa2eb5-0xa2f4d); by the other reading the offer's own.
-    pub(super) fn show_offer_after_movie(&mut self, mission: MissionId, venue: Venue) {
-        if venue == Venue::Computer {
-            return;
-        }
-        let movie = match self.rules.source_for(RuleKey::DescMovieGlobals) {
-            RuleSource::Engine => self.loaded_movie.clone(),
-            RuleSource::Bible => self.offer_movie(mission),
-        };
-        if let Some(movie) = movie.filter(|movie| movie.after) {
-            self.shown_texts.push(MissionShown::Movie(movie));
+            self.out.shown_texts.push(MissionShown::Movie(movie));
         }
     }
 
@@ -406,11 +367,13 @@ impl Session {
     /// where a ship's offer is answered over flight.
     #[must_use]
     pub fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
-        self.landed.is_some()
+        self.mode.landed().is_some()
             && self
-                .offer_of(mission)
+                .run
+                .offer_of(self.mode.landed(), mission)
                 .is_some_and(|offer| offer.venue != Venue::Computer)
             && self
+                .statics
                 .mission_record(mission)
                 .is_some_and(|record| record.flags & UNREFUSABLE == 0)
     }
@@ -420,7 +383,7 @@ impl Session {
     /// whether the last text was queued after its last redraw.
     #[must_use]
     pub fn texts_queued(&self) -> u64 {
-        self.texts_queued
+        self.out.texts_queued()
     }
 
     /// The status bar as each mission text since they were last taken
@@ -431,7 +394,7 @@ impl Session {
     /// Taking the texts lets go of them.
     #[must_use]
     pub fn text_bars(&self) -> &[TextBar] {
-        &self.text_bars
+        self.out.text_bars()
     }
 
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
@@ -439,7 +402,7 @@ impl Session {
     /// [`Session::text_bars`]'s.
     #[must_use]
     pub fn text_nav(&self) -> Option<NavMode> {
-        self.text_bars.last().map(|bar| bar.nav)
+        self.out.text_nav()
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
@@ -467,13 +430,15 @@ impl Session {
         map: Option<MapMarks>,
         chance: &mut dyn Chance,
     ) -> bool {
-        let Some((raw, graphic, movie)) = self.mission_texts.get(&mission).and_then(|texts| {
-            Some((
-                kind.of(texts)?.to_owned(),
-                kind.graphic_of(texts),
-                kind.movie_of(texts),
-            ))
-        }) else {
+        let Some((raw, graphic, movie)) =
+            self.statics.mission_texts.get(&mission).and_then(|texts| {
+                Some((
+                    kind.of(texts)?.to_owned(),
+                    kind.graphic_of(texts),
+                    kind.movie_of(texts),
+                ))
+            })
+        else {
             return false;
         };
         let raw = self.load_description(Some(&raw), movie.as_ref(), chance);
@@ -481,14 +446,18 @@ impl Session {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
         };
-        self.queue_text(MissionText {
-            kind,
-            mission,
-            text,
-            graphic,
-            movie,
-            map,
-        });
+        self.chart.queue_text(
+            &self.pilot,
+            &mut self.out,
+            MissionText {
+                kind,
+                mission,
+                text,
+                graphic,
+                movie,
+                map,
+            },
+        );
         true
     }
 
@@ -499,26 +468,18 @@ impl Session {
     /// shown in order, so no load comes between the two.
     pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
         let movie = self.loaded_after_movie();
-        self.queue_text(MissionText {
-            kind,
-            mission,
-            text,
-            graphic: None,
-            movie,
-            map: None,
-        });
-    }
-
-    /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
-    /// noting the bar as it is now ([`Session::text_bars`]).
-    fn queue_text(&mut self, text: MissionText) {
-        self.texts_queued += 1;
-        self.text_bars.push(TextBar {
-            texts: self.texts_queued,
-            nav: self.nav_mode(),
-            reserves: self.reserves(),
-        });
-        self.shown_texts.push(MissionShown::Text(text));
+        self.chart.queue_text(
+            &self.pilot,
+            &mut self.out,
+            MissionText {
+                kind,
+                mission,
+                text,
+                graphic: None,
+                movie,
+                map: None,
+            },
+        );
     }
 
     /// The mission computer of the stellar docked at (`_DoMissionDialog`
@@ -539,7 +500,11 @@ impl Session {
     /// (`_IsMissionAvailable(i, 1)` @0xa38bd-0xa3956), checked as an
     /// accept leaves them, drawing nothing.
     pub fn mission_computer(&self) -> Result<MissionComputer, ComputerRefusal> {
-        if self.accept_refusal(0, &mut NeverFires) == Err(AcceptRefusal::SlotsFull) {
+        if self
+            .ship
+            .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
+            == Err(AcceptRefusal::SlotsFull)
+        {
             return Err(ComputerRefusal::SlotsFull);
         }
         let offers = self.mission_offers(Venue::Computer);
@@ -584,7 +549,7 @@ impl Session {
             .missions
             .iter()
             .filter_map(|(slot, active)| {
-                let record = self.lifecycle_record(active.mission);
+                let record = self.statics.lifecycle_record(active.mission);
                 if record.flags & HIDDEN != 0 {
                     return None;
                 }
@@ -619,7 +584,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Option<ComputerRow> {
-        self.offer_of(mission)?;
+        self.run.offer_of(self.mode.landed(), mission)?;
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts.and_then(|texts| texts.offer.clone());
@@ -664,15 +629,16 @@ impl Session {
     /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)
             .iter()
             .filter(|offer| {
-                self.mission_record(offer.mission)
+                self.statics
+                    .mission_record(offer.mission)
                     .is_some_and(|record| record.avail_loc == loc)
-                    && !self.suppressed.contains(&offer.mission)
+                    && !self.run.suppressed.contains(&offer.mission)
             })
             .cloned()
             .collect();
@@ -697,7 +663,11 @@ impl Session {
     ///
     /// As [`Session::mission_computer`].
     pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
-        if self.accept_refusal(0, &mut NeverFires) != Err(AcceptRefusal::SlotsFull) {
+        if self
+            .ship
+            .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
+            != Err(AcceptRefusal::SlotsFull)
+        {
             let listed: Vec<MissionId> = self
                 .mission_offers(Venue::Computer)
                 .iter()
@@ -724,6 +694,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> VenueOffer {
         let can_refuse = self
+            .statics
             .mission_record(mission)
             .is_some_and(|record| record.flags & UNREFUSABLE == 0);
         let texts = self.mission_texts(mission);
@@ -763,6 +734,149 @@ impl Session {
     /// @0xa36a7-0xa36d7): entering one other than the last forgets the
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
     pub fn enter_offer_venue(&mut self, loc: i16) {
+        self.run.enter_offer_venue(loc);
+    }
+
+    /// Whether `offer`, on the visit under way, is still available at its
+    /// venue, the visit's rolls read and nothing drawn, as
+    /// `_IsMissionAvailable(i, 1)` checks it: never in flight, nor for a
+    /// mission the session has no record of.
+    fn still_available(&self, offer: &Offer) -> bool {
+        let (Some(stellar), Some(record)) = (
+            self.mode.landed(),
+            self.statics.mission_record(offer.mission),
+        ) else {
+            return false;
+        };
+        self.at_visit(stellar, |visit| {
+            let facts = AvailFacts {
+                visit,
+                mission: record,
+                venue: offer.venue,
+                rolls: self.run.offers.table(),
+                cached_avail_bits: None,
+            };
+            availability()
+                .first_refusal(&facts, &mut NeverFires)
+                .is_ok()
+        })
+        .unwrap_or(false)
+    }
+}
+
+impl Outbox {
+    /// The mission texts and offer movies to show since they were last
+    /// taken, in the order they came. Taking them lets go of the bars
+    /// noted with them ([`Session::text_bars`]).
+    fn take_mission_texts(&mut self) -> Vec<MissionShown> {
+        self.text_bars.clear();
+        std::mem::take(&mut self.shown_texts)
+    }
+
+    /// The mission texts to show since they were last taken, for a test
+    /// that queues no offer movie: it panics on one.
+    #[cfg(test)]
+    pub(super) fn take_texts_only(&mut self) -> Vec<MissionText> {
+        self.take_mission_texts()
+            .into_iter()
+            .map(|shown| match shown {
+                MissionShown::Text(text) => text,
+                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
+            })
+            .collect()
+    }
+
+    /// How many mission texts have been queued since the session started,
+    /// never reset: a view that notes it at each of its redraws can tell
+    /// whether the last text was queued after its last redraw.
+    #[must_use]
+    fn texts_queued(&self) -> u64 {
+        self.texts_queued
+    }
+
+    /// The status bar as each mission text since they were last taken
+    /// was queued, in order, one for each text ([`TextBar`]): what each
+    /// text's caller redraws the whole bar with as it closes, where a
+    /// script run after it, such as an `OnSuccess` after the `CompText`
+    /// (@0xa048c, @0xa0491, then @0xa04f8), has written the bar since.
+    /// Taking the texts lets go of them.
+    #[must_use]
+    fn text_bars(&self) -> &[TextBar] {
+        &self.text_bars
+    }
+
+    /// The nav mode ([`Session::nav_mode`]) as the last text since they
+    /// were last taken was queued, `None` with none: the last of
+    /// [`Session::text_bars`]'s.
+    #[must_use]
+    fn text_nav(&self) -> Option<NavMode> {
+        self.text_bars.last().map(|bar| bar.nav)
+    }
+}
+
+impl Statics {
+    /// What the screens show of mission `id`, as the session read it as
+    /// it started: `None` for a `mïsn` it has no texts of.
+    #[must_use]
+    fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
+        self.mission_texts.get(&id)
+    }
+
+    /// The movie `mission`'s offer `dësc` names, if any.
+    fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
+        self.mission_texts(mission)
+            .and_then(|texts| texts.movies.offer.clone())
+    }
+}
+
+impl Chart {
+    /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
+    /// noting the bar as it is now ([`Session::text_bars`]).
+    fn queue_text(&mut self, pilot: &Pilot, out: &mut Outbox, text: MissionText) {
+        out.texts_queued += 1;
+        out.text_bars.push(TextBar {
+            texts: out.texts_queued,
+            nav: self.nav_mode(),
+            reserves: super::reserves(pilot),
+        });
+        out.shown_texts.push(MissionShown::Text(text));
+    }
+}
+
+impl MissionRun {
+    /// Queues the after-movie the offer dialog of `mission` plays once its
+    /// answer has queued its texts (`_OfferOneMission` @0xa3580-0xa35b8):
+    /// only for an offer the dialog showed, at a venue or from a ship; the
+    /// mission computer (`_DoMissionDialog`) plays none. The check reads
+    /// the globals as the answer left them ([`RuleKey::DescMovieGlobals`]):
+    /// by the engine, the last `dësc` loaded's after-movie, which after an
+    /// accept is the offer's again (reloaded @0xa2e29), and after a
+    /// `RefuseText` that text's, as nothing reloads the offer after it
+    /// (@0xa2eb5-0xa2f4d); by the other reading the offer's own.
+    pub(super) fn show_offer_after_movie(
+        &mut self,
+        statics: &Statics,
+        setup: &Setup,
+        out: &mut Outbox,
+        mission: MissionId,
+        venue: Venue,
+    ) {
+        if venue == Venue::Computer {
+            return;
+        }
+        let movie = match setup.rules.source_for(RuleKey::DescMovieGlobals) {
+            RuleSource::Engine => self.loaded_movie.clone(),
+            RuleSource::Bible => statics.offer_movie(mission),
+        };
+        if let Some(movie) = movie.filter(|movie| movie.after) {
+            out.shown_texts.push(MissionShown::Movie(movie));
+        }
+    }
+
+    /// Enters venue `loc` for its offers (`_OfferMissionFromPort`
+    /// @0xa36a7-0xa36d7): entering one other than the last forgets the
+    /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
+    fn enter_offer_venue(&mut self, loc: i16) {
         if self.offer_venue != Some(loc) {
             if loc != SPACEPORT {
                 self.suppressed.clear();
@@ -775,30 +889,6 @@ impl Session {
     /// another venue is entered (`_OfferMissionFromPort` @0xa3765).
     pub(super) fn suppress_offer(&mut self, mission: MissionId) {
         self.suppressed.insert(mission);
-    }
-
-    /// Whether `offer`, on the visit under way, is still available at its
-    /// venue, the visit's rolls read and nothing drawn, as
-    /// `_IsMissionAvailable(i, 1)` checks it: never in flight, nor for a
-    /// mission the session has no record of.
-    fn still_available(&self, offer: &Offer) -> bool {
-        let (Some(stellar), Some(record)) = (self.landed, self.mission_record(offer.mission))
-        else {
-            return false;
-        };
-        self.at_visit(stellar, |visit| {
-            let facts = AvailFacts {
-                visit,
-                mission: record,
-                venue: offer.venue,
-                rolls: self.offers.table(),
-                cached_avail_bits: None,
-            };
-            availability()
-                .first_refusal(&facts, &mut NeverFires)
-                .is_ok()
-        })
-        .unwrap_or(false)
     }
 }
 
@@ -991,7 +1081,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off you go, captain.")],
             "the earlier <SRK129> is reset (@0x71926-0x71930)"
         );
@@ -1292,14 +1382,14 @@ mod tests {
     fn cached(session: &Session, missions: &[i16]) -> Vec<Option<bool>> {
         missions
             .iter()
-            .map(|&id| session.avail_cache.get(&MissionId(id)).copied())
+            .map(|&id| session.run.avail_cache.get(&MissionId(id)).copied())
             .collect()
     }
 
     /// Every verdict cached `false`, as if `AvailBits` had failed at the
     /// last refresh.
     fn all_cached_false(session: &mut Session) {
-        for verdict in session.avail_cache.values_mut() {
+        for verdict in session.run.avail_cache.values_mut() {
             *verdict = false;
         }
     }
@@ -1354,7 +1444,7 @@ mod tests {
         );
         let mut session = docked(&catalog);
         session.enter_offer_venue(BAR);
-        session.suppressed.insert(MissionId(141));
+        session.run.suppressed.insert(MissionId(141));
         all_cached_false(&mut session);
         assert_eq!(
             prompted(session.next_offer(BAR, &mut NeverFires)),
@@ -1537,12 +1627,13 @@ mod tests {
             .expect("takes off");
         settle(session, catalog);
         let site = *session
+            .chart
             .sites
             .iter()
             .find(|site| site.id == StellarId(stellar))
             .expect("shown");
-        session.player.position = site.position;
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.position = site.position;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(session), Ok(StellarId(stellar)));
         settle(session, catalog);
     }
@@ -1663,7 +1754,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 MissionText {
                     graphic: Some(5008),
@@ -1755,7 +1846,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 MissionText {
                     movie: film("No.mov", 0x0001),
@@ -1783,14 +1874,14 @@ mod tests {
         session
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
-        assert_eq!(session.take_texts_only(), []);
+        assert_eq!(session.out.take_texts_only(), []);
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Comp, 130, "Delivered to Luna.")]
         );
-        assert_eq!(session.take_texts_only(), [], "taken");
+        assert_eq!(session.out.take_texts_only(), [], "taken");
     }
 
     // The nav each text notes as it is queued.
@@ -1881,7 +1972,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(session.texts_queued(), 1);
-        session.nav = NavMode::Off;
+        session.chart.nav = NavMode::Off;
         session
             .accept_mission(MissionId(131), &mut NeverFires)
             .expect("accepted");
@@ -1909,7 +2000,7 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "failed");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Fail, 130, "Failed at [Error].")]
         );
     }
@@ -1943,7 +2034,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 text(MissionTextKind::Refuse, 130, "No trip to [Error]."),
                 text(MissionTextKind::Brief, 131, "Off to Mars."),
@@ -1969,7 +2060,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to [Error].")],
             "its OnAccept aborted it, freeing the slot"
         );
@@ -1985,7 +2076,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to Mars.")]
         );
     }
@@ -2016,7 +2107,7 @@ mod tests {
         run(&mut session, "F131");
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().iter().next().is_none());
-        assert_eq!(session.take_texts_only(), []);
+        assert_eq!(session.out.take_texts_only(), []);
     }
 
     /// Mission `id`, offered at the bar, to Mars for 900.
@@ -2701,7 +2792,7 @@ mod tests {
                 session.accept_mission(MissionId(141), &mut NeverFires),
                 Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
             );
-            assert_eq!(session.take_texts_only(), [], "{source:?}");
+            assert_eq!(session.out.take_texts_only(), [], "{source:?}");
             assert_eq!(session.take_sounds(), [], "{source:?}");
             assert_eq!(outside(&session), [141, 142, 143], "{source:?}");
             assert_eq!(
@@ -2777,7 +2868,7 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         settle(&mut session, &catalog);
-        session.player.velocity = Vec2::ZERO;
+        session.ship.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         assert_eq!(
@@ -2805,7 +2896,7 @@ mod tests {
         assert_eq!(first(&mut full), MissionId(143), "the same visit");
         full.enter_offer_venue(SPACEPORT);
         assert!(
-            full.suppressed.contains(&MissionId(142)),
+            full.run.suppressed.contains(&MissionId(142)),
             "the spaceport keeps it"
         );
         full.enter_offer_venue(BAR);
@@ -3250,14 +3341,14 @@ mod tests {
         type Refusal = (&'static str, fn(&mut Session));
         let refusals: [Refusal; 7] = [
             ("the pre-jump, +0x50 > 0 (@0x70424)", |session| {
-                session.jump = Some(super::super::Jump::PreJump {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::PreJump {
                     to: SystemId(131),
                     bearing: None,
                     warp: None,
                 });
             }),
             ("hyperspace, +0x50 > 0 (@0x70424)", |session| {
-                session.jump = Some(super::super::Jump::Hyperspace {
+                session.mode = crate::session::Mode::Jumping(super::super::Jump::Hyperspace {
                     to: SystemId(131),
                     warp: 0,
                 });
@@ -3268,18 +3359,18 @@ mod tests {
             (
                 "breaking up, -0x2ca and +0x3c (@0x70439, @0x7044b)",
                 |session| {
-                    session.condition = Condition::Dying {
+                    session.ship.condition = Condition::Dying {
                         ticks_left: 3,
                         starting: false,
                     };
                 },
             ),
             ("exploded, the dead branch (@0x6870d)", |session| {
-                session.condition = Condition::Destroyed;
-                session.player_exploded_this_tick = true;
+                session.ship.condition = Condition::Destroyed;
+                session.ship.fate.player_exploded_this_tick = true;
             }),
             ("holding after the explosion", |session| {
-                session.condition = Condition::Destroyed;
+                session.ship.condition = Condition::Destroyed;
             }),
             (
                 "the take-off grace, _frameCounter < 0 (@0x7045e)",
@@ -3307,11 +3398,11 @@ mod tests {
     #[test]
     fn a_disabled_ship_takes_the_mission_info_key() {
         let mut session = with_missions(true, false);
-        session.condition = Condition::Disabled;
+        session.ship.condition = Condition::Disabled;
         let info = session.mission_info();
         assert_eq!(session.press_mission_info(), MissionInfoPress::Opens(info));
         let mut none = with_missions(false, false);
-        none.condition = Condition::Disabled;
+        none.ship.condition = Condition::Disabled;
         assert_eq!(
             none.press_mission_info(),
             MissionInfoPress::NoActiveMissions
@@ -3366,16 +3457,19 @@ mod tests {
     fn a_loaded_desc_leaves_its_movie_and_a_missing_one_empties_it() {
         let mut session = ranked(Vec::new(), Vec::new(), Rulebook::default());
         let movie = film("Loaded.mov", 0x0001);
-        assert_eq!(session.loaded_movie, None, "a new session has loaded none");
+        assert_eq!(
+            session.run.loaded_movie, None,
+            "a new session has loaded none"
+        );
         let _ = session.load_description(
             Some("Earlier: <PRK128> <SRK129>."),
             movie.as_ref(),
             &mut NeverFires,
         );
-        assert_eq!(session.loaded_movie, movie);
+        assert_eq!(session.run.loaded_movie, movie);
         let _ = session.load_description(None, film("Other.mov", 0).as_ref(), &mut NeverFires);
         assert_eq!(
-            session.loaded_movie, None,
+            session.run.loaded_movie, None,
             "a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
         );
         assert_eq!(
@@ -3384,10 +3478,10 @@ mod tests {
             "and keeps the governments (@0x71a5e skips @0x71926)"
         );
         let _ = session.load_description(Some("Plain."), None, &mut NeverFires);
-        assert_eq!(session.loaded_movie, None, "a dësc that names none");
+        assert_eq!(session.run.loaded_movie, None, "a dësc that names none");
         let _ = session.load_description(Some("Again."), movie.as_ref(), &mut NeverFires);
         let _ = session.peek_desc(Some("Peeked."));
-        assert_eq!(session.loaded_movie, movie, "peeking loads nothing");
+        assert_eq!(session.run.loaded_movie, movie, "peeking loads nothing");
     }
 
     #[test]
@@ -3686,7 +3780,7 @@ mod tests {
             .accept_mission(MissionId(142), &mut NeverFires)
             .expect("accepted");
         let _ = session.show_info_row(0, &mut NeverFires);
-        assert_eq!(session.loaded_movie, film("Q.mov", 0x0001));
+        assert_eq!(session.run.loaded_movie, film("Q.mov", 0x0001));
     }
 
     #[test]
@@ -3715,13 +3809,13 @@ mod tests {
         prompted(session.next_offer(BAR, &mut NeverFires));
         let _ = session.show_info_row(0, &mut NeverFires);
         assert_eq!(
-            session.loaded_movie,
+            session.run.loaded_movie,
             film("Q.mov", 0x0001),
             "the QuickBrief's"
         );
         session.reload_offer_desc(MissionId(142), &mut NeverFires);
         assert_eq!(
-            session.loaded_movie,
+            session.run.loaded_movie,
             film("A.mov", 0x0001),
             "the info screen's close reloads the offer (@0xa335c)"
         );

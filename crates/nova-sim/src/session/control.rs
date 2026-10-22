@@ -43,9 +43,9 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
+use super::{MissionRun, Outbox, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
@@ -68,6 +68,10 @@ pub(crate) struct Facts<'a> {
     pub(crate) armament: &'a Armament,
 }
 
+/// Whether a `P` test passes: always, the engine taking the game as
+/// registered.
+pub(super) const REGISTERED: bool = true;
+
 impl Facts<'_> {
     /// The outfit a carried fighter of ship type `ship` docks back into:
     /// the first bay launching it, that bay's ammunition outfit of lowest
@@ -75,6 +79,24 @@ impl Facts<'_> {
     fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
         let bay = self.armament.bay_of(ship)?;
         lowest_ammo_outfit(self.ammo_outfits, bay)
+    }
+
+    /// The outfits an `o` test counts: each the pilot owns one of or
+    /// more, and each carried fighter's dock outfit
+    /// ([`Facts::docks_into`]).
+    pub(super) fn counted_outfits(&self) -> impl Iterator<Item = OutfitId> + '_ {
+        let owned = self
+            .pilot
+            .outfits()
+            .filter(|&(_, count)| count > 0)
+            .map(|(id, _)| id);
+        let docked = self
+            .pilot
+            .escorts()
+            .iter()
+            .filter(|escort| escort.carried)
+            .filter_map(|escort| self.docks_into(escort.ship));
+        owned.chain(docked)
     }
 }
 
@@ -87,19 +109,13 @@ impl PilotFacts for Facts<'_> {
         self.pilot.gender()
     }
 
-    /// Always: the engine takes the game as registered.
+    /// [`REGISTERED`].
     fn paid(&self, _days: u16) -> bool {
-        true
+        REGISTERED
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.pilot.owned(outfit) > 0
-            || self
-                .pilot
-                .escorts()
-                .iter()
-                .filter(|escort| escort.carried)
-                .any(|escort| self.docks_into(escort.ship) == Some(outfit))
+        self.counted_outfits().any(|counted| counted == outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
@@ -110,23 +126,25 @@ impl PilotFacts for Facts<'_> {
 /// The session's pilot, as its `Facts` read it.
 impl PilotFacts for Session {
     fn bit(&self, bit: Bit) -> bool {
-        self.facts().bit(bit)
+        self.ship.facts(&self.pilot, &self.statics).bit(bit)
     }
 
     fn gender(&self) -> Gender {
-        self.facts().gender()
+        self.ship.facts(&self.pilot, &self.statics).gender()
     }
 
     fn paid(&self, days: u16) -> bool {
-        self.facts().paid(days)
+        self.ship.facts(&self.pilot, &self.statics).paid(days)
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.facts().has_outfit(outfit)
+        self.ship
+            .facts(&self.pilot, &self.statics)
+            .has_outfit(outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
-        self.facts().explored(system)
+        self.ship.facts(&self.pilot, &self.statics).explored(system)
     }
 }
 
@@ -151,7 +169,7 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_set_op_observer(mut self, observer: std::rc::Rc<dyn SetOpObserver>) -> Self {
-        self.op_observer = Some(super::hire::Shared(observer));
+        self.setup.op_observer = Some(super::hire::Shared(observer));
         self
     }
 
@@ -159,15 +177,18 @@ impl Session {
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
-            SetOp::RemoveOutfit(outfit) => self.script_remove(*outfit),
-            SetOp::Explore(system) => self.explore_system(*system),
+            SetOp::RemoveOutfit(outfit) => {
+                self.ship
+                    .script_remove(&mut self.pilot, &self.statics, &self.setup, *outfit);
+            }
+            SetOp::Explore(system) => self.chart.explore_system(&mut self.pilot, *system),
             SetOp::ChangeShip(ship) => self.change_ship(*ship, OutfitCarry::Keep, false),
             SetOp::ChangeShipWithDefaults(ship) => {
-                let clamp = self.ship_change_rules().clamps();
+                let clamp = self.setup.ship_change_rules().clamps();
                 self.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
             }
             SetOp::ReplaceShip(ship) => {
-                let rules = self.ship_change_rules();
+                let rules = self.setup.ship_change_rules();
                 let carry = OutfitCarry::Persistent {
                     mask: rules.persistent(),
                 };
@@ -175,58 +196,44 @@ impl Session {
             }
             SetOp::RenameShip(list) => self.rename_ship(list.0, chance),
             SetOp::MoveTo(system) => {
-                self.select_for_landed_move(*system, true);
-                self.queued.moves.push(ScriptMove::To(*system));
+                self.chart
+                    .select_for_landed_move(&self.statics, self.mode.landed(), *system, true);
+                self.run.queued.moves.push(ScriptMove::To(*system));
             }
             SetOp::MoveKeepPosition(system) => {
-                self.select_for_landed_move(*system, false);
-                self.queued.moves.push(ScriptMove::KeepPosition(*system));
+                self.chart.select_for_landed_move(
+                    &self.statics,
+                    self.mode.landed(),
+                    *system,
+                    false,
+                );
+                self.run
+                    .queued
+                    .moves
+                    .push(ScriptMove::KeepPosition(*system));
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
-            SetOp::PlaySound(sound) => self.play_script_sound(*sound),
+            SetOp::PlaySound(sound) => {
+                self.run
+                    .play_script_sound(&self.setup, &mut self.out, *sound);
+            }
             SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar, chance),
             SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
             SetOp::AbortMission(mission) => self.script_abort(*mission, chance),
             SetOp::FailMission(mission) => self.script_fail(*mission),
             SetOp::StartMission(mission) => self.script_start(*mission, chance),
-            SetOp::ActivateRank(rank) => self.activate_rank(*rank),
-            SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
-            SetOp::OutOfRange { op, .. } => self.out_of_range(*op),
+            SetOp::ActivateRank(rank) => {
+                self.run
+                    .activate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::DeactivateRank(rank) => {
+                self.run
+                    .deactivate_rank(&mut self.pilot, &self.statics, &self.setup, *rank);
+            }
+            SetOp::OutOfRange { op, .. } => self.run.out_of_range(&self.setup, *op),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
-        }
-    }
-
-    /// An operator whose number is out of range (see
-    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
-    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
-    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
-    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
-    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
-    /// and does nothing by the other.
-    ///
-    /// `P`, `T` and `Q` have no check, and a number past 32767, the
-    /// engine's widest ID, names no resource, so each does what the
-    /// original does with a missing one: `T` nothing (an empty pick
-    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
-    /// leaves the message empty, @0x15c02); `P` a sound that does not
-    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
-    /// replaces a held one with none (@0x15a30; `_PlayGame`
-    /// @0x4631b-0x46348).
-    ///
-    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
-    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
-    fn out_of_range(&mut self, op: SetOpKind) {
-        match op {
-            SetOpKind::MoveKeepPosition
-                if self.script_effect_rules().out_of_range_move == RuleSource::Engine =>
-            {
-                self.queued.moves.push(ScriptMove::Stay);
-            }
-            SetOpKind::PlaySound => self.drop_script_sound(),
-            SetOpKind::LeaveStellar => self.leave_on_no_list(),
-            _ => {}
         }
     }
 
@@ -249,7 +256,7 @@ impl Session {
         chance: &mut dyn Chance,
         between: &mut dyn FnMut(&mut Session, &mut dyn Chance),
     ) {
-        let observer = self.op_observer.clone();
+        let observer = self.setup.op_observer.clone();
         let before = self.pilot.clone();
         let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
             if let Some(observer) = &observer {
@@ -272,33 +279,24 @@ impl Session {
             self.reset_precalced_for(ResetCause::SetExpr);
         }
         if self.pilot != before {
-            self.save_due = true;
+            self.out.save_due = true;
             // What a `Visibility` test reads is the pilot's: one left as
             // it was cannot change the galaxy.
-            self.galaxy_stale = true;
+            self.chart.galaxy_stale = true;
         }
     }
 
     /// What running set expressions had to tell since this was last taken,
     /// in order; taking it empties the list.
     pub fn take_script_notes(&mut self) -> Vec<ScriptNote> {
-        std::mem::take(&mut self.script_notes)
-    }
-
-    /// What a control-bit test reads about the pilot.
-    pub(crate) fn facts(&self) -> Facts<'_> {
-        Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
-            armament: &self.armament,
-        }
+        self.out.take_script_notes()
     }
 
     /// The session's control bits ([`Session::with_control_bits`]) and its
     /// pilot, as the rules that test a record's control bits ask them.
     pub(crate) fn gate(&self) -> Gate<'_> {
         Gate {
-            control_bits: &*self.control_bits.0,
+            control_bits: &*self.setup.control_bits.0,
             pilot: self,
         }
     }
@@ -318,7 +316,60 @@ impl Session {
         } else {
             bits.clear(bit);
         }
-        self.save_due = true;
+        self.out.save_due = true;
+    }
+}
+
+impl Outbox {
+    /// What running set expressions had to tell since this was last taken,
+    /// in order; taking it empties the list.
+    fn take_script_notes(&mut self) -> Vec<ScriptNote> {
+        std::mem::take(&mut self.script_notes)
+    }
+}
+
+impl PlayerShip {
+    /// What a control-bit test reads about the pilot.
+    pub(super) fn facts<'a>(&'a self, pilot: &'a Pilot, statics: &'a Statics) -> Facts<'a> {
+        Facts {
+            pilot,
+            ammo_outfits: &statics.ammo_outfits,
+            armament: &self.fit.armament,
+        }
+    }
+}
+
+impl MissionRun {
+    /// An operator whose number is out of range (see
+    /// [`SetOp::OutOfRange`]). `_EvalSetExp` skips each such operator and
+    /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
+    /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
+    /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
+    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
+    /// and does nothing by the other.
+    ///
+    /// `P`, `T` and `Q` have no check, and a number past 32767, the
+    /// engine's widest ID, names no resource, so each does what the
+    /// original does with a missing one: `T` nothing (an empty pick
+    /// skips, @0x15b47); `Q` a blank `Q` (`_GetRandomIndString` @0x72f0f
+    /// leaves the message empty, @0x15c02); `P` a sound that does not
+    /// load, which by [`ScriptEffectRules::sound`]'s engine reading
+    /// replaces a held one with none (@0x15a30; `_PlayGame`
+    /// @0x4631b-0x46348).
+    ///
+    /// [`ScriptEffectRules::out_of_range_move`]: crate::ScriptEffectRules::out_of_range_move
+    /// [`ScriptEffectRules::sound`]: crate::ScriptEffectRules::sound
+    fn out_of_range(&mut self, setup: &Setup, op: SetOpKind) {
+        match op {
+            SetOpKind::MoveKeepPosition
+                if setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+            {
+                self.queued.moves.push(ScriptMove::Stay);
+            }
+            SetOpKind::PlaySound => self.drop_script_sound(setup),
+            SetOpKind::LeaveStellar => self.leave_on_no_list(setup),
+            _ => {}
+        }
     }
 }
 
@@ -373,7 +424,7 @@ mod tests {
     fn the_pilot_view_reads_the_bits_gender_and_explored_systems() {
         let mut session = session();
         session.set_control_bit(bit(12), true);
-        let facts = session.facts();
+        let facts = session.ship.facts(&session.pilot, &session.statics);
         assert!(facts.bit(bit(12)));
         assert!(!facts.bit(bit(13)));
         assert_eq!(facts.gender(), Gender::Male);
@@ -385,7 +436,13 @@ mod tests {
             .expect("starts")
             .with_gender(Gender::Female);
         let session = Session::fly(&catalog, female).expect("flies");
-        assert_eq!(session.facts().gender(), Gender::Female);
+        assert_eq!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .gender(),
+            Gender::Female
+        );
     }
 
     #[test]
@@ -415,7 +472,13 @@ mod tests {
     fn the_pilot_view_always_counts_the_game_as_paid() {
         let session = session();
         for days in [0, 30, u16::MAX] {
-            assert!(session.facts().paid(days), "{days}");
+            assert!(
+                session
+                    .ship
+                    .facts(&session.pilot, &session.statics)
+                    .paid(days),
+                "{days}"
+            );
         }
     }
 
@@ -425,8 +488,18 @@ mod tests {
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.outfits.insert(OutfitId(300), 1);
         let session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.facts().has_outfit(OutfitId(300)));
-        assert!(!session.facts().has_outfit(OutfitId(301)));
+        assert!(
+            session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(300))
+        );
+        assert!(
+            !session
+                .ship
+                .facts(&session.pilot, &session.statics)
+                .has_outfit(OutfitId(301))
+        );
     }
 
     fn set(text: &str) -> SetExpr {

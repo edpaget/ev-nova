@@ -341,8 +341,9 @@ pub struct SpawnTable {
     /// The fleets its `DudeTypes` name, each with its `% Prob`.
     pub dude_fleets: Vec<(FleetId, u32)>,
     /// The fleets whose `LinkSyst` matches it. Their `AppearOn` is tested
-    /// when one spawns (see [`spawn`](crate::traffic::spawn)), so a bit
-    /// set in the system counts without resolving the table again.
+    /// when one spawns, against the player as the last galaxy refresh
+    /// read them (see [`spawn`](crate::traffic::spawn)), so the table is
+    /// not resolved again when a bit changes.
     pub link_fleets: BTreeSet<FleetId>,
     /// The fleets it can spawn, from either list, the escort-strength
     /// timer's `flët` 382 and 383 wherever they exist (see
