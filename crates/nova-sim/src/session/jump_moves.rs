@@ -68,7 +68,8 @@
 //! the refresh's move, the hook, the re-explore and the entry, which
 //! populates once and places the ship no more by the engine's
 //! `jump_arrival` (by the other reading, at rest on the last leg's side
-//! unless a move ran).
+//! unless a move placed it; after an `N`, or an `M` that keeps the ship,
+//! the entry still places it).
 //!
 //! **Ordering.** The stellars shown, the stellar sprites and the sprite
 //! pool wait for the entry's rebuild: nothing is drawn between the move
@@ -99,8 +100,12 @@ use crate::story::{Entrance, StoryEvent, StoryEventKind};
 /// A jump's window, from its end to its entry (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct JumpWindow {
-    /// Whether a move into a system ran in it.
-    pub(super) moved: bool,
+    /// Whether a move into a system placed the ship in it: an `M` onto a
+    /// stellar, or at the centre by [`ScriptEffectRules::starless`]'s
+    /// other reading, not an `N` or a starless `M` that keeps it.
+    ///
+    /// [`ScriptEffectRules::starless`]: super::ScriptEffectRules::starless
+    pub(super) placed: bool,
     /// Whether a move or a move's tail ran in it, setting the kill flags.
     pub(super) killed: bool,
     /// Whether a move's own enter-system dispatch is running.
@@ -129,9 +134,10 @@ impl Session {
     /// the `departure`, its last leg `from` one system `at` another,
     /// reading `catalog` and drawing on `chance` to populate (see the
     /// module docs): the ship placed by the entry only by the other
-    /// reading of `jump_arrival`, and then only when no move ran. The
-    /// window closes once it has entered, and the explosions the jump made
-    /// are killed when a move ran in it.
+    /// reading of `jump_arrival`, and then only when no move placed it (an
+    /// `N` keeps the entry's placement). The window closes once it has
+    /// entered, and the explosions the jump made are killed when a move or
+    /// a move's tail ran in it.
     pub(super) fn enter_jump_system<C>(
         &mut self,
         how: Entry,
@@ -142,8 +148,8 @@ impl Session {
         C: PilotCatalog + TrafficCatalog,
     {
         let system = self.pilot.system;
-        let moved = self.chart.jump_window.is_some_and(|window| window.moved);
-        let ship = if moved {
+        let placed = self.chart.jump_window.is_some_and(|window| window.placed);
+        let ship = if placed {
             ShipPlacement::Keep
         } else {
             self.jump_entry_placement(from, at)
@@ -197,6 +203,7 @@ impl Session {
             }
             ScriptMove::To(_) | ScriptMove::KeepPosition(_) | ScriptMove::Stay => None,
         };
+        let mut placed = false;
         if let Some((system, keep)) = to {
             self.pilot.system = system;
             self.chart.deselect();
@@ -205,7 +212,9 @@ impl Session {
                 .first_stellars
                 .get(&system)
                 .map(|&stellar| (self.statics.stellar_position(stellar), None));
-            self.place(move_placement(first, keep, false, rules));
+            let placement = move_placement(first, keep, false, rules);
+            placed = placement.ship != ShipPlacement::Keep;
+            self.place(placement);
         }
         self.chart
             .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
@@ -221,7 +230,7 @@ impl Session {
             self.run.raise(StoryEvent::Explored { system });
         }
         if let Some(window) = &mut self.chart.jump_window {
-            window.moved |= to.is_some();
+            window.placed |= placed;
             window.killed = true;
         }
         self.enter_in_jump(chance);
@@ -457,6 +466,50 @@ mod tests {
             Vec2::new(-1001.0, 0.0),
             "with no move, at rest outside the zone"
         );
+    }
+
+    #[test]
+    fn by_the_at_rest_arrival_a_move_that_places_nothing_keeps_the_arrival() {
+        // An `N`, or an `M` to a starless system by the engine's
+        // `starless`, keeps the ship where it is: by the other reading of
+        // `jump_arrival` that is where the entry puts it, at rest outside
+        // the zone, not at its departure's coordinates.
+        let at_rest = Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible);
+        for (script, system) in [("N133", 133), ("M132", 132)] {
+            let catalog = moving(Vec::new(), vec![scripted(128, 1, script, "")]);
+            let mut session = flown(&catalog, at_rest);
+            assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(system)));
+            assert_eq!(
+                session.player().position,
+                Vec2::new(-1001.0, 0.0),
+                "{script}: the at-rest arrival"
+            );
+            assert_eq!(session.player().velocity, Vec2::ZERO, "{script}");
+        }
+        // By the other reading of `starless` the `M` stops the ship at the
+        // centre, which the entry keeps.
+        let catalog = moving(Vec::new(), vec![scripted(128, 1, "M132", "")]);
+        let rules = at_rest.with_override(RuleKey::MoveStarless, RuleSource::Bible);
+        let mut session = flown(&catalog, rules);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(132)));
+        assert_eq!(session.player().position, Vec2::ZERO);
+    }
+
+    #[test]
+    fn by_the_engines_arrival_an_n_in_the_jump_keeps_the_early_placement() {
+        // The arrival block places the ship before the window opens
+        // (@0x6bcf5), and an `N` keeps it there, as a `M` to a starless
+        // system does.
+        let plain = moving(Vec::new(), Vec::new());
+        let mut session = flown(&plain, Rulebook::default());
+        assert_eq!(jump(&mut session, &plain, 131), Some(SystemId(131)));
+        let placed = *session.player();
+        for script in ["N133", "M132"] {
+            let catalog = moving(Vec::new(), vec![scripted(128, 1, script, "")]);
+            let mut session = flown(&catalog, Rulebook::default());
+            assert!(jump(&mut session, &catalog, 131).is_some());
+            assert_eq!(*session.player(), placed, "{script}");
+        }
     }
 
     #[test]
