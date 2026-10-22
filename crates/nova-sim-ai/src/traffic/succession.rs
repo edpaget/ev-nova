@@ -600,6 +600,25 @@ mod tests {
     }
 
     #[test]
+    fn an_independent_successor_of_an_independent_lead_maps_its_own_goal() {
+        // Two ships of no government share none: the take-over reads the
+        // lead only when both are of one government.
+        let mut traffic = taking_over(None, Goal::Hold);
+        let taker = of_mut(&mut traffic, 1);
+        taker.govt = None;
+        taker.target = Some(PLAYER);
+        think(&mut traffic);
+        let taker = of(&traffic, 1);
+        assert_eq!(taker.goal, Goal::Attack(PLAYER));
+        assert_eq!(taker.target, Some(PLAYER), "its own target, not the lead's");
+        assert!(!taker.travel_set, "not the lead's travel stellar");
+        assert_eq!(taker.warp.goal, None, "not the lead's warp");
+        assert_eq!(taker.pursuit, Pursuit::default());
+        assert_eq!(taker.docking, None);
+        assert_eq!(taker.leader, None);
+    }
+
+    #[test]
     fn following_its_leads_jump_it_jumps_on_its_own() {
         let taker = mapped(
             FEDS,
