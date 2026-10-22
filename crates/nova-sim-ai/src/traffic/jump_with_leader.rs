@@ -8,6 +8,12 @@
 //! reset and its type's think, `_EscortAI` included. So
 //! [`Traffic::think_holding`] makes it no decision: its goal and target
 //! stay as its jump left them. Its high level and low level still run.
+//! Before them come two cancels ([`Traffic::cancel_jump_follows`],
+//! @0x900d5-0x901a3), each to goal 0, sub 0, target and travel stellar -1
+//! and +0x50 -1.0: a follower of the player's jump while the player is
+//! disabled, and a follower of an NPC's whose lead, there and not
+//! disabled, attacks while the follower's stage is 1.0 or below. The
+//! think half runs them after the disabled reset. No sound, no draw.
 //!
 //! **Goal 0xb** is a ship following its leader's jump
 //! ([`Npc::follows_leaders_jump`]): sub 0xd's warp goal
@@ -34,6 +40,11 @@
 //! inertialess ([`Npc::flies_inertialess`]), leaves its fleet to jump on
 //! its own ([`Npc::detach_for_own_jump`], +0x50 = 0).
 //!
+//! **The fighter turn-back** ([`turn_back`], `_HighLevelAIHandler`
+//! @0x8d575-0x8d625), after the hold and before the goal blocks: a
+//! fighter on its leader's jump that can't jump docks back with its
+//! carrier. The player's fighters do so from the player's brake on.
+//!
 //! **`_EscortAI`'s -1.0 writes.** Its Defend, Attack and formation blocks
 //! write +0x50 = -1.0 beside +0x4c (@0x83c6b-0x83c73, @0x83d62-0x83d6a,
 //! @0x83ea8-0x83eb0), whoever the parent, the player or an NPC, and its
@@ -44,18 +55,20 @@
 //! in the same tick (@0x8d513), as the original's does in the same
 //! dispatch, so an escort rests at 0 between ticks.
 
+#[cfg(doc)]
+use crate::ai::Decision;
 use crate::ai::leave::{self, Leg};
-#[cfg(doc)]
-use crate::ai::{Decision, dispatch_gate};
-use crate::ai::{Goal, sight};
+use crate::ai::pursuit::Pursuit;
+use crate::ai::{Goal, dispatch_gate, sight};
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::flight::FlightRules;
-#[cfg(doc)]
-use crate::traffic::Traffic;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Npc, NpcId};
 #[cfg(doc)]
 use crate::traffic::warp_out;
 use crate::traffic::warp_out::WarpGoal;
+use crate::traffic::{Traffic, World};
 
 impl Npc {
     /// Whether it is in goal 0xb, following its leader's jump: sub 0xd's
@@ -187,6 +200,78 @@ fn entry(npc: &Npc, npcs: &[Npc], flight: FlightRules) -> Option<Entry> {
 #[must_use]
 pub fn leaves_by_substate(npc: &Npc) -> bool {
     npc.warp.goal == Some(WarpGoal::Own) || brakes_for_jump(npc)
+}
+
+impl Traffic {
+    /// `_AIDispatch`'s cancels on the jump path (@0x900d5-0x901a3), in
+    /// `world`: each ship there in goal 0xb is put back to goal 0 when its
+    /// leader can no longer take it along ([`cancelled`]). It loses its
+    /// goal, substate, target and jump, and gives up its stage (+0x50 =
+    /// -1.0).
+    ///
+    /// The original cancels inside each ship's dispatch, reading its lead's
+    /// goal as the frame's lower slots left it; here the cancels read the
+    /// ships as the think half found them, so a lead that turns to attack
+    /// this tick cancels its escorts on the next. And a ship cancelled
+    /// here makes its type's think in the same tick, where the original's
+    /// jump path had already skipped it. Each is a one-tick lag that
+    /// crosses no boundary the player sees.
+    pub(crate) fn cancel_jump_follows(&mut self, world: &World) {
+        let player = world.player.map(|player| player.condition);
+        let cancels: Vec<bool> = self
+            .npcs
+            .iter()
+            .map(|npc| cancelled(npc, &self.npcs, player))
+            .collect();
+        for (npc, cancels) in self.npcs.iter_mut().zip(cancels) {
+            if cancels {
+                npc.goal = Goal::Idle;
+                npc.pursuit = Pursuit::default();
+                npc.target = None;
+                npc.warp.goal = None;
+                npc.warp.give_up();
+            }
+        }
+    }
+}
+
+/// Whether `npc`'s jump is cancelled among `npcs`, the player in
+/// `player`'s condition when it is there: on the jump path in goal 0xb,
+/// following the player while the player is `_IsDisabled`
+/// (@0x900e3-0x9011e); or led by an NPC there and not `_IsDisabled` that
+/// attacks (goal 4, [`Goal::attacking`]) while its own stage is 1.0 or
+/// below (@0x90125-0x9019c).
+fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
+    if !dispatch_gate::takes_jump_path(npc) || !npc.follows_leaders_jump() {
+        return false;
+    }
+    if npc.warp.goal == Some(WarpGoal::Follow(ShipRef::Player)) {
+        return player.is_some_and(Condition::disabled);
+    }
+    npc.warp.stage <= 1.0
+        && npc
+            .leader
+            .and_then(|id| npcs.iter().find(|lead| lead.id == id))
+            .is_some_and(|lead| !lead.condition.disabled() && lead.goal.attacking().is_some())
+}
+
+/// `_HighLevelAIHandler`'s fighter turn-back (@0x8d575-0x8d625), after
+/// the hold: a fighter (AI type 5, [`Npc::carrier`]) in goal 0xb that
+/// can't jump (`_AIShipHasFuelForJump` inlined, [`leave::can_jump`] by
+/// `reading` of [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel))
+/// turns back to dock with its carrier: goal 5 ([`Goal::Dock`]), target
+/// -1, its jump dropped. Its stage is left, for the warp-out's
+/// not-jumping test to zero. The player's fighters dock with the player,
+/// an NPC's with its carrier. It plays no sound and draws nothing.
+pub fn turn_back(npc: &mut Npc, reading: RuleSource) {
+    let Some(carrier) = npc.carrier else {
+        return;
+    };
+    if npc.follows_leaders_jump() && !leave::can_jump(npc, reading) {
+        npc.goal = Goal::Dock(carrier.ship);
+        npc.target = None;
+        npc.warp.goal = None;
+    }
 }
 
 /// Whether each of `npcs`, whose think is `due`, makes its type's think:
@@ -614,6 +699,187 @@ mod tests {
             assert_eq!(ship, None);
             assert!(target.is_some());
         }
+    }
+
+    // The fighter turn-back.
+
+    /// A fighter of `carrier` on its leader's jump, short of fuel when
+    /// `short`.
+    fn fighter_on_jump(carrier: ShipRef, short: bool) -> Npc {
+        let mut fighter = far(1);
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: carrier,
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter.state.position = Vec2::new(3000.0, 500.0);
+        fighter.goal = Goal::Formation { guard: None };
+        fighter.target = Some(ShipRef::Npc(NpcId(9)));
+        fighter.warp.goal = Some(WarpGoal::Follow(carrier));
+        fighter.warp.stage = 3.0;
+        fighter.class_fuel = if short { 0 } else { 100 };
+        fighter
+    }
+
+    #[test]
+    fn a_fighter_that_cannot_jump_turns_back_to_dock_with_its_carrier() {
+        // @0x8d575-0x8d625: goal 5, target -1, +0x6c its parent.
+        let reading = crate::rulebook::RuleSource::Engine;
+        let mut short = fighter_on_jump(ShipRef::Player, true);
+        turn_back(&mut short, reading);
+        assert_eq!(
+            (short.goal, short.target, short.warp.goal),
+            (Goal::Dock(ShipRef::Player), None, None)
+        );
+        assert_eq!(short.warp.stage, 3.0, "left for the warp-out to zero");
+        let mut able = fighter_on_jump(ShipRef::Player, false);
+        turn_back(&mut able, reading);
+        assert_eq!(able.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(able.goal, Goal::Formation { guard: None });
+        let mut escort = fighter_on_jump(ShipRef::Player, true);
+        escort.carrier = None;
+        turn_back(&mut escort, reading);
+        assert_eq!(
+            escort.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "AI type 5 alone"
+        );
+        let mut own = fighter_on_jump(ShipRef::Player, true);
+        own.warp.goal = Some(WarpGoal::Own);
+        own.goal = Goal::JumpOut;
+        turn_back(&mut own, reading);
+        assert_eq!(own.goal, Goal::JumpOut, "goal 0xb alone");
+    }
+
+    #[test]
+    fn an_npc_carriers_fighter_short_of_fuel_turns_back_to_its_jumping_carrier_in_the_fly_half() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut carrier = far(0);
+        carrier.begin_own_jump();
+        let carrier = traffic.add_npc(carrier);
+        let mut fighter = fighter_on_jump(ShipRef::Npc(carrier), true);
+        fighter.leader = Some(carrier);
+        fighter.warp.stage = 0.0;
+        let fighter = traffic.add_npc(fighter);
+        let mut waiting = fighter_on_jump(ShipRef::Npc(carrier), true);
+        waiting.leader = Some(carrier);
+        waiting.warp.stage = 0.0;
+        waiting.ai_wait = 50;
+        let waiting = traffic.add_npc(waiting);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let ship = of(&traffic, fighter);
+        assert_eq!(ship.goal, Goal::Dock(ShipRef::Npc(carrier)));
+        assert_eq!(ship.warp.goal, None);
+        let ship = of(&traffic, waiting);
+        assert_eq!(
+            ship.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(carrier))),
+            "its high level waits"
+        );
+    }
+
+    // The cancels.
+
+    /// A follower of `leader`'s jump at `stage`, and its NPC lead, NPC 0,
+    /// in goal `lead_goal`, disabled as `lead_condition` says.
+    fn on_leaders_jump(
+        leader: ShipRef,
+        stage: f32,
+        lead_goal: Goal,
+        lead_condition: crate::combat::hull::Condition,
+    ) -> Vec<Npc> {
+        let mut lead = far(0);
+        lead.goal = lead_goal;
+        lead.condition = lead_condition;
+        let mut follower = far(1);
+        follower.leader = match leader {
+            ShipRef::Npc(id) => Some(id),
+            ShipRef::Player => None,
+        };
+        follower.goal = Goal::Follow {
+            lead: NpcId(0),
+            guard: None,
+        };
+        follower.target = Some(ShipRef::Npc(NpcId(0)));
+        follower.warp.goal = Some(WarpGoal::Follow(leader));
+        follower.warp.stage = stage;
+        vec![lead, follower]
+    }
+
+    #[test]
+    fn a_follower_of_the_players_jump_is_cancelled_while_the_player_is_disabled() {
+        use crate::combat::hull::Condition;
+        let npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
+        for (player, cancels) in [
+            (Some(Condition::Disabled), true),
+            (
+                Some(Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                }),
+                true,
+            ),
+            (Some(Condition::Intact), false),
+            (None, false),
+        ] {
+            assert_eq!(cancelled(&npcs[1], &npcs, player), cancels, "{player:?}");
+        }
+    }
+
+    #[test]
+    fn a_follower_of_an_attacking_npc_lead_is_cancelled_at_stage_1_or_below() {
+        use crate::combat::hull::Condition;
+        let lead = ShipRef::Npc(NpcId(0));
+        let attacking = Goal::Attack(ShipRef::Player);
+        for (stage, cancels) in [(-1.0, true), (0.0, true), (1.0, true), (1.5, false)] {
+            let npcs = on_leaders_jump(lead, stage, attacking, Condition::Intact);
+            assert_eq!(cancelled(&npcs[1], &npcs, None), cancels, "{stage}");
+        }
+        let npcs = on_leaders_jump(lead, 0.0, Goal::Snipe(ShipRef::Player), Condition::Intact);
+        assert!(cancelled(&npcs[1], &npcs, None), "goal 4 standing off");
+        let npcs = on_leaders_jump(lead, 0.0, Goal::JumpOut, Condition::Intact);
+        assert!(!cancelled(&npcs[1], &npcs, None), "not attacking");
+        let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Disabled);
+        assert!(
+            !cancelled(&npcs[1], &npcs, None),
+            "a disabled lead (@0x9015b)"
+        );
+        let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Intact);
+        assert!(!cancelled(&npcs[1], &npcs[1..], None), "a lead not there");
+        let mut paused = npcs.clone();
+        paused[1].goal = Goal::Regroup {
+            kept: crate::ai::regroup::Kept::Coast,
+        };
+        assert!(!cancelled(&paused[1], &paused, None), "not goal 0xb");
+        let mut hulk = npcs;
+        hulk[1].no_ai = true;
+        assert!(!cancelled(&hulk[1], &hulk, None), "no jump path");
+    }
+
+    #[test]
+    fn a_lead_turning_to_attack_cancels_its_escorts_early_jump_in_the_think_half() {
+        use crate::combat::hull::Condition;
+        let mut traffic = Traffic::with_interval(1);
+        for ship in on_leaders_jump(
+            ShipRef::Npc(NpcId(0)),
+            0.5,
+            Goal::Attack(ShipRef::Player),
+            Condition::Intact,
+        ) {
+            traffic.add_npc(ship);
+        }
+        traffic.think_holding(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let escort = of(&traffic, NpcId(1));
+        assert_eq!(
+            (
+                escort.goal,
+                escort.target,
+                escort.warp.goal,
+                escort.warp.stage
+            ),
+            (Goal::Idle, None, None, -1.0),
+            "goal 0, target -1, +0x50 -1.0 (@0x90125-0x9019c)"
+        );
     }
 
     // `_EscortAI`'s -1.0 writes.

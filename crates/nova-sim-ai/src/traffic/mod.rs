@@ -1165,7 +1165,8 @@ impl Traffic {
     /// to the `strikes` left, the lost leads' succession ([`succession`]),
     /// the NPC formations ([`fleet_formation`]), the fleet leaders' orders
     /// ([`escort_orders`]), the regroup pause's draws ([`regroup`]), the
-    /// disabled ships' reset ([`disabled_reset`]), the decisions as
+    /// disabled ships' reset ([`disabled_reset`]), the jump cancels
+    /// ([`jump_with_leader`]), the decisions as
     /// `behaviour` says, rolling
     /// on `chance`, their goals, pursuit, fire commands and targets, the
     /// gate waits, each flying NPC's cloak think and each escape pod's
@@ -1187,6 +1188,7 @@ impl Traffic {
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
         self.reset_disabled(world.npc_escort_ai);
+        self.cancel_jump_follows(&world);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
         self.launch_room = Some(left);

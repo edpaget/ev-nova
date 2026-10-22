@@ -8,7 +8,10 @@
 //!   ship pass (see [`gone`](super::gone)); holds every NPC's cloak; on
 //!   the advance pass moves each
 //!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
-//!   warp to its goal and its fold to its dispatch, and runs the odds pass
+//!   warp to its goal and turns back a fighter that can't follow its
+//!   leader's jump, unless its high level waits (see
+//!   [`jump_with_leader`](super::jump_with_leader)), holds its fold to
+//!   its dispatch, and runs the odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
 //!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
 //!   ships are entering a gate; and snapshots what each flight reads of
@@ -47,8 +50,8 @@ use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
 use super::{
-    DockNotes, Traffic, World, ionization, plunder, repair_dock, ship_display, tractor_hold,
-    warp_out,
+    DockNotes, Traffic, World, ionization, jump_with_leader, plunder, repair_dock, ship_display,
+    tractor_hold, warp_out,
 };
 use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{Goal, sight};
@@ -142,6 +145,7 @@ impl Traffic {
                 // the high level past its AI wait (`jump_with_leader`).
                 if npc.condition == Condition::Intact && !npc.high_level_waits() {
                     warp_out::hold_stage(npc);
+                    jump_with_leader::turn_back(npc, world.npc_jump_fuel);
                 }
                 ship_display::dispatch_fold(npc);
             }
