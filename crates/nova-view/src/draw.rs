@@ -705,6 +705,15 @@ pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
     );
 }
 
+/// The one command [`fill_rect`] draws for `area` in `color`, for tests
+/// to compare drawn commands against.
+#[cfg(test)]
+pub(crate) fn fill_command(area: Bounds, color: Color) -> DrawCommand {
+    let mut list = DrawList::new();
+    fill_rect(&mut list, area, color);
+    list.iter().next().cloned().expect("a fill is one command")
+}
+
 impl<'a> IntoIterator for &'a DrawList {
     type Item = &'a DrawCommand;
     type IntoIter = std::slice::Iter<'a, DrawCommand>;

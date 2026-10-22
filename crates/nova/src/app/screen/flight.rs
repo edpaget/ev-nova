@@ -19,11 +19,11 @@ use nova_view::spaceport::shipyard::{
     InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
 };
 use nova_view::spaceport::trade::TRADE_DIALOG;
-use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
+use nova_view::spaceport::{ListLooks, OutfitterCatalog, ShipyardCatalog};
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG, YES_NO_DIALOG};
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
@@ -51,7 +51,8 @@ impl AppScreen {
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
-            spaceport = spaceport.with_trade(trade, quantity, market);
+            let colors = self.data.list_colors();
+            spaceport = spaceport.with_trade(trade, quantity, market, colors);
         }
         if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
@@ -108,7 +109,11 @@ impl AppScreen {
                 );
         }
         spaceport = spaceport
-            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_player_info(
+                template_of(PLAYER_INFO_DIALOG),
+                template_of(YES_NO_DIALOG),
+                BackgroundSizes::read(&self.data),
+            )
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
@@ -271,12 +276,15 @@ impl AppScreen {
     }
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
-    /// its stellar sprite pool, what its berths keep, its course map's
-    /// zoom and whether the map shows the borders, for the next flight in
-    /// this run.
+    /// its stellar sprite pool, what its berths keep, what its last galaxy
+    /// refresh left hidden, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(last_refresh) = flight.last_refresh() {
+            self.last_refresh = Some(last_refresh);
         }
         if let Some(pool) = flight.stellar_sprite_pool() {
             self.stellar_sprites = pool.clone();

@@ -55,7 +55,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
+    outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -216,13 +217,34 @@ fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
     }
 }
 
-/// The scrolling text role of `text`.
+/// The scrolling text role of `text`, straight on the dialog.
 fn text_role(text: String) -> Role {
     Role::ScrollText {
         text,
         font: Font::Geneva,
         size: TEXT_SIZE,
         color: TEXT_COLOR,
+        backing: None,
+    }
+}
+
+/// The reply's box: `_CommDialogUpdate` paints item 10 inset 1 white
+/// (@0x907b5), sets the reply in the item inset (5, 3) (@0x907d9), then
+/// inverts the inset-1 box (@0x90839): white text on a black box.
+const REPLY_BACKING: TextBacking = TextBacking {
+    fill: Color::BLACK,
+    fill_inset: 1.0,
+    text_inset: (5.0, 3.0),
+};
+
+/// The reply's scrolling text role: `text` over [`REPLY_BACKING`].
+fn reply_role(text: String) -> Role {
+    Role::ScrollText {
+        text,
+        font: Font::Geneva,
+        size: TEXT_SIZE,
+        color: TEXT_COLOR,
+        backing: Some(REPLY_BACKING),
     }
 }
 
@@ -421,7 +443,7 @@ fn layout(
     let items = template.items.len();
     let mut roles = vec![
         (CLOSE_ITEM, Role::Button(CLOSE_CHANNEL.to_owned())),
-        (REPLY_ITEM, text_role(view.reply.clone())),
+        (REPLY_ITEM, reply_role(view.reply.clone())),
         (CLASS_ITEM, text_role(class_text(view))),
     ];
     let mut buttons = [CLOSE_ITEM].to_vec();
@@ -715,7 +737,7 @@ mod tests {
     use nova_sim::{EscortStatus, HailButton, NpcId};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
@@ -920,6 +942,62 @@ mod tests {
             .center();
         click(&mut three, at);
         assert_eq!(three.take_press(), None, "the reply is no button");
+    }
+
+    #[test]
+    fn the_reply_draws_over_its_item_inset_1_filled_black_its_text_inset_5_3() {
+        let dialog = dialog(&view());
+        let item = dialog.dialog().item_bounds(REPLY_ITEM).expect("item 10");
+        let commands = drawn(&dialog);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(item.grown(-1.0), Color::BLACK))
+            .expect("item 10 inset 1, filled black");
+        let (text, origin) = commands
+            .iter()
+            .enumerate()
+            .find_map(|(at, command)| match command {
+                DrawCommand::Text { text, origin, .. } if text == "Channel open." => {
+                    Some((at, *origin))
+                }
+                _ => None,
+            })
+            .expect("the reply");
+        assert!(fill < text, "the box is under the text");
+        assert_eq!(
+            origin,
+            Point::new(item.min.x + 5.0, item.min.y + 3.0),
+            "inset (5, 3)"
+        );
+        let class = dialog.dialog().item_bounds(CLASS_ITEM).expect("item 12");
+        assert!(
+            !commands.iter().any(|command| {
+                [class, class.grown(-1.0)]
+                    .into_iter()
+                    .any(|area| *command == fill_command(area, Color::BLACK))
+            }),
+            "the class has no box"
+        );
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_reply() {
+        let long: Vec<String> = (0..20).map(|n| format!("line {n}")).collect();
+        let mut dialog = dialog(&HailView {
+            reply: long.join("\r"),
+            ..view()
+        });
+        let first = |dialog: &CommDialog| {
+            dialog
+                .dialog()
+                .text(REPLY_ITEM)
+                .map(super::super::scroll_text::ScrollText::first)
+        };
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Down));
+        assert_eq!(first(&dialog), Some(2));
+        dialog.input(&key(Key::Up));
+        assert_eq!(first(&dialog), Some(1));
     }
 
     #[test]

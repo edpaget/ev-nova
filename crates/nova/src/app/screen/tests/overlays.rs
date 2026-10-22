@@ -1032,6 +1032,67 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
 }
 
+/// The player info's background pictures `open` draws, each with its
+/// clip.
+fn player_info_background(open: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    use nova_view::ui::player_info::BACKGROUND;
+    drawn(open)
+        .iter()
+        .filter(|command| match command {
+            DrawCommand::Clipped { command, .. } => matches!(
+                **command,
+                DrawCommand::Picture { ref image, .. }
+                | DrawCommand::StretchedPicture { ref image, .. }
+                    if BACKGROUND.contains(image)
+            ),
+            _ => false,
+        })
+        .cloned()
+        .collect()
+}
+
+/// What `open` draws of the fixture data's player info background: its
+/// upper cap alone ([`UPPER_CAP_SIZE`]), at its own size over the
+/// window's top-left, as neither the middle nor the lower cap is there.
+fn data_background(open: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    let window = open.bounds().expect("laid out");
+    let (width, height) = UPPER_CAP_SIZE;
+    vec![DrawCommand::Clipped {
+        clip: window,
+        command: Box::new(DrawCommand::StretchedPicture {
+            image: nova_view::ImageKey::picture(8518),
+            top_left: window.min,
+            width: f32::from(width),
+            height: f32::from(height),
+        }),
+    }]
+}
+
+#[test]
+fn the_flight_player_info_draws_the_game_datas_background_pictures() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    let open = screen.flight_player_info().expect("open");
+    assert_eq!(
+        player_info_background(open),
+        data_background(open),
+        "the 300 x 30 upper cap the data holds, and no middle or lower cap"
+    );
+}
+
+#[test]
+fn the_spaceport_player_info_draws_the_game_datas_background_pictures() {
+    let mut screen = landed_trader(&MemoryPilots::new());
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    let open = spaceport(&screen).player_info().expect("open");
+    assert_eq!(
+        player_info_background(open),
+        data_background(open),
+        "the 300 x 30 upper cap the data holds, and no middle or lower cap"
+    );
+}
+
 #[test]
 fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
     let store = MemoryPilots::new();

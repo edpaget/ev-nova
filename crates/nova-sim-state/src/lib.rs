@@ -54,6 +54,9 @@
 //!   its `shïp`'s fields and the outfits it carries: the one place its
 //!   handling, reserve capacities, fuel, shield and armour regeneration
 //!   and cargo space come from.
+//! - [`trade_dialog`]: what the exchange's dialog shows beside its
+//!   prices: the header's hold or fleet, each row's price marker and the
+//!   cargo summary, in `STR#` 2002's words.
 //!
 //! A doc here links only to items of this crate, `nova-sim-base` and
 //! `nova-sim-catalog`. An item of a crate above it is named by its facade
@@ -79,3 +82,4 @@ pub mod legal;
 pub mod market;
 pub mod outfit_effects;
 pub mod stats;
+pub mod trade_dialog;

@@ -16,6 +16,13 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The trait's default `boom_sounds` is empty already: `vec![]` is the
+    # same empty list as `Vec::new()`.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::boom_sounds -> Vec<\\(BoomId, SoundId\\)> with vec!\\[\\]$",
+    # Widening a 5-bit channel, (c5 << 3) | (c5 >> 2): the two halves
+    # never share a bit (the first's low 3 bits are 0, the second is at
+    # most 7), so OR and XOR give the same byte.
+    'replace \| with \^ in widen5',
     # A formation slot's side push turns by trunc(heading + 90) % 360:
     # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
     # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same

@@ -604,6 +604,51 @@ fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
     assert_eq!(failed.kept_berths(), None);
 }
 
+/// A new pilot of [`catalog`] begun, with `carried` handed on, if any:
+/// whether it explored Alpha Centauri (131), Sol's neighbour.
+fn begun_explores_131(carried: Option<nova_sim::LastRefresh>) -> bool {
+    let catalog = catalog();
+    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+    let view = FlightView::with_pilot(catalog, pilot);
+    let mut view = match carried {
+        Some(carried) => view.with_last_refresh(carried),
+        None => view,
+    };
+    view.begin();
+    view.session()
+        .expect("flying")
+        .pilot()
+        .has_explored(SystemId(131))
+}
+
+#[test]
+fn a_flight_hands_the_last_refresh_to_its_new_pilots_neighbour_pass_and_back() {
+    let hiding = nova_sim::LastRefresh::hiding([SystemId(131)]);
+    assert!(begun_explores_131(None), "the launch's");
+    assert!(!begun_explores_131(Some(hiding.clone())), "the one carried");
+    // 131 hidden until the `OnStart` sets bit 50.
+    let mut shown_on_start = starting_with("b50");
+    shown_on_start
+        .visibility
+        .push(nova_sim::catalog::SystemVisibility {
+            id: SystemId(131),
+            visibility: nova_sim::control::Test::parse("b50"),
+        });
+    let pilot = Pilot::new(&shown_on_start, "Ada").expect("starts");
+    let mut view = FlightView::with_pilot(shown_on_start, pilot);
+    view.begin();
+    assert_eq!(view.last_refresh(), Some(hiding.clone()), "before OnStart");
+    view.enter_game();
+    assert_eq!(view.last_refresh(), Some(nova_sim::LastRefresh::default()));
+    let mut failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_last_refresh(hiding);
+    failed.enter_game();
+    assert_eq!(failed.last_refresh(), None);
+}
+
 #[test]
 fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
     let mut sprites = SlotSprites::default();

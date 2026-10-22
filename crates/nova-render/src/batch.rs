@@ -2032,6 +2032,84 @@ mod tests {
     }
 
     #[test]
+    fn the_player_infos_middle_picture_is_cropped_not_squashed() {
+        use nova_view::ui::player_info::{BackgroundSizes, PictureSize, draw_background};
+        let page = 512.0;
+        let sized = |width, height| Some(PictureSize { width, height });
+        let stock = BackgroundSizes {
+            upper: sized(413.0, 40.0),
+            middle: sized(413.0, 215.0),
+            lower: sized(413.0, 40.0),
+        };
+        let images = FakeImages::default()
+            .with(
+                ImageKind::Pict,
+                8518,
+                vec![solid(413, 40, [255, 0, 0, 255])],
+            )
+            .with(
+                ImageKind::Pict,
+                8519,
+                vec![solid(413, 215, [0, 255, 0, 255])],
+            )
+            .with(
+                ImageKind::Pict,
+                8520,
+                vec![solid(413, 40, [0, 0, 255, 255])],
+            );
+        let mut renderer = Renderer::with_page_size(images, 512);
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        draw_background(&mut list, Bounds::at(at(0.0, 0.0), 413.0, 227.0), &stock);
+        let viewport = Viewport::new(LogicalSize { w: 512, h: 384 }, (512, 384), 1.0);
+
+        assert_eq!(
+            renderer.render(&list, &viewport, &mut gpu),
+            RenderReport::default()
+        );
+
+        let frame = gpu.submits()[0].clone();
+        let quads: Vec<QuadInstance> = frame
+            .batches
+            .iter()
+            .filter_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => Some(quads.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let [middle, upper, lower] = quads.as_slice() else {
+            panic!("three pictures: {frame:?}");
+        };
+        assert_eq!(
+            middle.dest,
+            Rect {
+                x: 0.0,
+                y: 40.0,
+                w: 413.0,
+                h: 187.0
+            },
+            "from below the upper cap to the window's bottom"
+        );
+        assert!(
+            ((middle.uv.v1 - middle.uv.v0) * page - 187.0).abs() < 1e-3,
+            "187 of the picture's 215 rows, not all 215 squashed: {middle:?}"
+        );
+        assert!(((middle.uv.u1 - middle.uv.u0) * page - 413.0).abs() < 1e-3);
+        assert_eq!(upper.dest.y, 0.0);
+        assert_eq!(
+            lower.dest,
+            Rect {
+                x: 0.0,
+                y: 187.0,
+                w: 413.0,
+                h: 40.0
+            },
+            "the lower cap over the middle's cut bottom"
+        );
+    }
+
+    #[test]
     fn a_clip_that_only_touches_or_misses_one_axis_draws_nothing() {
         let mut list = DrawList::new();
         let picture = DrawCommand::Picture {

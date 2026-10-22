@@ -19,12 +19,17 @@
 //! drawn after the arrival shows it.
 //!
 //! Before any write, the system entered is resolved through the galaxy
-//! overlay, so the player is always in a visible system: the system
-//! itself when it is visible, else the visible system at its place, else
-//! the chain head, made visible ([`OverlaidGalaxy::arrival`]; see the
-//! `story` module's "Galaxy overlay"). The stellars of a system resolved
-//! to another are read again; the caller's placement is kept, a system at
-//! the same place being at the same map position.
+//! overlay, so the player is always in a visible system, as
+//! [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem) says
+//! (`Chart::entry_resolution`; see the `arrival_system` module): by the
+//! engine, the system itself while it is visible, a visible system
+//! shadowed at its place too ([`OverlaidGalaxy::entered`]); by the other
+//! reading, the visible system that stands for it
+//! ([`OverlaidGalaxy::arrival`]). Under both, a hidden system goes to the
+//! visible system at its place, else the chain head, made visible (see
+//! the `story` module's "Galaxy overlay"). The stellars of a system
+//! resolved to another are read again; the caller's placement is kept, a
+//! system at the same place being at the same map position.
 //!
 //! **The stellars shown.** [`Session::set_player_system`] is the one owner
 //! of which stellars the session shows, and every move of the player's
@@ -40,8 +45,9 @@
 //! Which of a system's stellars are shown is the galaxy's: those it holds
 //! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as
 //! `_HandleStellarSystemVisibility` shows only the active stellars the
-//! player's system owns, so a stellar another visible system owns is not
-//! shown though the system lists it. The stellar the ship is docked at
+//! player's system owns, so a stellar another visible system owns, or
+//! keeps rescued until the next refresh (the `kept_rescues` module), is
+//! not shown though the system lists it. The stellar the ship is docked at
 //! is always among those shown. The session keeps every stellar the
 //! system lists, and derives the stellars shown from them as the system
 //! changes and at each flight rebuild point ([`Session::reshow`]); a
@@ -72,7 +78,7 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics, story};
+use super::{Chart, Mode, Outbox, PlayerShip, Session, SessionEvent, Statics};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
     SystemTraffic, TrafficCatalog,
@@ -93,10 +99,13 @@ use crate::traffic::{Leave, Traffic};
 /// How the player enters a system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Entry {
-    /// A hyperspace jump's arrival, having made `hops` hops along the
-    /// course, at its natural end, both warp-ups finished or halted by the
-    /// fallback's pass before it, or not, a warp-up still playing with no
-    /// fallback pass first (see [`Session::arrive`]).
+    /// A hyperspace jump's arrival, its course stepping over `hops` hops
+    /// still on it (the hops passed on the way are spooled as they are
+    /// made: see the `jump_hops` module), at its natural end, both
+    /// warp-ups finished or halted by the fallback's pass before it, or
+    /// not, a warp-up still playing with no fallback pass first (see
+    /// [`Session::arrive`]). The system entered is the player's as the
+    /// jump and its in-flight moves left it (see the `jump_moves` module).
     Jump { hops: usize, natural_end: bool },
     /// Out of a hypergate or wormhole.
     Gate,
@@ -122,7 +131,7 @@ impl Entry {
     /// names, a jump's hops left out: none for the escape pod's rescue,
     /// which calls no `_MissionHandlePlayerEnteredNewSystem` and so raises
     /// no enter-system event and runs no enter-system hook.
-    fn entrance(self) -> Option<Entrance> {
+    pub(super) fn entrance(self) -> Option<Entrance> {
         match self {
             Self::Jump { .. } => Some(Entrance::Jump),
             Self::Gate => Some(Entrance::Gate),
@@ -130,6 +139,21 @@ impl Entry {
             Self::ScriptStay => Some(Entrance::ScriptMove { landed: false }),
             Self::Relocate => Some(Entrance::Relocate),
             Self::Rescue => None,
+        }
+    }
+
+    /// The way in ([`Entry::entrance`]) whose enter-system hook is still
+    /// to run as [`Session::enter_system`] populates the system and
+    /// announces it: none for a jump, whose [`Session::arrive`] raised and
+    /// dispatched its [`StoryEvent::EnteredSystem`] before the re-explore
+    /// and the setup (@0x6c15d; see the `jump_exploration` module), nor
+    /// for an in-flight move or its tail with no move, whose operator
+    /// dispatched it (@0x159a8; see the `operator_moves` module), nor for
+    /// the rescue, which runs none.
+    pub(super) fn hook_pending(self) -> Option<Entrance> {
+        match self {
+            Self::Jump { .. } | Self::ScriptMove { landed: false } | Self::ScriptStay => None,
+            _ => self.entrance(),
         }
     }
 }
@@ -175,6 +199,12 @@ pub(super) enum ShipPlacement {
     },
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
+    /// At this position with its velocity zeroed, its heading and its
+    /// speed along its heading kept: an in-flight `M`, which writes the
+    /// position (+0x18/+0x1c) and the velocity (+0x20/+0x24) but never
+    /// the speed (+0x48) an inertialess ship's velocity follows
+    /// (`_EvalSetExp` @0x157a6-0x157da; see the `inertialess` module).
+    Stopped(Vec2),
     /// Where it is, as it is.
     Keep,
 }
@@ -229,6 +259,10 @@ pub(super) enum Reset {
     GateEntry,
     /// The shots and beams in flight are left behind.
     Combat,
+    /// The explosions the fight has reported and the view has not taken
+    /// are dropped, as `_killExplods` kills them (see the
+    /// `killed_explosions` module).
+    Explosions,
     /// The cargo boxes are cleared, as `_killBoxes` kills them
     /// (see the `cargo_boxes` module).
     Boxes,
@@ -301,8 +335,14 @@ pub(super) enum CourseStep {
     /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
     /// the `course` module).
     Arrival { hops: usize },
-    /// It is cleared.
+    /// It is cleared, its start included: the rescue (`_ResetPlayer`
+    /// @0x1d6bb). The relocation and the move by
+    /// [`RuleKey::MoveArrival`](crate::RuleKey::MoveArrival)'s other
+    /// reading have no original, so they take the plain clear too.
     Clear,
+    /// Its hops are cleared and it starts at the system entered: the gate
+    /// exits (@0x63e1d-0x63e3c, @0x64713-0x64731).
+    Restart,
 }
 
 /// What becomes of the player's nav mode and its selection (see the
@@ -371,7 +411,7 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
     match how {
         Entry::Jump { hops, .. } => jump(hops, placed),
         Entry::Gate => gate(),
-        Entry::ScriptMove { landed: true } => script_move_landed(arrival),
+        Entry::ScriptMove { landed: true } => script_move_landed(),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
         Entry::ScriptStay => script_move_in_flight(false, facts),
         Entry::Relocate => relocate(),
@@ -471,7 +511,8 @@ fn jump(hops: usize, placed: bool) -> Resets {
 
 /// Out of a hypergate or wormhole: `_PlayerEnterHypergate` (@0x637bf)
 /// and `_PlayerEnterWormhole` (@0x64005) bypass the hyperspace arrival,
-/// so a held sound is kept. The course is cleared and the thrust
+/// so a held sound is kept. The course is restarted at the system
+/// entered (@0x63e0e-0x63e3c, @0x64708-0x64731) and the thrust
 /// stopped; the system is populated even when it is the one gone in,
 /// and the arrival sounds but raises no message of its own (the caller
 /// raises the gate's). The caller arms the escort-strength timer before
@@ -497,51 +538,53 @@ fn gate() -> Resets {
             Reset::ArrivalSound,
             Reset::Rebuild,
         ],
-        CourseStep::Clear,
+        CourseStep::Restart,
         NavStep::Deselect,
         TrafficStep::Populate,
     )
 }
 
-/// A landed `M` or `N` (`_EvalSetExp` @0x1570e-0x158d4 and
-/// @0x158d9-0x159ad): landed, the original empties `_dockedPortMissions`
-/// (@0x1584b, @0x15949) and does nothing more, so only the pilot's
-/// system and stellar change, the offers are emptied (the stellar they
-/// were rolled at kept) and the stellars wait for the take-off. As an
-/// `arrival` (the Bible's reading of `MoveArrival`) the system is
-/// explored and the course cleared at once. The nav is kept: the
-/// operator already wrote it, as `_EvalSetExp` does (`M` in mode 2 its
-/// destination's first stellar, @0x156f2-0x15705; otherwise the selection
-/// let go, @0x15733, @0x158fd; see the `nav` module), and the take-off
-/// lets go of it (@0x674d2).
-fn script_move_landed(arrival: bool) -> Resets {
-    let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
-    let course = if arrival {
-        set.push(Reset::Explore);
-        CourseStep::Clear
-    } else {
-        CourseStep::Keep
-    };
-    Resets::of(&set, course, NavStep::Keep, TrafficStep::None)
+/// A landed `M` or `N`'s entry, after its operator (`_EvalSetExp`
+/// @0x1570e-0x158d4 and @0x158d9-0x159ad; see the `operator_moves`
+/// module): landed, the original empties `_dockedPortMissions` (@0x1584b,
+/// @0x15949) and does nothing more, and the operator has emptied the
+/// offers, written the system and placed the ship, so only the pilot's
+/// stellar changes and the stellars wait for the take-off. The offers
+/// are not emptied again, so a landing's re-offer after the operator
+/// keeps its offers. As an `arrival` (the Bible's reading of
+/// `MoveArrival`) the operator explored the system and cleared the
+/// course. The nav is kept: the operator already wrote it, as
+/// `_EvalSetExp` does (`M` in mode 2 its destination's first stellar,
+/// @0x156f2-0x15705; otherwise the selection let go, @0x15733, @0x158fd;
+/// see the `nav` module), and the take-off lets go of it (@0x674d2).
+fn script_move_landed() -> Resets {
+    Resets::of(
+        &[Reset::Stellar, Reset::SaveDue],
+        CourseStep::Keep,
+        NavStep::Keep,
+        TrafficStep::None,
+    )
 }
 
 /// An `M` or `N` in flight (`_EvalSetExp` @0x158a4): the shots are
 /// killed and the stellars rebuilt; here the whole scene is let go of
 /// with them, and a jump given up, the thrust stopping only when there
 /// was one. The pilot's stellar is forgotten only in another system. As
-/// an `arrival` the system is explored, the course cleared, the fighters
-/// out dealt with and the system populated, even within the same
-/// system; otherwise only into another system does the traffic go on,
+/// an `arrival` the fighters out are dealt with and the system populated,
+/// even within the same system, the operator having explored the system
+/// and cleared the course (see the `operator_moves` module); otherwise only into another system does the traffic go on,
 /// with the ships the player leads alone (`_EvalSetExp` @0x15807,
 /// @0x1590b), the rest left behind as
 /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says. The
 /// nav selection is let go and the mode kept (@0x157e3, @0x158fd). The
-/// asteroid field is killed (@0x158ca, @0x1598e).
+/// explosions pending and the asteroid field are killed (@0x158ba,
+/// @0x1597e; @0x158ca, @0x1598e).
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
         Reset::GateEntry,
         Reset::Combat,
+        Reset::Explosions,
         Reset::Boxes,
         Reset::Asteroids,
         Reset::Strikes,
@@ -557,15 +600,15 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     if facts.jump_pending {
         set.push(Reset::Thrust);
     }
-    let (course, traffic) = if arrival {
-        set.extend([Reset::Explore, Reset::FightersOut]);
-        (CourseStep::Clear, TrafficStep::Populate)
+    let traffic = if arrival {
+        set.push(Reset::FightersOut);
+        TrafficStep::Populate
     } else if facts.system_changed {
-        (CourseStep::Keep, TrafficStep::Retarget)
+        TrafficStep::Retarget
     } else {
-        (CourseStep::Keep, TrafficStep::None)
+        TrafficStep::None
     };
-    Resets::of(&set, course, NavStep::Deselect, traffic)
+    Resets::of(&set, CourseStep::Keep, NavStep::Deselect, traffic)
 }
 
 /// The developer tools' move of a landed pilot, and the walker's landing
@@ -650,16 +693,24 @@ impl TrafficCatalog for NoTraffic {
 
 impl Session {
     /// Enters `arrival`'s system `how`, resolved through the galaxy
-    /// overlay, its stellars read again from `stellars` when it resolves to
+    /// overlay as [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem)
+    /// says, its stellars read again from `stellars` when it resolves to
     /// another: places the ship as the caller chose, makes the arrival
     /// writes, and resets what the row of [`resets`] for `how` says,
     /// populating from `catalog` on `chance` where it says so (see the
     /// module docs). A chain head made visible makes a save due and tells
     /// [`SessionEvent::GalaxyChanged`].
+    ///
+    /// `left` is the system the entry leaves: the player's system before
+    /// the entry for most ways in, and a jump's departure for a jump,
+    /// whose hops and arrival have already been written as the player's
+    /// system ([`Session::arrive`]). The system changes, the grudges held
+    /// and the traffic brought in read it, never the player's system.
     #[allow(clippy::too_many_lines)] // the Chart calls' explicit parameters wrap
     pub(super) fn enter_system<S, C, R>(
         &mut self,
         how: Entry,
+        left: SystemId,
         arrival: Arrival,
         stellars: &S,
         catalog: &C,
@@ -669,20 +720,19 @@ impl Session {
         C: TrafficCatalog + ?Sized,
         R: Chance + ?Sized,
     {
+        // A move's entry still owed comes first, so no entry straddles
+        // another (see the `operator_moves` module).
+        self.settle_pending_move(stellars, catalog, chance);
         let Arrival {
             system: asked,
             sites,
             placement,
         } = arrival;
-        let resolved = self.chart.galaxy.arrival(asked);
-        if story::show(&mut self.pilot, &mut self.chart.galaxy, resolved) {
-            self.out.save_due = true;
-            self.out.emit(SessionEvent::GalaxyChanged);
-        }
-        let system = resolved.to;
-        let left = self.pilot.system;
+        let system = self
+            .chart
+            .show_entry(&mut self.pilot, &self.setup, &mut self.out, asked);
         let facts = EntryFacts {
-            system_changed: system != self.pilot.system,
+            system_changed: system != left,
             jump_pending: self.mode.jump().is_some(),
         };
         let resets = resets(how, &self.setup.rules, facts);
@@ -691,8 +741,8 @@ impl Session {
             // their grudges are held first, against the system left, its
             // NPCs and the player as they stand before the entry moves
             // either.
-            let left = std::mem::take(&mut self.space.strikes);
-            self.hold_left_grudges(&left);
+            let strikes = std::mem::take(&mut self.space.strikes);
+            self.hold_left_grudges(&strikes, left);
         }
         // A way in that docks docks at a stellar of the system asked for.
         let dock = if resets.has(Reset::Dock) {
@@ -725,7 +775,8 @@ impl Session {
                 self.chart
                     .course_after_arrival(&mut self.pilot, &self.setup, hops, system);
             }
-            CourseStep::Clear => self.pilot.course.clear(),
+            CourseStep::Clear => self.pilot.clear_course(),
+            CourseStep::Restart => self.pilot.restart_course(system),
         }
         if resets.has(Reset::Touchdown) {
             self.port.touchdown = self.ship.player.position;
@@ -757,13 +808,7 @@ impl Session {
         if resets.has(Reset::RedrawOffers) {
             self.run.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(
-            resets.traffic,
-            how.entrance(),
-            (left, system),
-            catalog,
-            chance,
-        );
+        self.bring_in_traffic(resets.traffic, how, (left, system), catalog, chance);
         if resets.has(Reset::PlaceAsteroids) {
             self.place_asteroids(chance);
         }
@@ -786,8 +831,9 @@ impl Session {
             notes,
         };
         self.announce(how, &resets, heard, stellars);
-        // A jump's arrival raised its `Explored` before its days, at the
-        // original's first nebula exploration (@0x6be12); a gate's or
+        // A jump's arrival explored its nebulae in `Session::arrive`,
+        // before its days (@0x6be12) and again before this entry
+        // (@0x6c1db; see the `jump_exploration` module); a gate's or
         // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
         // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
         // module).
@@ -878,8 +924,9 @@ impl Session {
     }
 
     /// Puts the ship where `placement` says, its speed along its heading
-    /// with it (see the `inertialess` module).
-    fn place(&mut self, placement: Placement) {
+    /// with it (see the `inertialess` module): at the entry, or as a jump
+    /// ends ([`Session::arrive`]).
+    pub(super) fn place(&mut self, placement: Placement) {
         match placement.ship {
             ShipPlacement::Arrive(state) => {
                 self.ship.player = state;
@@ -893,6 +940,10 @@ impl Session {
                 self.ship.player.position = position;
                 self.ship.player.velocity = Vec2::ZERO;
                 self.ship.player_speed = 0.0;
+            }
+            ShipPlacement::Stopped(position) => {
+                self.ship.player.position = position;
+                self.ship.player.velocity = Vec2::ZERO;
             }
             ShipPlacement::Keep => {}
         }
@@ -927,6 +978,9 @@ impl Session {
         if resets.has(Reset::Combat) {
             self.space.combat.clear();
         }
+        if resets.has(Reset::Explosions) {
+            self.kill_explosions();
+        }
         if resets.has(Reset::Boxes) {
             self.space.clear_boxes();
         }
@@ -953,14 +1007,13 @@ impl Session {
         }
     }
 
-    /// Does `step` to the traffic of a system entered `how`, by a way in
-    /// whose enter-system hook is still to run, if any, going `from` one
-    /// system `to` another, reading `catalog` and drawing on `chance` to
-    /// populate: the only draw entering a system makes.
+    /// Does `step` to the traffic of a system entered `how`, going `from`
+    /// one system `to` another, reading `catalog` and drawing on `chance`
+    /// to populate: the only draw entering a system makes.
     fn bring_in_traffic<C, R>(
         &mut self,
         step: TrafficStep,
-        how: Option<Entrance>,
+        how: Entry,
         (from, to): (SystemId, SystemId),
         catalog: &C,
         chance: &mut R,
@@ -970,7 +1023,7 @@ impl Session {
     {
         match step {
             TrafficStep::None => {}
-            TrafficStep::Populate => self.populate_as(catalog, chance, how),
+            TrafficStep::Populate => self.populate_as(catalog, chance, Some(how)),
             TrafficStep::Retarget => {
                 let table =
                     self.chart
@@ -1027,8 +1080,9 @@ impl Session {
 
     /// Sounds and raises the arrival in `heard`'s system, as `resets`
     /// says, tells its event, if any ([`scene_event`]), and raises
-    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
-    /// names an entrance ([`Entry::entrance`]). The arrival message is the
+    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in whose
+    /// enter-system hook is still to run ([`Entry::hook_pending`]). The
+    /// arrival message is the
     /// system's buoy, its strings read from `catalog`, or the arrival line
     /// ([`Chart::arrival_message`]); a buoy replaces the
     /// abandoned-fighters suffix too, so it drops the fighter notes this
@@ -1058,7 +1112,7 @@ impl Session {
         if let Some(event) = event {
             self.out.emit(event);
         }
-        if let Some(how) = how.entrance() {
+        if let Some(how) = how.hook_pending() {
             self.run.raise(StoryEvent::EnteredSystem { system, how });
         }
     }
@@ -1237,8 +1291,8 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_clears_the_course_stops_the_thrust_keeps_a_held_sound_and_populates_into_any_system()
-    {
+    fn a_gate_restarts_the_course_stops_the_thrust_keeps_a_held_sound_and_populates_into_any_system()
+     {
         let expected = Resets::of(
             &with(
                 &SCENE,
@@ -1250,7 +1304,7 @@ mod tests {
                     Reset::ArrivalSound,
                 ],
             ),
-            CourseStep::Clear,
+            CourseStep::Restart,
             NavStep::Deselect,
             TrafficStep::Populate,
         );
@@ -1325,38 +1379,35 @@ mod tests {
 
     #[test]
     fn a_landed_move_changes_where_the_pilot_is_and_defers_the_stellars() {
+        // The operator emptied the offers and, as an arrival, explored the
+        // system and cleared the course (see the `operator_moves` module).
         let landed = Entry::ScriptMove { landed: true };
-        assert_eq!(
-            resets(landed, &arrival(RuleSource::Engine), facts(true, false)),
-            Resets::of(
-                &[Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers],
-                CourseStep::Keep,
-                NavStep::Keep,
-                TrafficStep::None,
-            ),
-            "by the engine"
-        );
-        assert_eq!(
-            resets(landed, &arrival(RuleSource::Bible), facts(true, false)),
-            Resets::of(
-                &[
-                    Reset::Stellar,
-                    Reset::Explore,
-                    Reset::SaveDue,
-                    Reset::EmptyOffers,
-                ],
-                CourseStep::Clear,
-                NavStep::Keep,
-                TrafficStep::None,
-            ),
-            "as an arrival"
-        );
+        for reading in READINGS {
+            assert_eq!(
+                resets(landed, &arrival(reading), facts(true, false)),
+                Resets::of(
+                    &[Reset::Stellar, Reset::SaveDue],
+                    CourseStep::Keep,
+                    NavStep::Keep,
+                    TrafficStep::None,
+                ),
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]
     fn a_move_in_flight_lets_go_of_the_scene_and_does_the_rest_as_its_reading_and_the_facts_say() {
         let in_flight = Entry::ScriptMove { landed: false };
-        let always = with(&SCENE, &[Reset::Jump, Reset::GateEntry, Reset::SaveDue]);
+        let always = with(
+            &SCENE,
+            &[
+                Reset::Jump,
+                Reset::GateEntry,
+                Reset::Explosions,
+                Reset::SaveDue,
+            ],
+        );
         for reading in READINGS {
             for changed in [false, true] {
                 for pending in [false, true] {
@@ -1367,17 +1418,19 @@ mod tests {
                     if pending {
                         set.push(Reset::Thrust);
                     }
-                    let (course, traffic) = match (reading, changed) {
+                    // As an arrival the operator explored the system and
+                    // cleared the course (see the `operator_moves` module).
+                    let traffic = match (reading, changed) {
                         (RuleSource::Bible, _) => {
-                            set.extend([Reset::Explore, Reset::FightersOut]);
-                            (CourseStep::Clear, TrafficStep::Populate)
+                            set.push(Reset::FightersOut);
+                            TrafficStep::Populate
                         }
-                        (RuleSource::Engine, true) => (CourseStep::Keep, TrafficStep::Retarget),
-                        (RuleSource::Engine, false) => (CourseStep::Keep, TrafficStep::None),
+                        (RuleSource::Engine, true) => TrafficStep::Retarget,
+                        (RuleSource::Engine, false) => TrafficStep::None,
                     };
                     assert_eq!(
                         resets(in_flight, &arrival(reading), facts(changed, pending)),
-                        Resets::of(&set, course, NavStep::Deselect, traffic),
+                        Resets::of(&set, CourseStep::Keep, NavStep::Deselect, traffic),
                         "{reading:?} changed {changed} pending {pending}"
                     );
                 }
@@ -1387,7 +1440,15 @@ mod tests {
 
     #[test]
     fn a_stay_is_a_move_within_the_system_by_the_engine_whatever_the_reading() {
-        let always = with(&SCENE, &[Reset::Jump, Reset::GateEntry, Reset::SaveDue]);
+        let always = with(
+            &SCENE,
+            &[
+                Reset::Jump,
+                Reset::GateEntry,
+                Reset::Explosions,
+                Reset::SaveDue,
+            ],
+        );
         for reading in READINGS {
             for pending in [false, true] {
                 let mut set = always.clone();
@@ -1422,11 +1483,11 @@ mod tests {
         };
         let (engine, bible) = (rows(RuleSource::Engine), rows(RuleSource::Bible));
         assert_eq!(
-            engine[..4],
-            bible[..4],
-            "a jump, a gate, a relocation and a rescue"
+            engine[..5],
+            bible[..5],
+            "a jump, a gate, a relocation, a rescue and a landed move, whose \
+             operator made the arrival"
         );
-        assert_ne!(engine[4], bible[4], "a landed move");
         assert_ne!(engine[5], bible[5], "a move in flight");
         let every_other = RuleKey::ALL
             .into_iter()
@@ -1477,6 +1538,32 @@ mod tests {
     }
 
     #[test]
+    fn every_way_in_but_a_jump_and_an_in_flight_move_leaves_its_enter_system_hook_to_the_entry() {
+        for how in [
+            Entry::Gate,
+            Entry::ScriptMove { landed: true },
+            Entry::Relocate,
+            Entry::Rescue,
+        ] {
+            assert_eq!(how.hook_pending(), how.entrance(), "{how:?}");
+        }
+        for how in [Entry::ScriptMove { landed: false }, Entry::ScriptStay] {
+            assert_eq!(
+                how.hook_pending(),
+                None,
+                "{how:?}: its operator's (@0x159a8)"
+            );
+        }
+        for (hops, natural_end) in [(0, true), (3, false)] {
+            assert_eq!(
+                Entry::Jump { hops, natural_end }.hook_pending(),
+                None,
+                "a jump's ran in `Session::arrive`"
+            );
+        }
+    }
+
+    #[test]
     fn every_way_in_but_a_landed_move_tells_the_scene_changed_and_a_relocation_tells_which() {
         use SessionEvent::{StellarChanged, SystemChanged};
         for changed in [false, true] {
@@ -1515,6 +1602,7 @@ mod tests {
         };
         session.enter_system(
             Entry::ScriptMove { landed: false },
+            session.pilot.system,
             arrival,
             &catalog(),
             &catalog(),
@@ -1574,6 +1662,39 @@ mod tests {
         };
         placed(&mut session, ShipPlacement::Arrive(moving), false);
         assert_eq!(session.player_speed(), 5.0, "the velocity's length");
+    }
+
+    #[test]
+    fn a_stop_zeroes_the_velocity_and_keeps_the_speed_along_the_heading() {
+        // An in-flight `M` writes +0x18 to +0x24 and never +0x48
+        // (`_EvalSetExp` @0x157a6-0x157da).
+        let mut session = Session::start(&catalog()).expect("starts");
+        let moving = ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: Vec2::new(3.0, -4.0),
+            heading: 1.5,
+        };
+        placed(&mut session, ShipPlacement::Arrive(moving), false);
+        placed(
+            &mut session,
+            ShipPlacement::Stopped(Vec2::new(-5.0, 6.0)),
+            false,
+        );
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                position: Vec2::new(-5.0, 6.0),
+                velocity: Vec2::ZERO,
+                heading: 1.5,
+            }
+        );
+        assert_eq!(session.player_speed(), 5.0, "kept");
+        placed(
+            &mut session,
+            ShipPlacement::AtRest(Vec2::new(-5.0, 6.0)),
+            false,
+        );
+        assert_eq!(session.player_speed(), 0.0, "at rest, none");
     }
 
     #[test]

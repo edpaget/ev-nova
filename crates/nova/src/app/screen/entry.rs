@@ -353,15 +353,17 @@ impl AppScreen {
     }
 
     /// Moves the game into the flight slot and shows flight, which a
-    /// return from play comes back to the main menu from; then readies
-    /// flight's first frame (see the module docs), and replays what the
-    /// entry held.
+    /// return from play comes back to the main menu from; then enters play
+    /// ([`FlightView::enter_game`]), readies flight's first frame (see the
+    /// module docs), and replays what the entry held.
     fn hand_over(&mut self) {
         self.drop_flight();
         self.flight = self.game.take();
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
         if let Some(flight) = &mut self.flight {
+            // `_EnterGameFromMainScreen`'s refresh (@0x19f81).
+            flight.enter_game();
             flight.cancel_pointer();
             flight.release_keys();
             flight.shut_escort_menu();

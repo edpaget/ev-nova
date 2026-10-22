@@ -2,17 +2,44 @@
 //! interface file's "Trade" dialog (`DLOG`/`DITL` 1001) over its
 //! background picture.
 //!
-//! The stock dialog is 426 x 252, centred, and drawn over `PICT` 8510,
-//! whose black list area and status bar match its items: the header row
-//! (item 3), eight rows of goods under it (items 4 to 11), the area below
-//! them (item 12), where the events under way here are named, the status
-//! bar (item 15), showing the free cargo space and the credits, and Buy
-//! (13), Sell (14) and Done (1) along the bottom.
+//! The stock dialog is 426 x 252, centred, and drawn over `PICT` 8510.
+//! `_TradeDialogUpdate` (0x4ceea-0x4e092 in the `EV Nova` executable)
+//! draws it all in Geneva 9 (`_smallTextFont`, `_smallTextSize`):
 //!
-//! Each row shows a good the stellar trades ([`Market`]): its name, its
-//! price and the tons held. One row is selected, by a click on it or with
-//! Up and Down; the list scrolls with the selection when there are more
-//! than eight. Buy and Sell, clicked or with B and S (key repeats too, so
+//! - The header, item 3: framed in dark grey, with "Commodity:" at
+//!   left+7, "In Fleet:" (escorts add holds) or "In Hold:" at right-123,
+//!   and "Price:" at right-70, in light grey on the baseline top+12
+//!   (@0x4cf77-0x4d0b6; [`Market::held_in`]).
+//! - The eight list slots, items 4 to 11 (@0x4d103-0x4d5c5). Slot n holds
+//!   commodity n, slot 6 a `jünk` the stellar buys and slot 7 one it
+//!   sells ([`MarketRow::slot`](nova_sim::MarketRow::slot)). Every slot,
+//!   empty or not, is filled inset by 1 in `cölr`'s `ListHilite` when its
+//!   row is selected, else `ListBkgnd`, with dark grey edges left and
+//!   right, along the top of item 4 and the bottom of item 11. A slot's
+//!   row is drawn in `ListText` on the baseline top+10: its name at
+//!   left+7 (a `jünk`'s at left+6), the tons held ending at right-110
+//!   when above 0, its marker at right-70 ("Low", "Med", "High",
+//!   "Higher", "Lower"; [`MarketRow::marker`](nova_sim::MarketRow::marker))
+//!   and its price, signed, ending at right-10.
+//! - The cargo summary, item 12 (@0x4d5cb-0x4dc93): its text
+//!   ([`CargoSummary`](nova_sim::CargoSummary)) wrapped white on black in
+//!   the item inset by 5 and 3, as `TETextBox` and `InvertRect` draw it,
+//!   and the item framed in dark grey.
+//! - The event line, item 15 (@0x4df54-0x4dfb5): only when there is one
+//!   ([`Market::events`]: by the engine the first local event's sentence,
+//!   "… has lowered the price of food.", or every local event's name
+//!   under `exchange_events` = bible; see `nova_sim::exchange_events`),
+//!   wrapped white on black in the whole item. Without one, the picture
+//!   shows.
+//! - Buy (13), Sell (14) and Done (1) along the bottom.
+//!
+//! There is no status line: the original shows the free space in the
+//! summary and the credits on the status bar beside the port.
+//!
+//! One row is selected, by a click on its slot or with Up and Down, which
+//! step over empty slots and stop at the ends. The original has one row a
+//! slot; the engine can list more than one `jünk` a side, whose extra rows
+//! follow their slot, and the list then scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
 //! holding a key keeps trading), ask for a plain trade of the selected
 //! good ([`Lot::Click`]), which moves up to 10 tons by the engine; Shift,
 //! Command and Control change nothing, as the original tests Option alone
@@ -61,7 +88,7 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::movie::Movies;
@@ -73,6 +100,7 @@ use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::quantity::QuantityDialog;
+use crate::ui::text_box::TextBox;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -84,18 +112,19 @@ pub const BACKGROUND: ImageKey = ImageKey::picture(8510);
 pub const DONE_ITEM: usize = 1;
 /// The header row's item.
 pub const HEADER_ITEM: usize = 3;
-/// The first row's item; the rows are this and the seven after it.
+/// The first slot's item; the slots are this and the seven after it.
 pub const FIRST_ROW_ITEM: usize = 4;
-/// How many rows show at once.
+/// How many slots show at once.
 pub const ROWS: usize = 8;
-/// The item the events under way are named in.
-pub const EVENTS_ITEM: usize = 12;
+/// The cargo summary's item.
+pub const SUMMARY_ITEM: usize = 12;
 /// Buy's item.
 pub const BUY_ITEM: usize = 13;
 /// Sell's item.
 pub const SELL_ITEM: usize = 14;
-/// The status bar's item.
-pub const STATUS_ITEM: usize = 15;
+/// The item the event line is drawn in, wrapped and inverted
+/// (@0x4df54-0x4dfb5), the entries of [`Market::events`] a line each.
+pub const EVENT_ITEM: usize = 15;
 
 /// `STR#` 150 #2.
 pub const BUY_LABEL: &str = "Buy";
@@ -112,33 +141,120 @@ pub const SELL_KEY: Key = Key::Char('s');
 /// at once.
 pub const MAX_LOT_KEY: Key = Key::Alt;
 
-/// The list's font, size and colour.
+/// The dialog's font: `_smallTextFont`, Geneva (@0x4cf4b-0x4cf72).
 pub const TEXT_FONT: Font = Font::Geneva;
-/// The list's size.
-pub const TEXT_SIZE: f32 = 10.0;
-/// The list's colour.
-pub const TEXT_COLOR: Color = Color::WHITE;
-/// The header's colour.
-pub const HEADER_COLOR: Color = Color::DIM;
-/// The selected row's background.
-pub const SELECTED_COLOR: Color = Color::rgba(40, 60, 140, 255);
-/// How far into its item each line of text starts.
-pub const INSET: f32 = 4.0;
-/// Where the price column starts, from a row's left.
-pub const PRICE_X: f32 = 220.0;
-/// Where the held column starts, from a row's left.
-pub const HELD_X: f32 = 290.0;
-/// The header's columns.
-pub const HEADER: [&str; 3] = ["Commodity", "Price", "Held"];
+/// The dialog's size: `_smallTextSize`, 9.
+pub const TEXT_SIZE: f32 = 9.0;
+/// `_rgbDarkGrey` (0x3b50d8, 0x4000 grey): the frames and the slots'
+/// edges.
+pub const DARK_GREY: Color = Color::from_rgb24(0x0040_4040);
+/// `_rgbLightGrey` (0x3b5170, 0xc000 grey): the header's labels.
+pub const LIGHT_GREY: Color = Color::from_rgb24(0x00C0_C0C0);
+/// The summary's and the event line's text, inverted from black.
+pub const BOX_TEXT: Color = Color::WHITE;
+/// The summary's and the event line's background, inverted from white.
+pub const BOX_BACKGROUND: Color = Color::BLACK;
+/// Where a commodity's name starts, from its slot's left (@0x4d2c9).
+pub const NAME_X: f32 = 7.0;
+/// Where a `jünk`'s name starts, from its slot's left (@0x4d31d).
+pub const JUNK_NAME_X: f32 = 6.0;
+/// How far left of its slot's right the tons held end (@0x4d382).
+pub const HELD_END: f32 = 110.0;
+/// How far left of its slot's right the marker starts (@0x4d3ce), and
+/// the header's "Price:" (@0x4d07f).
+pub const MARKER_FROM_RIGHT: f32 = 70.0;
+/// How far left of its slot's right the price ends (@0x4d535).
+pub const PRICE_END: f32 = 10.0;
+/// A slot's baseline, below its top (@0x4d2b2).
+pub const ROW_BASELINE: f32 = 10.0;
+/// The header's baseline, below its top (@0x4d004).
+pub const HEADER_BASELINE: f32 = 12.0;
+/// Where the header's "Commodity:" starts, from its left (@0x4d004).
+pub const HEADER_NAME_X: f32 = 7.0;
+/// How far left of the header's right "In Fleet:" or "In Hold:" starts
+/// (@0x4d034).
+pub const HELD_HEADER_FROM_RIGHT: f32 = 123.0;
+/// How far the summary's text box is inset in item 12, across and down
+/// (@0x4d636-0x4d65b).
+pub const SUMMARY_INSET: (f32, f32) = (5.0, 3.0);
 
-/// The status bar's text for `market`: the free cargo space and the
-/// credits.
-#[must_use]
-pub fn status_line(market: &Market) -> String {
-    format!(
-        "Free cargo space: {} tons    Credits: {}",
-        market.free, market.cash
-    )
+/// The list's colours, `cölr`'s `ListText`, `ListBkgnd` and `ListHilite`
+/// (0x3b5638, loaded by `_LoadObjectData` @0x7e0c5-0x7e130).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListColors {
+    /// A row's text.
+    pub text: Color,
+    /// A slot's fill.
+    pub background: Color,
+    /// The selected slot's fill.
+    pub hilite: Color,
+}
+
+impl ListColors {
+    /// Stock `cölr` 128's: white text on black, the selection dark red.
+    pub const STOCK: Self = Self {
+        text: Color::WHITE,
+        background: Color::BLACK,
+        hilite: Color::from_rgb24(0x0080_0000),
+    };
+}
+
+/// The list's look.
+pub trait ListLooks {
+    /// The list's colours, from `cölr` 128, or [`ListColors::STOCK`] when
+    /// it is missing or does not decode.
+    fn list_colors(&self) -> ListColors;
+}
+
+/// The list positions of `market`'s rows, slot by slot from 0 to 7: each
+/// row in that slot, in the rows' order, or `None` for an empty slot.
+/// The original has one row a slot; extra `jünk` rows of a side follow
+/// their slot.
+fn positions(market: &Market) -> Vec<Option<usize>> {
+    let slots = u8::try_from(ROWS).unwrap_or(u8::MAX);
+    let mut positions = Vec::new();
+    for slot in 0..slots {
+        let before = positions.len();
+        positions.extend(
+            (0..market.rows.len())
+                .filter(|&index| market.rows[index].slot == slot)
+                .map(Some),
+        );
+        if positions.len() == before {
+            positions.push(None);
+        }
+    }
+    positions
+}
+
+/// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
+/// covers it: both ends included.
+fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
+    let area = Bounds {
+        min: from,
+        max: Point::new(to.x + 1.0, to.y + 1.0),
+    };
+    fill_rect(list, area, color);
+}
+
+/// `FrameRect(rect)` in `color`: a one-pixel border just inside it.
+fn frame(list: &mut DrawList, rect: Bounds, color: Color) {
+    let (left, top) = (rect.min.x, rect.min.y);
+    let (right, bottom) = (rect.max.x - 1.0, rect.max.y - 1.0);
+    rule(list, Point::new(left, top), Point::new(right, top), color);
+    rule(
+        list,
+        Point::new(left, bottom),
+        Point::new(right, bottom),
+        color,
+    );
+    rule(list, Point::new(left, top), Point::new(left, bottom), color);
+    rule(
+        list,
+        Point::new(right, top),
+        Point::new(right, bottom),
+        color,
+    );
 }
 
 /// The exchange, laid out.
@@ -164,9 +280,11 @@ pub struct TradeScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     market: Market,
+    /// The list's colours.
+    colors: ListColors,
     /// The selected row, by index into the market's rows.
     selected: usize,
-    /// The row shown first.
+    /// The list position shown first (see [`positions`]).
     top: usize,
     /// The quantity dialog, while it is open, the row and direction it
     /// counts, and whether Alt is held.
@@ -191,7 +309,8 @@ impl TradeScreen {
     /// template and the metrics its text is measured by, or why there are
     /// none. The quantity dialog is laid out by `quantity`, its template
     /// (or, without one, its fallback). Its buttons are labelled in
-    /// `style`. The first row is selected.
+    /// `style`. The first row in the list is selected. Its list is in
+    /// the stock colours until given others ([`TradeScreen::with_colors`]).
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -217,6 +336,7 @@ impl TradeScreen {
         let mut screen = Self {
             laid,
             market,
+            colors: ListColors::STOCK,
             selected: 0,
             top: 0,
             quantity: QuantityAsk::new(quantity.ok(), style),
@@ -228,8 +348,15 @@ impl TradeScreen {
             style,
             sounds: Vec::new(),
         };
-        screen.regrey();
+        let first = positions(&screen.market).into_iter().flatten().next();
+        screen.select(first.unwrap_or(0));
         screen
+    }
+
+    /// Its list drawn in `colors`.
+    #[must_use]
+    pub fn with_colors(self, colors: ListColors) -> Self {
+        Self { colors, ..self }
     }
 
     /// The trade center with mission offers, each shown in the offer dialog of
@@ -349,13 +476,20 @@ impl TradeScreen {
         &self.market
     }
 
+    /// The list's colours.
+    #[must_use]
+    pub fn colors(&self) -> ListColors {
+        self.colors
+    }
+
     /// The selected row's index, if there are any rows.
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         (self.selected < self.market.rows.len()).then_some(self.selected)
     }
 
-    /// The index of the first row shown.
+    /// The list position shown first: slot 0 and up, extra `jünk` rows
+    /// counted (see the module docs).
     #[must_use]
     pub fn top(&self) -> usize {
         self.top
@@ -392,16 +526,38 @@ impl TradeScreen {
     }
 
     /// Selects row `index`, or the last row when there is no such row, and
-    /// scrolls the list to show it, never past its end.
+    /// scrolls the list to show its slot, never past the list's end.
     fn select(&mut self, index: usize) {
         let count = self.market.rows.len();
         self.selected = index.min(count.saturating_sub(1));
+        let positions = positions(&self.market);
+        let at = positions
+            .iter()
+            .position(|&row| row == Some(self.selected))
+            .unwrap_or(0);
         self.top = self
             .top
-            .min(count.saturating_sub(ROWS))
-            .min(self.selected)
-            .max((self.selected + 1).saturating_sub(ROWS));
+            .min(positions.len().saturating_sub(ROWS))
+            .min(at)
+            .max((at + 1).saturating_sub(ROWS));
         self.regrey();
+    }
+
+    /// Selects the row of the next filled list position after the
+    /// selected one (`forward`) or before it, if there is one.
+    fn step(&mut self, forward: bool) {
+        let positions = positions(&self.market);
+        let Some(at) = positions.iter().position(|&row| row == Some(self.selected)) else {
+            return;
+        };
+        let next = if forward {
+            positions[at + 1..].iter().flatten().next()
+        } else {
+            positions[..at].iter().rev().flatten().next()
+        };
+        if let Some(&row) = next {
+            self.select(row);
+        }
     }
 
     /// Greys Buy and Sell when a ton could not be traded that way on the
@@ -464,40 +620,140 @@ impl TradeScreen {
             DONE_ITEM => self.closed = true,
             BUY_ITEM => self.ask(Direction::Buy, false),
             SELL_ITEM => self.ask(Direction::Sell, false),
-            row if (FIRST_ROW_ITEM..FIRST_ROW_ITEM + ROWS).contains(&row) => {
-                let index = self.top + (row - FIRST_ROW_ITEM);
-                if index < self.market.rows.len() {
-                    self.select(index);
+            slot if (FIRST_ROW_ITEM..FIRST_ROW_ITEM + ROWS).contains(&slot) => {
+                let at = self.top + (slot - FIRST_ROW_ITEM);
+                if let Some(Some(row)) = positions(&self.market).get(at) {
+                    self.select(*row);
                 }
             }
             _ => {}
         }
     }
 
-    /// `text` at the left of item `item`'s line `line` (from 0), plus
-    /// `dx`, in the list's font.
-    fn line(laid: &Laid, list: &mut DrawList, item: usize, line: usize, dx: f32, text: &str) {
-        Self::text(laid, list, item, line, dx, text, TEXT_COLOR);
-    }
-
-    fn text(
-        laid: &Laid,
-        list: &mut DrawList,
-        item: usize,
-        line: usize,
-        dx: f32,
-        text: &str,
-        color: Color,
-    ) {
-        let Some(bounds) = laid.dialog.item_bounds(item) else {
+    /// The header, item 3 (see the module docs).
+    fn draw_header(&self, laid: &Laid, list: &mut DrawList) {
+        let Some(header) = laid.dialog.item_bounds(HEADER_ITEM) else {
             return;
         };
-        let height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        #[allow(clippy::cast_precision_loss)] // A handful of lines.
-        let y = bounds.min.y + height * line as f32;
-        let origin = Point::new(bounds.min.x + dx, y);
-        list.text_in(TEXT_FONT, text, origin, TEXT_SIZE, None, color);
+        frame(list, header, DARK_GREY);
+        let words = &self.market.words;
+        let baseline = header.min.y + HEADER_BASELINE;
+        let labels = [
+            (&*words.commodity, header.min.x + HEADER_NAME_X),
+            (
+                words.held_in(self.market.held_in()),
+                header.max.x - HELD_HEADER_FROM_RIGHT,
+            ),
+            (&*words.price, header.max.x - MARKER_FROM_RIGHT),
+        ];
+        for (label, x) in labels {
+            text_at(list, label, x, baseline, LIGHT_GREY);
+        }
     }
+
+    /// The eight slots shown, items 4 to 11 (see the module docs).
+    fn draw_slots(&self, laid: &Laid, list: &mut DrawList) {
+        let positions = positions(&self.market);
+        let selected = self.selected();
+        for shown in 0..ROWS {
+            let Some(slot) = laid.dialog.item_bounds(FIRST_ROW_ITEM + shown) else {
+                continue;
+            };
+            let row = positions.get(self.top + shown).copied().flatten();
+            let fill = if row.is_some() && row == selected {
+                self.colors.hilite
+            } else {
+                self.colors.background
+            };
+            fill_rect(list, slot.inset(1.0, 1.0), fill);
+            let (left, top) = (slot.min.x, slot.min.y);
+            let (right, bottom) = (slot.max.x - 1.0, slot.max.y - 1.0);
+            rule(
+                list,
+                Point::new(left, top),
+                Point::new(left, bottom),
+                DARK_GREY,
+            );
+            rule(
+                list,
+                Point::new(right, top),
+                Point::new(right, bottom),
+                DARK_GREY,
+            );
+            if shown == 0 {
+                rule(
+                    list,
+                    Point::new(left, top),
+                    Point::new(right, top),
+                    DARK_GREY,
+                );
+            }
+            if shown == ROWS - 1 {
+                rule(
+                    list,
+                    Point::new(left, bottom),
+                    Point::new(right, bottom),
+                    DARK_GREY,
+                );
+            }
+            if let Some(row) = row {
+                self.draw_row(laid, list, slot, &self.market.rows[row]);
+            }
+        }
+    }
+
+    /// `row`'s text in its `slot`: name, tons held, marker and price.
+    fn draw_row(&self, laid: &Laid, list: &mut DrawList, slot: Bounds, row: &nova_sim::MarketRow) {
+        let color = self.colors.text;
+        let baseline = slot.min.y + ROW_BASELINE;
+        let name_x = match row.good {
+            nova_sim::Good::Commodity(_) => NAME_X,
+            nova_sim::Good::Junk(_) => JUNK_NAME_X,
+        };
+        text_at(list, &row.name, slot.min.x + name_x, baseline, color);
+        let ending = |list: &mut DrawList, text: &str, end: f32| {
+            let width = laid.metrics.0.width(TEXT_FONT, TEXT_SIZE, text);
+            text_at(list, text, slot.max.x - end - width, baseline, color);
+        };
+        if row.held > 0 {
+            ending(list, &row.held.to_string(), HELD_END);
+        }
+        if let Some(marker) = row.marker {
+            let word = self.market.words.marker(marker);
+            text_at(list, word, slot.max.x - MARKER_FROM_RIGHT, baseline, color);
+        }
+        ending(list, &row.price.to_string(), PRICE_END);
+    }
+
+    /// The cargo summary, item 12, and the event line, item 15, when
+    /// there is one (see the module docs).
+    fn draw_boxes(&self, laid: &Laid, list: &mut DrawList) {
+        if let Some(summary) = laid.dialog.item_bounds(SUMMARY_ITEM) {
+            let (dx, dy) = SUMMARY_INSET;
+            let text = self.market.summary.text(&self.market.words);
+            inverted_box(laid, list, &text, summary.inset(dx, dy));
+            frame(list, summary, DARK_GREY);
+        }
+        if !self.market.events.is_empty()
+            && let Some(event) = laid.dialog.item_bounds(EVENT_ITEM)
+        {
+            inverted_box(laid, list, &self.market.events.join("\r"), event);
+        }
+    }
+}
+
+/// `text` in the dialog's font, starting at `x` on `baseline`, its top a
+/// size above it.
+fn text_at(list: &mut DrawList, text: &str, x: f32, baseline: f32, color: Color) {
+    let origin = Point::new(x, baseline - TEXT_SIZE);
+    list.text_in(TEXT_FONT, text, origin, TEXT_SIZE, None, color);
+}
+
+/// `text` wrapped into `rect` by `TETextBox`, black on white, then
+/// inverted by `InvertRect`: white on black.
+fn inverted_box(laid: &Laid, list: &mut DrawList, text: &str, rect: Bounds) {
+    fill_rect(list, rect, BOX_BACKGROUND);
+    TextBox::new(text, TEXT_FONT, TEXT_SIZE, BOX_TEXT, rect, &laid.metrics.0).draw(list);
 }
 
 impl Screen for TradeScreen {
@@ -547,12 +803,12 @@ impl Screen for TradeScreen {
                 key: Key::Up,
                 pressed: true,
                 ..
-            } => self.select(self.selected.saturating_sub(1)),
+            } => self.step(false),
             Input::Key {
                 key: Key::Down,
                 pressed: true,
                 ..
-            } => self.select(self.selected + 1),
+            } => self.step(true),
             Input::Key {
                 key: BUY_KEY,
                 pressed: true,
@@ -600,37 +856,9 @@ impl Screen for TradeScreen {
         };
         let dialog = &laid.dialog;
         list.picture(BACKGROUND, dialog.bounds().min);
-        for (column, dx) in HEADER.iter().zip([INSET, PRICE_X, HELD_X]) {
-            Self::text(laid, list, HEADER_ITEM, 0, dx, column, HEADER_COLOR);
-        }
-        let shown = self
-            .market
-            .rows
-            .iter()
-            .enumerate()
-            .skip(self.top)
-            .take(ROWS);
-        for (item, (index, row)) in (FIRST_ROW_ITEM..).zip(shown) {
-            if Some(index) == self.selected()
-                && let Some(bounds) = dialog.item_bounds(item)
-            {
-                fill_rect(list, bounds, SELECTED_COLOR);
-            }
-            Self::line(laid, list, item, 0, INSET, &row.name);
-            Self::line(laid, list, item, 0, PRICE_X, &row.price.to_string());
-            Self::line(laid, list, item, 0, HELD_X, &row.held.to_string());
-        }
-        for (line, event) in self.market.events.iter().enumerate() {
-            Self::line(laid, list, EVENTS_ITEM, line, INSET, event);
-        }
-        Self::line(
-            laid,
-            list,
-            STATUS_ITEM,
-            0,
-            INSET,
-            &status_line(&self.market),
-        );
+        self.draw_header(laid, list);
+        self.draw_slots(laid, list);
+        self.draw_boxes(laid, list);
         dialog.draw(list);
         self.quantity.draw(list);
         if let Some(offering) = &self.offering {
@@ -669,11 +897,13 @@ impl Screen for TradeScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{Good, JunkId, MarketRow, RuleKey, RuleSource, Rulebook};
+    use nova_sim::trade_dialog::cargo_summary;
+    use nova_sim::{
+        Good, JunkId, MarketRow, PriceMarker, RuleKey, RuleSource, Rulebook, TradeWords,
+    };
 
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::geometry::Bounds;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
@@ -727,7 +957,13 @@ mod tests {
     const METAL: Good = Good::Commodity(4);
     const OPALS: Good = Good::Junk(JunkId(146));
 
+    /// A row of `good`, traded both ways, unmarked: a commodity in its
+    /// own slot, a `jünk` in slot 6 (bought here).
     fn row(good: Good, name: &str, price: i64, held: u32) -> MarketRow {
+        let slot = match good {
+            Good::Commodity(n) => n,
+            Good::Junk(_) => 6,
+        };
         MarketRow {
             good,
             name: name.to_owned(),
@@ -735,26 +971,37 @@ mod tests {
             held,
             sold_here: true,
             bought_here: true,
+            slot,
+            marker: None,
         }
     }
 
-    /// Food at 93 (2 held), metal at 200, and opals bought here only at
-    /// 1500 (1 held), for a player with 1000 credits and 7 of 10 tons
-    /// free, during a food surplus.
+    /// Food at 93 (2 held, lowered), metal at 200 (medium), and opals
+    /// bought here only at 1500 (1 held, high), for a player with 1000
+    /// credits and 7 of 10 tons free, during a food surplus.
     fn market() -> Market {
         Market {
             rows: vec![
-                row(FOOD, "Food", 93, 2),
-                row(METAL, "Metal", 200, 0),
+                MarketRow {
+                    marker: Some(PriceMarker::Lower),
+                    ..row(FOOD, "Food", 93, 2)
+                },
+                MarketRow {
+                    marker: Some(PriceMarker::Medium),
+                    ..row(METAL, "Metal", 200, 0)
+                },
                 MarketRow {
                     sold_here: false,
+                    marker: Some(PriceMarker::High),
                     ..row(OPALS, "Opals", 1500, 1)
                 },
             ],
             events: vec!["An enormous food surplus".to_owned()],
             cash: 1000,
             capacity: 10,
+            ship_capacity: 10,
             free: 7,
+            summary: cargo_summary(&[], [], 10, 10, 3),
             ..Market::default()
         }
     }
@@ -861,10 +1108,10 @@ mod tests {
                 HEADER_ITEM,
                 FIRST_ROW_ITEM,
                 ROWS,
-                EVENTS_ITEM,
+                SUMMARY_ITEM,
                 BUY_ITEM,
                 SELL_ITEM,
-                STATUS_ITEM
+                EVENT_ITEM
             ],
             [1, 3, 4, 8, 12, 13, 14, 15]
         );
@@ -873,13 +1120,31 @@ mod tests {
             (BUY_KEY, SELL_KEY, MAX_LOT_KEY),
             (Key::Char('b'), Key::Char('s'), Key::Alt)
         );
-    }
-
-    #[test]
-    fn the_status_line_is_the_free_space_and_the_credits() {
+        assert_eq!((TEXT_FONT, TEXT_SIZE), (Font::Geneva, 9.0));
+        assert_eq!(DARK_GREY, Color::rgba(0x40, 0x40, 0x40, 255));
+        assert_eq!(LIGHT_GREY, Color::rgba(0xC0, 0xC0, 0xC0, 255));
         assert_eq!(
-            status_line(&market()),
-            "Free cargo space: 7 tons    Credits: 1000"
+            [
+                NAME_X,
+                JUNK_NAME_X,
+                HELD_END,
+                MARKER_FROM_RIGHT,
+                PRICE_END,
+                ROW_BASELINE,
+                HEADER_BASELINE,
+                HEADER_NAME_X,
+                HELD_HEADER_FROM_RIGHT
+            ],
+            [7.0, 6.0, 110.0, 70.0, 10.0, 10.0, 12.0, 7.0, 123.0]
+        );
+        assert_eq!(SUMMARY_INSET, (5.0, 3.0));
+        assert_eq!(
+            ListColors::STOCK,
+            ListColors {
+                text: Color::WHITE,
+                background: Color::BLACK,
+                hilite: Color::rgba(0x80, 0, 0, 255),
+            }
         );
     }
 
@@ -892,11 +1157,106 @@ mod tests {
         assert_eq!(screen.top(), 0);
         assert!(!screen.closed());
         assert_eq!(screen.market(), &market());
+        assert_eq!(screen.colors(), ListColors::STOCK);
         assert_eq!(item(&screen, 4), rect(337.0, 283.0, 352.0, 13.0));
     }
 
+    /// Each text drawn, with where it starts, its size and colour.
+    fn styled(commands: &[DrawCommand]) -> Vec<(String, Point, Font, f32, Color)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    font,
+                    size,
+                    color,
+                    ..
+                } => Some((text.clone(), *origin, *font, *size, *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where and in what colour `wanted` is drawn, if it is, in Geneva 9.
+    fn drawn_at(commands: &[DrawCommand], wanted: &str) -> Option<(Point, Color)> {
+        styled(commands)
+            .into_iter()
+            .find(|(text, ..)| text == wanted)
+            .map(|(_, at, font, size, color)| {
+                assert_eq!((font, size), (Font::Geneva, 9.0), "{wanted}");
+                (at, color)
+            })
+    }
+
+    /// Text starting at `x` on `baseline`: its top 9 above.
+    fn on(x: f32, baseline: f32) -> Point {
+        Point::new(x, baseline - 9.0)
+    }
+
+    /// `rect` with `dx` off each side and `dy` off its top and bottom,
+    /// worked out here rather than by the screen's own `inset`.
+    fn shrunk(rect: Bounds, dx: f32, dy: f32) -> Bounds {
+        Bounds::at(
+            Point::new(rect.min.x + dx, rect.min.y + dy),
+            rect.width() - 2.0 * dx,
+            rect.height() - 2.0 * dy,
+        )
+    }
+
+    /// How many times `part` is drawn in `commands`.
+    fn count(commands: &[DrawCommand], part: &[DrawCommand]) -> usize {
+        commands
+            .windows(part.len())
+            .filter(|window| *window == part)
+            .count()
+    }
+
+    /// `rect` filled in `color`.
+    fn filled(rect: Bounds, color: Color) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        fill_rect(&mut list, rect, color);
+        list.iter().cloned().collect()
+    }
+
+    /// A one-pixel dark grey rule from (x0, y0) to (x1, y1), ends included.
+    fn ruled(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<DrawCommand> {
+        filled(
+            Bounds {
+                min: Point::new(x0, y0),
+                max: Point::new(x1 + 1.0, y1 + 1.0),
+            },
+            DARK_GREY,
+        )
+    }
+
+    /// `rect` framed in dark grey.
+    fn framed(rect: Bounds) -> Vec<DrawCommand> {
+        let (l, t, r, b) = (rect.min.x, rect.min.y, rect.max.x - 1.0, rect.max.y - 1.0);
+        [
+            ruled(l, t, r, t),
+            ruled(l, b, r, b),
+            ruled(l, t, l, b),
+            ruled(r, t, r, b),
+        ]
+        .concat()
+    }
+
+    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
+        commands.windows(part.len()).any(|window| window == part)
+    }
+
+    /// Where `part` starts in `commands`.
+    fn index_of(commands: &[DrawCommand], part: &[DrawCommand]) -> usize {
+        commands
+            .windows(part.len())
+            .position(|window| window == part)
+            .expect("drawn")
+    }
+
     #[test]
-    fn it_draws_the_background_the_header_the_rows_the_events_the_status_then_the_dialog() {
+    fn it_draws_the_background_the_header_the_slots_the_boxes_then_the_dialog() {
         let screen = screen();
         let commands = drawn(&screen);
         assert_eq!(
@@ -906,129 +1266,376 @@ mod tests {
                 top_left: ORIGIN,
             }
         );
-        let at = |item_number: usize, dx: f32, line: f32| {
-            let bounds = item(&screen, item_number);
-            Point::new(bounds.min.x + dx, bounds.min.y + line * 12.0)
-        };
-        let mut expected = vec![
-            ("Commodity".to_owned(), at(3, INSET, 0.0)),
-            ("Price".to_owned(), at(3, PRICE_X, 0.0)),
-            ("Held".to_owned(), at(3, HELD_X, 0.0)),
-            ("Food".to_owned(), at(4, INSET, 0.0)),
-            ("93".to_owned(), at(4, PRICE_X, 0.0)),
-            ("2".to_owned(), at(4, HELD_X, 0.0)),
-            ("Metal".to_owned(), at(5, INSET, 0.0)),
-            ("200".to_owned(), at(5, PRICE_X, 0.0)),
-            ("0".to_owned(), at(5, HELD_X, 0.0)),
-            ("Opals".to_owned(), at(6, INSET, 0.0)),
-            ("1500".to_owned(), at(6, PRICE_X, 0.0)),
-            ("1".to_owned(), at(6, HELD_X, 0.0)),
-            ("An enormous food surplus".to_owned(), at(12, INSET, 0.0)),
-            (
-                "Free cargo space: 7 tons    Credits: 1000".to_owned(),
-                at(15, INSET, 0.0),
+        let header = index_of(&commands, &framed(item(&screen, 3)));
+        let first_slot = index_of(
+            &commands,
+            &filled(
+                shrunk(item(&screen, 4), 1.0, 1.0),
+                Color::rgba(0x80, 0, 0, 255),
             ),
-        ];
+        );
+        let summary = index_of(&commands, &framed(item(&screen, 12)));
+        let event = index_of(&commands, &filled(item(&screen, 15), Color::BLACK));
+        assert!(header < first_slot && first_slot < summary && summary < event);
         let mut dialog = DrawList::new();
         screen.dialog().expect("laid out").draw(&mut dialog);
         let buttons: Vec<DrawCommand> = dialog.iter().cloned().collect();
-        expected.extend(texts(&buttons));
-        assert_eq!(texts(&commands), expected);
         assert_eq!(commands[commands.len() - buttons.len()..], buttons[..]);
         let labels: Vec<_> = texts(&buttons).into_iter().map(|(t, _)| t).collect();
         assert_eq!(labels, ["Done", "Buy", "Sell"]);
     }
 
     #[test]
-    fn each_event_has_its_own_line() {
-        let screen = screen_of(Market {
-            events: vec!["A glut".to_owned(), "A drought".to_owned()],
+    fn the_header_is_framed_dark_grey_with_light_grey_labels_in_geneva_9() {
+        let screen = screen();
+        let header = item(&screen, 3);
+        let commands = drawn(&screen);
+        assert!(contains(&commands, &framed(header)));
+        let baseline = header.min.y + 12.0;
+        assert_eq!(
+            drawn_at(&commands, "Commodity:"),
+            Some((on(header.min.x + 7.0, baseline), LIGHT_GREY))
+        );
+        assert_eq!(
+            drawn_at(&commands, "In Hold:"),
+            Some((on(header.max.x - 123.0, baseline), LIGHT_GREY))
+        );
+        assert_eq!(
+            drawn_at(&commands, "Price:"),
+            Some((on(header.max.x - 70.0, baseline), LIGHT_GREY))
+        );
+        assert_eq!(drawn_at(&commands, "In Fleet:"), None);
+        let fleet = screen_of(Market {
+            capacity: 15,
             ..market()
         });
-        let events = item(&screen, EVENTS_ITEM);
-        let lines: Vec<_> = texts(&drawn(&screen))
-            .into_iter()
-            .filter(|(text, _)| text.starts_with("A "))
-            .collect();
+        let commands = drawn(&fleet);
         assert_eq!(
-            lines,
-            [
-                (
-                    "A glut".to_owned(),
-                    Point::new(events.min.x + INSET, events.min.y)
-                ),
-                (
-                    "A drought".to_owned(),
-                    Point::new(events.min.x + INSET, events.min.y + 12.0)
-                ),
-            ]
+            drawn_at(&commands, "In Fleet:"),
+            Some((on(header.max.x - 123.0, baseline), LIGHT_GREY))
         );
+        assert_eq!(drawn_at(&commands, "In Hold:"), None);
     }
 
     #[test]
-    fn the_list_is_in_geneva_white_under_a_dim_header() {
-        let commands = drawn(&screen());
-        let style = |wanted: &str| {
-            commands.iter().find_map(|command| match command {
-                DrawCommand::Text {
-                    text,
-                    font,
-                    size,
-                    color,
-                    wrap_width,
-                    ..
-                } if text == wanted => Some((*font, *size, *color, *wrap_width)),
-                _ => None,
-            })
+    fn the_header_and_markers_are_told_in_the_markets_words() {
+        let mut words = TradeWords::STOCK;
+        words.commodity = "Ware:".into();
+        words.lower = "Down".into();
+        words.free_cargo_space = "Room".into();
+        let commands = drawn(&screen_of(Market { words, ..market() }));
+        assert!(drawn_at(&commands, "Ware:").is_some());
+        assert!(drawn_at(&commands, "Down").is_some());
+        assert_eq!(drawn_at(&commands, "Commodity:"), None);
+        assert!(drawn_at(&commands, "Room: 7 tons").is_some(), "item 12");
+        assert_eq!(drawn_at(&commands, "Free cargo space: 7 tons"), None);
+    }
+
+    #[test]
+    fn rows_are_drawn_in_their_slots_with_empty_slots_framed() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        let at = |number: usize, dx: f32| {
+            let slot = item(&screen, number);
+            on(slot.min.x + dx, slot.min.y + 10.0)
         };
         assert_eq!(
-            style("Commodity"),
-            Some((Font::Geneva, 10.0, Color::DIM, None))
+            drawn_at(&commands, "Food"),
+            Some((at(4, 7.0), Color::WHITE))
         );
-        for text in [
-            "Food",
-            "93",
-            "An enormous food surplus",
-            "Free cargo space: 7 tons    Credits: 1000",
-        ] {
-            assert_eq!(
-                style(text),
-                Some((Font::Geneva, 10.0, Color::WHITE, None)),
-                "{text}"
+        assert_eq!(
+            drawn_at(&commands, "Metal"),
+            Some((at(8, 7.0), Color::WHITE))
+        );
+        assert_eq!(
+            drawn_at(&commands, "Opals"),
+            Some((at(10, 6.0), Color::WHITE))
+        );
+        for number in [5, 6, 7, 9, 11] {
+            let slot = item(&screen, number);
+            assert!(
+                contains(&commands, &filled(shrunk(slot, 1.0, 1.0), Color::BLACK)),
+                "{number} filled"
             );
+            assert!(
+                contains(
+                    &commands,
+                    &ruled(slot.min.x, slot.min.y, slot.min.x, slot.max.y - 1.0)
+                ),
+                "{number} edged"
+            );
+            let inside = styled(&commands)
+                .into_iter()
+                .filter(|(_, origin, ..)| slot.contains(Point::new(origin.x, origin.y + 9.0)))
+                .count();
+            assert_eq!(inside, 0, "{number} has no text");
         }
     }
 
-    /// The selected row's highlight: the row's item filled.
-    fn highlight(screen: &TradeScreen, number: usize) -> Vec<DrawCommand> {
-        let mut list = DrawList::new();
-        fill_rect(&mut list, item(screen, number), SELECTED_COLOR);
-        list.iter().cloned().collect()
-    }
-
-    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
-        commands.windows(part.len()).any(|window| window == part)
-    }
-
     #[test]
-    fn the_selected_row_is_highlighted_under_its_text() {
-        let mut screen = screen();
+    fn the_selected_slot_is_filled_in_the_list_hilite() {
+        let colors = ListColors {
+            text: Color::rgba(1, 2, 3, 255),
+            background: Color::rgba(4, 5, 6, 255),
+            hilite: Color::rgba(7, 8, 9, 255),
+        };
+        let mut screen = screen().with_colors(colors);
+        let slot = |screen: &TradeScreen, number| shrunk(item(screen, number), 1.0, 1.0);
         let commands = drawn(&screen);
-        let first = highlight(&screen, 4);
-        assert!(contains(&commands, &first));
-        let at = commands
-            .windows(first.len())
-            .position(|window| window == first)
-            .expect("drawn");
+        assert!(contains(
+            &commands,
+            &filled(slot(&screen, 4), colors.hilite)
+        ));
+        for number in 5..=11 {
+            assert!(contains(
+                &commands,
+                &filled(slot(&screen, number), colors.background)
+            ));
+        }
+        let fill = index_of(&commands, &filled(slot(&screen, 4), colors.hilite));
         let food = commands
             .iter()
             .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Food"))
             .expect("drawn");
-        assert!(at < food, "under the text");
+        assert!(fill < food, "under the text");
+        assert_eq!(
+            drawn_at(&commands, "Food").map(|(_, c)| c),
+            Some(colors.text)
+        );
         press(&mut screen, Key::Down);
         let commands = drawn(&screen);
-        assert!(!contains(&commands, &first));
-        assert!(contains(&commands, &highlight(&screen, 5)));
+        assert!(contains(
+            &commands,
+            &filled(slot(&screen, 4), colors.background)
+        ));
+        assert!(contains(
+            &commands,
+            &filled(slot(&screen, 8), colors.hilite)
+        ));
+    }
+
+    #[test]
+    fn edges_left_and_right_on_every_slot_top_on_item_4_bottom_on_item_11() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        for number in 4..=11 {
+            let slot = item(&screen, number);
+            let (l, t) = (slot.min.x, slot.min.y);
+            let (r, b) = (slot.max.x - 1.0, slot.max.y - 1.0);
+            assert!(contains(&commands, &ruled(l, t, l, b)), "{number} left");
+            assert!(contains(&commands, &ruled(r, t, r, b)), "{number} right");
+            assert_eq!(
+                contains(&commands, &ruled(l, t, r, t)),
+                number == 4,
+                "{number} top"
+            );
+            // Item 11's bottom is also item 12's frame's top: drawn twice.
+            let bottoms = count(&commands, &ruled(l, b, r, b));
+            assert_eq!(bottoms, if number == 11 { 2 } else { 0 }, "{number} bottom");
+        }
+    }
+
+    #[test]
+    fn a_junk_name_starts_one_pixel_left_of_a_commoditys() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        let food = drawn_at(&commands, "Food").expect("drawn").0;
+        let opals = drawn_at(&commands, "Opals").expect("drawn").0;
+        assert_eq!(food.x - item(&screen, 4).min.x, 7.0);
+        assert_eq!(opals.x - item(&screen, 10).min.x, 6.0);
+    }
+
+    #[test]
+    fn the_held_count_is_drawn_right_aligned_at_right_110_only_above_0() {
+        let screen = screen_of(Market {
+            rows: vec![row(FOOD, "Food", 93, 12), row(METAL, "Metal", 200, 0)],
+            ..market()
+        });
+        let commands = drawn(&screen);
+        let food = item(&screen, 4);
+        // "12" is 9 wide in Geneva 9 by the fixture's metrics.
+        assert_eq!(
+            drawn_at(&commands, "12").map(|(at, _)| at),
+            Some(on(food.max.x - 110.0 - 9.0, food.min.y + 10.0))
+        );
+        assert_eq!(drawn_at(&commands, "0"), None, "none held draws nothing");
+    }
+
+    #[test]
+    fn the_price_is_drawn_signed_right_aligned_at_right_10() {
+        let screen = screen_of(Market {
+            rows: vec![row(FOOD, "Food", 93, 0), row(OPALS, "Opals", -1200, 0)],
+            ..market()
+        });
+        let commands = drawn(&screen);
+        let food = item(&screen, 4);
+        let opals = item(&screen, 10);
+        assert_eq!(
+            drawn_at(&commands, "93").map(|(at, _)| at),
+            Some(on(food.max.x - 10.0 - 9.0, food.min.y + 10.0))
+        );
+        assert_eq!(
+            drawn_at(&commands, "-1200").map(|(at, _)| at),
+            Some(on(opals.max.x - 10.0 - 22.5, opals.min.y + 10.0))
+        );
+    }
+
+    #[test]
+    fn a_row_with_no_listing_draws_no_text() {
+        let screen = screen_of(Market {
+            rows: Vec::new(),
+            ..market()
+        });
+        let commands = drawn(&screen);
+        for number in 4..=11 {
+            let slot = item(&screen, number);
+            let inside = styled(&commands)
+                .into_iter()
+                .filter(|(_, origin, ..)| slot.contains(Point::new(origin.x, origin.y + 9.0)))
+                .count();
+            assert_eq!(inside, 0, "{number}");
+            assert!(contains(
+                &commands,
+                &filled(shrunk(slot, 1.0, 1.0), Color::BLACK)
+            ));
+        }
+        assert_eq!(screen.selected(), None);
+    }
+
+    #[test]
+    fn each_marker_is_drawn_at_right_70() {
+        let markers = [
+            (PriceMarker::Higher, "Higher"),
+            (PriceMarker::Lower, "Lower"),
+            (PriceMarker::Low, "Low"),
+            (PriceMarker::Medium, "Med"),
+            (PriceMarker::High, "High"),
+        ];
+        let rows = (0..5)
+            .zip(markers)
+            .map(|(n, (marker, _))| MarketRow {
+                marker: Some(marker),
+                ..row(Good::Commodity(n), &format!("Good {n}"), 10, 0)
+            })
+            .collect();
+        let screen = screen_of(Market { rows, ..market() });
+        let commands = drawn(&screen);
+        for (n, (_, word)) in markers.into_iter().enumerate() {
+            let slot = item(&screen, 4 + n);
+            assert_eq!(
+                drawn_at(&commands, word).map(|(at, _)| at),
+                Some(on(slot.max.x - 70.0, slot.min.y + 10.0)),
+                "{word}"
+            );
+        }
+        let unmarked = screen_of(Market {
+            rows: vec![row(FOOD, "Food", 93, 0)],
+            ..market()
+        });
+        let words: Vec<_> = texts(&drawn(&unmarked))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        for (_, word) in markers {
+            assert!(!words.contains(&word.to_owned()), "{word}");
+        }
+    }
+
+    #[test]
+    fn the_cargo_summary_is_white_on_black_in_item_12_inset_5_3_and_framed() {
+        let screen = screen_of(Market {
+            summary: cargo_summary(&[], [4], 10, 30, 6),
+            ..market()
+        });
+        let summary = item(&screen, 12);
+        let boxed = shrunk(summary, 5.0, 3.0);
+        let commands = drawn(&screen);
+        let fill = index_of(&commands, &filled(boxed, Color::BLACK));
+        let frame = index_of(&commands, &framed(summary));
+        assert!(fill < frame);
+        let mut expected = DrawList::new();
+        TextBox::new(
+            "Other cargo: 4 tons of miscellaneous goods\r\r\
+             Free cargo space in your ship: 10 tons\r\
+             Free cargo space in your fleet: 24 tons",
+            Font::Geneva,
+            9.0,
+            Color::WHITE,
+            boxed,
+            &MonoMetrics,
+        )
+        .draw(&mut expected);
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert_eq!(expected.len(), 3, "a blank line between");
+        assert!(contains(&commands, &expected));
+        assert!(index_of(&commands, &expected) > fill);
+    }
+
+    #[test]
+    fn the_event_line_is_wrapped_white_on_black_in_item_15() {
+        let sentence = "An enormous food surplus has lowered the price of food at the \
+                        market here, and the traders are worried.";
+        let screen = screen_of(Market {
+            events: vec![sentence.to_owned()],
+            ..market()
+        });
+        let event = item(&screen, EVENT_ITEM);
+        let commands = drawn(&screen);
+        let boxed = TextBox::new(
+            sentence,
+            Font::Geneva,
+            9.0,
+            Color::WHITE,
+            event,
+            &MonoMetrics,
+        );
+        assert_eq!(boxed.lines().len(), 2, "wrapped to item 15's width");
+        let mut expected = DrawList::new();
+        boxed.draw(&mut expected);
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        let fill = index_of(&commands, &filled(event, Color::BLACK));
+        assert!(index_of(&commands, &expected) > fill);
+        let names = screen_of(Market {
+            events: vec!["A glut".to_owned(), "A drought".to_owned()],
+            ..market()
+        });
+        assert_eq!(
+            drawn_at(&drawn(&names), "A drought").map(|(at, _)| at),
+            Some(Point::new(event.min.x, event.min.y + 9.0 * 1.2)),
+            "a line each"
+        );
+    }
+
+    #[test]
+    fn no_event_draws_nothing_in_item_15() {
+        let screen = screen_of(Market {
+            events: Vec::new(),
+            ..market()
+        });
+        let event = item(&screen, EVENT_ITEM);
+        let commands = drawn(&screen);
+        assert!(!contains(&commands, &filled(event, Color::BLACK)));
+        let inside = styled(&commands)
+            .into_iter()
+            .filter(|(_, origin, ..)| event.contains(*origin))
+            .count();
+        assert_eq!(inside, 0);
+    }
+
+    #[test]
+    fn there_is_no_status_line() {
+        let words: Vec<_> = texts(&drawn(&screen()))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert!(
+            !words.iter().any(|text| text.contains("Credits")),
+            "{words:?}"
+        );
+        assert!(
+            words.contains(&"Free cargo space: 7 tons".to_owned()),
+            "{words:?}"
+        );
     }
 
     #[test]
@@ -1049,21 +1656,66 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_row_selects_it_and_on_an_empty_row_nothing() {
+    fn up_and_down_skip_empty_slots() {
+        // Food (slot 0) and metal (slot 4), with slots 1 to 3 empty, and
+        // a sold jünk (slot 7) listed before a bought one (slot 6).
+        let mut screen = screen_of(Market {
+            rows: vec![
+                row(FOOD, "Food", 93, 0),
+                row(METAL, "Metal", 200, 0),
+                MarketRow {
+                    slot: 7,
+                    ..row(Good::Junk(JunkId(134)), "Water", 240, 0)
+                },
+                row(OPALS, "Opals", 1500, 0),
+            ],
+            ..market()
+        });
+        let mut visited = vec![screen.selected()];
+        for _ in 0..4 {
+            press(&mut screen, Key::Down);
+            visited.push(screen.selected());
+        }
+        assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(2)]);
+        press(&mut screen, Key::Up);
+        assert_eq!(screen.selected(), Some(3), "back to slot 6");
+    }
+
+    #[test]
+    fn the_first_row_in_the_list_is_selected() {
+        let screen = screen_of(Market {
+            rows: vec![
+                MarketRow {
+                    slot: 7,
+                    ..row(Good::Junk(JunkId(134)), "Water", 240, 0)
+                },
+                row(OPALS, "Opals", 1500, 0),
+            ],
+            ..market()
+        });
+        assert_eq!(screen.selected(), Some(1), "slot 6 before slot 7");
+    }
+
+    #[test]
+    fn a_click_on_a_slot_selects_its_row_and_on_an_empty_slot_nothing() {
         let mut screen = screen();
-        click_item(&mut screen, 6);
+        click_item(&mut screen, 10);
         assert_eq!(screen.selected(), Some(2));
         click_item(&mut screen, 4);
         assert_eq!(screen.selected(), Some(0));
-        click_item(&mut screen, 9);
-        assert_eq!(screen.selected(), Some(0));
-        click_item(&mut screen, 7);
-        assert_eq!(screen.selected(), Some(0), "the first empty row");
+        click_item(&mut screen, 8);
+        assert_eq!(screen.selected(), Some(1));
+        for empty in [5, 6, 7, 9, 11] {
+            click_item(&mut screen, empty);
+            assert_eq!(screen.selected(), Some(1), "{empty} is empty");
+        }
         assert_eq!(screen.take_sounds(), [], "rows are silent");
         assert_eq!(screen.take_order(), None);
     }
 
-    /// `count` goods, numbered from 0, each 10 a ton.
+    /// `count` `jünk` bought here, numbered from 0, each 10 a ton: rows
+    /// all in slot 6, after six empty commodity slots and before an empty
+    /// slot 7.
     fn long(count: usize) -> Market {
         Market {
             rows: (0..count)
@@ -1085,27 +1737,44 @@ mod tests {
     }
 
     #[test]
-    fn the_list_scrolls_with_the_selection_past_eight_rows() {
-        let mut screen = screen_of(long(11));
-        let first: Vec<_> = (0..8).map(|n| format!("Good {n}")).collect();
-        assert_eq!(names(&screen), first);
-        for _ in 0..7 {
-            press(&mut screen, Key::Down);
-        }
-        assert_eq!((screen.selected(), screen.top()), (Some(7), 0));
+    fn extra_junk_rows_follow_their_slot_and_scroll() {
+        let mut screen = screen_of(long(4));
+        // Slots 0-5 empty, then goods 0-3, then slot 7: 11 positions, and
+        // the first row shown scrolled into view.
+        assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
+        assert_eq!(names(&screen), ["Good 0", "Good 1"]);
         press(&mut screen, Key::Down);
-        assert_eq!((screen.selected(), screen.top()), (Some(8), 1));
-        assert_eq!(names(&screen)[0], "Good 1");
-        assert!(contains(&drawn(&screen), &highlight(&screen, 11)));
-        for _ in 0..5 {
-            press(&mut screen, Key::Down);
-        }
-        assert_eq!((screen.selected(), screen.top()), (Some(10), 3));
-        assert_eq!(names(&screen).last().map(String::as_str), Some("Good 10"));
+        press(&mut screen, Key::Down);
+        assert_eq!((screen.selected(), screen.top()), (Some(2), 1));
+        assert_eq!(names(&screen), ["Good 0", "Good 1", "Good 2"]);
+        let good_2 = item(&screen, 11);
+        assert!(contains(
+            &drawn(&screen),
+            &filled(shrunk(good_2, 1.0, 1.0), Color::rgba(0x80, 0, 0, 255))
+        ));
+        press(&mut screen, Key::Down);
+        assert_eq!((screen.selected(), screen.top()), (Some(3), 2));
+        press(&mut screen, Key::Down);
+        assert_eq!((screen.selected(), screen.top()), (Some(3), 2), "the end");
         click_item(&mut screen, 4);
-        assert_eq!((screen.selected(), screen.top()), (Some(3), 3));
+        assert_eq!(screen.selected(), Some(3), "slot 2, scrolled, is empty");
+        click_item(&mut screen, 8);
+        assert_eq!(screen.selected(), Some(0));
         press(&mut screen, Key::Up);
-        assert_eq!((screen.selected(), screen.top()), (Some(2), 2));
+        assert_eq!(
+            (screen.selected(), screen.top()),
+            (Some(0), 2),
+            "no row above"
+        );
+    }
+
+    #[test]
+    fn eight_positions_or_fewer_never_scroll() {
+        let mut screen = screen_of(long(1));
+        assert_eq!(screen.top(), 0);
+        press(&mut screen, Key::Down);
+        assert_eq!(screen.top(), 0);
+        assert_eq!(names(&screen), ["Good 0"]);
     }
 
     #[test]
@@ -1650,15 +2319,15 @@ mod tests {
         assert_eq!(enabled(&screen), (false, true));
         let shown: Vec<_> = texts(&drawn(&screen)).into_iter().map(|(t, _)| t).collect();
         assert!(shown.contains(&"7".to_owned()), "{shown:?}");
-        assert!(shown.contains(&"Free cargo space: 0 tons    Credits: 0".to_owned()));
         let mut scrolled = screen_of(long(11));
         for _ in 0..10 {
             press(&mut scrolled, Key::Down);
         }
+        assert_eq!((scrolled.selected(), scrolled.top()), (Some(10), 9));
         scrolled.set_market(long(3));
         assert_eq!(
             (scrolled.selected(), scrolled.top()),
-            (Some(2), 0),
+            (Some(2), 2),
             "clamped"
         );
         scrolled.set_market(long(0));

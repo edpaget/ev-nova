@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_data::records::boom::Boom;
 use nova_data::records::character::Character;
 use nova_data::records::cron::Cron;
 use nova_data::records::desc::Desc;
@@ -35,7 +36,7 @@ use nova_rsrc::ResType;
 use crate::blink::Blink;
 use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS, BoomId,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
     DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
@@ -45,7 +46,7 @@ use crate::catalog::{
     ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
     StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
     SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    TrafficCatalog, WeaponId, WeaponRecord, explosion_sound, loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -295,6 +296,7 @@ impl PilotCatalog for GameData {
                     interference: system.interference,
                     murk: system.murk,
                     message: system.message,
+                    background: system.bkgnd_color,
                     stellars: system
                         .nav_def
                         .iter()
@@ -726,6 +728,15 @@ impl PilotCatalog for GameData {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         sound_length(self, WARP_OUT_SOUND)
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        self.records::<Boom>()
+            .filter_map(|(id, boom)| {
+                let sound = explosion_sound(boom.ok()?.record.sound_index)?;
+                Some((BoomId(id), sound))
+            })
+            .collect()
     }
 
     /// Every `snd ` 1000-1799 that exists, with its length when it can be
@@ -3112,6 +3123,7 @@ mod tests {
                     interference: 0,
                     murk: 0,
                     message: -1,
+                    background: 0,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -3122,6 +3134,7 @@ mod tests {
                     interference: 45,
                     murk: 5,
                     message: 7,
+                    background: 0,
                 },
             ]
         );
@@ -3140,6 +3153,24 @@ mod tests {
         ]);
         let murk: Vec<i16> = data.star_map().iter().map(|system| system.murk).collect();
         assert_eq!(murk, [45, 0]);
+    }
+
+    #[test]
+    fn a_systems_background_is_its_sÿsts_bkgnd_color_raw() {
+        // `BkgndColor` is `sÿst` +0x8e, `00RRGGBB`; `_LoadObjectData`
+        // builds its `RGBColor` from it (@0x77d85-0x77dc5).
+        let mut coloured = linked(0, 0, &[]);
+        coloured[0x8E..0x92].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
+        let data = store(&[
+            (System::TYPE, 130, coloured),
+            (System::TYPE, 131, linked(0, 0, &[])),
+        ]);
+        let backgrounds: Vec<u32> = data
+            .star_map()
+            .iter()
+            .map(|system| system.background)
+            .collect();
+        assert_eq!(backgrounds, [0x0012_3456, 0]);
     }
 
     #[test]
@@ -3749,6 +3780,29 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    /// A `bööm` of `sound_index`, its frame advance 100 and its graphic 0.
+    fn boom(sound_index: i16) -> Vec<u8> {
+        [100_i16, sound_index, 0]
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn boom_sounds_list_each_readable_bööm_by_id_with_a_sound_of_0_to_63() {
+        use nova_data::records::boom::Boom;
+        let data = store(&[
+            (Boom::TYPE, 130, boom(63)),
+            (Boom::TYPE, 128, boom(2)),
+            (Boom::TYPE, 129, boom(-1)),
+            (Boom::TYPE, 131, boom(64)),
+        ]);
+        assert_eq!(
+            data.boom_sounds(),
+            [(BoomId(128), SoundId(302)), (BoomId(130), SoundId(363))]
+        );
     }
 
     #[test]

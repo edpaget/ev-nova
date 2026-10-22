@@ -8,12 +8,12 @@ use nova_sim_base::fixture::FAST;
 
 use super::{planet, star};
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, CharacterStart,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
     DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
-    PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
+    PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
     SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::handling::ShipFields;
@@ -130,6 +130,8 @@ pub struct FakePilotCatalog {
     /// The warp-out sound's length: none, by default, so an arrival's
     /// warp-out never plays on and every jump arrival plays it.
     pub warp_out_sound: Option<SoundLength>,
+    /// Each `bööm` with the `snd ` its explosion plays.
+    pub boom_sounds: Vec<(BoomId, SoundId)>,
     /// The escorts' voices: none, by default, so no escort speaks.
     pub voices: Voices,
 }
@@ -224,6 +226,7 @@ pub fn catalog() -> FakePilotCatalog {
         asteroid_fields: Vec::new(),
         box_frames: [None; BOX_GRAPHICS],
         warp_out_sound: None,
+        boom_sounds: Vec::new(),
         voices: Voices::default(),
     }
 }
@@ -382,22 +385,24 @@ impl PilotCatalog for FakePilotCatalog {
         self.place_names.clone()
     }
 
+    /// Every stellar given a mark, then each other one listed, at its
+    /// first site's position, as a `spöb`'s `xPos` and `yPos` place it.
     fn stellar_marks(&self) -> Vec<StellarMark> {
         let given = |id: StellarId| {
             self.marks.iter().any(|mark| mark.id == id) || self.unloaded.contains(&id)
         };
-        let listed = self
-            .sites
-            .iter()
-            .flat_map(|(_, sites)| sites.iter().map(|site| site.id))
-            .filter(|&id| !given(id))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .map(|id| StellarMark {
-                id,
-                place: (0, 0),
-                name: format!("#{}", id.0),
-            });
+        let mut listed = std::collections::BTreeMap::new();
+        for site in self.sites.iter().flat_map(|(_, sites)| sites) {
+            if !given(site.id) {
+                listed.entry(site.id).or_insert(site.position);
+            }
+        }
+        let listed = listed.into_iter().map(|(id, position)| StellarMark {
+            id,
+            #[allow(clippy::cast_possible_truncation)] // a fixture's small positions
+            place: (position.x as i16, position.y as i16),
+            name: format!("#{}", id.0),
+        });
         self.marks.iter().cloned().chain(listed).collect()
     }
 
@@ -423,6 +428,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         self.warp_out_sound
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        self.boom_sounds.clone()
     }
 
     fn voices(&self) -> Voices {
@@ -819,6 +828,7 @@ mod tests {
             warp_sound: Some(sound(1)),
             warp_sound_double_time: Some(sound(2)),
             warp_out_sound: Some(sound(3)),
+            boom_sounds: vec![(BoomId(130), SoundId(302))],
             dudes: vec![(DudeId(140), dude.clone())],
             voices: Voices::read(&[], &[(crate::catalog::GovtId(128), 4)]),
             ..catalog()
@@ -832,6 +842,7 @@ mod tests {
         assert_eq!(fake.warp_sound(), Some(sound(1)));
         assert_eq!(fake.warp_sound_double_time(), Some(sound(2)));
         assert_eq!(fake.warp_out_sound(), Some(sound(3)));
+        assert_eq!(fake.boom_sounds(), [(BoomId(130), SoundId(302))]);
         assert_eq!(
             fake.voices().set_of(Some(crate::catalog::GovtId(128))),
             Some(4)

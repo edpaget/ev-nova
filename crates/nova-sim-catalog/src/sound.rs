@@ -282,6 +282,21 @@ pub enum SimSound {
     /// played by `PlaySound` with no test of whether it is playing
     /// (`_HandlePlayer` @0x69375). Its priority is 100.
     OnboardExplosion,
+    /// A stellar a `Y` destroyed exploded (`_EvalSetExp` @0x15ab4): the
+    /// explosion's `snd `, 300 + its `bööm`'s `SoundIndex` when that is
+    /// 0-63, which `_CreateExplosion` plays at once, whether the player is
+    /// docked or in flight, with `_PlaySoundDistance(-1, snd, 6, ..)` from
+    /// the explosion to the player (@0x3f8ca-0x3f91a). The view draws the
+    /// explosion without playing it again (`CombatEvent::ExplodedHeard`).
+    Explosion {
+        /// The `snd `.
+        sound: SoundId,
+        /// Where the explosion is from the player, in whole pixels, x
+        /// right and y down: how far away it is heard.
+        offset: (i32, i32),
+        /// Its priority, [`EXPLOSION_PRIORITY`].
+        priority: u16,
+    },
     /// A disabled or dying player's pre-jump collapsed: `_beepSnd[1]`,
     /// `snd ` 151 (`_PlaySound` @0x68aaf), after a [`SimSound::Halt`] of
     /// [`WARP_UP_HALTS`]. Its priority is 50.
@@ -336,6 +351,10 @@ pub enum SimSound {
     SelfDestructed,
 }
 
+/// The priority an explosion's sound plays at: `_CreateExplosion`'s
+/// `_PlaySoundDistance(.., 6, ..)` (@0x3f8f1, played @0x3f91a).
+pub const EXPLOSION_PRIORITY: u16 = 6;
+
 /// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129
 /// (loaded @0x1c12f-0x1c14f), in the order the player's eject halts them
 /// after its [`SimSound::Ejected`] (`_HandlePlayer` @0x6f925-0x6f95a), a
@@ -371,5 +390,10 @@ mod tests {
     #[test]
     fn the_escape_pod_sound_is_snd_372() {
         assert_eq!(ESCAPE_POD_SOUND, SoundId(372));
+    }
+
+    #[test]
+    fn an_explosion_plays_at_priority_6() {
+        assert_eq!(EXPLOSION_PRIORITY, 6);
     }
 }

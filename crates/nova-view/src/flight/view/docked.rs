@@ -1077,3 +1077,11 @@ impl<C> FlightView<C> {
         self.session.as_mut().is_ok_and(Session::take_save_due)
     }
 }
+
+/// The mission computer's cut offer names are filled by the session, as
+/// [`Session::offer_text`] fills them; a session that failed fills none.
+impl<C> crate::spaceport::OfferNames for FlightView<C> {
+    fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
+        self.session.as_ref().ok()?.offer_text(mission, raw)
+    }
+}

@@ -419,6 +419,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
+mod arrival_system;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -453,6 +454,7 @@ mod escort_hits;
 mod escort_loss;
 mod escorts;
 mod events;
+mod exchange_events;
 #[cfg(test)]
 mod exit_cursors;
 mod explored;
@@ -465,6 +467,8 @@ mod game_work;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
+#[cfg(test)]
+mod grant_explorations;
 mod gravity;
 mod hail;
 mod hire;
@@ -476,7 +480,13 @@ mod intro;
 mod ionization;
 mod jump_arrival;
 mod jump_collapse;
+mod jump_exploration;
+mod jump_hops;
+mod jump_moves;
 mod kept_berths;
+mod kept_rescues;
+mod killed_explosions;
+mod last_refresh;
 mod launch_frame;
 mod lost_lead;
 mod lost_target;
@@ -485,6 +495,7 @@ mod map_borders;
 mod map_click;
 mod map_panel;
 mod map_search;
+mod map_walk;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_map;
@@ -499,8 +510,10 @@ mod nebulae;
 mod news;
 mod npc_escape;
 mod npc_kinds;
+mod operator_moves;
 mod outbox;
 mod outfits;
+mod owners_unset;
 mod person_offers;
 mod persons;
 mod pilot_panel;
@@ -526,6 +539,7 @@ mod repair_dock;
 mod rescue;
 mod sabotage;
 mod script_effects;
+mod script_move;
 mod self_destruct;
 mod self_repair;
 mod setup;
@@ -547,18 +561,25 @@ mod stellars;
 mod story;
 mod stray_words;
 mod swarm_formation;
+mod system_background;
+mod take_off_moves;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
 mod thrust;
 mod tractor_hold;
+mod trade_dialog;
 mod tutorial;
+#[cfg(test)]
+mod vacated_berths;
 mod voices;
 mod wait_for_me;
 mod warp_stage;
+mod y_explosion;
 
 use capture::CaptureFuel;
 pub use hooks::HookRules;
+pub use last_refresh::LastRefresh;
 pub use map_click::{MapClicked, MapPress};
 pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
@@ -585,6 +606,7 @@ use std::rc::Rc;
 use self::chart::Chart;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::jump_hops::Chain;
 use self::mission_run::MissionRun;
 use self::mode::Mode;
 use self::outbox::Outbox;
@@ -673,7 +695,7 @@ use crate::shipyard::{
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
+use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
@@ -1162,6 +1184,7 @@ impl Session {
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
+            boom_sounds: catalog.boom_sounds().into_iter().collect(),
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -1367,6 +1390,7 @@ impl Session {
         self.space
             .traffic
             .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        self.chart.read_rescue_rule(&rules);
         self.setup.rules = rules;
         self
     }
@@ -1783,11 +1807,14 @@ impl Session {
     }
 
     /// Fills the system as [`Session::populate`] does, the active
-    /// missions' special ships set up first, `entering` it by a way in
-    /// whose enter-system hook is still to run, if any (see the
+    /// missions' special ships set up first, `entry` the way it is entered,
+    /// if any: the setup predicts the enter-system hook of a way in whose
+    /// hook is still to run ([`Entry::hook_pending`]; see the
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
-    /// order.
+    /// order. A system filled by no way in that names an entrance
+    /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue) puts
+    /// its mission escorts beside the player.
     ///
     /// The ships dropped give their aux ships back, but the fleet's
     /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
@@ -1806,19 +1833,20 @@ impl Session {
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
-        entering: Option<Entrance>,
+        entry: Option<Entry>,
     ) {
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
         let left = std::mem::take(&mut self.space.strikes);
-        self.hold_left_grudges(&left);
+        self.hold_left_grudges(&left, self.pilot.system);
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
         let table = self
             .chart
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
-        let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
+        let (missions, set_up) =
+            self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
@@ -1855,7 +1883,7 @@ impl Session {
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
         self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
-        if entering.is_none() {
+        if entry.and_then(Entry::entrance).is_none() {
             self.snap_mission_escorts();
         }
         self.space.hold_derelicts(&self.statics);
@@ -2109,13 +2137,21 @@ impl Session {
     /// gate's width is known: only the traffic's tick fires and flies, and
     /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
-        let system_govt = self.chart.galaxy.govt(self.pilot.system);
+        self.world_in(self.pilot.system)
+    }
+
+    /// [`Session::world`] as it stands in `system`: its government, the
+    /// player's legal record there and the reinforcements coming to it,
+    /// whatever the player's system. What an entry reads of the system it
+    /// leaves, once a jump has written its arrival as the player's.
+    fn world_in(&self, system: SystemId) -> World<'_> {
+        let system_govt = self.chart.galaxy.govt(system);
         World {
             sites: &self.chart.sites,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
-            record: self.chart.system_record(&self.pilot, &self.setup),
+            record: self.chart.record_in(&self.pilot, &self.setup, system, None),
             persons: PersonWorld {
                 rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -2149,7 +2185,7 @@ impl Session {
             area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
-            reinforcements: self.reinforcements_coming(),
+            reinforcements: self.reinforcements_coming_to(system),
             iff_marked: &self.space.iff_marked,
             stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.setup.rules.source_for(RuleKey::IndependentKin),
@@ -2862,9 +2898,10 @@ impl Session {
 
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
-    /// links it follows. A route cues its first hop
-    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
-    /// no route the course is cleared, and the nav selection let go with
+    /// links it follows. A route starts the course at the system the ship
+    /// is in and cues its first hop ([`Session::cue_course`]), selecting it
+    /// in nav mode 3. When there is no route the course is cleared, its
+    /// start included, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
     /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
@@ -3068,15 +3105,26 @@ impl Session {
     /// chain uses one jump's fuel and the days the stats give one jump;
     /// under [`MultiJumpRule::PerHop`] every hop does, and the chain stops
     /// at a hop the ship has not the fuel for. Each day steps the planetary
-    /// events, rolled on `chance`.
+    /// events, rolled on `chance`. The jump's fuel is taken once its
+    /// explorations have run, before the refresh (@0x6be31), so it comes
+    /// off what an `OnExplore`'s change of ship held to the new class's
+    /// most; under `PerHop` a further hop is made only if the fuel, less
+    /// the hops already owed, pays for it, and every hop's fuel is taken
+    /// there together, the original having no per-hop fuel to place. An
+    /// `OnExplore` that holds the fuel below what is owed leaves it short
+    /// of zero, as the original's one take can. Every hop's days, the
+    /// first's and each further one's, pass together after the refresh,
+    /// so a crön on any of the jump's days reads the bits its
+    /// `OnExplore`s set (the original has no per-hop days to place).
     ///
-    /// The systems hopped are taken off the course. Those passed through
-    /// on the way are not entered; only the last is: explored, its
-    /// stellars read from `catalog`, the nav system off and then the
-    /// course's next hop cued, and the ship placed just outside its
-    /// no-jump zone, at rest on the side facing the system it last left
-    /// (see [`arrival`]), with its reserves as they were, so it can jump
-    /// on at once. It raises
+    /// The systems hopped are taken off the course, each passed through
+    /// as it is made, the last at the entry (see the `jump_hops` module).
+    /// Those passed through on the way are not entered; only the last is:
+    /// explored, its stellars read from `catalog`, the nav system off and
+    /// then the course's next hop cued, with its reserves as they were.
+    /// The ship is placed as the jump ends, before its explorations, by
+    /// [`RuleKey::JumpArrival`]'s engine reading, and else at the entry
+    /// (see the `jump_arrival` module). It raises
     /// [`SimMessage::Arrived`] for that last system, or the system's
     /// message buoy, [`SimMessage::Buoy`], in its place (see the `buoys`
     /// module). The system arrived in
@@ -3086,27 +3134,75 @@ impl Session {
     ///
     /// It enters that system as every way in does, by its row of the
     /// table in the `entry` module, which also lets go of the strikes, the
-    /// target, the boarding, the hail and a held `P` sound.
+    /// target, the boarding, the hail and a held `P` sound. Which system
+    /// that is, [`RuleKey::ArrivalSystem`] decides before the refresh (see
+    /// the `arrival_system` module): by the engine, the last hop's
+    /// stand-in on the multi-jump branch (a course followed, more than
+    /// one hop a jump), else the raw Con target of the slot the jump was
+    /// selected from (+0x6c), read before the days; it is entered as it
+    /// is unless the refresh left it hidden. By the other reading, the
+    /// stand-in J took, resolved by place after the refresh. The first
+    /// hop is the one J took, where the original takes it at arrival
+    /// (@0x6bdc1); they differ only if visibility changes during the warp,
+    /// which no refresh point under `visibility_refresh = engine` allows.
     ///
-    /// Before its days it raises [`StoryEvent::Explored`] for each system
-    /// passed and the one arrived in, as the original explores their
-    /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
+    /// It explores at once, in the original's order (see the
+    /// `jump_exploration` module): each system passed as its hop is made
+    /// (@0x6bddb), then the one arrived in (@0x6be12), each
+    /// [`StoryEvent::Explored`] dispatched there and then with the
+    /// activity of the last refresh, so a nebula's `OnExplore` runs before
+    /// the refresh and the days, its `Q` waiting for the caller's
+    /// settling. Once the refresh is written it explores the arrival
+    /// again (@0x6c1db), the system the entry will resolve it to, with
+    /// the activity the refresh wrote, before it is entered and populated.
+    /// [`StoryEvent::EnteredSystem`] follows the days and is dispatched at
+    /// once, before the re-explore and the population (@0x6c15d), a `Q`'s
+    /// leave waiting for the caller's settling with the days' events; the
+    /// ship goals are checked once the system is set up, each slot's
+    /// deadline first (see the `jump_exploration` module).
+    ///
+    /// From the jump's end to its entry an in-flight `M` or `N` is the
+    /// jump's own, applied at its operator: an `OnExplore`'s, a day's, the
+    /// hook's or the re-explore's (see the `jump_moves` module). The
+    /// refresh's move, the hook, the re-explore and the entry read the
+    /// player's system as the moves left it, and the system is entered and
+    /// populated once.
+    ///
+    /// Each system explored is first written as the player's system, as
+    /// the original writes +0x74 (@0x6bdd4, @0x6be0b), and after the
+    /// refresh the player's system is the one its move leaves (@0x99918),
+    /// so the explorations' and the days' scripts read the hop or the
+    /// arrival (see the `jump_exploration` module); the galaxy awaits its
+    /// rebuild from the first write. The entry then writes the system
+    /// itself. Two differences cross no boundary the player sees, so they
+    /// are not filed: the engine raises the arrival's explored level as it
+    /// enters (`Reset::Explore`), after the re-explore, where the original
+    /// raises it before (@0x6c184-0x6c1b8, then @0x6c1db), and no
+    /// `OnExplore` operator reads it to any other end (`X` raises 0 to 1
+    /// either way, @0x15c93; the known pass a map's or `Y`'s rebuild makes
+    /// is made afresh by the entry's rebuild); and the hops leave the
+    /// course at the entry (`CourseStep::Arrival`), where the original
+    /// spools each before the days (@0x6bde0), which read no course.
     ///
     /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
     /// every system's `Visibility`, and every nebula's `ActiveOn`,
-    /// evaluated before the days, so a bit
-    /// their scripts set shows only at the next refresh, and written once
-    /// the hops and the systems explored are resolved by the flags as they
-    /// stood, before the system is entered, telling
-    /// [`SessionEvent::GalaxyChanged`] when it changed anything.
+    /// evaluated after the explorations, so it reads the bits their
+    /// `OnExplore`s set, and before the days, so a bit the days' scripts
+    /// set shows only at the next refresh; and written at once, before
+    /// the days, with the hops and the systems explored resolved by the
+    /// flags as they stood, telling [`SessionEvent::GalaxyChanged`] when
+    /// it changed anything. So the days read the refreshed ownership and
+    /// visibility, and a stellar the refresh leaves with no owner has none
+    /// through the days and the entry's population, until the entry's
+    /// rebuild (see the `owners_unset` module).
     ///
-    /// Its first draw on `chance` arms the escort-strength timer (see
-    /// [`strength`]). The original's order is `Rand(0x800)` (@0x6bfdd),
-    /// the escort-strength timer (@0x6c013), the roll table
-    /// (@0x6c040-0x6c066), the days (@0x6c144), then the setup
-    /// (@0x6c1f9). Ours lets the days go by (`take_jump_cost`) before
-    /// `enter_system` redraws the offers (`Offers::redraw`). That is
-    /// harmless: the fill reads nothing the days change, and the days
+    /// After its explorations' scripts, its first draw on `chance` arms
+    /// the escort-strength timer (see [`strength`]). The original's order
+    /// is `Rand(0x800)` (@0x6bfdd), the escort-strength timer (@0x6c013),
+    /// the roll table (@0x6c040-0x6c066), the days (@0x6c144), then the
+    /// setup (@0x6c1f9). Ours lets the days go by (`pass_jump_days`)
+    /// before `enter_system` redraws the offers (`Offers::redraw`). That
+    /// is harmless: the fill reads nothing the days change, and the days
     /// don't read the table. Only the order of the draws differs, and the
     /// engine doesn't match that.
     ///
@@ -3133,10 +3229,20 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
+        // A move's entry still owed comes before the jump's window opens
+        // (see the `operator_moves` module).
+        self.settle_pending_move(catalog, catalog, chance);
         let Some(Jump::Hyperspace { to: first, .. }) = self.mode.jump() else {
             return None;
         };
+        // The raw Con target the jump was selected from, read before its
+        // fuel and days (+0x6c @0x6bd3a, the days @0x6c144; see the
+        // `arrival_system` module).
+        let raw = self.chart.selected_con_target(&self.pilot, first);
         self.mode.end_jump();
+        // From here to the entry an in-flight move is the jump's own (see
+        // the `jump_moves` module).
+        self.chart.open_jump_window();
         self.ship.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
         // module).
@@ -3157,68 +3263,52 @@ impl Session {
             self.ship
                 .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
-        let mark = self.run.story_mark();
-        // The galaxy refresh evaluated before the days, so a bit their
-        // scripts set waits for the next refresh (@0x6bf3f, days
+        let departure = self.pilot.system;
+        // The arrival block, before the hop loop and every exploration
+        // (@0x6bc0d-0x6bd20; see the `jump_arrival` module).
+        self.place_jump_arrival(departure, first);
+        // The hop loop (@0x6bd67-0x6bdfc; see the `jump_hops` module).
+        let Chain {
+            on_course,
+            jumps,
+            from,
+            at,
+        } = self.hop_along(catalog, &mut &mut *chance, departure, first);
+        // The system the jump writes before its refresh (@0x6be0b): the
+        // last hop's stand-in on the multi-jump branch, else the raw Con
+        // target, by the engine's `arrival_system`.
+        let multi_jump =
+            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
+        let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
+        // The arrival written as the player's system and explored at once
+        // (@0x6be0b, @0x6be12). The written system shares its stand-in's
+        // place, so the same nebulae.
+        self.chart
+            .write_jump_system(&mut self.pilot, &self.setup, written);
+        let arrived = self.chart.jump_explored(&self.setup, written);
+        self.explore_now(catalog, &mut &mut *chance, arrived);
+        // The jump's fuel, after its explorations, so it comes off what an
+        // `OnExplore`'s change of ship has held to the new class's most
+        // (@0x6be31): the original's one hop's, or by `PerHop` every
+        // hop's.
+        self.pilot.reserves.fuel.now -= JUMP_FUEL * f32::from(jumps);
+        // The galaxy refresh evaluated after the explorations, so it reads
+        // the bits their `OnExplore`s set, and before the days, so a bit
+        // the days' scripts set waits for the next refresh (@0x6bf3f, days
         // @0x6c144); the `AvailBits` and the spawners' tests cached with
         // it.
         let refresh = self.refresh_now();
         self.propagate_cached_tests();
-        // The escort-strength timer armed before the roll table, the days
-        // and the setup (@0x6c013).
-        self.space.arm_strength_timer(chance);
-        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
-        self.red_alert.clear_icon();
-        self.take_jump_cost(chance);
-        let departure = self.pilot.system;
-        let (mut from, mut at) = (departure, first);
-        let mut hops = 0;
-        // The systems passed on the way, each hop the visible system that
-        // stands for it, as the original resolves them (@0x6bd67-0x6bdc1).
-        let mut passed = Vec::new();
-        if self
-            .pilot
-            .course
-            .first()
-            .is_some_and(|&hop| hop == first || self.chart.galaxy.same_place(hop) == Some(first))
-        {
-            hops = 1;
-            for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
-                let next = self.pilot.course.get(hops);
-                let Some(next) = next.and_then(|&hop| self.chart.galaxy.same_place(hop)) else {
-                    break;
-                };
-                if self.setup.multi_jump == MultiJumpRule::PerHop {
-                    if self.pilot.reserves.fuel.now < JUMP_FUEL {
-                        break;
-                    }
-                    self.take_jump_cost(chance);
-                }
-                hops += 1;
-                passed.push(at);
-                (from, at) = (at, next);
-            }
-        }
-        // The systems passed, then the one arrived in, each reached before
-        // the days (@0x6bddb, @0x6be12): the one entering it will resolve
-        // to, should the galaxy have hidden it on the way.
-        let arrived = self.chart.galaxy.arrival(at).to;
-        for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
-            self.run.raise_at(mark + n, StoryEvent::Explored { system });
-        }
-        let entered = Arrival {
-            system: at,
-            sites: self.chart.read_sites(catalog, at),
-            placement: Placement {
-                ship: self.jump_arrival(departure, first, from, at),
-                stellar: None,
-                hold: false,
-            },
-        };
-        // The refresh written, with the hops and the systems explored
-        // resolved by the flags as they stood (@0x6bd67-0x6bdd4,
-        // @0x6be0b). The player is between systems: its entry resolves the
-        // arrival by the same rule as any move out of a hidden system.
+        // The refresh written at once, before the days (@0x6bf3f, the days
+        // @0x6c144), with the hops and the systems explored resolved by
+        // the flags as they stood (@0x6bd67-0x6bdd4, @0x6be0b). It forgets
+        // every rescue kept, and the owners it leaves unset stay so through
+        // the days and the entry's population, until the entry's rebuild
+        // rescues for the arrival system (see the `kept_rescues` and
+        // `owners_unset` modules). The stellars shown stay the departure's
+        // until the entry: nothing is drawn before the original's rebuild
+        // (@0x6c203), so that crosses no boundary.
+        self.chart.forget_rescues();
         if self
             .chart
             .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
@@ -3228,26 +3318,62 @@ impl Session {
         {
             self.out.emit(SessionEvent::GalaxyChanged);
         }
-        self.pilot.jumped_from = Some(from);
-        self.enter_system(
-            Entry::Jump { hops, natural_end },
-            entered,
+        self.chart.leave_owners_unset(&self.setup);
+        // The refresh's move out of a system it hid (@0x99918), as the
+        // entry will resolve it, of the system the jump wrote or an
+        // `OnExplore`'s move left: the player's system from here on.
+        let left = self.pilot.system;
+        self.chart
+            .jump_refresh_move(&mut self.pilot, &self.setup, &mut self.out, left);
+        // The escort-strength timer armed before the roll table, the days
+        // and the setup (@0x6c013).
+        self.space.arm_strength_timer(chance);
+        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
+        self.red_alert.clear_icon();
+        // Every hop's days (@0x6c144), so the crons read the bits the
+        // jump's `OnExplore`s set.
+        for _ in 0..jumps {
+            self.pass_jump_days(chance);
+        }
+        // The enter-system hook, after the days and before the re-explore
+        // and the setup (@0x6c15d): its events settled at once, the days'
+        // left for the caller's settling.
+        self.enter_jump_hook_now(catalog, &mut &mut *chance);
+        // The arrival explored again, with the activity the refresh wrote,
+        // before the setup populates it (`_AutoSetExploration` @0x6c1db,
+        // `_SetupShipsInSystem` @0x6c1f9): the system the entry will
+        // resolve it to, as the refresh's move and the moves since left
+        // +0x74. A walk reaching 0 at level 1 (@0x6c1cb-0x6c1db; see the
+        // `map_walk` module).
+        let system = self.pilot.system;
+        self.auto_explore(
             catalog,
+            &mut &mut *chance,
+            system,
+            0,
+            ExploredLevel::Explored,
+        );
+        self.pilot.jumped_from = Some(from);
+        let course_hops = self.jump_course_hops(on_course, multi_jump);
+        self.enter_jump_system(
+            Entry::Jump {
+                hops: course_hops,
+                natural_end,
+            },
+            (departure, from, at),
             catalog,
             chance,
         );
+        // The ship goals checked once the system is set up, as the
+        // original's per-frame check first finds them (@0x9edb5), each
+        // slot's deadline before its goals (@0x9eba5-0x9ec70).
+        self.check_goals_after_jump(&mut &mut *chance);
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
         Some(self.pilot.system)
-    }
-
-    /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
-    fn take_jump_cost(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.pilot.reserves.fuel.now -= JUMP_FUEL;
-        self.pass_jump_days(chance);
     }
 
     /// Lets the days the stats give a jump go by through the daily step
@@ -3365,6 +3491,14 @@ impl Session {
     /// anything, as the land key's breakup-timer gate refuses it
     /// (@0x6a8cb).
     ///
+    /// The stellar held is rechecked as the dock request rechecks it
+    /// (@0x6699a-0x669aa): one the player's system no longer holds
+    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+    /// or no longer among the stellars shown, is refused as
+    /// [`LandingRefusal::NotLandable`], a disabled ship's too. A galaxy
+    /// change between rebuild points can give a stellar shown to another
+    /// system.
+    ///
     /// A cloaked ship's press goes as far as a disabled ship's, and the
     /// dock request's `_ShipIsCloaked` (@0x66a8e), before its
     /// `_IsDisabled`, refuses it [`LandingRefusal::Cloaked`] with a beep,
@@ -3401,12 +3535,29 @@ impl Session {
         };
         let blessing = self.blessing();
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        // The stellar held, wherever its system lists it, and the dock
+        // request's recheck of it (@0x6699a-0x669aa): its owner word the
+        // player's system, and active, which the stellars shown hold as the
+        // last rebuild point left them.
+        let target = self
+            .nav_target()
+            .and_then(|id| self.chart.listed.iter().find(|site| site.id == id));
+        let player = self.pilot.system;
+        let held = |site: &LandingSite| {
+            self.chart.sites.iter().any(|shown| shown.id == site.id)
+                && self
+                    .chart
+                    .galaxy
+                    .holder(site.id, self.statics.listers(site.id), player)
+                    == Some(player)
+        };
         let press = land_or_select(
-            self.nav_target(),
+            target,
             self.port.dock,
             &self.ship.player,
             &self.chart.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
+            held,
             |site| self.space.landing_reach(&self.setup, site),
         );
         // The cloak's refusal (@0x66a8e) comes before the disabled one
@@ -3488,7 +3639,7 @@ impl Session {
             let system_of = |id| {
                 self.chart
                     .galaxy
-                    .system_of(self.statics.listers(id), self.pilot.system)
+                    .system_of(id, self.statics.listers(id), self.pilot.system)
             };
             Ok(gate::hypergate_offers(
                 &links,
@@ -3549,7 +3700,7 @@ impl Session {
         let system_of = |id| {
             self.chart
                 .galaxy
-                .system_of(self.statics.listers(id), self.pilot.system)
+                .system_of(id, self.statics.listers(id), self.pilot.system)
         };
         let exit = if has_links(&links) {
             to.and_then(|to| {
@@ -3590,7 +3741,11 @@ impl Session {
     /// course cleared and the nav selection let go, its thrust stopped,
     /// populated with its traffic ([`Session::populate`]), even when it is
     /// the system gone in, the fight left behind and
-    /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
+    /// [`SimSound::Arrived`]. A wormhole comes out in its exit's owner as
+    /// it is, a visible system shadowed at its place too, by the engine's
+    /// [`RuleKey::ArrivalSystem`] (`_PlayerEnterWormhole` @0x642a7); a
+    /// hypergate in the stand-in the player picked. It raises
+    /// [`SimMessage::PassedWormhole`] or
     /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
     /// The ship enters the system by the gate's row of the table in the
     /// `entry` module, which keeps a held `P` sound and lets go of the
@@ -3621,7 +3776,11 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
-        let owner_of = |id| self.chart.galaxy.holder(self.statics.listers(id), player);
+        let owner_of = |id| {
+            self.chart
+                .galaxy
+                .holder(id, self.statics.listers(id), player)
+        };
         let Some(exit) =
             wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
@@ -3691,7 +3850,14 @@ impl Session {
                 hold: false,
             },
         };
-        self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Gate,
+            self.pilot.system,
+            entered,
+            catalog,
+            catalog,
+            chance,
+        );
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
@@ -3775,8 +3941,11 @@ impl Session {
     /// it while the ship was docked at another system's stellar
     /// ([`Session::set_player_system`]), telling
     /// [`SessionEvent::SystemChanged`] when they are another system's than
-    /// the stellars they replace. `None`, and nothing changes, when it has
-    /// not landed.
+    /// the stellars they replace. A move made during the take-off itself
+    /// (its days, its walk's `OnExplore`s) is a landed move too, applied at
+    /// its operator, and the take-off shows and populates the system moved
+    /// to once (see the `take_off_moves` module). `None`, and nothing
+    /// changes, when it has not landed.
     ///
     /// It raises a [`StoryEvent::DayPassed`] for each day, then
     /// [`StoryEvent::Explored`] for the system, then
@@ -3786,9 +3955,9 @@ impl Session {
     /// rolled on `chance`, as [`RuleKey::StayDays`] reads: by the engine,
     /// half as many days as escorts sold or upgraded, then the day's wage
     /// [`RuleKey::TakeOffPay`] reads, then a day if an outfit was bought
-    /// or sold, four if a ship was bought, and the take-off's own day
-    /// (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa-0x6020e,
-    /// `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
+    /// or sold, four if a ship was bought, and, after the ship is placed,
+    /// the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog`
+    /// @0x601fa-0x6020e, `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
     /// days. After every day each active mission's auxiliary ships are
     /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
     /// module), then the escort-strength timer is armed on it (see
@@ -3805,7 +3974,7 @@ impl Session {
     /// are refused (see the `takeoff_grace` module).
     pub fn take_off(
         &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
         let stellar = self.lift_off(catalog, chance)?;
@@ -3830,12 +3999,22 @@ impl Session {
 
     /// [`Session::take_off`] but for its greeting: whoever calls it greets,
     /// or not.
+    ///
+    /// Every move from the ship leaving the spaceport to the take-off's
+    /// last nebula pass is a landed one, applied at its operator, in the
+    /// window the take-off opens (see the `take_off_moves` module).
     pub(super) fn lift_off(
         &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<StellarId> {
+        // A docked move's entry still owed comes before the take-off's
+        // window opens (see the `operator_moves` module).
+        self.settle_pending_move(catalog, catalog, chance);
         let stellar = self.mode.take_landed()?;
+        // `_playerIsLanded` stays set to @0x6358e: the moves until then
+        // are landed ones (see the `take_off_moves` module).
+        self.chart.open_take_off_window();
         // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
         // @0x633a0), before the stay's days (@0x63440) and the deselect
         // (@0x674d2); see the flight view's `took_off`.
@@ -3853,8 +4032,10 @@ impl Session {
         if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
             self.pay_escorts(1);
         }
+        // The port's days, before the take-off's placement
+        // (`_DoPortDialog` @0x601fa, @0x6020e).
         if stay_days {
-            self.pass_days(stay.leaving_days(), chance);
+            self.pass_days(stay.port_days(), chance);
         }
         // The dock request's tail (@0x67673; see the `takeoff_grace`
         // module).
@@ -3864,18 +4045,41 @@ impl Session {
         {
             self.out.emit(SessionEvent::SystemChanged);
         }
+        // The take-off's placement (@0x633a5-0x63417).
         if std::mem::take(&mut self.port.hold_position) {
             self.ship.player.position = self.port.touchdown;
         }
+        self.chart.mark_take_off_placed();
+        // The take-off's own day, after the placement (@0x63440).
+        if stay_days {
+            self.pass_days(Stay::TAKE_OFF_DAYS, chance);
+        }
         // At level 2, with its place's head, by the engine
-        // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
-        // @0x634b1-0x634c8; see the `explored` module).
+        // (`_PlayerLandOnStellar` @0x6346d-0x6349e; see the `explored`
+        // module), then the walk reaching 0 at level 2, its `OnExplore`s
+        // at once (`_AutoSetExploration` @0x634b1-0x634c8; see the
+        // `map_walk` module). Both read the player's system after the
+        // take-off's day, so a move on a day raises and walks the system
+        // moved to.
         let system = self.pilot.system;
         self.chart
             .explore_place(&mut self.pilot, &self.setup, system, ExploredLevel::Charted);
-        self.run.raise(StoryEvent::Explored {
-            system: self.pilot.system,
-        });
+        self.auto_explore(
+            &story::NoCatalog,
+            &mut &mut *chance,
+            system,
+            0,
+            ExploredLevel::Charted,
+        );
+        // `_ExploreNebulaeFromSystem(+0x74)` (@0x634cd-0x634da): after a
+        // move in the walk, the nebulae of the system moved to, raising no
+        // level. With no such move it finds every nebula explored, so it
+        // is skipped.
+        if self.pilot.system != system {
+            let moved_to = self.pilot.system;
+            self.explore_now(&story::NoCatalog, &mut &mut *chance, moved_to);
+        }
+        self.close_take_off_window(catalog);
         self.space
             .restock_fleet(&mut self.pilot, &self.statics, &self.setup);
         // The escort-strength timer armed after every day of the stay
@@ -3937,21 +4141,27 @@ impl Session {
     }
 
     /// The exchange of the stellar the ship is docked at, if it has landed
-    /// at a trade center, priced by the stellar's [`Markup`].
+    /// at a trade center, priced by the stellar's [`Markup`], with its
+    /// event line (see the `exchange_events` module) and its dialog's
+    /// `STR#` 2002 words (the `trade_dialog` module).
     #[must_use]
     pub fn market(&self) -> Option<Market> {
         let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
-        market::market(&market::Exchange {
+        let mut market = market::market(&market::Exchange {
             goods: &self.statics.goods,
             stellar,
             flags: site.flags,
             pilot: &self.pilot,
             capacity: self.capacity(),
+            ship_capacity: self.stats().capacity,
             gate: self.gate(),
             rules: self.setup.rules,
             markup: self.chart.markup(&self.pilot, &self.setup, site),
-        })
+        })?;
+        market.events = self.exchange_events(stellar);
+        market.words = self.trade_words();
+        Some(market)
     }
 
     /// What traffic control weighs of the pilot at `site` (see
@@ -4401,7 +4611,7 @@ impl Session {
         match order.direction {
             Direction::Buy => {
                 self.port.outfit_visit.bought(&record);
-                let added = self.grant_outfit(record.id);
+                let added = self.grant_outfit(record.id, chance);
                 self.run_script(&record.on_purchase, chance);
                 if added && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0 {
                     self.remove_after_purchase(record.id);
@@ -5042,7 +5252,7 @@ impl Session {
             return None;
         }
         for _ in 0..granted.count {
-            self.grant_outfit(granted.outfit);
+            self.grant_outfit(granted.outfit, chance);
         }
         self.ship.refit(
             &mut self.pilot,
@@ -6494,9 +6704,10 @@ impl Chart {
 
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
-    /// links it follows. A route cues its first hop
-    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
-    /// no route the course is cleared, and the nav selection let go with
+    /// links it follows. A route starts the course at the system the ship
+    /// is in and cues its first hop ([`Session::cue_course`]), selecting it
+    /// in nav mode 3. When there is no route the course is cleared, its
+    /// start included, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
     /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
@@ -6512,12 +6723,13 @@ impl Chart {
     ) -> Result<&'a [SystemId], RouteError> {
         match self.galaxy.map().route(pilot.system, to, setup.hyperlinks) {
             Ok(route) => {
+                pilot.restart_course(pilot.system);
                 pilot.course = route;
                 self.cue_course(pilot, setup);
                 Ok(&pilot.course)
             }
             Err(error) => {
-                pilot.course.clear();
+                pilot.clear_course();
                 self.deselect();
                 Err(error)
             }
@@ -6562,7 +6774,8 @@ impl Chart {
     /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
     /// the stellar's +0x14 as the aux and mission ship readers find it.
     fn holder_of(&self, pilot: &Pilot, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
-        self.galaxy.holder(statics.listers(stellar), pilot.system)
+        self.galaxy
+            .holder(stellar, statics.listers(stellar), pilot.system)
     }
 
     /// The markup at `site`, one of the system's: by whether it has a
@@ -6993,7 +7206,8 @@ fn shown_sites(
     listed
         .iter()
         .filter(|site| {
-            docked == Some(site.id) || galaxy.shows(listers_of(listed_stellars, site.id), system)
+            docked == Some(site.id)
+                || galaxy.shows(site.id, listers_of(listed_stellars, site.id), system)
         })
         .copied()
         .collect()
@@ -7141,6 +7355,7 @@ pub(super) mod tests {
             rate: crate::warp::warp_up_rate(session.player_warp_factor()),
         }
     }
+    use super::jump_exploration::tests::watching_explored;
     use super::*;
     use crate::catalog::{
         CharacterStart, GateSite, LandingSite, MissionId, RankId, SoundId, StellarId,
@@ -7175,7 +7390,6 @@ pub(super) mod tests {
         edge_lander, fly_out, hideable, hiding_bit, jump, jump_with, land_now, outfit, planet,
         resumed_on, star, starting,
     };
-    use entry::NoTraffic;
 
     #[test]
     fn a_session_flies_the_first_chärs_ship_with_its_handling() {
@@ -7488,7 +7702,7 @@ pub(super) mod tests {
         land_now(&mut session).expect("lands");
         let docked = *session.player();
         assert_eq!(
-            session.take_off(&NoTraffic, &mut NeverFires),
+            session.take_off(&catalog(), &mut NeverFires),
             Some(StellarId(128))
         );
         assert_eq!(session.landed(), None);
@@ -7514,10 +7728,10 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.tick(THRUST);
         let flying = *session.player();
-        assert_eq!(session.take_off(&NoTraffic, &mut NeverFires), None);
+        assert_eq!(session.take_off(&catalog(), &mut NeverFires), None);
         assert_eq!(*session.player(), flying);
         assert_eq!(
-            session.take_off(&NoTraffic, &mut NeverFires),
+            session.take_off(&catalog(), &mut NeverFires),
             None,
             "nor twice"
         );
@@ -7613,7 +7827,7 @@ pub(super) mod tests {
         assert!(session.take_save_due());
         assert_eq!(session.take_sounds(), [SimSound::Landed]);
         // Once off again, L requests clearance afresh.
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert!(matches!(
             session.land(),
             Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
@@ -7643,7 +7857,7 @@ pub(super) mod tests {
         );
         // Planet 129 is far away: L requests it, then refuses as too far
         // and keeps it.
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
@@ -8976,10 +9190,10 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
         session.take_save_due();
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         assert!(session.take_save_due());
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert!(!session.take_save_due(), "not landed: nothing happens");
     }
 
@@ -9665,7 +9879,7 @@ pub(super) mod tests {
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
         session.tick(THRUST);
         assert_eq!(
@@ -9678,13 +9892,13 @@ pub(super) mod tests {
     #[test]
     fn taking_off_emits_took_off_and_not_taking_off_emits_nothing() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "not landed");
         land_now(&mut session).expect("lands");
         session.take_sounds();
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "nor twice");
     }
 
@@ -10246,7 +10460,7 @@ pub(super) mod tests {
     /// A session of [`fleet_exchange`], landed, whose fleet is a trader
     /// escort (129), a warship (130), a launched fighter (131) and an
     /// escort with no record (132).
-    fn landed_with_a_fleet() -> Session {
+    pub(super) fn landed_with_a_fleet() -> Session {
         let mut session = Session::start(&fleet_exchange()).expect("starts");
         session.pilot.escorts = vec![
             fleet_escort(129),
@@ -11003,7 +11217,7 @@ pub(super) mod tests {
     fn take_off_with(session: &mut Session, tons: &[(Good, u32)]) {
         buy_goods(session, tons);
         assert_eq!(
-            session.take_off(&NoTraffic, &mut NeverFires),
+            session.take_off(&catalog(), &mut NeverFires),
             Some(StellarId(128))
         );
     }
@@ -11325,7 +11539,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
     }
 
     #[test]
@@ -11439,7 +11657,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
 
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Scripted::answering(&[true]).and_rolling(&[0]);
@@ -11464,7 +11686,11 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         let market = session.market().expect("docked at the exchange");
-        assert_eq!(market.events, ["An enormous food surplus"]);
+        assert_eq!(
+            market.events,
+            ["An enormous food surplus    ."],
+            "the event's line, with no STR# 2002 or 4001 in the catalog"
+        );
         session.take_off(&catalog, &mut NeverFires);
         let mut chance = Scripted::default();
         jump_with(&mut session, &catalog, 132, &mut chance);
@@ -12997,7 +13223,7 @@ pub(super) mod tests {
         let mut session = outfitted(&limiting());
         dirty_the_visit(&mut session);
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         land_now(&mut session).expect("lands");
         assert!(opened_anew(&session));
@@ -13083,7 +13309,7 @@ pub(super) mod tests {
     fn landing_takes_the_copy() {
         let mut session = outfitted(&outfitting());
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         land_now(&mut session).expect("lands");
         session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
         assert_eq!(session.pilot().cash(), 24_000 + 500);
@@ -13641,16 +13867,14 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn buying_a_map_raises_explored_for_each_system_it_reaches() {
+    fn buying_a_map_dispatches_explored_for_each_system_it_reaches() {
         let mut session = outfitted(&limiting());
         session.run.drop_raised();
+        let (mut session, seen) =
+            super::jump_exploration::tests::watching_explored(session, &[130, 131, 132, 133]);
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
-        assert_eq!(
-            session.story_raised(),
-            [130, 131, 132].map(|system| StoryEvent::Explored {
-                system: SystemId(system)
-            })
-        );
+        assert_eq!(seen.systems(), [130, 131, 132].map(SystemId));
+        assert_eq!(session.story_raised(), [], "dispatched at once");
     }
 
     #[test]
@@ -15551,7 +15775,7 @@ pub(super) mod tests {
     /// Takes off and lands on planet 128 again.
     fn relanded(session: &mut Session) {
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         land_now(session).expect("lands again");
     }
@@ -15590,7 +15814,7 @@ pub(super) mod tests {
         assert!(!lists_speed(&mut session, &mut firing), "kept");
         assert!(firing.asked.is_empty());
         session
-            .take_off(&NoTraffic, &mut firing)
+            .take_off(&catalog(), &mut firing)
             .expect("takes off");
         assert_eq!(firing.asked, [50], "the take-off's day draws it");
         land_now(&mut session).expect("lands again");
@@ -15611,7 +15835,7 @@ pub(super) mod tests {
         assert!(!lists_new(&mut session, &mut firing), "kept");
         assert!(firing.asked.is_empty());
         session
-            .take_off(&NoTraffic, &mut firing)
+            .take_off(&catalog(), &mut firing)
             .expect("takes off");
         assert_eq!(firing.asked, [50], "the take-off's day draws it");
         land_now(&mut session).expect("lands again");
@@ -15623,7 +15847,7 @@ pub(super) mod tests {
     fn a_take_offs_day_draws_the_rolls_the_next_landing_reads() {
         let mut session = outfitted(&rolling(50, 50));
         let mut day = Scripted::answering(&[true, false]);
-        session.take_off(&NoTraffic, &mut day).expect("takes off");
+        session.take_off(&catalog(), &mut day).expect("takes off");
         assert_eq!(day.asked, [50, 50], "the ship class, then the outfit");
         land_now(&mut session).expect("lands again");
         let mut none = Scripted::default();
@@ -15684,7 +15908,7 @@ pub(super) mod tests {
         assert!(lists_new(&mut session, &mut firing));
         session.decline_ship(NEW);
         session
-            .take_off(&NoTraffic, &mut firing)
+            .take_off(&catalog(), &mut firing)
             .expect("takes off");
         land_now(&mut session).expect("lands again");
         assert!(lists_new(&mut session, &mut firing));
@@ -15883,7 +16107,7 @@ pub(super) mod tests {
             let mut days = Cycle::default();
             let (mut speeds, mut news) = (0, 0);
             for _ in 0..100 {
-                session.take_off(&NoTraffic, &mut days).expect("takes off");
+                session.take_off(&catalog, &mut days).expect("takes off");
                 land_now(&mut session).expect("lands again");
                 let mut none = Scripted::default();
                 speeds += u32::from(lists_speed(&mut session, &mut none));
@@ -26647,7 +26871,7 @@ pub(super) mod tests {
     #[test]
     fn no_fuel_is_sold_in_flight() {
         let mut session = half_empty_at_port();
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);
     }
@@ -27039,7 +27263,7 @@ pub(super) mod tests {
 
     /// Stellar `id` at (`x`, `y`), with `flags2`, its `links` and its exit
     /// angle.
-    fn gate_site(
+    pub(super) fn gate_site(
         id: i16,
         (x, y): (f32, f32),
         flags2: u16,
@@ -27060,7 +27284,7 @@ pub(super) mod tests {
     }
 
     /// A landable stellar `id` at the centre with `flags2`.
-    fn gate_landing(id: i16, flags2: u16) -> LandingSite {
+    pub(super) fn gate_landing(id: i16, flags2: u16) -> LandingSite {
         LandingSite {
             flags2,
             ..planet(id, 0.0, 0.0)
@@ -28262,6 +28486,8 @@ pub(super) mod tests {
 
     #[test]
     fn by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one() {
+        // Which of the two an arrival enters is `arrival_system`'s (see the
+        // `arrival_system` module).
         let catalog = alternates();
         let mut session = resolving(&catalog, RuleSource::Engine);
         assert_eq!(
@@ -28275,12 +28501,6 @@ pub(super) mod tests {
             Err(RouteError::Unreachable),
             "134 is shadowed by 131"
         );
-        land_now(&mut session).expect("lands");
-        session
-            .relocate(&catalog, SystemId(134), StellarId(141))
-            .expect("relocates");
-        assert_eq!(session.system(), SystemId(131), "resolved to the lowest");
-        assert!(session.galaxy().visible(SystemId(134)), "still visible");
     }
 
     #[test]
@@ -28764,7 +28984,7 @@ pub(super) mod tests {
             .assert_docked_among_shown(session.mode.landed());
         session.take_events();
         assert_eq!(
-            session.take_off(&NoTraffic, &mut NeverFires),
+            session.take_off(&catalog(), &mut NeverFires),
             Some(StellarId(140))
         );
         assert_eq!(session.system(), SystemId(134));
@@ -28938,39 +29158,32 @@ pub(super) mod tests {
     #[test]
     fn a_jump_into_a_system_hidden_on_the_way_explores_the_one_it_arrives_in() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
-        hide(&mut session, &catalog, &[131]);
-        session.run.drop_raised();
-        session.arrive(&catalog, &mut NeverFires);
-        let explored: Vec<SystemId> = session
-            .story_raised()
-            .into_iter()
-            .filter_map(|event| match event {
-                StoryEvent::Explored { system } => Some(system),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(explored, [SystemId(134)], "no event for the head");
-        assert!(session.pilot().has_explored(SystemId(134)));
-        assert!(
-            session.pilot().has_explored(SystemId(131)),
-            "131, its place's head, by the engine (see the `explored` module)"
-        );
-    }
-
-    /// The `Explored` events raised and not yet settled.
-    fn explored_raised(session: &Session) -> Vec<SystemId> {
-        session
-            .story_raised()
-            .into_iter()
-            .filter_map(|event| match event {
-                StoryEvent::Explored { system } => Some(system),
-                _ => None,
-            })
-            .collect()
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::ArrivalSystem, source));
+            session.plot_course(SystemId(131)).expect("a route");
+            fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            hide(&mut session, &catalog, &[131]);
+            let (mut session, seen) = watching_explored(session, &[131, 134]);
+            session.arrive(&catalog, &mut NeverFires);
+            // By the engine's `arrival_system` the jump explores the system
+            // it writes, 131, at 134's place (@0x6be12); by the other, the
+            // arrival resolved by place, with no event for the head. Each
+            // then explores again the system it enters (@0x6c1db).
+            let explored = match source {
+                RuleSource::Engine => ids(&[131, 134]),
+                RuleSource::Bible => ids(&[134, 134]),
+            };
+            assert_eq!(seen.systems(), explored, "{source:?}");
+            assert_eq!(session.system(), SystemId(134), "{source:?}");
+            assert!(session.pilot().has_explored(SystemId(134)));
+            assert!(
+                session.pilot().has_explored(SystemId(131)),
+                "131, its place's head, by the engine (see the `explored` module)"
+            );
+        }
     }
 
     /// [`chained`] of `mod_val` with 135 at 131's place, listing 132,
@@ -28988,13 +29201,13 @@ pub(super) mod tests {
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
         hide(&mut session, &catalog, &[131]);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
-        session.run.drop_raised();
+        let (mut session, seen) = watching_explored(session, &[131, 132, 135]);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
         );
         assert_eq!(session.course(), ids(&[134]));
-        assert_eq!(explored_raised(&session), ids(&[135, 132]), "135 passed");
+        assert_eq!(seen.systems(), ids(&[135, 132, 132]), "135 passed");
         assert!(on_the_map(&session));
     }
 
@@ -29006,7 +29219,7 @@ pub(super) mod tests {
                 .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
             hide(&mut session, &catalog, &[132]);
             assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-            session.run.drop_raised();
+            let (mut session, seen) = watching_explored(session, &[131, 132]);
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))
@@ -29019,7 +29232,7 @@ pub(super) mod tests {
                 RuleSource::Bible => ids(&[132, 134]),
             };
             assert_eq!(session.course(), kept, "{source:?}");
-            assert_eq!(explored_raised(&session), ids(&[131]));
+            assert_eq!(seen.systems(), ids(&[131, 131]));
         }
     }
 
@@ -29255,7 +29468,9 @@ pub(super) mod tests {
         let listers = [SystemId(131)];
         assert_eq!(session.galaxy().owner(&listers), None, "made visible");
         assert_eq!(
-            session.galaxy().holder(&listers, SystemId(131)),
+            session
+                .galaxy()
+                .holder(StellarId(400), &listers, SystemId(131)),
             Some(SystemId(131)),
             "rescued"
         );

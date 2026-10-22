@@ -186,13 +186,13 @@ use super::layout::{
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, port_key_item,
     service_item,
 };
-use super::missions::{MissionComputerScreen, MissionInfoScreen};
+use super::missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::outfitter::{NO_ITEMS, OutfitterCatalog, OutfitterScreen};
 use super::port_map::PortMap;
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
-use super::trade::TradeScreen;
+use super::trade::{ListColors, TradeScreen};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::MapOpener;
@@ -208,12 +208,12 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::ui::player_info::{PlayerInfoScreen, is_player_info_press};
+use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen, is_player_info_press};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
@@ -455,6 +455,18 @@ struct Missioning {
     info_requested: bool,
 }
 
+/// What the player info screen is laid out from
+/// ([`SpaceportView::with_player_info`]).
+#[derive(Clone, Debug)]
+struct PlayerInfoDialogs {
+    /// `DLOG` 1017, or why there is none.
+    template: Result<DialogTemplate, String>,
+    /// The Yes/No dialog, `DLOG` 3002, or why there is none.
+    confirm: Result<DialogTemplate, String>,
+    /// The background pictures' sizes.
+    background: BackgroundSizes,
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
@@ -465,12 +477,14 @@ pub struct SpaceportView {
     /// The screen open over it, if any.
     open: Option<Open>,
     /// The exchange's dialog template and its quantity dialog's (or why
-    /// there are none) and the exchange as it is, once given.
-    #[allow(clippy::type_complexity)] // Two templates and the exchange.
+    /// there are none), the exchange as it is and its list's colours,
+    /// once given.
+    #[allow(clippy::type_complexity)] // Two templates, the exchange and its colours.
     trade: Option<(
         Result<DialogTemplate, String>,
         Result<DialogTemplate, String>,
         Market,
+        ListColors,
     )>,
     /// The outfitter, once given.
     outfitting: Option<Outfitting>,
@@ -497,12 +511,9 @@ pub struct SpaceportView {
     /// since the texts closed were last taken
     /// ([`SpaceportView::take_texts_closed`]).
     texts_dropped: usize,
-    /// The player info screen's dialog and its Yes/No dialog, once given.
-    #[allow(clippy::type_complexity)] // Two templates.
-    player_info_dialogs: Option<(
-        Result<DialogTemplate, String>,
-        Result<DialogTemplate, String>,
-    )>,
+    /// The player info screen's dialog, its Yes/No dialog and its
+    /// background pictures' sizes, once given.
+    player_info_dialogs: Option<PlayerInfoDialogs>,
     /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen in the
     /// spaceport itself.
     player_info_requested: bool,
@@ -567,11 +578,17 @@ impl SpaceportView {
                 (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
                 (
                     TEXT_ITEM,
+                    // White on a black box: `_PortDialogUpdate` sets it with
+                    // `TETextBox` (@0x4ef64) and inverts the item
+                    // (`InvertRect` @0x4ef72) when it is visible
+                    // (`RectInRgn` @0x4ef08), which `Dialog` models as the
+                    // item being inside the dialog.
                     Role::ScrollText {
                         text: text.clone(),
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
+                        backing: Some(TextBacking::BLACK_BOX),
                     },
                 ),
             ];
@@ -819,17 +836,18 @@ impl SpaceportView {
     /// The spaceport with the stellar's exchange, `market`, which the
     /// Trade Center opens laid out by `template`, the "Trade" dialog (or
     /// saying why there is none), its quantity dialog by `quantity` (or,
-    /// without it, the dialog's fallback). Without it, the Trade Center
-    /// opens its placeholder.
+    /// without it, the dialog's fallback), its list in `colors`. Without
+    /// it, the Trade Center opens its placeholder.
     #[must_use]
     pub fn with_trade(
         self,
         template: Result<DialogTemplate, String>,
         quantity: Result<DialogTemplate, String>,
         market: Market,
+        colors: ListColors,
     ) -> Self {
         Self {
-            trade: Some((template, quantity, market)),
+            trade: Some((template, quantity, market, colors)),
             ..self
         }
     }
@@ -858,7 +876,7 @@ impl SpaceportView {
         if let Some(Open::Trade(screen)) = &mut self.open {
             screen.set_market(market.clone());
         }
-        if let Some((_, _, kept)) = &mut self.trade {
+        if let Some((_, _, kept, _)) = &mut self.trade {
             *kept = market;
         }
     }
@@ -1510,10 +1528,11 @@ impl SpaceportView {
     }
 
     /// Shows `row`, loaded, in the mission computer open while its offer
-    /// is selected.
-    pub fn show_computer_row(&mut self, row: &ComputerRow) {
+    /// is selected, its cut name filled by `names`
+    /// ([`MissionComputerScreen::show_row`]).
+    pub fn show_computer_row(&mut self, row: &ComputerRow, names: &impl OfferNames) {
         if let Some(Open::Computer(screen)) = &mut self.open {
-            screen.show_row(row);
+            screen.show_row(row, names);
         }
     }
 
@@ -1624,15 +1643,21 @@ impl SpaceportView {
 
     /// The spaceport with the player info screen's dialog, `template`
     /// (`DLOG` 1017), and its Yes/No dialog, `confirm` (`DLOG` 3002), or
-    /// why there are none.
+    /// why there are none, and its background pictures' sizes,
+    /// `background`.
     #[must_use]
     pub fn with_player_info(
         self,
         template: Result<DialogTemplate, String>,
         confirm: Result<DialogTemplate, String>,
+        background: BackgroundSizes,
     ) -> Self {
         Self {
-            player_info_dialogs: Some((template, confirm)),
+            player_info_dialogs: Some(PlayerInfoDialogs {
+                template,
+                confirm,
+                background,
+            }),
             ..self
         }
     }
@@ -1666,12 +1691,28 @@ impl SpaceportView {
         let Ok(port) = &self.port else {
             return;
         };
-        let (template, confirm) = self.player_info_dialogs.clone().unwrap_or_else(|| {
+        let dialogs = self.player_info_dialogs.clone().unwrap_or_else(|| {
             let none = || Err("the player info dialog was not given".to_owned());
-            (none(), none())
+            PlayerInfoDialogs {
+                template: none(),
+                confirm: none(),
+                background: BackgroundSizes {
+                    upper: None,
+                    middle: None,
+                    lower: None,
+                },
+            }
         });
-        let layout = template.map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.player_info = Some(PlayerInfoScreen::new(layout, confirm, info, port.style));
+        let layout = dialogs
+            .template
+            .map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.player_info = Some(PlayerInfoScreen::new(
+            layout,
+            dialogs.confirm,
+            info,
+            port.style,
+            dialogs.background,
+        ));
     }
 
     /// The player info screen open, if it is.
@@ -1991,9 +2032,10 @@ impl SpaceportView {
         let clock = self.offer_clock;
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
-                (Some((template, quantity, market)), _, _, Service::TradeCenter) => {
+                (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
-                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style);
+                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
+                        .with_colors(*colors);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2334,13 +2376,14 @@ mod tests {
     use nova_sim::landing::StellarFlags;
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::Bounds;
     use crate::input::MouseButton;
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
     use crate::spaceport::layout::SERVICE_ITEMS;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     /// Stellar 140, Earth: a planet with a trade center and a bar, of
@@ -2622,6 +2665,41 @@ mod tests {
         };
         assert_eq!(origin, on_screen(160.0, 327.0, 0.0, 0.0).min);
         assert_eq!((font, size, color), (Font::Geneva, 10.0, Color::WHITE));
+    }
+
+    #[test]
+    fn the_description_draws_over_a_black_box_filling_its_item() {
+        let view = earth();
+        let commands = drawn(&view);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(item(&view, TEXT_ITEM), Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Blue and green."))
+            .expect("the description");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_description() {
+        let long: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        let catalog = FakePort {
+            description: Ok(long.join("\r")),
+            ..catalog()
+        };
+        let mut view = view_of(&catalog);
+        let first = |view: &SpaceportView| {
+            view.dialog()
+                .and_then(|dialog| dialog.text(TEXT_ITEM))
+                .map(ScrollText::first)
+        };
+        view.input(&key(Key::Down));
+        view.input(&key(Key::Down));
+        assert_eq!(first(&view), Some(2));
+        view.input(&key(Key::Up));
+        assert_eq!(first(&view), Some(1));
     }
 
     #[test]
@@ -3304,6 +3382,8 @@ mod tests {
                 held,
                 sold_here: true,
                 bought_here: true,
+                slot: 0,
+                marker: None,
             }],
             events: Vec::new(),
             cash: 1000,
@@ -3334,8 +3414,15 @@ mod tests {
     }
 
     fn trading(template: Result<Template, String>) -> SpaceportView {
-        earth().with_trade(template, Ok(quantity_template()), exchange(0))
+        earth().with_trade(template, Ok(quantity_template()), exchange(0), COLORS)
     }
+
+    /// The list colours the spaceport's exchange is given.
+    const COLORS: ListColors = ListColors {
+        text: Color::rgba(1, 2, 3, 255),
+        background: Color::rgba(4, 5, 6, 255),
+        hilite: Color::rgba(7, 8, 9, 255),
+    };
 
     fn trade_item(view: &SpaceportView, number: usize) -> Point {
         view.open_trade()
@@ -3354,6 +3441,7 @@ mod tests {
         click_item(&mut view, 7);
         let open = view.open_trade().expect("trading");
         assert_eq!(open.market(), &exchange(0));
+        assert_eq!(open.colors(), COLORS, "in the colours given");
         assert!(view.open_service().is_none());
         // Drawn over the spaceport, as the original's dialog is.
         let mut expected: Vec<DrawCommand> = drawn(&earth());
@@ -4733,6 +4821,7 @@ mod tests {
             rows: vec![ComputerRow {
                 mission: MissionId(130),
                 name: "Run".to_owned(),
+                raw_name: "Run".to_owned(),
                 text: "Go.".to_owned(),
             }],
             today: "June 23rd, 1177 NC".to_owned(),
@@ -5046,7 +5135,12 @@ mod tests {
         let outfits: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
         let ships: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
         view_of(&port)
-            .with_trade(Ok(trade_template()), Ok(quantity_template()), exchange(0))
+            .with_trade(
+                Ok(trade_template()),
+                Ok(quantity_template()),
+                exchange(0),
+                ListColors::STOCK,
+            )
             .with_outfitter(
                 Ok(outfit_template()),
                 Ok(quantity_template()),
@@ -5659,6 +5753,15 @@ mod tests {
         assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoClosed)]);
     }
 
+    /// Fills nothing: the stored name as it is.
+    struct AsStored;
+
+    impl OfferNames for AsStored {
+        fn munged(&self, _: MissionId, raw: &str) -> Option<String> {
+            Some(raw.to_owned())
+        }
+    }
+
     #[test]
     fn the_mission_screens_ask_for_their_selected_texts_and_show_them_loaded() {
         let mut view = missioned();
@@ -5668,11 +5771,15 @@ mod tests {
         view.open_mission_computer(Ok(offers()));
         assert_eq!(view.take_computer_text_request(), Some(MissionId(130)));
         assert_eq!(view.take_computer_text_request(), None, "once");
-        view.show_computer_row(&ComputerRow {
-            mission: MissionId(130),
-            name: "Run, loaded".to_owned(),
-            text: "Go, loaded.".to_owned(),
-        });
+        view.show_computer_row(
+            &ComputerRow {
+                mission: MissionId(130),
+                name: "Run, loaded".to_owned(),
+                raw_name: "Run <DST>".to_owned(),
+                text: "Go, loaded.".to_owned(),
+            },
+            &AsStored,
+        );
         let computer = view.mission_computer().expect("open");
         let item = |item| {
             computer
@@ -5683,6 +5790,7 @@ mod tests {
                 .join(" ")
         };
         assert_eq!(item(crate::spaceport::missions::TEXT_ITEM), "Go, loaded.");
+        assert_eq!(item(crate::spaceport::missions::NAME_ITEM), "Run <DST>");
         view.open_mission_info(actives(2));
         assert_eq!(view.take_info_text_request(), Some(0));
         view.show_info_text(0, "Text 0, loaded.");
@@ -5720,7 +5828,8 @@ mod tests {
     // Player info.
 
     use crate::ui::player_info::{
-        PLAYER_INFO_KEY, PlayerInfoButton, PlayerInfoScreen as InfoScreen, Tab,
+        BACKGROUND, BackgroundSizes, PLAYER_INFO_KEY, PictureSize, PlayerInfoButton,
+        PlayerInfoScreen as InfoScreen, Tab,
     };
     use nova_sim::PlayerInfo;
 
@@ -5769,13 +5878,31 @@ mod tests {
             honors: None,
             jettisonable: true,
             words: nova_sim::player_info::Words::STOCK,
+            cheat_ids: nova_sim::player_info::CheatIds::default(),
+            cheats: false,
+        }
+    }
+
+    /// The stock background pictures' sizes.
+    fn stock_background() -> BackgroundSizes {
+        let size = |width, height| Some(PictureSize { width, height });
+        BackgroundSizes {
+            upper: size(413.0, 40.0),
+            middle: size(413.0, 215.0),
+            lower: size(413.0, 40.0),
         }
     }
 
     /// `view` with the player info screen's dialogs given, its Yes/No
-    /// dialog the text's shape.
+    /// dialog the text's shape, and its background `sizes`.
+    fn informed_with(view: SpaceportView, sizes: BackgroundSizes) -> SpaceportView {
+        view.with_player_info(Ok(player_info_template()), Ok(text_template()), sizes)
+    }
+
+    /// `view` with the player info screen's dialogs given, its Yes/No
+    /// dialog the text's shape, over the stock pictures.
     fn informed(view: SpaceportView) -> SpaceportView {
-        view.with_player_info(Ok(player_info_template()), Ok(text_template()))
+        informed_with(view, stock_background())
     }
 
     /// Presses P on `view`, which asked nothing before: whether it asks.
@@ -6259,6 +6386,33 @@ mod tests {
         assert!(view.mission_computer().is_some(), "and nothing below");
         view.input(&key(PLAYER_INFO_KEY));
         assert!(view.take_player_info_request(), "asked again");
+    }
+
+    #[test]
+    fn the_player_info_draws_its_background_from_the_sizes_given() {
+        let sizes = BackgroundSizes {
+            middle: None,
+            ..stock_background()
+        };
+        let mut view = informed_with(missioned(), sizes);
+        view.open_player_info(pilot_info());
+        let screen = view.player_info().expect("open");
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let pictures: Vec<i16> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match **command {
+                    DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::Picture { image, .. } => Some(image),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .filter(|image| BACKGROUND.contains(image))
+            .map(|image| image.id)
+            .collect();
+        assert_eq!(pictures, [8518, 8520], "no middle given, none drawn");
     }
 
     #[test]

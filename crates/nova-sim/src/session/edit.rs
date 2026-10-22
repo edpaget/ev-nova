@@ -175,6 +175,7 @@ impl Session {
         };
         self.enter_system(
             Entry::Relocate,
+            self.pilot.system,
             arrival,
             catalog,
             &NoTraffic,
@@ -533,6 +534,7 @@ mod tests {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.pilot().course_start(), Some(SystemId(130)));
         session.ship.player.heading = 1.25;
         let (stats, reserves) = (session.stats(), session.reserves());
         assert_eq!(session.npcs().len(), 2);
@@ -545,6 +547,7 @@ mod tests {
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
         assert_eq!(session.player().position, Vec2::new(50.0, 60.0));
         assert_eq!(session.player().velocity, Vec2::ZERO);
         assert_eq!(session.player().heading, 1.25, "heading kept");

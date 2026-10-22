@@ -399,6 +399,7 @@ mod player_berths;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
+pub mod script_explosions;
 pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
@@ -518,6 +519,16 @@ pub enum CombatEvent {
         /// loaded `BlastRadius` is floored at none: a negative size
         /// scatters none either way.
         size: f32,
+    },
+    /// An explosion of size 0 whose sound the session has raised already,
+    /// as a `SimSound::Explosion`: a stellar a `Y` destroyed (`_EvalSetExp`
+    /// @0x15ab4; see the [`script_explosions`] module). Drawn as an
+    /// [`Exploded`](Self::Exploded) is, its sound not played again.
+    ExplodedHeard {
+        /// Where.
+        at: Vec2,
+        /// Its explosion.
+        explosion: Explosion,
     },
     /// A ship was disabled.
     Disabled {

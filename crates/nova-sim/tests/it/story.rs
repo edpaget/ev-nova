@@ -313,7 +313,7 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
 }
 
 #[test]
-fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
+fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_its_moves_hook_sees() {
     let home = Home {
         armed: true,
         lives: vec![StellarLife {
@@ -362,7 +362,10 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
     );
     let (b7, b8) = (Bit::new(7).expect("a bit"), Bit::new(8).expect("a bit"));
     assert!(session.control_bit(b7), "its OnDestroy ran");
-    assert!(!session.control_bit(b8), "its move waits for the settling");
+    assert!(
+        session.control_bit(b8),
+        "its move's enter-system hook, dispatched at the operator (@0x159a8), saw b7"
+    );
     let _ = session.settle_script(&home, &mut NeverFires);
-    assert!(session.control_bit(b8), "the arrival's dispatch saw b7");
+    assert!(session.control_bit(b8));
 }

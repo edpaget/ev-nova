@@ -191,6 +191,11 @@ pub struct Hail<'a> {
     /// Every NPC in the system, the ship hailed among them: what a helper
     /// picks its target from (see [`battle`]).
     pub npcs: &'a [Npc],
+    /// The last ships of the berths vacated with their records intact
+    /// ([`Traffic::vacated`](crate::traffic::Traffic::vacated)), which
+    /// only the pick of rank battle help and of a paid helper reads
+    /// ([`Hail::vacated_threats`]). The session sets it; none otherwise.
+    pub vacated: &'a [Npc],
     /// The help the player needs, if any.
     pub need: Option<Help>,
     /// The comm quote (an entry in `STR#` 7100) Greetings says in place
@@ -257,12 +262,31 @@ impl<'a> Hail<'a> {
     /// `_AIFightEnemyThreatToPlayer` (@0x82c9f-0x82d11) picks among, by
     /// its inline test (+0x70 == 0, AI state 3 or 4, @0x82cda-0x82cef), so
     /// not a ship attacking one the player leads. Rank battle help and a
-    /// paid helper pick from these ([`battle`]).
+    /// paid helper pick from these ([`battle`]), and, as the routine has
+    /// no active test (+0xb8), from the [`Hail::vacated_threats`] too.
     pub fn threats_to_player(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
         let me = self.npc.id;
         self.npcs
             .iter()
             .filter(move |other| other.id != me && other.threatens_player())
+    }
+
+    /// The [`Hail::vacated`] ships that pass the same inline test
+    /// ([`Npc::threatens_player`]: +0x70 == 0, AI state 3 or 4, intact
+    /// standing for `_IsDisabled` and `_IsDying` on the record as it was
+    /// left), in the order recorded: the inactive slots
+    /// `_AIFightEnemyThreatToPlayer` still counts (@0x82c9f-0x82d99; see
+    /// [`traffic::vacated`](crate::traffic::vacated)). A berth that the
+    /// ship hailed or any NPC in the system holds is not one: a ship
+    /// taking a berth drops its record anyway.
+    pub fn vacated_threats(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
+        let npcs = self.npcs;
+        let mine = self.npc.berth;
+        self.vacated.iter().filter(move |gone| {
+            gone.berth != mine
+                && gone.threatens_player()
+                && npcs.iter().all(|npc| npc.berth != gone.berth)
+        })
     }
 }
 
@@ -339,6 +363,7 @@ impl<'a> Hail<'a> {
                 .any(|other| other.threatens_player_among(around.npcs)),
             threatened_by_enemy: player_threatened_by_enemy_of(npc, around),
             npcs: around.npcs,
+            vacated: &[],
             need,
             quote: None,
             joins: false,
@@ -587,8 +612,9 @@ impl HailOptions {
     /// and Use As Escort, as `rulebook` chooses: the first three's
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
     /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice), Request
-    /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget)
-    /// and [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp),
+    /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget),
+    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp)
+    /// and [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots),
     /// and Use As Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
     /// entries. Release is for the player's escorts and Use As Escort for
     /// the rest, so the two are never listed together.
@@ -656,6 +682,7 @@ pub(crate) mod fixture {
             player_threatened: false,
             threatened_by_enemy: false,
             npcs: &[],
+            vacated: &[],
             need: None,
             quote: None,
             joins: false,

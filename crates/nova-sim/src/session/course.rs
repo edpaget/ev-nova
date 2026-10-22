@@ -2,23 +2,28 @@
 //! arrival, as [`RuleKey::RouteRewrite`] reads it (see
 //! [`course`](crate::course) for the rules themselves).
 //!
+//! The course's start (`Pilot::course_start`, the original's slot 0) is
+//! rewritten and kept with it.
+//!
 //! **Rebuild points** ([`Chart::rewrite_course`]):
-//! `_HandleStellarSystemVisibility` rewrites the course first thing
-//! (@0x32ab3-0x32b0d), before it shares exploration (@0x32b13). The
-//! session rewrites first thing at each rebuild point, docked or not (see
-//! the `stellars` module's "Rebuild points"), raising no event: the
-//! rewrite never changes the course shown at that moment, as
-//! `Session::course_shown` already resolves each hop by place and cuts at
-//! the first with none. It shows only later, when a hop it rewrote or cut
-//! shows again. A galaxy change is no rebuild point, so between rebuild
-//! points the course keeps its IDs and each hop is resolved by place when
-//! it is used. A load's rebuild rewrites under the default reading, as
+//! `_HandleStellarSystemVisibility` rewrites the course first thing, its
+//! start included (@0x32aaa-0x32b0d), before it shares exploration
+//! (@0x32b13). The session rewrites first thing at each rebuild point,
+//! docked or not (see the `stellars` module's "Rebuild points"), raising
+//! no event: a hop's rewrite never changes the course shown at that
+//! moment, as `Session::course_shown` already resolves each hop by place
+//! and cuts at the first with none. It shows only later, when a hop it
+//! rewrote or cut shows again. A start cut is the exception: it empties
+//! the course shown at once. A galaxy change is no rebuild point, so between rebuild points
+//! the course keeps its IDs and each hop is resolved by place when it is
+//! used. A load's rebuild rewrites under the default reading, as
 //! `Session::fly` runs before `Session::with_rules` (task
 //! load-reads-rules-before-fly).
 //!
 //! **An arrival** ([`Chart::course_after_arrival`]): the jump's entry
-//! drops the hops made, and an arrival that made none clears the course
-//! or drops its first hop by the engine (@0x6c472-0x6c4c6; see the
+//! drops the hops made, the start then the last one made, and an arrival
+//! that made none clears the course or drops its first hop by the engine
+//! (@0x6c472-0x6c4c6; see the
 //! `entry` module's `CourseStep::Arrival`). The entry tells
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
@@ -33,17 +38,19 @@ impl Session {}
 
 impl Setup {
     /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
-    fn route_rewrite(&self) -> RuleSource {
+    pub(super) fn route_rewrite(&self) -> RuleSource {
         self.rules.source_for(RuleKey::RouteRewrite)
     }
 }
 
 impl Chart {
     /// A rebuild point's rewrite (see the module docs): by the engine,
-    /// each hidden hop rewritten to the system at its place and the
-    /// course cut at the first with none. Raises no event.
+    /// a hidden start and each hidden hop rewritten to the system at its
+    /// place, and the course cut at the first with none, whole when it is
+    /// the start. Raises no event.
     pub(super) fn rewrite_course(&mut self, pilot: &mut Pilot, setup: &Setup) {
-        pilot.course = course::rewritten(
+        (pilot.course_start, pilot.course) = course::rewritten(
+            pilot.course_start,
             &pilot.course,
             self.galaxy.map().places(),
             setup.route_rewrite(),
@@ -59,7 +66,8 @@ impl Chart {
         hops: usize,
         arrived: SystemId,
     ) {
-        pilot.course = course::after_arrival(
+        (pilot.course_start, pilot.course) = course::after_arrival(
+            pilot.course_start,
             &pilot.course,
             hops,
             arrived,
@@ -73,10 +81,13 @@ impl Chart {
 mod tests {
     use super::*;
     use crate::chance::NeverFires;
+    use crate::control::SetExpr;
     use crate::hyperspace::MultiJumpRule;
     use crate::rulebook::Rulebook;
-    use crate::session::tests::{alternates, bound_for_134, chained, hide, unhide};
-    use crate::testkit::{begin_jump_now, catalog, land_now};
+    use crate::session::tests::{
+        alternates, at_gate, at_wormhole, bound_for_134, chained, gated, hide, unhide, wormholes,
+    };
+    use crate::testkit::{FakePilotCatalog, Scripted, begin_jump_now, catalog, land_now};
 
     fn ids(route: &[i16]) -> Vec<SystemId> {
         route.iter().copied().map(SystemId).collect()
@@ -194,5 +205,151 @@ mod tests {
             );
             assert_eq!(session.course(), ids(&[132, 134]), "{source:?}");
         }
+    }
+
+    /// Runs the set expression `text` and settles it, as play does.
+    fn settle(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
+        session.run_set(
+            &SetExpr::parse(text).expect("parses"),
+            &mut Scripted::default(),
+        );
+        let _ = session.settle_script(catalog, &mut Scripted::default());
+    }
+
+    #[test]
+    fn a_plotted_course_starts_at_the_pilots_system() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.pilot.course_start(), Some(SystemId(130)));
+        assert!(session.plot_course(SystemId(999)).is_err());
+        assert_eq!(
+            session.pilot.course_start(),
+            None,
+            "a failed plot clears it"
+        );
+    }
+
+    #[test]
+    fn a_course_whose_start_hides_with_nothing_at_its_place_is_cut_whole_at_the_next_rebuild() {
+        let catalog = alternates();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(rules(source));
+            session.plot_course(SystemId(132)).expect("a route");
+            settle(&mut session, &catalog, "M131");
+            assert_eq!(session.system(), SystemId(131));
+            assert_eq!(session.course(), ids(&[131, 132]), "the move keeps it");
+            assert_eq!(session.pilot.course_start(), Some(SystemId(130)));
+            hide(&mut session, &catalog, &[130]);
+            land_now(&mut session).expect("lands");
+            assert_eq!(
+                session.course(),
+                by(source, ids(&[]), ids(&[131, 132])),
+                "{source:?}"
+            );
+            assert_eq!(
+                session.pilot.course_start(),
+                by(source, None, Some(SystemId(130))),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hidden_start_with_a_system_at_its_place_becomes_it_and_keeps_the_course() {
+        let catalog = alternates();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(rules(source));
+            settle(&mut session, &catalog, "M131");
+            session.plot_course(SystemId(132)).expect("a route");
+            assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
+            settle(&mut session, &catalog, "M130");
+            hide(&mut session, &catalog, &[131]);
+            land_now(&mut session).expect("lands");
+            assert_eq!(session.course(), ids(&[132]), "{source:?}");
+            assert_eq!(
+                session.pilot.course_start(),
+                by(source, Some(SystemId(134)), Some(SystemId(131))),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_take_off_after_a_landed_move_cuts_a_course_whose_start_hid() {
+        let catalog = alternates();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(rules(source));
+            session.plot_course(SystemId(132)).expect("a route");
+            land_now(&mut session).expect("lands");
+            settle(&mut session, &catalog, "M131");
+            assert_eq!(session.system(), SystemId(131));
+            hide(&mut session, &catalog, &[130]);
+            assert_eq!(session.course(), ids(&[131, 132]), "{source:?}");
+            session.take_off(&catalog, &mut NeverFires);
+            assert_eq!(
+                session.course(),
+                by(source, ids(&[]), ids(&[131, 132])),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_in_flight_move_that_keeps_the_course_draws_it_from_its_start() {
+        // `_DrawMap` pairs `_hyperRoute` from slot 0 (@0xe661-0xe7a2),
+        // never from the player's system.
+        let catalog = alternates();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::MoveArrival, source));
+            session.plot_course(SystemId(132)).expect("a route");
+            settle(&mut session, &catalog, "M131");
+            assert_eq!(session.system(), SystemId(131), "{source:?}");
+            let drawn = session
+                .map_drawing(None, &[], crate::galaxy_map::MapMarks::NONE)
+                .course;
+            let kept = [(130, 131), (131, 132)].map(|(a, b)| (SystemId(a), SystemId(b)));
+            assert_eq!(drawn, by(source, kept.to_vec(), vec![]), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn an_arrival_along_the_course_starts_it_at_the_last_hop_made() {
+        let catalog = chained(catalog(), 1);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        session.arrive(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
+    }
+
+    #[test]
+    fn a_hypergate_or_wormhole_exit_restarts_the_course_at_the_system_entered() {
+        let gates = gated();
+        let mut session = at_gate(&gates);
+        session.pilot.course = ids(&[132]);
+        session.pilot.course_start = Some(SystemId(133));
+        session.open_hypergate(&gates).expect("opens");
+        session
+            .enter_hypergate(Some(SystemId(131)), &gates, &mut NeverFires)
+            .expect("enters");
+        assert_eq!(session.course(), ids(&[]));
+        assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
+
+        let holes = wormholes();
+        let mut session = at_wormhole(&holes);
+        session.pilot.course = ids(&[132]);
+        session
+            .enter_wormhole(&holes, &mut Scripted::rolling(&[0]))
+            .expect("enters");
+        assert_eq!(session.course(), ids(&[]));
+        assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
     }
 }

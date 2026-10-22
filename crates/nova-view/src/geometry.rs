@@ -105,6 +105,17 @@ impl Bounds {
             max: Point::new(self.max.x + margin, self.max.y + margin),
         }
     }
+
+    /// The rectangle with `dx` taken off its left and right and `dy` off
+    /// its top and bottom, as QuickDraw's `InsetRect` does. Negative
+    /// insets grow it: [`Bounds::grown`] is `inset(-margin, -margin)`.
+    #[must_use]
+    pub fn inset(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            min: Point::new(self.min.x + dx, self.min.y + dy),
+            max: Point::new(self.max.x - dx, self.max.y - dy),
+        }
+    }
 }
 
 /// The point `t` of the way from `from` to `to`: exactly `from` at 0 and
@@ -233,5 +244,13 @@ mod tests {
         assert_eq!(box_.grown(0.0), box_);
         let point = bounds((4.0, 4.0), (4.0, 4.0));
         assert_eq!(point.grown(1.5), bounds((2.5, 2.5), (5.5, 5.5)));
+    }
+
+    #[test]
+    fn insetting_moves_the_sides_in_by_dx_and_the_top_and_bottom_by_dy() {
+        let box_ = bounds((10.0, 10.0), (50.0, 46.0));
+        assert_eq!(box_.inset(5.0, 3.0), bounds((15.0, 13.0), (45.0, 43.0)));
+        assert_eq!(box_.inset(0.0, 0.0), box_);
+        assert_eq!(box_.inset(-2.0, -2.0), box_.grown(2.0));
     }
 }

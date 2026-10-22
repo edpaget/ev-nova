@@ -82,7 +82,7 @@ use std::rc::Rc;
 
 use super::missions::TextSource;
 use super::{Outbox, Session, Setup, Space, Statics, hire};
-use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
+use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch, SystemId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -419,10 +419,12 @@ impl Session {
     /// session held every grudge at its settle step before weapons-fidelity
     /// phase 45. Record only, not filed: in the original these hits were
     /// answered in turn, but the NPCs are discarded with the system, so
-    /// their reactions are never seen, and the grudge is kept.
-    pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike]) {
+    /// their reactions are never seen, and the grudge is kept. The NPCs
+    /// fly among the world of `left`, the system the strikes are left in
+    /// ([`Session::world_in`]).
+    pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike], left: SystemId) {
         let hit: Vec<NpcId> = {
-            let world = self.world();
+            let world = self.world_in(left);
             let around = world.around(self.space.traffic.npcs());
             strikes
                 .iter()

@@ -10,10 +10,14 @@
 //! - Level 1: a jump's arrival, the head then the system
 //!   (@0x6c184-0x6c1b8), a hypergate's exit (@0x63a1a-0x63a49) and a
 //!   wormhole's exit (@0x642c4-0x642f3): the entry's explore step (see the
-//!   `entry` module).
+//!   `entry` module). Neither exit runs the neighbour pass: the original's
+//!   write the head and the system directly (@0x63a04-0x63a49,
+//!   @0x642ae-0x642f3) and call no `_AutoSetExploration`, so neither
+//!   explores a linked system.
 //! - Level 2: the take-off (`_PlayerLandOnStellar` raises the head, then
 //!   the system, @0x6346d-0x6349e, then `_AutoSetExploration(system, 0,
-//!   2)` raises both again @0x634b1-0x634c8): [`Session::take_off`].
+//!   2)` raises both again @0x634b1-0x634c8, the walk of the `map_walk`
+//!   module): [`Session::take_off`].
 //! - Level 2: a map grant: `_AutoSetExploration` → `_RecursiveAutoExplore`
 //!   raises each reached system (@0xd9a6-0xd9af) and its head
 //!   (@0xda07-0xda10), for the N-jump (@0x44dcb), inhabited-independent
@@ -48,8 +52,15 @@
 //! neighbour loop is the original's and the Bible says nothing of it: by
 //! the engine each neighbour's head, by the other reading the neighbour
 //! itself. The start system is explored by `Pilot::new`, and its head by
-//! the rebuild `Session::begin` ends with, under the engine; visibility
-//! is the galaxy as `Session::fly` refreshed it for the new pilot's bits.
+//! the rebuild `Session::begin` ends with, under the engine. The loop
+//! tests each link's visible flag (@0x18fc5) before `_DoNewPilot`'s own
+//! refresh (@0x1925e), so by the engine's reading of
+//! [`RuleKey::NewPilotVisibility`] the visibility is the run's last
+//! refresh: the one a session earlier in the run left
+//! (`Session::with_last_refresh`), else the launch's, with clear bits
+//! (see the `last_refresh` module). By the other reading it is the galaxy
+//! as `Session::fly` refreshed it for the new pilot's bits. A link to no
+//! system explores nothing by either.
 //!
 //! **A load** keeps each system's level, as the original's pilot file
 //! does (`_LoadPilotData` @0x7553f-0x75565; see the save's version 29).
@@ -59,14 +70,14 @@
 //! point works the known set out afresh right after its share
 //! (`Chart::rework_known`, @0x32b7b, @0x32b91-0x32c10), so a new
 //! pilot, a loaded one and a fresh session are known from before their
-//! first frame, as each ends in a rebuild. A map grant adds its pass,
-//! with no clear, after its walk (`Chart::add_known`, @0xdb06-0xdbd4).
-//! The take-off's `_AutoSetExploration` runs the same pass
-//! (@0x634c8), but needs none of its own here: the dock request's rebuild
-//! point ends the take-off (@0x674c7; `Session::lift_off`) and works the
-//! known set out afresh from what the take-off explored, as the
-//! original's does after the pass. The hypergate map's arrows mark their
-//! systems ([`Session::mark_known`], @0xf45f).
+//! first frame, as each ends in a rebuild. Every walk adds its pass, with
+//! no clear, at its end (`Chart::add_known`, @0xdb06-0xdbd4; see the
+//! `map_walk` module): a map grant's, a nested one's inside the outer
+//! walk, the take-off's (@0x634c8) and a jump's re-explore's (@0x6c1db).
+//! The rebuild point after the take-off (@0x674c7; `Session::lift_off`)
+//! and the jump's entry work the known set out afresh, as the original's
+//! do after the pass. The hypergate map's arrows mark their systems
+//! ([`Session::mark_known`], @0xf45f).
 //!
 //! Left to others: `_ResetPlayer`'s neighbours (@0x1da0f-0x1da7a) and the
 //! escape pod's exploration (@0x690cb), roadmap player-death. The
@@ -75,7 +86,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Chart, Session, Setup};
+use super::{Chart, Session, Setup, Statics};
 use crate::catalog::SystemId;
 use crate::exploration::{explored_with, known_from, shared_by_place, start_neighbours};
 use crate::pilot::{ExploredLevel, Pilot};
@@ -179,14 +190,22 @@ impl Chart {
     }
 
     /// A new pilot's neighbours (see the module docs): each of the start
-    /// system's Con slots naming a visible system explores, by the
-    /// engine, that system's head, and by the other reading the system.
-    pub(super) fn explore_start_neighbours(&mut self, pilot: &mut Pilot, setup: &Setup) {
+    /// system's Con slots naming a system that exists and that the
+    /// visibility read ([`RuleKey::NewPilotVisibility`]) shows explores,
+    /// by the engine, that system's head, and by the other reading the
+    /// system.
+    pub(super) fn explore_start_neighbours(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) {
         let source = setup.explored_by_place();
+        let refresh = self.new_pilot_refresh(statics, setup);
         let galaxy = &self.galaxy;
         let neighbours = start_neighbours(
             galaxy.con_slots(pilot.system),
-            |system| galaxy.exists(system) && galaxy.visible(system),
+            |system| galaxy.exists(system) && !refresh.hides(system),
             galaxy.map().places(),
             source,
         );
@@ -204,6 +223,7 @@ mod tests {
     use crate::control::Test;
     use crate::pilot::Pilot;
     use crate::rulebook::Rulebook;
+    use crate::session::LastRefresh;
     use crate::session::tests::{at_gate, at_wormhole, gated, wormholes};
     use crate::testkit::{
         FakePilotCatalog, Scripted, catalog, hideable, hiding_bit, jump, land_now, star,
@@ -327,6 +347,49 @@ mod tests {
                 Ok(SystemId(131))
             );
             assert_arrived_at_level_1(&session, source);
+        }
+    }
+
+    #[test]
+    fn a_gate_or_wormhole_exit_runs_no_neighbour_pass() {
+        // 131, the exit's system, lists 132, visible, whose head is 126.
+        let neighboured = |base: FakePilotCatalog| {
+            let mut catalog = shadowed(base);
+            catalog.star_map.push(star(126, (600.0, 600.0), &[]));
+            catalog
+        };
+        let gates = neighboured(gated());
+        let holes = neighboured(wormholes());
+        let unexplored = |session: &Session, how: &str, source: RuleSource| {
+            assert!(session.galaxy().visible(SystemId(132)), "{how}");
+            for system in [132, 126] {
+                assert_eq!(
+                    level(session, system),
+                    ExploredLevel::Unexplored,
+                    "{source:?} {how} {system}"
+                );
+            }
+        };
+        for source in RuleSource::ALL {
+            let mut session = at_gate(&gates).with_rules(rules(source));
+            unexplored(&session, "before the gate", source);
+            assert_eq!(
+                session.enter_hypergate(Some(SystemId(131)), &gates, &mut Scripted::default()),
+                Ok(SystemId(131))
+            );
+            // `_PlayerEnterHypergate` @0x63a04-0x63a49 calls no
+            // `_AutoSetExploration`.
+            assert_arrived_at_level_1(&session, source);
+            unexplored(&session, "a gate", source);
+            let mut session = at_wormhole(&holes).with_rules(rules(source));
+            unexplored(&session, "before the wormhole", source);
+            assert_eq!(
+                session.enter_wormhole(&holes, &mut Scripted::rolling(&[0])),
+                Ok(SystemId(131))
+            );
+            // `_PlayerEnterWormhole` @0x642ae-0x642f3, likewise.
+            assert_arrived_at_level_1(&session, source);
+            unexplored(&session, "a wormhole", source);
         }
     }
 
@@ -456,33 +519,111 @@ mod tests {
         }
     }
 
+    /// What a new pilot holding `hidden_bits` explores of its neighbours
+    /// in `catalog`, sharing by place as `place` says, reading visibility
+    /// as `visibility` says, with `carried` handed on from earlier in the
+    /// run, if any.
+    fn new_pilot_explores(
+        catalog: &FakePilotCatalog,
+        hidden_bits: &[i16],
+        (place, visibility): (RuleSource, RuleSource),
+        carried: Option<LastRefresh>,
+    ) -> Vec<i16> {
+        let mut pilot = Pilot::new(catalog, "").expect("starts");
+        for &system in hidden_bits {
+            pilot.bits_mut().set(hiding_bit(system));
+        }
+        let session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(rules(place).with_override(RuleKey::NewPilotVisibility, visibility));
+        let mut session = match carried {
+            Some(carried) => session.with_last_refresh(carried),
+            None => session,
+        };
+        session.chart.explore_start_neighbours(
+            &mut session.pilot,
+            &session.statics,
+            &session.setup,
+        );
+        // At level 1 (`_DoNewPilot` @0x18fe6, @0x1902e).
+        assert_eq!(session.pilot().charted().count(), 0);
+        session.pilot().explored().map(|system| system.0).collect()
+    }
+
     #[test]
     fn a_new_pilot_explores_each_visible_neighbours_head() {
-        // 130 lists 131 (127's place), 133, 132 hidden, and 999, no system.
+        // 130 lists 131 (127's place), 133, 132 hidden, and 999, no system:
+        // hidden by the pilot's bit, which the other reading sees, and by
+        // the refresh carried, which the engine's sees.
         let mut catalog = shadowed(catalog());
         catalog.star_map[0].links = [131, 133, 132, 999].map(SystemId).to_vec();
-        for source in RuleSource::ALL {
-            let mut pilot = Pilot::new(&catalog, "").expect("starts");
-            pilot.bits_mut().set(hiding_bit(132));
-            let mut session = Session::fly(&catalog, pilot)
-                .expect("flies")
-                .with_rules(rules(source));
-            session
-                .chart
-                .explore_start_neighbours(&mut session.pilot, &session.setup);
-            let explored: Vec<SystemId> = session.pilot().explored().collect();
-            let expected: &[i16] = match source {
-                RuleSource::Engine => &[127, 130, 133],
-                RuleSource::Bible => &[130, 131, 133],
-            };
-            assert_eq!(
-                explored,
-                expected.iter().copied().map(SystemId).collect::<Vec<_>>(),
-                "{source:?}"
-            );
-            // At level 1 (`_DoNewPilot` @0x18fe6, @0x1902e).
-            assert_eq!(session.pilot().charted().count(), 0, "{source:?}");
+        let carried = LastRefresh::hiding([SystemId(132), SystemId(127), SystemId(129)]);
+        for place in RuleSource::ALL {
+            for visibility in RuleSource::ALL {
+                let carried = (visibility == RuleSource::Engine).then(|| carried.clone());
+                let expected: &[i16] = match place {
+                    RuleSource::Engine => &[127, 130, 133],
+                    RuleSource::Bible => &[130, 131, 133],
+                };
+                assert_eq!(
+                    new_pilot_explores(&catalog, &[132], (place, visibility), carried),
+                    expected,
+                    "{place:?} {visibility:?}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_new_pilot_reads_the_carried_refresh() {
+        // 130 lists 131, whose head is 127.
+        let catalog = shadowed(catalog());
+        let engine = (RuleSource::Engine, RuleSource::Engine);
+        let bible = (RuleSource::Engine, RuleSource::Bible);
+        // Carried hides 131; the new pilot's own bits show it.
+        let hiding_131 = || Some(LastRefresh::hiding([SystemId(131)]));
+        assert_eq!(
+            new_pilot_explores(&catalog, &[], engine, hiding_131()),
+            [130]
+        );
+        assert_eq!(
+            new_pilot_explores(&catalog, &[], bible, hiding_131()),
+            [127, 130]
+        );
+        // The pilot's own bits hide 131; the carried refresh shows it.
+        let showing = || Some(LastRefresh::default());
+        assert_eq!(
+            new_pilot_explores(&catalog, &[131], engine, showing()),
+            [127, 130]
+        );
+        assert_eq!(
+            new_pilot_explores(&catalog, &[131], bible, showing()),
+            [130]
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_with_no_carried_refresh_reads_the_launchs() {
+        // The pilot's bit hides 131; the launch had clear bits.
+        let catalog = shadowed(catalog());
+        assert_eq!(
+            new_pilot_explores(
+                &catalog,
+                &[131],
+                (RuleSource::Engine, RuleSource::Engine),
+                None
+            ),
+            [127, 130]
+        );
+        assert_eq!(
+            new_pilot_explores(
+                &catalog,
+                &[131],
+                (RuleSource::Engine, RuleSource::Bible),
+                None
+            ),
+            [130]
+        );
     }
 
     // Known.

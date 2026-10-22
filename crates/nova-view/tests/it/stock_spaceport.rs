@@ -20,7 +20,7 @@ use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
 };
-use nova_view::spaceport::{SpaceportView, StellarId, TradeScreen};
+use nova_view::spaceport::{ListColors, ListLooks, SpaceportView, StellarId, TradeScreen};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::DialogResources;
@@ -116,14 +116,20 @@ fn at_port_kane(data: &GameData) -> Session {
 
 /// Port Kane's Trade Center: its exchange in the 426 x 252 "Trade"
 /// dialog, centred over its background, with Done, Buy and Sell along the
-/// bottom and a row for each good.
+/// bottom, the header in `STR#` 2002's words, a row for each good and the
+/// cargo summary's free space, with no status line.
 #[test]
 fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
     for (dir, ui) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(TRADE_DIALOG).expect("Trade");
-        let market = at_port_kane(&data).market().expect("a trade center");
+        // The strings the app gives the session: `STR#` 2002's words.
+        let strings = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+        let market = at_port_kane(&data)
+            .with_strings(strings)
+            .market()
+            .expect("a trade center");
         let screen = TradeScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             ui.dialog_template(QUANTITY_DIALOG),
@@ -162,9 +168,37 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
                 _ => None,
             })
             .collect();
-        for shown in ["Food", "93", "Equipment", "440", "Done", "Buy", "Sell"] {
+        for shown in [
+            "Commodity:",
+            "In Hold:",
+            "Price:",
+            "Food",
+            "93",
+            "Equipment",
+            "440",
+            "Done",
+            "Buy",
+            "Sell",
+        ] {
             assert!(texts.contains(&shown), "{shown}: {texts:?}");
         }
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.starts_with("Free cargo space: ")),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|text| text.contains("Credits")));
+    }
+}
+
+/// Stock `cölr` 128's list colours are the stock ones: white text on
+/// black, the selection dark red.
+#[test]
+fn the_stock_list_colours_are_colr_128s() {
+    for (dir, _) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        assert_eq!(data.list_colors(), ListColors::STOCK);
     }
 }
 

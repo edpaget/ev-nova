@@ -30,7 +30,7 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
-use nova_sim::Pilot;
+use nova_sim::{LastRefresh, Pilot};
 use nova_view::flight::FlightView;
 
 use super::{AppScreen, Side};
@@ -58,6 +58,16 @@ impl AppScreen {
         if let Some(old) = self.game.replace(flight) {
             self.remember_flight(&old);
         }
+    }
+
+    /// What the run's last galaxy refresh left hidden, for a new pilot's
+    /// neighbour pass (see [`nova_sim::LastRefresh`]): the game held's,
+    /// else the last flight put away's, else `None`, the launch's.
+    pub(super) fn run_refresh(&self) -> Option<LastRefresh> {
+        self.game
+            .as_ref()
+            .and_then(FlightView::last_refresh)
+            .or_else(|| self.last_refresh.clone())
     }
 
     /// Settles what the held game's hooks queued
@@ -108,8 +118,13 @@ impl AppScreen {
     /// pilot loaded; choice 0 runs no sweep after it (@0x1a795-0x1a7d2).
     /// What the settling then makes due is saved too, as after any input.
     /// Its intro is remembered for the entry
-    /// ([`AppScreen::remember_new_pilot_intro`]).
-    pub(super) fn hold_new_pilot(&mut self, mut flight: FlightView<Rc<GameData>>) {
+    /// ([`AppScreen::remember_new_pilot_intro`]). Its neighbour pass
+    /// reads the run's last refresh ([`AppScreen::run_refresh`]).
+    pub(super) fn hold_new_pilot(&mut self, flight: FlightView<Rc<GameData>>) {
+        let mut flight = match self.run_refresh() {
+            Some(carried) => flight.with_last_refresh(carried),
+            None => flight,
+        };
         self.remember_new_pilot_intro();
         flight.begin();
         flight.take_save_due();

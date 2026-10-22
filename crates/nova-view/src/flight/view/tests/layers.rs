@@ -147,7 +147,17 @@ fn the_message_line_is_overlay_text_drawn_among_the_world() {
         .expect("the message");
     let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
     assert_eq!(layers[message], DrawLayer::Overlay);
-    assert_eq!(layers[message - 1], DrawLayer::World, "over the stars");
+    assert_eq!(
+        list.iter().nth(message - 1),
+        Some(&fill_command(hud::message_box(VIEW_SIZE), Color::BLACK)),
+        "its box under it"
+    );
+    assert_eq!(
+        layers[message - 1],
+        DrawLayer::World,
+        "the box in the world"
+    );
+    assert_eq!(layers[message - 2], DrawLayer::World, "over the stars");
     assert_eq!(layers[message + 1], DrawLayer::World, "under the stellars");
     assert!(sprite_of(1128)(
         list.iter().nth(message + 1).expect("drawn")

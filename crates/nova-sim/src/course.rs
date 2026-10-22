@@ -3,22 +3,31 @@
 //! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says.
 //!
 //! The original's course is 32 words at 0x3b51c8. Slot 0 is the system
-//! last reached: a plot leaves it there, and `_SpoolNextHyperRouteDest`
-//! (0x12103-0x121a2) shifts the course left once slot 1's stand-in is the
-//! player's system's stand-in. Slot 1 is the next hop. The engine's
-//! course is the original's slots 1 and up, so its first hop is the
+//! the course was last started or advanced from: Clear Route and the gate
+//! exits restart it there, a Shift-click's append sets it when it is -1,
+//! and `_SpoolNextHyperRouteDest` (0x12103-0x121a2) shifts the course left
+//! once slot 1's stand-in is the player's system's stand-in. Only `M` and
+//! `N` (@0x1570e-0x159ad) move the player without touching it. Slot 1 is
+//! the next hop. The engine keeps slot 0 as `Pilot::course_start` and the
+//! original's slots 1 and up as `Pilot::course`, so its first hop is the
 //! original's slot 1. How a Shift-click on the course map writes the
 //! course is the [`map_route`](crate::map_route) module's.
 //!
 //! **Rewrite and cut** ([`rewritten`]). `_HandleStellarSystemVisibility`
-//! runs it first (@0x32ab3-0x32b0d), so every rebuild point runs it. For
-//! each slot, an empty one (-1) is skipped (@0x32abe); a visible hop is
+//! runs it first (@0x32aaa-0x32b0d), so every rebuild point runs it. It
+//! starts at slot 0, the course's start (%esi = 0 @0x32aaa). For each
+//! slot, an empty one (-1) is skipped (@0x32abe); a visible hop is
 //! left as it is, even when another visible system shadows it at its
 //! place (the +0x1eb test @0x32ad4); a hidden hop is overwritten with the
 //! system `_FindActiveCoLocatedSystem` gives (@0x32ae1-0x32ae6), its
 //! [`Places::stand_in`]; and when that is -1, the slot and every later
-//! slot are set to -1 (@0x32aed-0x32b02), cutting the course for good. No
-//! sound plays.
+//! slot are set to -1 (@0x32aed-0x32b02), cutting the course for good.
+//! A start hidden with no stand-in so cuts the whole course, start and
+//! hops; this is reachable only after an `M` or `N` keeps a course whose
+//! start later hides, as every other writer leaves the start at the
+//! player's place, which always has a visible system. A hidden start's
+//! stand-in shares its place, so rewriting it is unobservable, but it is
+//! done. No sound plays.
 //!
 //! **Arrival clear** ([`after_arrival`], @0x6c472-0x6c4c6). The course is
 //! cleared only when slot 1 is set, the jump flag at -0x2c9(%ebp) is
@@ -44,9 +53,14 @@
 //! only makes that resolution stick at each rebuild point. The move out of
 //! a hidden system (@0x998f1-0x99a36) doesn't touch the course.
 //!
+//! An arrival leaves the start at the last hop made, raw, and a course
+//! with no hops left has no start, as `_SpoolNextHyperRouteDest` and the
+//! arrival clear leave slot 0.
+//!
 //! **Branches left out.**
-//! - The rewrite of slot 0, the system last reached (@0x32abb, %esi = 0),
-//!   which the engine doesn't store: crons-news-ranks-fidelity phase 23.
+//! - `_DrawMap` draws the course from slot 0 (@0xe661-0xe7a2), where the
+//!   engine's map draws it from the current system:
+//!   crons-news-ranks-fidelity phase 39.
 //! - A multi-jump hop with no stand-in partway through the chain
 //!   (@0x6bdc6-0x6bdcc → 0x6bdfe → 0x6be0b): the original writes system
 //!   -1 as the player's system. The engine stops the chain at the previous
@@ -68,46 +82,78 @@ use crate::catalog::SystemId;
 use crate::hyperspace::Places;
 use crate::rulebook::RuleSource;
 
-/// `course` at a rebuild point: by the engine, each hidden hop rewritten
-/// to the system at its place, and the course cut at the first hidden hop
-/// with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d); by the
-/// other reading, unchanged.
+/// The course's start and hops at a rebuild point. By the engine
+/// (`_HandleStellarSystemVisibility` @0x32aaa-0x32b0d), an empty `start`
+/// is skipped, a visible one kept, and a hidden one rewritten to the
+/// system at its place; a hidden start with none empties the whole
+/// course. Then each hidden hop is rewritten to the system at its place,
+/// and the hops are cut at the first hidden one with none. By the other
+/// reading both come back unchanged.
 #[must_use]
-pub fn rewritten(course: &[SystemId], places: &Places, source: RuleSource) -> Vec<SystemId> {
+pub fn rewritten(
+    start: Option<SystemId>,
+    course: &[SystemId],
+    places: &Places,
+    source: RuleSource,
+) -> (Option<SystemId>, Vec<SystemId>) {
+    let rewrite = |system: SystemId| {
+        if places.visible(system) {
+            Some(system)
+        } else {
+            places.stand_in(system)
+        }
+    };
     match source {
-        RuleSource::Bible => course.to_vec(),
-        RuleSource::Engine => course
-            .iter()
-            .map_while(|&hop| {
-                if places.visible(hop) {
-                    Some(hop)
-                } else {
-                    places.stand_in(hop)
-                }
-            })
-            .collect(),
+        RuleSource::Bible => (start, course.to_vec()),
+        RuleSource::Engine => match start.map(rewrite) {
+            Some(None) => (None, Vec::new()),
+            start => (
+                start.flatten(),
+                course.iter().map_while(|&hop| rewrite(hop)).collect(),
+            ),
+        },
     }
 }
 
-/// `course` after an arrival at `arrived` that made `hops` of its hops:
-/// those dropped. An arrival that made none, by the engine, clears the
-/// course when its first hop stands elsewhere and drops that hop when it
-/// stands at `arrived` (@0x6c472-0x6c4c6); by the other reading it keeps
-/// the course.
+/// The course's start and hops after an arrival at `arrived` that made
+/// `hops` of its hops: those dropped, and the start the last one made,
+/// raw (`_SpoolNextHyperRouteDest` @0x12103-0x121a2). An arrival that
+/// made none, by the engine, clears the course when its first hop stands
+/// elsewhere and drops that hop, raw, into the start when it stands at
+/// `arrived` (@0x6c472-0x6c4c6); by the other reading it keeps both. A
+/// course with no hops left has no start, by both readings, as the
+/// original empties all 32 slots when slot 1 is -1.
 #[must_use]
 pub fn after_arrival(
+    start: Option<SystemId>,
     course: &[SystemId],
     hops: usize,
     arrived: SystemId,
     places: &Places,
     source: RuleSource,
-) -> Vec<SystemId> {
-    if hops > 0 || source == RuleSource::Bible {
-        return course[hops.min(course.len())..].to_vec();
-    }
-    match course.split_first() {
-        Some((&first, rest)) if places.stand_in(first) == places.stand_in(arrived) => rest.to_vec(),
-        _ => Vec::new(),
+) -> (Option<SystemId>, Vec<SystemId>) {
+    let (start, rest) = if hops > 0 {
+        let made = hops.min(course.len());
+        (
+            made.checked_sub(1)
+                .and_then(|last| course.get(last))
+                .copied(),
+            &course[made..],
+        )
+    } else if source == RuleSource::Bible {
+        (start, course)
+    } else {
+        match course.split_first() {
+            Some((&first, rest)) if places.stand_in(first) == places.stand_in(arrived) => {
+                (Some(first), rest)
+            }
+            _ => (None, &[][..]),
+        }
+    };
+    if rest.is_empty() {
+        (None, Vec::new())
+    } else {
+        (start, rest.to_vec())
     }
 }
 
@@ -145,8 +191,13 @@ mod tests {
     #[test]
     fn a_hidden_hop_is_rewritten_to_the_system_at_its_place() {
         assert_eq!(
-            rewritten(&list(&[131, 132]), &places(&[131]), RuleSource::Engine),
-            list(&[134, 132])
+            rewritten(
+                None,
+                &list(&[131, 132]),
+                &places(&[131]),
+                RuleSource::Engine
+            ),
+            (None, list(&[134, 132]))
         );
     }
 
@@ -155,8 +206,8 @@ mod tests {
         let places = places(&[]);
         assert_eq!(places.stand_in(SystemId(134)), Some(SystemId(131)));
         assert_eq!(
-            rewritten(&list(&[134, 132]), &places, RuleSource::Engine),
-            list(&[134, 132])
+            rewritten(None, &list(&[134, 132]), &places, RuleSource::Engine),
+            (None, list(&[134, 132]))
         );
     }
 
@@ -165,13 +216,13 @@ mod tests {
         // 132 is hidden alone at its place; 131 is hidden with visible 134.
         let hidden = places(&[132, 131]);
         assert_eq!(
-            rewritten(&list(&[134, 132, 131]), &hidden, RuleSource::Engine),
-            list(&[134]),
+            rewritten(None, &list(&[134, 132, 131]), &hidden, RuleSource::Engine),
+            (None, list(&[134])),
             "131 after the cut has a stand-in, but stays cut"
         );
         assert_eq!(
-            rewritten(&list(&[132, 133]), &hidden, RuleSource::Engine),
-            list(&[])
+            rewritten(None, &list(&[132, 133]), &hidden, RuleSource::Engine),
+            (None, list(&[]))
         );
     }
 
@@ -183,7 +234,10 @@ mod tests {
             (list(&[134, 132, 131]), places(&[132, 131])),
             (list(&[132, 133]), places(&[132])),
         ] {
-            assert_eq!(rewritten(&course, &hidden, RuleSource::Bible), course);
+            assert_eq!(
+                rewritten(Some(SystemId(132)), &course, &hidden, RuleSource::Bible),
+                (Some(SystemId(132)), course)
+            );
         }
     }
 
@@ -191,10 +245,12 @@ mod tests {
     fn the_hops_made_are_dropped_by_both_readings() {
         let course = list(&[132, 133, 131]);
         for source in RuleSource::ALL {
-            let after = |hops| after_arrival(&course, hops, SystemId(133), &places(&[]), source);
-            assert_eq!(after(1), list(&[133, 131]));
-            assert_eq!(after(2), list(&[131]));
-            assert_eq!(after(5), list(&[]), "clamped");
+            let after =
+                |hops| after_arrival(None, &course, hops, SystemId(133), &places(&[]), source);
+            assert_eq!(after(1), (Some(SystemId(132)), list(&[133, 131])));
+            assert_eq!(after(2), (Some(SystemId(133)), list(&[131])));
+            assert_eq!(after(3), (None, list(&[])), "the course finished");
+            assert_eq!(after(5), (None, list(&[])), "clamped");
         }
     }
 
@@ -202,13 +258,14 @@ mod tests {
     fn an_arrival_off_the_course_clears_it_when_its_next_hop_stands_elsewhere() {
         assert_eq!(
             after_arrival(
+                None,
                 &list(&[133, 132]),
                 0,
                 SystemId(131),
                 &places(&[]),
                 RuleSource::Engine
             ),
-            list(&[])
+            (None, list(&[]))
         );
     }
 
@@ -216,13 +273,15 @@ mod tests {
     fn an_arrival_off_the_course_drops_a_next_hop_standing_at_the_arrival() {
         assert_eq!(
             after_arrival(
+                None,
                 &list(&[131, 132, 133]),
                 0,
                 SystemId(134),
                 &places(&[131]),
                 RuleSource::Engine
             ),
-            list(&[132, 133])
+            (Some(SystemId(131)), list(&[132, 133])),
+            "the start is the hop dropped, raw"
         );
     }
 
@@ -230,8 +289,8 @@ mod tests {
     fn an_arrival_off_no_course_leaves_none() {
         for source in RuleSource::ALL {
             assert_eq!(
-                after_arrival(&[], 0, SystemId(131), &places(&[]), source),
-                list(&[])
+                after_arrival(None, &[], 0, SystemId(131), &places(&[]), source),
+                (None, list(&[]))
             );
         }
     }
@@ -243,9 +302,99 @@ mod tests {
             (list(&[131, 132, 133]), 134, places(&[131])),
         ] {
             assert_eq!(
-                after_arrival(&course, 0, SystemId(arrived), &hidden, RuleSource::Bible),
-                course
+                after_arrival(
+                    Some(SystemId(133)),
+                    &course,
+                    0,
+                    SystemId(arrived),
+                    &hidden,
+                    RuleSource::Bible
+                ),
+                (Some(SystemId(133)), course)
             );
         }
+    }
+
+    #[test]
+    fn a_hidden_start_with_no_stand_in_empties_the_whole_course() {
+        // 132 is hidden alone at its place; every hop is visible.
+        assert_eq!(
+            rewritten(
+                Some(SystemId(132)),
+                &list(&[133, 131]),
+                &places(&[132]),
+                RuleSource::Engine
+            ),
+            (None, list(&[]))
+        );
+    }
+
+    #[test]
+    fn a_hidden_start_with_a_stand_in_becomes_it_and_keeps_the_hops() {
+        assert_eq!(
+            rewritten(
+                Some(SystemId(131)),
+                &list(&[132, 133]),
+                &places(&[131]),
+                RuleSource::Engine
+            ),
+            (Some(SystemId(134)), list(&[132, 133]))
+        );
+    }
+
+    #[test]
+    fn a_visible_start_is_kept_even_when_shadowed() {
+        for start in [131, 134] {
+            assert_eq!(
+                rewritten(
+                    Some(SystemId(start)),
+                    &list(&[132]),
+                    &places(&[]),
+                    RuleSource::Engine
+                ),
+                (Some(SystemId(start)), list(&[132]))
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_start_is_skipped_and_the_hops_are_rewritten() {
+        assert_eq!(
+            rewritten(
+                None,
+                &list(&[131, 132]),
+                &places(&[131]),
+                RuleSource::Engine
+            ),
+            (None, list(&[134, 132]))
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_hidden_start_is_kept() {
+        assert_eq!(
+            rewritten(
+                Some(SystemId(132)),
+                &list(&[133]),
+                &places(&[132]),
+                RuleSource::Bible
+            ),
+            (Some(SystemId(132)), list(&[133]))
+        );
+    }
+
+    #[test]
+    fn an_arrival_off_the_course_clears_its_start_too() {
+        assert_eq!(
+            after_arrival(
+                Some(SystemId(132)),
+                &list(&[133, 132]),
+                0,
+                SystemId(131),
+                &places(&[]),
+                RuleSource::Engine
+            ),
+            (None, list(&[]))
+        );
     }
 }

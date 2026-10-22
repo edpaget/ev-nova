@@ -261,6 +261,7 @@ impl Harness {
         let screen = start_screen(Rc::clone(&data)).with_flight_overlays(FlightOverlays {
             title: true,
             help: true,
+            cheats: false,
         });
         Self {
             app: App::new(&FakeWindow, data, screen),

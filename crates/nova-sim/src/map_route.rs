@@ -6,8 +6,9 @@
 //!
 //! The original's course is 32 words, slot 0 the system last reached and
 //! slots 1-31 the hops; the engine's course is slots 1-31 (see the
-//! [`course`](crate::course) module), and slot 0 is taken to be the
-//! current system, as every writer but an in-flight `M` or `N` leaves it.
+//! [`course`](crate::course) module), and slot 0 is the course's start
+//! (`Pilot::course_start`), which a click keeps, clears or sets as
+//! [`RouteEdit::start`] says.
 //! A "place" compares `_FindFirstCoLocatedSystem`, the place's head
 //! ([`Places::head`]), a system not in the catalog being its own. In
 //! order:
@@ -17,8 +18,8 @@
 //!    −1 is the empty course already, so on the engine's course it is a
 //!    no-op.
 //! 2. **The current system's place.** A pick there sets all 32 slots to −1
-//!    (@0x132ec-0x13306), and the click goes on: the cut finds nothing, so
-//!    the source is the current system.
+//!    (@0x132ec-0x13306), the start included, and the click goes on: the
+//!    cut finds nothing, so the source is the current system.
 //! 3. **The cut.** The first of slots 1-31, up to the first −1, at the
 //!    pick's place, and every later slot, are set to −1 (@0x13310-0x1335c).
 //!    The steps below run on the cut course, so the pick is put back when
@@ -36,12 +37,13 @@
 //! 5. **The remove** (@0x13466-0x134ba): the last slot at the pick's raw
 //!    position is set to −1 and the click ends. The cut has taken every
 //!    hop at the pick's place, so it can match only slot 0 with the
-//!    length 1 of step 4, which isn't stored; with slot 0 the current
-//!    system it never fires. Left out, with the slot-0 rewrite, in
-//!    rdm:task/do-system-map-left-out-branches.
+//!    length 1 of step 4. Left out: galaxy-map-fidelity-followups phase 4,
+//!    which can read the stored start.
 //! 6. **The append.** When the session's link test passes for the source
-//!    (`can_append`, @0x1340f-0x13462), the pick is written at the length
-//!    and `showClearRouteButton` set (@0x134c9-0x13509); otherwise the
+//!    (`can_append`, @0x1340f-0x13462), the start is set to the current
+//!    system when it is −1 and kept otherwise (@0x134d3-0x134eb), the pick
+//!    is written at the length and `showClearRouteButton` set
+//!    (@0x134c9-0x13509); otherwise the
 //!    course stays as steps 2 and 3 left it.
 //!
 //! No sound plays and no random draw is made.
@@ -57,6 +59,10 @@ pub const ROUTE_HOPS: usize = 31;
 /// What a Shift-click made of the course ([`shift_click`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteEdit {
+    /// The course's start after it (slot 0): cleared by a pick at the
+    /// current system's place (@0x132ec-0x13306), and set to the current
+    /// system by an append when there is none (@0x134d3-0x134eb).
+    pub start: Option<SystemId>,
     /// The course after it.
     pub course: Vec<SystemId>,
     /// Whether the pick was written, setting `showClearRouteButton`
@@ -64,12 +70,13 @@ pub struct RouteEdit {
     pub appended: bool,
 }
 
-/// `course`, flown from `current`, after a Shift-click picking `pick`, as
-/// `_DoSystemMap` writes it (see the module docs), `can_append` the
-/// session's link test of the source: whether the pick may be added after
-/// it.
+/// `course`, started at `start` and flown from `current`, after a
+/// Shift-click picking `pick`, as `_DoSystemMap` writes it (see the
+/// module docs), `can_append` the session's link test of the source:
+/// whether the pick may be added after it.
 #[must_use]
 pub fn shift_click(
+    start: Option<SystemId>,
     course: &[SystemId],
     current: SystemId,
     pick: SystemId,
@@ -78,8 +85,10 @@ pub fn shift_click(
 ) -> RouteEdit {
     let place = |system: SystemId| places.head(system).unwrap_or(system);
     let mut course = course.to_vec();
+    let mut start = start;
     if place(pick) == place(current) {
         course.clear();
+        start = None;
     }
     if let Some(cut) = course
         .iter()
@@ -96,13 +105,18 @@ pub fn shift_click(
     };
     let appended = can_append(source);
     if appended {
+        start = start.or(Some(current));
         if full {
             course[0] = pick;
         } else {
             course.push(pick);
         }
     }
-    RouteEdit { course, appended }
+    RouteEdit {
+        start,
+        course,
+        appended,
+    }
 }
 
 #[cfg(test)]
@@ -141,8 +155,20 @@ mod tests {
     /// The Shift-click from 130, its link test passing for `sources`
     /// alone.
     fn click(course: &[i16], pick: i16, places: &Places, sources: &[i16]) -> RouteEdit {
+        click_from(None, course, pick, places, sources)
+    }
+
+    /// [`click`] with the course started at `start`.
+    fn click_from(
+        start: Option<i16>,
+        course: &[i16],
+        pick: i16,
+        places: &Places,
+        sources: &[i16],
+    ) -> RouteEdit {
         let sources = ids(sources);
         shift_click(
+            start.map(SystemId),
             &ids(course),
             SystemId(130),
             SystemId(pick),
@@ -151,11 +177,59 @@ mod tests {
         )
     }
 
+    /// The edit of a course with no start: an append starts it at 130.
     fn edit(course: &[i16], appended: bool) -> RouteEdit {
         RouteEdit {
+            start: appended.then_some(SystemId(130)),
             course: ids(course),
             appended,
         }
+    }
+
+    #[test]
+    fn an_append_to_a_course_with_no_start_starts_it_at_the_current_system() {
+        assert_eq!(
+            click_from(None, &[131], 132, &places(&[]), &[131]).start,
+            Some(SystemId(130))
+        );
+    }
+
+    #[test]
+    fn an_append_keeps_a_start_elsewhere() {
+        assert_eq!(
+            click_from(Some(133), &[131], 132, &places(&[]), &[131]).start,
+            Some(SystemId(133))
+        );
+    }
+
+    #[test]
+    fn a_refused_pick_keeps_the_start() {
+        assert_eq!(
+            click_from(Some(133), &[131], 132, &places(&[]), &[]).start,
+            Some(SystemId(133))
+        );
+    }
+
+    #[test]
+    fn a_pick_at_the_current_systems_place_clears_the_start_before_the_append() {
+        assert_eq!(
+            click_from(Some(133), &[131], 135, &places(&[]), &[]).start,
+            None
+        );
+        assert_eq!(
+            click_from(Some(133), &[131], 135, &places(&[]), &[130]).start,
+            Some(SystemId(130)),
+            "the append starts it again"
+        );
+    }
+
+    #[test]
+    fn the_full_course_wrap_keeps_the_start() {
+        let full = long(ROUTE_HOPS);
+        assert_eq!(
+            click_from(Some(133), &full, 131, &places(&[]), &[130]).start,
+            Some(SystemId(133))
+        );
     }
 
     #[test]

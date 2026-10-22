@@ -184,7 +184,6 @@ mod tests {
     use crate::market::ActiveEvent;
     use crate::news::CARGO_NAMES;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::entry::NoTraffic;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, cron, govt, land_now, planet};
 
     const RUNNING: CronState = CronState {
@@ -528,7 +527,7 @@ mod tests {
         let catalog = barred(Some(130), vec![]);
         let mut session = landed(&catalog, lists());
         assert!(session.open_bar(&mut NeverFires));
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.news(), None, "took off");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert!(session.open_bar(&mut NeverFires));
@@ -774,7 +773,7 @@ mod tests {
         let catalog = barred(Some(130), vec![]);
         let mut session = landed(&catalog, lists());
         assert!(session.open_bar(&mut NeverFires));
-        session.take_off(&NoTraffic, &mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.chart.bar_nav, None, "took off");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert!(session.open_bar(&mut NeverFires));

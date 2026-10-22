@@ -116,6 +116,13 @@
 //!   An older save can't tell whether its pilot ever entered play, and
 //!   showing a long-played pilot the intro is worse than skipping it for
 //!   one never flown, so the upgrade gives `true`.
+//! - Version 32: adds the course's start (`course_start`, a system or
+//!   `null`), the original's `_hyperRoute` slot 0 (0x3b51c8): the system
+//!   the course was last started or advanced from, which the rewrite at
+//!   each rebuild point reads (`_HandleStellarSystemVisibility`
+//!   @0x32aaa-0x32b0d). Every writer of slot 0 but `M` and `N` leaves it
+//!   at the player's system, so the upgrade gives the pilot's `system`
+//!   when the course has hops, and `null` when it has none.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -214,7 +221,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 31;
+pub const CURRENT: u64 = 32;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -901,6 +908,9 @@ struct Saved {
     cash: i64,
     reserves: SavedReserves,
     course: Vec<i16>,
+    /// `None` for no start (the original's slot 0 at -1).
+    #[serde(deserialize_with = "Option::deserialize")]
+    course_start: Option<i16>,
     explored: Vec<i16>,
     charted: Vec<i16>,
     reinforcement_days: Vec<SavedReinforcementDays>,
@@ -1015,6 +1025,7 @@ pub fn encode(pilot: &Pilot) -> String {
         cash: pilot.cash,
         reserves: pilot.reserves.into(),
         course: pilot.course.iter().map(|system| system.0).collect(),
+        course_start: pilot.course_start.map(|system| system.0),
         explored: pilot.explored.iter().map(|system| system.0).collect(),
         charted: pilot.charted.iter().map(|system| system.0).collect(),
         reinforcement_days: saved_reinforcement_days(&pilot.reinforcement_days),
@@ -1138,7 +1149,26 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     charted,
     reinforcement_days,
     seen_intro,
+    course_start,
 ];
+
+/// Version 31 to 32: the course's start. Every writer of the original's
+/// slot 0 but `M` and `N` leaves it at the player's system, so a course
+/// with hops starts there, and no course has no start.
+fn course_start(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        let has_hops = object
+            .get("course")
+            .and_then(Value::as_array)
+            .is_some_and(|course| !course.is_empty());
+        let start = if has_hops {
+            object.get("system").cloned().unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        object.insert("course_start".to_owned(), start);
+    }
+}
 
 /// Version 30 to 31: the intro screen seen. An older save can't tell
 /// whether its pilot ever entered play, and showing a long-played pilot
@@ -1462,6 +1492,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         cash: saved.cash,
         reserves: saved.reserves.into(),
         course: saved.course.into_iter().map(SystemId).collect(),
+        course_start: saved.course_start.map(SystemId),
         explored: explored_of(&saved.explored, &saved.charted),
         charted: saved.charted.into_iter().map(SystemId).collect(),
         reinforcement_days: reinforcement_days_of(saved.reinforcement_days),
@@ -1651,6 +1682,7 @@ mod tests {
                 },
             },
             course: vec![SystemId(132), SystemId(133)],
+            course_start: Some(SystemId(131)),
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             charted: BTreeSet::from([SystemId(131)]),
             reinforcement_days: BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)]),
@@ -1831,8 +1863,9 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 31);
+        assert_eq!(CURRENT, 32);
         assert_eq!(value["seen_intro"], true);
+        assert_eq!(value["course_start"], 131);
         assert_eq!(value["explored"], serde_json::json!([130, 131, 200]));
         assert_eq!(value["charted"], serde_json::json!([131]));
         assert_eq!(
@@ -1923,7 +1956,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 31"), "{text}");
+        assert!(text.contains("\n  \"version\": 32"), "{text}");
     }
 
     #[test]
@@ -3584,10 +3617,70 @@ mod tests {
         assert_eq!(back, pilot);
     }
 
-    /// `pilot` saved at version 30: whether it has seen the intro screen
-    /// not kept.
-    fn at_version_30(pilot: &Pilot) -> String {
+    /// `pilot` saved at version 31: the course's start not kept.
+    fn at_version_31(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(31);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("course_start");
+        value.to_string()
+    }
+
+    #[test]
+    fn the_course_start_survives_a_round_trip_either_way() {
+        for course_start in [None, Some(SystemId(130))] {
+            let pilot = Pilot {
+                course_start,
+                ..seasoned()
+            };
+            let back = decode(&encode(&pilot)).expect("loads");
+            assert_eq!(back.course_start(), course_start);
+            assert_eq!(back, pilot, "{course_start:?}");
+        }
+    }
+
+    #[test]
+    fn a_version_31_save_starts_a_course_with_hops_at_the_pilots_system() {
+        let elsewhere = Pilot {
+            course_start: Some(SystemId(200)),
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_31(&elsewhere)).expect("loads");
+        assert_eq!(pilot.course_start(), Some(SystemId(131)));
+        assert_eq!(pilot, seasoned());
+    }
+
+    #[test]
+    fn a_version_31_save_with_no_course_has_no_start() {
+        let idle = Pilot {
+            course: Vec::new(),
+            course_start: Some(SystemId(131)),
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_31(&idle)).expect("loads");
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn a_current_save_missing_course_start_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_31(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("course_start"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 30: whether it has seen the intro screen
+    /// not kept, nor the course's start.
+    fn at_version_30(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_31(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(30);
         value
             .as_object_mut()
@@ -3625,6 +3718,7 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_str(&at_version_30(&seasoned())).expect("JSON");
         value["version"] = serde_json::Value::from(CURRENT);
+        value["course_start"] = serde_json::json!(131);
         let text = value.to_string();
         assert!(
             unusable(&text).contains("seen_intro"),
@@ -3812,6 +3906,7 @@ mod tests {
         value["charted"] = serde_json::json!([]);
         value["reinforcement_days"] = serde_json::json!([]);
         value["seen_intro"] = serde_json::json!(true);
+        value["course_start"] = serde_json::json!(131);
         let text = value.to_string();
         assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
     }
@@ -4243,12 +4338,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 31", "\"version\": 32");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 32 }));
+        let newer = encode(&seasoned()).replace("\"version\": 32", "\"version\": 33");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 33 }));
         assert_eq!(
-            SaveError::Newer { version: 32 }.to_string(),
+            SaveError::Newer { version: 33 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 32, and this version of Nova reads up to 31)."
+             (it is version 33, and this version of Nova reads up to 32)."
         );
     }
 

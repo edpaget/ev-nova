@@ -356,6 +356,7 @@ impl Session {
         Hail {
             quote,
             joins: self.joins(npc),
+            vacated: self.space.traffic.vacated(),
             ..Hail::new(
                 npc,
                 &around,
@@ -742,7 +743,7 @@ pub(super) fn make_leave(npc: &mut Npc) {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use std::rc::Rc;
 
     use super::*;
@@ -940,7 +941,7 @@ mod tests {
     }
 
     /// Hails, its conversation in variant 0 and an even mood.
-    fn hail(session: &mut Session, catalog: &FakePilotCatalog) -> HailView {
+    pub(in crate::session) fn hail(session: &mut Session, catalog: &FakePilotCatalog) -> HailView {
         hail_with(session, catalog, &opening(0))
             .0
             .expect("answered")
@@ -2221,7 +2222,7 @@ mod tests {
     /// active, its warship of strength 100 at cached odds of 0.2, beside
     /// a pirate of strength 20 attacking the player. The catalog, the
     /// session and the pirate.
-    fn reinforced() -> (FakePilotCatalog, Session, NpcId) {
+    pub(in crate::session) fn reinforced() -> (FakePilotCatalog, Session, NpcId) {
         let mut catalog = hailable();
         catalog.govts[2].enemies = [1, -1, -1, -1];
         catalog.ranks = vec![RankRecord {

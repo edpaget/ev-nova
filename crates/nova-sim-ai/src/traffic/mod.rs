@@ -242,6 +242,7 @@ pub mod strength;
 pub mod succession;
 pub mod table;
 pub mod tractor_hold;
+pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
 pub mod warp_out;
@@ -289,6 +290,7 @@ use plunder::{HighLevel, PirateEvent};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{ShipKind, SpawnPerson, SpawnTable};
+use vacated::VacatedBerths;
 
 /// The ship-table slots a traffic spawn leaves free:
 /// `_GenericRandomShipSpawn(arg1, reserve)` (@0x3c89f) searches only the
@@ -828,6 +830,9 @@ pub struct Traffic {
     /// The ships gone since the last decision pass whose slots a think may
     /// still read ([`gone`]).
     gone: GoneShips,
+    /// The last ship of each berth whose slot lost only its active flag,
+    /// until a ship takes the berth or the system is left ([`vacated`]).
+    vacated: VacatedBerths,
     /// The frame's work on the message line, in slot order, since it was
     /// last taken ([`Traffic::take_on_line`]): the calls the decisions
     /// made, the scans of the player, what the pirates and repairers did
@@ -961,6 +966,7 @@ impl Traffic {
             departed: Vec::new(),
             freed: Vec::new(),
             gone: GoneShips::default(),
+            vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
@@ -1037,6 +1043,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.gone.clear();
+        self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -1155,6 +1162,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.gone.clear();
+        self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -2269,6 +2277,8 @@ impl Traffic {
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
         self.mark_spawned(berth);
+        // A ship taking the slot rewrites the vacated record ([`vacated`]).
+        self.vacated.taken(berth);
         self.npcs.push(npc);
         id
     }
@@ -2787,6 +2797,7 @@ impl Traffic {
             npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);
+            self.vacated.taken(berth);
             self.npcs.push(npc);
         }
         if formation == NpcFormation::Original {

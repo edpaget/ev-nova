@@ -672,14 +672,18 @@ const OVERLAY_SIZE: f32 = 14.0;
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
 pub const HELP: &str = "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
-/// The port's own overlays on the flight screen, which the original does
-/// not draw: developer settings, both off by default.
+/// The developer settings flight carries: two overlays the original does
+/// not draw, and cheat mode. All are off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlightOverlays {
     /// The system's name and `sÿst` ID at the top left.
     pub title: bool,
     /// The [`HELP`] line of keys at the bottom.
     pub help: bool,
+    /// The original's cheat mode (`_cheatsActive`, which nothing in 1.1
+    /// turns on): the player info shows its IDs
+    /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)).
+    pub cheats: bool,
 }
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
