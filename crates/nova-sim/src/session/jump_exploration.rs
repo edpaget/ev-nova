@@ -38,9 +38,11 @@
 //! events raised before it stay queued, in order, for the next settling.
 //! `Session::arrive` explores each system passed and the arrival with it
 //! before its refresh and days, and again the arrival, as the entry will
-//! resolve it, before it enters and populates the system;
-//! [`Session::begin`] dispatches the `OnStart`'s explorations before
-//! `_PlayGame`'s refresh.
+//! resolve it, before it enters and populates the system. A map grant
+//! dispatches its own explorations at once, wherever it runs, with no
+//! catalog ([`Session::grant_outfit`]): so an `OnStart`'s map explores
+//! before `_PlayGame`'s refresh in [`Session::begin`], and a crön's before
+//! the next crön of the pass.
 //!
 //! **The player's system** (crons-news-ranks-fidelity phase 40).
 //! `_HandlePlayer` writes +0x74 to each hop's stand-in (@0x6bdd4, after
@@ -70,10 +72,7 @@
 //! checks the goals once the system is set up, each slot's deadline
 //! first, as `_MissionObjectivesCheck` does (@0x9eba5-0x9ec70).
 //!
-//! **Ordering.** A map granted by a script run outside the dispatcher (a
-//! crön's, a ship's hook, a stellar's `OnRegen`) explores at the next
-//! settling, which crosses a boundary the player can see;
-//! crons-news-ranks-fidelity phase 43 covers it. The jump's `DayPassed`
+//! **Ordering.** The jump's `DayPassed`
 //! events settle at the caller's settling, after the hook: the original
 //! polls the deadlines per frame after the arrival, so that matches, and
 //! the first goal check, which comes before that settling, checks each

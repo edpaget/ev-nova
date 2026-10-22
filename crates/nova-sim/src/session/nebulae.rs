@@ -55,9 +55,9 @@
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the
 //! `entry` module).
 //!
-//! Left to others: the escape pod's exploration (roadmap player-death)
-//! and the explorations of scripts run outside the dispatcher
-//! (crons-news-ranks-fidelity phase 43). A jump's scripts read the
+//! Left to others: the escape pod's exploration (roadmap player-death).
+//! A map grant's explorations run at once wherever it runs (see
+//! [`Session::grant_outfit`]). A jump's scripts read the
 //! arrival as the player's system, and its `EnteredSystem` hooks run
 //! before the arrival is explored again (see the `jump_exploration`
 //! module).

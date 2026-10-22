@@ -215,14 +215,12 @@ impl Session {
             if self.setup.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
-            // A map the `OnStart` grants explores at once, with
-            // `_DoNewPilot`'s activity (@0x1925e), before `_PlayGame`'s
-            // refresh reads the bits its `OnExplore`s set (see the
-            // `jump_exploration` module); the events raised before stay
-            // queued.
-            let mark = self.run.story_mark();
+            // A map the `OnStart` grants explores at once, inside the
+            // grant (`Session::grant_outfit`), with `_DoNewPilot`'s
+            // activity (@0x1925e), before `_PlayGame`'s refresh reads the
+            // bits its `OnExplore`s set (see the `jump_exploration`
+            // module); the events raised before stay queued.
             self.run_script(&start.on_start, chance);
-            self.dispatch_explored_since(catalog, chance, mark);
         }
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's. It runs

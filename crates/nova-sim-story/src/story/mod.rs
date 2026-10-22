@@ -473,7 +473,11 @@
 //! and before it explores the arrival again and sets it up (@0x6c15d,
 //! @0x6c1db, @0x6c1f9). Each `Explored` and the `EnteredSystem` is
 //! dispatched as it is raised, the `DayPassed` events left for the
-//! settling. Every other way in raises its `DayPassed`
+//! settling. A map granted (`G`, the outfitter's buy, the plunder)
+//! raises the `Explored` of each system it reaches and dispatches them
+//! at once, inside the grant, before the grant's paint and its caller's
+//! next step (`_GrantOutfitItem` @0x44dcb, @0x44e12, @0x44e86;
+//! `nova_sim::Session::grant_outfit`). Every other way in raises its `DayPassed`
 //! events, if any, `EnteredSystem`, then `Explored` when its row
 //! explores, but a gate's or wormhole's exit, which explores no nebula.
 //! Each exploration raises `Explored`, the system explored

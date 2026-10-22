@@ -104,8 +104,80 @@ enum Settling {
     /// The moves, the events and a `Q`'s leave: [`Session::settle_story`].
     Full,
     /// The events alone, the moves and a leave held for the next full
-    /// settling: [`Session::dispatch_explored_since`].
+    /// settling: [`Session::dispatch_explored_since`], with a catalog or
+    /// with [`NoCatalog`].
     EventsOnly,
+}
+
+/// What a settling reads from the catalog: a landing's offer roll and
+/// re-offer (the `Landed` arms of [`Consumer::Offers`] and
+/// [`Consumer::Missions`]), and the moves. Every catalog has it; so has
+/// [`NoCatalog`], for an events-only settling that has none.
+pub(super) trait SettlingCatalog {
+    /// Rolls the offers at `stellar`, landed on
+    /// ([`Session::roll_landing_offers`]).
+    fn roll_landing_offers(
+        &self,
+        session: &mut Session,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    );
+    /// The landing's galaxy refresh and re-offer (`missions::REOFFER`).
+    fn reoffer(&self, session: &mut Session, chance: &mut dyn Chance);
+    /// Applies the moves queued ([`Session::settle_moves`]).
+    fn settle_moves(&self, session: &mut Session, chance: &mut dyn Chance, settled: &mut Settled);
+}
+
+impl<C: PilotCatalog + TrafficCatalog + ?Sized> SettlingCatalog for C {
+    fn roll_landing_offers(
+        &self,
+        session: &mut Session,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    ) {
+        session.roll_landing_offers(stellar, self, chance);
+    }
+
+    fn reoffer(&self, session: &mut Session, chance: &mut dyn Chance) {
+        session.refresh_galaxy(self);
+        session.reoffer_missions(chance);
+    }
+
+    fn settle_moves(&self, session: &mut Session, chance: &mut dyn Chance, settled: &mut Settled) {
+        session.settle_moves(self, chance, settled);
+    }
+}
+
+/// No catalog: an events-only settling's that has none, as a map grant's
+/// explorations dispatch (see [`Session::grant_outfit`]). An events-only
+/// settling holds the moves, and it only ever dispatches the
+/// [`StoryEvent::Explored`] events taken and what their scripts raise,
+/// never a [`StoryEvent::Landed`], which only a landing raises: so none of
+/// this is reached, and a debug build says so if it is.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NoCatalog;
+
+impl NoCatalog {
+    /// Fails a debug build: an events-only settling read the catalog.
+    fn unreached(what: &str) {
+        if cfg!(debug_assertions) {
+            unreachable!("an events-only settling read the catalog: {what}");
+        }
+    }
+}
+
+impl SettlingCatalog for NoCatalog {
+    fn roll_landing_offers(&self, _: &mut Session, _: StellarId, _: &mut dyn Chance) {
+        Self::unreached("the offer roll");
+    }
+
+    fn reoffer(&self, _: &mut Session, _: &mut dyn Chance) {
+        Self::unreached("the re-offer");
+    }
+
+    fn settle_moves(&self, _: &mut Session, _: &mut dyn Chance, _: &mut Settled) {
+        Self::unreached("the moves");
+    }
 }
 
 /// The session settling, with the catalog and the chance it settles with,
@@ -119,7 +191,7 @@ struct SessionStage<'a, C: ?Sized> {
     settling: Settling,
 }
 
-impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
+impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
     fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
         self.session.run.story.registry.matching(event)
     }
@@ -169,8 +241,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // module).
             Consumer::Offers => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
-                    self.session
-                        .roll_landing_offers(stellar, self.catalog, &mut *self.chance);
+                    self.catalog
+                        .roll_landing_offers(self.session, stellar, &mut *self.chance);
                 }
             }
             // The galaxy refresh after the land check (@0xa1af2) and the
@@ -178,8 +250,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // (see the `missions` module).
             Consumer::Missions => match (id, event) {
                 (missions::REOFFER, StoryEvent::Landed { .. }) => {
-                    self.session.refresh_galaxy(self.catalog);
-                    self.session.reoffer_missions(&mut *self.chance);
+                    self.catalog.reoffer(self.session, &mut *self.chance);
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
             },
@@ -228,8 +299,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
         if self.settling == Settling::EventsOnly {
             return;
         }
-        self.session
-            .settle_moves(self.catalog, &mut *self.chance, self.settled);
+        self.catalog
+            .settle_moves(self.session, &mut *self.chance, self.settled);
     }
 
     /// Applies a pending leave; none when only the events settle.
@@ -385,14 +456,21 @@ impl Session {
     /// `mark`, and every other kind raised since, kept in order. Events
     /// dropped past the limit are told, as [`ScriptNote::EventsDropped`].
     /// The nebulae's explorations at once (see the `jump_exploration`
-    /// module).
+    /// module): a jump's, with its `catalog`, and a map grant's, with
+    /// [`NoCatalog`] ([`Session::grant_outfit`]).
+    ///
+    /// It may run inside a settling, a grant run from a subscription's
+    /// script: this settling is its own, with its own budget, and the
+    /// outer one's queue is its own too, so the outer settling goes on as
+    /// it was. Grants nested through `OnExplore`s are bounded by the
+    /// nebulae, each marked explored before its `OnExplore` runs.
     pub(super) fn dispatch_explored_since<C>(
         &mut self,
         catalog: &C,
         chance: &mut dyn Chance,
         mark: usize,
     ) where
-        C: PilotCatalog + TrafficCatalog + ?Sized,
+        C: SettlingCatalog + ?Sized,
     {
         self.dispatch_since(catalog, chance, mark, StoryEventKind::Explored);
     }
@@ -408,7 +486,7 @@ impl Session {
         mark: usize,
         kind: StoryEventKind,
     ) where
-        C: PilotCatalog + TrafficCatalog + ?Sized,
+        C: SettlingCatalog + ?Sized,
     {
         let (now, mut kept): (VecDeque<_>, VecDeque<_>) =
             std::mem::take(&mut self.run.story.raised)
@@ -436,7 +514,7 @@ impl Session {
         settled: &mut Settled,
         settling: Settling,
     ) where
-        C: PilotCatalog + TrafficCatalog + ?Sized,
+        C: SettlingCatalog + ?Sized,
     {
         let reentry = Reentry::from(self.setup.rules.source_for(RuleKey::StoryReentry));
         let dropped = dispatch::settle(

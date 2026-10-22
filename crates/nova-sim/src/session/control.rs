@@ -176,7 +176,7 @@ impl Session {
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
-            SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
+            SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
             SetOp::RemoveOutfit(outfit) => {
                 self.ship
                     .script_remove(&mut self.pilot, &self.statics, &self.setup, *outfit);

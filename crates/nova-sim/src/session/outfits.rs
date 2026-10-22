@@ -13,11 +13,39 @@
 //! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace)
 //! (`_RecursiveAutoExplore` @0xd9b6-0xda10; see the `explored` module),
 //! raising [`StoryEvent::Explored`] for each system reached, in order,
-//! and none for a head; a paint
+//! and none for a head, and dispatching them at once, after the known
+//! pass and before the paint (crons-news-ranks-fidelity phase 43); a paint
 //! paints the ship; a clean-record outfit cleans the legal records; and
 //! anything else is added, one more owned. An ID in range with no record
 //! is added as a plain item, as the original bumps that slot's count.
 //! The grant path does not refit the ship; each caller refits once.
+//!
+//! **A map's explorations run at once.** The map arm (`ModType` 0x10,
+//! @0x44d9b) calls `_AutoSetExploration` synchronously (@0x44dcb,
+//! @0x44e12, @0x44e86), whose `_RecursiveAutoExplore` runs
+//! `_ExploreNebulaeFromSystem` (@0xd98a) for each system reached, so the
+//! `OnExplore`s run inside the grant: before the map flag (0x3b5588,
+//! @0x44eaf) skips the clean (@0x44f4e) and the count (@0x44fe7), before
+//! the paint is written (@0x44f9a-0x44fd1), and before the caller's next
+//! step. The grant path dispatches its `Explored` events right after the
+//! known pass, through an events-only settling with no catalog
+//! ([`NoCatalog`]), the moves and a `Q`'s leave they queue held for the
+//! caller's settling; the events raised before stay queued. So an
+//! `OnExplore` that paints is painted over by the grant's own paint, the
+//! script that ran `G` reads the `OnExplore`'s bits at its next operator,
+//! and a crön later in the day's pass reads them too. A grant run inside
+//! a settling (a subscription's script) settles its own explorations, the
+//! outer settling's queue untouched.
+//!
+//! The original interleaves each system's `OnExplore`s with the walk:
+//! they run before the system's explored level is written (@0xd9a6-0xd9af,
+//! the head's @0xda07-0xda10) and before its neighbours are walked
+//! (@0xdaa3). Here every level is written first and the `OnExplore`s run
+//! after; no set operator or test reads an explored level in between, so
+//! that crosses no boundary. What can be seen is the walk's shared
+//! visited set and reach (0xde93c, 0xde944), which a map granted inside
+//! the walk replaces; here the whole reveal is worked out first
+//! ([`map_reveals`]). That walk is crons-news-ranks-fidelity phase 45.
 //!
 //! **Its callers.** A purchase in the outfitter
 //! ([`Session::outfit`]) pays, then grants (`_DoOutfitDialog`
@@ -72,8 +100,10 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
+use super::story::NoCatalog;
 use super::{Chart, PlayerShip, Session, Setup, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
+use crate::chance::Chance;
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
@@ -139,13 +169,15 @@ fn take_one(pilot: &mut Pilot, outfit: OutfitId) -> bool {
 
 impl Session {
     /// Grants one of `outfit` through the grant path (see the module
-    /// docs), without refitting: whether one more is owned.
-    pub(crate) fn grant_outfit(&mut self, outfit: OutfitId) -> bool {
+    /// docs), without refitting, a map's `OnExplore`s drawing on
+    /// `chance`: whether one more is owned.
+    pub(crate) fn grant_outfit(&mut self, outfit: OutfitId, chance: &mut dyn Chance) -> bool {
         if !OUTFIT_IDS.contains(&outfit.0) {
             return false;
         }
         let effect = self.setup.grant_effect(&self.statics, outfit);
         if let Some(reach) = effect.map {
+            let mark = self.run.story_mark();
             let reached = map_reveals(
                 reach,
                 self.pilot.system,
@@ -168,6 +200,10 @@ impl Session {
             // Its known pass, with no clear (`_AutoSetExploration`
             // @0xdb06-0xdbd4).
             self.chart.add_known(&self.pilot);
+            // The explorations at once, before the paint, the clean and
+            // the count, and before the caller's next step (@0x44dcb,
+            // @0x44e12, @0x44e86, then @0xd98a).
+            self.dispatch_explored_since(&NoCatalog, chance, mark);
         }
         if let Some(paint) = effect.paint {
             self.pilot.paint = paint;
@@ -193,13 +229,14 @@ impl Session {
         effect.added
     }
 
-    /// `G`: grants one of `outfit` and refits (see the module docs).
-    pub(super) fn script_grant(&mut self, outfit: OutfitId) {
+    /// `G`: grants one of `outfit` and refits (see the module docs),
+    /// drawing on `chance`.
+    pub(super) fn script_grant(&mut self, outfit: OutfitId, chance: &mut dyn Chance) {
         if self
             .ship
             .script_may_grant(&self.pilot, &self.statics, &self.setup, outfit)
         {
-            self.grant_outfit(outfit);
+            self.grant_outfit(outfit, chance);
             self.ship.refit(
                 &mut self.pilot,
                 &self.statics,
@@ -343,9 +380,11 @@ mod tests {
 
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
+    use crate::chance::NeverFires;
     use crate::control::{ScriptNote, SetExpr, SetOp};
     use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT, Rgb15};
     use crate::rulebook::{RuleKey, Rulebook};
+    use crate::session::jump_exploration::tests::watching_explored;
     use crate::stats::MORE_SHIELD;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, govt, outfit, star};
 
@@ -448,11 +487,11 @@ mod tests {
     #[test]
     fn a_map_explores_and_adds_nothing() {
         let mut session = session(&mapped());
-        assert!(!session.grant_outfit(JUMPS_2));
+        assert!(!session.grant_outfit(JUMPS_2, &mut NeverFires));
         assert_eq!(explored(&session), ids(&[130, 131, 132]), "D is missed");
         assert_eq!(session.pilot().owned(JUMPS_2), 0);
         let mut session = self::session(&mapped());
-        session.grant_outfit(CLASS_3);
+        session.grant_outfit(CLASS_3, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 135]));
     }
 
@@ -464,7 +503,7 @@ mod tests {
         };
         assert_eq!(known(&session), ids(&[130, 131, 132]));
         session.mark_known([SystemId(137)]);
-        session.grant_outfit(JUMPS_2);
+        session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(
             known(&session),
             ids(&[130, 131, 132, 133, 137]),
@@ -476,20 +515,20 @@ mod tests {
     fn the_bibles_map_reaches_every_system_within_its_jumps() {
         let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
         let mut session = session(&mapped()).with_rules(rules);
-        session.grant_outfit(JUMPS_2);
+        session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 131, 132, 133]));
     }
 
     #[test]
     fn the_inhabited_independent_map_reads_the_stellars_as_the_rule_says_when_granted() {
         let mut session = session(&mapped());
-        session.grant_outfit(INDEPENDENTS);
+        session.grant_outfit(INDEPENDENTS, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 134]));
         // The rule given after the session started is the one the grant
         // reads.
         let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
         let mut session = self::session(&mapped()).with_rules(rules);
-        session.grant_outfit(INDEPENDENTS);
+        session.grant_outfit(INDEPENDENTS, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 134, 136]));
     }
 
@@ -500,12 +539,12 @@ mod tests {
         catalog.star_map[2] = star(132, (1.0, 1.0), &[130, 131]);
         let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
         let mut session = session(&catalog).with_rules(rules);
-        session.grant_outfit(JUMPS_2);
+        session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 131, 132]));
         let mut both = self::session(&catalog)
             .with_rules(rules)
             .with_hyperlinks(crate::HyperlinkRule::BothWays);
-        both.grant_outfit(JUMPS_2);
+        both.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&both), ids(&[130, 131, 132, 133]));
     }
 
@@ -514,12 +553,12 @@ mod tests {
         let mut session = session(&mapped());
         session.pilot.legal.insert(GovtId(140), -50);
         session.pilot.legal.insert(GovtId(141), -20);
-        assert!(!session.grant_outfit(CLEAN_140));
+        assert!(!session.grant_outfit(CLEAN_140, &mut NeverFires));
         assert_eq!(session.pilot().legal_record(GovtId(140)), 0);
         assert_eq!(session.pilot().legal_record(GovtId(141)), -20);
         assert_eq!(session.pilot().owned(CLEAN_140), 0);
         session.pilot.legal.insert(GovtId(140), 30);
-        session.grant_outfit(CLEAN_140);
+        session.grant_outfit(CLEAN_140, &mut NeverFires);
         assert_eq!(session.pilot().legal_record(GovtId(140)), 30);
     }
 
@@ -537,7 +576,7 @@ mod tests {
             pilot.set_system_record(SystemId(system), record);
         }
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        session.grant_outfit(CLEAN_140);
+        session.grant_outfit(CLEAN_140, &mut NeverFires);
         let records: Vec<i16> = (134..=137)
             .map(|system| session.pilot().system_record(SystemId(system)))
             .collect();
@@ -552,7 +591,7 @@ mod tests {
     #[test]
     fn a_paint_paints_the_ship() {
         let mut session = session(&mapped());
-        assert!(!session.grant_outfit(PAINTER));
+        assert!(!session.grant_outfit(PAINTER, &mut NeverFires));
         assert_eq!(session.pilot().paint(), Some(Rgb15 { r: 3, g: 5, b: 7 }));
         assert_eq!(session.pilot().owned(PAINTER), 0);
     }
@@ -560,16 +599,19 @@ mod tests {
     #[test]
     fn a_plain_outfit_is_added_and_an_id_out_of_range_does_nothing() {
         let mut session = session(&mapped());
-        assert!(session.grant_outfit(SHIELD));
-        assert!(session.grant_outfit(SHIELD));
+        assert!(session.grant_outfit(SHIELD, &mut NeverFires));
+        assert!(session.grant_outfit(SHIELD, &mut NeverFires));
         assert_eq!(session.pilot().owned(SHIELD), 2);
         let before = session.pilot().clone();
         for id in [127, 640, -1, 0] {
-            assert!(!session.grant_outfit(OutfitId(id)), "{id}");
+            assert!(!session.grant_outfit(OutfitId(id), &mut NeverFires), "{id}");
         }
         assert_eq!(*session.pilot(), before);
-        assert!(session.grant_outfit(OutfitId(639)), "no record: plain");
-        assert!(session.grant_outfit(OutfitId(128)));
+        assert!(
+            session.grant_outfit(OutfitId(639), &mut NeverFires),
+            "no record: plain"
+        );
+        assert!(session.grant_outfit(OutfitId(128), &mut NeverFires));
         assert_eq!(session.pilot().owned(OutfitId(639)), 1);
         assert_eq!(session.pilot().owned(OutfitId(128)), 1);
     }
@@ -577,12 +619,12 @@ mod tests {
     #[test]
     fn a_map_that_explores_nothing_is_used_up_or_kept_as_the_rule_says() {
         let mut session = session(&mapped());
-        assert!(!session.grant_outfit(BLANK_MAP));
+        assert!(!session.grant_outfit(BLANK_MAP, &mut NeverFires));
         assert_eq!(session.pilot().owned(BLANK_MAP), 0);
         assert_eq!(explored(&session), ids(&[130]));
         let rules = Rulebook::default().with_override(RuleKey::InvalidMap, RuleSource::Bible);
         let mut session = self::session(&mapped()).with_rules(rules);
-        assert!(session.grant_outfit(BLANK_MAP));
+        assert!(session.grant_outfit(BLANK_MAP, &mut NeverFires));
         assert_eq!(session.pilot().owned(BLANK_MAP), 1);
     }
 
@@ -849,7 +891,7 @@ mod tests {
         overlay(&mut session, &catalog, |galaxy| {
             galaxy.set_visible(SystemId(131), Some(false));
         });
-        session.grant_outfit(JUMPS_2);
+        session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 132, 133]), "131 hidden");
     }
 
@@ -861,7 +903,7 @@ mod tests {
         overlay(&mut session, &catalog, |galaxy| {
             galaxy.set_visible(SystemId(134), Some(false));
         });
-        session.grant_outfit(INDEPENDENTS);
+        session.grant_outfit(INDEPENDENTS, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130]), "134 hidden");
     }
 
@@ -873,7 +915,7 @@ mod tests {
         overlay(&mut session, &catalog, |galaxy| {
             galaxy.set_visible(SystemId(135), Some(false));
         });
-        session.grant_outfit(CLASS_3);
+        session.grant_outfit(CLASS_3, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130]), "135 hidden");
     }
 
@@ -893,11 +935,12 @@ mod tests {
     }
 
     #[test]
-    fn a_map_grant_explores_each_reached_systems_head_and_raises_explored_for_the_reached_only() {
+    fn a_map_grant_explores_each_reached_systems_head_and_dispatches_explored_for_the_reached_only()
+    {
         for source in RuleSource::ALL {
-            let (_, mut session) = shadowed(source);
-            session.run.drop_raised();
-            session.grant_outfit(JUMPS_2);
+            let (_, session) = shadowed(source);
+            let (mut session, seen) = watching_explored(quiet(session), &[128, 129, 130, 131, 132]);
+            session.grant_outfit(JUMPS_2, &mut NeverFires);
             let heads: &[i16] = match source {
                 RuleSource::Engine => &[129],
                 RuleSource::Bible => &[],
@@ -905,14 +948,9 @@ mod tests {
             let mut expected = ids(&[130, 131, 132]);
             expected.extend(heads);
             assert_eq!(explored(&session), expected, "{source:?}");
-            assert_eq!(
-                session.story_raised(),
-                [130, 131, 132].map(|system| StoryEvent::Explored {
-                    system: SystemId(system)
-                }),
-                "{source:?}"
-            );
-            session.grant_outfit(CLASS_3);
+            assert_eq!(seen.systems(), systems(&[130, 131, 132]), "{source:?}");
+            assert_eq!(session.story_raised(), [], "{source:?}: none left");
+            session.grant_outfit(CLASS_3, &mut NeverFires);
             assert_eq!(
                 session.pilot().has_explored(SystemId(128)),
                 source == RuleSource::Engine,
@@ -950,12 +988,12 @@ mod tests {
                 }
             };
             let (_, mut session) = shadowed(source);
-            session.grant_outfit(JUMPS_2);
+            session.grant_outfit(JUMPS_2, &mut NeverFires);
             let mut expected = ids(&[130, 131, 132]);
             expected.extend(heads(&[129]));
             assert_eq!(charted(&session), expected, "{source:?}: N jumps");
             let (_, mut session) = shadowed(source);
-            session.grant_outfit(CLASS_3);
+            session.grant_outfit(CLASS_3, &mut NeverFires);
             let mut expected = ids(&[135]);
             expected.extend(heads(&[128]));
             assert_eq!(charted(&session), expected, "{source:?}: a class");
@@ -966,7 +1004,7 @@ mod tests {
             overlay(&mut session, &catalog, |galaxy| {
                 galaxy.set_visible(SystemId(127), Some(false));
             });
-            session.grant_outfit(INDEPENDENTS);
+            session.grant_outfit(INDEPENDENTS, &mut NeverFires);
             let mut expected = ids(&[134]);
             expected.extend(heads(&[127]));
             assert_eq!(charted(&session), expected, "{source:?}: independents");
@@ -997,7 +1035,7 @@ mod tests {
             galaxy.set_govt(SystemId(137), Some(Some(GovtId(140))));
             galaxy.set_govt(SystemId(135), Some(None));
         });
-        session.grant_outfit(CLASS_3);
+        session.grant_outfit(CLASS_3, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 137]));
     }
 
@@ -1025,31 +1063,26 @@ mod tests {
         session
     }
 
-    fn explored_events(systems: &[i16]) -> Vec<StoryEvent> {
-        systems
-            .iter()
-            .map(|&system| StoryEvent::Explored {
-                system: SystemId(system),
-            })
-            .collect()
+    fn systems(ids: &[i16]) -> Vec<SystemId> {
+        ids.iter().copied().map(SystemId).collect()
     }
 
     #[test]
-    fn a_map_raises_explored_for_each_system_it_reaches_explored_already_or_not() {
-        let mut session = quiet(scripted(&mapped()));
+    fn a_map_dispatches_explored_for_each_system_it_reaches_explored_already_or_not() {
+        let (mut session, seen) =
+            watching_explored(quiet(scripted(&mapped())), &[130, 131, 132, 133, 134]);
         run(&mut session, "G300");
-        assert_eq!(session.story_raised(), explored_events(&[130, 131, 132]));
-        let mut session = quiet(session);
-        session.grant_outfit(JUMPS_2);
+        assert_eq!(seen.systems(), systems(&[130, 131, 132]));
+        assert_eq!(session.story_raised(), [], "dispatched at once");
+        session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(
-            session.story_raised(),
-            explored_events(&[130, 131, 132]),
+            seen.systems(),
+            systems(&[130, 131, 132, 130, 131, 132]),
             "again"
         );
-        let mut session = quiet(session);
-        session.grant_outfit(BLANK_MAP);
-        session.grant_outfit(SHIELD);
-        assert_eq!(session.story_raised(), [], "a map of nothing, a shield");
+        session.grant_outfit(BLANK_MAP, &mut NeverFires);
+        session.grant_outfit(SHIELD, &mut NeverFires);
+        assert_eq!(seen.systems().len(), 6, "a map of nothing, a shield");
     }
 
     #[test]

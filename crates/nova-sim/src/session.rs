@@ -458,6 +458,8 @@ mod game_work;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
+#[cfg(test)]
+mod grant_explorations;
 mod gravity;
 mod hail;
 mod hire;
@@ -4457,7 +4459,7 @@ impl Session {
         match order.direction {
             Direction::Buy => {
                 self.port.outfit_visit.bought(&record);
-                let added = self.grant_outfit(record.id);
+                let added = self.grant_outfit(record.id, chance);
                 self.run_script(&record.on_purchase, chance);
                 if added && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0 {
                     self.remove_after_purchase(record.id);
@@ -5091,7 +5093,7 @@ impl Session {
             return None;
         }
         for _ in 0..granted.count {
-            self.grant_outfit(granted.outfit);
+            self.grant_outfit(granted.outfit, chance);
         }
         self.ship.refit(
             &mut self.pilot,
@@ -13718,16 +13720,14 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn buying_a_map_raises_explored_for_each_system_it_reaches() {
+    fn buying_a_map_dispatches_explored_for_each_system_it_reaches() {
         let mut session = outfitted(&limiting());
         session.run.drop_raised();
+        let (mut session, seen) =
+            super::jump_exploration::tests::watching_explored(session, &[130, 131, 132, 133]);
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
-        assert_eq!(
-            session.story_raised(),
-            [130, 131, 132].map(|system| StoryEvent::Explored {
-                system: SystemId(system)
-            })
-        );
+        assert_eq!(seen.systems(), [130, 131, 132].map(SystemId));
+        assert_eq!(session.story_raised(), [], "dispatched at once");
     }
 
     #[test]
