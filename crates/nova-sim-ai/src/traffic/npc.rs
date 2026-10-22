@@ -810,6 +810,18 @@ impl Npc {
         self.mission.is_some_and(|mark| mark.formation.is_some())
     }
 
+    /// Whether it attacks stellars: a mission's special ship of `ShipBehav`
+    /// 2, which `_AIDispatch` flags on every think from its mark (+0xc8d2,
+    /// @0x8fbcd-0x8fc38) and sends to `_DeathStarAI` in place of its type's
+    /// think (@0x8ff3a-0x8ff43; see
+    /// [`death_star`](crate::ai::death_star)). It is keyed on the mark
+    /// alone, so a captured one kept as a mission escort attacks too.
+    #[must_use]
+    pub fn attacks_stellars(&self) -> bool {
+        self.mission
+            .is_some_and(|mark| mark.behav == ShipBehav::AttackStellars)
+    }
+
     /// Its standing order as one of the player's escorts: a hired
     /// escort's ([`EscortDuty::order`]), else a mission escort's
     /// ([`MissionMark::order`]); none for any other ship.

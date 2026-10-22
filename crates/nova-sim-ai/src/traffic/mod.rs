@@ -380,9 +380,9 @@ pub enum ShipBehav {
     /// player's escorts do, never one of the hired escorts; it leaves as
     /// its mission ends (see the session's `mission_ships` module).
     EscortPlayer,
-    /// 2: they attack stellars (`_DeathStarAI`). Until
-    /// rdm:phase/mission-ships/phase-12-stellar-attackers, as
-    /// [`Self::Own`].
+    /// 2: they attack stellars (`_DeathStarAI`, see
+    /// [`death_star`](crate::ai::death_star)), thinking as it does whatever
+    /// their `düde`'s AI decides ([`Npc::attacks_stellars`]).
     AttackStellars,
 }
 
