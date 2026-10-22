@@ -460,6 +460,66 @@ pub(super) mod tests {
         assert_eq!(*seen.0.borrow(), [SystemId(134)], "the crön's X132");
     }
 
+    /// The missions each `A` operator aborts, in order, which an
+    /// [`EventFilter`]'s fixture script names to say it ran.
+    #[derive(Debug, Default)]
+    struct Aborts(RefCell<Vec<i16>>);
+
+    impl SetOpObserver for Aborts {
+        fn saw(&self, op: &SetOp, _session: &Session) {
+            if let SetOp::AbortMission(mission) = op {
+                self.0.borrow_mut().push(mission.0);
+            }
+        }
+    }
+
+    /// `session` with a fixture subscription, `record`, to `filter`,
+    /// running `A{record}`, which an [`Aborts`] sees: a mission (128 to
+    /// 1127) never active.
+    fn aborting_on(mut session: Session, record: i16, filter: EventFilter) -> Session {
+        session
+            .register_story(Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record,
+                    hook: 0,
+                },
+                filter,
+                Script::parse(&format!("A{record}")),
+            ))
+            .expect("registers");
+        session
+    }
+
+    #[test]
+    fn a_jump_into_a_system_its_refresh_hides_enters_the_system_moved_to_before_exploring_it_again()
+    {
+        // As above: the refresh hides 131, the system the jump wrote, and
+        // its move takes the player to 134. The enter-system hook (@0x6c15d)
+        // names 134, before the re-explore of 134 (@0x6c1db); 131's never
+        // runs.
+        let catalog = alternates();
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        session.pilot.bits_mut().set(hiding_bit(131));
+        let session = aborting_on(session, 601, EventFilter::EnteredSystem(SystemId(134)));
+        let session = aborting_on(session, 602, EventFilter::EnteredSystem(SystemId(131)));
+        let session = aborting_on(session, 603, EventFilter::Explored(SystemId(134)));
+        let seen = Rc::new(Aborts::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(
+            *seen.0.borrow(),
+            [601, 603],
+            "134's hook during the arrival, then its re-explore; never 131's hook"
+        );
+    }
+
     /// [`shared`] with 128, shadowed by 127 at (-600, 600), and 131
     /// listing 160, which no system owns or rescues: the lowest visible
     /// lister, 128, is `_FindSystemFromStellar`'s. 150 is kept rescued in
