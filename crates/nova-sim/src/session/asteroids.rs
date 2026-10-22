@@ -9,7 +9,9 @@
 //! (@0x444f5). [`Session::game_work`] and [`Session::tick_combat`] run
 //! it after the fight, landed or jumping, so it steps the field through a
 //! jump's lead-in, and [`Session::tick_again`] runs it after the second
-//! pass's fight. The
+//! pass's fight without the spawn: `_DoPlayGameWork(0)` jumps past it
+//! with the AI (@0x4402a to @0x44350), and `_HandleAsteroids` runs on
+//! both passes. The
 //! original spawns and steps the field after the collision passes, which
 //! test the shots' last moves, as the fight's hit pass does here (see
 //! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where
@@ -18,6 +20,16 @@
 //! before the AI and the ships' fire in the original and after them
 //! here; a new asteroid is met by no shot until the next pass either way,
 //! so that crosses no boundary the player sees.
+//!
+//! *The refill against the spawn.* The collision passes
+//! (@0x43e70-0x44015, `_CheckShotProximities` @0x44015) break asteroids
+//! before `_SpawnAsteroid` (@0x44243) fills the first free slot, and
+//! `_HandleAsteroids` refills slot 0 for the miners (@0x361b5) after both,
+//! as the spawn comes before the refill here. So on the advance pass a
+//! slot 0 a shot broke takes the edge spawn, while the field is below its
+//! count, and the refill finds it live; on the second pass, which spawns
+//! nothing, the refill moves the first live asteroid of slots 1-15 into
+//! it.
 //!
 //! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
 //! The fight hands its tick the field's asteroids
@@ -55,6 +67,7 @@ use super::{Session, Setup, Space, Statics};
 use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
+use crate::combat::GamePass;
 use crate::combat::asteroid_hit::AsteroidTarget;
 use crate::rulebook::{RuleKey, RuleSource};
 
@@ -81,7 +94,7 @@ impl Session {
         self.space.asteroids()
     }
 
-    /// Runs one game-work pass's asteroid work, drawing on `chance`: an
+    /// Runs one advance pass's asteroid work, drawing on `chance`: an
     /// asteroid spawned at the field's edge, on the ring
     /// [`RuleKey::AsteroidRespawnRing`] says, slot 0 refilled while miners
     /// are active (`_HandleAsteroids` @0x361b5-0x3624b, see the `mining`
@@ -89,6 +102,18 @@ impl Session {
     /// (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
     pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.asteroid_pass(
+            GamePass::Advance {
+                double_time: self.ship.warp.double_time,
+            },
+            chance,
+        );
+    }
+
+    /// Runs `pass`'s asteroid work, drawing on `chance`, as
+    /// [`Session::tick_asteroids`] does the advance pass's; double
+    /// time's second pass spawns none (see the module docs).
+    pub(super) fn asteroid_pass(&mut self, pass: GamePass, chance: &mut (impl Chance + ?Sized)) {
         if self.mode.landed().is_some() {
             // The landing's kill is spent: the field stays empty until the
             // take-off, and a later frame's counter can't match it.
@@ -106,14 +131,16 @@ impl Session {
             RuleSource::Bible => Ring::Outside,
         };
         let player = self.ship.player.position;
-        self.space.asteroids.spawn(
-            Origin::Edge(ring),
-            self.field_spec(),
-            &self.statics.asteroid_types,
-            player,
-            self.space.play_area,
-            chance,
-        );
+        if matches!(pass, GamePass::Advance { .. }) {
+            self.space.asteroids.spawn(
+                Origin::Edge(ring),
+                self.field_spec(),
+                &self.statics.asteroid_types,
+                player,
+                self.space.play_area,
+                chance,
+            );
+        }
         if self.space.miners_active() {
             self.space.asteroids.refill_slot_0();
         }
@@ -503,19 +530,23 @@ mod tests {
     }
 
     #[test]
-    fn double_times_second_pass_spawns_and_steps_again() {
+    fn double_times_second_pass_steps_again_and_spawns_nothing() {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.set_double_time_key(true);
         pass(&mut session, &mut NeverFires);
-        assert_eq!(session.asteroids().count(), 1);
+        let first = *session.asteroids().next().expect("spawned");
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.asteroids().count(), 2, "the second pass's spawn");
+        let stepped: Vec<_> = session.asteroids().copied().collect();
+        assert_eq!(stepped.len(), 1, "`_DoPlayGameWork(0)` spawns none");
+        assert_eq!(stepped[0].position, first.position + first.velocity);
+        pass(&mut session, &mut NeverFires);
+        assert_eq!(session.asteroids().count(), 2, "the next advance pass's");
     }
 
     #[test]
@@ -755,11 +786,15 @@ mod tests {
 
     // Shots at asteroids.
 
+    use crate::ai::miner::MINES;
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::{CombatEvent, ParticleBurst, Rules};
     use crate::reserves::Reserves;
     use crate::session::tests::{Attacking, arming, blaster, homing_missile, with_an_npc_at};
+    use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
+    use crate::testkit::{FAST, npc};
+    use crate::traffic::npc::Npc;
 
     /// Asteroid type `kind` of `Strength` `strength` and `Mass` 20, its
     /// frames `size` across: a hit radius of half of it.
@@ -1317,6 +1352,65 @@ mod tests {
             95,
             "met where the step left it"
         );
+    }
+
+    /// A still shot of the player's in flight at its centre, then a field
+    /// of system 130's count of 2 (`Asteroids` 2): a rock of `Strength`
+    /// 4 at the centre in slot 0, which the shot breaks, and one at rest
+    /// at (200, 20) in slot 1; and a leaderless miner far off. The
+    /// session and slot 1's rock.
+    fn mining_a_full_field() -> (Session, Asteroid) {
+        let catalog = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 2, 0x0001)],
+            ..rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)])
+        };
+        let mut session = flying(&catalog);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        assert_eq!(session.shots().len(), 1, "one still shot");
+        session.space.asteroids.clear();
+        let mut miner = Npc {
+            miner: MINES,
+            ..npc(9, ShipStats::new(FAST, &[]))
+        };
+        miner.state.position = Vec2::new(-250.0, 250.0);
+        session.space.traffic.add_npc(miner);
+        assert_eq!(put(&mut session, 0, 4, 0.0, 0.0), 0);
+        assert_eq!(put(&mut session, 0, 100, 200.0, 20.0), 1);
+        assert!(session.space.miners_active());
+        let other = slot(&session, 1);
+        (session, other)
+    }
+
+    #[test]
+    fn on_the_advance_pass_a_slot_0_shot_away_takes_the_edge_spawn() {
+        // The collision passes (@0x43e70-0x44015) break slot 0 before
+        // `_SpawnAsteroid` (@0x44243) fills the first free slot, so
+        // `_HandleAsteroids`' refill (@0x361b5) finds slot 0 live.
+        let (mut session, other) = mining_a_full_field();
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let spawned = slot(&session, 0);
+        let off = spawned.position - session.player().position;
+        assert!(off.x.abs() >= R - 2.0 && off.y.abs() >= R - 2.0, "{off:?}");
+        assert_eq!(slot(&session, 1), other, "left where it was");
+        assert_eq!(session.asteroids().count(), 2);
+    }
+
+    #[test]
+    fn on_the_second_pass_a_slot_0_shot_away_is_refilled_and_nothing_spawns() {
+        // `_DoPlayGameWork(0)` jumps past `_SpawnAsteroid` (@0x4402a to
+        // @0x44350), and `_HandleAsteroids` (@0x444f5) refills slot 0.
+        let (mut session, other) = mining_a_full_field();
+        session.set_double_time_key(true);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(slot(&session, 0), other, "slot 1's rock, at rest");
+        assert_eq!(session.asteroids().count(), 1, "no spawn");
     }
 
     #[test]

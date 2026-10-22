@@ -301,7 +301,7 @@ impl Session {
         self.fight_tail(rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
-        self.tick_asteroids(chance);
+        self.asteroid_pass(pass, chance);
         if ai.is_none() {
             self.tick_reinforcements(chance);
         }

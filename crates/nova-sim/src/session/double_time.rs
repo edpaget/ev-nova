@@ -175,8 +175,9 @@ impl Session {
     /// ([`Session::player_fires`]), then its move; the collision passes,
     /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
     /// its hits answered; the ship loop's flights and fire;
-    /// `_HandleBeams` and what the pass leaves; then the asteroids and the
-    /// reinforcement clock; from the eject check on, the advance pass's own
+    /// `_HandleBeams` and what the pass leaves; then the asteroids, with no
+    /// spawn (see the `asteroids` module), and the reinforcement clock;
+    /// from the eject check on, the advance pass's own
     /// routine without its AI ([`Session::pass_after_move`]). Its caller
     /// runs it after the advance pass
     /// ([`Session::game_work`]) while [`Session::double_time`] is on.
