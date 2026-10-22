@@ -236,8 +236,14 @@ impl Combat {
         };
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
+        let idle = fighters[index]
+            .target
+            .is_none_or(|target| fighters.iter().all(|other| other.ship != target));
         let fighter = &mut fighters[index];
         self.ion_lockout.reload_one(fighter);
+        if idle {
+            fighter.armament.hold_idle_bays();
+        }
         regenerate(fighter, arena.rules.disable);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);

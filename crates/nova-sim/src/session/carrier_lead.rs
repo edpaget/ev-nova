@@ -266,3 +266,36 @@ fn the_players_fighter_told_to_hold_coasts_its_glide_out() {
     assert_eq!(left, 1);
     assert_eq!(session.space.npc(id).expect("there").goal, Goal::Wait);
 }
+
+#[test]
+fn an_idle_carrier_launches_its_first_fighter_a_reload_after_it_takes_a_target() {
+    // `_HandleShip` holds an idle NPC's bays at their `Reload` every frame
+    // (@0x3390a-0x3394e), after `_AILaunchFighter` (@0x8e6fa) in the same
+    // frame: the frame it takes a target its bay still reads 60, and its
+    // launch comes 60 frames on.
+    let catalog = carrying();
+    let (mut session, raider, lead) = raided(&catalog);
+    for ship in [lead, raider] {
+        let npc = session.space.npc_mut(ship).expect("there");
+        npc.goal = Goal::Idle;
+        npc.target = None;
+    }
+    let ai = raiding_ai();
+    for _ in 0..100 {
+        fight(&mut session, &catalog, &ai);
+    }
+    assert_eq!(vipers(&session), [], "idle, it launches nothing");
+    let bay =
+        |session: &Session| session.space.npc(raider).expect("there").armament.mounts()[0].reload;
+    assert_eq!(bay(&session), 60.0, "held at its Reload");
+    for ship in [lead, raider] {
+        let npc = session.space.npc_mut(ship).expect("there");
+        npc.goal = Goal::Attack(ShipRef::Player);
+        npc.target = Some(ShipRef::Player);
+    }
+    let launched = (1..=100).find(|_| {
+        fight(&mut session, &catalog, &ai);
+        !vipers(&session).is_empty()
+    });
+    assert_eq!(launched, Some(61), "60 ticks after the first with a target");
+}

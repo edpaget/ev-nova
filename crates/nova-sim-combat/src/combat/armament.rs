@@ -128,6 +128,7 @@
 
 mod ai_launch;
 mod burst_reload;
+mod idle_bays;
 
 use std::collections::BTreeMap;
 

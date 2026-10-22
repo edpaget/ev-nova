@@ -2406,7 +2406,8 @@ pub(super) mod tests {
 
     /// Scripts each NPC's trigger by its number: point defence for the
     /// defenders, the goal-4 launch for the carrier once `launch` is set,
-    /// and the missile for the picker, at the low defender.
+    /// at its own target, and the missile for the picker, at the low
+    /// defender.
     #[derive(Debug)]
     struct Scripted {
         defenders: [NpcId; 2],
@@ -2441,8 +2442,15 @@ pub(super) mod tests {
             }
         }
 
+        /// The picker's, the low defender; the carrier keeps its own, as
+        /// with none `_HandleShip` would hold its bay at its `Reload`
+        /// (@0x3390a-0x3394e).
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
-            (npc.id == self.picker).then_some(ShipRef::Npc(self.defenders[0]))
+            if npc.id == self.picker {
+                Some(ShipRef::Npc(self.defenders[0]))
+            } else {
+                npc.target.filter(|_| npc.id == self.carrier)
+            }
         }
     }
 

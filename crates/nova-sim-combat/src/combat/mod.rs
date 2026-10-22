@@ -3771,6 +3771,7 @@ mod tests {
     mod exit_steps;
     mod fold_stamp;
     mod hidden_shots;
+    mod idle_bays;
     mod ion_lockout_tick;
     mod lineup;
     mod plunder_fire;
