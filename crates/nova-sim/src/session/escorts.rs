@@ -467,29 +467,14 @@ impl Session {
     /// ship-table order, by berth, hired and mission escorts alike, as
     /// `_AICalcFormationPositions` numbers every ship whose formation
     /// parent is the player in table-slot order (@0x85137-0x851cc), out of
-    /// them and the player, spaced by the widest sprite among them
-    /// ([`escort::spacing`]).
+    /// them and the player, spaced by the widest sprite among them, the
+    /// player's included ([`escort::number_formation`], which numbers an
+    /// NPC's formation too).
     pub(super) fn formation_slots(&self) -> Vec<(NpcId, FormationSlot)> {
-        let placed: Vec<&Npc> = self
+        let placed = self
             .player_led()
-            .filter(|npc| swarm::formation_parent(npc) == Some(FormationParent::Player))
-            .collect();
-        let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
-        let widths: Vec<Option<f32>> = placed.iter().map(|npc| npc.hull.sprite_size).collect();
-        let spacing = escort::spacing(self.ship.fit.hull.sprite_size, &widths);
-        placed
-            .iter()
-            .enumerate()
-            .map(|(place, npc)| {
-                let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
-                let formation = FormationSlot {
-                    slot,
-                    ships,
-                    spacing,
-                };
-                (npc.id, formation)
-            })
-            .collect()
+            .filter(|npc| swarm::formation_parent(npc) == Some(FormationParent::Player));
+        escort::number_formation(self.ship.fit.hull.sprite_size, placed)
     }
 
     /// Puts escort NPC `id`, hired or a mission escort, on its slot beside

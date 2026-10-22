@@ -73,31 +73,16 @@ fn parents(npcs: &[Npc]) -> Vec<Option<usize>> {
 }
 
 /// The slots of the formation of `npcs[at]`, whose followers are the
-/// others whose parent, among `parents`, it is (see the module docs).
+/// others whose parent, among `parents`, it is (see the module docs),
+/// numbered as the player's are ([`escort::number_formation`]).
 fn formation(npcs: &[Npc], parents: &[Option<usize>], at: usize) -> Vec<(NpcId, FormationSlot)> {
-    let mut followers: Vec<&Npc> = npcs
+    let followers = npcs
         .iter()
         .zip(parents)
         .enumerate()
         .filter(|&(of, (_, &parent))| of != at && parent == Some(at))
-        .map(|(_, (npc, _))| npc)
-        .collect();
-    followers.sort_by_key(|npc| npc.berth);
-    let ships = u8::try_from(followers.len() + 1).unwrap_or(u8::MAX);
-    let widths: Vec<Option<f32>> = followers.iter().map(|npc| npc.hull.sprite_size).collect();
-    let spacing = escort::spacing(npcs[at].hull.sprite_size, &widths);
-    followers
-        .iter()
-        .enumerate()
-        .map(|(place, npc)| {
-            let slot = FormationSlot {
-                slot: u8::try_from(place + 2).unwrap_or(u8::MAX),
-                ships,
-                spacing,
-            };
-            (npc.id, slot)
-        })
-        .collect()
+        .map(|(_, (npc, _))| npc);
+    escort::number_formation(npcs[at].hull.sprite_size, followers)
 }
 
 /// Works `lead`'s formation out among `npcs` (as [`slots`] does) and

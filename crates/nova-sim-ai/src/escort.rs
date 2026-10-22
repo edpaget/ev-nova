@@ -29,7 +29,7 @@
 //! [`RuleKey::EscortOrders`](crate::RuleKey::EscortOrders), and the
 //! other reading keeps the orders (see the session).
 //!
-//! **Formation** ([`spacing`], [`slot_offset`], [`slot_position`];
+//! **Formation** ([`number_formation`], [`spacing`], [`slot_offset`], [`slot_position`];
 //! `_AICalcFormationPositions` @0x85040, `_AICalcShipFormPos` @0x84cb8):
 //! the player leads, in slot 1, and the ships it leads take slots 2, 3, …
 //! in ship-table order (their berths): its hired escorts and its mission
@@ -315,6 +315,39 @@ pub fn spacing(leader: Option<f32>, followers: &[Option<f32>]) -> f32 {
     (widest * SPACING_SHARE)
         .trunc()
         .clamp(MIN_SPACING, MAX_SPACING)
+}
+
+/// The slots of one formation: its parent `parent_width` pixels wide
+/// (none without a sprite) and its `followers`, every ship whose
+/// formation parent it is (`_AICalcFormationPositions`
+/// @0x85137-0x851cc). The followers take slots 2, 3, … in ship-table
+/// order, by berth (ships at one berth in the order given), out of
+/// `ships`, the followers and the parent, all spaced alike by the widest
+/// sprite among them ([`spacing`]). Which ships follow, and the parent's
+/// width, are the caller's: the player's formation is the session's,
+/// an NPC's the traffic's ([`fleet_formation`](crate::traffic::fleet_formation)).
+#[must_use]
+pub fn number_formation<'a>(
+    parent_width: Option<f32>,
+    followers: impl IntoIterator<Item = &'a Npc>,
+) -> Vec<(NpcId, FormationSlot)> {
+    let mut followers: Vec<&Npc> = followers.into_iter().collect();
+    followers.sort_by_key(|npc| npc.berth);
+    let ships = u8::try_from(followers.len() + 1).unwrap_or(u8::MAX);
+    let widths: Vec<Option<f32>> = followers.iter().map(|npc| npc.hull.sprite_size).collect();
+    let spacing = spacing(parent_width, &widths);
+    followers
+        .iter()
+        .enumerate()
+        .map(|(place, npc)| {
+            let slot = FormationSlot {
+                slot: u8::try_from(place + 2).unwrap_or(u8::MAX),
+                ships,
+                spacing,
+            };
+            (npc.id, slot)
+        })
+        .collect()
 }
 
 /// Where slot `slot` of a formation of `ships` sits, in spacings: how far
@@ -773,6 +806,71 @@ mod tests {
             (SPACING_SHARE, MIN_SPACING, MAX_SPACING, NO_SPRITE),
             (0.6, 24.0, 60.0, 64.0)
         );
+    }
+
+    /// A follower numbered `id`, at berth `berth`, `width` wide.
+    fn follower(id: u32, berth: u32, width: Option<f32>) -> Npc {
+        let mut npc = crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
+        npc.berth = berth;
+        npc.hull.sprite_size = width;
+        npc
+    }
+
+    #[test]
+    fn a_formation_numbers_its_followers_from_2_by_berth_out_of_them_and_the_parent() {
+        let ships = [
+            follower(1, 9, None),
+            follower(2, 6, None),
+            follower(3, 7, None),
+            follower(4, 6, None),
+        ];
+        let slot = |slot| FormationSlot {
+            slot,
+            ships: 5,
+            spacing: 38.0,
+        };
+        assert_eq!(
+            number_formation(None, &ships),
+            [
+                (NpcId(2), slot(2)),
+                (NpcId(4), slot(3)),
+                (NpcId(3), slot(4)),
+                (NpcId(1), slot(5)),
+            ],
+            "by berth; one berth's in the order given"
+        );
+        assert!(number_formation(None, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_formation_is_spaced_by_the_widest_sprite_the_parents_included() {
+        let spacing_of = |parent: Option<f32>, widths: &[Option<f32>]| {
+            let ships: Vec<Npc> = (1..)
+                .zip(widths)
+                .map(|(n, &width)| follower(n, n, width))
+                .collect();
+            let slots = number_formation(parent, &ships);
+            assert_eq!(slots.len(), widths.len());
+            assert!(
+                slots
+                    .iter()
+                    .all(|(_, slot)| slot.spacing == slots[0].1.spacing)
+            );
+            slots[0].1.spacing
+        };
+        assert_eq!(
+            spacing_of(None, &[Some(40.0), Some(70.0)]),
+            42.0,
+            "70 × 0.6"
+        );
+        assert_eq!(spacing_of(None, &[Some(20.0)]), 38.0, "64 with no sprite");
+        assert_eq!(
+            spacing_of(Some(50.0), &[Some(20.0), None]),
+            30.0,
+            "the parent's"
+        );
+        assert_eq!(spacing_of(Some(30.0), &[Some(20.0), Some(30.0)]), 24.0);
+        assert_eq!(spacing_of(Some(30.0), &[Some(120.0)]), 60.0);
     }
 
     #[test]
