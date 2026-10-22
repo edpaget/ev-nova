@@ -1557,8 +1557,9 @@
 //! - **`_GetStellarSpriteXSize`** (@0xac91-0xad37) gives, in order: 150
 //!   for a stellar index above 0x7ff (@0xac9c); 150 when the stellar's
 //!   +0x14 is not the player's system (+0x74 of the first ship,
-//!   @0xacb9-0xacc1; a stellar in two visible systems, story-runtime
-//!   phase 18, stellar-in-a-second-system-reach); 150 when `Type` (+0x0e)
+//!   @0xacb9-0xacc1; for a stellar another system owns, read by NPC gate
+//!   entry, as the dock request refuses such a stellar before the reach:
+//!   see "Checked for stellar-fidelity phase 7"); 150 when `Type` (+0x0e)
 //!   is outside 0 to 255 (@0xacc3-0xacd0), its `_masterStellarSprite`
 //!   entry is null (@0xacdf) or that master has no current frame (+0x50,
 //!   @0xace6); 32 when the master's frame index (+0x68) is below 0 or
@@ -2509,6 +2510,85 @@
 //! only the speed compare changed. The fee's branches (@0x669b4-0x66a80,
 //! @0x66db9-0x66df5) are stellar-fidelity phase 15's; the cloak refusal
 //! is cloaking-fidelity phase 8's; every other branch was already built.
+//!
+//! ## Built by stellar-fidelity phase 7
+//!
+//! - **The owner test** is `Chart::held_here` (`nova_sim`'s
+//!   `session::chart_ownership`): the stellar's holder
+//!   ([`OverlaidGalaxy::holder`], its owner, else the rescue to the
+//!   player's system) is the player's system.
+//! - **The width.** The player's landing reach and the NPCs' gate entry
+//!   box read `TypeWidth::Unloaded`, 150, for a stellar not held, ahead of
+//!   phase 3's master rule, as `_GetStellarSpriteXSize`'s owner test runs
+//!   ahead of its master tests. So such a stellar reaches trunc(150 ×
+//!   1.75) = 262 and a gate a quarter of 150, 37.
+//! - **The press.** `land_or_select` refuses a stellar not held as not
+//!   landable, after `is_landable` and before the uninhabited, request,
+//!   speed and reach tests, with the not-landable line and its beep.
+//!
+//! Every stellar shown is held ([`OverlaidGalaxy::shows`]), so these
+//! bite only on a stellar kept among the sites after the player's system
+//! changed without a rebuild point. By the other reading of
+//! [`landing_distance`](crate::RuleKey::LandingDistance), the circle, the
+//! owner counts for nothing, as the master doesn't. The Bible says nothing
+//! of ownership and the landing width, so there is no new key.
+//!
+//! ## Checked for stellar-fidelity phase 7
+//!
+//! - **The width's owner test.** `_GetStellarSpriteXSize`
+//!   (@0xac91-0xad37) gives 150 when the stellar's owner word (+0x14) is
+//!   not the player's system, the first ship's +0x74 through 0x3b5138
+//!   (@0xacb2-0xacc1). It comes after the index test (@0xac9c) and before
+//!   the `Type` range and master tests (@0xacc3-0xace6). The master table
+//!   `_masterStellarSprite` (0x3b5040) is indexed by `Type`
+//!   (@0xacd2-0xacda), not by system: a shared stellar's 150 elsewhere is
+//!   the owner test, not a master loaded for one system only. The
+//!   function plays no sound.
+//! - **Who owns, and when.** Unchanged: see "Visibility and governments"
+//!   and the ownership checks of crons-news-ranks phase 5, missions-fidelity
+//!   phase 11 and crons-news-ranks-fidelity phases 18 and 38. The owner is
+//!   the lowest-ID visible lister no lower visible system at its place
+//!   shadows, recomputed only at a galaxy refresh; a rebuild only rescues
+//!   an unowned stellar to the player's system.
+//! - **The slot rule.** `_HandleStellarSystemVisibility` keeps a master
+//!   and gives a sprite slot only to a stellar active and owned by the
+//!   player's system (@0x32cf9-0x32d4c, @0x32ee4-0x33229). In another
+//!   system that lists it, the stellar is not drawn, not clicked (the
+//!   click walks the slots at 0x3b53d0, `_HandlePlayer`
+//!   @0x6a5f9-0x6a686) and not hit (`_SWRLECollision` @0x372a8).
+//!   [`OverlaidGalaxy::shows`] already gives this.
+//! - **The dock request refuses first.** `_HandlePlayerDockRequest`
+//!   tests the held stellar (+0x6c): `_StellarIsLandable` (@0x66977), its
+//!   owner the player's +0x74 (@0x6699a-0x669a4), and active (@0x669aa).
+//!   Any failure goes to 0x67cda, the not-landable line (`STR#` 2002
+//!   #84-#90) and `_beepSnd[3]`, `snd ` 153 (@0x67e8f). Both its width
+//!   calls come later (@0x66cd9, @0x6773a), so the player is never landed
+//!   on a stellar another system owns at 150 × 1.75.
+//! - **NPC gate entry reads the 150.** `_HighLevelAIHandler` state 20
+//!   (@0x8dbdf) takes `_GetStellarSpriteXSize(gate) / 4`, inclusive: 37
+//!   for a gate the player's system doesn't own. An NPC holds one as its
+//!   destination: `_SelectRandomStellarDest` picks from its system's
+//!   `NavDefs` (@0x806bd-0x8087c), testing only `_StellarIsLandable`
+//!   (@0x8074e) and `Flags`/`Flags2`, never the owner or active. A ship an
+//!   in-flight `M` or `N` leaves behind can hold one on its last tick, but
+//!   is freed before it is drawn (`_HandleShipDisplay` @0x2ded6-0x2dee7).
+//! - **Readers with no owner test.** `_FindNearestStellar`
+//!   (@0x276c-0x2888) walks the ship's system's 16 `NavDefs`, requiring
+//!   active (@0x27c3) and `Flags` 0x01 (@0x27cd), a gate only within the
+//!   squared distance at 0xdd050 (@0x2841-0x2853). The land key with
+//!   nothing held (@0x6a8ed-0x6a932) requests its pick, which the dock
+//!   request then refuses when unowned; the tutorial's land hints name it
+//!   (@0x709e8, @0x70bdc). The slot keys and F5 (`_HandlePlayer`
+//!   @0x69e28-0x69e94) take `NavDefs[slot]` (@0x69e2e-0x69e46) or the
+//!   nearest pick (@0x69e59) and act only on an owned one (@0x69e88), with
+//!   no sound: slot N is `NavDefs` index N, gaps included. The status
+//!   radar (`_DrawStatusRadar` @0x498ad-0x49a8a) draws every non-empty
+//!   `NavDefs` entry, with no active or owner test, sizing the blip by
+//!   whether the `Type` master is loaded (@0x499ef-0x49a27). The engine's
+//!   picks, NPC destinations and radar read only the stellars shown:
+//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
+//!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
+//!   and rdm:task/radar-blips-every-listed-stellar.
 
 //! # Mission lifecycle
 //!

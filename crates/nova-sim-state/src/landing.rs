@@ -151,7 +151,11 @@
 //! - [`UNLOADED_TYPE_WIDTH`], 150, while it is not
 //!   ([`TypeWidth::Unloaded`]): a destroyed stellar from a rebuild point
 //!   until a flight frame loads it again, unless another stellar shown
-//!   keeps it loaded, or a `Type` whose sheet cannot be read;
+//!   keeps it loaded, or a `Type` whose sheet cannot be read; and,
+//!   whatever its master, a stellar whose owner is not the player's
+//!   system (@0xacb9-0xacc1, before the master tests), which the dock
+//!   request refuses as not landable before it reads the reach, so only
+//!   NPC gate entry meets it;
 //! - [`OUT_OF_RANGE_FRAME_WIDTH`], 32, for a loaded master whose `spïn`
 //!   gives no frame count ([`TypeWidth::OutOfRange`]);
 //!
