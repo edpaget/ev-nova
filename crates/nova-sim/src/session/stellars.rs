@@ -122,7 +122,7 @@ use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
-use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_reach};
+use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landing_reach};
 use crate::legal::{Crime, LegalCode};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -324,7 +324,7 @@ impl Session {
 
     /// The stellars shown that shots can hit this tick: each whole one of
     /// `Strength` above 0 drawing a sheet that can be read, as big as the
-    /// disc of that sheet's frame (half its larger side, which for a `Type`
+    /// disc of that sheet's frame ([`frame_radius`], which for a `Type`
     /// sheet is [`landing_radius`](crate::landing::landing_radius)), with
     /// its current strength. A whole
     /// stellar with no `Type` sheet is hit by the frame its sprite slot
@@ -336,14 +336,14 @@ impl Session {
             .iter()
             .filter(|site| !site.destroyed)
             .filter_map(|site| {
-                let (width, height) =
-                    self.space
-                        .drawn_frame_size(&self.statics, &self.setup, site)?;
+                let frame = self
+                    .space
+                    .drawn_frame_size(&self.statics, &self.setup, site)?;
                 let life = self.statics.lives.get(&site.id)?;
                 wreck::destroyable(life).then(|| StellarTarget {
                     stellar: site.id,
                     position: site.position,
-                    radius: width.max(height) as f32 / 2.0,
+                    radius: frame_radius(frame),
                     strength: self
                         .space
                         .strength

@@ -316,18 +316,25 @@ impl LandingRefusal {
     }
 }
 
-/// Half the larger side of `site`'s sprite's frame, which is what the
-/// player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
+/// The disc a stellar's frame of `(width, height)` shows: half its larger
+/// side. The landing radius takes it from the `Type` sheet's frame
+/// ([`landing_radius`]); the shots take it from the frame the stellar
+/// draws, which may be its sprite slot's when no `Type` sheet can be read
+/// (`nova_sim::Session`'s stellar targets).
+#[must_use]
+pub fn frame_radius((width, height): (u32, u32)) -> f32 {
+    width.max(height) as f32 / 2.0
+}
+
+/// The [`frame_radius`] of `site`'s `Type` sheet's frame, which is what
+/// the player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
 /// sprite: the landing radius of [`RuleKey::LandingDistance`]'s other
-/// reading, the radius NPCs land within, and the disc the shots hit.
+/// reading and the radius NPCs land within.
 ///
 /// [`RuleKey::LandingDistance`]: crate::RuleKey::LandingDistance
 #[must_use]
 pub fn landing_radius(site: &LandingSite) -> f32 {
-    site.frame_size
-        .map_or(UNKNOWN_STELLAR_RADIUS, |(width, height)| {
-            width.max(height) as f32 / 2.0
-        })
+    site.frame_size.map_or(UNKNOWN_STELLAR_RADIUS, frame_radius)
 }
 
 /// The original's reach when the stellar's sprite slot shows no frame
@@ -951,6 +958,13 @@ mod tests {
             ],
             [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80]
         );
+    }
+
+    #[test]
+    fn a_frame_disc_is_half_the_frame_s_larger_side() {
+        assert_eq!(frame_radius((100, 60)), 50.0);
+        assert_eq!(frame_radius((140, 185)), 92.5);
+        assert_eq!(frame_radius((141, 85)), 70.5);
     }
 
     #[test]
