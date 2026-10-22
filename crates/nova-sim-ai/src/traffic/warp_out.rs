@@ -137,7 +137,7 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::Outcome;
 use crate::traffic::World;
-use crate::traffic::autopilot::{position_step, steer, step};
+use crate::traffic::autopilot::{plain_step, position_step, steer};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::jump_with_leader;
 use crate::traffic::npc::{Mode, Npc, NpcId};
@@ -515,7 +515,8 @@ pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Ine
         return;
     }
     match inertia {
-        Inertia::Inertial => step(npc, handling, controls, flight, inertia),
+        // A turn alone writes neither word.
+        Inertia::Inertial => plain_step(npc, handling, controls, flight, inertia),
         Inertia::Inertialess { .. } => {
             npc.state.heading = turned(npc.state.heading, controls.turn, handling.turn_rate);
             inertialess::drift(npc, handling);

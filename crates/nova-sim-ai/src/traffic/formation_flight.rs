@@ -342,7 +342,7 @@ pub(crate) fn fly(
             (Controls { turn, ..controls }, flown)
         }
     };
-    autopilot::step(npc, &flown, controls, flight, inertia);
+    held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
 }
 
 #[cfg(test)]

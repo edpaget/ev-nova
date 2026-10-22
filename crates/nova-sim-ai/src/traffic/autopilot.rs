@@ -461,7 +461,7 @@ fn fly_mobile(
     let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc, &handling);
-        step(npc, &handling, controls, flight, inertia);
+        held_burst::step(npc, &handling, controls, flight, inertia, Word::Writes);
         return Outcome::Flying;
     }
     let unsteered_by = (speeds, flight, readings.held_burst);
@@ -572,29 +572,12 @@ fn fly_mobile(
     Outcome::Flying
 }
 
-/// Flies `npc` one tick under `controls` as `inertia` says
-/// ([`plain_step`]), its substate writing the burst word +0x34 as it
-/// thrusts ([`held_burst::Word::Writes`]): a thrust, or an inertialess
-/// ship's brake, drops the gate burst it owes ([`Npc::owed_burst`], F8 of
-/// [`held_burst`]).
-pub(crate) fn step(
-    npc: &mut Npc,
-    handling: &Handling,
-    controls: Controls,
-    flight: FlightRules,
-    inertia: Inertia,
-) {
-    let inertialess = matches!(inertia, Inertia::Inertialess { .. });
-    if controls.thrust || (inertialess && controls.reverse) {
-        npc.owed_burst = None;
-    }
-    plain_step(npc, handling, controls, flight, inertia);
-}
-
 /// Flies `npc` one tick under `controls` as `inertia` says: an inertial
 /// ship's [`flight::step`], an inertialess one's
 /// [`flight::inertialess_step`] (see [`inertialess`]), its drive recorded
-/// ([`ship_display::record`]). What it owes of a gate burst is left.
+/// ([`ship_display::record`]). What it owes of a gate burst is left: a
+/// flight whose substate writes the burst word +0x34 flies by
+/// [`held_burst::step`] under [`Word::Writes`], which drops it.
 pub(crate) fn plain_step(
     npc: &mut Npc,
     handling: &Handling,
@@ -753,7 +736,7 @@ fn dock_in(
         reverse: false,
         ..Controls::default()
     };
-    step(npc, handling, controls, flight, inertia);
+    held_burst::step(npc, handling, controls, flight, inertia, Word::Writes);
     let pull = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
@@ -805,7 +788,7 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
 /// gun turning as `snipe_lead` says, leading by that gun's record in
 /// `weapons`. It flies under `flight` as
-/// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
+/// `flown_by` says ([`held_burst::step`]); a moving inertialess sniper brakes as
 /// substate 0xe does ([`snipe::inertialess_brake`]). An inertialess
 /// dogfighter whose frame matches its target's speed
 /// ([`Frame::speed_cap`](pursuit::Frame::speed_cap)) flies at most at
@@ -966,7 +949,8 @@ fn unsteered(
                 _ => {}
             }
             disabled_drag(npc);
-            step(npc, handling, Controls::default(), flight, inertia);
+            // No thrust: it writes neither word.
+            plain_step(npc, handling, Controls::default(), flight, inertia);
         }
         (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, flown, chance),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, flown, chance),
@@ -2045,7 +2029,7 @@ mod tests {
             turn: Turn::Left,
             ..Controls::default()
         };
-        step(&mut ship, &handling, controls, flight, Inertia::Inertial);
+        plain_step(&mut ship, &handling, controls, flight, Inertia::Inertial);
         assert_eq!(ship.display.drive.turn, -1);
         assert_eq!(ship.display.drive.thrust, ship_display::Thrust::Plain);
         let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);

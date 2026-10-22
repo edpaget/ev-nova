@@ -456,7 +456,7 @@ mod tests {
         let mut expected = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
         expected.speed = 1.0;
         let (controls, by) = stop(&mut expected.state, &HANDLING, inertia, false);
-        autopilot::step(&mut expected, &by, controls, rules, inertia);
+        autopilot::plain_step(&mut expected, &by, controls, rules, inertia);
         assert_eq!(
             (inertialess.state, inertialess.speed),
             (expected.state, expected.speed)

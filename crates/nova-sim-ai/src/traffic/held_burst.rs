@@ -14,9 +14,10 @@
 //! - **What drops it** (F8): every substate's thrust but three writes
 //!   +0x34 with +0x30 (subs 2, 3, 5, 6, 7, 8, 9, 0xb, 0xc's
 //!   counter-thrust, 0xf, 0x10, 0x11), so the first such thrust drops it
-//!   ([`Word::Writes`], [`autopilot::step`]). An inertialess dogfighter
-//!   matching its target's speed writes +0x34 whether or not it thrusts
-//!   (@0x860a6), which the autopilot's fight drops it for.
+//!   ([`Word::Writes`], [`step`]; what thrusts is [`writes_thrust`]). An
+//!   inertialess dogfighter matching its target's speed writes +0x34
+//!   whether or not it thrusts (@0x860a6), which the autopilot's fight
+//!   drops it for.
 //! - **What keeps it** (F5, F6): the swarm's thrust (sub 0x12, @0x8533d),
 //!   sub 1's brakes (inertialess -0.5 × `_ShipAccelRate` @0x853e0-0x853fe;
 //!   inertial, its full thrust from 1.75 on an axis @0x85510-0x8551e or
@@ -90,18 +91,26 @@ impl Word {
         }
     }
 
-    /// Sub 1's word, as `inertia` says: an inertial ship's thrust while
-    /// `controls` thrust, `flown`'s acceleration (half of it on the soft
-    /// brake, which `flown` carries); an inertialess one's brake while
-    /// `controls` reverse, |[`BRAKE`]| of it (@0x853f6).
+    /// Sub 1's word, as `inertia` says, while `controls` thrust
+    /// ([`writes_thrust`]): an inertial ship's thrust, `flown`'s
+    /// acceleration (half of it on the soft brake, which `flown` carries);
+    /// an inertialess one's brake, |[`BRAKE`]| of it (@0x853f6).
     pub(crate) fn stop(controls: Controls, flown: &Handling, inertia: Inertia) -> Self {
         let thrust = match inertia {
-            Inertia::Inertial if controls.thrust => flown.accel,
-            Inertia::Inertialess { .. } if controls.reverse => flown.accel * -BRAKE,
-            _ => 0.0,
+            _ if !writes_thrust(controls, inertia) => 0.0,
+            Inertia::Inertial => flown.accel,
+            Inertia::Inertialess { .. } => flown.accel * -BRAKE,
         };
         Self::Keeps { thrust }
     }
+}
+
+/// Whether `controls` write the thrust word +0x30, as `inertia` says: an
+/// inertial ship's thrust; an inertialess one's thrust or its brake,
+/// reverse ([`flight::inertialess_step`]). An inertial reverse turns
+/// alone.
+pub(crate) fn writes_thrust(controls: Controls, inertia: Inertia) -> bool {
+    controls.thrust || (matches!(inertia, Inertia::Inertialess { .. }) && controls.reverse)
 }
 
 /// What a flight flies this tick: its controls, and its [`Word`].
@@ -138,8 +147,8 @@ impl From<Controls> for Flight {
 /// `inertia` says, its substate doing `word` to +0x34 (see the module
 /// docs): owing a burst under a [`Word::Keeps`] that thrusts, it bursts
 /// ([`burst`]); under one that doesn't, it flies keeping what it owes
-/// ([`autopilot::plain_step`]); under [`Word::Writes`] it flies as
-/// [`autopilot::step`] does, its thrust dropping what it owes.
+/// ([`autopilot::plain_step`]); under [`Word::Writes`] it flies as ever,
+/// its thrust ([`writes_thrust`]) dropping what it owes (F8).
 pub(crate) fn step(
     npc: &mut Npc,
     handling: &Handling,
@@ -153,12 +162,17 @@ pub(crate) fn step(
             burst(npc, handling, controls, flight, inertia, (speed, thrust));
         }
         (Word::Keeps { .. }, _) => autopilot::plain_step(npc, handling, controls, flight, inertia),
-        (Word::Writes, _) => autopilot::step(npc, handling, controls, flight, inertia),
+        (Word::Writes, _) => {
+            if writes_thrust(controls, inertia) {
+                npc.owed_burst = None;
+            }
+            autopilot::plain_step(npc, handling, controls, flight, inertia);
+        }
     }
 }
 
 /// One tick of `npc`'s burst at `speed`, its thrust word `thrust` (F2):
-/// it records its drive and turns as [`autopilot::step`] would under
+/// it records its drive and turns as [`autopilot::plain_step`] would under
 /// `controls` on `handling` under `flight`, as `inertia` says, then moves
 /// along its new heading at `speed` in place of its thrust
 /// ([`autopilot::burst_motion`]), and owes `thrust` less.
@@ -349,7 +363,7 @@ mod tests {
             let mut npc = owing(Some(30.0));
             let flown = handling(&npc);
             let mut plain = npc.clone();
-            autopilot::step(
+            autopilot::plain_step(
                 &mut plain,
                 &flown,
                 controls,
@@ -379,7 +393,7 @@ mod tests {
             ..Controls::default()
         };
         let mut plain = npc.clone();
-        autopilot::step(
+        autopilot::plain_step(
             &mut plain,
             &flown,
             controls,
