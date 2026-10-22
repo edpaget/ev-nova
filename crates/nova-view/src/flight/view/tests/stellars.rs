@@ -554,6 +554,65 @@ fn a_system_entered_by_a_jump_with_a_stellar_destroyed_draws_type_zero_from_its_
     assert_eq!(moon(&view), Moon::TypeZero);
 }
 
+// A whole stellar whose `Type` sheet cannot be read (stellar-fidelity
+// phase 3).
+
+/// Why the Moon's `Type` sheet cannot be read.
+const UNREADABLE: &str = "spöb 129: no spïn 1004 for its graphic type 4";
+
+/// A flight in Sol whose Moon (129) is whole and its `Type` sheet cannot
+/// be read, by `rules`, after its first frame.
+fn unreadable_moon(rules: Rulebook) -> View {
+    let mut view = FlightView::new(FakeCatalog {
+        moon_unreadable: Some(UNREADABLE),
+        ..catalog()
+    })
+    .with_rules(rules);
+    view.tick(TICK);
+    view
+}
+
+/// Whether the placeholder's reason for the Moon's `Type` sheet is drawn.
+fn moon_placeholder_drawn(view: &View) -> bool {
+    texts(&drawn(view)).contains(&format!("Sprite unavailable: {UNREADABLE}"))
+}
+
+/// The scene's problems.
+fn problems(view: &View) -> Vec<String> {
+    view.scene().expect("a scene").problems().to_vec()
+}
+
+#[test]
+fn a_whole_stellar_with_no_type_sheet_draws_type_zero_in_flight() {
+    for rules in [
+        Rulebook::default(),
+        Rulebook::default().with_override(RuleKey::TypeSheetFallback, RuleSource::Engine),
+    ] {
+        let view = unreadable_moon(rules);
+        assert!(type_zero_drawn(&view), "the entry's rebuild point");
+        assert!(!moon_placeholder_drawn(&view));
+        assert!(
+            problems(&view).contains(&format!("spöb 129 Type: {UNREADABLE}")),
+            "{:?}",
+            problems(&view)
+        );
+    }
+}
+
+#[test]
+fn by_the_other_reading_it_draws_the_placeholder_and_why() {
+    let view = unreadable_moon(
+        Rulebook::default().with_override(RuleKey::TypeSheetFallback, RuleSource::Bible),
+    );
+    assert!(!type_zero_drawn(&view));
+    assert!(moon_placeholder_drawn(&view));
+    assert!(
+        problems(&view).contains(&format!("spöb 129 Type: {UNREADABLE}")),
+        "{:?}",
+        problems(&view)
+    );
+}
+
 // The sheet drawn and the click box agree (stellar-fidelity phase 1).
 
 /// A flight in Sol whose Moon (129) can be destroyed, 50 square, with

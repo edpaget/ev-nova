@@ -209,6 +209,9 @@ struct FakeCatalog {
     /// The Moon's (129) sheets and graphic type 0's, given to the sim
     /// and the view alike: the defaults, unless set.
     moon: Option<MoonSheets>,
+    /// Why the Moon's (129) `Type` sheet cannot be read, in the sim and
+    /// the view alike: it can, by default.
+    moon_unreadable: Option<&'static str>,
     /// The missions: none, by default.
     missions: Vec<nova_sim::catalog::MissionRecord>,
     /// What the mission screens show of each: none, by default.
@@ -388,6 +391,7 @@ fn catalog() -> FakeCatalog {
         gate_listers: Vec::new(),
         lives: Vec::new(),
         moon: None,
+        moon_unreadable: None,
         missions: Vec::new(),
         mission_texts: Vec::new(),
         visibility: Vec::new(),
@@ -409,6 +413,11 @@ impl FakeCatalog {
                         site.frame_size = Some((moon.width, moon.width));
                         site.dead_graphic = moon.dead_width.map(|_| 9);
                         site.dead_frame_size = moon.dead_width.map(|w| (w, w));
+                    }
+                }
+                if self.moon_unreadable.is_some() {
+                    for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+                        site.frame_size = None;
                     }
                 }
                 sites
@@ -817,6 +826,11 @@ impl SystemCatalog for FakeCatalog {
                     .dead_width
                     .map(|w| Ok(square(2129, w, moon.dead_frames)));
                 stellar.animation.only_when_destroyed = moon.only_when_destroyed;
+            }
+        }
+        if let Some(reason) = self.moon_unreadable {
+            for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
+                stellar.sprite = Err(reason.to_owned());
             }
         }
         SystemContents {
