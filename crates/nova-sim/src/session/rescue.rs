@@ -1074,10 +1074,11 @@ mod tests {
         );
         assert!(session.space.npc(hulk).is_none(), "the old ships gone");
         assert_eq!(session.npcs().len(), 2, "the new system's set up");
+        let events = session.take_events();
+        assert!(events.contains(&super::super::SessionEvent::SystemChanged));
         assert!(
-            session
-                .take_events()
-                .contains(&super::super::SessionEvent::SystemChanged)
+            events.contains(&super::super::SessionEvent::StarfieldReset),
+            "`_RandomizeStars` @0x690d0"
         );
     }
 

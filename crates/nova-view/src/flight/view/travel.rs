@@ -911,6 +911,7 @@ impl<
                 SessionEvent::StellarChanged => redrawn.stellar = true,
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
+                SessionEvent::StarfieldReset => {}
             }
         }
         if redrawn.galaxy {

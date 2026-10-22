@@ -27680,15 +27680,18 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_arrival_tells_the_system_changed() {
+    fn an_arrival_tells_the_system_changed_and_the_starfield_reset() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+        );
     }
 
     #[test]
-    fn a_gates_exit_tells_the_system_changed_even_into_the_system_gone_in() {
+    fn a_gates_exit_tells_the_system_changed_and_resets_the_stars_even_into_the_same() {
         let catalog = gated();
         let mut session = at_gate(&catalog);
         assert_eq!(
@@ -27700,7 +27703,10 @@ pub(super) mod tests {
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
             .expect("through");
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+        );
         let catalog = wormholes();
         for (roll, system) in [(0, 131), (1, 130)] {
             let mut session = at_wormhole(&catalog);
@@ -27710,7 +27716,7 @@ pub(super) mod tests {
             );
             assert_eq!(
                 session.take_events(),
-                [SessionEvent::SystemChanged],
+                [SessionEvent::SystemChanged, SessionEvent::StarfieldReset],
                 "{system}"
             );
         }

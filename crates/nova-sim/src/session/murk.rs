@@ -1,5 +1,6 @@
 //! What the murk asks of the session (see [`murk`]): the
-//! player's effective murk in its system, which the view darkens shots by.
+//! player's effective murk in its system, which the view darkens shots by,
+//! and its system's murk as loaded, which the starfield reads.
 
 use super::{Chart, Session, Setup, Statics};
 use crate::murk;
@@ -22,6 +23,17 @@ impl Session {
         self.chart
             .effective_murk(&self.pilot, &self.statics, &self.setup)
     }
+
+    /// The player's system's `Murk` as loaded ([`murk::loaded_murk`], by
+    /// the rulebook's [`RuleKey::LowMurk`] reading), with no outfit's:
+    /// the runtime +0xbc that `_LoadObjectData` writes
+    /// (@0x77eb7/0x77ece-0x77eff). −1 for a negative `Murk`, which
+    /// clears the starfield (`_RandomizeStars` @0x0b168-0x0b18d), and
+    /// otherwise 0..=100, which dims it (`_HandleStars` @0x2f8cc-0x2f913).
+    #[must_use]
+    pub fn system_murk(&self) -> i16 {
+        self.chart.system_murk(&self.pilot, &self.setup)
+    }
 }
 
 impl Chart {
@@ -37,9 +49,15 @@ impl Chart {
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
     fn effective_murk(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> u8 {
-        let raw = self.galaxy.map().murk(pilot.system);
-        let loaded = murk::loaded_murk(raw, setup.rules.source_for(RuleKey::LowMurk));
+        let loaded = self.system_murk(pilot, setup);
         murk::effective_murk(loaded, murk::outfit_murk(&pilot.outfits, &statics.outfits))
+    }
+
+    /// The player's system's `Murk` as loaded (see
+    /// [`Session::system_murk`]).
+    fn system_murk(&self, pilot: &Pilot, setup: &Setup) -> i16 {
+        let raw = self.galaxy.map().murk(pilot.system);
+        murk::loaded_murk(raw, setup.rules.source_for(RuleKey::LowMurk))
     }
 }
 
@@ -117,5 +135,23 @@ mod tests {
         assert_eq!(session.effective_murk(), 0);
         session.pilot.outfits.insert(OutfitId(300), 1);
         assert_eq!(session.effective_murk(), 15, "-1 floored at none, plus 15");
+    }
+
+    #[test]
+    fn the_system_murk_is_the_players_systems_as_loaded_without_its_outfits() {
+        let mut outfitted = session(&murky(40));
+        outfitted.pilot.outfits.insert(OutfitId(300), 2);
+        assert_eq!(outfitted.system_murk(), 40, "the outfits left out");
+        assert_eq!(session(&murky(250)).system_murk(), 100);
+        assert_eq!(session(&murky(-20)).system_murk(), -1, "kept negative");
+        assert_eq!(session(&murky(0)).system_murk(), 0);
+    }
+
+    #[test]
+    fn a_system_murk_of_5_is_none_by_the_engine_and_5_by_the_bible() {
+        let catalog = murky(5);
+        assert_eq!(session(&catalog).system_murk(), 0);
+        let bible = Rulebook::default().with_override(RuleKey::LowMurk, RuleSource::Bible);
+        assert_eq!(session(&catalog).with_rules(bible).system_murk(), 5);
     }
 }

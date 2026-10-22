@@ -668,6 +668,18 @@ pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEven
     }
 }
 
+/// Whether entering a system `how` tells a view
+/// [`SessionEvent::StarfieldReset`]: only the ways in that run the
+/// original's `_RandomizeStars`, a jump's arrival (`_HandlePlayer`
+/// @0x6bf5d-0x6bf7d), a hypergate's or wormhole's exit
+/// (`_PlayerEnterHypergate` @0x63de9-0x63e09, `_PlayerEnterWormhole`
+/// @0x64603-0x646e8) and the escape pod's rescue (`_HandlePlayer`
+/// @0x68de8, @0x690d0). An `M` or `N` move, a developer tools' move and
+/// a walker's landing keep the stars, which wrap back in about the ship.
+pub(super) fn resets_starfield(how: Entry) -> bool {
+    matches!(how, Entry::Jump { .. } | Entry::Gate | Entry::Rescue)
+}
+
 /// No traffic to read: what [`Session::relocate`] enters a system with,
 /// as its row resets the traffic without reading any.
 #[derive(Clone, Copy, Debug)]
@@ -1111,6 +1123,9 @@ impl Session {
         }
         if let Some(event) = event {
             self.out.emit(event);
+        }
+        if resets_starfield(how) {
+            self.out.emit(SessionEvent::StarfieldReset);
         }
         if let Some(how) = how.hook_pending() {
             self.run.raise(StoryEvent::EnteredSystem { system, how });
@@ -1586,6 +1601,27 @@ mod tests {
         }
         assert_eq!(scene_event(Entry::Relocate, true), Some(SystemChanged));
         assert_eq!(scene_event(Entry::Relocate, false), Some(StellarChanged));
+    }
+
+    #[test]
+    fn a_jump_a_gate_and_a_rescue_reset_the_starfield_and_no_other_way_in() {
+        for (how, resets) in [
+            (
+                Entry::Jump {
+                    hops: 1,
+                    natural_end: false,
+                },
+                true,
+            ),
+            (Entry::Gate, true),
+            (Entry::Rescue, true),
+            (Entry::ScriptMove { landed: false }, false),
+            (Entry::ScriptMove { landed: true }, false),
+            (Entry::ScriptStay, false),
+            (Entry::Relocate, false),
+        ] {
+            assert_eq!(resets_starfield(how), resets, "{how:?}");
+        }
     }
 
     /// Enters system 130, the one the session is in, by a move in flight
