@@ -13,8 +13,12 @@
 //!   price events at the stellar docked at, the disputed
 //!   [`exchange_events::exchange_events`]: the first local event's line
 //!   ([`exchange_events::event_line`]), or every local event's name.
-//! - [`exploration`]: which systems a map outfit explores
-//!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`exploration`]: which walks a map outfit runs
+//!   ([`exploration::map_walks`]) and which systems are inhabited.
+//! - [`map_walk`]: the exploration walk a map grant, the take-off and a
+//!   jump's re-explore run, as `_AutoSetExploration` runs it
+//!   ([`map_walk::auto_set_exploration`]), over a
+//!   [`WalkSite`](map_walk::WalkSite).
 //! - [`mission`]: mission offers: which missions a docked stellar offers
 //!   at its mission computer and outside it ([`mission::availability`],
 //!   each field a plain [`Check`](nova_sim_base::rules::Check) refusing
@@ -88,6 +92,7 @@ use nova_sim_state::{
 
 pub mod exchange_events;
 pub mod exploration;
+pub mod map_walk;
 pub mod mission;
 pub mod nebula;
 pub mod news;

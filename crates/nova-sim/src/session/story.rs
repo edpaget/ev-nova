@@ -149,7 +149,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> SettlingCatalog for C {
 }
 
 /// No catalog: an events-only settling's that has none, as a map grant's
-/// explorations dispatch (see [`Session::grant_outfit`]). An events-only
+/// and a take-off's explorations dispatch (see [`Session::grant_outfit`]
+/// and the `map_walk` module). An events-only
 /// settling holds the moves, and it only ever dispatches the
 /// [`StoryEvent::Explored`] events taken and what their scripts raise,
 /// never a [`StoryEvent::Landed`], which only a landing raises: so none of
@@ -456,8 +457,8 @@ impl Session {
     /// `mark`, and every other kind raised since, kept in order. Events
     /// dropped past the limit are told, as [`ScriptNote::EventsDropped`].
     /// The nebulae's explorations at once (see the `jump_exploration`
-    /// module): a jump's, with its `catalog`, and a map grant's, with
-    /// [`NoCatalog`] ([`Session::grant_outfit`]).
+    /// module): a jump's, with its `catalog`, and a map grant's and a
+    /// take-off's, with [`NoCatalog`] ([`Session::grant_outfit`]).
     ///
     /// It may run inside a settling, a grant run from a subscription's
     /// script: this settling is its own, with its own budget, and the
@@ -1342,8 +1343,11 @@ mod tests {
         system: SystemId(130),
     };
 
+    /// The take-off's `Explored` is dispatched at once, inside its walk
+    /// (`_AutoSetExploration` @0x634b1-0x634c8; see the `map_walk`
+    /// module), so it is not left raised.
     #[test]
-    fn a_take_off_raises_its_days_then_explored_then_took_off() {
+    fn a_take_off_raises_its_days_then_took_off() {
         let mut session = quiet(shopping());
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         let landed = session.date();
@@ -1351,19 +1355,19 @@ mod tests {
             .take_off(&NoTraffic, &mut NeverFires)
             .expect("takes off");
         let mut expected = days_after(landed, 2);
-        expected.extend([EXPLORED_130, TOOK_OFF_128]);
+        expected.push(TOOK_OFF_128);
         assert_eq!(session.story_raised(), expected);
     }
 
     #[test]
-    fn by_the_other_stay_reading_a_take_off_raises_only_explored_and_took_off() {
+    fn by_the_other_stay_reading_a_take_off_raises_only_took_off() {
         let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
         let mut session = quiet(shopping().with_rules(rules));
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         session
             .take_off(&NoTraffic, &mut NeverFires)
             .expect("takes off");
-        assert_eq!(session.story_raised(), [EXPLORED_130, TOOK_OFF_128]);
+        assert_eq!(session.story_raised(), [TOOK_OFF_128]);
     }
 
     #[test]

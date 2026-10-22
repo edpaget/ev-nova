@@ -6,19 +6,14 @@
 //! `_GrantOutfitItem` (@0x44d4f): an outfit ID outside 128 to 639 does
 //! nothing (@0x44d5c), and otherwise the outfit's
 //! [`GrantEffect`](crate::outfit_effects::GrantEffect) applies: a map
-//! explores the systems [`map_reveals`] gives from the pilot's system,
-//! along the session's hyperlinks and as
-//! [`OutfitRules::map_explore`] says, read when the grant runs, each
-//! with its place's head by the engine reading of
-//! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace)
-//! (`_RecursiveAutoExplore` @0xd9b6-0xda10; see the `explored` module),
-//! raising [`StoryEvent::Explored`] for each system reached, in order,
-//! and none for a head, and dispatching them at once, after the known
-//! pass and before the paint (crons-news-ranks-fidelity phase 43); a paint
-//! paints the ship; a clean-record outfit cleans the legal records; and
-//! anything else is added, one more owned. An ID in range with no record
-//! is added as a plain item, as the original bumps that slot's count.
-//! The grant path does not refit the ship; each caller refits once.
+//! runs the walks [`map_walks`] gives from the pilot's system, as
+//! [`OutfitRules::map_explore`] says, read when the grant runs, each at
+//! level 2 ([`Session::auto_explore`]; see the `map_walk` module); a
+//! paint paints the ship; a clean-record outfit cleans the legal
+//! records; and anything else is added, one more owned. An ID in range
+//! with no record is added as a plain item, as the original bumps that
+//! slot's count. The grant path does not refit the ship; each caller
+//! refits once.
 //!
 //! **A map's explorations run at once.** The map arm (`ModType` 0x10,
 //! @0x44d9b) calls `_AutoSetExploration` synchronously (@0x44dcb,
@@ -27,8 +22,9 @@
 //! `OnExplore`s run inside the grant: before the map flag (0x3b5588,
 //! @0x44eaf) skips the clean (@0x44f4e) and the count (@0x44fe7), before
 //! the paint is written (@0x44f9a-0x44fd1), and before the caller's next
-//! step. The grant path dispatches its `Explored` events right after the
-//! known pass, through an events-only settling with no catalog
+//! step. Each system's `Explored` is dispatched as the walk reaches it,
+//! before its level is raised and before its neighbours are walked,
+//! through an events-only settling with no catalog
 //! ([`NoCatalog`]), the moves and a `Q`'s leave they queue held for the
 //! caller's settling; the events raised before stay queued. So an
 //! `OnExplore` that paints is painted over by the grant's own paint, the
@@ -37,15 +33,11 @@
 //! a settling (a subscription's script) settles its own explorations, the
 //! outer settling's queue untouched.
 //!
-//! The original interleaves each system's `OnExplore`s with the walk:
-//! they run before the system's explored level is written (@0xd9a6-0xd9af,
-//! the head's @0xda07-0xda10) and before its neighbours are walked
-//! (@0xdaa3). Here every level is written first and the `OnExplore`s run
-//! after; no set operator or test reads an explored level in between, so
-//! that crosses no boundary. What can be seen is the walk's shared
-//! visited set and reach (0xde93c, 0xde944), which a map granted inside
-//! the walk replaces; here the whole reveal is worked out first
-//! ([`map_reveals`]). That walk is crons-news-ranks-fidelity phase 45.
+//! A map granted by an `OnExplore` inside a walk runs its own walk over
+//! the same visited set and reach, as the original's globals (0xde93c,
+//! 0xde944) are shared: the outer walk goes on with the inner one's reach
+//! and re-enters what the inner one's clear wiped (crons-news-ranks-fidelity
+//! phase 45; see the [`map_walk`](crate::map_walk) module).
 //!
 //! **Its callers.** A purchase in the outfitter
 //! ([`Session::outfit`]) pays, then grants (`_DoOutfitDialog`
@@ -105,13 +97,12 @@ use super::{Chart, PlayerShip, Session, Setup, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::MOD_WEAPON;
-use crate::exploration::map_reveals;
+use crate::exploration::map_walks;
 use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::{ExploredLevel, Pilot};
 use crate::rulebook::RuleSource;
-use crate::story::StoryEvent;
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -177,33 +168,20 @@ impl Session {
         }
         let effect = self.setup.grant_effect(&self.statics, outfit);
         if let Some(reach) = effect.map {
-            let mark = self.run.story_mark();
-            let reached = map_reveals(
+            // A walk for each origin, at level 2, each `OnExplore` at once,
+            // before the paint, the clean and the count, and before the
+            // caller's next step (@0x44dcb, @0x44e12, @0x44e86, then
+            // @0xd98a; see the `map_walk` module).
+            let walks = map_walks(
                 reach,
                 self.pilot.system,
                 self.chart.galaxy.map(),
-                self.setup.hyperlinks,
                 &self.statics.govts,
                 self.setup.outfit_rules().map_explore,
             );
-            for system in reached {
-                // At level 2, with its place's head, by the engine
-                // (`_RecursiveAutoExplore` @0xd9a6-0xd9af, @0xda07-0xda10).
-                self.chart.explore_place(
-                    &mut self.pilot,
-                    &self.setup,
-                    system,
-                    ExploredLevel::Charted,
-                );
-                self.run.raise(StoryEvent::Explored { system });
+            for (from, reach) in walks {
+                self.auto_explore(&NoCatalog, chance, from, reach, ExploredLevel::Charted);
             }
-            // Its known pass, with no clear (`_AutoSetExploration`
-            // @0xdb06-0xdbd4).
-            self.chart.add_known(&self.pilot);
-            // The explorations at once, before the paint, the clean and
-            // the count, and before the caller's next step (@0x44dcb,
-            // @0x44e12, @0x44e86, then @0xd98a).
-            self.dispatch_explored_since(&NoCatalog, chance, mark);
         }
         if let Some(paint) = effect.paint {
             self.pilot.paint = paint;

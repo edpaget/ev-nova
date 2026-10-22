@@ -16,7 +16,8 @@
 //!   explores a linked system.
 //! - Level 2: the take-off (`_PlayerLandOnStellar` raises the head, then
 //!   the system, @0x6346d-0x6349e, then `_AutoSetExploration(system, 0,
-//!   2)` raises both again @0x634b1-0x634c8): [`Session::take_off`].
+//!   2)` raises both again @0x634b1-0x634c8, the walk of the `map_walk`
+//!   module): [`Session::take_off`].
 //! - Level 2: a map grant: `_AutoSetExploration` → `_RecursiveAutoExplore`
 //!   raises each reached system (@0xd9a6-0xd9af) and its head
 //!   (@0xda07-0xda10), for the N-jump (@0x44dcb), inhabited-independent
@@ -69,14 +70,14 @@
 //! point works the known set out afresh right after its share
 //! (`Chart::rework_known`, @0x32b7b, @0x32b91-0x32c10), so a new
 //! pilot, a loaded one and a fresh session are known from before their
-//! first frame, as each ends in a rebuild. A map grant adds its pass,
-//! with no clear, after its walk (`Chart::add_known`, @0xdb06-0xdbd4).
-//! The take-off's `_AutoSetExploration` runs the same pass
-//! (@0x634c8), but needs none of its own here: the dock request's rebuild
-//! point ends the take-off (@0x674c7; `Session::lift_off`) and works the
-//! known set out afresh from what the take-off explored, as the
-//! original's does after the pass. The hypergate map's arrows mark their
-//! systems ([`Session::mark_known`], @0xf45f).
+//! first frame, as each ends in a rebuild. Every walk adds its pass, with
+//! no clear, at its end (`Chart::add_known`, @0xdb06-0xdbd4; see the
+//! `map_walk` module): a map grant's, a nested one's inside the outer
+//! walk, the take-off's (@0x634c8) and a jump's re-explore's (@0x6c1db).
+//! The rebuild point after the take-off (@0x674c7; `Session::lift_off`)
+//! and the jump's entry work the known set out afresh, as the original's
+//! do after the pass. The hypergate map's arrows mark their systems
+//! ([`Session::mark_known`], @0xf45f).
 //!
 //! Left to others: `_ResetPlayer`'s neighbours (@0x1da0f-0x1da7a) and the
 //! escape pod's exploration (@0x690cb), roadmap player-death. The

@@ -22,9 +22,10 @@
 //! (@0x515a) before `OnExplore` (@0x519e), so a nested exploration finds
 //! it explored; and tells [`SessionEvent::GalaxyChanged`], so the map
 //! draws it. Activity and the explored flag are read as the event
-//! is dispatched; a jump's and a new pilot's `OnStart` explorations are
-//! dispatched at once, as the original explores them, so each reads the
-//! activity of the last refresh (see the `jump_exploration` module).
+//! is dispatched; a jump's, a take-off's and a map grant's explorations
+//! are dispatched at once, as the original explores them, so each reads
+//! the activity of the last refresh (see the `jump_exploration` and
+//! `map_walk` modules).
 //!
 //! **Readings.** By the engine's reading of [`RuleKey::NebulaExploreOnce`]
 //! the explored flag is never saved and exploring makes no save due; a

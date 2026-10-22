@@ -114,8 +114,12 @@
 //!   events at the stellar docked at, the disputed
 //!   [`exchange_events::exchange_events`], which [`Session::market`]
 //!   puts in [`Market::events`](market::Market::events).
-//! - [`exploration`]: which systems a map outfit explores
-//!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`exploration`]: which walks a map outfit runs
+//!   ([`exploration::map_walks`]) and which systems are inhabited.
+//! - [`map_walk`]: the exploration walk a map grant, the take-off and a
+//!   jump's re-explore run, as `_AutoSetExploration` runs it
+//!   ([`map_walk::auto_set_exploration`]), over a
+//!   [`WalkSite`](map_walk::WalkSite).
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
 //!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
@@ -373,6 +377,7 @@ pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
 pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
+pub use nova_sim_story::map_walk;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub use nova_sim_base::flight;

@@ -485,6 +485,7 @@ mod map_borders;
 mod map_click;
 mod map_panel;
 mod map_search;
+mod map_walk;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_map;
@@ -3236,9 +3237,16 @@ impl Session {
         // before the setup populates it (`_AutoSetExploration` @0x6c1db,
         // `_SetupShipsInSystem` @0x6c1f9): the system the entry will
         // resolve it to, as the refresh's move and the moves since left
-        // +0x74.
+        // +0x74. A walk reaching 0 at level 1 (@0x6c1cb-0x6c1db; see the
+        // `map_walk` module).
         let system = self.pilot.system;
-        self.explore_now(catalog, &mut &mut *chance, system);
+        self.auto_explore(
+            catalog,
+            &mut &mut *chance,
+            system,
+            0,
+            ExploredLevel::Explored,
+        );
         self.pilot.jumped_from = Some(from);
         let course_hops = self.jump_course_hops(on_course, multi_jump);
         self.enter_jump_system(
@@ -3900,14 +3908,20 @@ impl Session {
             self.ship.player.position = self.port.touchdown;
         }
         // At level 2, with its place's head, by the engine
-        // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
-        // @0x634b1-0x634c8; see the `explored` module).
+        // (`_PlayerLandOnStellar` @0x6346d-0x6349e; see the `explored`
+        // module), then the walk reaching 0 at level 2, its `OnExplore`s
+        // at once (`_AutoSetExploration` @0x634b1-0x634c8; see the
+        // `map_walk` module).
         let system = self.pilot.system;
         self.chart
             .explore_place(&mut self.pilot, &self.setup, system, ExploredLevel::Charted);
-        self.run.raise(StoryEvent::Explored {
-            system: self.pilot.system,
-        });
+        self.auto_explore(
+            &story::NoCatalog,
+            &mut &mut *chance,
+            system,
+            0,
+            ExploredLevel::Charted,
+        );
         self.space
             .restock_fleet(&mut self.pilot, &self.statics, &self.setup);
         // The escort-strength timer armed after every day of the stay

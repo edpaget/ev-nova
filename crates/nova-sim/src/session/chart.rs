@@ -16,6 +16,7 @@ use crate::traffic::npc::NpcId;
 
 use super::LastRefresh;
 use super::jump_moves::JumpWindow;
+use super::map_walk::MapWalk;
 use super::nav::NavSlot;
 
 /// What the player sees of the galaxy and has selected in it, in
@@ -83,6 +84,10 @@ pub(super) struct Chart {
     /// module). It sits with the jump's other writes of the player's
     /// system ([`Chart::write_jump_system`]).
     pub(super) jump_window: Option<JumpWindow>,
+    /// The exploration walk's visited set and reach, shared by every walk
+    /// as the original's globals are (see the `map_walk` module); not
+    /// saved.
+    pub(super) walk: MapWalk,
 }
 
 impl Chart {
@@ -108,6 +113,7 @@ impl Chart {
             last_refresh: LastRefresh::default(),
             carried_refresh: None,
             jump_window: None,
+            walk: MapWalk::default(),
         }
     }
 }

@@ -40,7 +40,10 @@
 //! events raised before it stay queued, in order, for the next settling.
 //! `Session::arrive` explores each system passed and the arrival with it
 //! before its refresh and days, and again the arrival, as the entry will
-//! resolve it, before it enters and populates the system. A map grant
+//! resolve it, before it enters and populates the system: that one is a
+//! walk reaching 0 at level 1 ([`Session::auto_explore`]; see the
+//! `map_walk` module), so a map an `OnExplore` grants there shares its
+//! visited set and reach. A map grant
 //! dispatches its own explorations at once, wherever it runs, with no
 //! catalog ([`Session::grant_outfit`]): so an `OnStart`'s map explores
 //! before `_PlayGame`'s refresh in [`Session::begin`], and a crön's before
@@ -93,6 +96,7 @@ use crate::chance::Chance;
 use crate::pilot::Pilot;
 use crate::story::{Entrance, StoryEvent, StoryEventKind};
 
+use super::story::SettlingCatalog;
 use super::{Chart, Outbox, Session, Setup};
 
 impl Session {
@@ -102,7 +106,7 @@ impl Session {
     /// events raised before it left queued.
     pub(super) fn explore_now<C>(&mut self, catalog: &C, chance: &mut dyn Chance, system: SystemId)
     where
-        C: PilotCatalog + TrafficCatalog + ?Sized,
+        C: SettlingCatalog + ?Sized,
     {
         let mark = self.run.story_mark();
         self.run.raise(StoryEvent::Explored { system });
