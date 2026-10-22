@@ -476,6 +476,7 @@ mod jump_hops;
 mod jump_moves;
 mod kept_berths;
 mod kept_rescues;
+mod killed_explosions;
 mod last_refresh;
 mod launch_frame;
 mod lost_target;

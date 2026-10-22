@@ -160,7 +160,10 @@ impl Session {
         // is the one the jump and its moves wrote, and the entry writes its
         // own (`set_player_system`).
         self.enter_system(how, departure, entered, catalog, catalog, chance);
-        self.chart.close_jump_window();
+        // The jump's explosions, killed when a move ran in it (see the
+        // `killed_explosions` module).
+        let window = self.chart.close_jump_window();
+        self.kill_jump_explosions(window);
     }
 
     /// Applies as the jump's own, at once, each move queued from `from`

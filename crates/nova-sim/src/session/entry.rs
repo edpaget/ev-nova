@@ -257,6 +257,10 @@ pub(super) enum Reset {
     GateEntry,
     /// The shots and beams in flight are left behind.
     Combat,
+    /// The explosions the fight has reported and the view has not taken
+    /// are dropped, as `_killExplods` kills them (see the
+    /// `killed_explosions` module).
+    Explosions,
     /// The cargo boxes are cleared, as `_killBoxes` kills them
     /// (see the `cargo_boxes` module).
     Boxes,
@@ -571,12 +575,14 @@ fn script_move_landed(arrival: bool) -> Resets {
 /// @0x1590b), the rest left behind as
 /// [`RuleKey::MoveLeftBehind`](crate::RuleKey::MoveLeftBehind) says. The
 /// nav selection is let go and the mode kept (@0x157e3, @0x158fd). The
-/// asteroid field is killed (@0x158ca, @0x1598e).
+/// explosions pending and the asteroid field are killed (@0x158ba,
+/// @0x1597e; @0x158ca, @0x1598e).
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
         Reset::GateEntry,
         Reset::Combat,
+        Reset::Explosions,
         Reset::Boxes,
         Reset::Asteroids,
         Reset::Strikes,
@@ -966,6 +972,9 @@ impl Session {
         }
         if resets.has(Reset::Combat) {
             self.space.combat.clear();
+        }
+        if resets.has(Reset::Explosions) {
+            self.kill_explosions();
         }
         if resets.has(Reset::Boxes) {
             self.space.clear_boxes();
@@ -1396,7 +1405,15 @@ mod tests {
     #[test]
     fn a_move_in_flight_lets_go_of_the_scene_and_does_the_rest_as_its_reading_and_the_facts_say() {
         let in_flight = Entry::ScriptMove { landed: false };
-        let always = with(&SCENE, &[Reset::Jump, Reset::GateEntry, Reset::SaveDue]);
+        let always = with(
+            &SCENE,
+            &[
+                Reset::Jump,
+                Reset::GateEntry,
+                Reset::Explosions,
+                Reset::SaveDue,
+            ],
+        );
         for reading in READINGS {
             for changed in [false, true] {
                 for pending in [false, true] {
@@ -1427,7 +1444,15 @@ mod tests {
 
     #[test]
     fn a_stay_is_a_move_within_the_system_by_the_engine_whatever_the_reading() {
-        let always = with(&SCENE, &[Reset::Jump, Reset::GateEntry, Reset::SaveDue]);
+        let always = with(
+            &SCENE,
+            &[
+                Reset::Jump,
+                Reset::GateEntry,
+                Reset::Explosions,
+                Reset::SaveDue,
+            ],
+        );
         for reading in READINGS {
             for pending in [false, true] {
                 let mut set = always.clone();
