@@ -46,7 +46,13 @@ pub fn distance(from: Vec2, to: Vec2) -> i64 {
 }
 
 /// Whether `npc` has escorts among `around`: some ship there whose leader
-/// is `npc` (see the module docs).
+/// is `npc` (see the module docs). It stands for the original's +0xc0,
+/// "has escorts", which `_DoPlayGameWork`'s marking pass clears and sets
+/// on each ship's parent every frame (@0x4405e-0x44129): the same set,
+/// as a led ship is the original's AI type 5 or 6 and every NPC is in the
+/// player's system. It is read live where the original reads the mark as
+/// the frame began, so a leader change mid-think (a capture) shows a tick
+/// early here: settled before the frame is drawn, crossing no boundary.
 #[must_use]
 pub fn has_escorts(npc: &Npc, around: &Surroundings) -> bool {
     around.npcs.iter().any(|other| other.leader == Some(npc.id))

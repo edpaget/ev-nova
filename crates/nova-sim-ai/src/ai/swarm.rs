@@ -194,9 +194,9 @@ pub enum FormationParent {
     Player,
     /// The ship at this berth: its swarm leader.
     Berth(u32),
-    /// Its NPC leader ([`Npc::leader`]), whose berth the formation of any
-    /// NPC parent will read (rdm phase
-    /// escort-fleet-fidelity/phase-6-npc-formations).
+    /// Its NPC leader ([`Npc::leader`]), whose formation the formation
+    /// pass gives it a slot in
+    /// ([`fleet_formation`](crate::traffic::fleet_formation)).
     Leader(NpcId),
 }
 

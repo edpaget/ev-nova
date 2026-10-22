@@ -14,10 +14,13 @@
 //! tick ([`Session::reform_on_swarm_change`]), whenever a slot the
 //! formation would give differs from the one its ship holds.
 //!
-//! The slot a ship that left takes on its swarm leader is
-//! rdm phase combat-ai-fidelity/phase-22-left-out-of-phase-14's, once NPC
-//! formation parents exist (rdm phase
-//! escort-fleet-fidelity/phase-6-npc-formations).
+//! A ship that left takes a slot in its swarm leader's formation from the
+//! traffic's formation pass
+//! ([`fleet_formation`](crate::traffic::fleet_formation),
+//! [`Npc::fleet_slot`]). Its `_AIMaintainFormation` calls in substates 5,
+//! 0x11 and 7 are
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14's
+//! item 2.
 
 use super::Session;
 use crate::traffic::npc::Npc;
