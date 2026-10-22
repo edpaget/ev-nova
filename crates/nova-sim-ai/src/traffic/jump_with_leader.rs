@@ -778,6 +778,38 @@ mod tests {
         );
     }
 
+    // The pause with sub 0xd.
+
+    #[test]
+    fn a_paused_follower_keeps_its_successors_jump_draws_no_release_and_zeroes_its_stage() {
+        use crate::ai::regroup::Kept;
+        let mut traffic = Traffic::with_interval(1);
+        let mut successor = far(0);
+        successor.begin_own_jump();
+        successor.warp.stage = 5.0;
+        successor.warp.aim = 90;
+        let successor = traffic.add_npc(successor);
+        let mut paused = far(0);
+        paused.state.position = Vec2::new(3000.0, 300.0);
+        paused.leader = Some(successor);
+        paused.goal = Goal::Regroup {
+            kept: Kept::Formation { guard: None },
+        };
+        paused.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(successor)));
+        let paused = traffic.add_npc(paused);
+        // A release draw of 0 would release it.
+        let mut chance = nova_sim_base::fixture::Draws::of(&[0; 16])
+            .keyed(crate::traffic::regroup::RELEASE_DRAW, 0);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut chance);
+        let ship = of(&traffic, paused);
+        assert!(matches!(ship.goal, Goal::Regroup { .. }), "no release draw");
+        assert_eq!(
+            ship.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(successor)))
+        );
+        assert_eq!(ship.warp.stage, 0.0, "started, then zeroed");
+    }
+
     // The cancels.
 
     /// A follower of `leader`'s jump at `stage`, and its NPC lead, NPC 0,

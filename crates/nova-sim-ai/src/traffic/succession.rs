@@ -53,10 +53,12 @@
 //!    parent is the successor; a fighter (AI type 5) becomes an escort (6,
 //!    @0x89480-0x89491), so off its carrier with its class's capacities;
 //!    and while its +0x50 is below 0.0 it pauses in goal 0x13, its
-//!    substate kept ([`Kept::of`]). The engine's stage sits at 0 at rest,
-//!    so it reads "not under way" for "below 0", and a ship on a jump (sub
-//!    4 or 0xd) keeps it:
-//!    rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
+//!    substate kept ([`Kept::of`]), sub 4 or 0xd included (its
+//!    [`WarpGoal`], rewritten to the successor). An escort rests at 0, as
+//!    the hold undoes `_EscortAI`'s -1.0 in the same dispatch (see
+//!    [`jump_with_leader`](super::jump_with_leader)), so one whose lead is
+//!    lost forms on the successor at once; a follower that gave its
+//!    stage up pauses, and its jump path then runs every frame.
 //!
 //! It writes no order word (+0xc90a): a follower flies the word its old
 //! lead gave it until its new lead's next order frame. Nor a follower's
@@ -167,7 +169,7 @@ impl Npc {
     /// It follows `successor`, its lost lead's successor (see the module
     /// docs): led by it, keeping with it or following its jump in place of
     /// the lost lead, off any carrier, and in the regroup pause, its
-    /// substate kept, while its jump is not under way.
+    /// substate (and any jump) kept, while its stage is below 0.
     pub fn follow_successor(&mut self, successor: NpcId) {
         if let Goal::Follow { lead, .. } = &mut self.goal {
             *lead = successor;
@@ -179,7 +181,7 @@ impl Npc {
         if self.carrier.is_some() {
             self.leave_carrier();
         }
-        if self.warp.goal.is_none() && !self.warp.under_way() {
+        if self.warp.stage < 0.0 {
             self.goal = Goal::Regroup {
                 kept: Kept::of(self.goal),
             };
@@ -390,9 +392,13 @@ mod tests {
         );
         think(&mut traffic);
         assert_eq!(of(&traffic, 3).leader, None, "the successor at berth 4");
-        for id in [1, 2, 4] {
+        for id in [1, 4] {
             assert_eq!(of(&traffic, id).leader, Some(NpcId(3)), "NPC {id}");
         }
+        // The disabled one, at rest, takes no pause (its +0x50 isn't below
+        // 0), so its dispatch reaches the disabled reset, which drops the
+        // successor it was given.
+        assert_eq!(of(&traffic, 2).leader, None, "NPC 2");
     }
 
     #[test]
@@ -659,14 +665,18 @@ mod tests {
 
     #[test]
     fn every_other_follower_follows_the_successor_and_pauses_keeping_its_substate() {
+        // The pause takes a follower whose +0x50 is below 0
+        // (@0x8949d-0x894a4), as its jump's give-up leaves it.
         let mut guarding = follower(FEDS, 100);
         guarding.goal = Goal::Follow {
             lead: LEAD,
             guard: Some(PLAYER),
         };
+        guarding.warp.stage = -1.0;
         let mut fighting = follower(FEDS, 100);
         fighting.goal = Goal::Attack(PLAYER);
         fighting.target = Some(PLAYER);
+        fighting.warp.stage = -1.0;
         let mut traffic = fleet(
             FEDS,
             DISABLED,
@@ -700,6 +710,25 @@ mod tests {
             }
         );
         assert_eq!(fighting.target, Some(PLAYER));
+    }
+
+    #[test]
+    fn a_follower_at_rest_takes_no_pause_and_forms_on_the_successor_at_once() {
+        // An escort rests at +0x50 0: the hold undoes `_EscortAI`'s -1.0 in
+        // the same dispatch (@0x8d513), so the strict test takes none.
+        let mut traffic = fleet(
+            FEDS,
+            DISABLED,
+            vec![follower(FEDS, 300), follower(FEDS, 100)],
+        );
+        think(&mut traffic);
+        assert_eq!(
+            of(&traffic, 2).goal,
+            Goal::Follow {
+                lead: NpcId(1),
+                guard: None
+            }
+        );
     }
 
     #[test]
@@ -755,6 +784,29 @@ mod tests {
             },
             "its jump is under way"
         );
+    }
+
+    #[test]
+    fn a_follower_that_gave_its_stage_up_pauses_keeping_its_follow_of_the_successors_jump() {
+        // Goal 0x13 with sub 0xd kept (@0x8949d-0x894a4): the jump path
+        // then runs on it every frame.
+        let mut gave_up = follower(FEDS, 100);
+        gave_up.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
+        gave_up.warp.stage = -1.0;
+        let mut traffic = fleet(FEDS, DISABLED, vec![follower(FEDS, 300), gave_up]);
+        think(&mut traffic);
+        let gave_up = of(&traffic, 2);
+        assert_eq!(
+            gave_up.goal,
+            Goal::Regroup {
+                kept: Kept::Formation { guard: None }
+            }
+        );
+        assert_eq!(
+            gave_up.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(NpcId(1))))
+        );
+        assert!(!gave_up.jumping(), "`_AIIsShipJumping` reads goal 0x13");
     }
 
     #[test]

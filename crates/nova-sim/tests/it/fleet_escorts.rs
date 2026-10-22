@@ -321,7 +321,7 @@ fn npc(traffic: &Traffic, id: NpcId) -> &Npc {
 }
 
 #[test]
-fn a_disabled_leads_heaviest_escort_leads_and_the_other_pauses_in_formation_then_takes_up_its_order()
+fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_in_formation_then_takes_up_its_order()
  {
     let mut traffic = cruising_fleet();
     let govts = govts();
@@ -340,6 +340,16 @@ fn a_disabled_leads_heaviest_escort_leads_and_the_other_pauses_in_formation_then
         .find(|npc| npc.id == LEAD)
         .expect("there")
         .condition = nova_sim::combat::hull::Condition::Disabled;
+    // The pause takes a follower whose +0x50 is below 0 (@0x8949d-0x894a4),
+    // as a follow of its lead's jump that gave its stage up leaves it; one
+    // at rest forms on its new lead at once.
+    traffic
+        .npcs_mut()
+        .iter_mut()
+        .find(|npc| npc.id == LIGHT)
+        .expect("there")
+        .warp
+        .give_up();
     let held = || Draws::of(&[0; 64]).keyed(RELEASE_DRAW, 99);
     traffic.tick_in(&NovaAi::default(), world, &[], &mut held());
     let heavy = npc(&traffic, HEAVY);

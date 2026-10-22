@@ -50,8 +50,8 @@ use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
 use super::{
-    DockNotes, Traffic, World, ionization, jump_with_leader, plunder, repair_dock, ship_display,
-    tractor_hold, warp_out,
+    DockNotes, Traffic, World, ionization, jump_with_leader, plunder, regroup, repair_dock,
+    ship_display, tractor_hold, warp_out,
 };
 use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{Goal, sight};
@@ -105,6 +105,10 @@ pub struct FlyPass {
     leads: BTreeMap<NpcId, SwarmLead>,
     /// The NPCs that don't see their NPC leader, as the half began.
     unseen: BTreeSet<NpcId>,
+    /// The NPCs in the regroup pause as the half began, whose flight
+    /// flies another goal ([`Npc::fly_as_flown`]) but whose warp-out reads
+    /// the pause's (see [`warp_out::fly_jump`]).
+    paused: BTreeSet<NpcId>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
     /// Each dock started and each repair completed.
@@ -195,6 +199,12 @@ impl Traffic {
             })
             .map(|npc| npc.id)
             .collect();
+        let paused = self
+            .npcs
+            .iter()
+            .filter(|npc| regroup::paused(npc))
+            .map(|npc| npc.id)
+            .collect();
         self.departed.clear();
         FlyPass {
             half,
@@ -213,6 +223,7 @@ impl Traffic {
             holders,
             leads,
             unseen,
+            paused,
             first: self.first_class,
             docks: DockNotes::default(),
             reached: Vec::new(),
@@ -451,7 +462,9 @@ fn fly_steered(
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think) {
+    // The goal it holds, not the one it flies (see `fly_one`).
+    let paused = pass.paused.contains(&npc.id);
+    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused) {
         return outcome;
     }
     match plunder::fly_docking(
@@ -493,7 +506,8 @@ fn fly_steered(
         world.weapons,
         &mut *chance,
     );
-    warp_out::settle(npc, &pass.leaders, &world.warp);
+    let jumping = npc.jumping() && !paused;
+    warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
     outcome
 }
 

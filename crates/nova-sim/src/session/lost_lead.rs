@@ -57,7 +57,6 @@ impl Space {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::regroup::Kept;
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::bay::Carrier;
     use crate::chance::{Chance, NeverFires};
@@ -287,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn by_the_default_rules_a_think_makes_the_heaviest_escort_lead_and_the_other_pause() {
+    fn by_the_default_rules_a_think_makes_the_heaviest_escort_lead_and_the_other_follow_it() {
         for (name, tick) in [
             ("traffic", traffic_tick as Tick),
             ("advance", advance_pass as Tick),
@@ -299,10 +298,13 @@ mod tests {
                 "{name}"
             );
             assert_eq!(light.leader, Some(heavy.id), "{name}");
+            // An escort rests at +0x50 0, so it takes no regroup pause
+            // (@0x8949d-0x894a4) and forms on its new lead at once.
             assert_eq!(
                 light.goal,
-                Goal::Regroup {
-                    kept: Kept::Formation { guard: None }
+                Goal::Follow {
+                    lead: heavy.id,
+                    guard: None
                 },
                 "{name}"
             );

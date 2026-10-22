@@ -7,8 +7,10 @@
 //! (+0xc8ca) kept, while its warp stage +0x50 is below 0.0 (@0x8949d-0x894a6),
 //! and to a disabled follower with no intact fellow, substate 0
 //! (@0x894b1-0x894f3). The traffic's succession pass writes it
-//! ([`succession`](crate::traffic::succession)), which reads "not under way"
-//! for the original's "below 0" (rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader).
+//! ([`succession`](crate::traffic::succession)). An escort rests at 0, so
+//! it takes the pause only once its jump gave its stage up; its sub 4 or
+//! 0xd is then kept, and the jump path runs on it every frame
+//! ([`jump_with_leader`](crate::traffic::jump_with_leader)).
 //!
 //! **What it flies** ([`Kept`]). `_AIDispatch` draws its release first
 //! (@0x8fe73-0x8febb, [`Traffic::release_regroups`](crate::traffic::Traffic::release_regroups)); held,
