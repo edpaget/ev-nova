@@ -254,6 +254,7 @@ use crate::combat::ion::Ion;
 use afterburners::AfterburnerRoll;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::cargo_box::CargoBox;
 use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
@@ -589,6 +590,9 @@ pub struct World<'a> {
     /// The asteroid in slot 0 of the system's field, if any
     /// ([`Surroundings::mining_rock`]).
     pub mining_rock: Option<Asteroid>,
+    /// The cargo boxes in space ([`Surroundings::boxes`]), which a miner
+    /// scoops and steers to.
+    pub boxes: &'a [CargoBox],
     /// The system's reinforcement fleet while one called is on its way
     /// ([`Surroundings::reinforcements`]).
     pub reinforcements: Option<reinforcements::Coming>,
@@ -672,7 +676,8 @@ impl<'a> World<'a> {
     /// factor on the led ships' top speed, the original's flight rules,
     /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
-    /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
+    /// no cloak scanner, no asteroid in slot 0, no cargo boxes, no
+    /// reinforcements coming,
     /// no government marked by an IFF scrambler, Nova's disable rule,
     /// no player's warp under way with warp sounds of no length, no
     /// tractor's pull, no weapon records
@@ -701,6 +706,7 @@ impl<'a> World<'a> {
             refuel_cap: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
+            boxes: &[],
             reinforcements: None,
             iff_marked: bare.iff_marked,
             stray_shoot_penalty: RuleSource::Engine,
@@ -761,6 +767,8 @@ impl<'a> World<'a> {
             record: self.record,
             targeted: self.targeted,
             mining_rock: self.mining_rock,
+            boxes: self.boxes,
+            flight: self.flight,
             reinforcements: self.reinforcements,
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,

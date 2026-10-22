@@ -48,6 +48,7 @@ pub mod dispatch_gate;
 pub mod escort;
 pub mod escort_orders;
 pub mod fire;
+pub mod fire_untargeted;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod flee_drop;
@@ -56,6 +57,7 @@ pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
 pub mod lost_sight;
+pub mod mine_orders;
 pub mod miner;
 pub mod nova;
 pub mod odds;
@@ -80,13 +82,14 @@ pub mod wimpy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
+use crate::cargo_box::CargoBox;
 use crate::catalog::{EscortClass, GovtId, LandingSite, RankId, RankRecord, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
 use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::flight::ShipState;
+use crate::flight::{FlightRules, ShipState};
 use crate::gate::GateKind;
 use crate::govt::Governments;
 use crate::handling::Handling;
@@ -336,11 +339,22 @@ pub enum Goal {
     /// (see [`miner`]). Its quarry is none, it doesn't scoop, and
     /// `_ExtendedIsThreatToPlayer` doesn't spare it (16 is none of its
     /// states). `_HighLevelAIHandler` flies it as order 1, a stop, while
-    /// slot 0 is empty (@0x8f879); the traffic brakes it so whether or not
-    /// slot 0 is live, until rdm:phase/asteroids/phase-5-ai-mining adds the
-    /// chase and kill (orders 0x13 and 0x14, @0x8f832-0x8f903) and the
-    /// shots that hit no ship.
+    /// slot 0 is empty (@0x8f879), as order 0x13, a chase, outside the
+    /// mining box of slot 0, and as order 0x14 inside it, holding by slot 0
+    /// and firing its untargeted gun at it (@0x8f832-0x8f903; see
+    /// [`mine_orders`], [`fire_untargeted`] and
+    /// [`mine_flight`](crate::traffic::mine_flight)). Its shots and beams
+    /// pass through every ship (`_AIShipIsAttackingAsteroid` @0x8982b; see
+    /// the combat's `sides` module).
     Mine,
+    /// Scoop up asteroid boxes: the original's state 0x11, which a miner
+    /// that can scoop takes while a scoopable box is in space (see
+    /// [`miner`]), and the one goal that scoops ([`Goal::scooping`]). Its
+    /// quarry is none, and `_ExtendedIsThreatToPlayer` doesn't spare it
+    /// (0x11 is none of its states). `_HighLevelAIHandler` flies it as
+    /// order 0x15 (@0x8faf3-0x8fafd), steering to the nearest scoopable box
+    /// (see [`mine_orders`] and [`mine_flight`](crate::traffic::mine_flight)).
+    Scoop,
     /// Disable this ship to board it: a pirate's goal 0xd (see
     /// [`pirate`]), which it takes against a trader, a former escort of the
     /// player's or the player, whose class has a crew. Against the ship
@@ -438,11 +452,11 @@ impl Goal {
     /// Whether it is scooping up asteroid boxes: `_AIShipIsScooping`
     /// (@0x88727), the original's goal 0x11, which the scoop branch of
     /// `_ShipCollisionHandler` asks of an NPC (see
-    /// [`scoop`](crate::scoop)). No goal answers yes until
-    /// rdm:phase/asteroids/phase-5-ai-mining adds the miner's.
+    /// [`scoop`](crate::scoop)): [`Goal::Scoop`] alone.
     #[must_use]
     pub fn scooping(self) -> bool {
         match self {
+            Self::Scoop => true,
             Self::Idle
             | Self::Wait
             | Self::Land(_)
@@ -493,8 +507,8 @@ impl Goal {
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
     /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
     ///
-    /// A plunder (goal 0xd), a drift (0xe) and a count wait (0x16) are
-    /// none of them.
+    /// A plunder (goal 0xd), a drift (0xe), a count wait (0x16), a mine
+    /// (0x10) and a scoop (0x11) are none of them.
     #[must_use]
     pub fn spares_player_threat(self) -> bool {
         match self {
@@ -513,6 +527,7 @@ impl Goal {
             | Self::Snipe(_)
             | Self::Flee(_)
             | Self::Mine
+            | Self::Scoop
             | Self::Plunder { .. }
             | Self::CountWait
             | Self::Drift
@@ -616,6 +631,15 @@ pub struct Surroundings<'a> {
     /// miner works (`*0x3b540c`, whose +0x20 says it is live, read by
     /// `_MinerAI` @0x8b2ad-0x8b2b8; see [`miner`]).
     pub mining_rock: Option<Asteroid>,
+    /// The cargo boxes in space, the original's `_boxData`: a miner that
+    /// can scoop takes state 17 while one is scoopable
+    /// (`_miningBoxesActive`, see [`miner`]) and steers to the nearest
+    /// ([`mine_orders::nearest_box`]).
+    pub boxes: &'a [CargoBox],
+    /// The flight rules every NPC flies by, which give a miner's
+    /// `_ShipAccelRate` for order 0x14's hold its fire reads
+    /// ([`fire_untargeted`]).
+    pub flight: FlightRules,
     /// The system's reinforcement fleet while one called is on its way
     /// (its timer above 0), which doubles an allied ship's `MaxOdds` in
     /// its odds retreat ([`reinforcements::odds_factor`]).
@@ -689,7 +713,8 @@ pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
 
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
-    /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
+    /// damage aimed, no asteroid in slot 0, no cargo boxes, the original's
+    /// flight rules, no reinforcements coming, no
     /// cloak scanner, no government marked by an IFF scrambler, room for
     /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus), no
     /// pass's [`wanted`](Surroundings::wanted) headings, the engine's jump
@@ -706,6 +731,8 @@ impl<'a> Surroundings<'a> {
             record: 0,
             targeted: &NO_AIMED_DAMAGE,
             mining_rock: None,
+            boxes: &[],
+            flight: FlightRules::default(),
             reinforcements: None,
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
@@ -1249,7 +1276,7 @@ mod tests {
     const FIGHTERS: [AiType; 2] = [AiType::Warship, AiType::Interceptor];
 
     #[test]
-    fn no_goal_scoops_until_the_miners_goal() {
+    fn only_the_miners_scoop_goal_scoops() {
         let ship = ShipRef::Npc(NpcId(2));
         for goal in [
             Goal::Idle,
@@ -1272,7 +1299,11 @@ mod tests {
         ] {
             assert!(!goal.scooping(), "{goal:?}");
         }
+        assert!(Goal::Scoop.scooping(), "state 0x11");
         assert!(!npc(1, AiType::WimpyTrader).is_scooping());
+        let mut scooper = npc(1, AiType::WimpyTrader);
+        scooper.goal = Goal::Scoop;
+        assert!(scooper.is_scooping());
     }
 
     #[test]
@@ -1311,6 +1342,16 @@ mod tests {
         assert_eq!(Goal::Mine.quarry(), None);
         assert!(!Goal::Mine.fights());
         assert!(!Goal::Mine.spares_player_threat(), "16 isn't in the list");
+    }
+
+    #[test]
+    fn a_miner_scooping_fights_nothing_and_is_not_spared_as_a_threat() {
+        let scoop = Goal::Scoop;
+        assert_eq!((scoop.quarry(), scoop.attacking()), (None, None));
+        assert!(!scoop.fights());
+        assert_eq!((scoop.plundering(), scoop.inspecting()), (None, None));
+        assert!(!scoop.flies_in_form());
+        assert!(!scoop.spares_player_threat(), "0x11 isn't in the list");
     }
 
     #[test]

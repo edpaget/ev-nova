@@ -134,6 +134,13 @@ impl CargoBox {
     }
 }
 
+/// Whether any of `boxes` is scoopable: the original's
+/// `_miningBoxesActive` (see [`CargoBoxes::any_scoopable`]).
+#[must_use]
+pub fn any_scoopable(boxes: &[CargoBox]) -> bool {
+    boxes.iter().any(|cargo_box| cargo_box.scoopable)
+}
+
 /// How many boxes a ship whose share of a jettison is `share` tons drops
 /// (@0x3e282-0x3e2b5): none for a share of none or less, else
 /// `trunc(share / 5)`, raised to 1 and capped at [`MAX_DROPPED`].
@@ -271,10 +278,11 @@ impl CargoBoxes {
     }
 
     /// Whether any box is scoopable: the original's `_miningBoxesActive`,
-    /// which gates the scoop's collision (see [`scoop`](crate::scoop)).
+    /// which gates the scoop's collision (see [`scoop`](crate::scoop)) and
+    /// a miner's state 17 (see [`miner`](crate::ai::miner)).
     #[must_use]
     pub fn any_scoopable(&self) -> bool {
-        self.boxes.iter().any(|cargo_box| cargo_box.scoopable)
+        any_scoopable(&self.boxes)
     }
 
     /// Takes the first scoopable box, in table order, that a ship's disc,

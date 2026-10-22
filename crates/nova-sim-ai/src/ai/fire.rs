@@ -184,7 +184,7 @@
 #[cfg(doc)]
 use crate::ai::PlayerSide;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::ai::{Surroundings, pursuit};
+use crate::ai::{Surroundings, fire_untargeted, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, blind_spot, quadrant_off};
@@ -556,8 +556,15 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 /// defence, where the original's handler may still reach
 /// `_AIFireTurret` on the frame before its next think drops the target: a
 /// one-tick lag the player cannot see.
+///
+/// A miner in [`Goal::Mine`](crate::ai::Goal::Mine) fires as its orders
+/// say instead ([`fire_untargeted::mining`]): order 0x14 runs no pass but
+/// `_AIFireGunUntargeted`, and orders 1 and 0x13 none.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
+    if npc.goal == crate::ai::Goal::Mine {
+        return fire_untargeted::mining(npc, around);
+    }
     fight_trigger(npc, around, rules, launches(npc, around))
 }
 
