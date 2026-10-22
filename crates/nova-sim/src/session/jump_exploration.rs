@@ -67,14 +67,17 @@
 //! [`Session::enter_jump_hook_now`] raises the jump's
 //! [`StoryEvent::EnteredSystem`] after the days and dispatches it at
 //! once, as an exploration is, and [`Session::check_goals_after_jump`]
-//! checks the goals once the system is set up.
+//! checks the goals once the system is set up, each slot's deadline
+//! first, as `_MissionObjectivesCheck` does (@0x9eba5-0x9ec70).
 //!
 //! **Ordering.** A map granted by a script run outside the dispatcher (a
 //! crön's, a ship's hook, a stellar's `OnRegen`) explores at the next
 //! settling, which crosses a boundary the player can see;
 //! crons-news-ranks-fidelity phase 43 covers it. The jump's `DayPassed`
 //! events settle at the caller's settling, after the hook: the original
-//! polls the deadlines per frame after the arrival, so that matches.
+//! polls the deadlines per frame after the arrival, so that matches, and
+//! the first goal check, which comes before that settling, checks each
+//! slot's deadline itself before its goals.
 //!
 //! [`RuleKey::StoryReentry`]: crate::RuleKey::StoryReentry
 
@@ -120,10 +123,16 @@ impl Session {
     /// system is set up, drawing on `chance`: the stand-in for the
     /// per-frame `_MissionObjectivesCheck` (`_MissionHandler` @0x9edb5),
     /// which the enter-system hook, run before the setup, leaves to here
-    /// (see the `mission_ships` module).
+    /// (see the `mission_ships` module). Slot by slot, as the original
+    /// does, the deadline comes first (@0x9eba5-0x9ec61): a mission whose
+    /// days ran out on the jump's days fails before its goals are checked,
+    /// so its goals-met moment is skipped (@0x9ec70), though the jump's
+    /// `DayPassed` deadline hooks settle only later, at the caller's
+    /// settling, where they find it failed already.
     pub(super) fn check_goals_after_jump(&mut self, chance: &mut dyn Chance) {
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
         for slot in slots {
+            self.mission_deadline(slot, chance);
             self.check_ship_goals(slot, false, chance);
         }
     }

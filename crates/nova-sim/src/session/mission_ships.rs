@@ -2427,6 +2427,74 @@ pub(super) mod tests {
         );
     }
 
+    /// [`returning`]'s mission 140 of no goal and `Flags` 0x0001, its two
+    /// ships in 130 with none arrived, `days_left` days left and `CanAbort`
+    /// 0, so a failure keeps it in its slot: a jump to 131 leaves its ships
+    /// behind, so the setup brings none and auto-aborts nothing, and the
+    /// first check after it would meet the goals (@0x9e7ef-0x9e821,
+    /// @0x9eb85). Its texts taken.
+    fn timed_hunt_left_behind(days_left: u32) -> (FakePilotCatalog, Session) {
+        let mut catalog = returning(-1, AUTO_ABORT);
+        catalog.missions[0].ships.syst = 130;
+        catalog.missions[0].time_limit = 10;
+        catalog.missions[0].can_abort = 0;
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+            active.days_left = Some(days_left);
+        }
+        let _ = shown(&mut session);
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_deadline_lapsing_on_a_jumps_day_fails_the_mission_before_its_first_goal_check() {
+        // `_MissionObjectivesCheck` checks the deadline first
+        // (@0x9eba5-0x9ec61) and skips the goals-met moment once the
+        // mission has failed (@0x9ec70).
+        let (catalog, mut session) = timed_hunt_left_behind(1);
+        let _ = session.take_messages();
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(
+            failed(&session),
+            Some(FailedBy::Quick),
+            "failed by its deadline"
+        );
+        assert!(bits(&session).contains(&5), "OnFailure ran");
+        assert!(!bits(&session).contains(&7), "no auto-abort's OnAbort");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+        assert_eq!(
+            session
+                .take_messages()
+                .iter()
+                .filter(|message| **message == SimMessage::DeadlineMissed)
+                .count(),
+            1,
+            "the deadline applied once"
+        );
+    }
+
+    #[test]
+    fn a_deadline_not_lapsing_on_a_jumps_day_leaves_the_first_goal_check_to_meet_the_goals() {
+        let (catalog, mut session) = timed_hunt_left_behind(5);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert!(bits(&session).contains(&7), "OnAbort ran");
+        assert!(!bits(&session).contains(&5), "no OnFailure");
+        assert!(
+            shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "ShipDoneText"
+        );
+    }
+
     #[test]
     fn a_jumps_goal_check_finds_an_escort_unmet_once_the_hook_restarts_its_ships() {
         // An escort goal met, its two ships arrived, `ShipStart` 1 in 131:

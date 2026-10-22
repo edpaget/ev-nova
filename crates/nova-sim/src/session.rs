@@ -3041,7 +3041,8 @@ impl Session {
     /// dispatched at once, before the re-explore and the population
     /// (@0x6c15d), its moves and a `Q`'s leave waiting for the caller's
     /// settling with the days' events; the ship goals are checked once
-    /// the system is set up (see the `jump_exploration` module).
+    /// the system is set up, each slot's deadline first (see the
+    /// `jump_exploration` module).
     ///
     /// Each system explored is first written as the player's system, as
     /// the original writes +0x74 (@0x6bdd4, @0x6be0b), and after the
@@ -3266,7 +3267,8 @@ impl Session {
             chance,
         );
         // The ship goals checked once the system is set up, as the
-        // original's per-frame check first finds them (@0x9edb5).
+        // original's per-frame check first finds them (@0x9edb5), each
+        // slot's deadline before its goals (@0x9eba5-0x9ec70).
         self.check_goals_after_jump(&mut &mut *chance);
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).

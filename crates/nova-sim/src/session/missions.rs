@@ -933,8 +933,10 @@ impl Session {
     /// The deadline check of the mission in `slot` (`_MissionObjectivesCheck`
     /// @0x9eba5-0x9ec61), drawing on `chance`: with none of its days left,
     /// not failed already, and the ship not docked, it fails at once
-    /// ([`Session::quick_failure`]).
-    fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
+    /// ([`Session::quick_failure`]). Once failed it does nothing, so the
+    /// `DayPassed` hooks that follow a jump's first check
+    /// ([`Session::check_goals_after_jump`]) apply it no second time.
+    pub(super) fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
