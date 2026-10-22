@@ -816,7 +816,22 @@ mod tests {
             escort: Some(duty),
             ..scooping_npc(at)
         };
-        for npc in [disabled, escort] {
+        // A fighter launched by the player: its carrier the player, on
+        // escort duty as the player's fighters fly.
+        let fighter = Npc {
+            escort: Some(duty),
+            carrier: Some(crate::bay::Carrier {
+                ship: crate::combat::ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..scooping_npc(at)
+        };
+        for (npc, who) in [
+            (disabled, "a disabled NPC"),
+            (escort, "the player's escort"),
+            (fighter, "the player's fighter"),
+        ] {
             let catalog = framed();
             let mut session = flying(&catalog, 0);
             let id = session.space.traffic.add_npc(npc);
@@ -825,10 +840,11 @@ mod tests {
                 .boxes
                 .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
             session.tick(Controls::default());
-            assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
+            assert_eq!(session.cargo_boxes().len(), 1, "the box is left: {who}");
             assert_eq!(
                 session.space.npc(id).expect("here").cargo,
-                NpcHold::default()
+                NpcHold::default(),
+                "{who}"
             );
         }
     }
