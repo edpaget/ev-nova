@@ -354,7 +354,9 @@ impl Default for Beside {
 pub enum Outcome {
     /// It flies on.
     Flying,
-    /// It landed on this stellar, and leaves the system.
+    /// It landed on this stellar, where it stays, waiting
+    /// ([`land_flight::stay`]); the traffic takes out only a mission ship
+    /// that leaves as it lands ([`land_flight::leaves`]).
     Landed(StellarId),
     /// It jumped out of the system.
     JumpedOut,
@@ -498,17 +500,13 @@ fn fly_mobile(
     hand_off(npc, sites);
     let state = npc.state;
     let Flight { controls, word } = match npc.goal {
-        // A stellar not among `sites` brakes: the original's guard on a
-        // travel stellar of -1 (@0x8d8c9-0x8d8d1) does nothing, but a
-        // landing goal always names its stellar, so it can't be reached.
-        Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
-            Some(site) if readings.npc_landing == RuleSource::Engine => {
-                return land_flight::fly(npc, site, &handling, flight, inertia, chance);
+        Goal::Land(stellar) => {
+            let by = (flight, inertia, readings.npc_landing);
+            match land(npc, sites, stellar, &handling, by, chance) {
+                Ok(controls) => controls,
+                Err(outcome) => return outcome,
             }
-            Some(site) if over(&state, site) => return Outcome::Landed(stellar),
-            Some(site) => land_approach(npc, site, &handling, inertia).into(),
-            None => braking(&state, &handling, inertia),
-        },
+        }
         Goal::EnterGate(gate) => {
             match enter_box(npc, sites, type_widths, gate, &handling, inertia) {
                 Ok(controls) => controls,
@@ -619,6 +617,38 @@ pub(crate) fn plain_step(
             flight::inertialess_step(&mut npc.state, &mut npc.speed, handling, controls, flight);
         }
     }
+}
+
+/// How `npc` flies a tick landing on `stellar` among `sites` on
+/// `handling`, under the flight rules, as its inertia says, by a reading
+/// of [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (`by`): the
+/// controls it flies, or how its own flight ended. By the engine's,
+/// [`land_flight::fly`]; by the other, landed and staying when
+/// [`over`] the stellar, else its approach ([`land_approach`]). A
+/// stellar not among `sites` brakes it: the original's guard on a travel
+/// stellar of -1 (@0x8d8c9-0x8d8d1) does nothing, but a landing goal
+/// always names its stellar, so it can't be reached.
+fn land(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    stellar: StellarId,
+    handling: &Handling,
+    (flight, inertia, reading): (FlightRules, Inertia, RuleSource),
+    chance: &mut (impl Chance + ?Sized),
+) -> Result<Flight, Outcome> {
+    let Some(site) = sites.iter().find(|site| site.id == stellar) else {
+        return Ok(braking(&npc.state, handling, inertia));
+    };
+    if reading == RuleSource::Engine {
+        return Err(land_flight::fly(
+            npc, site, handling, flight, inertia, chance,
+        ));
+    }
+    if over(&npc.state, site) {
+        land_flight::stay(npc, stellar, chance);
+        return Err(Outcome::Landed(stellar));
+    }
+    Ok(land_approach(npc, site, handling, inertia).into())
 }
 
 /// State 1's hand-off (@0x8d8b8-0x8d8fe): a landing goal whose stellar
@@ -2094,6 +2124,12 @@ mod tests {
             Outcome::Landed(StellarId(140))
         );
         assert_eq!(ship.state.position, Vec2::ZERO, "where it was");
+        // It stays as the engine's landing does: stopped, at goal 0, the
+        // stellar visited, its wait the longest the draws give.
+        assert_eq!(ship.state.velocity, Vec2::ZERO);
+        assert_eq!(ship.goal, Goal::Idle);
+        assert_eq!(ship.visited, Some(StellarId(140)));
+        assert_eq!(ship.ai_wait, 499);
         let mut fast = lander(1.5, 0.0);
         assert_eq!(
             fly_reading(&mut fast, &sites, None, by_circle()),

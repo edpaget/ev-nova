@@ -50,10 +50,11 @@
 //!   [`Npc::gate_visit`]), so on its first idle think it leaves by
 //!   hyperspace, or stops if it can't jump. A miner's shuttle writes the
 //!   stellar it sets off for (`_MinerAI` @0x8b3ae, see
-//!   [`miner`](super::miner)). The landing's end
-//!   (`_HighLevelAIHandler` @0x8db00) is
-//!   rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's: until it lands,
-//!   a landing ship leaves the system. `_LoadPilotData` @0x751ed writes the
+//!   [`miner`](super::miner)). The landing's end writes the stellar it
+//!   landed on (`_HighLevelAIHandler` @0x8db00,
+//!   [`land_flight::stay`](crate::traffic::land_flight::stay)), so once its
+//!   wait there is out it leaves by hyperspace, or stops if it can't jump.
+//!   `_LoadPilotData` @0x751ed writes the
 //!   player's, and `_LoadObjectData` @0x77c42 a system's field at the same
 //!   offset: neither is an NPC's.
 //!
@@ -63,10 +64,10 @@
 //! **Left out:**
 //!
 //! - The sub-goal +0x6a = 2 a pick writes (@0x8b0f7 and the other copies),
-//!   and its absence from the interceptor's patrol: the engine flies a
-//!   landing without that sub-goal
-//!   (rdm:phase/stellar-fidelity/phase-5-npc-landing-reach Part A owns the
-//!   approach).
+//!   and its absence from the interceptor's patrol: state 1 writes the
+//!   landing's sub-goal itself on every pass (@0x8d9b2-0x8db5a), so the
+//!   engine flies it from the ship's place each tick
+//!   ([`land_flight`](crate::traffic::land_flight)) and keeps no sub-goal.
 //! - The leave's +0x50 clamp and +0xa4 stamp (@0x8b179-0x8b19b and the
 //!   copies): rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
 //! - The warship's second copy (@0x8b9c8-0x8bb03, while its target is still

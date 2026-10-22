@@ -120,7 +120,7 @@
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see `nova_sim::mission`) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see `nova_sim::legal`) | one record a government, read through the system's (landing: the stellar's) government |
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see `nova_sim::mission::goals`) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
-//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see `nova_sim::story`) | it leaves the system, counted as one that jumped out\* |
+//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system: it stays, stopped at the stellar for its wait, then takes a new goal, as the original's does (`_HighLevelAIHandler` @0x8dadc-0x8db5a), and its landing counts nothing (see `nova_sim_ai::traffic::land_flight` and `nova_sim::story`) | it leaves the system, counted as one that jumped out\* |
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see `nova_sim::mission::aux_ships`) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see `nova_sim::mission::aux_ships`) | the freed slot is skipped\* |
 //! | [`PlainBoardCounts`](RuleKey::PlainBoardCounts) | `plain_board_counts` | a board or rescue goal's ship counts as boarded only on the assist path (`ShipGoal` 2 or 5, `Flags` 0x0001, one ship left) or on a `PickupMode` 2 pickup; a plain board only marks it boarded, so a goal with neither path is never met (`_HandlePlayerBoardAttempt` @0x653a7, @0x65575-0x65762; see `nova_sim::mission::goals`) | any board of a board or rescue goal's ship counts, as the Bible's "board them" and "rescue them" read |
@@ -1953,12 +1953,12 @@ rule_keys! {
     /// (see `nova_sim::mission::goals`).
     LeftRespawn => "left_respawn",
     /// Whether a mission ship that lands leaves the system, for the
-    /// counts of [`RuleKey::LeftRespawn`]. By the engine, no: in the
-    /// original an AI ship that lands stays in the system, waiting at the
-    /// stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), and only its
-    /// later jump out counts, so the ship the engine takes out as it
-    /// lands counts nothing. By the other reading, it leaves as one that
-    /// jumped out does. The Bible says nothing of it, so the other
+    /// counts of [`RuleKey::LeftRespawn`]. By the engine, no: as in the
+    /// original, an AI ship that lands stays in the system, stopped at the
+    /// stellar for its wait, then takes a new goal
+    /// (`_HighLevelAIHandler` @0x8dadc-0x8db5a), and only its later jump
+    /// out counts. By the other reading, it leaves as it lands, counted as
+    /// one that jumped out. The Bible says nothing of it, so the other
     /// reading is the intended behaviour, not anything the Bible says
     /// (see `nova_sim::story`).
     LandedLeaves => "landed_leaves",

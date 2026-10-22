@@ -3,10 +3,11 @@
 //! and redraws, as the window sends them: a system whose one `düde` flies
 //! a trader, one ship on average. Entering flight populates it on the
 //! app's source of chance: the trader is drawn with its own sprite and as
-//! a dim radar blip, flies to the system's planet and lands there, and is
-//! gone. Every flight's NPCs decide as the router's behaviour says,
-//! whether flight was entered with the developer's F or a new pilot flies
-//! it, and its ships are disabled as the router's rule says. The trader
+//! a dim radar blip, flies to the system's planet and lands there, and
+//! waits there, stopped. Every flight's NPCs decide as the router's
+//! behaviour says, whether flight was entered with the developer's F or a
+//! new pilot flies it, and its ships are disabled as the router's rule
+//! says. The trader
 //! carries a weapon the simulation reports as not fully done, and a
 //! trader that fires it has the app write that out once, as a line.
 
@@ -601,7 +602,7 @@ fn dim_pixels(frame: &Frame) -> Vec<Point> {
 }
 
 #[test]
-fn the_trader_flies_to_the_planet_lands_and_is_gone() {
+fn the_trader_flies_to_the_planet_lands_and_waits_there() {
     let mut harness = Harness::flying(None);
     harness.frame();
     harness.run(1);
@@ -609,10 +610,30 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
     assert_eq!(trader.goal, Goal::Land(StellarId(128)));
     // Starting at its top speed, it closes on the planet by sub 2's
     // approach and brakes in its landing box (40 pixels a side, wider for
-    // a slower turn) until it moves below 0.35 a tick on each axis.
-    let last = harness.run(70);
-    assert_eq!(harness.session().npcs(), [], "landed and gone");
-    assert_eq!(traders(&last), []);
+    // a slower turn) until it moves below 0.35 a tick on each axis. Then
+    // it stays, stopped, for its wait of 300 to 499 ticks.
+    let mut landed = None;
+    for _ in 0..70 {
+        let last = harness.run(1);
+        let session = harness.session();
+        assert_eq!(session.npcs().len(), 1, "still in the system");
+        if session.npcs()[0].wait_running() {
+            landed = Some(last);
+            break;
+        }
+    }
+    let last = landed.expect("it lands within 70 seconds");
+    let waiting = harness.session().npcs()[0].clone();
+    assert_eq!(waiting.id, trader.id);
+    assert_eq!(waiting.visited, Some(StellarId(128)));
+    assert_eq!(waiting.state.velocity, Vec2::ZERO, "stopped");
+    // Over Alpha Prime, at (0, -300), within the widest box there is.
+    let off = waiting.state.position - Vec2::new(0.0, -300.0);
+    assert!(off.x.abs() <= 104.0 && off.y.abs() <= 104.0, "{off:?}");
+    assert_ne!(traders(&last), [], "still drawn");
+    let still = harness.run(1);
+    assert_eq!(harness.session().npcs()[0].state, waiting.state, "waiting");
+    assert_ne!(traders(&still), []);
 }
 
 #[test]

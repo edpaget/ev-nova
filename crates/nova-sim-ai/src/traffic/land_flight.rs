@@ -52,16 +52,32 @@
 //!    ([`leave_flight`]'s stop, not refuelling: goal 1 is not goal 9),
 //!    reading the cut velocity. The high level runs every pass, so the cut
 //!    applies on every flight tick.
-//! 9. **The landing** (@0x8dadc-0x8db5a): [`Outcome::Landed`].
+//! 9. **The landing** (@0x8dadc-0x8db5a): it stops and waits at the
+//!    stellar ([`stay`]), and the flight gives [`Outcome::Landed`]. The
+//!    traffic keeps it in its slot (+0xb8 stays set), so it still counts
+//!    toward the system's ships; `_HandleShip` counts its wait down a
+//!    tick at a time, `_gSpeedMult` 1.0 (@0x35025-0x35048), as the
+//!    traffic counts every AI wait down
+//!    ([`plunder::count_down`](crate::traffic::plunder::count_down)),
+//!    skipping its turn, thrust and fire meanwhile (@0x34a54-0x34a72;
+//!    the autopilot's wait gate and
+//!    [`fire::gated`](crate::ai::fire::gated)). `_AIDispatch` runs its
+//!    type's think from the next frame whatever the wait (@0x8ff26-0x90016),
+//!    in goal 0, so a trader or warship finds [`Npc::visited`] and leaves
+//!    by hyperspace or stops, and its high level flies that once the wait
+//!    is out. Only a mission ship by the other reading of
+//!    [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves) leaves the
+//!    system as it lands ([`leaves`]).
 //!
 //! It plays no sound: state 1 calls no `PlaySound` or `_beepSnd`.
 
-#[cfg(doc)]
 use crate::ai::Goal;
 use crate::ai::leave::Leg;
-use crate::catalog::LandingSite;
+use crate::ai::miner::SCOOPS;
+use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::flight::FlightRules;
+use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing;
 use crate::rulebook::RuleSource;
@@ -86,7 +102,7 @@ pub fn fly(
     handling: &Handling,
     flight: FlightRules,
     inertia: Inertia,
-    _chance: &mut (impl Chance + ?Sized),
+    chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let turn = handling.turn_rate;
     if !landing::npc_over(site, npc.state.position, turn, RuleSource::Engine) {
@@ -99,17 +115,63 @@ pub fn fly(
         npc.drag_in_doubles(LANDING_DRAG);
         return leave_flight::fly(npc, Leg::Brake, handling, flight, inertia);
     }
+    stay(npc, site.id, chance);
     Outcome::Landed(site.id)
+}
+
+/// Whether `npc`, landed, leaves the system as it lands, under
+/// `landed_leaves`
+/// ([`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)): only a
+/// mission's special ship ([`Npc::mission`]) by the other reading, which
+/// counts it as one that jumped out. By the engine's reading, as the
+/// original, every landed ship stays in its slot (+0xb8 is not cleared,
+/// @0x8dadc-0x8db5a), an auxiliary ship and ordinary traffic always.
+#[must_use]
+pub fn leaves(npc: &Npc, landed_leaves: RuleSource) -> bool {
+    npc.mission.is_some() && landed_leaves == RuleSource::Bible
+}
+
+/// The least a ship whose class scoops (`shïp` `Flags3` 0x0002) waits at
+/// the stellar it landed on, in ticks (@0x8db19-0x8db3a).
+pub const SHORT_STAY_BASE: u32 = 100;
+/// `Rand(75)`: the spread of that wait.
+pub const SHORT_STAY_SPAN: u32 = 75;
+/// The least any other ship waits at the stellar it landed on, in ticks
+/// (@0x8db41-0x8db5a).
+pub const STAY_BASE: u32 = 300;
+/// `Rand(200)`: the spread of that wait.
+pub const STAY_SPAN: u32 = 200;
+
+/// `npc` landing on `stellar` (@0x8dadc-0x8db5a): it stops, its velocity
+/// and speed (+0x48) none, takes goal 0 ([`Goal::Idle`], sub-goal 0), marks
+/// the stellar visited (+0x92 = +0x6c @0x8db00, [`Npc::visited`]) and
+/// keeps it as its travel stellar (+0x6c is not written, so
+/// [`Npc::travel_set`] holds), and starts its AI wait (+0x4c): a class
+/// that scoops (`shïp` `Flags3` 0x0002, class +0x9ec, copied from the
+/// record's +0x726 @0x7a204-0x7a20b; [`SCOOPS`])
+/// [`SHORT_STAY_BASE`] + `Rand(`[`SHORT_STAY_SPAN`]`)`, any other
+/// [`STAY_BASE`] + `Rand(`[`STAY_SPAN`]`)`, rolled on `chance`. Its
+/// target, provocation, trigger and pick are left as they are, and its
+/// slot stays active (+0xb8 is not cleared). The wait is the original's
+/// under either reading of `npc_landing`.
+pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
+    npc.state.velocity = Vec2::ZERO;
+    npc.speed = 0.0;
+    npc.goal = Goal::Idle;
+    npc.visited = Some(stellar);
+    npc.travel_set = true;
+    npc.ai_wait = if npc.miner & SCOOPS != 0 {
+        SHORT_STAY_BASE + chance.below(SHORT_STAY_SPAN)
+    } else {
+        STAY_BASE + chance.below(STAY_SPAN)
+    };
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ai::Goal;
-    use crate::catalog::StellarId;
     use crate::flight::ShipState;
-    use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
@@ -350,5 +412,124 @@ mod tests {
         open.armament.fold_mut().set = 0;
         flown(&mut open, &TURN_8);
         assert_eq!(open.armament.fold().dir, 0, "set 0");
+    }
+
+    #[test]
+    fn only_a_mission_ship_by_the_other_reading_leaves_as_it_lands() {
+        let plain = lander((0.0, 0.0), (0.0, 0.0));
+        let marked = Npc {
+            mission: Some(crate::traffic::npc::MissionMark {
+                slot: 0,
+                behav: crate::traffic::ShipBehav::AttackPlayer,
+                formation: None,
+                order: None,
+            }),
+            ..plain.clone()
+        };
+        let aux = Npc {
+            aux: Some(2),
+            ..plain.clone()
+        };
+        assert!(leaves(&marked, RuleSource::Bible));
+        assert!(!leaves(&marked, RuleSource::Engine));
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            assert!(!leaves(&plain, reading), "{reading:?}");
+            assert!(!leaves(&aux, reading), "{reading:?}: an aux ship");
+        }
+    }
+
+    #[test]
+    fn the_stays_are_pinned() {
+        assert_eq!((SHORT_STAY_BASE, SHORT_STAY_SPAN), (100, 75));
+        assert_eq!((STAY_BASE, STAY_SPAN), (300, 200));
+    }
+
+    /// A ship of miner bits `miner`, moving, its goal, target, provocation,
+    /// trigger and pick set, staying on 140 as its draws below 75 and 200
+    /// give `drawn`: the ship, and what was asked of the dice.
+    fn stayed(miner: u16, drawn: u32) -> (Npc, Vec<u32>) {
+        let mut npc = lander((10.0, 0.0), (0.2, -0.1));
+        npc.miner = miner;
+        npc.speed = 0.3;
+        npc.target = Some(crate::combat::ShipRef::Player);
+        npc.provoked = 7.0;
+        npc.trigger.primary = true;
+        npc.pick = Some(crate::catalog::WeaponId(130));
+        let mut chance = Draws::of(&[]).keyed(75, drawn.min(74)).keyed(200, drawn);
+        stay(&mut npc, StellarId(140), &mut chance);
+        (npc, chance.asked)
+    }
+
+    #[test]
+    fn a_landed_ship_stops_takes_goal_0_and_marks_the_stellar_visited() {
+        let (npc, _) = stayed(0, 0);
+        assert_eq!(npc.state.velocity, Vec2::ZERO);
+        assert_eq!(npc.speed, 0.0);
+        assert_eq!(npc.goal, Goal::Idle);
+        assert_eq!(npc.visited, Some(StellarId(140)), "+0x92 @0x8db00");
+        assert!(npc.travel_set, "+0x6c keeps the stellar");
+        assert_eq!(npc.state.position, site().position + Vec2::new(10.0, 0.0));
+        assert_eq!(npc.target, Some(crate::combat::ShipRef::Player), "kept");
+        assert_eq!(npc.provoked, 7.0, "kept");
+        assert!(npc.trigger.primary, "kept");
+        assert_eq!(npc.pick, Some(crate::catalog::WeaponId(130)), "kept");
+    }
+
+    #[test]
+    fn a_ship_that_scoops_stays_100_to_174_ticks_and_any_other_300_to_499() {
+        for (drawn, short, long) in [(0, 100, 300), (74, 174, 374), (199, 174, 499)] {
+            let (scooper, asked) = stayed(crate::ai::miner::SCOOPS, drawn);
+            assert_eq!(scooper.ai_wait, short, "{drawn}");
+            assert_eq!(asked, [75], "Rand(75)");
+            let (other, asked) = stayed(0, drawn);
+            assert_eq!(other.ai_wait, long, "{drawn}");
+            assert_eq!(asked, [200], "Rand(200)");
+            let both = crate::ai::miner::SCOOPS | crate::ai::miner::MINES;
+            assert_eq!(stayed(both, drawn).0.ai_wait, short, "{drawn}");
+        }
+        let (miner, asked) = stayed(crate::ai::miner::MINES, 0);
+        assert_eq!(miner.ai_wait, 300, "Flags3 0x0001 alone stays long");
+        assert_eq!(asked, [200]);
+    }
+
+    #[test]
+    fn a_landed_ship_waits_holding_its_guns() {
+        let (npc, _) = stayed(0, 0);
+        assert!(npc.wait_running());
+        let gated = crate::ai::fire::gated(&npc);
+        assert!(!gated.primary, "its guns held");
+        assert_eq!(gated.secondary, None);
+    }
+
+    #[test]
+    fn landing_in_its_box_it_stays() {
+        let mut npc = lander((0.0, 0.0), (0.1, 0.0));
+        let mut chance = Draws::of(&[]).keyed(200, 17);
+        let outcome = fly(
+            &mut npc,
+            &site(),
+            &TURN_8,
+            FlightRules::default(),
+            Inertia::Inertial,
+            &mut chance,
+        );
+        assert_eq!(outcome, Outcome::Landed(StellarId(140)));
+        assert_eq!(npc.ai_wait, 317);
+        assert_eq!(npc.goal, Goal::Idle);
+        assert_eq!(npc.visited, Some(StellarId(140)));
+        assert_eq!(npc.state.velocity, Vec2::ZERO);
+        let mut flying = lander((0.0, 0.0), (1.0, 0.0));
+        let mut chance = Draws::of(&[]);
+        flown(&mut flying, &TURN_8);
+        fly(
+            &mut flying,
+            &site(),
+            &TURN_8,
+            FlightRules::default(),
+            Inertia::Inertial,
+            &mut chance,
+        );
+        assert!(chance.asked.is_empty(), "no stay while it brakes");
+        assert_eq!(flying.ai_wait, 0);
     }
 }

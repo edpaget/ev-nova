@@ -1542,7 +1542,6 @@ mod tests {
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
-        crate::session::tests::landing_by_circle(&mut session);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
         assert_eq!(placed_ships(&session), [129, 129, 129]);
     }

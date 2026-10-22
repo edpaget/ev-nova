@@ -25,11 +25,15 @@
 //!   its spawn's display rolls, then flies its jump, its docking flight
 //!   or its autopilot step from its own state as it stands, so a push an
 //!   earlier slot's shockwave gave it is in the velocity it moves by, and
-//!   banks and glows. One whose flight ends it (it landed, jumped,
-//!   entered a gate, docked) leaves the traffic at once, as its slot is
-//!   inactive from its own `_HandleShip` on: no later slot's step, fire or
-//!   shockwave sees it; one that left the system is recorded among the
-//!   ships gone ([`gone`](super::gone)).
+//!   banks and glows. One whose flight ends it (it jumped, entered a gate,
+//!   docked) leaves the traffic at once, as its slot is inactive from its
+//!   own `_HandleShip` on: no later slot's step, fire or shockwave sees it;
+//!   one that left the system is recorded among the ships gone
+//!   ([`gone`](super::gone)). One that landed stays in its slot, waiting
+//!   at the stellar, as the original's does (+0xb8 is not cleared,
+//!   @0x8dadc-0x8db5a): only a mission ship under
+//!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
+//!   reading leaves as it lands ([`land_flight::leaves`]).
 //! - **End** starts the pirates' docks, queues the repairs completed on
 //!   the line, counts the AI waits down, releases the followers of each
 //!   lead that reached its gate's box, and regenerates the fuel; on the
@@ -52,8 +56,8 @@ use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
 use super::{
-    DockNotes, Traffic, World, ionization, jump_with_leader, plunder, regroup, repair_dock,
-    ship_display, tractor_hold, warp_out,
+    DockNotes, Traffic, World, ionization, jump_with_leader, land_flight, plunder, regroup,
+    repair_dock, ship_display, tractor_hold, warp_out,
 };
 use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{Goal, sight};
@@ -255,7 +259,7 @@ impl Traffic {
         {
             pass.reached.push((id, gate, npc.ai_type));
         }
-        if outcome != Outcome::Flying {
+        if ends(&self.npcs[index], outcome, world) {
             if let Some(freed) = Freed::by(outcome) {
                 self.gone.record(self.npcs[index].clone(), freed);
             }
@@ -335,6 +339,18 @@ impl Traffic {
             self.fly_npc(&mut pass, id, world, chance);
         }
         self.end_fly(pass);
+    }
+}
+
+/// Whether `npc`'s flight's `outcome` takes it out of the traffic in
+/// `world`: any but flying on, but a landing only for a ship that leaves
+/// as it lands ([`land_flight::leaves`]); every other landed ship stays in
+/// its slot, waiting at the stellar.
+fn ends(npc: &Npc, outcome: Outcome, world: &World) -> bool {
+    match outcome {
+        Outcome::Flying => false,
+        Outcome::Landed(_) => land_flight::leaves(npc, world.landed_leaves),
+        _ => true,
     }
 }
 
@@ -527,6 +543,7 @@ mod tests {
     use crate::catalog::{LandingSite, ShipId};
     use crate::chance::NeverFires;
     use crate::geometry::Vec2;
+    use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::plunder_dock::{DockSub, Docking};
@@ -558,7 +575,8 @@ mod tests {
     /// A traffic whose fly half lands one NPC, docks a fighter with its
     /// carrier, starts a pirate's dock with that carrier, takes a lead
     /// into its gate's box (releasing its follower) and holds one still:
-    /// 0 lands on planet 140; 1, a fighter, docks with 2, its carrier;
+    /// 0 lands on planet 140 and stays there; 1, a fighter, docks with 2,
+    /// its carrier;
     /// 3 docks with 2 to plunder it; 4 enters the gate, 5 following it;
     /// 6 flies on, short of fuel and regenerating half a unit a tick.
     fn busy() -> Traffic {
@@ -671,6 +689,18 @@ mod tests {
         };
         let gate = Goal::EnterGate(GATE);
         vec![
+            // The lander, stopped at goal 0 for its stay (300 + `Rand(200)`,
+            // the longest, 499), counted once.
+            (
+                NpcId(0),
+                state(0.0, 0.0, 0.0, 0.0),
+                false,
+                None,
+                Goal::Idle,
+                300.0,
+                Mode::Flying,
+                498,
+            ),
             // The carrier, boarded by its fighter.
             (
                 NpcId(2),
@@ -727,18 +757,16 @@ mod tests {
         ]
     }
 
-    /// What [`busy`]'s fly half sent away, the lander then the fighter.
-    fn busy_departed() -> [(NpcId, Outcome); 2] {
-        [
-            (NpcId(0), Outcome::Landed(StellarId(140))),
-            (
-                NpcId(1),
-                Outcome::Docked {
-                    carrier: ShipRef::Npc(NpcId(2)),
-                    ship: ShipId(200),
-                },
-            ),
-        ]
+    /// What [`busy`]'s fly half sent away: the fighter, docked. The lander
+    /// stays.
+    fn busy_departed() -> [(NpcId, Outcome); 1] {
+        [(
+            NpcId(1),
+            Outcome::Docked {
+                carrier: ShipRef::Npc(NpcId(2)),
+                ship: ShipId(200),
+            },
+        )]
     }
 
     /// `traffic`'s fly half of `half` run one NPC at a time, in the
@@ -802,18 +830,54 @@ mod tests {
         let world = World::new(&sites);
         let mut traffic = busy();
         let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-        let landed = traffic.fly_npc(&mut pass, NpcId(0), &world, &mut NeverFires);
-        assert_eq!(landed, Some(Outcome::Landed(StellarId(140))));
-        assert!(traffic.npcs().iter().all(|npc| npc.id != NpcId(0)), "gone");
+        let docked = traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
+        assert_eq!(docked, Some(busy_departed()[0].1));
+        assert!(traffic.npcs().iter().all(|npc| npc.id != NpcId(1)), "gone");
+        assert_eq!(traffic.departed(), busy_departed());
         assert_eq!(
-            traffic.departed(),
-            [(NpcId(0), Outcome::Landed(StellarId(140)))]
-        );
-        assert_eq!(
-            traffic.fly_npc(&mut pass, NpcId(0), &world, &mut NeverFires),
+            traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires),
             None,
             "no longer there"
         );
+    }
+
+    #[test]
+    fn an_npc_that_lands_stays_in_its_slot_unless_it_leaves_as_it_lands() {
+        let sites = sites();
+        let mark = crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::traffic::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        };
+        for (mission, reading, stays) in [
+            (None, RuleSource::Engine, true),
+            (None, RuleSource::Bible, true),
+            (Some(mark), RuleSource::Engine, true),
+            (Some(mark), RuleSource::Bible, false),
+        ] {
+            let world = World {
+                landed_leaves: reading,
+                ..World::new(&sites)
+            };
+            let mut traffic = busy();
+            traffic.npcs[0].mission = mission;
+            let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+            let landed = traffic.fly_npc(&mut pass, NpcId(0), &world, &mut NeverFires);
+            assert_eq!(landed, Some(Outcome::Landed(StellarId(140))));
+            let there = traffic.npcs().iter().any(|npc| npc.id == NpcId(0));
+            assert_eq!(there, stays, "{mission:?} {reading:?}");
+            let departed: &[_] = if stays {
+                &[]
+            } else {
+                &[(NpcId(0), Outcome::Landed(StellarId(140)))]
+            };
+            assert_eq!(traffic.departed(), departed, "{mission:?} {reading:?}");
+            assert!(
+                traffic.gone.ships().is_empty(),
+                "no landing is recorded gone"
+            );
+        }
     }
 
     #[test]

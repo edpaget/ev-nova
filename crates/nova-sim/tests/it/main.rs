@@ -14,6 +14,7 @@ mod idle_block;
 mod landing;
 mod lost_sight;
 mod missions;
+mod npc_landing;
 mod odds_cache;
 mod plugin_strings;
 mod stellar_hazards;

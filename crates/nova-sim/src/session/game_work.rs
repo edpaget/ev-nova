@@ -1143,6 +1143,9 @@ mod tests {
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.goal = Goal::Hold;
         npc.state.velocity = Vec2::new(0.3, 0.0);
+        // The warm-up pass landed it on planet 128, within its box; a lead
+        // drifting on, and its escort cloned from it, wait for nothing.
+        npc.ai_wait = 0;
         let mut escort = npc.clone();
         escort.leader = Some(lead);
         escort.goal = Goal::Follow { lead, guard: None };

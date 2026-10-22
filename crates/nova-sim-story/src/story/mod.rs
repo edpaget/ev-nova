@@ -242,9 +242,11 @@
 //!   brought in again; a ship of any other goal that leaves counts
 //!   nothing and comes back at the next setup
 //!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
-//!   reading). An AI ship that lands stays in the system, waiting at the
-//!   stellar, so a landing counts nothing
-//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). One that leaves
+//!   reading). An AI ship that lands stays in the system, stopped at the
+//!   stellar for its wait (`_HighLevelAIHandler` @0x8dadc-0x8db5a), then
+//!   takes a new goal, so a landing counts nothing and only its later jump
+//!   out may count ([`landed_leaves`](crate::RuleKey::LandedLeaves) has
+//!   the other reading, which takes it out as it lands). One that leaves
 //!   through a hypergate or wormhole is gone, but counts nothing either
 //!   ([`gate_exit_counts`](crate::RuleKey::GateExitCounts)). Here the
 //!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
@@ -2422,11 +2424,37 @@
 //!   @0x8da8d-0x8dad7); below it on both it lands (@0x8dadc).
 //! - **Sounds.** None: state 1 calls no `PlaySound` or `_beepSnd`.
 //!
+//! - **The landing's end** (@0x8dadc-0x8db5a,
+//!   `nova_sim::traffic::land_flight::stay`): its velocity and speed none,
+//!   goal and sub-goal 0, +0x92 = +0x6c (@0x8db00, the stellar visited);
+//!   +0x6c, its target and its provocation are not written; and its wait
+//!   +0x4c is `Rand(75)` + 100 for a class of `shïp` `Flags3` 0x0002
+//!   (class +0x9ec, copied from the record's +0x726 @0x7a204-0x7a20b;
+//!   @0x8db19-0x8db3a), else `Rand(200)` + 300 (@0x8db41-0x8db5a). Its
+//!   slot stays active (+0xb8 is not cleared), so it still counts toward
+//!   the system's ships and `AvgShips` and keeps its berth.
+//! - **The wait.** `_HandleShip` counts +0x4c down by `_gSpeedMult` (1.0
+//!   a frame) for any class but the escape pod (@0x35025-0x35048), and
+//!   skips the ship's turn, thrust and fire meanwhile (@0x34a54-0x34a72):
+//!   the engine's AI wait, counted down at the end of the fly half,
+//!   holding its flight and its guns. `_AIDispatch` runs its type's think
+//!   every frame whatever the wait (@0x8ff26-0x90016), in goal 0, so the
+//!   idle block finds the stellar visited and sends a trader or warship
+//!   away by hyperspace, or stops it when it can't jump; the high level,
+//!   skipped while the wait runs (@0x8d4b9-0x8d4d2), flies that once it is
+//!   out. A miner's shuttle stays idle through its wait, then picks the
+//!   nearest other stellar.
+//! - **Mission ships.** By the engine's reading of
+//!   [`landed_leaves`](crate::RuleKey::LandedLeaves) a mission ship stays
+//!   too, and its landing counts nothing; by the other it leaves the system
+//!   as it lands, counted as one that jumped out.
+//!
 //! **Readings.** The Rulebook key
 //! [`npc_landing`](crate::RuleKey::NpcLanding) defaults to the engine's
 //! box. The other reading, the port's earlier landing, lands within the
 //! stellar's landing radius at or below 1.0 a tick, flying its own
-//! approach; the Bible says nothing of how an NPC lands.
+//! approach; the Bible says nothing of how an NPC lands. The landing's end
+//! and its wait are the original's under either reading.
 
 //! # Mission lifecycle
 //!

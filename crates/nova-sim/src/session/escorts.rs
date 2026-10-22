@@ -1366,7 +1366,6 @@ mod tests {
         let mut session = Session::fly(catalog, escorted(catalog))
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
-        crate::session::tests::landing_by_circle(&mut session);
         tick(&mut session, catalog);
         session
     }

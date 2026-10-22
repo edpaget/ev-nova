@@ -338,9 +338,8 @@ mod tests {
     /// `catalog`'s session flying with a fleet of `ships`, placed.
     fn fleet(catalog: &FakePilotCatalog, ships: &[ShipId]) -> Session {
         let escorts = ships.iter().map(|&ship| escort(ship)).collect();
-        let mut session = flying_by(catalog, pilot(catalog, 0, escorts), Rulebook::default());
+        let session = flying_by(catalog, pilot(catalog, 0, escorts), Rulebook::default());
         assert_eq!(fleet_npcs(&session).len(), ships.len(), "placed");
-        crate::session::tests::landing_by_circle(&mut session);
         session
     }
 

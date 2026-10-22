@@ -2086,6 +2086,7 @@ impl Session {
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
             npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
+            landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
@@ -2168,6 +2169,7 @@ impl Session {
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
             npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
+            landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
         }
     }
@@ -16095,14 +16097,26 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn every_ai_type_lands_peacefully() {
+    fn every_ai_type_lands_peacefully_waits_there_then_leaves_by_hyperspace() {
         for ai_type in 1..=4 {
             // 129, 2000 out, is beyond the 999 bound on a destination.
-            let how = Outcome::Landed(StellarId(128));
             let catalog = trafficked(130, 1, ai_type);
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
-            assert_eq!(first_departure(&mut session, &catalog), how, "AI {ai_type}");
+            let mut ticks = 0;
+            while session.npcs()[0].ai_wait == 0 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+                assert_eq!(session.departed(), [], "AI {ai_type}: it stays");
+                ticks += 1;
+                assert!(ticks < 3000, "AI {ai_type}: never landed");
+            }
+            let landed = &session.npcs()[0];
+            assert_eq!(landed.visited, Some(StellarId(128)), "AI {ai_type}");
+            assert_eq!(landed.ai_wait, 498, "AI {ai_type}: 300 + Rand(200)");
+            // Its stay out, the idle block finds it has visited a stellar
+            // here and sends it away by hyperspace.
+            let how = first_departure(&mut session, &catalog);
+            assert_eq!(how, Outcome::JumpedOut, "AI {ai_type}");
             assert_eq!(session.npcs(), []);
         }
     }
@@ -16591,7 +16605,6 @@ pub(super) mod tests {
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
         stop_npcs(&mut session);
-        landing_by_circle(&mut session);
         session
     }
 
@@ -23780,7 +23793,6 @@ pub(super) mod tests {
                 &mut placing(2, &[(0, 0, -100, 0), (1, 35, -100, 0)]),
             );
             stop_npcs(&mut session);
-            landing_by_circle(&mut session);
             session.chart.target = Some(victim);
             if fires {
                 session.hold_trigger(FIRE);

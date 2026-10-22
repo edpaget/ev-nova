@@ -649,12 +649,15 @@ mod tests {
             assert_eq!(npc.goal, held.goal, "{at}");
         }
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "the wait is out");
+        // It flies its goal: it moves off, or, over the stellar it was
+        // bound for and at rest, lands there and stays.
+        assert_eq!(held.visited, None);
         let moved = (0..300).any(|_| {
             tick(&mut session);
             session
                 .npcs()
                 .first()
-                .is_none_or(|npc| npc.state != held.state)
+                .is_none_or(|npc| npc.state != held.state || npc.visited.is_some())
         });
         assert!(moved, "flies on");
     }

@@ -640,7 +640,6 @@ mod tests {
     fn in_traffic_a_shuttle_lands_on_its_nearest_stellar_and_a_mining_miner_comes_to_rest() {
         use crate::ai::NovaAi;
         use crate::traffic::Traffic;
-        use crate::traffic::autopilot::Outcome;
         let sites = stellars();
         let mut traffic = Traffic::new();
         let mut shuttle = miner(SCOOPS, false);
@@ -654,11 +653,18 @@ mod tests {
         let mut landed = None;
         for _ in 0..600 {
             traffic.tick(&ai, &sites, &mut Draws::of(&[]));
-            if let Some(&(_, outcome)) = traffic.departed().iter().find(|(id, _)| *id == shuttle) {
-                landed = Some(outcome);
+            assert!(traffic.departed().iter().all(|&(id, _)| id != shuttle));
+            let there = traffic.npcs().iter().find(|npc| npc.id == shuttle);
+            let ship = there.expect("a landed shuttle stays");
+            if landed.is_none() && ship.ai_wait > 0 {
+                // Its short stay (100 + `Rand(75)`, the longest), counted
+                // once, stopped where it landed.
+                assert_eq!(ship.ai_wait, 173);
+                assert_eq!(ship.state.velocity, Vec2::ZERO);
+                landed = ship.visited;
             }
         }
-        assert_eq!(landed, Some(Outcome::Landed(StellarId(129))));
+        assert_eq!(landed, Some(StellarId(129)));
         let at_rest = traffic
             .npcs()
             .iter()

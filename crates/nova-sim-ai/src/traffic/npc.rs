@@ -404,9 +404,9 @@ pub struct Npc {
     /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574) and a miner's shuttle
     /// as it sets off (@0x8b3ae, [`Decision::visits`](crate::ai::Decision::visits),
     /// see [`miner`](crate::ai::miner)), which also reads it to leave that
-    /// stellar out of its pick (@0x8b373). The landing's end
-    /// (`_HighLevelAIHandler` @0x8db00) is
-    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's.
+    /// stellar out of its pick (@0x8b373), and the landing's end, which
+    /// marks the stellar it landed on (`_HighLevelAIHandler` @0x8db00,
+    /// [`land_flight::stay`](crate::traffic::land_flight::stay)).
     pub visited: Option<StellarId>,
     /// Whether its travel stellar, the original's +0x6c, is set: what a
     /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read
@@ -539,9 +539,11 @@ pub struct Npc {
     /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
     /// took into its fleet (150, which its first think as an escort ends,
     /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)) (see
-    /// [`plunder`](crate::traffic::plunder))
-    /// and a pirate's count wait (120, see
-    /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
+    /// [`plunder`](crate::traffic::plunder)),
+    /// a pirate's count wait (120, see
+    /// [`board_wait`](crate::traffic::board_wait)) and a landed ship's stay
+    /// at its stellar (`Rand(75)` + 100 or `Rand(200)` + 300, see
+    /// [`land_flight::stay`](crate::traffic::land_flight::stay)). While it runs it counts
     /// in [`Npc::wait_running`], the traffic counts it down as the ship
     /// flies, its high level is skipped but for a drift, a hold or a count
     /// wait, and the ship moves on at its velocity with no turn or thrust
@@ -1190,12 +1192,13 @@ impl Npc {
     /// fighter bays and point defence, its pick kept
     /// ([`fire::gated`](crate::ai::fire::gated)). So does its AI wait
     /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
-    /// plunder, a ship a pirate took into its fleet, and the wait of a
-    /// ship following its leader's warp out while the leader still turns
-    /// (`_LowLevelAIHandler` @0x85bc3, see
-    /// [`warp_out`](crate::traffic::warp_out)). The waits the engine
-    /// doesn't fly yet (a landed ship's stay, a launched fighter's) will
-    /// count here once built (rdm weapons-fidelity phase 17's findings).
+    /// plunder, a ship a pirate took into its fleet, a landed ship's stay
+    /// at its stellar ([`land_flight::stay`](crate::traffic::land_flight::stay)),
+    /// and the wait of a ship following its leader's warp out while the
+    /// leader still turns (`_LowLevelAIHandler` @0x85bc3, see
+    /// [`warp_out`](crate::traffic::warp_out)). The wait the engine
+    /// doesn't fly yet (a launched fighter's) will count here once built
+    /// (rdm weapons-fidelity phase 17's findings).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
     /// the original keeps it in +0x4c, read so by

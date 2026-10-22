@@ -125,10 +125,13 @@
 //!    wait, a pirate's count wait's included ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
-//! 7. the removal of those that landed, jumped out, entered a gate or
-//!    docked, each in [`Traffic::departed`] with how it left, for its
-//!    session to take a fighter docked aboard, the pods freed in step 5
-//!    after them;
+//! 7. the removal of those that jumped out, entered a gate or docked, each
+//!    in [`Traffic::departed`] with how it left, for its session to take a
+//!    fighter docked aboard, the pods freed in step 5 after them; a ship
+//!    that landed stays in its slot, waiting at the stellar
+//!    ([`land_flight::stay`]), but for a mission ship under
+//!    [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
+//!    reading, which leaves as it lands ([`land_flight::leaves`]);
 //! 8. and every NPC left, disabled or breaking up included,
 //!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
 //!    `_HandleShip` @0x35305-0x35374), on both passes. Steps 6 to 8 are
@@ -201,6 +204,8 @@ pub mod ionization;
 pub mod jump_with_leader;
 pub mod kept_berths;
 pub mod land_flight;
+#[cfg(test)]
+mod landed_stay_tests;
 mod launch_room;
 mod launch_think;
 pub mod leave_flight;
@@ -667,6 +672,12 @@ pub struct World<'a> {
     /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding), see
     /// [`land_flight`]).
     pub npc_landing: RuleSource,
+    /// Whether a mission ship that lands leaves the system: by the engine
+    /// no ship does, as the original keeps it waiting at the stellar; by
+    /// the other reading a mission's special ship does
+    /// ([`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves), see
+    /// [`land_flight::leaves`]).
+    pub landed_leaves: RuleSource,
     /// The stellars shots can shoot down ([`Surroundings::destroyable`]),
     /// among which a stellar attacker picks its quarry.
     pub destroyable: &'a BTreeSet<StellarId>,
@@ -731,6 +742,7 @@ impl<'a> World<'a> {
             successor_repairer: RuleSource::Engine,
             held_burst: RuleSource::Engine,
             npc_landing: RuleSource::Engine,
+            landed_leaves: RuleSource::Engine,
             destroyable: bare.destroyable,
         }
     }
@@ -3489,7 +3501,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_that_lands_or_jumps_out_leaves() {
+    fn a_ship_that_jumps_out_leaves_and_one_that_lands_stays() {
         // NPC 0 over planet 140, at rest; NPC 1 at rest just past 1000.
         let mut traffic = populated(2, 1);
         traffic.npcs[1].state.position = Vec2::new(0.0, -1000.5);
@@ -3497,15 +3509,14 @@ mod tests {
         traffic.npcs[1].goal = Goal::JumpOut;
         let sites = [planet(140, 0.0, 0.0)];
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
-        assert_eq!(
-            traffic.departed(),
-            [(NpcId(0), Outcome::Landed(StellarId(140)))]
-        );
-        assert!(traffic.npcs()[0].jumping(), "its warp out begins");
+        assert_eq!(traffic.departed(), [], "the lander stays");
+        assert_eq!(traffic.npcs()[0].visited, Some(StellarId(140)));
+        assert!(traffic.npcs()[1].jumping(), "its warp out begins");
         // With warp sounds of no length, its warp is over on its first
         // advance pass (see `warp_out`).
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs(), []);
+        let ids: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(ids, [NpcId(0)], "waiting at 140");
         assert_eq!(traffic.departed(), [(NpcId(1), Outcome::JumpedOut)]);
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         assert_eq!(traffic.departed(), [], "only the last tick's");
