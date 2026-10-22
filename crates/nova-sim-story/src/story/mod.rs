@@ -282,7 +282,9 @@
 //! `ShipFate`, on
 //! `TookOff` (the first flight frame after a landing or a docked accept,
 //! held until the take-off's setup has run, as the original sets the
-//! system up first, @0x674c2), and in flight on `EnteredSystem`; an accept in flight is checked once
+//! system up first, @0x674c2), and in flight on `EnteredSystem` but a
+//! jump's, whose check follows its setup (the hook runs before it,
+//! @0x6c15d, the poll after); an accept in flight is checked once
 //! its settling is done. The ships' arrivals raise
 //! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
 //! leaving [`Fate::Departed`], so an escort's presence, an observation
@@ -453,7 +455,7 @@
 //!
 //! | Event | Its one source | The original's |
 //! |---|---|---|
-//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
+//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] but a jump's; a jump's arrival, after its days, dispatched at once | the enter-system hook |
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as `nova_sim::Session::land` docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | `nova_sim::Session::take_off`, after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
@@ -467,7 +469,11 @@
 //! arrival raises the `Explored` of the systems it passes and of the one
 //! it arrives at, its `DayPassed` events, then `EnteredSystem`: the
 //! original explores those nebulae before the days (@0x6bddb, @0x6be12;
-//! see "Checked for phase 3"). Every other way in raises its `DayPassed`
+//! see "Checked for phase 3"), and runs the enter-system hook after them
+//! and before it explores the arrival again and sets it up (@0x6c15d,
+//! @0x6c1db, @0x6c1f9). Each `Explored` and the `EnteredSystem` is
+//! dispatched as it is raised, the `DayPassed` events left for the
+//! settling. Every other way in raises its `DayPassed`
 //! events, if any, `EnteredSystem`, then `Explored` when its row
 //! explores, but a gate's or wormhole's exit, which explores no nebula.
 //! Each exploration raises `Explored`, the system explored

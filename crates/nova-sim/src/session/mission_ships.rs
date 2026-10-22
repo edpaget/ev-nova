@@ -23,11 +23,16 @@
 //! nor a relocation (`_MissionHandlePlayerEnteredNewSystem`
 //! @0x99f5b-0x99fae). The original runs it before the system's ships are
 //! set up (@0x6c15d before @0x6c1f9, @0x67159 before @0x672e0), so a
-//! `ShipStart` 1 slot it restarts brings none at that setup. Here the
-//! setup comes first, as the system is entered, and the hook as the
-//! entry settles: the setup on such an entry ([`Session::populate`]
-//! through the entry table) leaves out every slot the hook is about to
-//! restart. Its timer is drawn after the setup's draws, not before. On a
+//! `ShipStart` 1 slot it restarts brings none at that setup. A jump's
+//! arrival does the same: `Session::arrive` dispatches its
+//! `EnteredSystem` after the days, before the re-explore and the setup,
+//! and checks the goals once the setup is done, as the original's
+//! per-frame poll first finds them (@0x9edb5), so the hook checks none on
+//! a jump. On the other entries the setup comes first, as the system is
+//! entered, and the hook as the entry settles: the setup on such an
+//! entry ([`Session::populate`] through the entry table) leaves out
+//! every slot the hook is about to restart. Its timer is drawn after the
+//! setup's draws, not before. On a
 //! hypergate's or wormhole's exit the original's loop A then overwrites
 //! the restart of every slot whose ships follow the player (`ShipSyst`
 //! -6, @0x6716a-0x67294), so, as the engine reads
@@ -373,7 +378,9 @@ impl Session {
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                if self.mode.landed().is_none() {
+                // A jump's hook runs before the setup, so its first check
+                // waits for the setup (`Session::arrive`).
+                if self.mode.landed().is_none() && how != Entrance::Jump {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
@@ -495,7 +502,8 @@ impl Session {
     /// its appear timer not running, brings ships left of them
     /// ([`spawn::mission_ships`]). `entering`
     /// by an entry whose enter-system hook is still to run, a slot the
-    /// hook is about to restart brings none (see the module docs). With the ships,
+    /// hook is about to restart brings none (see the module docs); a
+    /// jump's hook has run already, so it predicts none. With the ships,
     /// the slots it took and their missions, in order, a slot of no
     /// `düde` among them: each is auto-aborted with `Flags` 0x0001
     /// ([`Session::abort_set_up`]).
@@ -521,8 +529,10 @@ impl Session {
                 || left <= 0
                 || state.appear >= 0
                 || entering.is_some_and(|how| {
-                    self.chart
-                        .hook_restarts(&self.pilot, &self.setup, &record, active, how)
+                    how != Entrance::Jump
+                        && self
+                            .chart
+                            .hook_restarts(&self.pilot, &self.setup, &record, active, how)
                 })
             {
                 continue;
@@ -2323,6 +2333,72 @@ pub(super) mod tests {
         let catalog_ticks = 199;
         ticks(&mut session, &catalog, catalog_ticks);
         assert_eq!(marked(&session), [0, 0]);
+    }
+
+    /// Slot 0's appear timer as each `X` applies.
+    #[derive(Debug, Default)]
+    struct Appears(std::cell::RefCell<Vec<i16>>);
+
+    impl crate::session::control::SetOpObserver for Appears {
+        fn saw(&self, op: &crate::control::SetOp, session: &Session) {
+            if matches!(op, crate::control::SetOp::Explore(_)) {
+                self.0.borrow_mut().push(ships_of(session).appear);
+            }
+        }
+    }
+
+    #[test]
+    fn a_jumps_hook_restarts_a_slots_appear_timer_before_the_re_explore_and_its_setup() {
+        // The nebula around 131 is active only from the jump's refresh, so
+        // only the re-explore (@0x6c1db) runs its `X132`: after the hook
+        // (@0x6c15d), before the setup (@0x6c1f9).
+        let mut catalog = ships_catalog(shipping(131, 1));
+        catalog.nebulae.push(crate::testkit::nebula(
+            128,
+            (500, -100, 200, 200),
+            "b5",
+            "X132",
+        ));
+        let mut session = accepted(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.appear = -1;
+        }
+        take_off(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("b5").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        let seen = Rc::new(Appears::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(*seen.0.borrow(), [199], "restarted by the re-explore");
+        assert!(marked(&session).is_empty(), "none set up");
+    }
+
+    #[test]
+    fn a_jumps_goal_check_runs_after_its_setup() {
+        // No goal, `Flags` 0x0001 and `ShipStart` 1, its ships in 131 with
+        // none arrived: the hook restarts their timer, the setup brings
+        // none, and the check after it leaves the goals unmet while they
+        // are still to come (@0x9ed8e-0x9ed98).
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        catalog.missions[0].ships.start = 1;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.appear = -1;
+        }
+        let _ = shown(&mut session);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_some(), "still held");
+        assert_eq!(ships_of(&session).appear, 199, "restarted");
+        assert!(!goals_met(&session));
+        assert_eq!(bits(&session), Vec::<u16>::new(), "no OnAbort");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
     }
 
     #[test]

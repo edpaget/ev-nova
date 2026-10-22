@@ -3029,8 +3029,11 @@ impl Session {
     /// caller's settling. Once the refresh is written it explores the
     /// arrival again (@0x6c1db), the system the entry will resolve it to,
     /// with the activity the refresh wrote, before it is entered and
-    /// populated. [`StoryEvent::EnteredSystem`] follows the days, and
-    /// waits, with the days' events, for the caller's settling.
+    /// populated. [`StoryEvent::EnteredSystem`] follows the days and is
+    /// dispatched at once, before the re-explore and the population
+    /// (@0x6c15d), its moves and a `Q`'s leave waiting for the caller's
+    /// settling with the days' events; the ship goals are checked once
+    /// the system is set up (see the `jump_exploration` module).
     ///
     /// Each system explored is first written as the player's system, as
     /// the original writes +0x74 (@0x6bdd4, @0x6be0b), and after the
@@ -3216,6 +3219,10 @@ impl Session {
         for _ in 0..jumps {
             self.pass_jump_days(chance);
         }
+        // The enter-system hook, after the days and before the re-explore
+        // and the setup (@0x6c15d): its events settled at once, the days'
+        // left for the caller's settling.
+        self.enter_jump_hook_now(catalog, &mut &mut *chance);
         let entered = Arrival {
             system: written,
             sites: self.chart.read_sites(catalog, written),
@@ -3246,6 +3253,9 @@ impl Session {
             catalog,
             chance,
         );
+        // The ship goals checked once the system is set up, as the
+        // original's per-frame check first finds them (@0x9edb5).
+        self.check_goals_after_jump(&mut &mut *chance);
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();

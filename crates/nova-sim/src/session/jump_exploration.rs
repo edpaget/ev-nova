@@ -56,18 +56,31 @@
 //! the departure's until the entry: nothing is drawn before the
 //! original's rebuild (@0x6c203), so that crosses no boundary.
 //!
-//! **Ordering.** A jump's `EnteredSystem` hooks settle in the caller's
-//! settling, after the re-explore and the population, where the original
-//! runs them (@0x6c15d) before both; and a map granted by a script run
-//! outside the dispatcher (a crön's, a ship's hook, a stellar's `OnRegen`)
-//! explores at the next settling. Each crosses a boundary the player can
-//! see; crons-news-ranks-fidelity phases 40 and 43 cover them.
+//! **The enter-system hook** (crons-news-ranks-fidelity phase 40). After
+//! the days and the price flux (@0x6c153, @0x6c158),
+//! `_MissionHandlePlayerEnteredNewSystem` (@0x6c15d, 0x99f11-0x9a017)
+//! restarts each slot's appear timer and aux countdown; then the explored
+//! levels are raised (@0x6c16c-0x6c1b8), the arrival is explored again
+//! (@0x6c1db) and set up (@0x6c1f9). The hook runs no script, plays no
+//! sound and checks no goal: `_MissionObjectivesCheck` runs from the
+//! per-frame `_MissionHandler` (@0x9edb5). So
+//! [`Session::enter_jump_hook_now`] raises the jump's
+//! [`StoryEvent::EnteredSystem`] after the days and dispatches it at
+//! once, as an exploration is, and [`Session::check_goals_after_jump`]
+//! checks the goals once the system is set up.
+//!
+//! **Ordering.** A map granted by a script run outside the dispatcher (a
+//! crön's, a ship's hook, a stellar's `OnRegen`) explores at the next
+//! settling, which crosses a boundary the player can see;
+//! crons-news-ranks-fidelity phase 43 covers it. The jump's `DayPassed`
+//! events settle at the caller's settling, after the hook: the original
+//! polls the deadlines per frame after the arrival, so that matches.
 //!
 //! [`RuleKey::StoryReentry`]: crate::RuleKey::StoryReentry
 
 use crate::catalog::{PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::story::StoryEvent;
+use crate::story::{Entrance, StoryEvent, StoryEventKind};
 
 use super::{Session, SessionEvent, story};
 
@@ -99,6 +112,35 @@ impl Session {
         self.chart.leave_owners_unset(&self.setup);
     }
 
+    /// Raises the jump's [`StoryEvent::EnteredSystem`] for the player's
+    /// system and dispatches it at once, as the explorations are (see the
+    /// module docs' "The enter-system hook"), reading `catalog` and drawing
+    /// on `chance`: after the days, before the re-explore and the
+    /// population (`_MissionHandlePlayerEnteredNewSystem` @0x6c15d).
+    pub(super) fn enter_jump_hook_now<C>(&mut self, catalog: &C, chance: &mut dyn Chance)
+    where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        let mark = self.run.story_mark();
+        self.run.raise(StoryEvent::EnteredSystem {
+            system: self.pilot.system,
+            how: Entrance::Jump,
+        });
+        self.dispatch_since(catalog, chance, mark, StoryEventKind::EnteredSystem);
+    }
+
+    /// The jump's first check of each mission's ship goals, once the
+    /// system is set up, drawing on `chance`: the stand-in for the
+    /// per-frame `_MissionObjectivesCheck` (`_MissionHandler` @0x9edb5),
+    /// which the enter-system hook, run before the setup, leaves to here
+    /// (see the `mission_ships` module).
+    pub(super) fn check_goals_after_jump(&mut self, chance: &mut dyn Chance) {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            self.check_ship_goals(slot, false, chance);
+        }
+    }
+
     /// The jump's refresh's move (@0x99918): the player is moved out of
     /// `written` when the refresh hid it, as the entry will resolve it
     /// ([`Chart::entry_resolution`](super::Chart::entry_resolution)), a
@@ -127,7 +169,8 @@ pub(super) mod tests {
     use super::super::nebulae::tests::{around_131, nebulous};
     use super::super::tests::{alternates, chained};
     use crate::catalog::{
-        MissionRecord, NebulaId, NebulaRecord, ShipId, StellarId, SystemId, SystemVisibility,
+        DudeId, DudeRecord, MissionRecord, NebulaId, NebulaRecord, ShipId, StellarId, SystemId,
+        SystemTraffic, SystemVisibility,
     };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp, Test};
@@ -468,6 +511,75 @@ pub(super) mod tests {
                 "{source:?}: 150 kept rescued in 130, which 129 stands for"
             );
         }
+    }
+
+    /// The system each `X` names, with the NPCs in the system as it
+    /// applies.
+    #[derive(Debug, Default)]
+    struct Populated(RefCell<Vec<(i16, usize)>>);
+
+    impl SetOpObserver for Populated {
+        fn saw(&self, op: &SetOp, session: &Session) {
+            if let SetOp::Explore(system) = op {
+                self.0.borrow_mut().push((system.0, session.npcs().len()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_jumps_entered_system_hook_settles_before_the_arrivals_re_explore_and_population() {
+        // `_MissionHandlePlayerEnteredNewSystem` (@0x6c15d) before the
+        // re-explore (@0x6c1db) and the setup (@0x6c1f9). The nebula
+        // around 131 is active only from the jump's refresh, so only the
+        // re-explore runs its `X132`; 131's traffic is two ships.
+        let mut dude_types = [(-1, 0); 8];
+        dude_types[0] = (128, 100);
+        let catalog = FakePilotCatalog {
+            traffic: vec![(
+                SystemId(131),
+                SystemTraffic {
+                    dude_types,
+                    avg_ships: 2,
+                    persons: Default::default(),
+                },
+            )],
+            dudes: vec![(
+                DudeId(128),
+                DudeRecord {
+                    ai_type: 1,
+                    govt: None,
+                    ships: vec![(ShipId(129), 1)],
+                    booty: 0,
+                    info_types: 0,
+                },
+            )],
+            ship_records: vec![ship(129, FAST)],
+            ..nebulous(vec![observed_around_131("b5")])
+        };
+        let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
+        session
+            .register_story(Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record: 1,
+                    hook: 0,
+                },
+                EventFilter::EnteredSystem(SystemId(131)),
+                Script::parse("X133"),
+            ))
+            .expect("registers");
+        bound(&mut session, &catalog, 131, "b5");
+        let seen = Rc::new(Populated::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(
+            *seen.0.borrow(),
+            [(133, 0), (132, 0)],
+            "the hook, then the re-explore, both before the setup"
+        );
+        assert_eq!(session.npcs().len(), 2, "the setup");
+        settle(&mut session, &catalog);
+        assert_eq!(seen.0.borrow().len(), 2, "nothing left to settle");
     }
 
     #[test]

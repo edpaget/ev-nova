@@ -55,12 +55,12 @@
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the
 //! `entry` module).
 //!
-//! Left to others: the escape pod's exploration (roadmap player-death),
-//! a jump's `EnteredSystem` hooks before the arrival is explored again
-//! and populated (crons-news-ranks-fidelity phase 40), and the
-//! explorations of scripts run outside the dispatcher
+//! Left to others: the escape pod's exploration (roadmap player-death)
+//! and the explorations of scripts run outside the dispatcher
 //! (crons-news-ranks-fidelity phase 43). A jump's scripts read the
-//! arrival as the player's system (see the `jump_exploration` module).
+//! arrival as the player's system, and its `EnteredSystem` hooks run
+//! before the arrival is explored again (see the `jump_exploration`
+//! module).
 
 use super::{Chart, MissionRun, Outbox, Session, SessionEvent, Setup, Statics};
 use crate::catalog::{NebulaId, SystemId};

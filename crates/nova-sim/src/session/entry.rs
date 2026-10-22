@@ -1044,7 +1044,8 @@ impl Session {
     /// Sounds and raises the arrival in `heard`'s system, as `resets`
     /// says, tells its event, if any ([`scene_event`]), and raises
     /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
-    /// names an entrance ([`Entry::entrance`]). The arrival message is the
+    /// names an entrance ([`Entry::entrance`]) but a jump, whose
+    /// [`Session::arrive`] raised it already. The arrival message is the
     /// system's buoy, its strings read from `catalog`, or the arrival line
     /// ([`Chart::arrival_message`]); a buoy replaces the
     /// abandoned-fighters suffix too, so it drops the fighter notes this
@@ -1074,7 +1075,9 @@ impl Session {
         if let Some(event) = event {
             self.out.emit(event);
         }
-        if let Some(how) = how.entrance() {
+        // A jump's was raised and dispatched before its re-explore and its
+        // setup (`Session::arrive`; see the `jump_exploration` module).
+        if let Some(how) = how.entrance().filter(|&how| how != Entrance::Jump) {
             self.run.raise(StoryEvent::EnteredSystem { system, how });
         }
     }

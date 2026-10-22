@@ -394,11 +394,27 @@ impl Session {
     ) where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
+        self.dispatch_since(catalog, chance, mark, StoryEventKind::Explored);
+    }
+
+    /// Dispatches now the events of `kind` raised since `mark`, as
+    /// [`Session::dispatch_explored_since`] does the explorations: a
+    /// jump's [`StoryEvent::EnteredSystem`] before its re-explore and its
+    /// population (see the `jump_exploration` module).
+    pub(super) fn dispatch_since<C>(
+        &mut self,
+        catalog: &C,
+        chance: &mut dyn Chance,
+        mark: usize,
+        kind: StoryEventKind,
+    ) where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
         let (now, mut kept): (VecDeque<_>, VecDeque<_>) =
             std::mem::take(&mut self.run.story.raised)
                 .into_iter()
                 .enumerate()
-                .partition(|(n, event)| *n >= mark && event.kind() == StoryEventKind::Explored);
+                .partition(|(n, event)| *n >= mark && event.kind() == kind);
         self.run.story.raised = now.into_iter().map(|(_, event)| event).collect();
         self.settle_events(
             catalog,
@@ -1326,18 +1342,44 @@ mod tests {
         }
     }
 
+    /// `session` watching a jump's [`StoryEvent::EnteredSystem`] for
+    /// `system`: a fixture subscription to it sets bit 30.
+    fn watching_entered(mut session: Session, system: i16) -> Session {
+        session
+            .register_story(Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record: 30,
+                    hook: 0,
+                },
+                EventFilter::EnteredSystem(SystemId(system)),
+                Script::parse("b30"),
+            ))
+            .expect("registers");
+        session
+    }
+
+    /// Whether [`watching_entered`]'s subscription has run.
+    fn entered_ran(session: &Session) -> bool {
+        session
+            .pilot()
+            .control_bit(crate::control::Bit::new(30).expect("a bit"))
+    }
+
     #[test]
     fn a_jump_dispatches_the_arrivals_explored_at_once_then_raises_its_days_then_entered_system() {
         let catalog = testkit::catalog();
         let session = quiet(Session::start(&catalog).expect("starts"));
-        let (mut session, seen) = watching_explored(session, &[131]);
+        let (session, seen) = watching_explored(session, &[131]);
+        let mut session = watching_entered(session, 131);
         session.ship.fit.stats.jump_days = 2;
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(seen.systems(), [SystemId(131), SystemId(131)], "again");
-        let mut expected = days_after(left, 2);
-        expected.push(entered(131, Entrance::Jump));
-        assert_eq!(session.story_raised(), expected);
+        // The jump's `EnteredSystem` is dispatched at once, after the days
+        // (@0x6c15d); the days wait for the caller's settling.
+        assert!(entered_ran(&session));
+        assert_eq!(session.story_raised(), days_after(left, 2));
     }
 
     #[test]
@@ -1365,7 +1407,6 @@ mod tests {
         jump(&mut session, &catalog, 131).expect("arrives");
         let mut expected = vec![LANDED_128];
         expected.extend(days_after(left, 1));
-        expected.push(entered(131, Entrance::Jump));
         assert_eq!(session.story_raised(), expected);
     }
 
@@ -1449,7 +1490,8 @@ mod tests {
             let catalog = chained(testkit::catalog(), mod_val);
             let mut session = bound_for_134(&catalog, rule);
             testkit::begin_jump_now(&mut session).expect("jumps");
-            let (mut session, seen) = watching_explored(quiet(session), &[131, 132]);
+            let (session, seen) = watching_explored(quiet(session), &[131, 132]);
+            let mut session = watching_entered(session, 132);
             let left = session.date();
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
@@ -1460,9 +1502,8 @@ mod tests {
                 [131, 132, 132].map(SystemId),
                 "{rule:?}: 132 again"
             );
-            let mut expected = days_after(left, days);
-            expected.push(entered(132, Entrance::Jump));
-            assert_eq!(session.story_raised(), expected, "{rule:?}");
+            assert!(entered_ran(&session), "{rule:?}");
+            assert_eq!(session.story_raised(), days_after(left, days), "{rule:?}");
         }
     }
 
@@ -1474,13 +1515,13 @@ mod tests {
         let mut session = bound_for_134(&catalog, MultiJumpRule::Engine);
         testkit::begin_jump_now(&mut session).expect("jumps");
         session.plot_course(SystemId(133)).expect("a route");
-        let (mut session, seen) = watching_explored(quiet(session), &[131, 133]);
+        let (session, seen) = watching_explored(quiet(session), &[131, 133]);
+        let mut session = watching_entered(session, 131);
         let left = session.date();
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(seen.systems(), [SystemId(131), SystemId(131)]);
-        let mut expected = days_after(left, 1);
-        expected.push(entered(131, Entrance::Jump));
-        assert_eq!(session.story_raised(), expected);
+        assert!(entered_ran(&session));
+        assert_eq!(session.story_raised(), days_after(left, 1));
     }
 
     // The dispatch, through fixture subscriptions.
