@@ -543,6 +543,7 @@ mod target_panel;
 #[cfg(test)]
 mod thrust;
 mod tractor_hold;
+mod trade_dialog;
 mod tutorial;
 #[cfg(test)]
 mod vacated_berths;
@@ -3916,7 +3917,8 @@ impl Session {
 
     /// The exchange of the stellar the ship is docked at, if it has landed
     /// at a trade center, priced by the stellar's [`Markup`], with its
-    /// event line (see the `exchange_events` module).
+    /// event line (see the `exchange_events` module) and its dialog's
+    /// `STR#` 2002 words (the `trade_dialog` module).
     #[must_use]
     pub fn market(&self) -> Option<Market> {
         let stellar = self.mode.landed()?;
@@ -3927,11 +3929,13 @@ impl Session {
             flags: site.flags,
             pilot: &self.pilot,
             capacity: self.capacity(),
+            ship_capacity: self.stats().capacity,
             gate: self.gate(),
             rules: self.setup.rules,
             markup: self.chart.markup(&self.pilot, &self.setup, site),
         })?;
         market.events = self.exchange_events(stellar);
+        market.words = self.trade_words();
         Some(market)
     }
 
@@ -10236,7 +10240,7 @@ pub(super) mod tests {
     /// A session of [`fleet_exchange`], landed, whose fleet is a trader
     /// escort (129), a warship (130), a launched fighter (131) and an
     /// escort with no record (132).
-    fn landed_with_a_fleet() -> Session {
+    pub(super) fn landed_with_a_fleet() -> Session {
         let mut session = Session::start(&fleet_exchange()).expect("starts");
         session.pilot.escorts = vec![
             fleet_escort(129),

@@ -196,6 +196,23 @@ fn spin() -> Vec<u8> {
     bytes
 }
 
+/// `STR#` 2002 as far as #392, with the exchange dialog's words in
+/// place and the rest empty.
+fn trade_words() -> Vec<&'static str> {
+    let mut list = vec![""; 392];
+    for (n, word) in [
+        (1, "ton"),
+        (2, "tons"),
+        (197, "Commodity:"),
+        (199, "In Hold:"),
+        (200, "Price:"),
+        (364, "Free cargo space"),
+    ] {
+        list[n - 1] = word;
+    }
+    list
+}
+
 fn game_data() -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
@@ -226,6 +243,7 @@ fn game_data() -> Rc<GameData> {
             str_list(&["75", "350", "750", "900", "200", "550"]),
         ),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
+        (StrList::TYPE, 2002, str_list(&trade_words())),
     ];
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
@@ -551,9 +569,21 @@ impl Harness {
     }
 }
 
-/// The status bar's text for `free` tons and `cash` credits.
-fn status(free: u32, cash: i64) -> String {
-    format!("Free cargo space: {free} tons    Credits: {cash}")
+/// The header's labels, in `STR#` 2002's words, for a ship alone.
+const HEADER: [&str; 3] = ["Commodity:", "In Hold:", "Price:"];
+
+/// The cargo summary's free-space line for `free` tons, a ship alone.
+fn free_space(free: u32) -> String {
+    format!("Free cargo space: {free} tons")
+}
+
+impl Harness {
+    /// Asserts the Trade Center shows `free` tons free in its cargo
+    /// summary and the exchange holds `cash` credits.
+    fn assert_shows(&mut self, free: u32, cash: i64) {
+        assert!(texts(&self.frame()).contains(&free_space(free)));
+        assert_eq!(self.trade().market().cash, cash);
+    }
 }
 
 #[test]
@@ -574,10 +604,13 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.open_trade_center();
     let cash = i64::from(CASH);
     let shown = texts(&game.frame());
-    for text in ["Food", "75", "Metal", "160", "Buy", "Sell", "Done"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    for text in HEADER
+        .iter()
+        .chain(&["Food", "75", "Metal", "160", "Buy", "Sell", "Done"])
+    {
+        assert!(shown.contains(&(*text).to_owned()), "{text}: {shown:?}");
     }
-    assert!(shown.contains(&status(10, cash)), "{shown:?}");
+    game.assert_shows(10, cash);
     for untraded in [
         "Industrial",
         "Medical Supplies",
@@ -595,7 +628,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(game.pilot().cash(), full);
     assert_eq!(store.writes(), writes + 1);
     assert_eq!(saved(&store, "Ada").held(FOOD), 10);
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
     assert_eq!(game.trade().market().free, 0);
 
     // Done closes the exchange; closing the window saves the cargo.
@@ -630,7 +663,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
         game.trade().market().row(FOOD).map(|row| row.held),
         Some(10)
     );
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
 
     // Selling pays the local price: S sells a ton, and Alt-S asks how
     // many, the quantity dialog opening at everything left, which Return
@@ -650,7 +683,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 0, "everything left is sold");
     assert_eq!(game.pilot().cash(), cash);
-    assert!(texts(&game.frame()).contains(&status(10, cash)));
+    game.assert_shows(10, cash);
     assert_eq!(saved(&store, "Ada").held(FOOD), 0);
 
     // Holding B buys a ton on the press and a ton on each repeat.
@@ -670,7 +703,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 10, "the hold is full");
     assert_eq!(game.pilot().cash(), full);
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
     assert_eq!(saved(&store, "Ada").held(FOOD), 10);
 }
 

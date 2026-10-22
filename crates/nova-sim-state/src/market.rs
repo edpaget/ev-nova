@@ -256,6 +256,10 @@ use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
+use crate::trade_dialog::{
+    CargoSummary, HeldIn, MissionLoad, PriceMarker, TradeWords, cargo_summary, commodity_marker,
+    first_local_delta, held_in, junk_marker,
+};
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -824,6 +828,14 @@ pub struct MarketRow {
     /// Every commodity row, and by the engine every `jünk` row, is; by the
     /// Bible only a `jünk`'s `BoughtAt` row.
     pub bought_here: bool,
+    /// The original's list slot it sits in (`_TradeDialogUpdate`
+    /// @0x4d103-0x4d5c5): commodity n in slot n, a `jünk`'s
+    /// [`JunkSide::BoughtAt`] row in slot 6 and its [`JunkSide::SoldAt`]
+    /// row in slot 7.
+    pub slot: u8,
+    /// The word it is marked with ([`commodity_marker`],
+    /// [`junk_marker`]), if any.
+    pub marker: Option<PriceMarker>,
 }
 
 /// A stellar's exchange, as the player sees it.
@@ -832,17 +844,25 @@ pub struct Market {
     /// The goods traded, standard commodities first by number, then
     /// `jünk` by ID.
     pub rows: Vec<MarketRow>,
-    /// What the exchange says of the events active here, one line each.
+    /// What the exchange says of the events active here, one line each,
+    /// drawn in item 15 (`_TradeDialogUpdate` @0x4df54-0x4dfb5).
     /// [`market`] leaves it empty: the story layer fills it through
     /// `nova_sim::exchange_events` (`nova_sim::Session::market`), since
     /// the text needs `STR#` strings this crate cannot read.
     pub events: Vec<String>,
     /// The player's credits.
     pub cash: i64,
-    /// The ship's cargo space, in tons.
+    /// The fleet's cargo space, in tons ([`fleet_holds`]).
     pub capacity: u32,
+    /// The ship's own cargo space, in tons (`_ShipTotalHolds`).
+    pub ship_capacity: u32,
     /// The cargo space free, in tons.
     pub free: u32,
+    /// The words the dialog is told in: [`market`] gives the stock ones,
+    /// and the story layer `STR#` 2002's (`nova_sim::Session::market`).
+    pub words: TradeWords,
+    /// The cargo summary under the rows, item 12.
+    pub summary: CargoSummary,
     /// The rule set the exchange was built by, which its questions read:
     /// how many tons a [`Lot::Click`] moves
     /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)), how the most a
@@ -861,6 +881,13 @@ impl Context for Market {
 }
 
 impl Market {
+    /// Where the header says the held tons are: in the fleet when
+    /// escorts add holds ([`held_in`]).
+    #[must_use]
+    pub const fn held_in(&self) -> HeldIn {
+        held_in(self.ship_capacity, self.capacity)
+    }
+
     /// `good`'s row, if it is traded here.
     #[must_use]
     pub fn row(&self, good: Good) -> Option<&MarketRow> {
@@ -1326,6 +1353,8 @@ pub trait Trader {
     /// The planetary events under way: each `öops` with the days it has
     /// left and the stellar it is at.
     fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent>;
+    /// Each mission slot's cargo, as the cargo summary counts it.
+    fn mission_loads(&self) -> Vec<MissionLoad>;
     /// The credits, to change.
     fn cash_mut(&mut self) -> &mut i64;
     /// The tons held of each good, to change; none of a good not listed.
@@ -1349,6 +1378,8 @@ pub struct Exchange<'a> {
     pub pilot: &'a dyn Trader,
     /// The fleet's cargo space, in tons ([`fleet_holds`]).
     pub capacity: u32,
+    /// The ship's own cargo space, in tons.
+    pub ship_capacity: u32,
     /// What a `jünk`'s `BuyOn` and `SellOn` tests are asked of.
     pub gate: Gate<'a>,
     /// The rule set the exchange is priced and traded by.
@@ -1371,6 +1402,7 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
         flags,
         pilot,
         capacity,
+        ship_capacity,
         ref rules,
         ..
     } = exchange;
@@ -1403,15 +1435,16 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
                 deltas: &deltas,
             };
             let price = commodity_price().of(&quote)?;
-            Some(listed(
-                Good::Commodity(*n),
-                &commodity.name,
-                price,
-                (true, true),
-            ))
+            let delta = first_local_delta(pilot.events_under_way(), &goods.disasters, stellar, *n);
+            Some(MarketRow {
+                slot: *n,
+                marker: commodity_marker(delta, price_level(flags, *n)),
+                ..listed(Good::Commodity(*n), &commodity.name, price, (true, true))
+            })
         })
         .collect();
-    rows.extend(junk_listing(exchange));
+    let (junk_rows, named) = junk_listing(exchange);
+    rows.extend(junk_rows);
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -1419,12 +1452,29 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
     // `_TotalCargo`: the mission cargo aboard takes space too, though no
     // row holds it, so it cannot be sold.
     let free = (i64::from(capacity) - pilot.total_cargo()).max(0);
+    // Every `jünk` held that neither row names is "other cargo"
+    // (@0x4d70c-0x4d767), as the original tests by slot, not by price.
+    let unlisted = goods
+        .junk
+        .iter()
+        .filter(|junk| !named.contains(&junk.id))
+        .map(|junk| i64::from(pilot.held(Good::Junk(junk.id))));
+    let summary = cargo_summary(
+        &pilot.mission_loads(),
+        unlisted,
+        ship_capacity,
+        capacity,
+        pilot.total_cargo(),
+    );
     Some(Market {
         rows,
         events: Vec::new(),
         cash: pilot.cash(),
         capacity,
+        ship_capacity,
         free: u32::try_from(free).unwrap_or(u32::MAX),
+        words: TradeWords::STOCK,
+        summary,
         rules: *rules,
     })
 }
@@ -1435,9 +1485,11 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
 /// allows its `SellOn`, a row at [`JunkSide::SoldAt`]: the bought one
 /// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). Each is
 /// priced by [`junk_price`], and not listed without a price, and traded
-/// the [`junk_ways`].
-fn junk_listing(exchange: &Exchange) -> Vec<MarketRow> {
+/// the [`junk_ways`]. Also every `jünk` a side names, priced or not,
+/// which the cargo summary leaves out of its "other cargo".
+fn junk_listing(exchange: &Exchange) -> (Vec<MarketRow>, Vec<JunkId>) {
     let mut rows = Vec::new();
+    let mut named = Vec::new();
     for junk in &exchange.goods.junk {
         let bought =
             junk.bought_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.buy_on);
@@ -1446,6 +1498,9 @@ fn junk_listing(exchange: &Exchange) -> Vec<MarketRow> {
             bought.then_some(JunkSide::BoughtAt),
             sold.then_some(JunkSide::SoldAt),
         ];
+        if bought || sold {
+            named.push(junk.id);
+        }
         for side in sides.into_iter().flatten() {
             let quote = JunkQuote {
                 exchange,
@@ -1454,11 +1509,15 @@ fn junk_listing(exchange: &Exchange) -> Vec<MarketRow> {
             };
             if let Some(price) = junk_price().of(&quote) {
                 let ways = junk_ways().of(&quote);
-                rows.push(listed(Good::Junk(junk.id), &junk.name, price, ways));
+                rows.push(MarketRow {
+                    slot: side.slot(),
+                    marker: Some(junk_marker(side)),
+                    ..listed(Good::Junk(junk.id), &junk.name, price, ways)
+                });
             }
         }
     }
-    rows
+    (rows, named)
 }
 
 /// One standard commodity being priced at an exchange: the facts its
@@ -1550,8 +1609,8 @@ fn floored_commodity_price(quote: &CommodityQuote) -> Option<i64> {
 }
 
 /// Which of a stellar's lists a `jünk` row comes from.
-#[derive(Clone, Copy, Debug)]
-enum JunkSide {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JunkSide {
     /// Its `BoughtAt`: the stellar buys it, at the high price.
     BoughtAt,
     /// Its `SoldAt`: the stellar sells it, at the low price.
@@ -1559,6 +1618,16 @@ enum JunkSide {
 }
 
 impl JunkSide {
+    /// The original's list slot of the side's row: 6 for `BoughtAt`, 7
+    /// for `SoldAt`.
+    #[must_use]
+    pub const fn slot(self) -> u8 {
+        match self {
+            Self::BoughtAt => 6,
+            Self::SoldAt => 7,
+        }
+    }
+
     /// The level the row is priced at.
     const fn level(self) -> PriceLevel {
         match self {
@@ -1668,6 +1737,8 @@ fn listed(good: Good, name: &str, price: i64, (sold_here, bought_here): (bool, b
         held: 0,
         sold_here,
         bought_here,
+        slot: 0,
+        marker: None,
     }
 }
 
@@ -1972,6 +2043,7 @@ mod tests {
     use super::*;
     use crate::control::{Gate, Test};
     use crate::rules::{Descriptor, Verdict};
+    use PriceMarker::{High, Higher, Low, Lower, Medium};
     use nova_sim_base::fixture::Scripted;
     use nova_sim_catalog::fixture::{AllowAll, RefuseBits};
 
@@ -2811,6 +2883,8 @@ mod tests {
         /// The tons of mission cargo aboard: they take space, but no good
         /// holds them.
         mission_tons: i64,
+        /// Each mission slot's cargo, as the summary counts it.
+        missions: Vec<MissionLoad>,
     }
 
     impl Trader for FakePilot {
@@ -2834,6 +2908,10 @@ mod tests {
             &self.events
         }
 
+        fn mission_loads(&self) -> Vec<MissionLoad> {
+            self.missions.clone()
+        }
+
         fn cash_mut(&mut self) -> &mut i64 {
             &mut self.cash
         }
@@ -2852,7 +2930,14 @@ mod tests {
         }
     }
 
+    /// A row of `good`, traded both ways, with none held: a commodity
+    /// unmarked in its own slot ([`marked`] marks it), a `jünk` in its
+    /// `SoldAt` slot, marked "Low" ([`bought`] moves it to `BoughtAt`).
     fn row(good: Good, name: &str, price: i64) -> MarketRow {
+        let (slot, marker) = match good {
+            Good::Commodity(n) => (n, None),
+            Good::Junk(_) => (JunkSide::SoldAt.slot(), Some(PriceMarker::Low)),
+        };
         MarketRow {
             good,
             name: name.to_owned(),
@@ -2860,6 +2945,24 @@ mod tests {
             held: 0,
             sold_here: true,
             bought_here: true,
+            slot,
+            marker,
+        }
+    }
+
+    /// `row` marked with `marker`.
+    fn marked(marker: PriceMarker, row: MarketRow) -> MarketRow {
+        MarketRow {
+            marker: Some(marker),
+            ..row
+        }
+    }
+
+    /// The `jünk` `row` on its `BoughtAt` side: slot 6, marked "High".
+    fn bought(row: MarketRow) -> MarketRow {
+        MarketRow {
+            slot: JunkSide::BoughtAt.slot(),
+            ..marked(PriceMarker::High, row)
         }
     }
 
@@ -2907,6 +3010,7 @@ mod tests {
             flags,
             pilot,
             capacity: 0,
+            ship_capacity: 0,
             gate: Gate::FRESH,
             rules: Rulebook::default(),
             markup: Markup::Standard,
@@ -3037,18 +3141,20 @@ mod tests {
             found,
             Market {
                 rows: vec![
-                    row(Good::Commodity(0), "Food", 93),
-                    row(Good::Commodity(1), "Industrial", 350),
-                    row(Good::Commodity(2), "Medical Supplies", 937),
-                    row(Good::Commodity(3), "Luxury Goods", 900),
-                    row(Good::Commodity(4), "Metal", 200),
-                    row(Good::Commodity(5), "Equipment", 440),
+                    marked(High, row(Good::Commodity(0), "Food", 93)),
+                    marked(Medium, row(Good::Commodity(1), "Industrial", 350)),
+                    marked(High, row(Good::Commodity(2), "Medical Supplies", 937)),
+                    marked(Medium, row(Good::Commodity(3), "Luxury Goods", 900)),
+                    marked(Medium, row(Good::Commodity(4), "Metal", 200)),
+                    marked(Low, row(Good::Commodity(5), "Equipment", 440)),
                 ],
                 events: Vec::new(),
                 cash: 500,
                 capacity: 10,
                 free: 10,
+                summary: cargo_summary(&[], [], 0, 10, 0),
                 rules: rules(RuleSource::Engine),
+                ..Market::default()
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -3060,8 +3166,8 @@ mod tests {
         assert_eq!(
             found.rows,
             [
-                row(Good::Commodity(1), "Industrial", 280),
-                row(Good::Commodity(4), "Metal", 250),
+                marked(Low, row(Good::Commodity(1), "Industrial", 280)),
+                marked(High, row(Good::Commodity(4), "Metal", 250)),
             ]
         );
         let none = market(&Exchange {
@@ -3092,13 +3198,191 @@ mod tests {
             ..exchange(&goods(), MARS, TRADE, &pilot(0))
         })
         .expect("trades");
-        assert_eq!(at_mars.rows, [row(Good::Junk(JunkId(146)), "Opals", 1500)]);
+        assert_eq!(
+            at_mars.rows,
+            [bought(row(Good::Junk(JunkId(146)), "Opals", 1500))]
+        );
         let elsewhere = market(&Exchange {
             rules: rules(RuleSource::Engine),
             ..exchange(&goods(), StellarId(150), TRADE, &pilot(0))
         })
         .expect("trades");
         assert_eq!(elsewhere.rows, []);
+    }
+
+    #[test]
+    fn rows_sit_in_the_originals_slots() {
+        let food_and_metal = TRADE | (1 << 28) | (4 << 12);
+        let slots = |stellar| {
+            market(&exchange(&goods(), stellar, food_and_metal, &pilot(0)))
+                .expect("trades")
+                .rows
+                .iter()
+                .map(|row| (row.good, row.slot))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            slots(MARS),
+            [
+                (Good::Commodity(0), 0),
+                (Good::Commodity(4), 4),
+                (Good::Junk(JunkId(146)), 6),
+            ],
+            "Mars buys opals"
+        );
+        assert_eq!(
+            slots(EARTH),
+            [
+                (Good::Commodity(0), 0),
+                (Good::Commodity(4), 4),
+                (Good::Junk(JunkId(134)), 7),
+                (Good::Junk(JunkId(146)), 7),
+            ],
+            "Earth sells water and opals"
+        );
+    }
+
+    #[test]
+    fn each_row_carries_its_marker() {
+        // Food low, industrial medium, metal high at Earth.
+        let flags = TRADE | (1 << 28) | (2 << 24) | (4 << 12);
+        let marks = |events: &[(usize, u16)]| {
+            let mut trader = pilot(0);
+            trader.events = events
+                .iter()
+                .map(|&(n, days)| at(&disasters()[n], days))
+                .collect();
+            market(&exchange(&goods(), EARTH, flags, &trader))
+                .expect("trades")
+                .rows
+                .iter()
+                .map(|row| (row.good, row.marker))
+                .collect::<Vec<_>>()
+        };
+        let with = |food| {
+            vec![
+                (Good::Commodity(0), food),
+                (Good::Commodity(1), Some(Medium)),
+                (Good::Commodity(4), Some(High)),
+                (Good::Junk(JunkId(134)), Some(Low)),
+                (Good::Junk(JunkId(146)), Some(Low)),
+            ]
+        };
+        assert_eq!(marks(&[]), with(Some(Low)), "by level");
+        assert_eq!(marks(&[(0, 5)]), with(Some(Lower)), "the surplus");
+        assert_eq!(marks(&[(2, 5)]), with(Some(Higher)), "the drought");
+        assert_eq!(
+            marks(&[(0, 5), (2, 5)]),
+            with(Some(Lower)),
+            "the first by ID"
+        );
+        assert_eq!(marks(&[(0, 0), (2, 5)]), with(Some(Higher)), "no days left");
+        assert_eq!(marks(&[(1, 5)]), with(Some(Low)), "at Mars");
+        let mut flat = disasters();
+        flat[0].price_delta = 0;
+        let mut trader = pilot(0);
+        trader.events = BTreeMap::from([at(&flat[0], 5)]);
+        let goods = Goods::new(&stock(), junk(), flat);
+        let found = market(&exchange(&goods, EARTH, flags, &trader)).expect("trades");
+        assert_eq!(found.rows[0].marker, None, "a delta of 0 marks nothing");
+    }
+
+    #[test]
+    fn the_exchange_carries_the_ships_own_holds() {
+        let found = market(&Exchange {
+            capacity: 30,
+            ship_capacity: 20,
+            ..exchange(&goods(), EARTH, TRADE, &pilot(0))
+        })
+        .expect("trades");
+        assert_eq!((found.ship_capacity, found.capacity), (20, 30));
+        assert_eq!(found.held_in(), HeldIn::Fleet);
+        assert_eq!(
+            (found.summary.ship_holds, found.summary.fleet_holds),
+            (20, 30)
+        );
+        let alone = market(&Exchange {
+            capacity: 20,
+            ship_capacity: 20,
+            ..exchange(&goods(), EARTH, TRADE, &pilot(0))
+        })
+        .expect("trades");
+        assert_eq!(alone.held_in(), HeldIn::Hold);
+        assert_eq!(alone.words, TradeWords::STOCK);
+    }
+
+    #[test]
+    fn the_summary_counts_the_mission_cargo_and_the_junk_not_listed_here() {
+        let mut trader = pilot(0);
+        trader.missions = vec![
+            MissionLoad {
+                aboard: true,
+                cargo_type: Some(2),
+                tons: 4,
+            },
+            MissionLoad {
+                aboard: true,
+                cargo_type: None,
+                tons: 3,
+            },
+        ];
+        trader.mission_tons = 7;
+        let spice = JunkRecord {
+            id: JunkId(150),
+            name: "Spice".to_owned(),
+            ..unlisted()
+        };
+        let mut all = junk();
+        all.push(spice);
+        trader.cargo = BTreeMap::from([
+            (Good::Junk(JunkId(150)), 2),
+            (Good::Junk(JunkId(146)), 5),
+            (Good::Commodity(0), 1),
+        ]);
+        let goods = Goods::new(&stock(), all, disasters());
+        let found = market(&Exchange {
+            capacity: 20,
+            ship_capacity: 20,
+            ..exchange(&goods, MARS, TRADE, &trader)
+        })
+        .expect("trades");
+        // Water, which Mars does not list, none held; spice, 2 held.
+        let expected = cargo_summary(&trader.missions, [0, 2], 20, 20, 15);
+        assert_eq!(found.summary, expected);
+        assert_eq!(
+            (found.summary.mission_kinds, found.summary.misc_kinds),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn a_junk_named_here_is_not_other_cargo_even_at_price_zero() {
+        let free = JunkRecord {
+            id: JunkId(150),
+            name: "Free".to_owned(),
+            base_price: 0,
+            sold_at: vec![EARTH],
+            ..unlisted()
+        };
+        let mut trader = pilot(0);
+        trader.cargo = BTreeMap::from([(Good::Junk(JunkId(150)), 3)]);
+        let goods = Goods::new(&stock(), vec![free.clone()], Vec::new());
+        let found = market(&exchange(&goods, EARTH, TRADE, &trader)).expect("trades");
+        assert_eq!(found.rows, [], "priced 0, so not listed by the engine");
+        assert_eq!(found.summary.misc_kinds, 0, "but named by its side");
+        let elsewhere_only = Goods::new(
+            &stock(),
+            vec![JunkRecord {
+                sold_at: vec![MARS],
+                ..free
+            }],
+            Vec::new(),
+        );
+        let elsewhere = market(&exchange(&elsewhere_only, EARTH, TRADE, &trader)).expect("trades");
+        assert_eq!(
+            (elsewhere.summary.misc_kinds, elsewhere.summary.misc_tons),
+            (1, 3)
+        );
     }
 
     /// The price rules with `jünk` traded by `junk_trade`, and the rest
@@ -3135,7 +3419,7 @@ mod tests {
             at(MARS),
             [MarketRow {
                 sold_here: false,
-                ..row(Good::Junk(JunkId(146)), "Opals", 1500)
+                ..bought(row(Good::Junk(JunkId(146)), "Opals", 1500))
             }]
         );
     }
@@ -3195,7 +3479,7 @@ mod tests {
         let found = both_ways(400, Markup::Standard, &pilot(0), 0);
         assert_eq!(
             found.rows,
-            [row(TWO_WAY, "Both", 500), row(TWO_WAY, "Both", 320)],
+            [bought(row(TWO_WAY, "Both", 500)), row(TWO_WAY, "Both", 320)],
             "400 × 1.25, then 400 / 1.25, each traded both ways"
         );
         let bible = both_ways_by(RuleSource::Bible, 400, Markup::Standard, &pilot(0), 0);
@@ -3204,7 +3488,7 @@ mod tests {
             [
                 MarketRow {
                     sold_here: false,
-                    ..row(TWO_WAY, "Both", 500)
+                    ..bought(row(TWO_WAY, "Both", 500))
                 },
                 MarketRow {
                     bought_here: false,
@@ -3722,9 +4006,9 @@ mod tests {
             [
                 MarketRow {
                     held: 2,
-                    ..row(FOOD, "Food", 60)
+                    ..marked(Lower, row(FOOD, "Food", 60))
                 },
-                row(Good::Commodity(1), "Industrial", 280),
+                marked(Low, row(Good::Commodity(1), "Industrial", 280)),
                 row(Good::Junk(JunkId(134)), "Water", 240),
                 row(Good::Junk(JunkId(146)), "Opals", 960),
             ]
@@ -4535,6 +4819,7 @@ mod tests {
             capacity: 100,
             free,
             rules: Rulebook::default(),
+            ..Market::default()
         }
     }
 

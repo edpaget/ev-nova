@@ -82,7 +82,9 @@ use nova_sim_catalog::{catalog, control, strings, warp};
 #[allow(unused_imports)]
 use nova_sim_combat::{cloak, combat, fleet};
 #[allow(unused_imports)]
-use nova_sim_state::{cron, date, govt, landing, legal, market, outfit_effects, stats};
+use nova_sim_state::{
+    cron, date, govt, landing, legal, market, outfit_effects, stats, trade_dialog,
+};
 
 pub mod exchange_events;
 pub mod exploration;

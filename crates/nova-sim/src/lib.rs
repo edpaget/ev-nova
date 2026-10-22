@@ -409,6 +409,7 @@ pub use nova_sim_state::landing;
 pub use nova_sim_state::legal;
 pub use nova_sim_state::market;
 pub use nova_sim_state::outfit_effects;
+pub use nova_sim_state::trade_dialog;
 pub use nova_sim_story::mission;
 pub use nova_sim_story::nebula;
 pub use nova_sim_story::news;
@@ -570,6 +571,7 @@ pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCa
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use trade_dialog::{CargoSummary, HeldIn, PriceMarker, TradeWords};
 pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Leave, Traffic, World};

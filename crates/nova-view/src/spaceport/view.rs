@@ -192,7 +192,7 @@ use super::outfitter::{NO_ITEMS, OutfitterCatalog, OutfitterScreen};
 use super::port_map::PortMap;
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
-use super::trade::TradeScreen;
+use super::trade::{ListColors, TradeScreen};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::MapOpener;
@@ -465,12 +465,14 @@ pub struct SpaceportView {
     /// The screen open over it, if any.
     open: Option<Open>,
     /// The exchange's dialog template and its quantity dialog's (or why
-    /// there are none) and the exchange as it is, once given.
-    #[allow(clippy::type_complexity)] // Two templates and the exchange.
+    /// there are none), the exchange as it is and its list's colours,
+    /// once given.
+    #[allow(clippy::type_complexity)] // Two templates, the exchange and its colours.
     trade: Option<(
         Result<DialogTemplate, String>,
         Result<DialogTemplate, String>,
         Market,
+        ListColors,
     )>,
     /// The outfitter, once given.
     outfitting: Option<Outfitting>,
@@ -819,17 +821,18 @@ impl SpaceportView {
     /// The spaceport with the stellar's exchange, `market`, which the
     /// Trade Center opens laid out by `template`, the "Trade" dialog (or
     /// saying why there is none), its quantity dialog by `quantity` (or,
-    /// without it, the dialog's fallback). Without it, the Trade Center
-    /// opens its placeholder.
+    /// without it, the dialog's fallback), its list in `colors`. Without
+    /// it, the Trade Center opens its placeholder.
     #[must_use]
     pub fn with_trade(
         self,
         template: Result<DialogTemplate, String>,
         quantity: Result<DialogTemplate, String>,
         market: Market,
+        colors: ListColors,
     ) -> Self {
         Self {
-            trade: Some((template, quantity, market)),
+            trade: Some((template, quantity, market, colors)),
             ..self
         }
     }
@@ -858,7 +861,7 @@ impl SpaceportView {
         if let Some(Open::Trade(screen)) = &mut self.open {
             screen.set_market(market.clone());
         }
-        if let Some((_, _, kept)) = &mut self.trade {
+        if let Some((_, _, kept, _)) = &mut self.trade {
             *kept = market;
         }
     }
@@ -1991,9 +1994,10 @@ impl SpaceportView {
         let clock = self.offer_clock;
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
-                (Some((template, quantity, market)), _, _, Service::TradeCenter) => {
+                (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
-                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style);
+                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
+                        .with_colors(*colors);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -3304,6 +3308,8 @@ mod tests {
                 held,
                 sold_here: true,
                 bought_here: true,
+                slot: 0,
+                marker: None,
             }],
             events: Vec::new(),
             cash: 1000,
@@ -3334,8 +3340,15 @@ mod tests {
     }
 
     fn trading(template: Result<Template, String>) -> SpaceportView {
-        earth().with_trade(template, Ok(quantity_template()), exchange(0))
+        earth().with_trade(template, Ok(quantity_template()), exchange(0), COLORS)
     }
+
+    /// The list colours the spaceport's exchange is given.
+    const COLORS: ListColors = ListColors {
+        text: Color::rgba(1, 2, 3, 255),
+        background: Color::rgba(4, 5, 6, 255),
+        hilite: Color::rgba(7, 8, 9, 255),
+    };
 
     fn trade_item(view: &SpaceportView, number: usize) -> Point {
         view.open_trade()
@@ -3354,6 +3367,7 @@ mod tests {
         click_item(&mut view, 7);
         let open = view.open_trade().expect("trading");
         assert_eq!(open.market(), &exchange(0));
+        assert_eq!(open.colors(), COLORS, "in the colours given");
         assert!(view.open_service().is_none());
         // Drawn over the spaceport, as the original's dialog is.
         let mut expected: Vec<DrawCommand> = drawn(&earth());
@@ -5046,7 +5060,12 @@ mod tests {
         let outfits: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
         let ships: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
         view_of(&port)
-            .with_trade(Ok(trade_template()), Ok(quantity_template()), exchange(0))
+            .with_trade(
+                Ok(trade_template()),
+                Ok(quantity_template()),
+                exchange(0),
+                ListColors::STOCK,
+            )
             .with_outfitter(
                 Ok(outfit_template()),
                 Ok(quantity_template()),

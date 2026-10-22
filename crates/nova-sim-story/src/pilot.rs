@@ -99,6 +99,7 @@ use crate::outfit_effects::Rgb15;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
+use crate::trade_dialog::MissionLoad;
 
 /// How far a system is explored: the original's `sÿst` +0x90, which
 /// takes 0, 1 or 2 and is only ever raised.
@@ -663,7 +664,8 @@ impl LegalRecords for Pilot {
 }
 
 /// The pilot at an exchange: its cash, the goods it holds, the mission
-/// cargo aboard ([`Pilot::total_cargo`]) and the events under way.
+/// cargo aboard ([`Pilot::total_cargo`]), each mission slot's cargo and
+/// the events under way.
 impl Trader for Pilot {
     fn cash(&self) -> i64 {
         self.cash
@@ -679,6 +681,19 @@ impl Trader for Pilot {
 
     fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent> {
         &self.events
+    }
+
+    /// Each held mission slot's cargo, in slot order: whether it is
+    /// aboard, its cargo type and its tons.
+    fn mission_loads(&self) -> Vec<MissionLoad> {
+        self.missions
+            .iter()
+            .map(|(_, active)| MissionLoad {
+                aboard: active.aboard,
+                cargo_type: active.cargo_type,
+                tons: active.cargo_tons,
+            })
+            .collect()
     }
 
     fn cash_mut(&mut self) -> &mut i64 {
@@ -1369,5 +1384,39 @@ mod tests {
         assert_eq!(pilot.cash(), 750);
         assert_eq!(pilot.held(Good::Commodity(5)), 2);
         assert_eq!(pilot.held(Good::Commodity(3)), 7);
+    }
+
+    #[test]
+    fn the_trader_port_gives_each_mission_slots_cargo() {
+        use crate::mission::ActiveMission;
+        use crate::mission::fixture::carrying;
+        use crate::trade_dialog::MissionLoad;
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(Trader::mission_loads(&pilot), []);
+        pilot.missions.put(3, carrying(140, 5));
+        pilot.missions.put(
+            1,
+            ActiveMission {
+                cargo_type: None,
+                aboard: false,
+                ..carrying(141, -2)
+            },
+        );
+        assert_eq!(
+            Trader::mission_loads(&pilot),
+            [
+                MissionLoad {
+                    aboard: false,
+                    cargo_type: None,
+                    tons: -2,
+                },
+                MissionLoad {
+                    aboard: true,
+                    cargo_type: Some(0),
+                    tons: 5,
+                },
+            ],
+            "in slot order"
+        );
     }
 }

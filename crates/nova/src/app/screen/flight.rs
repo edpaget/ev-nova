@@ -19,7 +19,7 @@ use nova_view::spaceport::shipyard::{
     InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
 };
 use nova_view::spaceport::trade::TRADE_DIALOG;
-use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
+use nova_view::spaceport::{ListLooks, OutfitterCatalog, ShipyardCatalog};
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
@@ -51,7 +51,8 @@ impl AppScreen {
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
-            spaceport = spaceport.with_trade(trade, quantity, market);
+            let colors = self.data.list_colors();
+            spaceport = spaceport.with_trade(trade, quantity, market, colors);
         }
         if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);

@@ -45,19 +45,21 @@
 //! it (`nova_sim::Session::market`), since the line needs `STR#` strings
 //! the state layer cannot read.
 //!
+//! # The rest of the function
+//!
+//! The rest of `_TradeDialogUpdate` is built elsewhere: the header's hold
+//! or fleet (@0x4cf77-0x4d0b6), the row markers (@0x4d3ec-0x4d521) and
+//! item 12's cargo summary (@0x4d5cb-0x4dc93) in
+//! [`trade_dialog`](crate::trade_dialog), and the drawing, this line's
+//! in item 15's rect, wrapped and inverted (@0x4df54-0x4dfb5), among it,
+//! in the view's trade screen (`nova_view::spaceport::trade`).
+//!
 //! # Left out
 //!
 //! - The debug flag 0x3b5144 (@0x4dd58-0x4ddd5), which puts "Disaster ID
 //!   " + (slot + 128) in place of the name: the engine has no debug mode.
 //! - The 63-byte name copy: a name over 62 characters would read past
 //!   the copy. Stock names run to 34. A width, noted only.
-//! - Where and how the line is drawn (item 15's rect, `TETextBox`'s wrap,
-//!   black then `InvertRect`, @0x4df54-0x4dfb5), and the rest of the
-//!   dialog the engine does not draw as the original does: the header
-//!   (@0x4cf77-0x4d0b6), the row fill and edges, the price drawn only
-//!   above 0 (@0x4d371-0x4d3c9), the row markers (@0x4d3ec-0x4d521) and
-//!   item 12's cargo summary (@0x4d5cb-0x4dc93). These go to the
-//!   crons-news-ranks-fidelity follow-up phase on the exchange's drawing.
 
 use std::collections::BTreeMap;
 
