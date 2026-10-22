@@ -31,7 +31,8 @@
 //!   ([`cheat_suffix`], @0x52951, @0x52a16, @0x52ae3, @0x52c1d).
 //! - **Cargo, Extras and Honors**: the text, wrapped in the content box
 //!   inset by 5 (10 at the bottom), white on a black box (`TETextBox`
-//!   then `InvertRect`, @0x53749-0x539c3); with nothing to show, a light
+//!   then `InvertRect`, @0x53749-0x539c3), a line straddling the box's
+//!   bottom clipped to it ([`TextBox`]); with nothing to show, a light
 //!   grey message centred across the box on baseline +0x37
 //!   (`_DrawCenteredText` @0x53a14): #268 or #269 for the cargo (by
 //!   whether the fleet holds more than the ship), #270 and #271.
@@ -76,7 +77,7 @@ use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix}
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::desc::DONE_LABEL;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate};
-use super::scroll_text::ScrollText;
+use super::text_box::TextBox;
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
@@ -490,8 +491,9 @@ struct Laid {
     content: Bounds,
     buttons: [(PlayerInfoButton, Button); 6],
     /// The Cargo, Extras and Honors texts, wrapped in their box, where
-    /// there is one.
-    texts: [Option<ScrollText>; 3],
+    /// there is one, each drawn as `TETextBox` draws it: a line
+    /// straddling the box's bottom shows its top, clipped to the box.
+    texts: [Option<TextBox>; 3],
     metrics: MetricsHandle,
 }
 
@@ -744,9 +746,8 @@ fn lay_out(
         ),
     };
     let texts = shown.map(|text| {
-        text.as_deref().map(|text| {
-            ScrollText::new(text, Font::Geneva, TEXT_SIZE, VALUE_COLOR, boxed, &metrics)
-        })
+        text.as_deref()
+            .map(|text| TextBox::new(text, Font::Geneva, TEXT_SIZE, VALUE_COLOR, boxed, &metrics))
     });
     Ok(Laid {
         bounds: Bounds::at(origin, size.0, size.1),
@@ -1785,6 +1786,50 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_cargo_text_wrapping_past_its_box_clips_the_straddling_line() {
+        // Geneva 9 is 4.5 a character: the last hard line, 89 characters,
+        // fits the content box's 405 but not the text box's 395. Counted
+        // at the full width the text is 11 lines, (11 + 2) x 10.8 = 140.4
+        // within 141, so the dialog doesn't grow; wrapped in the box it is
+        // 12, and the 12th's top, 118.8, is inside the box's 126 and its
+        // bottom, 129.6, past it.
+        let long = vec!["abcd"; 18].join(" ");
+        let mut hard = vec!["line"; 10];
+        hard.push(&long);
+        let cargo = hard.join("\r");
+        let mut screen = screen_of(PlayerInfo {
+            cargo: Some(cargo),
+            ..info()
+        });
+        assert_eq!(screen.bounds().expect("laid out").height(), 227.0);
+        screen.input(&press(Key::Tab));
+        let boxed = Bounds {
+            min: Point::new(314.0, 315.0),
+            max: Point::new(709.0, 441.0),
+        };
+        let row = |text: &str, n: f32| DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Geneva,
+            origin: Point::new(314.0, 315.0 + n * 10.8),
+            size: TEXT_SIZE,
+            wrap_width: None,
+            color: VALUE_COLOR,
+        };
+        let commands = drawn(&screen);
+        let last_whole = row(&vec!["abcd"; 17].join(" "), 10.0);
+        assert!(commands.contains(&last_whole), "{commands:?}");
+        let straddling = row("abcd", 11.0);
+        assert!(
+            commands.contains(&DrawCommand::Clipped {
+                clip: boxed,
+                command: Box::new(straddling.clone()),
+            }),
+            "{commands:?}"
+        );
+        assert!(!commands.contains(&straddling), "not drawn whole");
     }
 
     #[test]
