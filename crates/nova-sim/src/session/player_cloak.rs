@@ -686,4 +686,31 @@ mod tests {
         );
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
     }
+
+    #[test]
+    fn a_warship_hunting_the_player_takes_no_cloaked_player_it_cannot_see_through_the_tick() {
+        // Its government's 0x0004 word (`_WarshipAI` @0x8b7ce) asks the
+        // sight the session gives the traffic from the player's cloak.
+        let mut catalog = armed();
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            flags: crate::govt::ALWAYS_ATTACKS_PLAYER,
+            ..crate::testkit::govt(140)
+        }];
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        npc.aggression = 2;
+        session.ship.cloak.cloak = FULL;
+        let ai = crate::ai::NovaAi::default();
+        let attacks =
+            |session: &Session| session.npcs()[0].goal == crate::ai::Goal::Attack(ShipRef::Player);
+        for tick in 0..30 {
+            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            assert!(!attacks(&session), "cloaked out of its sight: tick {tick}");
+        }
+        session.ship.cloak.cloak = Cloak::default();
+        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        assert!(attacks(&session), "uncloaked");
+    }
 }
