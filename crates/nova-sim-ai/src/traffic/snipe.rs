@@ -212,6 +212,7 @@ mod tests {
             &mut Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
         assert_eq!(npc.armament.last_gun(), Some(WeaponId(128)));
         npc

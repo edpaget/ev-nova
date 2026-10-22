@@ -3287,6 +3287,7 @@ mod tests {
             &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
         ship.pick = Some(WeaponId(128));
         // 1000 above crossing right at 10 a tick: led about 1000 to the
@@ -3558,6 +3559,7 @@ mod tests {
             &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
         let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
         let records = crate::ai::fixture::records_of([&ship]);

@@ -505,6 +505,8 @@ mod port;
 mod precalced;
 mod radar;
 mod ranks;
+#[cfg(test)]
+mod rating_stretch;
 mod red_alert;
 mod refuel_dock;
 mod reinforcements;
@@ -592,6 +594,7 @@ use crate::catalog::{
     StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
+use crate::combat::ai_fire::PlayerRating;
 use crate::combat::armament::{
     Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
@@ -2357,6 +2360,11 @@ impl Session {
         Field {
             frame: i32::from(self.space.pass_frame),
             interference: self.chart.galaxy.map().interference(self.pilot.system),
+            // Refreshed each tick, so a kill's rating counts from the next.
+            player_rating: PlayerRating {
+                rating: self.pilot.combat_rating,
+                yardstick: self.statics.arsenal.strength(ShipId(128)),
+            },
         }
     }
 

@@ -1049,6 +1049,11 @@ pub struct Field {
     /// against as it is launched, whoever fires it (`_SpawnShot`
     /// @0x3eab2-0x3eb66).
     pub interference: i16,
+    /// The player's combat rating against `shïp` 128's `Strength`: what
+    /// stretches the reload of an NPC's pick fired at the player
+    /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
+    /// @0x88fb3-0x8901b). The default stretches nothing.
+    pub player_rating: ai_fire::PlayerRating,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -2115,6 +2120,9 @@ impl Combat {
             &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            // Only a ship whose target is slot 0, the player, is stretched
+            // (@0x88fb3).
+            (fighter.target == Some(ShipRef::Player)).then_some(self.field.player_rating),
         );
         let Some(volley) = volley else {
             return;
@@ -3771,6 +3779,7 @@ mod tests {
     mod ion_lockout_tick;
     mod lineup;
     mod plunder_fire;
+    mod rating_stretch;
     mod shot_slots;
     mod shot_visits;
     mod stellar_hazards;
@@ -11982,6 +11991,7 @@ mod tests {
         let field = |frame| Field {
             frame,
             interference: 100,
+            ..Field::default()
         };
         // Fired on frame 0, it moves on frames 1 to 15.
         for frame in 0..16 {

@@ -18,7 +18,9 @@ impl Armament {
     /// reload timer (+0xf8, a float) is strictly above its `Reload` (the
     /// weapon table's float at +0x30, as `_FireAIShipWeapon` reads it
     /// @0x88f8b/@0x88f96). Only a burst reload longer than `Reload` (or
-    /// a rating's stretch of the timer) gets there.
+    /// a rating's stretch of the timer,
+    /// [`PlayerRating::stretch`](crate::combat::ai_fire::PlayerRating::stretch))
+    /// gets there.
     ///
     /// By the Bible's "cloak when their weapon goes into burst reload": a
     /// weapon carried that bursts (`BurstCount` and `BurstReload` above 0)
@@ -129,5 +131,42 @@ mod tests {
             armament.mounts[0].reload = 60.0;
             assert!(!armament.reloading(RuleSource::Bible), "{plain:?}");
         }
+    }
+
+    #[test]
+    fn a_pick_stretched_against_the_player_reloads_past_its_reload_by_the_engine() {
+        use crate::catalog::WeaponId;
+        use crate::chance::NeverFires;
+        use crate::combat::ai_fire::PlayerRating;
+        use crate::combat::aim::Aim;
+        use crate::combat::armament::{LauncherRounds, Shooter};
+        use crate::combat::hull::Condition;
+        use crate::combat::report::Reports;
+        use crate::reserves::Gauge;
+        let fired = |at_player| {
+            let mut armament = Armament::new([(spec(146, 15, 0, 0), 1)]);
+            let volley = armament.fire_pick(
+                WeaponId(146),
+                Condition::Intact,
+                Shooter {
+                    npc: true,
+                    ..Shooter::PLAYER
+                },
+                &mut LauncherRounds::default(),
+                &mut Gauge::default(),
+                &mut NeverFires,
+                &mut Reports::default(),
+                RuleSource::Engine,
+                &mut |_spec: &WeaponSpec| Some(Aim::along(0.0, None)),
+                at_player,
+            );
+            assert!(volley.is_some());
+            armament.reloading(RuleSource::Engine)
+        };
+        assert!(fired(Some(PlayerRating {
+            rating: 0,
+            yardstick: 1
+        })));
+        assert!(!fired(None));
     }
 }

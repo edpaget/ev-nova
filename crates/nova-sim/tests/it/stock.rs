@@ -2837,6 +2837,7 @@ fn a_stock_interference_system_confuses_a_stock_seeker() {
     let field = nova_sim::Field {
         frame: 0,
         interference: obatta.interference,
+        ..nova_sim::Field::default()
     };
     for id in [135, 137] {
         let missile = stock_weapon(&data, id);
