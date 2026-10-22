@@ -11,15 +11,11 @@
 //! never met.
 
 use super::*;
-use crate::combat::asteroid_hit::AsteroidTarget;
+use crate::asteroid::AsteroidType;
 
 /// The collision passes alone among `ships` and `rocks`, by the default
 /// rules: the events they raised.
-fn test_amid(
-    combat: &mut Combat,
-    ships: &mut [Ship],
-    rocks: &mut [AsteroidTarget],
-) -> Vec<CombatEvent> {
+fn test_amid(combat: &mut Combat, ships: &mut [Ship], rocks: &mut Rocks) -> Vec<CombatEvent> {
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let arena = Arena {
@@ -30,7 +26,7 @@ fn test_amid(
         field: Field::default(),
     };
     let scenery = Scenery {
-        asteroids: rocks,
+        asteroids: Some(rocks.lend()),
         ..Scenery::default()
     };
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
@@ -48,14 +44,6 @@ fn explosions(events: &[CombatEvent]) -> Vec<Vec2> {
         .collect()
 }
 
-/// An asteroid in slot `slot` at (`x`, `y`) with `strength` left.
-fn worn(slot: usize, x: f32, y: f32, strength: i16) -> AsteroidTarget {
-    AsteroidTarget {
-        strength,
-        ..rock(slot, x, y)
-    }
-}
-
 #[test]
 fn a_shot_touching_two_asteroids_is_spent_on_the_one_in_the_lower_slot() {
     // Slot 0 is the farther along the move: the asteroid layer's walk
@@ -68,38 +56,80 @@ fn a_shot_touching_two_asteroids_is_spent_on_the_one_in_the_lower_slot() {
         Vec2::ZERO,
         Vec2::new(100.0, 0.0),
     );
-    let mut rocks = [rock(0, 80.0, 0.0), rock(1, 30.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 80.0, 0.0), rock(1, 30.0, 0.0)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    assert_eq!(rocks[0].strength, 6, "the lower slot's: {rocks:?}");
-    assert_eq!(rocks[1].strength, 10, "the nearer untouched");
+    assert_eq!(rocks.at(0).strength, 6, "the lower slot's: {rocks:?}");
+    assert_eq!(rocks.at(1).strength, 10, "the nearer untouched");
     let at = explosions(&events);
     assert_eq!(at.len(), 1, "{events:?}");
     assert!((at[0] - Vec2::new(70.0, 0.0)).length() < 1e-3, "{at:?}");
     assert_eq!(flying(&combat, shot), None, "spent");
 }
 
+/// Which kind of event each of `events` is: an explosion, a burst of
+/// particles, or something else.
+fn kinds(events: &[CombatEvent]) -> Vec<&'static str> {
+    events
+        .iter()
+        .map(|event| match event {
+            CombatEvent::Exploded { .. } => "exploded",
+            CombatEvent::Particles(_) => "particles",
+            CombatEvent::ShotDown { .. } => "shot down",
+            _ => "other",
+        })
+        .collect()
+}
+
 #[test]
-fn a_shot_passes_through_an_asteroid_an_earlier_shot_broke_in_the_same_walk() {
-    // A0's walk meets s1 first, which breaks it; s2, which touches only
-    // A0, passes through the broken asteroid: the engine's skip until
-    // rdm:phase/asteroids/phase-10-shots-break-asteroids-inline, where the
-    // original's walk spends s2 on it too (@0xacd5b-0xacd6d).
+fn a_later_shot_of_the_walk_is_spent_on_the_asteroid_it_destroyed() {
+    // A0's walk meets s1 first, which destroys it (@0x3691a); the walk
+    // goes on meeting A0 (@0xacd5b-0xacd6d), so s2, which touches only
+    // A0, is spent on it too, and destroys it again below 0. Each
+    // destruction's particles and explosion come before the next hit's.
     let mut combat = Combat::default();
-    let s1 = put(&mut combat, blaster(), A, Vec2::ZERO, Vec2::new(100.0, 0.0));
+    let s1 = put(
+        &mut combat,
+        rock_gun(),
+        A,
+        Vec2::ZERO,
+        Vec2::new(100.0, 0.0),
+    );
     let s2 = put(
         &mut combat,
-        blaster(),
+        rock_gun(),
         A,
         Vec2::new(80.0, -50.0),
         Vec2::new(0.0, 100.0),
     );
-    let mut rocks = [worn(0, 80.0, 0.0, 1), rock(1, 30.0, 0.0)];
-    test_amid(&mut combat, &mut [], &mut rocks);
-    assert_eq!(rocks[0].strength, -3, "s1's 4 alone: {rocks:?}");
-    assert_eq!(rocks[1].strength, 10, "s1 spent on A0");
-    assert_eq!(combat.take_broken_asteroids(), [0]);
+    let mut rocks = Rocks::of([worn(0, 80.0, 0.0, 1), rock(1, 30.0, 0.0)]);
+    rocks.types[0] = AsteroidType {
+        part_count: 8,
+        explosion: Explosion::decode(3),
+        ..rocks.types[0]
+    };
+    let events = test_amid(&mut combat, &mut [], &mut rocks);
+    assert_eq!(rocks.get(0), None, "destroyed");
+    assert_eq!(rocks.at(1).strength, 10, "s1 spent on A0");
     assert_eq!(flying(&combat, s1), None);
-    assert!(flying(&combat, s2).is_some(), "flies on");
+    assert_eq!(flying(&combat, s2), None, "spent on A0 too");
+    let at = Vec2::new(80.0, 0.0);
+    assert_eq!(remains_at(&combat.take_asteroid_remains()), [at, at]);
+    let hit_and_destroyed = ["exploded", "particles", "particles", "exploded"];
+    assert_eq!(
+        kinds(&events),
+        [hit_and_destroyed, hit_and_destroyed].concat()
+    );
+    let booms = explosions(&events);
+    assert!(
+        (booms[0] - Vec2::new(70.0, 0.0)).length() < 1e-3,
+        "s1's hit: {booms:?}"
+    );
+    assert_eq!(booms[1], at, "A0's own");
+    assert!(
+        (booms[2] - Vec2::new(80.0, -10.0)).length() < 1e-3,
+        "s2's hit: {booms:?}"
+    );
+    assert_eq!(booms[3], at, "A0's again");
 }
 
 #[test]
@@ -119,9 +149,9 @@ fn a_point_defence_shot_that_crosses_an_asteroid_hits_it_and_meets_no_missile() 
         Vec2::new(3.0, 0.0),
         Vec2::ZERO,
     );
-    let mut rocks = [rock(0, -20.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, -20.0, 0.0)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    assert_eq!(rocks[0].strength, 9, "the Quad's 1: {rocks:?}");
+    assert_eq!(rocks.at(0).strength, 9, "the Quad's 1: {rocks:?}");
     assert_eq!(shot_down(&events), []);
     assert_eq!(flying(&combat, pd), None, "spent on the asteroid");
     assert!(flying(&combat, missile).is_some(), "flies on");
@@ -147,9 +177,10 @@ fn missile_across_a_rock(combat: &mut Combat, record: WeaponRecord) -> (ShotId, 
 fn a_missile_that_crosses_an_asteroid_hits_it_and_point_defence_never_meets_it() {
     let mut combat = Combat::default();
     let (pd, missile) = missile_across_a_rock(&mut combat, still_missile());
-    let mut rocks = [rock(0, -20.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, -20.0, 0.0)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    assert_eq!(rocks[0].strength, -10, "the missile's 20: {rocks:?}");
+    assert_eq!(rocks.get(0), None, "the missile's 20 destroys it");
+    assert_eq!(combat.take_asteroid_remains().len(), 1);
     assert_eq!(shot_down(&events), []);
     assert_eq!(flying(&combat, missile), None, "spent on the asteroid");
     assert!(flying(&combat, pd).is_some(), "not spent");
@@ -166,9 +197,9 @@ fn a_missile_whose_move_spent_its_life_is_spent_on_an_asteroid_and_never_met() {
     };
     let (pd, missile) = missile_across_a_rock(&mut combat, expiring);
     assert!(combat.shots[1].expired());
-    let mut rocks = [rock(0, -20.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, -20.0, 0.0)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    assert!(rocks[0].strength < 10, "{rocks:?}");
+    assert_eq!(rocks.get(0), None, "destroyed: {rocks:?}");
     assert_eq!(shot_down(&events), []);
     assert_eq!(flying(&combat, missile), None);
     assert!(flying(&combat, pd).is_some(), "not spent");
@@ -190,10 +221,11 @@ fn a_missile_crossing_only_an_asteroid_a_shot_broke_in_an_earlier_layers_pass_is
         Vec2::new(0.0, 40.0),
     );
     let (pd, missile) = missile_across_a_rock(&mut combat, still_missile());
-    let mut rocks = [worn(0, -20.0, 0.0, 1)];
+    let mut rocks = Rocks::of([worn(0, -20.0, 0.0, 1)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    assert_eq!(rocks[0].strength, -3, "the blaster's 4 alone: {rocks:?}");
-    assert_eq!(combat.take_broken_asteroids(), [0]);
+    assert_eq!(rocks.get(0), None, "the blaster's 4 destroys it");
+    let remains = combat.take_asteroid_remains();
+    assert_eq!(remains.len(), 1, "once, by the blaster alone: {remains:?}");
     assert_eq!(shot_down(&events), [Vec2::new(3.0, 0.0)]);
     assert_eq!(flying(&combat, gun), None);
     assert_eq!(flying(&combat, missile), None, "shot down");
@@ -220,16 +252,7 @@ fn point_defence_shoots_missiles_down_after_the_asteroid_passes_hits() {
         Vec2::new(3.0, 0.0),
         Vec2::ZERO,
     );
-    let mut rocks = [rock(0, 100.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
     let events = test_amid(&mut combat, &mut [], &mut rocks);
-    let kinds: Vec<&str> = events
-        .iter()
-        .map(|event| match event {
-            CombatEvent::Exploded { .. } => "exploded",
-            CombatEvent::Particles(_) => "particles",
-            CombatEvent::ShotDown { .. } => "shot down",
-            _ => "other",
-        })
-        .collect();
-    assert_eq!(kinds, ["exploded", "particles", "shot down"]);
+    assert_eq!(kinds(&events), ["exploded", "particles", "shot down"]);
 }

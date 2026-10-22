@@ -36,9 +36,10 @@
 //! it.
 //!
 //! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
-//! The fight hands its tick the field's asteroids
-//! ([`Space::asteroid_targets`]), keeps what the shots leave of them,
-//! and destroys those they broke ([`Space::settle_asteroid_hits`]).
+//! The collision passes are lent the field whole and destroy each
+//! asteroid a hit leaves below 0 at once, as `_HandleAsteroidHit` does;
+//! the session spawns the boxes after them (see the `asteroid_hits`
+//! module).
 //!
 //! **The kill.** Every way into a system but the escape pod's rescue kills
 //! the field: a jump's arrival (@0x6c4fc), a hypergate (@0x63f47), a
@@ -94,11 +95,10 @@
 use std::collections::BTreeMap;
 
 use super::{Session, Setup, Space, Statics};
-use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring, SLOTS};
+use crate::asteroid::{Asteroid, FieldSpec, Origin, Ring, SLOTS};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
 use crate::combat::GamePass;
-use crate::combat::asteroid_hit::AsteroidTarget;
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 
@@ -286,76 +286,6 @@ impl Space {
     pub(super) fn kill_asteroids(&mut self) {
         self.asteroids.clear();
         self.asteroid_kill = Some(self.pass_frame);
-    }
-
-    /// The asteroids shots may hit this tick, slot by slot, each with its
-    /// type's radius and `Mass` (see
-    /// [`asteroid_hit`](crate::combat::asteroid_hit)).
-    pub(super) fn asteroid_targets(&self, statics: &Statics) -> Vec<AsteroidTarget> {
-        self.asteroids
-            .indexed()
-            .map(|(slot, asteroid)| {
-                let kind_type = statics
-                    .asteroid_types
-                    .get(usize::from(asteroid.kind))
-                    .copied()
-                    .unwrap_or(AsteroidType::MISSING);
-                AsteroidTarget {
-                    slot,
-                    position: asteroid.position,
-                    velocity: asteroid.velocity,
-                    radius: kind_type.radius(),
-                    strength: asteroid.strength,
-                    mass: kind_type.mass,
-                }
-            })
-            .collect()
-    }
-
-    /// Keeps the strength and velocity each of `targets` is left with
-    /// after the fight's tick, then destroys each asteroid the shots
-    /// broke, in the order they broke, drawing on `chance`
-    /// ([`Asteroids::destroy`](crate::asteroid::Asteroids::destroy)): its
-    /// particles and explosion go off, and its scoopable boxes are
-    /// spawned where it was
-    /// ([`CargoBoxes::spawn_scoopable`](crate::cargo_box::CargoBoxes::spawn_scoopable)).
-    ///
-    /// The original destroys an asteroid inside the hit
-    /// (`_HandleAsteroidHit` @0x3691a), so its booms and particles come
-    /// before the rest of the frame's collisions, and a fragment is in the
-    /// field for the shots after it. Here they come after the fight's own
-    /// events, and its fragments are hit from the next pass on, so a later
-    /// shot of the pass that would meet a fragment flies on into the next
-    /// frame: a divergence, filed as
-    /// rdm:phase/asteroids/phase-10-shots-break-asteroids-inline. The
-    /// beams destroy theirs at once (see the `asteroid_beams` module).
-    pub(super) fn settle_asteroid_hits(
-        &mut self,
-        statics: &Statics,
-        targets: &[AsteroidTarget],
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        for target in targets {
-            if let Some(asteroid) = self.asteroids.get_mut(target.slot) {
-                asteroid.strength = target.strength;
-                asteroid.velocity = target.velocity;
-            }
-        }
-        for slot in self.combat.take_broken_asteroids() {
-            let Some(remains) = self
-                .asteroids
-                .destroy(slot, &statics.asteroid_types, chance)
-            else {
-                continue;
-            };
-            self.spawn_asteroid_boxes(&remains, chance);
-            if let Some(particles) = remains.particles {
-                self.combat.particles(particles);
-            }
-            if let Some(explosion) = remains.explosion {
-                self.combat.explode(remains.at, explosion);
-            }
-        }
     }
 }
 

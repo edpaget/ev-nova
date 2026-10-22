@@ -55,20 +55,25 @@
 //!   no source gate ([`impact`](super::impact)); then `_IonizeShip`
 //!   (@0x368b7) ionizes it over the blast's circle ([`ion`](super::ion)).
 //!
-//! A broken asteroid is skipped by every later shot in the tick: by a
-//! later layer's pass and the proximity pass as its hidden sprite and
-//! cleared slot are (@0xacba3, @0x376dd), and within the walk that broke
-//! it as the engine's skip until
-//! rdm:phase/asteroids/phase-10-shots-break-asteroids-inline, as the
-//! original's walk goes on meeting it (@0xacd5b-0xacd6d).
+//! **A destroyed asteroid** (rdm asteroids phase 10, see
+//! [`asteroid_walk`](super::asteroid_walk)): a hit below 0 destroys it at
+//! once (@0x3691a). A later layer's walk skips its hidden sprite
+//! (@0xacba3), and the proximity pass its cleared slot (@0x376dd). The
+//! walk that destroyed it goes on meeting it (@0xacd5b-0xacd6d): each
+//! later shot of that walk that touches it is spent on it, and destroys it
+//! again below 0. Its fragments' sprites stay hidden until
+//! `_HandleAsteroids` (@0x3638a), so the contact walks never meet them,
+//! but the proximity pass, which reads only the slots, does.
 //!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
+use super::asteroid_beam::Rock;
 use super::damage::Blast;
 use super::impact::speed_limit;
 use super::projectile::{Shot, contact};
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
+use crate::asteroid::Asteroids;
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -89,24 +94,6 @@ pub const BEAM_HIT_PART_VARIATION: u32 = 25;
 
 /// A hit particle's most life over its least (the 1.25 @0xdd5c8).
 pub const HIT_PART_LIFE_SPAN: f64 = 1.25;
-
-/// An asteroid shots may hit this tick, taken from its slot by the
-/// session, which writes its strength and velocity back.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AsteroidTarget {
-    /// Its slot in the field.
-    pub slot: usize,
-    /// Its centre.
-    pub position: Vec2,
-    /// How it is moving.
-    pub velocity: Vec2,
-    /// Its hit radius.
-    pub radius: f32,
-    /// Its strength: below 0 once broken.
-    pub strength: i16,
-    /// Its type's `Mass`.
-    pub mass: i16,
-}
 
 /// Which asteroids a shot's armed proximity fuse is set off by, as
 /// [`RuleKey::FuseIgnoresAsteroids`](crate::RuleKey::FuseIgnoresAsteroids)
@@ -140,25 +127,27 @@ pub fn broken(strength: i16) -> bool {
     strength < 0
 }
 
-/// Where `shot`, having flown here from `was`, first came within
-/// `target`'s radius on its way, if it did: where it was for a shot that
-/// started within. None for a broken asteroid, or for a weapon that
-/// ignores asteroids (see the module docs).
+/// Where `shot`, having flown here from `was`, first came within `rock`'s
+/// radius on its way, if it did: where it was for a shot that started
+/// within. None for a weapon that ignores asteroids (see the module
+/// docs). Whether the walk meets the asteroid at all, destroyed or not,
+/// is the walk's ([`asteroid_walk`](super::asteroid_walk)).
 #[must_use]
-pub fn touches(shot: &Shot, was: Vec2, target: &AsteroidTarget) -> Option<Vec2> {
-    if shot.weapon.ignores_asteroids() || broken(target.strength) {
+pub fn touches(shot: &Shot, was: Vec2, rock: &Rock) -> Option<Vec2> {
+    if shot.weapon.ignores_asteroids() {
         return None;
     }
-    let t = contact(was, shot.position, target.position, target.radius)?;
+    let t = contact(was, shot.position, rock.position, rock.radius)?;
     Some(was + (shot.position - was) * t)
 }
 
-/// The asteroid among `targets`, by its index, that sets `shot`'s armed
-/// proximity fuse off by `fuse`'s reading: the first not broken, in slot
-/// order, whose whole offset from the shot on each axis, squared and
-/// summed, is at most `ProxRadius`² (see the module docs).
+/// The slot of the asteroid among `asteroids` that sets `shot`'s armed
+/// proximity fuse off by `fuse`'s reading: the first active one in slot
+/// order, a fragment seated earlier in the passes among them, whose whole
+/// offset from the shot on each axis, squared and summed, is at most
+/// `ProxRadius`² (see the module docs).
 #[must_use]
-pub fn fused(shot: &Shot, targets: &[AsteroidTarget], fuse: AsteroidFuse) -> Option<usize> {
+pub fn fused(shot: &Shot, asteroids: &Asteroids, fuse: AsteroidFuse) -> Option<usize> {
     let weapon = &shot.weapon;
     if weapon.ignores_asteroids()
         || weapon.prox_radius <= 0.0
@@ -168,10 +157,10 @@ pub fn fused(shot: &Shot, targets: &[AsteroidTarget], fuse: AsteroidFuse) -> Opt
         return None;
     }
     let reach = whole(weapon.prox_radius);
-    targets.iter().position(|target| {
-        let off = target.position - shot.position;
+    asteroids.indexed().find_map(|(slot, asteroid)| {
+        let off = asteroid.position - shot.position;
         let (dx, dy) = (whole(off.x), whole(off.y));
-        !broken(target.strength) && dx * dx + dy * dy <= reach * reach
+        (dx * dx + dy * dy <= reach * reach).then_some(slot)
     })
 }
 
@@ -270,6 +259,7 @@ pub fn damaged_by(strength: i16, weapon: &WeaponSpec, times: i32) -> i16 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::asteroid::Asteroid;
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -305,15 +295,41 @@ mod tests {
         (shot, was)
     }
 
-    fn rock(slot: usize, x: f32, y: f32, radius: f32) -> AsteroidTarget {
-        AsteroidTarget {
+    /// An asteroid in `slot` at (`x`, `y`) of hit radius `radius`.
+    fn rock(slot: usize, x: f32, y: f32, radius: f32) -> Rock {
+        Rock {
             slot,
             position: Vec2::new(x, y),
-            velocity: Vec2::ZERO,
+            height: 2.0 * radius,
             radius,
-            strength: 10,
-            mass: 20,
         }
+    }
+
+    /// A field holding an asteroid at each of `spots`, by slot: none for
+    /// a free slot.
+    fn field(spots: &[Option<(f32, f32)>]) -> Asteroids {
+        let mut field = Asteroids::default();
+        for (slot, spot) in spots.iter().enumerate() {
+            if let Some((x, y)) = *spot {
+                field.seat(
+                    slot,
+                    Asteroid {
+                        position: Vec2::new(x, y),
+                        velocity: Vec2::ZERO,
+                        frame: 0.0,
+                        spin: 0.0,
+                        strength: 10,
+                        kind: 0,
+                    },
+                );
+            }
+        }
+        field
+    }
+
+    /// A field of one asteroid at (`x`, `y`), in slot 0.
+    fn one(x: f32, y: f32) -> Asteroids {
+        field(&[Some((x, y))])
     }
 
     #[test]
@@ -335,16 +351,6 @@ mod tests {
         let (shot, was) = fast(weapon(128));
         let at = touches(&shot, was, &rock(0, 5.0, 0.0, 10.0)).expect("touched");
         assert_eq!(at, was);
-    }
-
-    #[test]
-    fn a_broken_asteroid_is_touched_by_no_shot() {
-        let (shot, was) = fast(weapon(128));
-        let mut target = rock(0, 30.0, 0.0, 5.0);
-        target.strength = -1;
-        assert_eq!(touches(&shot, was, &target), None);
-        target.strength = 0;
-        assert!(touches(&shot, was, &target).is_some(), "at 0, whole");
     }
 
     #[test]
@@ -388,14 +394,13 @@ mod tests {
     #[test]
     fn the_fuse_takes_the_first_asteroid_in_slot_order_within_reach_not_the_nearest() {
         let shot = fuse(50, 0, 0, 0, 1);
-        let targets = [rock(0, 40.0, 0.0, 1.0), rock(1, 5.0, 0.0, 1.0)];
-        assert_eq!(fused(&shot, &targets, AsteroidFuse::Original), Some(0));
-        let mut targets = targets;
-        targets[0].strength = -1;
+        let both = field(&[Some((40.0, 0.0)), Some((5.0, 0.0))]);
+        assert_eq!(fused(&shot, &both, AsteroidFuse::Original), Some(0));
+        let freed = field(&[None, None, Some((40.0, 0.0)), Some((5.0, 0.0))]);
         assert_eq!(
-            fused(&shot, &targets, AsteroidFuse::Original),
-            Some(1),
-            "a broken one skipped"
+            fused(&shot, &freed, AsteroidFuse::Original),
+            Some(2),
+            "a free slot skipped, its slot given"
         );
     }
 
@@ -411,9 +416,8 @@ mod tests {
             (30.0, 40.9, true),
             (30.0, 41.0, false),
         ] {
-            let target = rock(0, x, y, 200.0);
             assert_eq!(
-                fused(&shot, &[target], AsteroidFuse::Original).is_some(),
+                fused(&shot, &one(x, y), AsteroidFuse::Original).is_some(),
                 reached,
                 "({x}, {y})"
             );
@@ -422,7 +426,7 @@ mod tests {
 
     #[test]
     fn no_fuse_is_set_off_without_a_radius_before_it_is_armed_or_under_seeker_0x0001() {
-        let near = [rock(0, 5.0, 0.0, 10.0)];
+        let near = one(5.0, 0.0);
         assert_eq!(
             fused(&fuse(0, 0, 0, 0, 1), &near, AsteroidFuse::Original),
             None
@@ -444,7 +448,7 @@ mod tests {
 
     #[test]
     fn flags2_0x0004_sets_the_fuse_off_by_the_original_and_not_by_the_bible() {
-        let near = [rock(0, 5.0, 0.0, 10.0)];
+        let near = one(5.0, 0.0);
         let shot = fuse(50, 0, 0, 0x0004, 1);
         assert_eq!(fused(&shot, &near, AsteroidFuse::Original), Some(0));
         assert_eq!(fused(&shot, &near, AsteroidFuse::Bible), None);

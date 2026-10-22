@@ -11,7 +11,7 @@
 //! particles and explosion are raised in the fight's events as it is
 //! destroyed.
 //!
-//! **The boxes** ([`Space::settle_beam_remains`]) are spawned after the
+//! **The boxes** ([`Space::settle_asteroid_remains`]) are spawned after the
 //! phase from what each asteroid left
 //! ([`Combat::take_asteroid_remains`](crate::combat::Combat::take_asteroid_remains)),
 //! where `_DestroyAsteroid` spawns them inside the pass (@0xae52-0xae73).
@@ -29,10 +29,15 @@ use crate::chance::Chance;
 use crate::session::Session;
 
 impl Space {
-    /// Spawns the scoopable boxes of each asteroid the beams destroyed
-    /// since they were last settled, drawing on `chance` (see the module
-    /// docs).
-    pub(super) fn settle_beam_remains(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    /// Spawns the scoopable boxes of each asteroid the beams or the shots
+    /// destroyed since they were last settled, in the order they were
+    /// destroyed, drawing on `chance`: after the beams' phase (see the
+    /// module docs) and after the collision passes (see the
+    /// `asteroid_hits` module). Spawning them after the phase rather than
+    /// inside the hit, as `_DestroyAsteroid` does (@0xae52-0xae73), crosses
+    /// no boundary the player sees: no hit of the phase reads a box, and
+    /// they spawn before `_HandleBoxes` and the frame.
+    pub(super) fn settle_asteroid_remains(&mut self, chance: &mut (impl Chance + ?Sized)) {
         for remains in self.combat.take_asteroid_remains() {
             self.spawn_asteroid_boxes(&remains, chance);
         }

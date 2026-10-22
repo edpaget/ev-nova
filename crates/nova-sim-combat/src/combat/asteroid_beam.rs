@@ -64,11 +64,12 @@
 //!
 //! [`Combat::close_tick_in`](super::Combat::close_tick_in) runs the pass
 //! for each beam whose ship hit gave nothing, in beam order, on the field
-//! the session lends ([`BeamField`]). It destroys an asteroid inline, as
+//! the session lends ([`AsteroidField`]). It destroys an asteroid inline, as
 //! the original does, so a later beam meets the fragments: the remains'
 //! particles and explosion are raised at once, and the boxes are left for
 //! the session to spawn ([`Combat::take_asteroid_remains`](super::Combat::take_asteroid_remains)),
 //! after the phase and before the frame is drawn, which no beam reads.
+//! The shots destroy theirs the same way ([`asteroid_walk`](super::asteroid_walk)).
 //!
 //! How the nearest is weighed is
 //! [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)'s
@@ -107,25 +108,16 @@
 //! [`TractorLock::touch_self`]: super::impact::TractorLock::touch_self
 
 use super::asteroid_hit::{BEAM_HIT_PART_VARIATION, broken, damaged_by, push};
+use super::asteroid_walk::AsteroidField;
 use super::beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle, HIT_SHORT_PER_WIDTH, cone};
 use super::impact::{ASTEROID_PULL_SHARE, Body, TractorLock, self_pull};
 use super::projectile::contact;
 use super::{Combat, CombatEvent, Fighter, GamePass};
-use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS, Remains};
+use crate::asteroid::{Asteroid, AsteroidType, KINDS};
 use crate::chance::Chance;
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::ship_layer::Slot;
-
-/// The asteroid field a tick's beams cut, lent by the session for the
-/// beams' phase: its slots, and every type.
-#[derive(Debug)]
-pub struct BeamField<'a> {
-    /// The field's slots, written as the beams cut them.
-    pub asteroids: &'a mut Asteroids,
-    /// Every asteroid type, by kind.
-    pub types: &'a [AsteroidType; KINDS],
-}
 
 /// One asteroid as the pass reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -278,7 +270,7 @@ impl Combat {
         &mut self,
         index: usize,
         fighters: &mut [Fighter],
-        field: &mut BeamField<'_>,
+        field: &mut AsteroidField<'_>,
         pass: GamePass,
         chance: &mut dyn Chance,
     ) {
@@ -348,37 +340,6 @@ impl Combat {
                 }
             }
         }
-    }
-
-    /// Destroys the asteroid in `slot` of `field` at once, drawing on
-    /// `chance` (`_DestroyAsteroid` @0x31a69,
-    /// [`Asteroids::destroy`](crate::asteroid::Asteroids::destroy)): its
-    /// fragments go into the field, its particles and explosion are raised,
-    /// and what it left is kept for the session's boxes.
-    fn destroy_asteroid(
-        &mut self,
-        slot: usize,
-        field: &mut BeamField<'_>,
-        chance: &mut dyn Chance,
-    ) {
-        let Some(remains) = field.asteroids.destroy(slot, field.types, chance) else {
-            return;
-        };
-        if let Some(particles) = remains.particles {
-            self.particles(particles);
-        }
-        if let Some(explosion) = remains.explosion {
-            self.explode(remains.at, explosion);
-        }
-        self.asteroid_remains.push(remains);
-    }
-
-    /// What each asteroid the beams destroyed left, since it was last
-    /// taken, in the order they were destroyed; taking it empties the
-    /// list. Its particles and explosion are raised already; the session
-    /// spawns its boxes (`nova_sim::Session::beams_phase`).
-    pub fn take_asteroid_remains(&mut self) -> Vec<Remains> {
-        std::mem::take(&mut self.asteroid_remains)
     }
 }
 

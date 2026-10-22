@@ -575,6 +575,52 @@ impl Asteroids {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<Remains> {
         let asteroid = (*self.slots.get(slot)?)?;
+        let remains = self.break_up(asteroid, types, chance);
+        self.slots[slot] = None;
+        Some(remains)
+    }
+
+    /// Destroys `ghost` again, the struct of the asteroid destroyed
+    /// earlier in a collision walk from `slot`, now free, with the types
+    /// `types`, drawing on `chance`: `_DestroyAsteroid` run a second time
+    /// on an inactive slot (`_HandleAsteroidHit` @0x3691a, see
+    /// `combat::asteroid_walk`). It leaves what [`Asteroids::destroy`]
+    /// leaves, read from `ghost`. Its fragments take the first free slots,
+    /// so the first may take `slot` itself (@0x3fbf7), overwriting the
+    /// struct: `ghost` then becomes that fragment, its position its own.
+    /// The trailing clear (@0xb008-0xb01c) frees `slot` again, so that
+    /// fragment is lost.
+    pub fn destroy_ghost(
+        &mut self,
+        slot: usize,
+        ghost: &mut Asteroid,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Remains {
+        let remains = self.break_up(*ghost, types, chance);
+        if let Some(lost) = self.slots.get_mut(slot).and_then(Option::take) {
+            *ghost = lost;
+        }
+        remains
+    }
+
+    /// Seats `asteroid` in `slot`, whatever it held: a test's field.
+    #[cfg(test)]
+    pub(crate) fn seat(&mut self, slot: usize, asteroid: Asteroid) {
+        self.slots[slot] = Some(asteroid);
+    }
+
+    /// What destroying `asteroid` leaves, its fragments spawned into the
+    /// field ([`Asteroids::destroy`]), with the types `types`, drawing on
+    /// `chance`. Every type field is read from `asteroid` before the first
+    /// fragment spawns, as `_DestroyAsteroid` reads them into locals or
+    /// before its fragment loop (@0xadd2-0xaf7f).
+    fn break_up(
+        &mut self,
+        asteroid: Asteroid,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Remains {
         let kind_type = type_of(types, asteroid.kind);
         let at = asteroid.position;
         // None with no `YieldQty`, which the original's guard skips.
@@ -620,15 +666,14 @@ impl Asteroids {
             };
             self.spawn_fragment(at, kind, types, chance);
         }
-        self.slots[slot] = None;
-        Some(Remains {
+        Remains {
             at,
             boxes,
             contents: kind_type.yield_type,
             graphic: u16::from(asteroid.kind >> 2) + 1,
             particles,
             explosion: kind_type.explosion,
-        })
+        }
     }
 
     /// Places `spec`'s field about `player` in `area`, with the types
@@ -1795,6 +1840,60 @@ mod tests {
         assert_eq!(field.active(), SLOTS - 1);
         assert_eq!(field.first_free(), Some(0));
         assert!(field.iter().all(|made| made.kind == 0));
+    }
+
+    #[test]
+    fn a_ghost_leaves_what_its_own_kind_and_place_say() {
+        // A second `_DestroyAsteroid` on a slot already cleared
+        // (`_HandleAsteroidHit` @0x3691a): its boxes, particles and
+        // explosion read the struct, here the ghost.
+        let mut field = holding(3, rock(1, PLAYER));
+        let mut ghost = rock(4, Vec2::new(-5.0, 7.0));
+        let remains = field.destroy_ghost(9, &mut ghost, &breakable(), &mut NeverFires);
+        assert_eq!(remains.at, Vec2::new(-5.0, 7.0));
+        assert_eq!((remains.boxes, remains.contents), (2, Some(1003)));
+        assert_eq!(remains.graphic, 2);
+        assert_eq!(remains.explosion, Explosion::decode(3));
+        assert_eq!(remains.particles.map(|p| p.count), Some(12));
+    }
+
+    #[test]
+    fn a_ghosts_first_fragment_takes_its_own_free_slot_and_is_cleared_with_it() {
+        // `_SpawnSubAsteroid`'s first-free scan (@0x3fbf7) finds the
+        // destroyed slot clear; the trailing clear (@0xb00b) undoes the
+        // fragment there, which the struct, the ghost, has become.
+        let mut field = holding(0, rock(0, PLAYER));
+        let at = Vec2::new(-5.0, 7.0);
+        let mut ghost = rock(4, at);
+        field.destroy_ghost(1, &mut ghost, &breakable(), &mut NeverFires);
+        assert_eq!(field.get(1), None, "the slot ends empty");
+        // Two fragments of kind 1: one lost in slot 1, one in slot 2.
+        let made: Vec<(usize, u8)> = field.indexed().map(|(slot, r)| (slot, r.kind)).collect();
+        assert_eq!(made, [(0, 0), (2, 1)]);
+        assert_eq!(field.get(2).map(|r| r.position), Some(at));
+        assert_eq!(ghost.kind, 1, "the ghost is now the lost fragment");
+        assert_eq!(ghost.strength, types()[1].strength);
+        assert_eq!(ghost.position, at, "copied from itself");
+        assert_eq!(ghost.velocity, Vec2::new(-1.0, -1.0));
+    }
+
+    #[test]
+    fn a_ghosts_fragments_all_take_later_slots_when_a_lower_one_is_free() {
+        let mut field = Asteroids::default();
+        let mut ghost = rock(4, PLAYER);
+        let before = ghost;
+        field.destroy_ghost(5, &mut ghost, &breakable(), &mut NeverFires);
+        let slots: Vec<usize> = field.indexed().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, [0, 1], "the first free slots, below its own");
+        assert_eq!(ghost, before, "none took its slot");
+    }
+
+    #[test]
+    fn the_first_destruction_holds_its_slot_while_its_fragments_spawn() {
+        let mut field = holding(0, rock(4, PLAYER));
+        field.destroy(0, &breakable(), &mut NeverFires);
+        let slots: Vec<usize> = field.indexed().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, [1, 2]);
     }
 
     #[test]

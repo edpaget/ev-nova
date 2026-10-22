@@ -22,14 +22,14 @@ fn arena<'a>(arsenal: &'a Arsenal, govts: &'a Governments, rules: Rules<'a>) -> 
 fn test_amid(
     combat: &mut Combat,
     ships: &mut [Ship],
-    rocks: &mut [AsteroidTarget],
+    rocks: &mut Rocks,
     stellars: &mut [StellarTarget],
 ) {
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let scenery = Scenery {
         stellars,
-        asteroids: rocks,
+        asteroids: Some(rocks.lend()),
         hazards: None,
     };
     let arena = arena(&arsenal, &govts, Rules::default());
@@ -95,9 +95,13 @@ fn a_missile_a_point_defence_shot_downs_breaks_an_asteroid_in_its_fuses_reach_th
     assert!(combat.targeted_damage().contains_key(&A), "live, it counts");
     let mut ships = beside_the_missile();
     // 20 pixels from the missile, beyond its 10-pixel radius.
-    let mut rocks = [rock(0, 23.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-    assert_eq!(combat.take_broken_asteroids(), [0], "{rocks:?}");
+    assert_eq!(rocks.get(0), None, "destroyed: {rocks:?}");
+    assert_eq!(
+        remains_at(&combat.take_asteroid_remains()),
+        [Vec2::new(23.0, 0.0)]
+    );
     let events = combat.take_events();
     assert_eq!(
         shot_down(&events),
@@ -120,11 +124,11 @@ fn a_light_missile_a_point_defence_shot_downs_pushes_the_asteroid_it_leaves_whol
     };
     pd_meets(&mut combat, light);
     let mut ships = beside_the_missile();
-    let mut rocks = [rock(0, 23.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-    assert_eq!(rocks[0].strength, 9, "{rocks:?}");
-    assert_ne!(rocks[0].velocity, Vec2::ZERO, "pushed");
-    assert!(combat.take_broken_asteroids().is_empty());
+    assert_eq!(rocks.at(0).strength, 9, "{rocks:?}");
+    assert_ne!(rocks.at(0).velocity, Vec2::ZERO, "pushed");
+    assert_eq!(combat.take_asteroid_remains(), [], "none destroyed");
     assert_eq!(combat.take_strikes(), []);
 }
 
@@ -152,12 +156,11 @@ fn a_point_defence_shot_with_a_proximity_radius_sets_off_an_asteroid_itself() {
     );
     let missile = put(&mut combat, sturdy, B, Vec2::new(-3.0, 0.0), Vec2::ZERO);
     let mut ships = [Ship::at(1, 0.0, 500.0), Ship::at(2, 1000.0, 1000.0)];
-    let mut rocks = [AsteroidTarget {
-        radius: 1.0,
-        ..rock(0, 4.0, 0.0)
-    }];
+    let mut rocks = Rocks::of([rock(0, 4.0, 0.0)]);
+    // 2 across: a radius of 1.
+    rocks.types[0].size = (2.0, 2.0);
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-    assert_eq!(rocks[0].strength, 9, "the Quad's 1 mass damage");
+    assert_eq!(rocks.at(0).strength, 9, "the Quad's 1 mass damage");
     assert_eq!(explosions(&combat.take_events()), [Vec2::ZERO]);
     assert!(!drawn_shot(&combat, pd), "spent");
     assert!(drawn_shot(&combat, missile), "the missile flies on");
@@ -183,9 +186,9 @@ fn a_life_zero_fuse_is_armed_by_count_above_prox_safety_not_by_age() {
         pd_meets(&mut combat, record);
         combat.shots[1].age = 3;
         let mut ships = beside_the_missile();
-        let mut rocks = [rock(0, 23.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
         test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-        assert_eq!(rocks[0].strength < 10, hit, "{what}: {rocks:?}");
+        assert_eq!(rocks.get(0).is_none(), hit, "{what}: destroyed: {rocks:?}");
     }
 }
 
@@ -197,10 +200,10 @@ fn a_spent_missile_point_defence_meets_is_put_back_to_life_zero_and_tested() {
     pd_meets(&mut combat, fused_missile(30));
     combat.shots[1].age = 100;
     let mut ships = beside_the_missile();
-    let mut rocks = [rock(0, 23.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
     fly_amid(&mut combat, &mut ships);
-    assert_eq!(rocks[0].strength, -10, "{rocks:?}");
+    assert_eq!(rocks.get(0), None, "destroyed: {rocks:?}");
     assert_eq!(
         explosions(&combat.take_events()),
         [Vec2::new(3.0, 0.0)],
@@ -239,9 +242,9 @@ fn a_missile_a_point_defence_beam_downs_sets_off_an_asteroid_in_the_next_tick() 
         .facing(180.0)
         .targeting(A);
     let mut ships = [defender, attacker];
-    let mut rocks = [rock(0, 20.0, -195.0)];
+    let mut rocks = Rocks::of([rock(0, 20.0, -195.0)]);
     let mut combat = Combat::default();
-    let tick_once = |combat: &mut Combat, ships: &mut [Ship], rocks: &mut [AsteroidTarget]| {
+    let tick_once = |combat: &mut Combat, ships: &mut [Ship], rocks: &mut Rocks| {
         tick_amid(combat, ships, &Arsenal::default(), Rules::default(), rocks);
         ships[0].trigger = QUIET;
         ships[1].trigger = QUIET;
@@ -252,18 +255,19 @@ fn a_missile_a_point_defence_beam_downs_sets_off_an_asteroid_in_the_next_tick() 
     assert!(combat.targeted_damage().contains_key(&A), "live, it counts");
     let events = tick_once(&mut combat, &mut ships, &mut rocks);
     assert_eq!(shot_down(&events).len(), 1, "{events:?}");
-    assert_eq!(rocks[0].strength, 10, "not yet");
+    assert_eq!(rocks.at(0).strength, 10, "not yet");
     assert!(!drawn_shot(&combat, missile), "hidden");
     assert_eq!(combat.targeted_damage(), BTreeMap::new());
     let events = tick_once(&mut combat, &mut ships, &mut rocks);
-    assert_eq!(rocks[0].strength, -10, "set off");
+    assert_eq!(rocks.get(0), None, "set off, destroyed");
     let at = explosions(&events);
     assert_eq!(at.len(), 1, "{events:?}");
     assert!((at[0] - Vec2::new(0.0, -195.0)).length() < 1e-3, "{at:?}");
     assert_eq!(combat.take_strikes(), [], "no ship hit");
-    rocks[0].strength = 10;
+    let (slot, again) = rock(0, 20.0, -195.0);
+    rocks.field.seat(slot, again);
     tick_once(&mut combat, &mut ships, &mut rocks);
-    assert_eq!(rocks[0].strength, 10, "freed by `_HandleShot`");
+    assert_eq!(rocks.at(0).strength, 10, "freed by `_HandleShot`");
 }
 
 #[test]
@@ -293,10 +297,10 @@ fn a_missile_a_beam_downs_before_its_first_move_is_still_tested() {
     drop(fighters);
     assert_eq!(shot_down(&combat.take_events()).len(), 1);
     assert!(!drawn_shot(&combat, missile));
-    let mut rocks = [rock(0, 20.0, -100.0)];
+    let mut rocks = Rocks::of([rock(0, 20.0, -100.0)]);
     ships[0].trigger = QUIET;
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-    assert_eq!(rocks[0].strength, -10, "set off");
+    assert_eq!(rocks.get(0), None, "set off, destroyed");
     assert_eq!(combat.take_strikes(), []);
 }
 
@@ -398,10 +402,10 @@ fn clearing_the_fight_lets_go_of_the_hidden_shots() {
     assert_eq!(combat.hidden.len(), 1, "kept hidden");
     combat.clear();
     combat.take_events();
-    let mut rocks = [rock(0, 20.0, -100.0)];
+    let mut rocks = Rocks::of([rock(0, 20.0, -100.0)]);
     ships[0].trigger = QUIET;
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-    assert_eq!(rocks[0].strength, 10, "untouched: {rocks:?}");
+    assert_eq!(rocks.at(0).strength, 10, "untouched: {rocks:?}");
     assert_eq!(explosions(&combat.take_events()), []);
 }
 
@@ -410,7 +414,7 @@ fn the_proximity_pass_and_handle_shot_leave_no_shot_hidden() {
     let mut combat = Combat::default();
     pd_meets(&mut combat, fused_missile(30));
     let mut ships = beside_the_missile();
-    test_amid(&mut combat, &mut ships, &mut [], &mut []);
+    test_amid(&mut combat, &mut ships, &mut Rocks::of([]), &mut []);
     fly_amid(&mut combat, &mut ships);
     assert_eq!(combat.hidden, [], "freed");
 }
@@ -444,7 +448,7 @@ fn a_players_missile_an_npc_downs_beside_an_asteroid_blasts_the_ships_in_its_squ
             Ship::at(2, 1000.0, 1000.0),
             Ship::at(3, 30.0, 10.0),
         ];
-        let mut rocks = [rock(0, 23.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
         test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
         let strikes = combat.take_strikes();
         let ships_struck: Vec<ShipRef> = strikes.iter().map(|strike| strike.ship).collect();
@@ -455,7 +459,7 @@ fn a_players_missile_an_npc_downs_beside_an_asteroid_blasts_the_ships_in_its_squ
                 .all(|strike| strike.by == Some(ShipRef::Player) && !strike.direct),
             "{strikes:?}"
         );
-        assert!(rocks[0].strength < 10, "{firer:?} {flags:#x}");
+        assert_eq!(rocks.get(0), None, "{firer:?} {flags:#x}: destroyed");
     }
 }
 
@@ -471,7 +475,7 @@ fn a_planet_type_shot_ended_at_life_zero_strikes_a_stellar_and_then_no_asteroid(
         };
         pd_meets(&mut combat, planet_type);
         let mut ships = beside_the_missile();
-        let mut rocks = [rock(0, 23.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
         let mut stellars = [StellarTarget {
             stellar: StellarId(128),
             position: Vec2::new(3.0, 0.0),
@@ -481,7 +485,11 @@ fn a_planet_type_shot_ended_at_life_zero_strikes_a_stellar_and_then_no_asteroid(
         test_amid(&mut combat, &mut ships, &mut rocks, &mut stellars);
         let strikes = combat.take_stellar_strikes();
         assert_eq!(strikes.len(), usize::from(stellar_hit), "{strikes:?}");
-        assert_eq!(rocks[0].strength < 10, !stellar_hit, "{standing}");
+        assert_eq!(
+            rocks.get(0).is_none(),
+            !stellar_hit,
+            "{standing}: destroyed"
+        );
         if stellar_hit {
             assert_eq!(stellars[0].strength, 70, "30 damage taken");
         }
@@ -495,7 +503,7 @@ fn a_hidden_shot_holds_one_slot_until_handle_shot() {
     let mut combat = crowded(MAX_SHOTS - 2, true);
     pd_meets(&mut combat, fused_missile(30));
     let mut ships = beside_the_missile();
-    test_amid(&mut combat, &mut ships, &mut [], &mut []);
+    test_amid(&mut combat, &mut ships, &mut Rocks::of([]), &mut []);
     assert!(!combat.shot_room(), "both still held");
     combat.shots.pop();
     assert!(combat.shot_room(), "each held once");

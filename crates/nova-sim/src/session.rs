@@ -420,6 +420,7 @@ mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
 mod asteroid_beams;
+mod asteroid_hits;
 #[cfg(test)]
 mod asteroid_seekers;
 mod asteroids;

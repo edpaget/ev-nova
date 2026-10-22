@@ -6,7 +6,7 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
-use super::asteroid_beam::BeamField;
+use super::asteroid_walk::AsteroidField;
 use super::ion::IonLockout;
 use super::lineup::reread;
 use super::stellar_hazards::StellarHazards;
@@ -353,7 +353,7 @@ impl Combat {
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
-        mut field: Option<BeamField<'_>>,
+        mut field: Option<AsteroidField<'_>>,
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;

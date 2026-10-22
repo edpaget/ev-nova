@@ -8,14 +8,13 @@
 
 use super::*;
 use crate::catalog::StellarId;
-use crate::combat::asteroid_hit::AsteroidTarget;
 
 /// The collision passes alone among `ships`, `rocks` and `stellars`, by
 /// the default rules.
 fn test_amid(
     combat: &mut Combat,
     ships: &mut [Ship],
-    rocks: &mut [AsteroidTarget],
+    rocks: &mut Rocks,
     stellars: &mut [StellarTarget],
 ) {
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
@@ -29,7 +28,7 @@ fn test_amid(
     };
     let scenery = Scenery {
         stellars,
-        asteroids: rocks,
+        asteroids: Some(rocks.lend()),
         hazards: None,
     };
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
@@ -88,7 +87,7 @@ fn of_a_hidden_and_a_live_shot_the_lower_slot_downs_a_stellar_with_one_hit_left(
         assert_eq!(combat.shots()[0].slot, usize::from(!live_first));
         // 14 to a stellar of 13: shot down.
         let mut stellars = [stellar_at(0.0, 500.0, 20.0, 13)];
-        test_amid(&mut combat, &mut [], &mut [], &mut stellars);
+        test_amid(&mut combat, &mut [], &mut Rocks::of([]), &mut stellars);
         let by = if live_first { B } else { C };
         assert_eq!(
             combat.take_stellar_strikes(),
@@ -128,14 +127,14 @@ fn of_a_hidden_and_a_live_shot_the_lower_slot_breaks_an_asteroid_in_both_fuses_r
             (live_gun, B, Vec2::ZERO),
             (hidden_gun, C, Vec2::new(0.0, 5.0)),
         );
-        let mut rocks = [AsteroidTarget {
-            strength: 1,
-            ..rock(0, 20.0, 0.0)
-        }];
+        let mut rocks = Rocks::of([worn(0, 20.0, 0.0, 1)]);
         test_amid(&mut combat, &mut [], &mut rocks, &mut []);
-        let left = if live_first { -3 } else { -19 };
-        assert_eq!(rocks[0].strength, left, "live first: {live_first}");
-        assert_eq!(combat.take_broken_asteroids(), [0]);
+        assert_eq!(rocks.get(0), None, "destroyed: live first: {live_first}");
+        assert_eq!(
+            remains_at(&combat.take_asteroid_remains()),
+            [Vec2::new(20.0, 0.0)],
+            "once, by the lower slot's shot: live first: {live_first}"
+        );
         assert_eq!(
             flying(&combat, live).is_some(),
             !live_first,
@@ -169,9 +168,9 @@ fn a_hidden_shots_asteroid_blast_lands_before_the_next_slot_is_tested() {
             (blasting, ShipRef::Player, Vec2::new(3.0, 0.0)),
         );
         let mut ships = [Ship::at(3, 30.0, 10.0)];
-        let mut rocks = [rock(0, 23.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
         test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
-        assert!(rocks[0].strength < 10, "{rocks:?}");
+        assert_eq!(rocks.get(0), None, "destroyed: {rocks:?}");
         let struck: Vec<(ShipRef, Option<ShipRef>, bool)> = combat
             .take_strikes()
             .iter()
@@ -200,7 +199,7 @@ fn a_planet_type_shot_meeting_a_stellar_goes_no_further_than_it() {
     let shot = put(&mut combat, fused, A, Vec2::ZERO, Vec2::ZERO);
     let mut ships = [Ship::at(2, 0.0, 30.0)];
     let mut stellars = [stellar_at(0.0, 0.0, 20.0, 100)];
-    test_amid(&mut combat, &mut ships, &mut [], &mut stellars);
+    test_amid(&mut combat, &mut ships, &mut Rocks::of([]), &mut stellars);
     assert_eq!(combat.take_stellar_strikes().len(), 1);
     assert_eq!(combat.take_strikes(), [], "B not hit");
     assert_eq!(flying(&combat, shot), None, "spent on the stellar");
@@ -225,7 +224,7 @@ fn a_shot_meeting_two_stellars_strikes_the_first_in_the_systems_order() {
             ..stellar_at(30.0, 0.0, 10.0, 100)
         },
     ];
-    test_amid(&mut combat, &mut [], &mut [], &mut stellars);
+    test_amid(&mut combat, &mut [], &mut Rocks::of([]), &mut stellars);
     let strikes = combat.take_stellar_strikes();
     let struck: Vec<StellarId> = strikes.iter().map(|strike| strike.stellar).collect();
     assert_eq!(struck, [StellarId(128)]);

@@ -45,8 +45,8 @@
 //! (+0xd0, @0x20080). Nothing else adds, moves or sorts one: the other
 //! references to the layer only lock, create, add or dispose of it
 //! (`_SetupSpriteWorld` @0x21c59, @0x21d21; `_DestroySpriteWorld`;
-//! `_Bye`), and `_DestroyAsteroid`, `_SpawnSubAsteroid` and
-//! `_HandleAsteroids` only show or hide a sprite. So each asteroid pass
+//! `_Bye`), `_DestroyAsteroid` and `_HandleAsteroids` only show or hide
+//! a sprite, and `_SpawnSubAsteroid` touches none. So each asteroid pass
 //! is asteroid-major in slot order ([`Combat::meet_asteroids`]): a shot
 //! touching two asteroids is spent on the one in the lower slot,
 //! wherever each is along its move. `_AsteroidCollisionHandler`
@@ -113,18 +113,21 @@
 //! reading; firing order by the other). The proximity pass goes by slot,
 //! the order the shots are kept in, by either reading.
 //!
-//! # Left out, each with its owner
+//! # Built since, each with its phase
 //!
-//! - **An asteroid destroyed mid-walk.** As the walk does not read the
-//!   asteroid's visibility again after its proc (@0xacd5b-0xacd6d), and
-//!   neither `_SWRLECollision` nor `_AsteroidCollisionHandler` nor
-//!   `_HandleAsteroidHit` asks whether it is still active, an asteroid
-//!   `_DestroyAsteroid` destroyed (@0xadc9-0xb028) goes on meeting the
-//!   rest of its walk's shots, each destroying it again; its fragments
-//!   (`_SpawnSubAsteroid` @0x3fbc7-0x3fd21) join the walk mid-pass. The
-//!   engine marks it broken and every later shot of the tick passes
-//!   through it ([`asteroid_hit::touches`]), until
-//!   rdm:phase/asteroids/phase-10-shots-break-asteroids-inline.
+//! **Built in asteroids phase 10: an asteroid destroyed mid-walk.** As the
+//! walk does not read the asteroid's visibility again after its proc
+//! (@0xacd5b-0xacd6d), and neither `_SWRLECollision` nor
+//! `_AsteroidCollisionHandler` nor `_HandleAsteroidHit` asks whether it is
+//! still active, an asteroid `_DestroyAsteroid` destroyed
+//! (@0xadc9-0xb028) goes on meeting the rest of its walk's shots, each
+//! destroying it again below 0. Its fragments (`_SpawnSubAsteroid`
+//! @0x3fbc7-0x3fd21) are seated at once, but their sprites stay hidden
+//! until `_HandleAsteroids` (@0x3638a), so no contact walk meets them; the
+//! proximity pass does. Here the hit destroys the asteroid at once, and
+//! each walk visits the slots shown as the passes began, less those
+//! destroyed since, each turn keeping the destroyed asteroid's struct for
+//! the rest of its walk (the `asteroid_walk` module).
 //!
 //! **Built in phase 42.** An escort's leader is cleared as the hit that
 //! leaves it disabled lands (`_DamageShip` @0x3ae58-0x3afdd, the
@@ -153,7 +156,8 @@
 //! after the pass (`Combat::settle_struck`), as nothing in the pass reads
 //! them but whether a ship is destroyed, which no hit there changes.
 
-use super::asteroid_hit::{self, AsteroidTarget};
+use super::asteroid_hit;
+use super::asteroid_walk::{AsteroidField, Shown, Struck, WalkTurn};
 use super::damage::Hit;
 use super::hull::DisableRule;
 use super::ion::Dose;
@@ -163,6 +167,7 @@ use super::stellar::StellarTarget;
 use super::{
     Arsenal, Combat, CombatEvent, Fighter, Landed, Push, ShipRef, blasted, defence, position_of,
 };
+use crate::asteroid::SLOTS;
 use crate::chance::Chance;
 use crate::geometry::Vec2;
 use crate::ship_layer::ShipLayer;
@@ -236,12 +241,15 @@ impl Combat {
     /// the asteroids against point defence's layer; then point defence's
     /// layer against the missiles ([`Combat::intercept`]), which meets
     /// none an earlier pass spent; then the proximity pass among
-    /// `stellars` and `asteroids`, slot by slot, the hidden shots among
-    /// the live ones ([`Combat::proximity_pass`]). Each hit and its blast
-    /// land as they are found ([`Combat::land_hit`]), and an asteroid's
-    /// blast likewise. Each proximity hit releases its sub-munitions in
-    /// place, their weapons read from `terms`' arsenal and their spread
-    /// drawn on `chance`.
+    /// `stellars` and the asteroid field, slot by slot, the hidden shots
+    /// among the live ones ([`Combat::proximity_pass`]). Each hit and its
+    /// blast land as they are found ([`Combat::land_hit`]), and an
+    /// asteroid's blast likewise; an asteroid a hit leaves below 0 is
+    /// destroyed in the field at once, drawing on `chance`. The asteroid
+    /// passes visit the asteroids shown as the passes begin ([`Shown`]).
+    /// Each proximity hit releases its sub-munitions in place, their
+    /// weapons read from `terms`' arsenal and their spread drawn on
+    /// `chance`.
     ///
     /// The move that spends a shot is never tested against a ship
     /// (`_ShotCanHitShip` @0x447c2, `_CheckShotProximities` @0x371ea), nor
@@ -255,9 +263,10 @@ impl Combat {
         entry: &[usize],
         terms: &WalkTerms,
         chance: &mut dyn Chance,
-        (stellars, asteroids): (&mut [StellarTarget], &mut [AsteroidTarget]),
+        (stellars, field): (&mut [StellarTarget], &mut AsteroidField),
     ) {
         let mut shots = std::mem::take(&mut self.shots);
+        let mut shown = Shown::of(field.asteroids);
         // A shot spent this pass, on a ship or an asteroid, or by point
         // defence.
         let mut spent = vec![false; shots.len()];
@@ -291,7 +300,7 @@ impl Combat {
                 in_layer,
                 (fighters, lineup),
                 terms.rule,
-                asteroids,
+                (field, &mut shown, chance),
             );
         }
         let point_defence = |shot: &Shot| shot.layer == ShotLayer::PointDefence;
@@ -300,7 +309,7 @@ impl Combat {
             point_defence,
             (fighters, lineup),
             terms.rule,
-            asteroids,
+            (field, &mut shown, chance),
         );
         let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
         self.intercept((&mut shots, &mut spent, entry), camera);
@@ -308,8 +317,7 @@ impl Combat {
         // as only `_HandleShot` frees a spent one (@0x3617c), so a
         // sub-munition released mid-pass is seated as the original seats it.
         self.keep_unspent(shots, &spent);
-        let scenery = (stellars, asteroids);
-        self.proximity_pass((fighters, lineup), terms, chance, scenery);
+        self.proximity_pass((fighters, lineup), terms, chance, (stellars, field));
     }
 
     /// Takes the shot in flight at `index` out, its slot held until
@@ -333,15 +341,17 @@ impl Combat {
 
     /// The asteroid layer's pass against the shots among `shots` that
     /// `takes` in (`_AsteroidCollisionHandler`, the asteroid layer the
-    /// outer list): each of `asteroids`, in the order the session gives
-    /// them, which is slot order, meets each shot not yet `spent` that has
-    /// moved, in `entry`'s order. A shot that touches it ([`touches`]) is
-    /// spent there, its hit's blast landing at once among the ships, as
-    /// `rule` says ([`Combat::land_on_asteroid`]). So a shot that touches
-    /// two asteroids is spent on the one in the lower slot. An asteroid
-    /// broken in the walk is touched by no later shot: the engine's skip
-    /// until rdm:phase/asteroids/phase-10-shots-break-asteroids-inline (see
-    /// the module docs).
+    /// outer list): each asteroid of `field` that `shown` still holds, in
+    /// slot order, takes its turn ([`WalkTurn`]), meeting each shot not
+    /// yet `spent` that has moved, in `entry`'s order. A shot that touches
+    /// it, as the turn began ([`touches`]), is spent there, its hit's blast
+    /// landing at once among the ships, as `rule` says
+    /// ([`Combat::land_on_asteroid`]). So a shot that touches two
+    /// asteroids is spent on the one in the lower slot. A hit that leaves
+    /// it below 0 destroys it at once, drawing on `chance`; the rest of
+    /// its turn's shots still meet it, wearing and destroying its struct
+    /// again, and `shown` lets it go, so no later walk visits it. A
+    /// fragment seated in the pass is never shown (see the module docs).
     ///
     /// [`touches`]: asteroid_hit::touches
     fn meet_asteroids(
@@ -350,9 +360,16 @@ impl Combat {
         takes: impl Fn(&Shot) -> bool,
         (fighters, lineup): Among,
         rule: &dyn DisableRule,
-        asteroids: &mut [AsteroidTarget],
+        (field, shown, chance): (&mut AsteroidField, &mut Shown, &mut dyn Chance),
     ) {
-        for target in asteroids.iter_mut() {
+        for slot in 0..SLOTS {
+            if !shown.has(slot) {
+                continue;
+            }
+            let Some(asteroid) = field.asteroids.get(slot) else {
+                continue;
+            };
+            let mut turn = WalkTurn::begin(slot, asteroid, field.types);
             for &index in entry {
                 let shot = &shots[index];
                 if spent[index] || !takes(shot) {
@@ -361,11 +378,14 @@ impl Combat {
                 let Some(from) = shot.moved_from else {
                     continue;
                 };
-                if let Some(at) = asteroid_hit::touches(shot, from, target) {
+                if let Some(at) = asteroid_hit::touches(shot, from, &turn.rock) {
                     spent[index] = true;
-                    let met = (shot, &mut *target, at);
-                    self.land_on_asteroid(met, (fighters, lineup), rule);
+                    let met = (shot, Struck::Turn(&mut turn), at);
+                    self.land_on_asteroid(met, (fighters, lineup), rule, (field, chance));
                 }
+            }
+            if turn.destroyed() {
+                shown.hide(slot);
             }
         }
     }
@@ -392,9 +412,10 @@ impl Combat {
     /// skips it, as the outer sprite (@0xacba3) or the inner one
     /// (@0xacbc6): a missile that touched a walked ship or an asteroid on
     /// its move, or a point-defence shot that touched an asteroid, is never
-    /// met. A missile that touched only a hidden ship, or only an asteroid
-    /// broken in an earlier layer's pass, whose sprite is hidden before
-    /// its own layer's pass, is met. A missile shot down by an earlier
+    /// met. A missile that touched only a hidden ship, only an asteroid
+    /// destroyed in an earlier layer's pass, whose sprite is hidden before
+    /// its own layer's pass, or only a fragment seated in the passes,
+    /// whose sprite is not shown yet, is met. A missile shot down by an earlier
     /// point-defence shot is hidden too. The walk does not read the outer
     /// sprite's visibility again after its proc (@0xacd5b-0xacd6d), so a
     /// point-defence shot spent on one missile goes on meeting the rest.
@@ -447,17 +468,19 @@ impl Combat {
         }
     }
 
-    /// A shot's hit on an asteroid at a point ([`Combat::hit_asteroid`]),
-    /// its blast's hits landed at once among the ships, as `rule` says,
-    /// each ship struck read again after them ([`Lineup::refresh`]).
+    /// A shot's hit on what it struck at a point ([`Combat::hit_asteroid`]),
+    /// in `field`, drawing on `chance`, its blast's hits landed at once
+    /// among the ships, as `rule` says, each ship struck read again after
+    /// them ([`Lineup::refresh`]).
     pub(super) fn land_on_asteroid(
         &mut self,
-        (shot, target, at): (&Shot, &mut AsteroidTarget, Vec2),
+        met: (&Shot, Struck<'_>, Vec2),
         (fighters, lineup): Among,
         rule: &dyn DisableRule,
+        (field, chance): (&mut AsteroidField, &mut dyn Chance),
     ) {
         let mut hits = Vec::new();
-        self.hit_asteroid(shot, target, at, fighters, &mut hits);
+        self.hit_asteroid(met, fighters, &mut hits, (field, chance));
         let hit: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         self.land(fighters, hits, rule);
         lineup.refresh(fighters, &hit, rule);
