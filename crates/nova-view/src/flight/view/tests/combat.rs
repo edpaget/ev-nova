@@ -1260,7 +1260,7 @@ fn the_sounds_are_the_sessions_then_the_fights() {
     );
 }
 
-fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
+pub(super) fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
     move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
 }
 
@@ -1268,7 +1268,12 @@ fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
 /// firing its blaster (which explodes where it hits) and two beams, one
 /// drawn under the ships and one over them, at it.
 fn firing_at_an_npc() -> View {
-    let catalog = armed(1, &[BLASTER, UNDER, OVER]);
+    firing_at_an_npc_in(armed(1, &[BLASTER, UNDER, OVER]))
+}
+
+/// [`firing_at_an_npc`] from `catalog`, an [`armed`] one carrying the
+/// blaster and the two beams.
+pub(super) fn firing_at_an_npc_in(catalog: FakeCatalog) -> View {
     let mut view = fighting(catalog, &placed(750, 650, 180));
     tap(&mut view, Key::Tab);
     view.input(&key(FIRE_KEY, true));
@@ -1294,9 +1299,10 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
     );
     let hud = hud_at(&list);
     // An unguided shot is in the shot layer 0x3b52f0, under the intact
-    // ships (`_SetupSpriteWorld` @0x21d0c-0x21e24).
+    // ships, and the explosion in `_explodLayer` 0x3b52b8, under the target
+    // layer's beams (`_SetupSpriteWorld` @0x21d0c-0x21e24).
     let order = [
-        stellar, under, shot, npc, ship, over, explosion, brackets, title, hud,
+        stellar, under, shot, npc, ship, explosion, over, brackets, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
@@ -2462,7 +2468,7 @@ fn a_ys_explosion_plays_no_boom_sound_from_the_view() {
 /// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which
 /// one hit of the player's blaster breaks up: the pod comes out on its
 /// explosion tick, at a timer of 2.
-fn podding() -> FakeCatalog {
+pub(super) fn podding() -> FakeCatalog {
     let mut catalog = armed(1, &[BLASTER]);
     catalog.weapons[0].energy_dmg = 200;
     catalog.weapons[0].mass_dmg = 200;
@@ -2472,7 +2478,7 @@ fn podding() -> FakeCatalog {
 }
 
 /// Fires at the targeted NPC until its pod is adrift.
-fn eject_a_pod(view: &mut View) {
+pub(super) fn eject_a_pod(view: &mut View) {
     tap(view, Key::Tab);
     view.input(&key(FIRE_KEY, true));
     for _ in 0..40 {

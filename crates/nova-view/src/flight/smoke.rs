@@ -34,11 +34,14 @@
 //! Stock has no `cicn` 1000-1015 and no weapon of `Flags` 0x0200 or
 //! 0x0400, so stock never smokes.
 //!
+//! The puffs are drawn in their sprite layer, `_smokeLayer` 0x3b52d0
+//! (`_SpawnSmoke` @0x3f957-0x3f9d4 takes a `_smokeData` slot): over the
+//! cargo boxes and the escape pods, under every shot and flying ship
+//! ([`SpriteLayer::Smoke`](nova_sim::sprite_layer::SpriteLayer::Smoke)).
+//!
 //! Left out: the translucency `_HandleSmoke` works out and overwrites at
-//! once (@0x2e308-0x2e33f), which is never seen; the frozen
-//! frame (@0x35ccf, @0x2e3bc), which the engine never has; and the puffs'
-//! sprite layer, which rdm:task/shots-drawn-in-their-sprite-layers owns:
-//! the view draws them with the other effects.
+//! once (@0x2e308-0x2e33f), which is never seen; and the frozen frame
+//! (@0x35ccf, @0x2e3bc), which the engine never has.
 
 use nova_sim::Vec2;
 

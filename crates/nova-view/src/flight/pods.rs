@@ -38,12 +38,14 @@
 //!   `_killShots` frees them on landing, a gate and the arrival
 //!   (@0x39e75-0x39e84), and the view clears its effects then.
 //!
+//! The pods are drawn in their sprite layer, `_boxLayer` 0x3b53ec, after
+//! the cargo boxes (`_InitSprites` @0x1fc71-0x1fd57, added @0x1fcfb):
+//! above the disabled ships and below the smoke, the shots and the flying
+//! ships ([`SpriteLayer::Boxes`](nova_sim::sprite_layer::SpriteLayer::Boxes)).
+//!
 //! Left out: the pods' murk (`_HandleSpriteMurkiness` @0x39fbc,
-//! rdm:task/murk-other-sprites); their sprite layer, 0x3b53ec, above the
-//! disabled ships and below the shots and the flying ships (`_InitSprites`
-//! @0x1fcfb): the view draws them after the cargo boxes and before every
-//! beam and ship (rdm:task/shots-drawn-in-their-sprite-layers); and
-//! `_WrapPlayerPosition`'s shift (@0x68232), as the engine has no wrap.
+//! rdm:task/murk-other-sprites); and `_WrapPlayerPosition`'s shift
+//! (@0x68232), as the engine has no wrap.
 
 use std::num::NonZeroU16;
 

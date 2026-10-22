@@ -178,36 +178,57 @@ impl<C> FlightView<C> {
         session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
-    /// Draws the ships and the shots, bottom first, in their layers as
-    /// the session stacks them ([`sprites`](super::sprites)): the ships as
+    /// The ships and the shots, bottom first, each in its layer as the
+    /// session stacks them ([`sprites`](super::sprites)): the ships as
     /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
     /// each layer in the order the session's rules overlap them, and the
     /// shots among them by their layers ([`nova_sim::sprite_layer`]).
-    /// Without a session it draws the player alone. The order and each
-    /// cloak's level are read from the session as the frame is drawn, so
-    /// nothing waits past it.
-    pub(super) fn draw_sprites(&self, list: &mut DrawList, camera: &Camera) {
-        let player = camera.world_to_screen(self.shown_position());
+    /// Without a session, the player alone, in the ships' layer. The order
+    /// is read from the session as the frame is drawn, so nothing waits
+    /// past it.
+    pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
         let Ok(session) = &self.session else {
-            self.draw_ship(list, player, ShipDrawn::Full);
-            return;
+            return vec![(SpriteLayer::Ships, Sprite::Ship(ShipRef::Player))];
         };
-        let npcs = self.shown_npcs();
-        let fade = session
-            .rules()
-            .source_for(nova_sim::RuleKey::TranslucentShotFade);
-        let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
-        for sprite in stacked {
-            match sprite {
-                Sprite::Ship(ShipRef::Player) => {
+        sprite_stack(session.draw_layers(), self.shown_shots(camera))
+    }
+
+    /// Draws the sprites of `stacked` in `layer`, in their order: the
+    /// player, the NPCs among `npcs` (as [`FlightView::shown_npcs`] places
+    /// them) and the shots. Each cloak's level is read from the session as
+    /// the frame is drawn. Without a session only the player is drawn,
+    /// in full.
+    pub(super) fn draw_sprite_layer(
+        &self,
+        list: &mut DrawList,
+        camera: &Camera,
+        stacked: &[(SpriteLayer, Sprite)],
+        npcs: &[(&Npc, Point, f32)],
+        layer: SpriteLayer,
+    ) {
+        let player = camera.world_to_screen(self.shown_position());
+        let sprites = stacked.iter().filter(|(on, _)| *on == layer);
+        for (_, sprite) in sprites {
+            match (sprite, &self.session) {
+                (Sprite::Ship(ShipRef::Player), Ok(session)) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
-                Sprite::Ship(ShipRef::Npc(id)) => {
-                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
+                (Sprite::Ship(ShipRef::Player), Err(_)) => {
+                    self.draw_ship(list, player, ShipDrawn::Full);
+                }
+                (Sprite::Ship(ShipRef::Npc(id)), Ok(session)) => {
+                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == *id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
-                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks, fade),
+                (Sprite::Shot(shot), Ok(session)) => {
+                    let fade = session
+                        .rules()
+                        .source_for(nova_sim::RuleKey::TranslucentShotFade);
+                    weapons::draw_shot(list, shot, &self.looks, fade);
+                }
+                // Without a session there are no NPCs or shots.
+                (Sprite::Ship(ShipRef::Npc(_)) | Sprite::Shot(_), Err(_)) => {}
             }
         }
     }

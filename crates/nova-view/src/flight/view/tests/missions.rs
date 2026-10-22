@@ -170,7 +170,7 @@ fn entering_another_venue_through_the_flight_offers_a_suppressed_offer_again() {
 /// accepted mission 130, carrying 4 tons of food loaded at accept,
 /// `Flags` `flags`, and bought the other 6 tons full of food when
 /// `food`, then took off.
-fn carrying(flags: u16, food: bool) -> View {
+pub(super) fn carrying(flags: u16, food: bool) -> View {
     carrying_in(trading(), Rulebook::default(), flags, food)
 }
 
@@ -300,7 +300,7 @@ fn command_k_drops_cargo_boxes_drawn_under_the_ship_where_they_drift() {
 
 /// `base` with asteroid type 0, its sheet `rlëD` 1800, and system 130
 /// holding 3 of it.
-fn rocky(base: FakeCatalog) -> FakeCatalog {
+pub(super) fn rocky(base: FakeCatalog) -> FakeCatalog {
     FakeCatalog {
         asteroid_types: vec![nova_sim::AsteroidTypeRecord {
             kind: 0,
@@ -320,7 +320,7 @@ fn rocky(base: FakeCatalog) -> FakeCatalog {
 }
 
 /// The rules with `key` read as the other reading.
-fn other_reading(key: RuleKey) -> Rulebook {
+pub(super) fn other_reading(key: RuleKey) -> Rulebook {
     Rulebook::default().with_override(key, RuleSource::Bible)
 }
 

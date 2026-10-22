@@ -1,19 +1,23 @@
 //! The flight view's sprite stack: the ships and the shots, bottom first,
-//! in the layers the simulation puts them in.
+//! each in the layer the simulation puts it in.
 //!
-//! The order is the simulation's ([`nova_sim::sprite_layer::stack`]): the
-//! disabled ships, the point-defence shots, the homing shots, the other
-//! shots, the ships the player leads, the other ships and the player, and
-//! a `Flags3` 0x0040 ship's turret shots, as `_SetupSpriteWorld` adds the
-//! layers (@0x21d0c-0x21e24) and `_SpawnShot` fills them
+//! The order is the simulation's ([`nova_sim::sprite_layer::layered_stack`]):
+//! the disabled ships, the point-defence shots, the homing shots, the
+//! other shots, the ships the player leads, the other ships and the
+//! player, and a `Flags3` 0x0040 ship's turret shots, as
+//! `_SetupSpriteWorld` adds the layers (@0x21d0c-0x21e24, calls to
+//! `_SWAddSpriteLayer` @0xb71b0) and `_SpawnShot` fills them
 //! (@0x3f0a9-0x3f143). Each layer keeps the order it is given in: the
 //! ships the session's draw order, the shots the session's
 //! ([`nova_sim::Session::shots_drawn`], each layer in the order its shot
-//! slots entered it). The view only draws what the stack gives.
+//! slots entered it). Each sprite keeps its [`SpriteLayer`], so the world
+//! draws each layer in its place among the others
+//! ([`nova_sim::sprite_layer::WORLD_PASSES`]). The view only draws what the
+//! stack gives.
 
 use nova_sim::ShipRef;
 use nova_sim::ship_layer::ShipLayer;
-use nova_sim::sprite_layer::{SpriteLayer, stack};
+use nova_sim::sprite_layer::{SpriteLayer, layered_stack};
 
 use crate::flight::weapons::ShotShown;
 
@@ -27,18 +31,18 @@ pub(super) enum Sprite {
 }
 
 /// `ships`, each with its layer in draw order, and `shots`, as they are
-/// drawn, bottom first (see the module docs).
+/// drawn, bottom first, each with its layer (see the module docs).
 pub(super) fn sprite_stack(
     ships: impl IntoIterator<Item = (ShipRef, ShipLayer)>,
     shots: impl IntoIterator<Item = ShotShown>,
-) -> Vec<Sprite> {
+) -> Vec<(SpriteLayer, Sprite)> {
     let ships = ships
         .into_iter()
         .map(|(ship, layer)| (SpriteLayer::from(layer), Sprite::Ship(ship)));
     let shots = shots
         .into_iter()
         .map(|shot| (shot.layer, Sprite::Shot(shot)));
-    stack(ships.chain(shots))
+    layered_stack(ships.chain(shots))
 }
 
 #[cfg(test)]
@@ -82,11 +86,11 @@ mod tests {
         assert_eq!(
             sprite_stack(ships(), [unguided]),
             [
-                Sprite::Ship(DISABLED),
-                Sprite::Shot(unguided),
-                Sprite::Ship(ESCORT),
-                Sprite::Ship(INTACT),
-                Sprite::Ship(ShipRef::Player),
+                (SpriteLayer::Disabled, Sprite::Ship(DISABLED)),
+                (SpriteLayer::Shots, Sprite::Shot(unguided)),
+                (SpriteLayer::Led, Sprite::Ship(ESCORT)),
+                (SpriteLayer::Ships, Sprite::Ship(INTACT)),
+                (SpriteLayer::Ships, Sprite::Ship(ShipRef::Player)),
             ]
         );
     }
@@ -99,9 +103,9 @@ mod tests {
         assert_eq!(
             sprite_stack([], [unguided, homing, defence]),
             [
-                Sprite::Shot(defence),
-                Sprite::Shot(homing),
-                Sprite::Shot(unguided)
+                (SpriteLayer::PointDefence, Sprite::Shot(defence)),
+                (SpriteLayer::Homing, Sprite::Shot(homing)),
+                (SpriteLayer::Shots, Sprite::Shot(unguided)),
             ]
         );
     }
@@ -110,7 +114,10 @@ mod tests {
     fn a_turret_shot_over_the_ships_is_drawn_over_every_ship() {
         let over = shot(130, SpriteLayer::OverShips);
         let stacked = sprite_stack(ships(), [over]);
-        assert_eq!(stacked.last(), Some(&Sprite::Shot(over)));
+        assert_eq!(
+            stacked.last(),
+            Some(&(SpriteLayer::OverShips, Sprite::Shot(over)))
+        );
     }
 
     #[test]
@@ -118,7 +125,10 @@ mod tests {
         let (first, second) = (shot(128, SpriteLayer::Shots), shot(129, SpriteLayer::Shots));
         assert_eq!(
             sprite_stack([], [first, second]),
-            [Sprite::Shot(first), Sprite::Shot(second)]
+            [
+                (SpriteLayer::Shots, Sprite::Shot(first)),
+                (SpriteLayer::Shots, Sprite::Shot(second)),
+            ]
         );
     }
 }

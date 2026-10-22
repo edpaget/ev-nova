@@ -103,13 +103,17 @@
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
 //! beams live before the fight's step are passed along, so a looped
-//! weapon is heard once a beam. The fight is drawn over the stellars:
-//! the asteroid field ([`asteroids`](super::asteroids), smoothed as the cargo boxes are),
-//! the cargo boxes a jettison left ([`boxes`](super::boxes), smoothed as the shots
-//! are), beams that go under the ships, then the ships, then the shots
-//! (each smoothed as the ships are) and the other beams, then the
-//! explosions and debris, then the brackets round the target
-//! ([`weapons`](super::weapons), [`effects`](super::effects), [`target`](super::target)). The HUD shows
+//! weapon is heard once a beam. The fight is drawn in the sprite world's
+//! layers, as `_SetupSpriteWorld` orders them
+//! ([`nova_sim::sprite_layer::WORLD_PASSES`], `world.rs`): over the
+//! stellars, the beams that go under the ships, the asteroid field
+//! ([`asteroids`](super::asteroids), smoothed as the cargo boxes are), the
+//! disabled ships, the cargo boxes a jettison left ([`boxes`](super::boxes),
+//! smoothed as the shots are) and the escape pods, the smoke, the shots and
+//! the ships in their layers (each smoothed as the ships are), the
+//! explosions, the other beams and last the particles; then, in the
+//! overlay, the brackets round the target ([`weapons`](super::weapons),
+//! [`effects`](super::effects), [`target`](super::target)). The HUD shows
 //! the target panel and the secondary weapon's line, its text laid out
 //! by the screen's [`TextMetrics`] ([`FlightView::with_metrics`]).
 //! Landing and arriving clear the effects.
@@ -665,6 +669,7 @@ mod shots;
 mod sprites;
 mod stars;
 mod travel;
+mod world;
 
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;

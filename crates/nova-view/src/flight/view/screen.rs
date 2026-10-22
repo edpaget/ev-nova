@@ -4,28 +4,22 @@ use std::time::Duration;
 
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, RuleKey, RuleSource, Session, Steps,
-    TargetPick, TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TargetPick,
+    TrafficCatalog,
 };
 
 use crate::flight::alert;
-use crate::flight::asteroids::{self};
-use crate::flight::boxes::{self};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::hud::{self};
-use crate::flight::weapons::{self};
 use crate::galaxy::GalaxyCatalog;
-use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self, SystemScene};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
 };
 
-use super::stars;
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, TITLE, TITLE_SIZE, ZOOM_IN_KEY,
@@ -355,7 +349,10 @@ impl<
 {
     /// Draws the scene and its HUD, the cursor and the fades left out:
     /// whether there was a scene to draw, or only why flight could not
-    /// start.
+    /// start. The sprite world goes first, in `_SetupSpriteWorld`'s order
+    /// ([`FlightView::draw_world`]), then the overlay over it: the
+    /// brackets, the red-alert and double-time icons, the floating map, the
+    /// escort menu, the title, the help and the status bar.
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         let Some(scene) = &self.scene else {
             let reason = self.session().err().unwrap_or_default();
@@ -397,69 +394,5 @@ impl<
             Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
         true
-    }
-
-    /// Draws the sprite world, the scene under the HUD: the stars, the
-    /// message line, the stellars, asteroids and boxes, the beams under
-    /// the ships, the ships and shots, the beams over them, the effects
-    /// and the smoke. The message line's box is filled in the system's
-    /// background ([`message_background`]), in the world; its text is
-    /// overlay among the world ([`DrawList::world`]).
-    fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::FlightStarfield)
-        });
-        stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
-            let background = message_background(
-                self.session
-                    .as_ref()
-                    .ok()
-                    .and_then(Session::system_background),
-            );
-            hud::draw_message(list, message, self.view, background, metrics);
-        }
-        scene::draw_stellars(list, scene, camera, self.elapsed);
-        asteroids::draw_asteroids(list, &self.shown_asteroids(camera), &self.looks);
-        boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
-        self.effects.draw_pods(list, camera, &self.looks);
-        let beams = self.shown_beams(camera);
-        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::LightningZigZag)
-        });
-        let lightning = (zig_zag, self.shot_looks.lightning());
-        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
-        self.draw_sprites(list, camera);
-        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
-        self.effects.draw(list, camera, &self.looks);
-        if let Ok(session) = &self.session {
-            let viewer = session.player().position;
-            let murk = session.effective_murk();
-            self.shot_looks.draw_smoke(list, camera, viewer, murk);
-        }
-    }
-}
-
-/// The colour the flight message's box is erased in: the player's
-/// system's `BkgndColor` (`background`, raw `00RRGGBB`) as the original's
-/// thousands-of-colours display shows it, or black with no system or no
-/// session (`_SetSystemBackgroundBackColor` @0x6e06-0x6e46, `BackColor`
-/// 33 @0x6e1c).
-fn message_background(background: Option<u32>) -> Color {
-    background.map_or(Color::BLACK, Color::from_rgb24_as_rgb555)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_message_background_is_the_systems_at_rgb555_or_black_without_one() {
-        assert_eq!(
-            message_background(Some(0x0007_0F12)),
-            Color::rgba(0x00, 0x08, 0x10, 255)
-        );
-        assert_eq!(message_background(None), Color::BLACK);
     }
 }

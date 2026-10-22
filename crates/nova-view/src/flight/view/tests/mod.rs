@@ -85,6 +85,7 @@ mod shots;
 mod stars;
 mod stellars;
 mod widescreen;
+mod world_layers;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system

@@ -242,7 +242,7 @@ fn set_1_puffs(view: &View) -> usize {
 
 /// The blaster smoking from set 1, with a particle trail, its shot living
 /// long enough to cross several smoke frames.
-fn smoking_trailing_blaster() -> FakeCatalog {
+pub(super) fn smoking_trailing_blaster() -> FakeCatalog {
     with_blaster(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;
         look.smoke_set = 1;
