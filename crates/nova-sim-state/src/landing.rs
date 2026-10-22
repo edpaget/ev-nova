@@ -60,8 +60,14 @@
 //!    decide whether a ship moving too fast is told it is too far or too
 //!    fast, as the original's dock request reads them again for its
 //!    refusal (@0x6773a-0x677c0).
-//! 2. [`LandingRefusal::TooFast`]: the ship is moving faster than
-//!    [`LANDING_SPEED`].
+//! 2. [`LandingRefusal::TooFast`]: the ship is moving too fast, by
+//!    [`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed). By the
+//!    engine's reading, unless |vx| and |vy| are each at most
+//!    [`PER_AXIS_LANDING_SPEED`], 0.75, compared in single precision and
+//!    inclusive, a NaN on either axis refused (`_FloatAbs` of +0x20 and
+//!    +0x24 @0x66beb-0x66c1d, `ucomiss` against the float at 0xdd658
+//!    @0x66c3c-0x66c66). By the other reading, the port's earlier check:
+//!    the overall speed above [`LANDING_SPEED`], 1.0.
 //!
 //! **Clearance** ([`cleared`]) is `_HandlePlayerDockRequest`'s clearance
 //! block (@0x67903-0x67a05), whole. Its checks run in this order, the pilot's [`Standing`] giving what they
@@ -118,10 +124,9 @@
 //!   has no player cloak (rdm:task/cloaking-device).
 //! - The fee refusal (@0x669b4-0x66a80), which is silent
 //!   (rdm:task/landing-fee).
-//! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
-//!   rdm:phase/stellar-fidelity/phase-6-per-axis-landing-speed.
-//! - The player's AI wait (+0x4c, tested @0x66c2f and zeroed @0x66b6d):
-//!   the engine keeps none.
+//! - The player's AI wait (+0x4c, tested @0x66c29-0x66c36 and zeroed
+//!   @0x66b6d): the player's +0x4c is never above 0, so the test always
+//!   passes, and the engine keeps none.
 //!
 //! Each refusal says whether the stellar is a station, which picks the
 //! original's "dock at this station" or "land on this planet" wording.
@@ -175,8 +180,8 @@
 //! The quarter of the width, inclusive (@0x8dbdf), is state 20's box for
 //! entering a hypergate or wormhole, not a landing ([`stellar_width`],
 //! see `nova_sim::traffic::gate_entry`).
-//! The player's speed gate is per axis in the original (story-runtime
-//! phase 17, per-axis-landing-speed).
+//! The player's speed gate is per axis in the original, built by
+//! stellar-fidelity phase 6 (item 2 above).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
@@ -189,7 +194,17 @@ use crate::rulebook::RuleSource;
 /// from top speed in about 20 ticks, and at it a ship takes more than two
 /// seconds to cross even a small stellar, so a landing ship is visibly
 /// parked over the stellar, as Nova asks.
+///
+/// It is now the other reading of
+/// [`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed) for the player
+/// and of [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) for an NPC.
 pub const LANDING_SPEED: f32 = 1.0;
+
+/// The fastest the player can land on each axis by the original, in
+/// pixels a tick: the single-precision float 0.75 at 0xdd658 (bytes
+/// `0000403f`, not a double), compared inclusively with |vx| and |vy| by
+/// `_HandlePlayerDockRequest` (@0x66c3c-0x66c66).
+pub const PER_AXIS_LANDING_SPEED: f32 = 0.75;
 
 /// The landing radius of a stellar with no sprite: half the 64-pixel
 /// placeholder box the views draw for it, so it matches what is drawn.
@@ -544,8 +559,10 @@ pub struct DockPress {
 /// dock request `dock`, for the ship `player` among the system's
 /// stellars `sites` (in navigation order), where `cleared` says whether
 /// traffic control clears the pilot to request docking at an inhabited
-/// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`]:
-/// see the module docs.
+/// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`],
+/// the speed read by `speed`
+/// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)): see the
+/// module docs.
 pub fn land_or_select(
     target: Option<StellarId>,
     dock: Option<DockRequest>,
@@ -553,6 +570,7 @@ pub fn land_or_select(
     sites: &[LandingSite],
     cleared: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
+    speed: RuleSource,
 ) -> DockPress {
     let refused = |refusal| DockPress {
         selected: None,
@@ -593,7 +611,7 @@ pub fn land_or_select(
         outcome,
     };
     if let Some(request) = dock.filter(|request| request.stellar == stellar) {
-        let attempt = check_landing(player, site, request.permission, reach(site));
+        let attempt = check_landing(player, site, request.permission, reach(site), speed);
         let dock = if attempt.is_ok() { None } else { dock };
         return pressed(dock, said, attempt.map(LandOutcome::Landed));
     }
@@ -730,20 +748,24 @@ fn has(site: &LandingSite, flag: u32) -> bool {
 /// stellar, or the refusal that applies (`_HandlePlayerDockRequest`
 /// @0x66c13-0x66cfd, @0x67687-0x67800). A counter not past
 /// [`REQUESTED_NEAR`] is [`LandingRefusal::TooFar`] wherever the ship is,
-/// as is a ship outside the reach; then a ship faster than
-/// [`LANDING_SPEED`] is [`LandingRefusal::TooFast`].
+/// as is a ship outside the reach; then a ship too fast by `reading`
+/// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)) is
+/// [`LandingRefusal::TooFast`]: by the engine, |vx| or |vy| above
+/// [`PER_AXIS_LANDING_SPEED`] or not a number (@0x66c3c-0x66c66); by the
+/// other reading, the overall speed above [`LANDING_SPEED`].
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
     permission: i16,
     reach: LandingReach,
+    reading: RuleSource,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
     if permission <= REQUESTED_NEAR || !reach.holds(site.position - player.position) {
         return Err(LandingRefusal::TooFar { stellar, station });
     }
-    let speed = player.velocity.length();
-    if speed > LANDING_SPEED {
+    if too_fast(player.velocity, reading) {
+        let speed = player.velocity.length();
         return Err(LandingRefusal::TooFast {
             stellar,
             station,
@@ -751,6 +773,20 @@ pub fn check_landing(
         });
     }
     Ok(stellar)
+}
+
+/// Whether a ship moving at `velocity` is too fast to land by `reading`
+/// (see [`check_landing`]). By the engine, written so that a NaN axis
+/// fails both compares and refuses, as the `jp` @0x66c51 and the
+/// unordered `jb` @0x66c66 do.
+fn too_fast(velocity: Vec2, reading: RuleSource) -> bool {
+    match reading {
+        RuleSource::Engine => {
+            !(velocity.x.abs() <= PER_AXIS_LANDING_SPEED
+                && velocity.y.abs() <= PER_AXIS_LANDING_SPEED)
+        }
+        RuleSource::Bible => velocity.length() > LANDING_SPEED,
+    }
 }
 
 /// The `MinStatus` that never clears by record (@0x67915).
@@ -970,6 +1006,16 @@ mod tests {
     /// request at [`CLEARED`], by `site`'s [`engine_reach`]: the stellar
     /// landed on, or the refusal. Traffic control is not asked.
     fn check(player: &ShipState, site: &LandingSite) -> Result<StellarId, LandingRefusal> {
+        check_by(player, site, RuleSource::Engine)
+    }
+
+    /// [`check`] with the speed read by `reading`
+    /// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)).
+    fn check_by(
+        player: &ShipState,
+        site: &LandingSite,
+        reading: RuleSource,
+    ) -> Result<StellarId, LandingRefusal> {
         let press = land_or_select(
             Some(site.id),
             Some(DockRequest {
@@ -980,6 +1026,7 @@ mod tests {
             std::slice::from_ref(site),
             |_| panic!("traffic control is asked"),
             engine_reach,
+            reading,
         );
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) => stellar,
@@ -1004,6 +1051,7 @@ mod tests {
             std::slice::from_ref(site),
             |site| landing_record(site, system_govt, &record) >= site.min_status,
             engine_reach,
+            RuleSource::Engine,
         );
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
@@ -1013,6 +1061,7 @@ mod tests {
     #[test]
     fn the_named_values() {
         assert_eq!(LANDING_SPEED, 1.0);
+        assert_eq!(PER_AXIS_LANDING_SPEED, 0.75);
         assert_eq!(UNKNOWN_STELLAR_RADIUS, 32.0);
         assert_eq!(NO_FRAME_REACH, 75.0);
         assert_eq!(UNLOADED_TYPE_WIDTH, 150);
@@ -1311,7 +1360,15 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
         let circle = LandingReach::Circle(landing_radius(&target));
-        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, CLEARED, circle);
+        let at = |x, y| {
+            check_landing(
+                &ship(x, y, 0.0, 0.0),
+                &target,
+                CLEARED,
+                circle,
+                RuleSource::Engine,
+            )
+        };
         assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
             at(30.0, 40.01),
@@ -1346,14 +1403,30 @@ mod tests {
     fn the_same_reach_decides_too_fast_and_too_far() {
         let target = site(128, 0.0, 0.0);
         let reach = LandingReach::Box(175.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, reach);
+        let fast = |y| {
+            check_landing(
+                &ship(0.0, y, 3.0, 0.0),
+                &target,
+                CLEARED,
+                reach,
+                RuleSource::Engine,
+            )
+        };
         assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
         // Outside today's 50 circle but inside the box: too fast, not too
         // far.
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
         let circle = LandingReach::Circle(50.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, circle);
+        let fast = |y| {
+            check_landing(
+                &ship(0.0, y, 3.0, 0.0),
+                &target,
+                CLEARED,
+                circle,
+                RuleSource::Engine,
+            )
+        };
         assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
     }
@@ -1752,17 +1825,120 @@ mod tests {
         ));
     }
 
+    /// [`TooFast`](LandingRefusal::TooFast) at stellar 128, a planet,
+    /// for a ship moving at `velocity`.
+    fn too_fast(velocity: Vec2) -> Result<StellarId, LandingRefusal> {
+        Err(LandingRefusal::TooFast {
+            stellar: StellarId(128),
+            station: false,
+            speed: velocity.length(),
+        })
+    }
+
+    /// [`check_by`] over stellar 128 for a parked ship moving at
+    /// (`vx`, `vy`), by `reading`.
+    fn moving(vx: f32, vy: f32, reading: RuleSource) -> Result<StellarId, LandingRefusal> {
+        check_by(&ship(0.0, 0.0, vx, vy), &site(128, 0.0, 0.0), reading)
+    }
+
     #[test]
-    fn exactly_the_landing_speed_lands() {
+    fn each_axis_at_most_three_quarters_lands_by_the_engine() {
+        let overall = Vec2::new(0.7, 0.7).length();
+        assert!(overall > 0.98 && overall < LANDING_SPEED, "{overall}");
+        assert_eq!(moving(0.7, 0.7, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.8, 0.0, RuleSource::Engine),
+            too_fast(Vec2::new(0.8, 0.0))
+        );
+        assert_eq!(
+            moving(0.0, -0.8, RuleSource::Engine),
+            too_fast(Vec2::new(0.0, -0.8))
+        );
+        // The default helper reads the engine.
+        assert_eq!(
+            check(&ship(0.0, 0.0, 0.8, 0.0), &site(128, 0.0, 0.0)),
+            too_fast(Vec2::new(0.8, 0.0))
+        );
+    }
+
+    #[test]
+    fn three_quarters_on_an_axis_is_inclusive_by_the_engine() {
+        assert_eq!(PER_AXIS_LANDING_SPEED, 0.75);
+        assert_eq!(moving(0.75, -0.75, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(moving(-0.75, 0.75, RuleSource::Engine), Ok(StellarId(128)));
+        let over = 0.75_f32.next_up();
+        assert_eq!(
+            moving(over, 0.0, RuleSource::Engine),
+            too_fast(Vec2::new(over, 0.0))
+        );
+        assert_eq!(
+            moving(0.0, -over, RuleSource::Engine),
+            too_fast(Vec2::new(0.0, -over))
+        );
+        // The readings differ both ways.
+        assert_eq!(moving(0.74, 0.74, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.74, 0.74, RuleSource::Bible),
+            too_fast(Vec2::new(0.74, 0.74))
+        );
+    }
+
+    #[test]
+    fn a_velocity_that_is_not_a_number_is_too_fast_by_the_engine() {
+        for (vx, vy) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            assert!(
+                matches!(
+                    moving(vx, vy, RuleSource::Engine),
+                    Err(LandingRefusal::TooFast { .. })
+                ),
+                "{vx} {vy}"
+            );
+            // The port's earlier check lets it land, as it did.
+            assert_eq!(moving(vx, vy, RuleSource::Bible), Ok(StellarId(128)));
+        }
+    }
+
+    #[test]
+    fn the_other_reading_checks_the_overall_speed() {
+        let bible = RuleSource::Bible;
+        assert_eq!(moving(0.7, 0.7, bible), Ok(StellarId(128)));
+        assert_eq!(moving(0.8, 0.0, bible), Ok(StellarId(128)));
+        assert_eq!(moving(0.0, 1.0, bible), Ok(StellarId(128)));
+        assert_eq!(moving(-1.0, 0.0, bible), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.0, 1.0_f32.next_up(), bible),
+            too_fast(Vec2::new(0.0, 1.0_f32.next_up()))
+        );
+        assert_eq!(moving(0.6, 0.81, bible), too_fast(Vec2::new(0.6, 0.81)));
+    }
+
+    #[test]
+    fn too_far_comes_before_too_fast_by_either_reading() {
         let target = site(128, 0.0, 0.0);
-        assert_eq!(
-            check(&ship(0.0, 0.0, 0.0, 1.0), &target),
-            Ok(StellarId(128))
-        );
-        assert_eq!(
-            check(&ship(0.0, 0.0, -1.0, 0.0), &target),
-            Ok(StellarId(128))
-        );
+        for reading in RuleSource::ALL {
+            let outside = ship(0.0, 500.0, 0.8, 0.0);
+            assert!(
+                matches!(
+                    check_landing(&outside, &target, CLEARED, engine_reach(&target), reading),
+                    Err(LandingRefusal::TooFar { .. })
+                ),
+                "{reading:?}"
+            );
+            let over = ship(0.0, 0.0, 0.8, 0.0);
+            assert!(
+                matches!(
+                    check_landing(
+                        &over,
+                        &target,
+                        REQUESTED_NEAR,
+                        engine_reach(&target),
+                        reading
+                    ),
+                    Err(LandingRefusal::TooFar { .. })
+                ),
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]
@@ -1817,6 +1993,7 @@ mod tests {
             sites,
             |_| clear,
             engine_reach,
+            RuleSource::Engine,
         )
     }
 

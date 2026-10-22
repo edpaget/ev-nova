@@ -323,7 +323,8 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     for _ in 0..40 {
         session.tick(reverse);
     }
-    while session.player().velocity.length() > 1.0 {
+    // Under 0.75 on each axis, the original's per-axis gate.
+    while session.player().velocity.length() > 0.75 {
         session.tick(thrust);
     }
     assert_eq!(

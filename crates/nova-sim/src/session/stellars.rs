@@ -2458,6 +2458,64 @@ mod tests {
         Rulebook::default().with_override(RuleKey::LandingDistance, RuleSource::Bible)
     }
 
+    /// The land key pressed in a session of `catalog` with `rules`, 128
+    /// targeted and cleared, the ship over its centre moving at
+    /// `velocity`: the stellar landed on, or the refusal, and the sounds
+    /// the press raised.
+    fn land_moving(
+        catalog: &FakePilotCatalog,
+        rules: &Rulebook,
+        velocity: Vec2,
+    ) -> (Result<StellarId, LandingRefusal>, Vec<crate::SimSound>) {
+        let mut session = quiet(catalog).with_rules(*rules);
+        session.ship.player = ShipState {
+            velocity,
+            ..ShipState::default()
+        };
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.port.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: crate::clearance::CLEARED,
+        });
+        let _ = session.take_sounds();
+        let landed = session.land().map(|press| match press {
+            LandPress::Outcome(LandOutcome::Landed(stellar)) => stellar,
+            other => panic!("not a landing: {other:?}"),
+        });
+        (landed, session.take_sounds())
+    }
+
+    #[test]
+    fn the_player_lands_by_the_per_axis_speed_by_default_and_by_the_overall_speed_by_the_other_reading()
+     {
+        let catalog = landing_at(100, StellarFlags::CAN_LAND, None, 12);
+        let too_fast = |velocity: Vec2| {
+            Err(LandingRefusal::TooFast {
+                stellar: StellarId(128),
+                station: false,
+                speed: velocity.length(),
+            })
+        };
+        let engine = Rulebook::default();
+        assert_eq!(
+            land_moving(&catalog, &engine, Vec2::new(0.7, 0.7)).0,
+            Ok(StellarId(128))
+        );
+        let (refused, sounds) = land_moving(&catalog, &engine, Vec2::new(0.8, 0.0));
+        assert_eq!(refused, too_fast(Vec2::new(0.8, 0.0)));
+        assert_eq!(sounds, [crate::SimSound::Refused], "@0x676fe");
+
+        let overall = Rulebook::default().with_override(RuleKey::LandingSpeed, RuleSource::Bible);
+        assert_eq!(
+            land_moving(&catalog, &overall, Vec2::new(0.8, 0.0)).0,
+            Ok(StellarId(128))
+        );
+        assert_eq!(
+            land_moving(&catalog, &overall, Vec2::new(0.74, 0.74)).0,
+            too_fast(Vec2::new(0.74, 0.74))
+        );
+    }
+
     #[test]
     fn a_destroyed_stellar_lands_within_its_type_width_until_a_rebuild_point_then_150() {
         for station in [false, true] {

@@ -101,10 +101,10 @@ impl PilotCatalog for Courier {
     }
 
     fn ship_fields(&self, _id: ShipId) -> Result<ShipFields, String> {
-        // 0.9 a tick led: slow enough to land as the jump arrives at its
-        // top speed.
+        // 0.6 a tick led: slow enough to land, under 0.75 on each axis,
+        // as the jump arrives at its top speed.
         Ok(ShipFields {
-            speed: 60,
+            speed: 40,
             accel: 900,
             maneuver: 30,
             fuel: 300,

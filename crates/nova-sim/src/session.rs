@@ -3390,6 +3390,7 @@ impl Session {
             &self.chart.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.space.landing_reach(&self.setup, site),
+            self.setup.rules.source_for(RuleKey::LandingSpeed),
         );
         if disabled {
             self.chart.select_pressed(press.selected);
@@ -7500,7 +7501,8 @@ pub(super) mod tests {
                 &flying,
                 &planet(128, 30.0, -40.0),
                 crate::clearance::CLEARED,
-                crate::landing::LandingReach::Box(175.0)
+                crate::landing::LandingReach::Box(175.0),
+                crate::rulebook::RuleSource::Engine,
             )
             .map(|_| StellarId(128))
         );

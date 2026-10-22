@@ -281,8 +281,8 @@ pub(crate) fn arriving(draws: &[u32]) -> Draws {
     Draws::of(&table.chain(draws.iter().copied()).collect::<Vec<_>>())
 }
 
-/// A slow ship, 0.6 of a pixel a tick (0.9 led, under the 1 a landing
-/// allows), gaining a unit a tick (its `Flags` 0x0008 letting its hull
+/// A slow ship, 0.4 of a pixel a tick (0.6 led, under the 0.75 on each
+/// axis a landing allows by the engine's reading of `LandingSpeed`), gaining a unit a tick (its `Flags` 0x0008 letting its hull
 /// regenerate): a jump from 130 arrives at its top speed, slow enough to
 /// land, over planet 140 at 131's edge, where the original's arrival puts
 /// it (see the `jump_arrival` module).
@@ -291,7 +291,7 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
         ships: vec![(
             ShipId(128),
             Ok(ShipFields {
-                speed: 60,
+                speed: 40,
                 fuel_regen: 1,
                 flags: crate::stats::FUEL_REGEN_HULL,
                 ..FAST
