@@ -20,14 +20,15 @@
 //!   [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) entry says:
 //!   - by the engine, it keeps formation ([`Goal::Formation`]) and guards
 //!     against a ship: the one it guards still while some weapon it
-//!     carries reaches it, disabled or not (`_AIInGunRange` @0x83edb),
-//!     else one drawn at random among the ships threatening the player
-//!     (`_AIFightThreatToParent` @0x81de6), at any distance. Every think
-//!     its low level fires `_AIFireTurret`'s one pick at its guard and
-//!     runs its point defence, at any distance and with no box
-//!     (`_AIEscortFireUnprovoked` from substates 1, 9, 0xb and 0xc,
-//!     [`unprovoked`]); a disabled or gone guard it drops instead, so its
-//!     next think draws again;
+//!     carries reaches it (`_AIInGunRange` @0x83edb), once its think's
+//!     validity step has dropped a gone or disabled one ([`valid_target`],
+//!     @0x83a9b-0x83ad2), else one drawn at random in the same think among
+//!     the ships threatening the player (`_AIFightThreatToParent`
+//!     @0x81de6), at any distance. Every think its low level fires
+//!     `_AIFireTurret`'s one pick at its guard and runs its point defence,
+//!     at any distance and with no box (`_AIEscortFireUnprovoked` from
+//!     substates 1, 9, 0xb and 0xc, [`unprovoked`]); a guard disabled or
+//!     gone between thinks it drops there;
 //!   - by the Bible (`shïp` `InherentAI`: "What AI the ship uses when
 //!     it's escorting the player"), it flies as its AI type would: a
 //!     warship or interceptor attacks the best threat to the player at
@@ -246,6 +247,28 @@ pub fn unprovoked(
     }
 }
 
+/// The target `npc`, an escort or fighter following `order`, keeps
+/// through its think's validity step among `around` (`_EscortAI`
+/// @0x83a9b-0x83ad2, for every parent): none once the target's slot is
+/// inactive (+0xb8: gone from the system, or destroyed; a ship still
+/// arriving holds its slot, @0x3c90b) or, unless the order is Attack, once
+/// it is `_IsDisabled` ([`Condition::disabled`], breaking up included).
+/// Phase 1 of escort-fleet-fidelity left this step to the low level's
+/// [`unprovoked`], so a disabled guard stood until the next think.
+#[must_use]
+pub fn valid_target(
+    npc: &Npc,
+    order: Option<EscortOrder>,
+    around: &Surroundings,
+) -> Option<ShipRef> {
+    let target = npc.target?;
+    let condition = around.condition_of(target)?;
+    if !condition.active() || (condition.disabled() && order != Some(EscortOrder::Attack)) {
+        return None;
+    }
+    Some(target)
+}
+
 /// Whether `npc` is intact and flying in the system, or holding its
 /// course after its glide or burst ([`Npc::arrived`]), where it is seen
 /// and fought: one an escort may keep fighting.
@@ -261,18 +284,19 @@ fn attack_or_form(threat: Option<NpcId>) -> Goal {
 }
 
 /// The ship `npc`, keeping formation, guards against among `around`:
-/// its target still, while some weapon `npc` carries reaches it, disabled
-/// or not, and arrived or not (`_AIInGunRange(ship, target, -1)`
+/// its target still, once the think's validity step has dropped a gone
+/// or disabled one ([`valid_target`]), while some weapon `npc` carries
+/// reaches it, arrived or not (`_AIInGunRange(ship, target, -1)`
 /// @0x83eb3-0x83ee4 reads the two places, +0x18 and +0x1c, and the
 /// weapons' reach alone, @0x7f9d5-0x7faf8: no slot, mode nor
 /// condition). So a ship still gliding in, waiting in its gate or
 /// bursting out of it ([`Npc::arrived`] false) is kept while in reach;
 /// otherwise one drawn on `chance` among the ships
 /// threatening the player ([`threats`], `_AIFightThreatToParent`
-/// @0x83ef4); none when there is none. The player is never kept
-/// (@0x83f0d-0x83f1a). [`unprovoked`] drops a disabled guard.
+/// @0x83ef4), in the same think; none when there is none. The player is
+/// never kept (@0x83f0d-0x83f1a).
 fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<ShipRef> {
-    let kept = match npc.target {
+    let kept = match valid_target(npc, None, around) {
         Some(ShipRef::Npc(id)) => around
             .npc(id)
             .filter(|target| fire::in_reach(npc, &target.state)),
@@ -729,28 +753,89 @@ mod tests {
     }
 
     #[test]
-    fn with_no_command_its_think_keeps_a_disabled_guard_in_reach_and_its_fire_drops_it() {
-        // `_EscortAI` keeps +0x70 while `_AIInGunRange` holds, reach alone
-        // (@0x83eb3-0x83ee4); `_AIEscortFireUnprovoked` then drops it.
+    fn with_no_command_its_think_drops_a_disabled_guard_and_draws_another() {
+        // `_EscortAI`'s step 5 drops a disabled target unless the order is
+        // Attack (@0x83a9b-0x83ad2), before the formation block keeps a
+        // target in reach (@0x83eb3-0x83ee4); the formation block then
+        // draws again in the same think (@0x83ef4). Between thinks
+        // `_AIEscortFireUnprovoked` drops it too.
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false,
+            },
+        ] {
+            let mut down = pirate(2, 100.0, 0.0);
+            down.condition = condition;
+            let guarding = having(
+                escort(None),
+                Goal::Formation { guard: Some(n(2)) },
+                Some(n(2)),
+            );
+            let npcs = [guarding, down, pirate(3, 200.0, 0.0)];
+            assert_eq!(
+                decide(&npcs, (0.0, 0.0), &[0]),
+                (Goal::Formation { guard: Some(n(3)) }, vec![1]),
+                "{condition:?}: drawn again among the threats in the same think"
+            );
+            assert_eq!(command(ENGINE, &npcs), (Trigger::default(), None));
+        }
+    }
+
+    #[test]
+    fn the_think_drops_a_gone_target_and_a_disabled_one_unless_the_order_is_attack() {
         let mut down = pirate(2, 100.0, 0.0);
         down.condition = Condition::Disabled;
-        let guarding = having(
-            escort(None),
-            Goal::Formation { guard: Some(n(2)) },
+        let npcs = [escort(None), down];
+        let around = Surroundings::new(&[], &npcs);
+        let targeting = |npc: Npc| having(npc, Goal::Idle, Some(n(2)));
+        assert_eq!(valid_target(&targeting(escort(None)), None, &around), None);
+        for order in [EscortOrder::Defend, EscortOrder::Hold, EscortOrder::Dock] {
+            assert_eq!(
+                valid_target(&targeting(escort(None)), Some(order), &around),
+                None,
+                "{order:?}"
+            );
+        }
+        assert_eq!(
+            valid_target(&targeting(escort(None)), Some(EscortOrder::Attack), &around),
             Some(n(2)),
+            "attack keeps a disabled target"
         );
-        let npcs = [guarding, down.clone(), pirate(3, 200.0, 0.0)];
+        let gone = having(escort(None), Goal::Idle, Some(n(9)));
         assert_eq!(
-            decide(&npcs, (0.0, 0.0), &[]),
-            (Goal::Formation { guard: Some(n(2)) }, vec![]),
-            "kept, no draw"
+            valid_target(&gone, Some(EscortOrder::Attack), &around),
+            None
         );
-        assert_eq!(command(ENGINE, &npcs), (Trigger::default(), None));
-        let dropped = having(escort(None), Goal::Formation { guard: Some(n(2)) }, None);
+        let mut destroyed = pirate(2, 100.0, 0.0);
+        destroyed.condition = Condition::Destroyed;
+        let npcs = [escort(None), destroyed];
+        let around = Surroundings::new(&[], &npcs);
         assert_eq!(
-            decide(&[dropped, down, pirate(3, 200.0, 0.0)], (0.0, 0.0), &[0]),
-            (Goal::Formation { guard: Some(n(3)) }, vec![1]),
-            "drawn again among the threats"
+            valid_target(&targeting(escort(None)), Some(EscortOrder::Attack), &around),
+            None,
+            "its slot freed"
+        );
+        // The slot's active test (+0xb8) keeps a ship still arriving.
+        let mut arriving = pirate(2, 100.0, 0.0);
+        arriving.mode = Mode::Emerging { ticks_left: 5 };
+        let npcs = [escort(None), arriving];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            valid_target(&targeting(escort(None)), None, &around),
+            Some(n(2))
+        );
+        // The player: gone with no player in the system.
+        let on_player = having(escort(None), Goal::Idle, Some(ShipRef::Player));
+        assert_eq!(valid_target(&on_player, None, &around), None);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            ..around
+        };
+        assert_eq!(
+            valid_target(&on_player, None, &around),
+            Some(ShipRef::Player)
         );
     }
 

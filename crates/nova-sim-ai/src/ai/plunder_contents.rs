@@ -72,7 +72,10 @@ pub const CAPTURE_SHARE: f64 = 0.5;
 /// The share of its armour capacity a captured ship is left with (the
 /// double 0.66 @0xdd5b8, @0x849b4-0x849c8).
 pub const CAPTURED_ARMOR_SHARE: f64 = 0.66;
-/// The AI wait a captured ship takes (+0x4c = 150.0 @0x8499c).
+/// The AI wait a captured ship takes (+0x4c = 150.0 @0x8499c). Its first
+/// think as its captor's escort ends it (`_EscortAI`'s formation block,
+/// +0x4c = -1.0 @0x83ea8-0x83eb0; see
+/// [`fleet_escort`](crate::ai::fleet_escort)).
 pub const CAPTURED_WAIT: u32 = 150;
 /// The AI wait a pirate takes as it plunders, its hold before it drifts
 /// off (+0x4c = 100.0 @0x8c772, @0x86f4e).

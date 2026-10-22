@@ -822,6 +822,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
             },
             "@0x8cb8f-0x8cb9d"
         );

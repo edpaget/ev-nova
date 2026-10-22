@@ -7,6 +7,7 @@
 mod common;
 
 mod asteroids;
+mod fleet_escorts;
 mod frame_rate;
 mod headless;
 mod idle_block;

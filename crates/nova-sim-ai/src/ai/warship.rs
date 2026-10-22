@@ -367,6 +367,7 @@ impl Hunt {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            ends_wait: false,
         }
     }
 }
@@ -1332,6 +1333,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
             }
         );
         assert!(
@@ -1839,6 +1841,7 @@ mod tests {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            ends_wait: false,
         }
     }
 
@@ -1924,6 +1927,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
             }
         );
         let mut calm = grudger;
@@ -1949,6 +1953,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
             },
             "no grudge: dropped, and nothing picked"
         );

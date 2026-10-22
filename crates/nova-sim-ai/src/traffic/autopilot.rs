@@ -474,7 +474,7 @@ fn fly_mobile(
             }
         }
         Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
-        Goal::Follow(_) | Goal::Inspect(_) => match other {
+        Goal::Follow { .. } | Goal::Inspect(_) => match other {
             Some(other) => follow(&state, &handling, other, inertia),
             None => brake(&state, &handling, inertia),
         },
@@ -2906,7 +2906,10 @@ mod tests {
         // `leave_flight`), so it is no goal that wants no speed.
         for goal in [
             Goal::Land(StellarId(140)),
-            Goal::Follow(NpcId(0)),
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None,
+            },
             Goal::Idle,
         ] {
             let mut ship = npc(still, goal, at(0.0, 0.0, 0.0, 0.0, 45.0));
@@ -2927,7 +2930,14 @@ mod tests {
             }
             assert_eq!(ship.state.position, Vec2::ZERO, "{goal:?}");
         }
-        let mut follower = npc(still, Goal::Follow(NpcId(0)), at(0.0, 0.0, 0.0, 0.0, 45.0));
+        let mut follower = npc(
+            still,
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None,
+            },
+            at(0.0, 0.0, 0.0, 0.0, 45.0),
+        );
         for _ in 0..300 {
             fly(&mut follower, &sites, Some(&lead));
         }
@@ -2944,7 +2954,10 @@ mod tests {
         for goal in [
             Goal::Idle,
             Goal::Land(StellarId(999)),
-            Goal::Follow(NpcId(9)),
+            Goal::Follow {
+                lead: NpcId(9),
+                guard: None,
+            },
         ] {
             let mut ship = npc(FAST, goal, at(0.0, 0.0, 4.0, -3.0, 10.0));
             for _ in 0..200 {
@@ -3014,7 +3027,10 @@ mod tests {
             Goal::Idle,
             Goal::JumpOut,
             Goal::Land(StellarId(140)),
-            Goal::Follow(NpcId(0)),
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None,
+            },
         ] {
             let mut ship = npc(FAST, goal, at(10.0, 20.0, 3.0, -1.0, 45.0));
             ship.immobile = true;
@@ -3039,7 +3055,7 @@ mod tests {
                 // A shove lasts only until its next tick.
                 ship.state.velocity = ship.state.velocity + Vec2::new(5.0, 5.0);
             }
-            if matches!(goal, Goal::Land(_) | Goal::Follow(_)) {
+            if matches!(goal, Goal::Land(_) | Goal::Follow { .. }) {
                 assert!(thrust > 0.0, "{goal:?} thrusts from rest");
             }
         }
@@ -3081,7 +3097,10 @@ mod tests {
         let mut lead = at(0.0, 0.0, 2.0, 0.0, 90.0);
         let mut ship = npc(
             FAST,
-            Goal::Follow(NpcId(0)),
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None,
+            },
             at(-600.0, 400.0, 0.0, 0.0, 0.0),
         );
         for _ in 0..600 {

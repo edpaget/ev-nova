@@ -43,7 +43,7 @@
 //!    [`RuleKey::EscapeShipCut`] says: a shield above 1.0 rolled below its
 //!    own (`Rand(trunc(shield))`), and half the velocity
 //!    (@0x3550a-0x35553). Once its carrier is no longer intact, the
-//!    fighter flies on its own (`Space::orphan_fighters`).
+//!    fighter leaves its fleet (`Space::lose_leads`).
 //!
 //! The view hears `snd ` 372 for each pod from where the NPC is
 //! ([`ESCAPE_POD_SOUND`](crate::sound::ESCAPE_POD_SOUND)), as a fight

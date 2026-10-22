@@ -337,7 +337,7 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
 fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
     let other = match npc.goal {
         _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
-        Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
+        Goal::Follow { lead, .. } => Some(ShipRef::Npc(lead)),
         Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
         Goal::Dock(carrier) => Some(carrier),
         goal => goal.quarry().or(goal.inspecting()),
@@ -510,7 +510,10 @@ mod tests {
         lead.goal = Goal::EnterGate(GATE);
         let mut follower = at(5, 2.0, 0.0);
         follower.leader = Some(NpcId(4));
-        follower.goal = Goal::Follow(NpcId(4));
+        follower.goal = Goal::Follow {
+            lead: NpcId(4),
+            guard: None,
+        };
         let mut flier = at(6, -300.0, 0.0);
         flier.state.velocity = Vec2::new(1.0, 0.0);
         flier.goal = Goal::JumpOut;

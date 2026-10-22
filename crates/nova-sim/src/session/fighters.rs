@@ -34,15 +34,17 @@
 //!   carrier's lead, or the carrier), of the carrier's government, and
 //!   attacks the carrier's target unless that is the carrier or of its
 //!   fleet (@0x3dc00-0x3dd47); it flies by
-//!   [`CarriedAi`](crate::CarriedAi).
+//!   [`FleetEscortAi`](crate::FleetEscortAi) under its lead, or by the
+//!   other reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
+//!   by [`CarriedAi`](crate::CarriedAi).
 //!
 //! **Docking.** A fighter that docks ([`Outcome::Docked`]) goes back
 //! aboard its carrier ([`Armament::stow`](crate::Armament::stow)): the
 //! player's leaves the fleet, its round going to the first fighter
 //! outfit of its bay, with no save due; one no bay of the player's
 //! launches is lost, which makes one. An NPC's fighter whose carrier is
-//! gone from the system or not intact is left on its own AI type, with
-//! no carrier and no leader.
+//! gone from the system or not intact leaves its fleet, with no carrier
+//! and no leader (see the `lost_lead` module).
 
 use std::collections::BTreeMap;
 
@@ -516,31 +518,6 @@ impl Space {
         match ship {
             ShipRef::Player => Some(ShipRef::Player),
             ShipRef::Npc(id) => self.npc(id).map(Npc::fleet),
-        }
-    }
-
-    /// Every NPC's fighter whose carrier is no longer in the system, or
-    /// not intact, is left on its own AI type: no carrier, no leader, and
-    /// idle until it decides (`_EscortAI` @0x83917-0x8397b).
-    pub(super) fn orphan_fighters(&mut self) {
-        let carriers: Vec<NpcId> = self
-            .traffic
-            .npcs()
-            .iter()
-            .filter(|npc| npc.condition == Condition::Intact)
-            .map(|npc| npc.id)
-            .collect();
-        for npc in self.traffic.npcs_mut() {
-            if let Some(Carrier {
-                ship: ShipRef::Npc(carrier),
-                ..
-            }) = npc.carrier
-                && !carriers.contains(&carrier)
-            {
-                npc.carrier = None;
-                npc.leader = None;
-                npc.goal = Goal::Idle;
-            }
         }
     }
 
@@ -1807,9 +1784,22 @@ pub(super) mod tests {
     }
 
     /// Nova's AI with every warship raiding and every interceptor
-    /// sitting.
+    /// sitting, by the other reading of [`RuleKey::NpcEscortAi`], the
+    /// port's earlier routing: the carrier, which escorts its lead, raids
+    /// by its type, and its fighters fly [`CarriedAi`](crate::CarriedAi).
+    /// These tests are of the launch and the dock, which
+    /// rdm:phase/escort-fleet-fidelity/phase-4-carriers-and-fighters moves
+    /// under the fleet escorts' AI.
     fn raiding_ai() -> NovaAi {
-        sitting_ai().with(AiType::Warship, Rc::new(Raiding))
+        NovaAi::from_rulebook(&earlier_escorts())
+            .with(AiType::Interceptor, Rc::new(Sitting))
+            .with(AiType::WimpyTrader, Rc::new(Sitting))
+            .with(AiType::Warship, Rc::new(Raiding))
+    }
+
+    /// The rules by the other reading of [`RuleKey::NpcEscortAi`].
+    fn earlier_escorts() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible)
     }
 
     pub(in crate::session) const PIRATES: crate::catalog::GovtId = crate::catalog::GovtId(142);
@@ -1864,13 +1854,14 @@ pub(super) mod tests {
         raided_by(catalog, RuleSource::Engine)
     }
 
-    /// [`raided`], an NPC's pick spending as `spend` reads
+    /// [`raided`], by the other reading of [`RuleKey::NpcEscortAi`] (see
+    /// [`raiding_ai`]), an NPC's pick spending as `spend` reads
     /// [`RuleKey::AiSpendWithoutShot`]: by the other reading the carrier's
     /// kept bay, fired as its pick on the tick its reload runs out, drains
     /// no fighter (see `an_npc_carrier_launches_its_fighters_at_its_target`),
     /// so both its fighters launch.
     fn raided_by(catalog: &FakePilotCatalog, spend: RuleSource) -> (Session, NpcId, NpcId) {
-        let rules = Rulebook::default()
+        let rules = earlier_escorts()
             .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
             .with_override(RuleKey::AiSpendWithoutShot, spend);
         let mut session = flying_by(catalog, pilot(catalog, 0, Vec::new()), rules);

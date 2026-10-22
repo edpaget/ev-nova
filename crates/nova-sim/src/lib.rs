@@ -21,7 +21,9 @@
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
-//!   orders; and an NPC carrier's fighters to [`CarriedAi`].
+//!   orders; and a ship with an NPC parent, a fleet's escort or an NPC
+//!   carrier's fighter, to [`FleetEscortAi`] (or, by the rulebook's other
+//!   reading, a led ship by its AI type and a fighter to [`CarriedAi`]).
 //! - [`asteroid`]: a system's asteroid field: the 16 slots
 //!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
 //!   field's edge or in place, how it drifts and spins, and when it is
@@ -452,8 +454,8 @@ pub use nova_sim_combat::tutorial;
 pub use nova_sim_port::wares;
 
 pub use ai::{
-    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,
-    Reaction, Surroundings, Warship, WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, FleetEscortAi, Goal, Interceptor, NovaAi,
+    Peaceful, PlayerSide, Reaction, Surroundings, Warship, WimpyTrader,
 };
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};

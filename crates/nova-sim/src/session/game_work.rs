@@ -615,7 +615,8 @@ impl Session {
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
-        self.space.orphan_fighters();
+        self.space
+            .lose_leads(self.setup.rules.source_for(crate::RuleKey::NpcEscortAi));
         self.let_go_of_gone_target();
         self.see_stellars();
         self.space.hold_derelicts(&self.statics);

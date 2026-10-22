@@ -49,6 +49,7 @@ pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod flee_drop;
+pub mod fleet_escort;
 pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
@@ -100,6 +101,7 @@ pub use brave::BraveTrader;
 pub use call_for_help::CommCall;
 pub use carried::CarriedAi;
 pub use escort::EscortAi;
+pub use fleet_escort::FleetEscortAi;
 pub use interceptor::Interceptor;
 pub use miner::MinerAi;
 pub use nova::NovaAi;
@@ -274,8 +276,19 @@ pub enum Goal {
     /// the centre, brake unless it expedites, and jump out (see
     /// [`leave`]).
     JumpOut,
-    /// Keep with this NPC, its fleet's lead.
-    Follow(NpcId),
+    /// Keep with `lead`, its fleet's lead: the original's goal 0xa under
+    /// an NPC parent, flown within
+    /// [`FOLLOW_DISTANCE`](crate::traffic::autopilot::FOLLOW_DISTANCE) of
+    /// the lead. A fleet escort flying `_EscortAI`'s formation (see
+    /// [`fleet_escort`]) holds the ship it guards in `guard`, its +0x70,
+    /// at which it fires its turret pick. It fights nothing: its quarry
+    /// is none.
+    Follow {
+        /// The lead it keeps with.
+        lead: NpcId,
+        /// The ship its turrets fire at, if any.
+        guard: Option<ShipRef>,
+    },
     /// Attack this ship.
     Attack(ShipRef),
     /// Stand off and fire at this ship, which it cannot catch.
@@ -413,7 +426,7 @@ impl Goal {
             | Self::Land(_)
             | Self::EnterGate(_)
             | Self::JumpOut
-            | Self::Follow(_)
+            | Self::Follow { .. }
             | Self::Attack(_)
             | Self::Snipe(_)
             | Self::Flee(_)
@@ -454,7 +467,7 @@ impl Goal {
             Self::Inspect(_)
             | Self::Assist(_)
             | Self::Dock(_)
-            | Self::Follow(_)
+            | Self::Follow { .. }
             | Self::Formation { .. }
             | Self::Hold => true,
             Self::Idle
@@ -933,6 +946,13 @@ pub struct Decision {
     /// pick runs no reach at all, so the ship it was inspecting is not
     /// looked over and the player is not scanned.
     pub re_picked: bool,
+    /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
+    /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
+    /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) for a ship under an NPC parent
+    /// ([`fleet_escort`]), so a ship a pirate took into its fleet ends its
+    /// [`CAPTURED_WAIT`](plunder_contents::CAPTURED_WAIT) at its first
+    /// think. The traffic zeroes [`Npc::ai_wait`] as it takes the goal.
+    pub ends_wait: bool,
 }
 
 /// How NPCs decide what to do.
@@ -1076,12 +1096,15 @@ pub(crate) fn random_stellar(
 
 /// What `npc` keeps to among `around` before its idle block runs, if
 /// anything: an escort follows its lead while the lead is in the system,
-/// and a goal it can still fly is kept.
+/// guarding nothing, and a goal it can still fly is kept. A led ship
+/// reaches its type's idle block only by the other reading of
+/// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the port's
+/// earlier routing; by the engine's it flies [`FleetEscortAi`] instead.
 pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
     if let Some(lead) = npc.leader
         && around.npc(lead).is_some()
     {
-        return Some(Goal::Follow(lead));
+        return Some(Goal::Follow { lead, guard: None });
     }
     can_still_fly(npc, around).then_some(npc.goal)
 }
@@ -1154,7 +1177,10 @@ mod tests {
             Goal::Land(StellarId(128)),
             Goal::EnterGate(StellarId(129)),
             Goal::JumpOut,
-            Goal::Follow(NpcId(2)),
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None,
+            },
             Goal::Attack(ship),
             Goal::Snipe(ship),
             Goal::Flee(ship),
@@ -1524,10 +1550,16 @@ mod tests {
             let mut chance = Draws::of(&[0]);
             assert_eq!(
                 decide(&escort, &sites(), &together, &mut chance),
-                Goal::Follow(NpcId(1))
+                Goal::Follow {
+                    lead: NpcId(1),
+                    guard: None
+                }
             );
             assert!(chance.asked.is_empty());
-            escort.goal = Goal::Follow(NpcId(1));
+            escort.goal = Goal::Follow {
+                lead: NpcId(1),
+                guard: None,
+            };
             assert_eq!(
                 decide(&escort, &sites(), &[escort.clone()], &mut chance),
                 alone,
@@ -1708,7 +1740,10 @@ mod tests {
             );
         }
         for goal in [
-            Goal::Follow(NpcId(7)),
+            Goal::Follow {
+                lead: NpcId(7),
+                guard: None,
+            },
             Goal::Idle,
             Goal::Attack(ShipRef::Player),
             Goal::Snipe(ShipRef::Player),
@@ -1759,7 +1794,10 @@ mod tests {
             Goal::Land(StellarId(128)),
             Goal::EnterGate(StellarId(128)),
             Goal::JumpOut,
-            Goal::Follow(NpcId(1)),
+            Goal::Follow {
+                lead: NpcId(1),
+                guard: None,
+            },
             Goal::Inspect(n),
             Goal::Assist(Help::Refuel),
             Goal::Assist(Help::Repair),

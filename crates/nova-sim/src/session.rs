@@ -469,6 +469,7 @@ mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
 mod launch_frame;
+mod lost_lead;
 mod lost_target;
 mod map;
 mod map_borders;
@@ -1916,14 +1917,16 @@ impl Session {
 
     /// The session's work after the traffic's motion, read against
     /// `marks`, drawing on `chance`: each mission ship that left raising
-    /// its fate, the persons' offers resolved, the fighters orphaned, and
+    /// its fate, the persons' offers resolved, the ships whose lead or
+    /// carrier is lost out of their fleets (the `lost_lead` module), and
     /// the watched ships observed. The fighters that docked are taken
     /// aboard before it ([`Session::dock_fighters`]), by the ship loop at
     /// each one's own slot.
     fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
         self.mission_ships_left(&marks.marks);
         self.resolve_person_offers(marks.last, &mut &mut *chance);
-        self.space.orphan_fighters();
+        self.space
+            .lose_leads(self.setup.rules.source_for(RuleKey::NpcEscortAi));
         self.observe_watched();
     }
 

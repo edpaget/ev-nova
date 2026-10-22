@@ -198,7 +198,10 @@ mod tests {
             Goal::Wait,
             Goal::Inspect(ShipRef::Player),
             Goal::Idle,
-            Goal::Follow(crate::traffic::npc::NpcId(2)),
+            Goal::Follow {
+                lead: crate::traffic::npc::NpcId(2),
+                guard: None,
+            },
             Goal::Assist(Help::Refuel),
         ] {
             let kept = taking(Decision {

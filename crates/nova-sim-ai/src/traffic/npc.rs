@@ -510,7 +510,9 @@ pub struct Npc {
     /// Its AI wait (the original's +0x4c) for the waits it takes while it
     /// flies, outside its [`Mode`]: a pirate's dock with its victim
     /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
-    /// took into its fleet (150) (see [`plunder`](crate::traffic::plunder))
+    /// took into its fleet (150, which its first think as an escort ends,
+    /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)) (see
+    /// [`plunder`](crate::traffic::plunder))
     /// and a pirate's count wait (120, see
     /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
     /// in [`Npc::wait_running`], the traffic counts it down as the ship
@@ -855,9 +857,13 @@ impl Npc {
     /// attack, snipe or flight, or a stop's kept target) for the AI states
     /// and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
-    /// [`Npc::threatens`] keeps it, since its one modelled reader
-    /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target))
-    /// sees only flying ships. The "other than itself" test can't
+    /// [`Npc::threatens`] keeps it, since its readers
+    /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target);
+    /// the threat searches for an NPC parent, `_AIFightThreatToParent`
+    /// @0x81e74 and `_IsShipANearbyThreatToParent` @0x83768,
+    /// [`escort::fight_threats`](crate::escort::fight_threats) and
+    /// [`escort::threat_score_to`](crate::escort::threat_score_to)) see
+    /// only flying ships. The "other than itself" test can't
     /// change the answer: a ship led by `ship` is excluded by the leader
     /// test first.
     ///
@@ -1020,10 +1026,12 @@ impl Npc {
     ///   `_CommDialogUpdate` @0x90625, `_DrawCommDialogButtons` @0x28d5a,
     ///   `_DoCommDialog` @0x95ce1, @0x960fa, @0x966da;
     ///   [`hail::like`](crate::hail::like));
-    /// - the player's escorts' threat picks (`_AIFightThreatToParent`
+    /// - the escorts' threat picks (`_AIFightThreatToParent`
     ///   @0x81e5c-0x81f7d, `_IsShipANearbyThreatToParent` @0x83744;
     ///   [`escort::threats`](crate::escort::threats),
-    ///   [`escort::threat_score`](crate::escort::threat_score)).
+    ///   [`escort::threat_score`](crate::escort::threat_score)), and an NPC
+    ///   lead's own (`_AIFightThreatToParent` @0x81e83-0x81e9d,
+    ///   [`escort::fight_threats`](crate::escort::fight_threats)).
     ///
     /// The stellar-defender clause above is planet-domination's.
     #[must_use]
@@ -2181,7 +2189,10 @@ mod tests {
             Goal::Assist(crate::ai::Help::Refuel),
             Goal::Assist(crate::ai::Help::Repair),
             Goal::Dock(ShipRef::Npc(NpcId(5))),
-            Goal::Follow(NpcId(5)),
+            Goal::Follow {
+                lead: NpcId(5),
+                guard: None,
+            },
             Goal::Formation { guard: None },
             Goal::Hold,
         ] {

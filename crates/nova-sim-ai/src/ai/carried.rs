@@ -1,5 +1,9 @@
 //! [`CarriedAi`]: how an NPC carrier's fighters fly and fight, while
-//! their carrier is in the system (see [`bay`](crate::bay)).
+//! their carrier is in the system (see [`bay`](crate::bay)), by the other
+//! reading of the rulebook's
+//! [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi): the port's
+//! earlier flight of them. By the engine's reading they fly `_EscortAI`
+//! under their lead ([`FleetEscortAi`](crate::ai::FleetEscortAi)).
 //!
 //! The original drives them through its escort AI with the carrier as
 //! their parent, and the carrier's orders (`_AIIssueEscortOrders`

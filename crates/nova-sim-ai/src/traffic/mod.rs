@@ -2225,7 +2225,8 @@ impl Traffic {
     /// the decision's write ([`Decision::travel`],
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
-    /// [`Npc::visited`]. Each decision's calls,
+    /// [`Npc::visited`]. A decision that ends its AI wait
+    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`]. Each decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
@@ -2245,6 +2246,7 @@ impl Traffic {
                 travel,
                 visits,
                 re_picked,
+                ends_wait,
                 ..
             } = decision;
             if let Some(write) = lost_sight {
@@ -2280,6 +2282,9 @@ impl Traffic {
             crate::ai::travel::take(npc, travel, goal);
             if let Some(stellar) = visits {
                 npc.visited = Some(stellar);
+            }
+            if ends_wait {
+                npc.ai_wait = 0;
             }
             npc.goal = goal;
         }
@@ -3882,7 +3887,13 @@ mod tests {
         traffic.npcs[1].leader = Some(NpcId(0));
         let sites = [planet(140, 0.0, -5000.0)];
         traffic.tick(&crate::ai::Peaceful, &sites, &mut Draws::of(&[0]));
-        assert_eq!(traffic.npcs()[1].goal, Goal::Follow(NpcId(0)));
+        assert_eq!(
+            traffic.npcs()[1].goal,
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None
+            }
+        );
         for _ in 0..60 {
             traffic.tick(&crate::ai::Peaceful, &sites, &mut Draws::of(&[]));
         }
@@ -4302,7 +4313,7 @@ mod tests {
         traffic.npcs[0].goal = Goal::EnterGate(GATE);
         for follower in &mut traffic.npcs[1..3] {
             follower.leader = Some(lead);
-            follower.goal = Goal::Follow(lead);
+            follower.goal = Goal::Follow { lead, guard: None };
             follower.target = Some(ShipRef::Player);
             follower.provoked = 5.0;
         }
@@ -4312,7 +4323,10 @@ mod tests {
             reach: 30.0,
         });
         traffic.npcs[3].leader = Some(NpcId(9));
-        traffic.npcs[3].goal = Goal::Follow(NpcId(9));
+        traffic.npcs[3].goal = Goal::Follow {
+            lead: NpcId(9),
+            guard: None,
+        };
         let untouched = traffic.npcs[3].clone();
         let sites = [gate_at_centre()];
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
@@ -4360,10 +4374,19 @@ mod tests {
         // A ship that joins its lead once the lead is entering is not
         // released: the release runs on the tick the lead reaches the box.
         traffic.npcs[1].leader = Some(NpcId(0));
-        traffic.npcs[1].goal = Goal::Follow(NpcId(0));
+        traffic.npcs[1].goal = Goal::Follow {
+            lead: NpcId(0),
+            guard: None,
+        };
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         assert_eq!(traffic.npcs[1].leader, Some(NpcId(0)));
-        assert_eq!(traffic.npcs[1].goal, Goal::Follow(NpcId(0)));
+        assert_eq!(
+            traffic.npcs[1].goal,
+            Goal::Follow {
+                lead: NpcId(0),
+                guard: None
+            }
+        );
     }
 
     /// Answers every hit on itself by attacking the player.
@@ -4781,6 +4804,7 @@ mod tests {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            ends_wait: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
@@ -4895,7 +4919,10 @@ mod tests {
         for goal in [
             Goal::Inspect(ShipRef::Player),
             Goal::Dock(ShipRef::Npc(NpcId(1))),
-            Goal::Follow(NpcId(1)),
+            Goal::Follow {
+                lead: NpcId(1),
+                guard: None,
+            },
             Goal::Hold,
             Goal::Assist(Help::Refuel),
         ] {

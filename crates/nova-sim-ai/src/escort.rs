@@ -54,7 +54,11 @@
 //! escort a quarter; a
 //! defending one looks within [`DEFEND_RADIUS`] of the player and keeps
 //! its target within [`DEFEND_KEEP_SQ`] (see
-//! [`ai::escort`](crate::ai::escort)).
+//! [`ai::escort`](crate::ai::escort)). The same searches serve an escort
+//! with an NPC parent ([`Parent`], [`fight_threats`], [`threat_score_to`],
+//! [`player_threat_score`], [`nearest_threat`]): the ships threatening the
+//! lead or a ship it leads, and the player when the lead threatens it
+//! (see [`ai::fleet_escort`](crate::ai::fleet_escort)).
 //!
 //! The strings are `STR#` 2002's: #51, #133, #134 and #154 the constants
 //! below, the labels each type gives, #155-#159 what a command's message
@@ -65,6 +69,7 @@
 use crate::ai::Surroundings;
 pub use crate::catalog::{EscortClass, FIGHTER_MASS, FREIGHTER_AI, MEDIUM_MASS};
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 pub use crate::fleet::EscortOrder;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
@@ -385,16 +390,78 @@ pub fn threats<'a>(
         .filter(move |candidate| candidate.id != escort.id && around.threatens_player(candidate))
 }
 
+/// The ship an escort guards, its parent (+0x9a): the player, where it
+/// is, or an NPC lead. The threat searches read it
+/// ([`fight_threats`], [`threat_score_to`], [`nearest_threat`]).
+#[derive(Clone, Copy, Debug)]
+pub enum Parent<'a> {
+    /// The player, at this place.
+    Player(&'a ShipState),
+    /// An NPC lead: a fleet's lead, a pirate that took the escort in, or
+    /// a fighter's lead.
+    Npc(&'a Npc),
+}
+
+impl Parent<'_> {
+    /// Where it is.
+    fn at(self) -> Vec2 {
+        match self {
+            Self::Player(state) => state.position,
+            Self::Npc(lead) => lead.state.position,
+        }
+    }
+}
+
+/// The ships among `around` that threaten `parent`, which `escort` may
+/// fight (`_AIFightThreatToParent` @0x81de6-0x81fae, whole), in the
+/// original's slot order, the player first:
+///
+/// - With the player the parent, the NPCs [`threats`] yields.
+/// - With an NPC lead, the player when it is in the system, not disabled,
+///   and `_ExtendedIsThreatToPlayer(lead)` holds (@0x81e83-0x81e9d,
+///   [`Surroundings::threatens_player`]: the player's sight of the lead,
+///   no blessing); and every NPC but `escort` and the lead that threatens
+///   the lead by `_ExtendedIsThreatToShip(lead, ship)` (@0x81e74,
+///   [`Npc::threatens_npc_among`], which fails a disabled ship).
+///
+/// It makes no sight test of its own. The test of a ship's system (+0x74)
+/// is not modelled, as every ship the engine holds is in the player's
+/// system; the count's missing active test can't matter, as both threat
+/// tests fail an inactive slot (@0x81a33, @0x81b82).
+#[must_use]
+pub fn fight_threats(escort: &Npc, parent: Parent, around: &Surroundings) -> Vec<ShipRef> {
+    match parent {
+        Parent::Player(_) => threats(escort, around)
+            .map(|threat| ShipRef::Npc(threat.id))
+            .collect(),
+        Parent::Npc(lead) => {
+            let player = around
+                .player
+                .filter(|player| player.condition == Condition::Intact)
+                .filter(|_| around.threatens_player(lead))
+                .map(|_| ShipRef::Player);
+            player
+                .into_iter()
+                .chain(
+                    around
+                        .npcs
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.id != escort.id
+                                && candidate.id != lead.id
+                                && candidate.threatens_npc_among(lead.id, around.npcs)
+                        })
+                        .map(|threat| ShipRef::Npc(threat.id)),
+                )
+                .collect()
+        }
+    }
+}
+
 /// How strongly `escort` takes `candidate` for a threat to the player at
 /// `player`, among `around` (`_IsShipANearbyThreatToParent` @0x836a4); the
-/// lowest wins, and none is no threat. The candidate must be one the
-/// escort sees (`_ShipVisibleToShip(candidate, escort)` @0x8370e,
-/// [`Surroundings::sees`]) that threatens the player as [`threats`] asks
-/// it (`_ExtendedIsThreatToPlayer` @0x83744). The score is the distance
-/// squared from the escort; with a `radius` around the player, the
-/// candidate must be within it, and its distance squared from the player
-/// is added. It is halved for a candidate of another class than the
-/// escort's, and halved again for a fighter against a warship escort.
+/// lowest wins, and none is no threat: [`threat_score_to`] with the player
+/// the parent.
 #[must_use]
 pub fn threat_score(
     escort: &Npc,
@@ -403,24 +470,112 @@ pub fn threat_score(
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<f32> {
-    if candidate.id == escort.id
-        || !around.sees(escort, ShipRef::Npc(candidate.id))
-        || !around.threatens_player(candidate)
+    threat_score_to(escort, candidate, Parent::Player(player), around, radius)
+}
+
+/// How strongly `escort` takes the NPC `candidate` for a threat to
+/// `parent` among `around` (`_IsShipANearbyThreatToParent`
+/// @0x836a4-0x83860); the lowest wins, and none is no threat. The
+/// candidate must be other than the escort, one the escort sees
+/// (`_ShipVisibleToShip(candidate, escort)` @0x8370e,
+/// [`Surroundings::sees`]), and threaten the parent (@0x83735-0x83768):
+/// the player as [`threats`] asks it (`_ExtendedIsThreatToPlayer`
+/// @0x83744), an NPC lead, never the lead itself, by
+/// `_ExtendedIsThreatToShip(lead, candidate)`
+/// ([`Npc::threatens_npc_among`]). The score is `scored`'s.
+///
+/// The tests of the candidate's own parent and of a sibling (@0x836f1)
+/// coincide with the threat tests' leader exclusions (@0x81a5a,
+/// @0x81b9f), and the test of a disabled candidate by its own order word
+/// (@0x83727) is dead, as both threat tests fail a disabled ship
+/// (@0x81a43, @0x81b92): none is built.
+#[must_use]
+pub fn threat_score_to(
+    escort: &Npc,
+    candidate: &Npc,
+    parent: Parent,
+    around: &Surroundings,
+    radius: Option<f32>,
+) -> Option<f32> {
+    if candidate.id == escort.id || !around.sees(escort, ShipRef::Npc(candidate.id)) {
+        return None;
+    }
+    let threatens = match parent {
+        Parent::Player(_) => around.threatens_player(candidate),
+        Parent::Npc(lead) => {
+            candidate.id != lead.id && candidate.threatens_npc_among(lead.id, around.npcs)
+        }
+    };
+    if !threatens {
+        return None;
+    }
+    scored(
+        escort,
+        candidate.state.position,
+        candidate.class,
+        parent.at(),
+        radius,
+    )
+}
+
+/// How strongly `escort` takes the player for a threat to its NPC `lead`
+/// among `around` (`_IsShipANearbyThreatToParent` with slot 0 the
+/// candidate): none with no player in the system, a disabled one, one the
+/// lead's government blesses with peace, or one the lead doesn't threaten
+/// by the narrow `_IsThreatToPlayer(lead)` (`_ExtendedIsThreatToShip`
+/// @0x81a89-0x81a9c, [`Npc::threatens_player_among`]). The player is
+/// always seen. The score is `scored`'s, the class the player's
+/// ([`PlayerSide::class`](crate::ai::PlayerSide::class)).
+#[must_use]
+pub fn player_threat_score(
+    escort: &Npc,
+    lead: &Npc,
+    around: &Surroundings,
+    radius: Option<f32>,
+) -> Option<f32> {
+    let player = around.player?;
+    if player.condition != Condition::Intact
+        || around.blessed(lead.govt)
+        || !lead.threatens_player_among(around.npcs)
     {
         return None;
     }
+    scored(
+        escort,
+        player.state.position,
+        player.class,
+        lead.state.position,
+        radius,
+    )
+}
+
+/// The score of a threat at `at`, of class `class`, to `escort`, its parent
+/// at `parent` (@0x837a5-0x83850): the distance squared from the escort;
+/// with a `radius` around the parent, the threat must be within it,
+/// inclusive, and its distance squared from the parent is added. It is
+/// halved for a threat of another class than the escort's, and halved
+/// again for a fighter against a warship escort. The original truncates
+/// the squares to integers and holds the score at least 1; the engine
+/// keeps floats, and the floor changes no pick.
+fn scored(
+    escort: &Npc,
+    at: Vec2,
+    class: EscortClass,
+    parent: Vec2,
+    radius: Option<f32>,
+) -> Option<f32> {
     let squared = |off: Vec2| off.x * off.x + off.y * off.y;
-    let mut score = squared(candidate.state.position - escort.state.position);
+    let mut score = squared(at - escort.state.position);
     if let Some(radius) = radius {
-        let from_player = squared(candidate.state.position - player.position);
-        if from_player > radius * radius {
+        let from_parent = squared(at - parent);
+        if from_parent > radius * radius {
             return None;
         }
-        score += from_player;
+        score += from_parent;
     }
-    if candidate.class != escort.class {
+    if class != escort.class {
         score /= 2.0;
-        if candidate.class == EscortClass::Fighter && escort.class == EscortClass::Warship {
+        if class == EscortClass::Fighter && escort.class == EscortClass::Warship {
             score /= 2.0;
         }
     }
@@ -428,7 +583,7 @@ pub fn threat_score(
 }
 
 /// The threat to the player at `player` among `around` that `escort` takes:
-/// the lowest [`threat_score`], the first of a tie. Only candidates
+/// [`nearest_threat`] with the player the parent. Only candidates
 /// [`threat_score`] accepts count, so both the escort's sight of a
 /// candidate ([`Surroundings::sees`]) and the player's
 /// ([`Surroundings::seen_by_player`]) gate the pick.
@@ -439,16 +594,42 @@ pub fn best_threat(
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<NpcId> {
-    let mut best: Option<(NpcId, f32)> = None;
-    for candidate in around.npcs {
-        let Some(score) = threat_score(escort, candidate, around, player, radius) else {
-            continue;
-        };
+    match nearest_threat(escort, Parent::Player(player), around, radius) {
+        Some(ShipRef::Npc(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// The threat to `parent` among `around` that `escort` takes
+/// (`_FindNearestThreatToParent` @0x83861-0x838d1): the lowest score, the
+/// earliest slot of a tie, as only a strictly lower score replaces the
+/// pick. Slot 0, the player, comes first ([`player_threat_score`], with
+/// an NPC lead alone), then the NPCs by slot ([`Surroundings::by_slot`],
+/// [`threat_score_to`]).
+#[must_use]
+pub fn nearest_threat(
+    escort: &Npc,
+    parent: Parent,
+    around: &Surroundings,
+    radius: Option<f32>,
+) -> Option<ShipRef> {
+    let player = match parent {
+        Parent::Player(_) => None,
+        Parent::Npc(lead) => {
+            player_threat_score(escort, lead, around, radius).map(|score| (ShipRef::Player, score))
+        }
+    };
+    let npcs = around.by_slot().into_iter().filter_map(|candidate| {
+        threat_score_to(escort, candidate, parent, around, radius)
+            .map(|score| (ShipRef::Npc(candidate.id), score))
+    });
+    let mut best: Option<(ShipRef, f32)> = None;
+    for (ship, score) in player.into_iter().chain(npcs) {
         if best.is_none_or(|(_, lowest)| score < lowest) {
-            best = Some((candidate.id, score));
+            best = Some((ship, score));
         }
     }
-    best.map(|(id, _)| id)
+    best.map(|(ship, _)| ship)
 }
 
 #[cfg(test)]
@@ -1029,6 +1210,329 @@ mod tests {
         assert_eq!(
             best_threat(&escort, &seen_by_player, &player, None),
             Some(NpcId(2))
+        );
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_lower_berth_whatever_the_order_held() {
+        // `_FindNearestThreatToParent` walks slots 0-63, a strictly lower
+        // score replacing the pick (@0x83861-0x838d1).
+        let player = ShipState::default();
+        let escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let mut later = ship(2, MEDIUM, 0.0, 100.0, true);
+        later.berth = 7;
+        let mut earlier = ship(3, MEDIUM, 100.0, 0.0, true);
+        earlier.berth = 4;
+        let npcs = [escort.clone(), later, earlier];
+        assert_eq!(
+            best_threat(&escort, &among(&npcs), &player, None),
+            Some(NpcId(3))
+        );
+    }
+
+    /// The NPC lead, NPC 10.
+    const LEAD: NpcId = NpcId(10);
+
+    /// The lead at (`x`, `y`), idle.
+    fn lead_at(x: f32, y: f32) -> Npc {
+        ship(10, MEDIUM, x, y, false)
+    }
+
+    /// NPC `id` at (`x`, `y`) led by the lead.
+    fn led(id: u32, x: f32, y: f32) -> Npc {
+        let mut npc = ship(id, MEDIUM, x, y, false);
+        npc.leader = Some(LEAD);
+        npc
+    }
+
+    /// NPC `id` at (`x`, `y`) attacking `target`.
+    fn attacking(id: u32, x: f32, y: f32, target: ShipRef) -> Npc {
+        let mut npc = ship(id, MEDIUM, x, y, false);
+        npc.goal = crate::ai::Goal::Attack(target);
+        npc
+    }
+
+    /// `npcs` with the player at (`x`, `y`), as `player` changes it.
+    fn with_player(
+        npcs: &[Npc],
+        (x, y): (f32, f32),
+        player: impl Fn(&mut crate::ai::PlayerSide),
+    ) -> Surroundings<'_> {
+        let mut side = crate::ai::fixture::player(x, y);
+        player(&mut side);
+        Surroundings {
+            player: Some(side),
+            ..among(npcs)
+        }
+    }
+
+    #[test]
+    fn the_nearest_threat_to_an_npc_lead_attacks_it_or_a_ship_it_leads() {
+        // `_IsShipANearbyThreatToParent` with an NPC parent asks
+        // `_ExtendedIsThreatToShip(parent, candidate)` (@0x83735-0x83768).
+        let lead = lead_at(0.0, 0.0);
+        let escort = led(1, 0.0, 0.0);
+        let npcs = [
+            escort.clone(),
+            lead.clone(),
+            led(2, 500.0, 0.0),
+            attacking(3, 300.0, 0.0, ShipRef::Npc(LEAD)),
+            attacking(4, 0.0, 200.0, ShipRef::Npc(NpcId(2))),
+            ship(5, MEDIUM, 10.0, 0.0, false),
+            attacking(6, 20.0, 0.0, ShipRef::Player),
+        ];
+        let around = among(&npcs);
+        let parent = Parent::Npc(&lead);
+        assert_eq!(
+            threat_score_to(&escort, &npcs[3], parent, &around, None),
+            Some(90_000.0)
+        );
+        assert_eq!(
+            threat_score_to(&escort, &npcs[4], parent, &around, None),
+            Some(40_000.0)
+        );
+        for calm in [&npcs[5], &npcs[6]] {
+            assert_eq!(
+                threat_score_to(&escort, calm, parent, &around, None),
+                None,
+                "{:?}",
+                calm.id
+            );
+        }
+        assert_eq!(
+            nearest_threat(&escort, parent, &around, None),
+            Some(ShipRef::Npc(NpcId(4)))
+        );
+        let far = lead_at(5000.0, 0.0);
+        let mut moved = npcs.clone();
+        moved[1] = far.clone();
+        assert_eq!(
+            nearest_threat(&escort, Parent::Npc(&far), &among(&moved), None),
+            Some(ShipRef::Npc(NpcId(4))),
+            "anywhere, measured from the escort"
+        );
+    }
+
+    #[test]
+    fn with_a_radius_the_npc_leads_distance_is_added_and_one_beyond_it_is_out() {
+        let lead = lead_at(100.0, 0.0);
+        let escort = led(1, 0.0, 0.0);
+        let inside = attacking(2, 650.0, 0.0, ShipRef::Npc(LEAD));
+        let outside = attacking(3, 651.0, 0.0, ShipRef::Npc(LEAD));
+        let npcs = [
+            escort.clone(),
+            lead.clone(),
+            outside.clone(),
+            inside.clone(),
+        ];
+        let around = among(&npcs);
+        let parent = Parent::Npc(&lead);
+        assert_eq!(
+            threat_score_to(&escort, &inside, parent, &around, Some(DEFEND_RADIUS)),
+            Some(650.0 * 650.0 + 550.0 * 550.0)
+        );
+        assert_eq!(
+            threat_score_to(&escort, &outside, parent, &around, Some(DEFEND_RADIUS)),
+            None
+        );
+        assert_eq!(
+            nearest_threat(&escort, parent, &around, Some(DEFEND_RADIUS)),
+            Some(ShipRef::Npc(NpcId(2)))
+        );
+        let npcs = [escort.clone(), lead.clone(), outside];
+        assert_eq!(
+            nearest_threat(&escort, parent, &among(&npcs), Some(DEFEND_RADIUS)),
+            None
+        );
+    }
+
+    #[test]
+    fn neither_the_lead_the_escort_nor_a_ship_the_lead_leads_is_a_threat_to_it() {
+        // The sibling and leader tests (@0x836f1) coincide with
+        // `_ExtendedIsThreatToShip`'s own leader test (@0x81a5a).
+        // The lead attacks a ship it leads, which by `_ExtendedIsThreatToShip`
+        // alone would make it a threat to itself.
+        let mut lead = lead_at(0.0, 0.0);
+        lead.goal = crate::ai::Goal::Attack(ShipRef::Npc(NpcId(2)));
+        let mut escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        escort.goal = crate::ai::Goal::Attack(ShipRef::Npc(LEAD));
+        let mut turncoat = led(2, 10.0, 0.0);
+        turncoat.goal = crate::ai::Goal::Attack(ShipRef::Npc(LEAD));
+        let npcs = [escort.clone(), lead.clone(), turncoat];
+        let around = among(&npcs);
+        let parent = Parent::Npc(&lead);
+        for candidate in &npcs {
+            assert_eq!(
+                threat_score_to(&escort, candidate, parent, &around, None),
+                None,
+                "{:?}",
+                candidate.id
+            );
+        }
+        assert_eq!(nearest_threat(&escort, parent, &around, None), None);
+        assert_eq!(fight_threats(&escort, parent, &around), []);
+    }
+
+    #[test]
+    fn a_cloaked_threat_to_an_npc_lead_the_escort_cannot_see_is_not_taken() {
+        let lead = lead_at(0.0, 0.0);
+        let mut escort = led(1, 0.0, 0.0);
+        let npcs = [
+            escort.clone(),
+            lead.clone(),
+            cloaked(attacking(2, 50.0, 0.0, ShipRef::Npc(LEAD))),
+        ];
+        let around = among(&npcs);
+        assert_eq!(
+            nearest_threat(&escort, Parent::Npc(&lead), &around, None),
+            None
+        );
+        escort.cloak_gear.scanner.on_screen = true;
+        assert_eq!(
+            nearest_threat(&escort, Parent::Npc(&lead), &around, None),
+            Some(ShipRef::Npc(NpcId(2)))
+        );
+    }
+
+    #[test]
+    fn the_player_is_a_nearby_threat_to_an_npc_lead_that_threatens_it() {
+        // Slot 0 as a candidate: not disabled, not blessed by the lead's
+        // government, and the lead `_IsThreatToPlayer` (@0x81a89-0x81a9c).
+        let mut lead = lead_at(0.0, 0.0);
+        lead.goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let mut class = led(1, 0.0, 0.0);
+        class.class = EscortClass::Freighter;
+        let npcs = [class.clone(), lead.clone()];
+        let parent = Parent::Npc(&lead);
+        let around = with_player(&npcs, (0.0, 300.0), |_| {});
+        assert_eq!(
+            nearest_threat(&class, parent, &around, None),
+            Some(ShipRef::Player)
+        );
+        assert_eq!(
+            player_threat_score(&class, &lead, &around, Some(DEFEND_RADIUS)),
+            Some(2.0 * 90_000.0),
+            "the player's class is the escort's: no halving"
+        );
+        let medium = led(1, 0.0, 0.0);
+        assert_eq!(
+            player_threat_score(&medium, &lead, &around, None),
+            Some(45_000.0),
+            "another class: half"
+        );
+        let blessed = with_player(&npcs, (0.0, 300.0), |player| {
+            player.blessing = crate::ai::fixture::blessing_of(crate::ai::fixture::PIRATES);
+        });
+        let mut pirate_lead = lead.clone();
+        pirate_lead.govt = Some(crate::ai::fixture::PIRATES);
+        let pirate_npcs = [class.clone(), pirate_lead.clone()];
+        let blessed = Surroundings {
+            npcs: &pirate_npcs,
+            ..blessed
+        };
+        assert_eq!(
+            nearest_threat(&class, Parent::Npc(&pirate_lead), &blessed, None),
+            None,
+            "blessed by the lead's government"
+        );
+        let disabled = with_player(&npcs, (0.0, 300.0), |player| {
+            player.condition = crate::combat::hull::Condition::Disabled;
+        });
+        assert_eq!(nearest_threat(&class, parent, &disabled, None), None);
+        let idle = lead_at(0.0, 0.0);
+        let npcs = [class.clone(), idle.clone()];
+        let around = with_player(&npcs, (0.0, 300.0), |_| {});
+        assert_eq!(
+            nearest_threat(&class, Parent::Npc(&idle), &around, None),
+            None,
+            "a lead that doesn't threaten the player"
+        );
+    }
+
+    #[test]
+    fn a_tie_with_the_player_goes_to_the_player_then_to_the_lower_berth() {
+        let mut lead = lead_at(0.0, 0.0);
+        lead.goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let escort = led(1, 0.0, 0.0);
+        let mut later = attacking(2, 100.0, 0.0, ShipRef::Npc(LEAD));
+        later.berth = 9;
+        let mut earlier = attacking(3, -100.0, 0.0, ShipRef::Npc(LEAD));
+        earlier.berth = 5;
+        let npcs = [escort.clone(), lead.clone(), later, earlier];
+        let around = with_player(&npcs, (0.0, 100.0), |player| {
+            player.class = MEDIUM;
+        });
+        let parent = Parent::Npc(&lead);
+        assert_eq!(
+            nearest_threat(&escort, parent, &around, None),
+            Some(ShipRef::Player)
+        );
+        let around = among(&npcs);
+        assert_eq!(
+            nearest_threat(&escort, parent, &around, None),
+            Some(ShipRef::Npc(NpcId(3)))
+        );
+    }
+
+    #[test]
+    fn an_npc_leads_fight_threats_include_the_player_whenever_it_threatens_the_player() {
+        // `_AIFightThreatToParent`'s slot 0 asks
+        // `_ExtendedIsThreatToPlayer(parent)` (@0x81e83-0x81e9d): the
+        // player's sight of the lead, no blessing.
+        let mut lead = lead_at(0.0, 0.0);
+        lead.goal = crate::ai::Goal::Attack(ShipRef::Player);
+        lead.govt = Some(crate::ai::fixture::PIRATES);
+        let escort = led(1, 0.0, 0.0);
+        let mut down = attacking(4, 30.0, 0.0, ShipRef::Npc(LEAD));
+        down.condition = crate::combat::hull::Condition::Disabled;
+        let npcs = [
+            escort.clone(),
+            lead.clone(),
+            attacking(2, 5000.0, 0.0, ShipRef::Npc(LEAD)),
+            ship(3, MEDIUM, 10.0, 0.0, false),
+            down,
+        ];
+        let parent = Parent::Npc(&lead);
+        let around = with_player(&npcs, (0.0, 300.0), |_| {});
+        assert_eq!(
+            fight_threats(&escort, parent, &around),
+            [ShipRef::Player, ShipRef::Npc(NpcId(2))]
+        );
+        let blessed = with_player(&npcs, (0.0, 300.0), |player| {
+            player.blessing = crate::ai::fixture::blessing_of(crate::ai::fixture::PIRATES);
+        });
+        assert_eq!(
+            fight_threats(&escort, parent, &blessed),
+            [ShipRef::Player, ShipRef::Npc(NpcId(2))],
+            "blessed or not"
+        );
+        let disabled = with_player(&npcs, (0.0, 300.0), |player| {
+            player.condition = crate::combat::hull::Condition::Disabled;
+        });
+        assert_eq!(
+            fight_threats(&escort, parent, &disabled),
+            [ShipRef::Npc(NpcId(2))]
+        );
+        assert_eq!(
+            fight_threats(&escort, parent, &among(&npcs)),
+            [ShipRef::Npc(NpcId(2))],
+            "no player in the system"
+        );
+        let unseen = [escort.clone(), cloaked(lead.clone())];
+        let around = with_player(&unseen, (0.0, 300.0), |_| {});
+        assert_eq!(
+            fight_threats(&escort, Parent::Npc(&unseen[1]), &around),
+            [],
+            "the player doesn't see the lead"
+        );
+        assert_eq!(
+            fight_threats(
+                &escort,
+                Parent::Player(&ShipState::default()),
+                &among(&npcs)
+            ),
+            [ShipRef::Npc(LEAD)],
+            "with the player the parent, the threats to the player"
         );
     }
 
