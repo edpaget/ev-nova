@@ -163,6 +163,9 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
     let looks = Looks::read(&catalog, []);
     for double in [false, true] {
         let mut session = Session::start(&catalog).expect("starts");
+        // Begun, the ship is at (50, 50): off the origin on both axes.
+        session.begin(&catalog, &mut NeverFires);
+        assert_eq!(session.player().position, Vec2::new(50.0, 50.0));
         session.set_double_time_key(double);
         assert_eq!(session.double_time(), double);
         let (mut field, mut chance) = scattered(&session, &looks);
