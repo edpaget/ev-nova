@@ -342,7 +342,9 @@ pub struct BoomLook {
 pub struct TargetCard {
     /// Its `Subtitle`.
     pub subtitle: String,
-    /// Its picture, `PICT` 3000 + (ID - 128), when there is one.
+    /// Its target picture: its own `PICT` 3000 + (ID − 128), else its base
+    /// ship's, and none without a `shän` (see
+    /// [`crate::target_picture::target_picture`]).
     pub picture: Option<i16>,
 }
 
