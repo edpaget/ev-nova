@@ -775,6 +775,7 @@ mod tests {
     fn the_ships_the_player_leads_warp_out_with_it_on_its_clock() {
         let catalog = ships_catalog(ships(1));
         let (mut session, led, traffic) = with_traffic();
+        crate::session::tests::landing_by_circle(&mut session);
         let class = session.space.npc(led[0]).expect("there").clone();
         let fighter = session.space.traffic.add_npc(Npc {
             escort: None,

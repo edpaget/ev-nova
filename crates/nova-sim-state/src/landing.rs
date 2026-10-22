@@ -154,15 +154,29 @@
 //! by phase 10"). By the other reading, the port's earlier circle: within
 //! [`landing_radius`] of the centre.
 //!
-//! NPCs land by their own rule, which stays on the [`landing_radius`]
-//! circle under either reading: the original's NPC landing is
-//! `_HighLevelAIHandler` state 1, whose box goes by the ship's turn rate
-//! (`phase/stellar-fidelity/phase-5-npc-landing-reach`). The quarter of
-//! the width, inclusive (@0x8dbdf), is state 20's box for entering a
-//! hypergate or wormhole, not a landing ([`stellar_width`], see
-//! `nova_sim::traffic::gate_entry`).
-//! The original's speed gate is per axis (story-runtime phase 17,
-//! per-axis-landing-speed).
+//! **NPCs land by their own rule** ([`npc_over`]), whichever reading of
+//! `LandingDistance` holds, following
+//! [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding). By the engine's
+//! reading, `_HighLevelAIHandler` state 1's box (@0x8d90d-0x8da07): the
+//! ship's offset from the stellar's centre, `(float)stellar − ship`
+//! truncated to whole pixels on each axis (`cvttss2si`, then a 16-bit
+//! `cwde` @0x8d929, @0x8d94b, not replicated), each at most the
+//! half-width [`npc_box`], inclusive: [`NPC_BOX`], 40 (@0x8d90f), or
+//! below a turn rate of [`NPC_BOX_TURN`] (`_ShipTurnRate`, the float
+//! @0xdd044) trunc((9 − turn) × 8 + 32) in doubles (@0xdda90, @0xdda98,
+//! @0xdd578; a 16-bit `movsx` @0x8d9b7, not replicated). So a ship 40.9
+//! pixels off on each axis is over the stellar, and one 41.0 off on
+//! either is not. A turn that is not a number keeps 40 (`jp`), and an
+//! offset that is not a number truncates to 0x80000000, whose low word 0
+//! is inside. By the other reading, the port's earlier circle: within
+//! [`landing_radius`]. The speed it must be below, the brake and the
+//! approach are the NPC flight's (`nova_sim::traffic::land_flight`).
+//!
+//! The quarter of the width, inclusive (@0x8dbdf), is state 20's box for
+//! entering a hypergate or wormhole, not a landing ([`stellar_width`],
+//! see `nova_sim::traffic::gate_entry`).
+//! The player's speed gate is per axis in the original (story-runtime
+//! phase 17, per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
@@ -424,6 +438,63 @@ pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource
     #[allow(clippy::cast_possible_truncation)]
     let reach = (f64::from(width) * REACH_PER_WIDTH).trunc() as f32;
     LandingReach::Box(reach)
+}
+
+/// The half-width of an NPC's landing box from a turn rate of
+/// [`NPC_BOX_TURN`] up, in pixels (`mov $0x28, %ebx`, @0x8d90f).
+pub const NPC_BOX: f32 = 40.0;
+/// The turn rate below which an NPC's landing box widens (the float
+/// @0xdd044).
+pub const NPC_BOX_TURN: f32 = 8.0;
+/// The turn rate the widening counts down from (the double @0xdda90).
+pub const NPC_BOX_TOP_TURN: f64 = 9.0;
+/// The pixels the box widens by for each degree of turn below
+/// [`NPC_BOX_TOP_TURN`] (the double @0xdda98).
+pub const NPC_BOX_PER_TURN: f64 = 8.0;
+/// The widened box's base half-width (the double @0xdd578).
+pub const NPC_BOX_BASE: f64 = 32.0;
+
+/// The half-width of the box an NPC turning at `turn_rate` lands in
+/// (`_HighLevelAIHandler` state 1, @0x8d90f-0x8d9a8): [`NPC_BOX`], or
+/// below a turn of [`NPC_BOX_TURN`] trunc((9 − turn) × 8 + 32), in
+/// doubles. A turn that is not a number keeps [`NPC_BOX`], as the
+/// comparison's `jp` does.
+#[must_use]
+pub fn npc_box(turn_rate: f32) -> f32 {
+    if turn_rate < NPC_BOX_TURN {
+        // A multiply then an add, as the original's `mulsd`/`addsd`.
+        let half = (NPC_BOX_TOP_TURN - f64::from(turn_rate)) * NPC_BOX_PER_TURN + NPC_BOX_BASE;
+        // Truncated, as `cvttsd2si` does; its 16-bit `movsx` is not
+        // replicated.
+        #[allow(clippy::cast_possible_truncation)]
+        let half = half.trunc() as f32;
+        half
+    } else {
+        NPC_BOX
+    }
+}
+
+/// Whether an NPC at `position`, turning at `turn_rate`, is over `site`
+/// under `source`
+/// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)). By the engine's
+/// reading, `_HighLevelAIHandler` state 1's box (@0x8d90d-0x8da07): its
+/// offset from the centre truncated to whole pixels on each axis, each at
+/// most [`npc_box`] of its turn, inclusive; an offset that is not a number
+/// reads as 0, inside. By the other reading, the port's earlier circle:
+/// within [`landing_radius`] of the centre.
+#[must_use]
+pub fn npc_over(site: &LandingSite, position: Vec2, turn_rate: f32, source: RuleSource) -> bool {
+    if source == RuleSource::Bible {
+        return (site.position - position).length() <= landing_radius(site);
+    }
+    let half = npc_box(turn_rate);
+    // `cvttss2si`'s truncation; Rust gives 0 for NaN as the original's
+    // 0x80000000 does in its low word. The `cwde` back from 16 bits is
+    // not replicated.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let whole = |offset: f32| (offset as i32) as f32;
+    let within = |offset: f32| whole(offset).abs() <= half;
+    within(site.position.x - position.x) && within(site.position.y - position.y)
 }
 
 /// What the land key did, when it was not refused.
@@ -1410,6 +1481,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_npcs_box_is_40_from_a_turn_of_8_and_widens_below_it() {
+        assert_eq!(NPC_BOX, 40.0);
+        assert_eq!(NPC_BOX_TURN, 8.0);
+        assert_eq!(NPC_BOX_TOP_TURN, 9.0);
+        assert_eq!(NPC_BOX_PER_TURN, 8.0);
+        assert_eq!(NPC_BOX_BASE, 32.0);
+        for (turn, half) in [
+            (8.0, 40.0),
+            (12.0, 40.0),
+            (7.99, 40.0),
+            (7.5, 44.0),
+            (7.0, 48.0),
+            (1.0, 96.0),
+            (f32::NAN, 40.0),
+        ] {
+            assert_eq!(npc_box(turn), half, "{turn}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_npc_is_over_a_stellar_within_its_box_in_whole_pixels() {
+        let planet = site(128, 100.0, -50.0);
+        let over = |dx: f32, dy: f32, turn| {
+            npc_over(
+                &planet,
+                Vec2::new(100.0 + dx, -50.0 + dy),
+                turn,
+                RuleSource::Engine,
+            )
+        };
+        for (dx, dy) in [(40.9, 40.9), (-40.9, -40.9), (40.9, -40.9), (0.0, 0.0)] {
+            assert!(over(dx, dy, 8.0), "{dx} {dy}");
+        }
+        for (dx, dy) in [(41.0, 0.0), (-41.0, 0.0), (0.0, 41.0), (0.0, -41.0)] {
+            assert!(!over(dx, dy, 8.0), "{dx} {dy}");
+        }
+        assert!(over(48.9, -48.9, 7.0));
+        assert!(!over(49.0, 0.0, 7.0));
+        assert!(!over(0.0, 49.0, 7.0));
+        // Far beyond any 16-bit offset: outside, not wrapped.
+        assert!(!over(1.0e9, 0.0, 8.0));
+    }
+
+    #[test]
+    fn by_the_engine_an_npc_at_no_position_is_over_the_stellar() {
+        let planet = site(128, 0.0, 0.0);
+        for position in [
+            Vec2::new(f32::NAN, f32::NAN),
+            Vec2::new(f32::NAN, 0.0),
+            Vec2::new(0.0, f32::NAN),
+        ] {
+            assert!(npc_over(&planet, position, 8.0, RuleSource::Engine));
+        }
+    }
+
+    #[test]
+    fn by_the_bible_an_npc_is_over_a_stellar_within_its_landing_radius() {
+        // 100 x 60: a radius of 50.
+        let planet = site(128, 0.0, 0.0);
+        let over = |x: f32, y: f32| npc_over(&planet, Vec2::new(x, y), 8.0, RuleSource::Bible);
+        assert!(over(30.0, 40.0));
+        assert!(over(-50.0, 0.0));
+        assert!(!over(30.0, 40.01));
+        assert!(!over(40.0, 40.0), "inside the box of 40");
+        // A turn rate makes no difference to the circle.
+        assert!(npc_over(
+            &planet,
+            Vec2::new(48.0, 0.0),
+            1.0,
+            RuleSource::Bible
+        ));
+        assert!(!npc_over(
+            &planet,
+            Vec2::new(60.0, 0.0),
+            1.0,
+            RuleSource::Bible
+        ));
     }
 
     #[test]

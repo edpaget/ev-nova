@@ -1,9 +1,10 @@
 //! `_LowLevelAIHandler`'s substate 2 (@0x8563b-0x857bd in the `EV Nova`
 //! executable): a ship closing in on the stellar its +0x6c holds, as the
 //! stellar attacker flies its approach
-//! ([`stellar_attack`](crate::traffic::stellar_attack)).
-//! rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's state 1 can fly
-//! its approach ("outside → sub 2") by [`toward`] too.
+//! ([`stellar_attack`](crate::traffic::stellar_attack)), and as a landing
+//! ship outside its box flies its approach (`_HighLevelAIHandler` state 1
+//! sets sub 2 there, @0x8d9b2-0x8da07; see
+//! [`land_flight`](crate::traffic::land_flight)).
 //!
 //! - It turns to `_CalcInterceptAngle(ship, stellar)`, the whole-degree
 //!   bearing of the stellar ([`trig::intercept_angle`]).

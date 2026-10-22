@@ -200,6 +200,7 @@ pub mod inertialess;
 pub mod ionization;
 pub mod jump_with_leader;
 pub mod kept_berths;
+pub mod land_flight;
 mod launch_room;
 mod launch_think;
 pub mod leave_flight;
@@ -660,6 +661,12 @@ pub struct World<'a> {
     /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), see
     /// [`held_burst`]).
     pub held_burst: RuleSource,
+    /// How an NPC lands: by the engine, in `_HighLevelAIHandler` state 1's
+    /// box, braking × 0.98 above 0.35 a tick; by the other reading, within
+    /// the landing radius at or below 1.0 a tick
+    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding), see
+    /// [`land_flight`]).
+    pub npc_landing: RuleSource,
     /// The stellars shots can shoot down ([`Surroundings::destroyable`]),
     /// among which a stellar attacker picks its quarry.
     pub destroyable: &'a BTreeSet<StellarId>,
@@ -723,6 +730,7 @@ impl<'a> World<'a> {
             npc_escort_ai: RuleSource::Engine,
             successor_repairer: RuleSource::Engine,
             held_burst: RuleSource::Engine,
+            npc_landing: RuleSource::Engine,
             destroyable: bare.destroyable,
         }
     }

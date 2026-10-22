@@ -2085,6 +2085,7 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
             destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
@@ -2166,6 +2167,7 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
             destroyable: &self.statics.destroyable,
         }
     }
@@ -16589,7 +16591,19 @@ pub(super) mod tests {
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
         stop_npcs(&mut session);
+        landing_by_circle(&mut session);
         session
+    }
+
+    /// `session` landing its NPCs by the port's earlier circle, the other
+    /// reading of `npc_landing`, for a test about something else: by the
+    /// engine's box (80 for a ship turning 3 a tick), a ship idling near
+    /// planet 128 at (30, -40) lands at once.
+    pub(super) fn landing_by_circle(session: &mut Session) {
+        session.setup.rules = session
+            .setup
+            .rules
+            .with_override(RuleKey::NpcLanding, RuleSource::Bible);
     }
 
     pub(super) const FIRE: Trigger = Trigger {
@@ -23766,6 +23780,7 @@ pub(super) mod tests {
                 &mut placing(2, &[(0, 0, -100, 0), (1, 35, -100, 0)]),
             );
             stop_npcs(&mut session);
+            landing_by_circle(&mut session);
             session.chart.target = Some(victim);
             if fires {
                 session.hold_trigger(FIRE);

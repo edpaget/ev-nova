@@ -607,9 +607,9 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
     harness.run(1);
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Land(StellarId(128)));
-    // Starting at its top speed, it overshoots the planet and comes back
-    // to settle within the 8 x 8 planet's 4 pixels, circling in on its
-    // 0.12 thrust for about a minute.
+    // Starting at its top speed, it closes on the planet by sub 2's
+    // approach and brakes in its landing box (40 pixels a side, wider for
+    // a slower turn) until it moves below 0.35 a tick on each axis.
     let last = harness.run(70);
     assert_eq!(harness.session().npcs(), [], "landed and gone");
     assert_eq!(traders(&last), []);

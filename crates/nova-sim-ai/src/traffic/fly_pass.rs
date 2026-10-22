@@ -509,6 +509,7 @@ fn fly_steered(
             snipe_lead: world.snipe_brake_lead,
             jump_fuel: world.npc_jump_fuel,
             held_burst: world.held_burst,
+            npc_landing: world.npc_landing,
         },
         world.weapons,
         &mut *chance,

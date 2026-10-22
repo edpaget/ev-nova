@@ -8,19 +8,27 @@
 //! [`flight::inertialess_step`] instead, its brake and planning as the
 //! [`inertialess`] module says.
 //!
-//! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
-//!   any sideways drift, and brakes (Down and thrust) once its stopping
-//!   distance reaches the distance left. It lands within the stellar's
-//!   [`landing_radius`] at or below [`LANDING_SPEED`]. That circle is not
-//!   the player's landing distance
-//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)).
-//!   The original's NPC landing is `_HighLevelAIHandler` state 1, its box
-//!   by the ship's turn rate
-//!   (`phase/stellar-fidelity/phase-5-npc-landing-reach`); the quarter of
-//!   the `Type` width at @0x8dbdf is state 20's gate entry, below. A
-//!   landing goal whose stellar is a hypergate or wormhole becomes
+//! - [`Goal::Land`]: by the engine's reading of
+//!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)
+//!   ([`Readings::npc_landing`]), as `_HighLevelAIHandler` state 1 flies
+//!   it ([`land_flight`]): outside its box (40 pixels a side, wider below
+//!   a turn rate of 8, [`landing::npc_box`](crate::landing::npc_box)) it
+//!   approaches by sub 2 ([`approach_flight`](crate::traffic::approach_flight));
+//!   inside, a folding ship unfolds, and moving 0.35 or more on an axis it
+//!   cuts its velocity and speed × 0.98 and brakes by sub 1; otherwise it
+//!   lands. By the other reading, the port's earlier landing: it heads for
+//!   the stellar at full speed, steering out any sideways drift, brakes
+//!   (Down and thrust) once its stopping distance reaches the distance
+//!   left, unfolds within the stellar's [`landing_radius`], and lands
+//!   within it at or below [`LANDING_SPEED`]. Neither is the player's
+//!   landing distance
+//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)); the
+//!   quarter of the `Type` width at @0x8dbdf is state 20's gate entry,
+//!   below. A landing goal whose stellar is a hypergate or wormhole becomes
 //!   [`Goal::EnterGate`] and is flown so the same tick (state 1's
-//!   hand-off, @0x8d8b8-0x8d8fe).
+//!   hand-off, @0x8d8b8-0x8d8fe), once its AI wait is out: state 1 runs
+//!   only past the high level's wait gate (@0x8d4b9-0x8d4d2). A stellar
+//!   not in the system brakes it.
 //! - [`Goal::EnterGate`]: outside the gate's box
 //!   ([`gate_entry::inside`], a quarter of its `Type` width on each axis,
 //!   inclusive) it heads for the gate as for a landing, with no wait.
@@ -251,6 +259,7 @@ use crate::traffic::formation_flight;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::held_burst::{self, Flight, Word};
 use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::land_flight;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
@@ -304,6 +313,10 @@ pub struct Readings {
     /// ([`Npc::end_wait`],
     /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
     pub held_burst: RuleSource,
+    /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
+    /// the engine ([`land_flight`]), within [`landing_radius`] by the other
+    /// reading ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)).
+    pub npc_landing: RuleSource,
 }
 
 /// What a flight reads beside the ship its goal is about: its swarm lead,
@@ -471,19 +484,27 @@ fn fly_mobile(
     if let Some(outcome) = unsteered(npc, &handling, unsteered_by, inertia, chance) {
         return outcome;
     }
-    hand_off(npc, sites);
     if npc.ai_wait > 0 && !npc.count_wait() {
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
         // inertialess ship's velocity following its speed (@0x3425f);
         // goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3443f-0x34454)
-        // and brakes below.
+        // and brakes below. The high level's wait gate returns before
+        // state 1 runs (@0x8d4b9-0x8d4d2), so a landing ship keeps its goal
+        // through the wait and hands a gate off only after it.
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
+    hand_off(npc, sites);
     let state = npc.state;
     let Flight { controls, word } = match npc.goal {
+        // A stellar not among `sites` brakes: the original's guard on a
+        // travel stellar of -1 (@0x8d8c9-0x8d8d1) does nothing, but a
+        // landing goal always names its stellar, so it can't be reached.
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
+            Some(site) if readings.npc_landing == RuleSource::Engine => {
+                return land_flight::fly(npc, site, &handling, flight, inertia, chance);
+            }
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
             Some(site) => land_approach(npc, site, &handling, inertia).into(),
             None => braking(&state, &handling, inertia),
@@ -1237,16 +1258,20 @@ fn count_down(npc: &mut Npc, ticks_left: u32) {
     };
 }
 
-/// Whether a ship at `state` can land on `site`: over it, and slow enough.
+/// Whether a ship at `state` can land on `site` by the other reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding): within its
+/// [`landing_radius`], at or below [`LANDING_SPEED`].
 fn over(state: &ShipState, site: &LandingSite) -> bool {
     (site.position - state.position).length() <= landing_radius(site)
         && state.velocity.length() <= LANDING_SPEED
 }
 
-/// How `npc`, landing on `site` but not over it, flies on `handling` as
-/// `inertia` says: toward it ([`approach`]), a folding ship unfolding
-/// once within its landing radius (`_HighLevelAIHandler` state 1
-/// @0x8da0c-0x8da38, see [`ship_display`]).
+/// How `npc`, landing on `site` by the other reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) but not over it,
+/// flies on `handling` as `inertia` says: toward it ([`approach`]), a
+/// folding ship unfolding once within its landing radius (the engine's
+/// reading unfolds in its box, `_HighLevelAIHandler` state 1
+/// @0x8da0c-0x8da38, see [`land_flight`]).
 fn land_approach(
     npc: &mut Npc,
     site: &LandingSite,
@@ -1609,6 +1634,46 @@ mod tests {
         )
     }
 
+    /// The engine's readings but `npc_landing`'s other: the port's circle at
+    /// [`LANDING_SPEED`], flying its earlier approach.
+    fn by_circle() -> Readings {
+        Readings {
+            npc_landing: RuleSource::Bible,
+            ..Readings::default()
+        }
+    }
+
+    /// Flies `npc` at its own top speed, with no lead, beside `other`, by
+    /// `readings`, any wait it draws its longest.
+    fn fly_reading(
+        npc: &mut Npc,
+        sites: &[LandingSite],
+        other: Option<&ShipState>,
+        readings: Readings,
+    ) -> Outcome {
+        let weapons = crate::ai::fixture::records_of([&*npc]);
+        let speeds = TopSpeeds::own_of(npc);
+        super::fly(
+            npc,
+            sites,
+            &BTreeMap::new(),
+            other,
+            false,
+            Beside::default(),
+            speeds,
+            FlightRules::default(),
+            readings,
+            &weapons,
+            &mut Draws::of(&[]),
+        )
+    }
+
+    /// [`FAST`] turning 8° a tick, so landing in a box of 40.
+    const NIMBLE: ShipFields = ShipFields {
+        maneuver: 80,
+        ..FAST
+    };
+
     /// An average ship: 3 pixels a tick at most, 0.1 more a tick, 1° a
     /// tick.
     const AVERAGE: ShipFields = ShipFields {
@@ -1637,8 +1702,18 @@ mod tests {
     /// Flies `npc` until it lands or jumps, or `limit` ticks pass, and
     /// gives how it ended and after how many ticks.
     fn until_gone(npc: &mut Npc, sites: &[LandingSite], limit: u32) -> (Outcome, u32) {
+        until_gone_by(npc, sites, limit, Readings::default())
+    }
+
+    /// [`until_gone`] by `readings`.
+    fn until_gone_by(
+        npc: &mut Npc,
+        sites: &[LandingSite],
+        limit: u32,
+        readings: Readings,
+    ) -> (Outcome, u32) {
         for tick in 0..limit {
-            let outcome = fly(npc, sites, None);
+            let outcome = fly_reading(npc, sites, None, readings);
             if outcome != Outcome::Flying {
                 return (outcome, tick);
             }
@@ -1915,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_at_rest_flies_to_a_stellar_and_lands_on_it() {
+    fn a_ship_at_rest_flies_to_a_stellar_and_lands_on_it_in_its_box() {
         let sites = [planet(140, 500.0, 300.0), planet(141, -800.0, 0.0)];
         for fields in [FAST, AVERAGE] {
             for heading in [0.0, 90.0, 225.0] {
@@ -1924,7 +1999,40 @@ mod tests {
                     Goal::Land(StellarId(140)),
                     at(0.0, 0.0, 0.0, 0.0, heading),
                 );
-                let (outcome, ticks) = until_gone(&mut ship, &sites, 2000);
+                let (outcome, ticks) = until_gone(&mut ship, &sites, 3000);
+                assert_eq!(
+                    outcome,
+                    Outcome::Landed(StellarId(140)),
+                    "{fields:?} {heading}"
+                );
+                assert!(ticks < 2000, "{ticks} ticks");
+                let turn = ship.stats.handling.turn_rate;
+                assert!(
+                    crate::landing::npc_over(
+                        &sites[0],
+                        ship.state.position,
+                        turn,
+                        RuleSource::Engine
+                    ),
+                    "{:?}",
+                    ship.state
+                );
+                assert!(!inertialess::moving(ship.state.velocity));
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_circle_a_ship_at_rest_flies_to_a_stellar_and_lands_within_its_radius() {
+        let sites = [planet(140, 500.0, 300.0), planet(141, -800.0, 0.0)];
+        for fields in [FAST, AVERAGE] {
+            for heading in [0.0, 90.0, 225.0] {
+                let mut ship = npc(
+                    fields,
+                    Goal::Land(StellarId(140)),
+                    at(0.0, 0.0, 0.0, 0.0, heading),
+                );
+                let (outcome, ticks) = until_gone_by(&mut ship, &sites, 2000, by_circle());
                 assert_eq!(
                     outcome,
                     Outcome::Landed(StellarId(140)),
@@ -1976,37 +2084,68 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_over_a_stellar_slow_enough_lands_at_once() {
+    fn by_the_circle_a_ship_over_a_stellar_at_or_below_1_a_tick_lands_at_once() {
         let sites = [planet(140, 10.0, 0.0)];
-        let mut ship = npc(
-            FAST,
-            Goal::Land(StellarId(140)),
-            at(0.0, 0.0, 1.0, 0.0, 0.0),
-        );
+        let lander =
+            |vx: f32, x: f32| npc(NIMBLE, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
+        let mut ship = lander(1.0, 0.0);
         assert_eq!(
-            fly(&mut ship, &sites, None),
+            fly_reading(&mut ship, &sites, None, by_circle()),
             Outcome::Landed(StellarId(140))
         );
         assert_eq!(ship.state.position, Vec2::ZERO, "where it was");
-        let mut fast = npc(
-            FAST,
-            Goal::Land(StellarId(140)),
-            at(0.0, 0.0, 1.5, 0.0, 0.0),
+        let mut fast = lander(1.5, 0.0);
+        assert_eq!(
+            fly_reading(&mut fast, &sites, None, by_circle()),
+            Outcome::Flying,
+            "too fast"
         );
-        assert_eq!(fly(&mut fast, &sites, None), Outcome::Flying, "too fast");
-        let mut far = npc(
-            FAST,
-            Goal::Land(StellarId(140)),
-            at(61.0, 0.0, 0.0, 0.0, 0.0),
+        let mut far = lander(0.0, 61.0);
+        assert_eq!(
+            fly_reading(&mut far, &sites, None, by_circle()),
+            Outcome::Flying,
+            "too far"
         );
-        assert_eq!(fly(&mut far, &sites, None), Outcome::Flying, "too far");
+        // 45 off: inside the circle of 50, outside the box of 40.
+        let mut in_circle = lander(0.0, -35.0);
+        assert_eq!(
+            fly_reading(&mut in_circle, &sites, None, by_circle()),
+            Outcome::Landed(StellarId(140))
+        );
+        let mut by_box = lander(0.0, -35.0);
+        assert_eq!(fly(&mut by_box, &sites, None), Outcome::Flying, "the box");
+    }
+
+    #[test]
+    fn by_the_engine_a_ship_in_its_box_lands_only_below_0_35_a_tick_on_each_axis() {
+        let sites = [planet(140, 10.0, 0.0)];
+        let lander = |vx: f32| npc(FAST, Goal::Land(StellarId(140)), at(0.0, 0.0, vx, 0.0, 0.0));
+        let mut slow = lander(0.3);
+        assert_eq!(
+            fly(&mut slow, &sites, None),
+            Outcome::Landed(StellarId(140))
+        );
+        let mut at_1 = lander(1.0);
+        assert_eq!(fly(&mut at_1, &sites, None), Outcome::Flying, "brakes");
+        // Its velocity cut × 0.98 before sub 1's brake.
+        let mut twin = lander(1.0);
+        twin.drag_in_doubles(land_flight::LANDING_DRAG);
+        let handling = twin.flying_handling(TopSpeeds::own_of(&twin).own, FlightRules::default());
+        leave_flight::fly(
+            &mut twin,
+            crate::ai::leave::Leg::Brake,
+            &handling,
+            FlightRules::default(),
+            Inertia::Inertial,
+        );
+        assert_eq!(at_1.state, twin.state);
     }
 
     #[test]
     fn a_folding_ship_landing_unfolds_near_its_stellar_too_fast_to_land() {
         let sites = [planet(140, 10.0, 0.0)];
         let folding = |x: f32, vx: f32| {
-            let mut ship = npc(FAST, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
+            let mut ship = npc(NIMBLE, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
             ship.hull.frames.flags = crate::combat::ship_frames::FOLDS;
             ship.hull.frames.base_sets = 6;
             ship.armament.fold_mut().set = 5;
@@ -2018,6 +2157,16 @@ mod tests {
         let mut far = folding(-80.0, 0.0);
         fly(&mut far, &sites, None);
         assert_eq!(far.armament.fold().dir, 0, "too far");
+        // 45 off: inside the circle of 50, outside the box of 40.
+        let mut boxed = folding(-35.0, 1.5);
+        fly(&mut boxed, &sites, None);
+        assert_eq!(boxed.armament.fold().dir, 0, "outside the box");
+        let mut circled = folding(-35.0, 1.5);
+        fly_reading(&mut circled, &sites, None, by_circle());
+        assert_eq!(circled.armament.fold().dir, -1, "inside the circle");
+        let mut far = folding(-80.0, 1.5);
+        fly_reading(&mut far, &sites, None, by_circle());
+        assert_eq!(far.armament.fold().dir, 0, "outside the circle");
         // Near a stellar far from the centre.
         let distant = [planet(140, 600.0, 0.0)];
         let mut there = folding(600.0, 1.5);
@@ -3221,14 +3370,27 @@ mod tests {
         }
         // A top speed of none caps nothing per axis (`_AdjustedAccel`
         // @0x2aecd-0x2aeee), so a follower matching its lead's velocity
-        // gets it; the other goals want no speed and stay put.
-        for goal in [Goal::Land(StellarId(140)), Goal::Idle] {
+        // gets it, and so does a lander's sub 2 thrust by the engine's
+        // landing; the other goals, and the port's earlier approach, want
+        // no speed and stay put.
+        for (goal, readings) in [
+            (Goal::Land(StellarId(140)), by_circle()),
+            (Goal::Idle, Readings::default()),
+        ] {
             let mut ship = npc(still, goal, at(0.0, 0.0, 0.0, 0.0, 45.0));
             for _ in 0..300 {
-                assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
+                let flown = fly_reading(&mut ship, &sites, Some(&lead), readings);
+                assert_eq!(flown, Outcome::Flying);
             }
             assert_eq!(ship.state.position, Vec2::ZERO, "{goal:?}");
         }
+        let mut lander = npc(
+            still,
+            Goal::Land(StellarId(140)),
+            at(0.0, 0.0, 0.0, 0.0, 90.0),
+        );
+        fly(&mut lander, &sites, Some(&lead));
+        assert!(lander.state.velocity.x > 0.0, "sub 2 thrusts uncapped");
         let mut follower = npc(
             still,
             Goal::Follow {
@@ -4115,6 +4277,28 @@ mod tests {
             flown_for(npc(FAST, Goal::Hold, start), &start, false, 1),
             "a drift with none left coasts as a hold"
         );
+    }
+
+    #[test]
+    fn a_ship_bound_to_land_on_a_gate_keeps_its_goal_through_its_ai_wait() {
+        // State 1 runs only once the high level's wait gate lets it
+        // (@0x8d4b9-0x8d4d2), so its gate hand-off waits too.
+        let sites = [hypergate()];
+        let start = at(0.0, 0.0, 0.0, 0.0, 90.0);
+        let mut ship = npc(FAST, Goal::Land(GATE), start);
+        for left in (1..=3).rev() {
+            ship.ai_wait = left;
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+            assert_eq!(ship.goal, Goal::Land(GATE), "{left}");
+            assert_eq!(ship.state, start, "{left}: at rest, unmoved");
+        }
+        ship.ai_wait = 0;
+        let mut entering = npc(FAST, Goal::EnterGate(GATE), start);
+        fly(&mut ship, &sites, None);
+        fly(&mut entering, &sites, None);
+        assert_eq!(ship.goal, Goal::EnterGate(GATE), "handed off once out");
+        assert_eq!(ship.state, entering.state, "and flown so that tick");
+        assert!(ship.state.velocity.x > 0.0, "{:?}", ship.state);
     }
 
     #[test]

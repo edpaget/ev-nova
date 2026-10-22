@@ -38,6 +38,7 @@
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
+//! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
@@ -293,7 +294,7 @@
 //! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
-//! `eight_bit_sheet`,
+//! `eight_bit_sheet`, `npc_landing`,
 //! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
 //! `desc_movie_globals`,
@@ -933,6 +934,22 @@ rule_keys! {
     /// (`nova_render::GameImages`; see the `nova_sim::story` module's
     /// "Checked for stellar-fidelity phase 4").
     EightBitSheet => "eight_bit_sheet",
+    /// How an NPC lands on a stellar: by the engine, as
+    /// `_HighLevelAIHandler` state 1 flies it (@0x8d903-0x8db5a): it lands
+    /// once its whole-pixel offset from the stellar's centre is at most 40
+    /// on each axis, or trunc((9 − turn) × 8 + 32) below a turn rate of 8
+    /// (`landing::npc_box`), and it moves below 0.35 a tick on each axis;
+    /// inside the box but faster it brakes by sub 1, its velocity and
+    /// speed × 0.98 a tick; outside it flies sub 2's approach, and a
+    /// folding ship unfolds inside the box. By the other reading, the
+    /// port's earlier landing: within `landing_radius` (half the larger
+    /// side of the `Type` frame, or 32 with no sprite), as a circle, at or
+    /// below 1.0 a tick, flying the port's earlier approach. The Bible
+    /// says nothing of how an NPC lands, so the other reading is the
+    /// intended alternative, not anything the Bible says (see
+    /// `nova_sim_ai::traffic::land_flight` and the `nova_sim::story`
+    /// module's "Built by stellar-fidelity phase 5").
+    NpcLanding => "npc_landing",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -6052,6 +6069,13 @@ mod tests {
             Some(RuleKey::EightBitSheet)
         );
         assert_eq!(RuleKey::EightBitSheet.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::NpcLanding.key(), "npc_landing");
+        assert_eq!(RuleKey::from_key("npc_landing"), Some(RuleKey::NpcLanding));
+        assert_eq!(RuleKey::NpcLanding.default_source(), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NpcLanding),
+            RuleSource::Engine
+        );
     }
 
     #[test]
@@ -6082,6 +6106,7 @@ mod tests {
                 RuleKey::StellarFrameCount,
                 RuleKey::TypeSheetFallback,
                 RuleKey::EightBitSheet,
+                RuleKey::NpcLanding,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,

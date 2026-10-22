@@ -1223,6 +1223,20 @@ impl Npc {
         self.goal == Goal::CountWait
     }
 
+    /// Cuts its velocity and its speed along its heading (+0x48,
+    /// [`Npc::speed`]) each to `by` of themselves, in doubles, back to
+    /// floats: the high level's drags, a stellar attacker's in band
+    /// (@0x8faaf-0x8faeb) and a landing ship's inside its box
+    /// (@0x8da8d-0x8dad7).
+    pub fn drag_in_doubles(&mut self, by: f64) {
+        self.state.velocity = crate::flight::drag_by(self.state.velocity, by);
+        // Doubles, back to a float.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.speed = (f64::from(self.speed) * by) as f32;
+        }
+    }
+
     /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
     /// ship on the assist path does (`_HandlePlayerBoardAttempt` @0x65746):
     /// flying, or already holding its course, it holds its course for that

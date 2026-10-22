@@ -2392,6 +2392,41 @@
 //!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). A stellar reaches them
 //!     only when murk gives it translucency (+0xa8 > 0), which the engine
 //!     does not model yet; a ship reaches them under cloak or fade.
+//!
+//! ## Built by stellar-fidelity phase 5
+//!
+//! NPCs land as `_HighLevelAIHandler` state 1 (@0x8d8b8-0x8db5a) lands
+//! them (`nova_sim::traffic::land_flight`, `nova_sim::landing::npc_over`):
+//!
+//! - **When it runs.** Only once the AI wait is out: the handler's wait
+//!   gate returns while +0x4c > 0, for every goal but 0xa and 0xe
+//!   (@0x8d4b9-0x8d4d2). So a landing goal on a hypergate or wormhole
+//!   (`Flags2` & 0x3000, @0x8d8d7-0x8d8fe) becomes a gate entry, state 20
+//!   in the same pass (@0x8db5f-0x8db62), only after the wait. With a
+//!   travel stellar of -1 the block does nothing (@0x8d8c9-0x8d8d1), which
+//!   the engine's landing goal, always naming its stellar, can't reach.
+//!   The jump stage +0x50 is zeroed each pass (@0x8d903), as the engine's
+//!   `warp_out::hold_stage` already zeroes it for a ship not jumping.
+//! - **The box.** The offset from the stellar's centre, truncated to whole
+//!   pixels (@0x8d90d-0x8d950), at most 40 on each axis (@0x8d90f), or
+//!   trunc((9 − turn) × 8 + 32) in doubles below a `_ShipTurnRate` of 8
+//!   (@0xdd044, @0xdda90, @0xdda98, @0xdd578, @0x8d90f-0x8d9a8),
+//!   inclusive (@0x8d9d7, @0x8d9f9). The 16-bit `cwde` and `movsx`
+//!   (@0x8d929, @0x8d94b, @0x8d9b7) are not replicated.
+//! - **Outside**, sub 2, the stellar attacker's approach (@0x8d9b2-0x8da07;
+//!   `_LowLevelAIHandler` @0x8563b-0x857bd).
+//! - **Inside**, a folding `shän` (0x02) above fold set 0 unfolds
+//!   (@0x8da0c-0x8da38), then the per-axis speed gate: 0.35 or more on
+//!   either axis (the double @0xdda68, @0x8da41-0x8da8b) brakes by sub 1,
+//!   its velocity and speed (+0x48) × 0.98 in doubles each pass (@0xdd988,
+//!   @0x8da8d-0x8dad7); below it on both it lands (@0x8dadc).
+//! - **Sounds.** None: state 1 calls no `PlaySound` or `_beepSnd`.
+//!
+//! **Readings.** The Rulebook key
+//! [`npc_landing`](crate::RuleKey::NpcLanding) defaults to the engine's
+//! box. The other reading, the port's earlier landing, lands within the
+//! stellar's landing radius at or below 1.0 a tick, flying its own
+//! approach; the Bible says nothing of how an NPC lands.
 
 //! # Mission lifecycle
 //!

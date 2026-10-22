@@ -57,7 +57,8 @@ pub fn fly(
         return leave_flight::fly(npc, Leg::Brake, handling, flight, inertia);
     };
     if matches!(band, Band::Brake | Band::Aim) {
-        drag(npc);
+        // The in-band drag (@0x8faaf-0x8faeb).
+        npc.drag_in_doubles(IN_BAND_DRAG);
     }
     match band {
         Band::Approach => {
@@ -77,18 +78,6 @@ pub fn fly(
             held_burst::step(npc, handling, controls, flight, inertia, word);
             Outcome::Flying
         }
-    }
-}
-
-/// The in-band drag (@0x8faaf-0x8faeb): `npc`'s velocity and its speed
-/// along its heading each cut to [`IN_BAND_DRAG`] of themselves, in
-/// doubles.
-fn drag(npc: &mut Npc) {
-    npc.state.velocity = crate::flight::drag_by(npc.state.velocity, IN_BAND_DRAG);
-    // Doubles, back to a float.
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        npc.speed = (f64::from(npc.speed) * IN_BAND_DRAG) as f32;
     }
 }
 
