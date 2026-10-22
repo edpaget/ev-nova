@@ -175,8 +175,8 @@ pub(super) mod tests {
     use super::super::nebulae::tests::{around_131, nebulous};
     use super::super::tests::{alternates, chained};
     use crate::catalog::{
-        DudeId, DudeRecord, MissionRecord, NebulaId, NebulaRecord, ShipId, StellarId, SystemId,
-        SystemTraffic, SystemVisibility,
+        DudeId, DudeRecord, MissionRecord, NebulaId, NebulaRecord, OutfitId, ShipId, StellarId,
+        SystemId, SystemTraffic, SystemVisibility,
     };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp, Test};
@@ -188,6 +188,7 @@ pub(super) mod tests {
     use crate::rulebook::RuleSource;
     use crate::session::Session;
     use crate::session::control::SetOpObserver;
+    use crate::stats::MULTI_JUMP;
     use crate::story::{
         Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
     };
@@ -459,13 +460,12 @@ pub(super) mod tests {
         assert_eq!(*seen.0.borrow(), [SystemId(134)], "the crön's X132");
     }
 
-    #[test]
-    fn a_jumps_explorations_derive_no_rescue_for_the_arrival() {
-        // [`shared`] with 128, shadowed by 127 at (-600, 600), and 131
-        // listing 160, which no system owns or rescues: the lowest visible
-        // lister, 128, is `_FindSystemFromStellar`'s. 150 is kept rescued
-        // in the departure 130. The arrival's `OnExplore` starts 141, to
-        // 160, and 142, to 150.
+    /// [`shared`] with 128, shadowed by 127 at (-600, 600), and 131
+    /// listing 160, which no system owns or rescues: the lowest visible
+    /// lister, 128, is `_FindSystemFromStellar`'s. 150 is kept rescued in
+    /// the departure 130 by [`rescued_in_130`]. The `OnExplore` of the
+    /// nebula around 131 starts 141, to 160, and 142, to 150.
+    fn unowned_160() -> FakePilotCatalog {
         let mut catalog = shared();
         catalog.star_map.push(star(127, (-600.0, 600.0), &[]));
         catalog.star_map.push(star(128, (-600.0, 600.0), &[]));
@@ -489,30 +489,92 @@ pub(super) mod tests {
         catalog
             .nebulae
             .push(nebula(128, (500, -100, 200, 200), "", "S141 S142"));
+        catalog
+    }
+
+    /// [`unowned_160`]'s pilot, reading `rescue_until_refresh` as
+    /// `source`, jumped to `to` from 130 along the course.
+    fn jumped_from_130(catalog: &FakePilotCatalog, source: RuleSource, to: i16) -> Session {
+        let mut session = rescued_in_130(catalog, source);
+        session.plot_course(SystemId(to)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(catalog, &mut NeverFires),
+            Some(SystemId(to)),
+            "{source:?}"
+        );
+        session
+    }
+
+    /// The system of the destination of the mission held in `slot`.
+    fn destination(session: &Session, slot: u8) -> Option<SystemId> {
+        session
+            .pilot()
+            .missions()
+            .get(slot)
+            .expect("held")
+            .destination
+            .and_then(|stop| stop.system)
+    }
+
+    #[test]
+    fn a_jumps_explorations_derive_no_rescue_for_the_arrival() {
+        let catalog = unowned_160();
         for source in RuleSource::ALL {
-            let mut session = rescued_in_130(&catalog, source);
-            session.plot_course(SystemId(131)).expect("a route");
-            fly_out(&mut session);
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-            session.arrive(&catalog, &mut NeverFires).expect("arrives");
-            let destination = |slot| {
-                session
-                    .pilot()
-                    .missions()
-                    .get(slot)
-                    .expect("held")
-                    .destination
-                    .and_then(|stop| stop.system)
-            };
+            let session = jumped_from_130(&catalog, source, 131);
             // By the other reading the holder derives the player's system,
             // 131 now, as that reading always does.
             assert_eq!(
-                destination(0),
+                destination(&session, 0),
                 by(source, Some(SystemId(128)), Some(SystemId(131))),
                 "{source:?}: 160 unowned while the rebuild is awaited"
             );
             assert_eq!(
-                destination(1),
+                destination(&session, 1),
+                by(source, Some(SystemId(129)), Some(SystemId(131))),
+                "{source:?}: 150 kept rescued in 130, which 129 stands for"
+            );
+        }
+    }
+
+    /// [`unowned_160`] with 132 and ship 128 jumping two systems a jump,
+    /// so a jump to 132 passes 131, whose `OnExplore` runs on the hop.
+    fn hopping_over_131() -> FakePilotCatalog {
+        let mut catalog = unowned_160();
+        catalog.systems.push(SystemId(132));
+        catalog.defaults = vec![(ShipId(128), vec![(OutfitId(320), 1)])];
+        catalog.outfits.push(outfit(320, &[(MULTI_JUMP, 2)]));
+        catalog
+    }
+
+    #[test]
+    fn a_hops_exploration_derives_no_rescue_for_the_hop() {
+        // 130 to 132 by 131: the hop's stand-in, 131, is written
+        // (@0x6bdd4) before it is explored (@0x6bddb), so the galaxy
+        // awaits its rebuild from there, and 160 stays unowned.
+        let catalog = hopping_over_131();
+        for source in RuleSource::ALL {
+            let session = jumped_from_130(&catalog, source, 132);
+            // By the other reading the holder derives the player's system,
+            // the hop's 131 as its `OnExplore` runs.
+            assert_eq!(
+                destination(&session, 0),
+                by(source, Some(SystemId(128)), Some(SystemId(131))),
+                "{source:?}: 160 unowned while the rebuild is awaited"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hops_exploration_keeps_the_departures_rescue() {
+        // The departure 130's rescue of 150 holds through the hop over
+        // 131: nothing is rescued for the hop.
+        let catalog = hopping_over_131();
+        for source in RuleSource::ALL {
+            let session = jumped_from_130(&catalog, source, 132);
+            assert_eq!(
+                destination(&session, 1),
                 by(source, Some(SystemId(129)), Some(SystemId(131))),
                 "{source:?}: 150 kept rescued in 130, which 129 stands for"
             );
