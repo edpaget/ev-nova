@@ -181,11 +181,11 @@ impl Behaviour for EscortAi {
     /// 2. The out-of-ammunition fallback (@0x83b88-0x83bda,
     ///    [`out_of_ammo::escort_order`]): the order the rest flies.
     /// 3. From the player's brake on, the player's jump
-    ///    ([`takes_players_jump`]): formation, its target dropped,
+    ///    (`takes_players_jump`): formation, its target dropped,
     ///    following the jump ([`Decision::follows_jump`]), its wait kept,
     ///    as no order block runs. The engine keeps no word for a ship the
     ///    player leads, so the fallback has nothing to write here.
-    /// 4. The order block ([`EscortAi::goal_by`]), ending its AI wait
+    /// 4. The order block (`EscortAi::goal_by`), ending its AI wait
     ///    ([`Decision::ends_wait`]) in the Defend, Attack and formation
     ///    blocks (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not
     ///    holding or returning to its hangar: a launched fighter told to
