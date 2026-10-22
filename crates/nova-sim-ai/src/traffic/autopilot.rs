@@ -138,6 +138,8 @@
 //!   the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
 //!   its top speed).
+//! - [`Goal::AttackStellar`]: by its band from its stellar, closing in,
+//!   running out, braking or aiming ([`stellar_attack`]).
 //! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
 //!   [`Goal::Mine`] (order 1 for now, see its docs),
 //!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
@@ -255,6 +257,7 @@ use crate::traffic::pod_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
+use crate::traffic::stellar_attack;
 use std::collections::BTreeMap;
 
 /// How far from its lead, in pixels, a fleet escort keeps by the port's
@@ -492,6 +495,9 @@ fn fly_mobile(
             }
         }
         Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
+        Goal::AttackStellar(_) => {
+            return stellar_attack::fly(npc, sites, weapons, &handling, (flight, inertia));
+        }
         Goal::Inspect(_) => follow_or_brake(&state, &handling, other, inertia),
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
@@ -560,12 +566,9 @@ fn fly_mobile(
         // is a wait (state 6, @0x8f101). The regroup pause flies its kept
         // substate's goal in its place (`Npc::fly_as_flown`, which the fly
         // pass runs), so it reaches here only flown by itself: a stop.
-        Goal::Idle
-        | Goal::Wait
-        | Goal::Mine
-        | Goal::CountWait
-        | Goal::Regroup { .. }
-        | Goal::AttackStellar(_) => braking(&state, &handling, inertia),
+        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait | Goal::Regroup { .. } => {
+            braking(&state, &handling, inertia)
+        }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
         // does nothing (@0x87345-0x87351).

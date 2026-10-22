@@ -38,11 +38,12 @@ use crate::ai::{Behaviour, Decision, Goal, Surroundings, fire};
 use crate::catalog::{LandingSite, WeaponId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::combat::armament::{Mount, Trigger};
+use crate::combat::armament::{Arsenal, Mount, Trigger};
 use crate::combat::weapon::{Guidance, WeaponSpec};
 use crate::flight::ShipState;
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
+use crate::traffic::inertialess;
 use crate::traffic::npc::Npc;
 use crate::trig;
 
@@ -69,7 +70,7 @@ impl Behaviour for DeathStar {
         }
         let enemy = enemy_stellar(npc, around);
         if let Some(stellar) = enemy
-            && planet_weapon(npc, around).is_some()
+            && planet_weapon(npc, around.weapons).is_some()
         {
             return Decision {
                 goal: Goal::AttackStellar(stellar.id),
@@ -165,20 +166,20 @@ pub fn planet_guidance(guidance: Guidance) -> bool {
     }
 }
 
-/// The planet gun `npc` attacks with among `around`, `_DeathStarAI`'s
-/// weapon test (@0x8c1e0-0x8c253): the lowest-index weapon (by ascending
+/// The planet gun `npc` attacks with, read from `weapons`, the weapon
+/// records and ship classes ([`Surroundings::weapons`]): `_DeathStarAI`'s
+/// weapon test (@0x8c1e0-0x8c253), the lowest-index weapon (by ascending
 /// `wëap` ID) that is planet-type, that its class carries in stock
-/// (`Arsenal::stock_slots`, class +0x5e8[i] above 0, @0x8c20e), that it has
-/// the ammunition for ([`fire::has_ammo`], @0x8c21f) and whose guidance
-/// passes ([`planet_guidance`]). Its reload is not read.
+/// (`Arsenal::stock_slots`, class `+0x5e8[i]` above 0, @0x8c20e), that it
+/// has the ammunition for ([`fire::has_ammo`], @0x8c21f) and whose
+/// guidance passes ([`planet_guidance`]). Its reload is not read.
 #[must_use]
-pub fn planet_weapon(npc: &Npc, around: &Surroundings) -> Option<WeaponSpec> {
-    around
-        .weapons
+pub fn planet_weapon(npc: &Npc, weapons: &Arsenal) -> Option<WeaponSpec> {
+    weapons
         .stock_slots(npc.ship)
         .into_iter()
         .filter(|&(_, (count, _))| count > 0)
-        .filter_map(|(id, _)| around.weapons.weapon(id).copied())
+        .filter_map(|(id, _)| weapons.weapon(id).copied())
         .find(|spec| {
             spec.planet_type()
                 && planet_guidance(spec.guidance)
@@ -205,9 +206,6 @@ pub enum Band {
 pub const APPROACH_BAND: f32 = 0.5625;
 /// d² below this times r² runs out (the double 0.0625 @0xddaa8).
 pub const RUN_OUT_BAND: f32 = 0.0625;
-/// In band, a speed on either axis of at least this brakes (0.35
-/// @0xdda68).
-pub const BRAKE_SPEED: f32 = 0.35;
 /// The sub 0x16 fires within its turn rate and this many degrees of the
 /// stellar's bearing, strictly (15.0 @0xdda30).
 pub const AIM_FACING: f32 = 15.0;
@@ -218,8 +216,8 @@ pub const NO_GUN_RANGE_SQ: f32 = 1.0;
 /// The band a ship at `at` flies attacking a stellar at `stellar` with a
 /// planet weapon reaching `range`, if any (see [`Band`]): beyond 0.75 r
 /// it approaches, inside 0.25 r it runs out, each strictly; in between it
-/// brakes while either axis of its velocity is at least [`BRAKE_SPEED`],
-/// and aims otherwise.
+/// brakes while either axis of its velocity is at least the double 0.35
+/// (@0xdda68, [`inertialess::moving`]), and aims otherwise.
 #[must_use]
 pub fn band(at: &ShipState, stellar: Vec2, range: Option<f32>) -> Band {
     let reach = range.map_or(NO_GUN_RANGE_SQ, |range| range * range);
@@ -229,25 +227,29 @@ pub fn band(at: &ShipState, stellar: Vec2, range: Option<f32>) -> Band {
         Band::Approach
     } else if squared < RUN_OUT_BAND * reach {
         Band::RunOut
-    } else if at.velocity.x.abs() >= BRAKE_SPEED || at.velocity.y.abs() >= BRAKE_SPEED {
+    } else if inertialess::moving(at.velocity) {
         Band::Brake
     } else {
         Band::Aim
     }
 }
 
-/// The band `npc` flies attacking its stellar among `around`, and the
+/// The band `npc` flies attacking its stellar among `sites`, and the
 /// stellar, while it is in [`Goal::AttackStellar`]: by the range of the
-/// planet weapon its think takes ([`planet_weapon`],
+/// planet weapon its think takes from `weapons` ([`planet_weapon`],
 /// [`WeaponSpec::range`], the weapon's +0x5c), or with none by
 /// [`NO_GUN_RANGE_SQ`].
 #[must_use]
-pub fn attack_band<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<(Band, &'a LandingSite)> {
+pub fn attack_band<'a>(
+    npc: &Npc,
+    sites: &'a [LandingSite],
+    weapons: &Arsenal,
+) -> Option<(Band, &'a LandingSite)> {
     let Goal::AttackStellar(stellar) = npc.goal else {
         return None;
     };
-    let site = around.sites.iter().find(|site| site.id == stellar)?;
-    let range = planet_weapon(npc, around).map(|spec| spec.range());
+    let site = sites.iter().find(|site| site.id == stellar)?;
+    let range = planet_weapon(npc, weapons).map(|spec| spec.range());
     Some((band(&npc.state, site.position, range), site))
 }
 
@@ -282,7 +284,7 @@ pub fn planet_gun_pick(npc: &Npc) -> Option<WeaponId> {
 /// While its AI wait runs the fight holds it ([`fire::gated`]).
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
-    let Some((Band::Aim, site)) = attack_band(npc, around) else {
+    let Some((Band::Aim, site)) = attack_band(npc, around.sites, around.weapons) else {
         return Trigger::default();
     };
     let bearing = trig::intercept_angle(npc.state.position, site.position);
@@ -497,25 +499,17 @@ mod tests {
         let npc = attacker(&[ordinary, gun]);
         let armed = arsenal(&[ordinary, gun], &[(129, 1), (131, 1)]);
         assert_eq!(
-            planet_weapon(&npc, &around_with(&npc, &armed)).map(|spec| spec.id),
+            planet_weapon(&npc, &armed).map(|spec| spec.id),
             Some(WeaponId(131))
         );
         let lower = planet_gun(130, 4);
         let npc = attacker(&[lower, gun]);
         let armed = arsenal(&[lower, gun], &[(130, 1), (131, 1)]);
         assert_eq!(
-            planet_weapon(&npc, &around_with(&npc, &armed)).map(|spec| spec.id),
+            planet_weapon(&npc, &armed).map(|spec| spec.id),
             Some(WeaponId(130)),
             "the lowest index"
         );
-    }
-
-    /// `npc` alone with the traders' governments and `arsenal`.
-    fn around_with<'a>(npc: &'a Npc, arsenal: &'a Arsenal) -> Surroundings<'a> {
-        Surroundings {
-            weapons: arsenal,
-            ..Surroundings::new(&[], std::slice::from_ref(npc))
-        }
     }
 
     #[test]
@@ -524,7 +518,7 @@ mod tests {
             let mut npc = attacker(&[record]);
             npc.rounds = LauncherRounds::from([(record.id, rounds)]);
             let armed = arsenal(&[record], &[(record.id.0, stock)]);
-            planet_weapon(&npc, &around_with(&npc, &armed)).is_some()
+            planet_weapon(&npc, &armed).is_some()
         };
         for guidance in [-1, 1, 2, 4, 5, 6, 7] {
             assert!(found(planet_gun(130, guidance), 1, 0), "{guidance}");
@@ -548,7 +542,7 @@ mod tests {
         assert!(npc.armament.mounts()[0].reload > 0.0);
         let armed = arsenal(&[slow], &[(130, 1)]);
         assert!(
-            planet_weapon(&npc, &around_with(&npc, &armed)).is_some(),
+            planet_weapon(&npc, &armed).is_some(),
             "its reload is not read"
         );
     }
@@ -558,7 +552,7 @@ mod tests {
         let gun = planet_gun(130, -1);
         let npc = attacker(&[]);
         let armed = arsenal(&[gun], &[(130, 1)]);
-        assert!(planet_weapon(&npc, &around_with(&npc, &armed)).is_some());
+        assert!(planet_weapon(&npc, &armed).is_some());
     }
 
     #[test]
@@ -756,9 +750,10 @@ mod tests {
             "exactly 0.25 r is in band"
         );
         assert_eq!(band_at(24.99, (0.0, 0.0)), Band::RunOut);
-        assert_eq!(band_at(50.0, (0.35, 0.0)), Band::Brake);
-        assert_eq!(band_at(50.0, (0.0, -0.35)), Band::Brake);
-        assert_eq!(band_at(50.0, (0.349, -0.349)), Band::Aim);
+        // The float against the double 0.35: a float 0.35 is just below.
+        assert_eq!(band_at(50.0, (0.350_001, 0.0)), Band::Brake);
+        assert_eq!(band_at(50.0, (0.0, -0.350_001)), Band::Brake);
+        assert_eq!(band_at(50.0, (0.35, -0.35)), Band::Aim);
         assert_eq!(
             band_at(80.0, (5.0, 0.0)),
             Band::Approach,
@@ -770,14 +765,8 @@ mod tests {
         assert_eq!(no_gun(0.76), Band::Approach);
         assert_eq!(no_gun(0.24), Band::RunOut);
         assert_eq!(
-            (
-                APPROACH_BAND,
-                RUN_OUT_BAND,
-                BRAKE_SPEED,
-                AIM_FACING,
-                NO_GUN_RANGE_SQ
-            ),
-            (0.5625, 0.0625, 0.35, 15.0, 1.0)
+            (APPROACH_BAND, RUN_OUT_BAND, AIM_FACING, NO_GUN_RANGE_SQ),
+            (0.5625, 0.0625, 15.0, 1.0)
         );
     }
 
@@ -789,32 +778,28 @@ mod tests {
             ..planet_gun(131, -1)
         };
         let armed = arsenal(&[gun], &[(131, 1)]);
-        let range = armed.weapon(WeaponId(131)).map(WeaponSpec::range);
-        assert!(range.is_some_and(|range| range > 100.0), "{range:?}");
+        let range = armed.weapon(WeaponId(131)).map_or(0.0, WeaponSpec::range);
+        // 100 off 131 at (400, 0): in band at this range, beyond r² 1.0.
+        assert!((134.0..400.0).contains(&range), "{range}");
         let mut npc = attacker(&[gun]);
         npc.goal = Goal::AttackStellar(StellarId(131));
+        npc.state.position = Vec2::new(300.0, 0.0);
         let sites = sites();
-        let npcs = [npc.clone()];
-        let around = Surroundings {
-            weapons: &armed,
-            ..Surroundings::new(&sites, &npcs)
-        };
-        let (band, site) = attack_band(&npc, &around).expect("attacking 131");
-        assert_eq!(site.id, StellarId(131));
-        let range = range.unwrap_or_default();
-        assert_eq!(band, super::band(&npc.state, site.position, Some(range)));
+        let (band, site) = attack_band(&npc, &sites, &armed).expect("attacking 131");
+        assert_eq!((site.id, band), (StellarId(131), Band::Aim));
         let unarmed = arsenal(&[gun], &[]);
-        let around = Surroundings {
-            weapons: &unarmed,
-            ..Surroundings::new(&sites, &npcs)
-        };
-        let (band, _) = attack_band(&npc, &around).expect("attacking 131");
-        assert_eq!(band, super::band(&npc.state, site.position, None));
+        let (band, _) = attack_band(&npc, &sites, &unarmed).expect("attacking 131");
+        assert_eq!(band, Band::Approach, "no planet weapon");
         let idle = Npc {
             goal: Goal::Idle,
+            ..npc.clone()
+        };
+        assert_eq!(attack_band(&idle, &sites, &armed), None);
+        let gone = Npc {
+            goal: Goal::AttackStellar(StellarId(140)),
             ..npc
         };
-        assert_eq!(attack_band(&idle, &around), None);
+        assert_eq!(attack_band(&gone, &sites, &armed), None);
     }
 
     /// A gun of `guidance` and `flags2`, `wëap` `id`, reloading 30.

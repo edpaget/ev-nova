@@ -160,6 +160,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+pub mod approach_flight;
 pub mod assist_think;
 pub mod autopilot;
 pub mod berth_blink;
@@ -233,6 +234,7 @@ pub mod skill;
 mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
+pub mod stellar_attack;
 pub mod strength;
 pub mod succession;
 pub mod table;

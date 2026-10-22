@@ -384,9 +384,12 @@ pub enum Goal {
         kept: regroup::Kept,
     },
     /// Shoot this stellar down: the original's goal 0x12, which only
-    /// `_DeathStarAI` sets (@0x8c25a-0x8c280), with +0x6c and +0x70 both
-    /// the stellar. Until its flight is built it brakes. Its quarry is
-    /// none, so it fights
+    /// `_DeathStarAI` sets (@0x8c25a-0x8c280, see [`death_star`]), with
+    /// +0x6c and +0x70 both the stellar. The high level flies it by its
+    /// distance from the stellar (@0x8f906-0x8faeb, see
+    /// [`stellar_attack`](crate::traffic::stellar_attack)), and it fires
+    /// its planet gun while it faces the stellar
+    /// ([`death_star::trigger`]). Its quarry is none, so it fights
     /// nothing; it is spared as a threat to the player, as goal 0x12 is in
     /// the threat tests' list (@0x7f567, @0x81c24), a hail finds it busy
     /// (`_AIIsShipBusy` @0x82fac-0x82fe4), it is not in form and it
