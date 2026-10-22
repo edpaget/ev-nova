@@ -84,10 +84,6 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 
-/// The warp stage the check writes the ship that leads or is left alone
-/// (-1.0).
-pub const LEFT_STAGE: f32 = -1.0;
-
 impl Traffic {
     /// Each ship whose lead is lost takes a new lead, leads, or is left
     /// alone, in `world` (see the module docs): by the engine's reading of
@@ -194,7 +190,7 @@ impl Npc {
     /// -1.0, in the regroup pause coasting (sub 0), its target kept.
     fn leave_alone(&mut self) {
         self.leave_fleet();
-        self.warp.stage = LEFT_STAGE;
+        self.warp.give_up();
         self.goal = Goal::Regroup { kept: Kept::Coast };
         self.pursuit = Pursuit::default();
         self.docking = None;
@@ -206,7 +202,7 @@ impl Npc {
     /// (see the module docs).
     fn take_over(&mut self, record: Option<&Npc>, repairer: RuleSource) {
         self.leave_fleet();
-        self.warp.stage = LEFT_STAGE;
+        self.warp.give_up();
         if let Some(lead) = record.filter(|lead| lead.govt.is_some() && lead.govt == self.govt) {
             self.goal = match lead.goal {
                 Goal::Follow { .. } | Goal::Formation { .. } => Goal::Hold,
@@ -255,6 +251,7 @@ mod tests {
     use crate::traffic::fixture::npc;
     use crate::traffic::gone::Freed;
     use crate::traffic::plunder_dock::{DockSub, Docking};
+    use crate::traffic::warp_out::GIVEN_UP_STAGE;
     use nova_sim_base::fixture::FAST;
 
     /// Every ship keeps its goal and target.
@@ -449,7 +446,7 @@ mod tests {
             let successor = of(&traffic, 1);
             assert_eq!(successor.leader, None, "{name}");
             assert_eq!(successor.goal, goal, "{name}");
-            assert_eq!(successor.warp.stage, LEFT_STAGE, "{name}");
+            assert_eq!(successor.warp.stage, GIVEN_UP_STAGE, "{name}");
         }
     }
 
@@ -510,7 +507,7 @@ mod tests {
         assert_eq!(taker.carrier, None);
         assert_eq!(taker.ai_type, AiType::Warship);
         assert_eq!(taker.reserves.shield.max, 30.0, "its class's capacity");
-        assert_eq!(taker.warp.stage, LEFT_STAGE);
+        assert_eq!(taker.warp.stage, GIVEN_UP_STAGE);
     }
 
     #[test]
@@ -773,7 +770,7 @@ mod tests {
         assert_eq!(alone.ai_type, AiType::Warship);
         assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast });
         assert_eq!(alone.target, Some(PLAYER), "held in the pause, not reset");
-        assert_eq!(alone.warp.stage, LEFT_STAGE);
+        assert_eq!(alone.warp.stage, GIVEN_UP_STAGE);
     }
 
     #[test]

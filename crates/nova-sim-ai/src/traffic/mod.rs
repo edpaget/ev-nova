@@ -192,6 +192,7 @@ mod hit_goal_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
+pub mod jump_with_leader;
 pub mod kept_berths;
 mod launch_room;
 mod launch_think;
@@ -1231,10 +1232,12 @@ impl Traffic {
             gone: &gone,
             ..world.around(&self.npcs)
         };
+        // The jump path skips the type think (`jump_with_leader`).
+        let decides = jump_with_leader::deciding(&self.npcs, &due);
         let mut decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
-            .zip(&due)
+            .zip(&decides)
             .map(|(npc, &due)| due.then(|| behaviour.decision(npc, &around, &mut &mut *chance)))
             .collect();
         board_wait::resolve(&self.npcs, &mut decisions);
@@ -1293,7 +1296,7 @@ impl Traffic {
             }
             let npc = &self.npcs[index];
             around.fighter_room = room.any();
-            let (trigger, target) = if due[index] {
+            let (trigger, target) = if decides[index] {
                 (
                     behaviour.trigger(npc, &around),
                     Some(behaviour.target(npc, &around)),
@@ -3448,7 +3451,7 @@ mod tests {
         assert_eq!(traffic.npcs[0].warp.stage, 0.0, "the high level's hold");
         assert_eq!(
             traffic.npcs[1].warp.stage,
-            disabled_reset::CANCELLED_STAGE,
+            warp_out::GIVEN_UP_STAGE,
             "none for a disabled ship, whose dispatch cancels its warp (@0x8fcc8)"
         );
     }

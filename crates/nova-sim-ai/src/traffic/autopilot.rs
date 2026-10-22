@@ -1083,7 +1083,7 @@ fn coast(npc: &mut Npc, ticks_left: u32, flown: Flown) {
 /// thrust: `npc` moves by its velocity, an inertialess one's velocity
 /// following its speed at `handling`'s rate first (@0x3425f,
 /// [`inertialess::drift`]).
-fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+pub(crate) fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
     match inertia {
         Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
         Inertia::Inertialess { .. } => inertialess::drift(npc, handling),

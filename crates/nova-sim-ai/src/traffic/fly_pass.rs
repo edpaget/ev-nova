@@ -138,8 +138,9 @@ impl Traffic {
             for npc in &mut self.npcs {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
-                // `_AIDispatch` runs no high level for a disabled ship.
-                if npc.condition == Condition::Intact {
+                // `_AIDispatch` runs no high level for a disabled ship, nor
+                // the high level past its AI wait (`jump_with_leader`).
+                if npc.condition == Condition::Intact && !npc.high_level_waits() {
                     warp_out::hold_stage(npc);
                 }
                 ship_display::dispatch_fold(npc);

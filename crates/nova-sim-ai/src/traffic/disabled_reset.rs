@@ -60,9 +60,6 @@ use crate::ai::{Goal, dispatch_gate};
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 
-/// The warp stage a disabled ship's cancel writes (-1.0, float 0xdd04c).
-pub const CANCELLED_STAGE: f32 = -1.0;
-
 impl Traffic {
     /// Each disabled NPC's warp cancelled and its AI reset, by `reading` of
     /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
@@ -80,7 +77,7 @@ impl Traffic {
 /// `npc`'s warp cancelled while it is disabled (see the module docs).
 fn cancel_warp(npc: &mut Npc) {
     if !pod_flight::is_pod(npc) && !npc.no_ai && npc.condition.disabled() && npc.warp.stage > 0.0 {
-        npc.warp.stage = CANCELLED_STAGE;
+        npc.warp.give_up();
     }
 }
 
@@ -125,7 +122,7 @@ mod tests {
     use crate::traffic::npc::{AiType, Mode, NpcId};
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::regroup::RELEASE_DRAW;
-    use crate::traffic::warp_out::WarpGoal;
+    use crate::traffic::warp_out::{GIVEN_UP_STAGE, WarpGoal};
     use nova_sim_base::fixture::{Draws, FAST};
 
     /// Every ship keeps its goal.
@@ -333,14 +330,14 @@ mod tests {
         led.warp.stage = 12.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
         let cancelled = of(&traffic, LED).warp;
-        assert_eq!(cancelled.stage, CANCELLED_STAGE);
+        assert_eq!(cancelled.stage, GIVEN_UP_STAGE);
         assert!(!cancelled.under_way(), "it restarts from nothing");
     }
 
     #[test]
     fn only_a_disabled_ship_with_its_warp_under_way_and_ai_has_it_cancelled() {
         for (condition, stage, no_ai, after) in [
-            (Condition::Disabled, 5.0, false, CANCELLED_STAGE),
+            (Condition::Disabled, 5.0, false, GIVEN_UP_STAGE),
             (Condition::Intact, 5.0, false, 5.0),
             (Condition::Disabled, 0.0, false, 0.0),
             (Condition::Disabled, 5.0, true, 5.0),

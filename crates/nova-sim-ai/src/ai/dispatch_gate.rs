@@ -29,13 +29,29 @@ use crate::traffic::pod_flight;
 /// Whether `npc`'s dispatch passes the gates (see the module docs).
 #[must_use]
 pub fn reaches_think(npc: &Npc) -> bool {
+    passes_entry_gates(npc) && npc.warp.goal.is_none()
+}
+
+/// Whether `npc`'s dispatch takes the jump path (@0x8fd83-0x8fd9a →
+/// @0x900d5): past the gates before it, on its own jump or its leader's
+/// (sub 4 or 0xd). There it skips the leader's orders, the regroup draw,
+/// the disabled reset and its type's think, and runs only the jump
+/// cancels and the high and low levels
+/// ([`jump_with_leader`](crate::traffic::jump_with_leader)).
+#[must_use]
+pub fn takes_jump_path(npc: &Npc) -> bool {
+    passes_entry_gates(npc) && npc.warp.goal.is_some()
+}
+
+/// Whether `npc`'s dispatch passes the gates before the jump path's test:
+/// not without AI, not an escape pod, not on the glide-in path.
+fn passes_entry_gates(npc: &Npc) -> bool {
     !pod_flight::is_pod(npc)
         && !npc.no_ai
         && !matches!(
             npc.mode,
             Mode::JumpingIn { .. } | Mode::LeavingGate { tick: 1.. }
         )
-        && npc.warp.goal.is_none()
 }
 
 #[cfg(test)]
@@ -98,6 +114,38 @@ mod tests {
             let mut jumping = ship();
             jumping.warp.goal = Some(goal);
             assert!(!reaches_think(&jumping), "{goal:?}");
+            assert!(takes_jump_path(&jumping), "{goal:?}");
         }
+        assert!(!takes_jump_path(&ship()), "no warp goal");
+    }
+
+    #[test]
+    fn a_ship_failing_an_earlier_gate_takes_no_jump_path() {
+        let jumping = |npc: Npc| Npc {
+            warp: crate::traffic::warp_out::Warp {
+                goal: Some(WarpGoal::Own),
+                ..npc.warp
+            },
+            ..npc
+        };
+        let mut pod = jumping(ship());
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        assert!(!takes_jump_path(&pod));
+        let mut hulk = jumping(ship());
+        hulk.no_ai = true;
+        assert!(!takes_jump_path(&hulk));
+        for mode in [Mode::JumpingIn { tick: 0 }, Mode::LeavingGate { tick: 1 }] {
+            assert!(
+                !takes_jump_path(&Npc {
+                    mode,
+                    ..jumping(ship())
+                }),
+                "{mode:?}"
+            );
+        }
+        assert!(takes_jump_path(&Npc {
+            mode: Mode::LeavingGate { tick: 0 },
+            ..jumping(ship())
+        }));
     }
 }
