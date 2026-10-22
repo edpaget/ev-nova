@@ -105,6 +105,14 @@ pub fn cloak_rolls(id: NpcId) -> HashedRolls {
     HashedRolls::new(0x434c_4f41_4b00_0000_u64.wrapping_add(u64::from(id.0)))
 }
 
+/// The rolls the player's own cloak jitters on: its own seed, outside
+/// every NPC's ([`cloak_rolls`] spans `0x434c_4f41_4b00_0000` plus any
+/// 32-bit ID).
+#[must_use]
+pub fn player_cloak_rolls() -> HashedRolls {
+    HashedRolls::new(0x504c_4159_434c_4b00)
+}
+
 /// The jitter of reach `reach` at `tick`, rolled on `rolls`: n −
 /// roll(2n + 1) on each axis, each within ±`reach`.
 #[must_use]
@@ -241,6 +249,18 @@ mod tests {
         let a = (0..20).map(|tick| jitter(3, tick, &cloak_rolls(NpcId(0))));
         let b = (0..20).map(|tick| jitter(3, tick, &cloak_rolls(NpcId(1))));
         assert!(a.ne(b));
+    }
+
+    #[test]
+    fn the_players_cloak_rolls_differ_from_every_npcs() {
+        // Its seed lies outside the NPCs' range, `0x434c_4f41_4b00_0000`
+        // plus any 32-bit ID.
+        for id in [0, 1, 0x1234, u32::MAX] {
+            assert_ne!(player_cloak_rolls(), cloak_rolls(NpcId(id)), "{id}");
+            let player = (0..20).map(|tick| jitter(3, tick, &player_cloak_rolls()));
+            let npc = (0..20).map(|tick| jitter(3, tick, &cloak_rolls(NpcId(id))));
+            assert!(player.ne(npc), "{id}");
+        }
     }
 
     #[test]

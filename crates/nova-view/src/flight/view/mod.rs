@@ -686,14 +686,14 @@ pub struct FlightOverlays {
 /// weapon select key back, Shift, which turns the target select key back,
 /// Command, which the jettison, eject and self-destruct keys need, the
 /// eject key and the self-destruct key, which work only held with Command,
-/// the land key, which holds the dock
+/// the cloak key, which toggles once a hold, the land key, which holds the dock
 /// approach back while it is down, H and `\`, which show the floating map
 /// while they are down, and \` and J. H, `\`, \` and J act again when
 /// held across a jump's end, a release of Option or a repair, as the
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 18] = [
+const FLIGHT_KEYS: [Key; 19] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -708,6 +708,7 @@ const FLIGHT_KEYS: [Key; 18] = [
     LAND_KEY,
     EJECT_KEY,
     SELF_DESTRUCT_KEY,
+    CLOAK_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
@@ -776,6 +777,11 @@ pub const EJECT_KEY: Key = Key::Char('x');
 /// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
 /// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
 pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
+/// The cloak key: the original's default for key-preference slot 0x52
+/// (`cloakKey`), keycode 0x20, U (`_loadKeys` @0xce461-0xce4d4). Held,
+/// it cloaks or uncloaks once a hold, with no Command
+/// (`_HandlePlayer` @0x705b7; see the session's `player_cloak`).
+pub const CLOAK_KEY: Key = Key::Char('u');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');

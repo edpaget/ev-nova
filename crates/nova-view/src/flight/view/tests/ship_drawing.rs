@@ -1119,6 +1119,50 @@ fn a_weapon_glow_whose_sheet_holds_no_runs_draws_no_overlay() {
     assert_eq!(drawn[0].1, crate::ImageKind::Rled);
 }
 
+/// The player's hull drawn now: where, its tint and its blend.
+fn player_hull(view: &View) -> Option<(Point, Color, crate::draw::Blend)> {
+    drawn(view).iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend,
+        } if image.id == 2000 => Some((center, tint, blend)),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_players_ship_is_drawn_faint_at_a_full_fade_and_jittered_while_fading() {
+    // `_HandleShipDisplay` draws the player's full fade at 0x1e
+    // (+0x86 0, @0x2d199-0x2d1a1 → 0x2d1be), and its fade jittered and
+    // faint (@0x2d2c0-0x2d648), as an NPC's.
+    let mut view = flight();
+    let (centre, _, _) = player_hull(&view).expect("drawn");
+    let set = |view: &mut View, cloak| {
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_cloak(session, cloak);
+    };
+    set(&mut view, CLOAKED);
+    let (_, tint, _) = player_hull(&view).expect("drawn faint");
+    assert_eq!(tint, crate::draw::translucent_tint(4, 30), "at 4 over 30");
+    set(
+        &mut view,
+        nova_sim::cloak::Cloak {
+            fade: 25.0,
+            direction: 1,
+        },
+    );
+    let (at, tint, blend) = player_hull(&view).expect("drawn fading");
+    assert_eq!((tint, blend), (lights_tint(7), crate::draw::Blend::Or));
+    assert!(
+        (at.x - centre.x).abs() <= 2.0 && (at.y - centre.y).abs() <= 2.0,
+        "{at:?} by {centre:?}"
+    );
+}
+
 #[test]
 fn an_unlit_weapon_glow_draws_neither_it_nor_its_runs() {
     let view = murky_with(solid_sheet(true, false));

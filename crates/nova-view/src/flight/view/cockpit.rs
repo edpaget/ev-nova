@@ -14,7 +14,7 @@ use crate::flight::alert;
 use crate::flight::asteroids::AsteroidShown;
 use crate::flight::boxes::BoxShown;
 use crate::flight::brackets;
-use crate::flight::cloak_fade::{CloakDraw, cloak_rolls};
+use crate::flight::cloak_fade::{CloakDraw, cloak_rolls, player_cloak_rolls};
 use crate::flight::effects::Effects;
 use crate::flight::escorts::{
     EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
@@ -1200,7 +1200,11 @@ impl<C> FlightView<C> {
                         a: base_alpha(sheet.base_transp),
                         ..Color::WHITE
                     },
-                    cloak: None,
+                    // Its cloak drawn as an NPC's, its full fade always
+                    // faint (see `Session::player_cloak_shown`).
+                    cloak: session.and_then(|session| {
+                        CloakDraw::of(session.player_cloak_shown(), tick, &player_cloak_rolls())
+                    }),
                     hull: drawn == ShipDrawn::Full,
                     murk: 0,
                     held: false,

@@ -60,6 +60,7 @@ use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
+mod cloak;
 mod combat;
 mod comm_line;
 mod controls;

@@ -89,6 +89,13 @@ impl Session {
         cloak::shown(self.ship.cloak.cloak, SEEN_AT_FULL_FADE)
     }
 
+    /// Sets the player's cloak directly, for
+    /// [`fixture::set_player_cloak`](crate::fixture::set_player_cloak).
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn set_player_cloak(&mut self, to: Cloak) {
+        self.ship.cloak.cloak = to;
+    }
+
     /// One pass of the cloak key and upkeep, the player
     /// `disabled_at_head` of the pass or not (see the module docs).
     pub(super) fn player_cloak_tick(&mut self, disabled_at_head: bool) {
