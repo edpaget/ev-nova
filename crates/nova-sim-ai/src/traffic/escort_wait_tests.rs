@@ -151,3 +151,13 @@ fn an_npc_carriers_fighter_out_of_ammunition_writes_its_return_and_docks() {
     assert_eq!(thought.goal, Goal::Dock(ShipRef::Npc(NpcId(2))));
     assert_eq!(thought.order_word, OrderWord(3));
 }
+
+#[test]
+fn a_holding_escort_held_at_its_gate_keeps_its_point_defence_beside_the_gate_wait() {
+    // Hold's `_AIFireTurret` (@0x83f4e) runs its point defence whether or
+    // not the wait runs, beside the wait's own (@0x8521e-0x85236).
+    let (_, thought) = hit_then_think(vec![players_escort(Some(EscortOrder::Hold))]);
+    assert!(matches!(thought.mode, Mode::HeldAtGate { .. }));
+    assert_eq!(thought.goal, Goal::Wait);
+    assert!(thought.trigger.point_defence, "{:?}", thought.trigger);
+}

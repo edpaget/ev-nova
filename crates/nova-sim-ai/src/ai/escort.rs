@@ -6,7 +6,9 @@
 //!   goal 6, which a hail finds busy: `_AIIsShipBusy` @0x82fac-0x82fe4),
 //!   targets nothing and fires nothing; its point defence runs on each of
 //!   its decisions, as `_EscortAI`'s hold tail-calls `_AIFireTurret`
-//!   (@0x83e59-0x83e74, @0x83f4e).
+//!   (@0x83e59-0x83e74, @0x83f4e, [`hold_trigger`]), and held at its gate
+//!   on every tick of the hold, beside the gate wait's
+//!   ([`fire_unprovoked`]). Hold keeps its AI wait, so it stays held.
 //! - **Defend**: once its think's validity step has dropped a gone or
 //!   disabled target ([`valid_target`]), it keeps its target while within
 //!   [`DEFEND_KEEP_SQ`] (distance squared) of the player
@@ -103,7 +105,7 @@ use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, thr
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{Mode, Npc, NpcId};
 
 /// The player's escorts' AI (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -224,13 +226,7 @@ impl Behaviour for EscortAi {
             Goal::Formation { guard: Some(guard) } => {
                 unprovoked(npc, Some(guard), around, self.fire).trigger
             }
-            // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
-            // no target (@0x83e59-0x83e74, @0x83f4e), which runs its point
-            // defence and fires nothing.
-            Goal::Wait => Trigger {
-                point_defence: true,
-                ..Trigger::default()
-            },
+            Goal::Wait => hold_trigger(npc),
             // Return to Hangar calls no turret (@0x83e79-0x83ea3).
             _ => Trigger::default(),
         }
@@ -299,9 +295,32 @@ fn player_breaking_up(around: &Surroundings) -> bool {
 /// read, as `_HandleShip` skips the fire step while the wait runs
 /// (@0x34a54-0x34a72, [`fire::gated`]), so it fires nothing and the pick
 /// stays.
+///
+/// Held at its gate on Hold Position ([`Mode::HeldAtGate`] with
+/// [`Goal::Wait`]), its think's point defence ([`hold_trigger`]) holds
+/// beside it on every tick of the hold, as `_AIFireTurret` runs it
+/// whether or not the wait runs (@0x83f4e, @0x80afa-0x80b0d). A ship
+/// waiting in its gate ([`Mode::Emerging`], goal 21) runs no think,
+/// whatever its goal from before.
 #[must_use]
 pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> GateWait {
-    unprovoked(npc, npc.target, around, rules)
+    let mut wait = unprovoked(npc, npc.target, around, rules);
+    if matches!(npc.mode, Mode::HeldAtGate { .. }) && npc.goal == Goal::Wait {
+        wait.trigger.point_defence |= hold_trigger(npc).point_defence;
+    }
+    wait
+}
+
+/// What `npc`, an escort or fighter holding position ([`Goal::Wait`]),
+/// fires: `_EscortAI`'s hold tail-calls `_AIFireTurret` with no target
+/// (@0x83e59-0x83e74, @0x83f4e), which runs its point defence unless it
+/// is disabled (@0x80afa-0x80b0d) and fires nothing.
+#[must_use]
+pub fn hold_trigger(npc: &Npc) -> Trigger {
+    Trigger {
+        point_defence: npc.condition == Condition::Intact,
+        ..Trigger::default()
+    }
 }
 
 /// What `npc`, an escort or fighter (AI type above 4, @0x80e59), fires
@@ -449,7 +468,7 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
     use crate::escort::{EscortClass, EscortDuty};
-    use crate::traffic::npc::{AiType, Mode};
+    use crate::traffic::npc::AiType;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -1587,6 +1606,46 @@ mod tests {
         let mut on_player = having(escort(None), Goal::Idle, Some(ShipRef::Player));
         on_player.state.position = crate::geometry::Vec2::new(900.0, 0.0);
         assert_eq!(waiting(&ENGINE, &[on_player]), POINT_DEFENCE);
+    }
+
+    #[test]
+    fn a_holding_escort_held_at_its_gate_runs_its_point_defence_through_the_wait() {
+        // Hold tail-calls `_AIFireTurret` with no target (@0x83e5f,
+        // @0x83f4e), point defence unless disabled (@0x80afa-0x80b0d),
+        // beside the wait's `_AIEscortFireUnprovoked`, which does nothing
+        // with no target (@0x8521e-0x85236). A ship waiting in its gate
+        // (goal 21) runs no think, whatever its goal from before.
+        let in_gate = |mode: Mode, goal: Goal, condition: Condition| {
+            let mut npc = having(escort(Some(EscortOrder::Hold)), goal, None);
+            npc.mode = mode;
+            npc.condition = condition;
+            let npcs = [npc, pirate(2, 10.0, 0.0)];
+            let govts = govts(0, 0);
+            let around = Surroundings {
+                player: Some(player(0.0, 0.0)),
+                govts: &govts,
+                ..Surroundings::new(&[], &npcs)
+            };
+            ENGINE.gate_wait(&npcs[0], &around)
+        };
+        let held = Mode::HeldAtGate { ticks_left: 20 };
+        let intact = Condition::Intact;
+        assert_eq!(in_gate(held, Goal::Wait, intact), POINT_DEFENCE);
+        assert_eq!(
+            in_gate(Mode::Emerging { ticks_left: 20 }, Goal::Wait, intact),
+            GateWait::default(),
+            "waiting in its gate"
+        );
+        assert_eq!(
+            in_gate(held, Goal::Attack(ShipRef::Player), intact),
+            GateWait::default(),
+            "held, attacking with no target"
+        );
+        assert_eq!(
+            in_gate(held, Goal::Wait, Condition::Disabled),
+            GateWait::default(),
+            "disabled"
+        );
     }
 
     #[test]

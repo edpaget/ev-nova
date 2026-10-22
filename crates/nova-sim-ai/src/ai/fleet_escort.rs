@@ -326,10 +326,7 @@ impl Behaviour for FleetEscortAi {
                     ..low.trigger
                 }
             }
-            Goal::Wait => Trigger {
-                point_defence: true,
-                ..Trigger::default()
-            },
+            Goal::Wait => escort::hold_trigger(npc),
             _ => Trigger::default(),
         }
     }
@@ -396,7 +393,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
     use crate::fleet::OrderWord;
-    use crate::traffic::npc::{AiType, NpcId};
+    use crate::traffic::npc::{AiType, Mode, NpcId};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -1520,6 +1517,38 @@ mod tests {
             ),
             Reaction::default(),
             "no Good Samaritan"
+        );
+    }
+
+    #[test]
+    fn holding_at_its_gate_it_runs_its_point_defence_through_the_wait() {
+        // Hold tail-calls `_AIFireTurret` with no target (@0x83e5f,
+        // @0x83f4e), point defence unless disabled (@0x80afa-0x80b0d),
+        // beside the wait's `_AIEscortFireUnprovoked`, which does nothing
+        // with no target (@0x8521e-0x85236). A ship waiting in its gate
+        // (goal 21) runs no think, whatever its goal from before.
+        let ai = FleetEscortAi::default();
+        let in_gate = |mode: Mode, goal: Goal| {
+            let mut npc = escort();
+            npc.mode = mode;
+            npc.goal = goal;
+            let npcs = [lead(Goal::Idle), npc, raider(3, 0.0, -50.0, n(1))];
+            ai.gate_wait(&npcs[1], &Surroundings::new(&[], &npcs))
+        };
+        let held = Mode::HeldAtGate { ticks_left: 20 };
+        assert!(
+            in_gate(held, Goal::Wait).trigger.point_defence,
+            "held, holding"
+        );
+        assert_eq!(
+            in_gate(Mode::Emerging { ticks_left: 20 }, Goal::Wait),
+            GateWait::default(),
+            "waiting in its gate"
+        );
+        assert_eq!(
+            in_gate(held, Goal::Attack(ShipRef::Player)),
+            GateWait::default(),
+            "held, attacking with no target"
         );
     }
 }
