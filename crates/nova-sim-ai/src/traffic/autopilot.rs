@@ -1730,6 +1730,80 @@ mod tests {
         assert_eq!(ship.escort, None);
     }
 
+    /// A [`FAST`] fleet escort following NPC 7 ([`Goal::Follow`]) from
+    /// `start`, in `fleet_slot` of its lead's formation; it holds slot 3
+    /// of 3, spaced 60, in the player's formation too, which it doesn't
+    /// keep.
+    fn fleet_escort(start: ShipState, fleet_slot: Option<FormationSlot>) -> Npc {
+        Npc {
+            goal: Goal::Follow {
+                lead: NpcId(7),
+                guard: None,
+            },
+            leader: Some(NpcId(7)),
+            fleet_slot,
+            escort: Some(EscortDuty {
+                formation: FormationSlot {
+                    slot: 3,
+                    ships: 3,
+                    spacing: 60.0,
+                },
+                order: None,
+            }),
+            ..npc(FAST, Goal::Idle, start)
+        }
+    }
+
+    #[test]
+    fn by_the_earlier_formation_a_fleet_escort_closes_on_and_holds_its_fleet_slot() {
+        let rules = earlier(FlightRules::default());
+        assert_eq!(rules.npc_formation, NpcFormation::Original);
+        let fleet = FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        };
+        let mut lead = at(0.0, 0.0, 2.0, 0.0, 90.0);
+        let mut ship = fleet_escort(at(-600.0, 400.0, 0.0, 0.0, 0.0), Some(fleet));
+        for _ in 0..600 {
+            lead.position = lead.position + lead.velocity;
+            assert_eq!(fly_earlier(&mut ship, Some(&lead)), Outcome::Flying);
+        }
+        assert_eq!(ship.state.velocity, lead.velocity, "{:?}", ship.state);
+        let slack = FORMATION_SLACK + FORMATION_NUDGE * ship.stats.handling.accel;
+        let off = |slot: Option<FormationSlot>| {
+            ship.state.position - slot.expect("a slot").position(&lead)
+        };
+        let fleet_off = off(Some(fleet));
+        assert!(
+            fleet_off.x.abs() <= slack && fleet_off.y.abs() <= slack,
+            "{fleet_off:?}"
+        );
+        let player_off = off(ship.formation());
+        assert!(player_off.length() > slack * 2.0, "{player_off:?}");
+
+        // On its slot, it keeps it: its lead's velocity and heading.
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = fleet.position(&leader);
+        let mut holding = fleet_escort(at(slot.x, slot.y, 0.0, 0.0, 200.0), Some(fleet));
+        assert_eq!(fly_earlier(&mut holding, Some(&leader)), Outcome::Flying);
+        assert_eq!(holding.state.velocity, leader.velocity);
+        assert_eq!(holding.state.heading, 30.0);
+        assert_eq!(holding.state.position, slot + leader.velocity);
+    }
+
+    #[test]
+    fn by_the_earlier_formation_a_fleet_escort_with_no_fleet_slot_brakes() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let start = at(0.0, 0.0, 0.0, 2.0, 180.0);
+        let mut slotless = fleet_escort(start, None);
+        fly_earlier(&mut slotless, Some(&leader));
+        let mut idle = npc(FAST, Goal::Idle, start);
+        fly_earlier(&mut idle, Some(&leader));
+        assert_ne!(idle.state.heading, 180.0, "it turns to brake");
+        assert_eq!(slotless.state, idle.state, "as an idle ship brakes");
+    }
+
     #[test]
     fn the_named_values() {
         assert_eq!((FOLLOW_DISTANCE, ALIGNED), (100.0, 5.0));
