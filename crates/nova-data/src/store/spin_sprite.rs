@@ -525,4 +525,40 @@ mod tests {
         );
         assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
     }
+
+    #[test]
+    fn a_corrupt_rled_does_not_fall_back_to_its_pict_pair() {
+        // `spïn` 3000 masked by `PICT` 2100, with a good `PICT` pair at
+        // its `SpritesID` and `MasksID`.
+        let pair = [
+            (Spin::TYPE, 3000, masked_spin(2000, 2100, 2, 1, 2, 2)),
+            (PICT, 2000, distinct(6, 2)),
+            (PICT, 2100, mask(6, 2, &[])),
+        ];
+        // On its own, with no `rlëD` 2000, the pair resolves.
+        let no_rled = FakeTree::new().dir("/d", &[("Pair", File)]);
+        let no_rled = GameData::load(
+            &no_rled,
+            &FakeForks::new().file("/d/Pair", fork(&pair)),
+            Path::new("/d"),
+            None,
+        )
+        .expect("opens");
+        let sheet = no_rled.spin_sheet(3000).expect("the pair resolves");
+        assert_eq!(sheet.kind, SheetKind::PictPair { mask_id: 2100 });
+        // With a corrupt `rlëD` 2000 beside it, the `rlëD` is still the
+        // sheet (`_ResourceExists` @0x1ebee), and its failure the error.
+        let mut resources = pair.to_vec();
+        resources.push((RLED, 2000, RledBuilder::new(2, 1).depth(32).build()));
+        let err = store(&[("Bad Paint", fork(&resources))])
+            .spin_sheet(3000)
+            .expect_err("the rlëD fails, not the pair resolves");
+        assert_eq!(
+            err,
+            SpinSpriteError::Graphics {
+                image_id: 2000,
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
+            }
+        );
+    }
 }
