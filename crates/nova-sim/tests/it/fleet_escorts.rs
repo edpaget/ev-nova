@@ -7,17 +7,24 @@
 //! it attacks a ship attacking the lead; an idle lead orders Return, and
 //! it follows the lead, guarding against that ship with its turret; a
 //! lead whose odds are not yet cached orders its warship escort to keep
-//! formation.
+//! formation. Keeping formation, it holds its slot in its lead's
+//! formation as the lead cruises (`_AICalcFormationPositions`, goal 0xa),
+//! or, by the other reading of `npc_formation`, follows within 100 of it.
 
 use std::collections::BTreeSet;
 
+use nova_sim::ai::{Behaviour, Decision, FleetEscortAi, Surroundings};
 use nova_sim::catalog::{EscortClass, GovtId, GovtRecord, WeaponId, WeaponRecord};
+use nova_sim::chance::Chance;
 use nova_sim::combat::ShipRef;
 use nova_sim::combat::armament::Armament;
 use nova_sim::combat::weapon::WeaponSpec;
+use nova_sim::escort::{FORMATION_NUDGE, FORMATION_SLACK};
 use nova_sim::fleet::OrderWord;
+use nova_sim::flight::{FlightRules, NpcFormation};
 use nova_sim::geometry::Vec2;
 use nova_sim::stats::ShipStats;
+use nova_sim::traffic::autopilot::FOLLOW_DISTANCE;
 use nova_sim::traffic::npc::AiType;
 use nova_sim::{Goal, Governments, NovaAi, Npc, NpcId, Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
@@ -170,4 +177,98 @@ fn an_idle_lead_orders_return_and_its_escort_follows_it_guarding_with_its_turret
     assert_eq!(escort.target, Some(ShipRef::Npc(RAIDER)));
     assert_eq!(escort.trigger.only, Some(TURRET), "its turret pick fired");
     assert!(escort.trigger.point_defence);
+}
+
+/// The lead keeps its goal; its escort flies `_EscortAI` under it.
+#[derive(Debug)]
+struct Cruise;
+
+impl Behaviour for Cruise {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        if npc.leader.is_some() {
+            FleetEscortAi::default().decision(npc, around, chance)
+        } else {
+            Decision {
+                goal: npc.goal,
+                ..Decision::default()
+            }
+        }
+    }
+}
+
+/// A lead cruising right at 2 a tick, holding its course, and its escort
+/// a little behind it, flown 300 ticks under `flight` off the lead's order
+/// frames (so the escort keeps formation): after each of the last 100,
+/// the escort's place off its slot and off its lead.
+fn cruising(flight: FlightRules) -> Vec<(Vec2, Vec2)> {
+    let mut lead = ship(128, AiType::Warship, (0.0, 0.0), Goal::Hold);
+    lead.state.velocity = Vec2::new(2.0, 0.0);
+    lead.state.heading = 90.0;
+    let mut escort = ship(128, AiType::Warship, (-60.0, 50.0), Goal::Idle);
+    escort.state.velocity = Vec2::new(2.0, 0.0);
+    escort.state.heading = 90.0;
+    escort.leader = Some(LEAD);
+    let mut traffic = Traffic::with_interval(1);
+    traffic.add_npc(lead);
+    traffic.add_npc(escort);
+    let world = World {
+        flight,
+        frame: 1,
+        ..World::new(&[])
+    };
+    let mut offs = Vec::new();
+    for tick in 0..300 {
+        traffic.tick_in(&Cruise, world, &[], &mut Draws::of(&[0; 64]));
+        let (lead, escort) = (&traffic.npcs()[0], &traffic.npcs()[1]);
+        assert_eq!(escort.order_word, OrderWord::NONE);
+        if tick >= 200 {
+            let slot = escort
+                .fleet_slot
+                .expect("a slot in its lead's formation")
+                .position(&lead.state);
+            offs.push((
+                escort.state.position - slot,
+                escort.state.position - lead.state.position,
+            ));
+        }
+    }
+    offs
+}
+
+#[test]
+fn a_fleet_escort_keeps_its_slot_on_a_cruising_lead() {
+    let flight = FlightRules::default();
+    let thrust = flight.handling(ShipStats::new(FAST, &[]).handling).accel;
+    let slack = FORMATION_SLACK + FORMATION_NUDGE * thrust;
+    for (tick, (off_slot, _)) in cruising(flight).into_iter().enumerate() {
+        assert!(
+            off_slot.x.abs() <= slack && off_slot.y.abs() <= slack,
+            "tick {tick}: {off_slot:?} off its slot"
+        );
+    }
+}
+
+#[test]
+fn by_the_earlier_follow_a_fleet_escort_keeps_within_100_of_its_cruising_lead() {
+    let flight = FlightRules {
+        npc_formation: NpcFormation::Earlier,
+        ..FlightRules::default()
+    };
+    let offs = cruising(flight);
+    for (tick, (_, off_lead)) in offs.iter().enumerate() {
+        assert!(
+            off_lead.length() <= FOLLOW_DISTANCE,
+            "tick {tick}: {off_lead:?} off its lead"
+        );
+    }
+    let slack = FORMATION_SLACK + FORMATION_NUDGE;
+    assert!(
+        offs.iter()
+            .any(|(off_slot, _)| off_slot.x.abs() > slack || off_slot.y.abs() > slack),
+        "not on its slot"
+    );
 }
