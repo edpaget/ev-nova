@@ -79,7 +79,9 @@ fn takes(npc: &Npc, mount: &Mount) -> bool {
         Guidance::Beam => !(spec.ignores_asteroids() && npc.miner & MINES != 0),
         _ => false,
     };
-    mount.count > 0 && guided && !spec.planet_type() && has_ammo(npc, mount) && mount.reload <= 0.0
+    // The count above 0 (@0x80443) holds for every mount: an armament
+    // mounts none of a weapon carried none of (`Armament::new`).
+    guided && !spec.planet_type() && has_ammo(npc, mount) && mount.reload <= 0.0
 }
 
 /// The trigger `npc` holds after `_AIFireGunUntargeted` (see the module

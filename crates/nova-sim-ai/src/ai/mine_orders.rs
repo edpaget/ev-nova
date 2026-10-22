@@ -448,6 +448,19 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_box_is_measured_from_the_ship() {
+        let boxes = [cargo(100.0, 0.0, 5.0, true), cargo(-50.0, 0.0, 5.0, true)];
+        assert_eq!(
+            nearest_box(Vec2::new(90.0, 0.0), &boxes),
+            Some(Vec2::new(100.0, 0.0))
+        );
+        assert_eq!(
+            nearest_box(Vec2::new(-40.0, 0.0), &boxes),
+            Some(Vec2::new(-50.0, 0.0))
+        );
+    }
+
+    #[test]
     fn the_brake_takes_each_axis_toward_none_by_its_step() {
         assert_eq!(scoop_brake_step(0.2), (0.2_f64 * 1.75) as f32);
         assert_eq!(brake(Vec2::new(2.0, -2.0), 0.5), Vec2::new(1.5, -1.5));
