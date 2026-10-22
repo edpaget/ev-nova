@@ -904,8 +904,9 @@ impl Session {
     }
 
     /// Puts the ship where `placement` says, its speed along its heading
-    /// with it (see the `inertialess` module).
-    fn place(&mut self, placement: Placement) {
+    /// with it (see the `inertialess` module): at the entry, or as a jump
+    /// ends ([`Session::arrive`]).
+    pub(super) fn place(&mut self, placement: Placement) {
         match placement.ship {
             ShipPlacement::Arrive(state) => {
                 self.ship.player = state;

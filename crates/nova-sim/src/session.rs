@@ -472,6 +472,7 @@ mod ionization;
 mod jump_arrival;
 mod jump_collapse;
 mod jump_exploration;
+mod jump_hops;
 mod kept_berths;
 mod kept_rescues;
 mod last_refresh;
@@ -582,6 +583,7 @@ use std::rc::Rc;
 use self::chart::Chart;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::jump_hops::Chain;
 use self::mission_run::MissionRun;
 use self::mode::Mode;
 use self::outbox::Outbox;
@@ -3140,45 +3142,17 @@ impl Session {
             self.ship
                 .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
         }
-        // The hops whose fuel the jump takes, once its explorations have
-        // run (@0x6be31), and whose days pass after the refresh (@0x6c144).
-        let mut jumps: u16 = 1;
         let departure = self.pilot.system;
-        let (mut from, mut at) = (departure, first);
-        let mut hops = 0;
-        if self
-            .pilot
-            .course
-            .first()
-            .is_some_and(|&hop| hop == first || self.chart.galaxy.same_place(hop) == Some(first))
-        {
-            hops = 1;
-            for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
-                let next = self.pilot.course.get(hops);
-                let Some(next) = next.and_then(|&hop| self.chart.galaxy.same_place(hop)) else {
-                    break;
-                };
-                // By `PerHop` a further hop is made only if the fuel, less
-                // the hops' already owed, pays for it too; its fuel is taken
-                // with the first's, its days pass with the first's.
-                if self.setup.multi_jump == MultiJumpRule::PerHop {
-                    let owed = JUMP_FUEL * f32::from(jumps);
-                    if self.pilot.reserves.fuel.now - owed < JUMP_FUEL {
-                        break;
-                    }
-                    jumps += 1;
-                }
-                hops += 1;
-                // Each system passed on the way, the visible system that
-                // stands for its hop as the original resolves them
-                // (@0x6bd67-0x6bdc1), written as the player's (@0x6bdd4)
-                // and explored at once (@0x6bddb).
-                self.chart
-                    .write_jump_system(&mut self.pilot, &self.setup, at);
-                self.explore_now(catalog, &mut &mut *chance, at);
-                (from, at) = (at, next);
-            }
-        }
+        // The arrival block, before the hop loop and every exploration
+        // (@0x6bc0d-0x6bd20; see the `jump_arrival` module).
+        self.place_jump_arrival(departure, first);
+        // The hop loop (@0x6bd67-0x6bdfc; see the `jump_hops` module).
+        let Chain {
+            hops,
+            jumps,
+            from,
+            at,
+        } = self.hop_along(catalog, &mut &mut *chance, departure, first);
         // The system the jump writes before its refresh (@0x6be0b): the
         // last hop's stand-in on the multi-jump branch, else the raw Con
         // target, by the engine's `arrival_system`.
@@ -3247,7 +3221,7 @@ impl Session {
             system: written,
             sites: self.chart.read_sites(catalog, written),
             placement: Placement {
-                ship: self.jump_arrival(departure, first, from, at),
+                ship: self.jump_entry_placement(from, at),
                 stellar: None,
                 hold: false,
             },
