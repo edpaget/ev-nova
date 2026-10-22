@@ -297,9 +297,43 @@ pub struct FieldSpec {
     pub types: u16,
 }
 
+/// The window width a system's `Asteroids` is stored for unscaled: the
+/// double at 0xdda08 that `_LoadObjectData` divides the window's width by
+/// (@0x77cbe).
+pub const ASTEROID_WIDTH_BASE: f64 = 640.0;
+
+/// The game window's width the session assumes when no view has said
+/// how wide it is: the original's smallest screen, 800 wide, as
+/// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) is its play
+/// area.
+pub const DEFAULT_WINDOW_WIDTH: u32 = 800;
+
+/// The most asteroids a stored count holds (`_LoadObjectData`
+/// @0x77cdd-0x77ce7): one for each of the field's [`SLOTS`].
+pub const STORED_COUNT_CAP: i16 = 16;
+
 impl FieldSpec {
     /// No field: what a system the catalog doesn't list holds.
     pub const NONE: Self = Self { count: 0, types: 0 };
+
+    /// The field as `_LoadObjectData` stores it at runtime +0x94 for a
+    /// game window `window_width` wide (@0x77c72-0x77ce7): its count
+    /// times `window_width` / [`ASTEROID_WIDTH_BASE`], truncated toward
+    /// zero (`cvttsd2si` @0x77cca), at most [`STORED_COUNT_CAP`]; a count
+    /// of 0 or less is stored as 0 (@0x77c79-0x77c83, @0x77d03). Its
+    /// types are kept. The original stores the result in 16 bits
+    /// (@0x77cce), which the cap keeps from wrapping.
+    #[must_use]
+    pub fn stored(self, window_width: u32) -> Self {
+        if self.count <= 0 {
+            return Self { count: 0, ..self };
+        }
+        let scaled = f64::from(self.count) * (f64::from(window_width) / ASTEROID_WIDTH_BASE);
+        // Capped, then truncated toward zero, so it fits.
+        #[allow(clippy::cast_possible_truncation)]
+        let count = scaled.min(f64::from(STORED_COUNT_CAP)).trunc() as i16;
+        Self { count, ..self }
+    }
 }
 
 /// Where an edge spawn starts, as
@@ -843,6 +877,46 @@ mod tests {
 
     fn spec(count: i16, types: u16) -> FieldSpec {
         FieldSpec { count, types }
+    }
+
+    /// The count `_LoadObjectData` stores of `count` in a window `width`
+    /// wide.
+    fn stored(count: i16, width: u32) -> i16 {
+        spec(count, 0x0001).stored(width).count
+    }
+
+    #[test]
+    fn a_count_is_stored_times_the_window_width_over_640_truncated() {
+        assert_eq!(stored(4, 640), 4, "the original's base width");
+        assert_eq!(stored(4, 800), 5);
+        assert_eq!(stored(3, 800), 3, "3.75 truncated");
+        assert_eq!(stored(2, 1024), 3, "3.2 truncated");
+        assert_eq!(stored(4, 1024), 6, "6.4 truncated");
+        assert_eq!(stored(5, 320), 2, "2.5 truncated");
+        assert_eq!(stored(1, 639), 0, "0.998 truncated");
+    }
+
+    #[test]
+    fn a_stored_count_is_at_most_16() {
+        assert_eq!(stored(12, 1024), 16, "19.2 capped");
+        assert_eq!(stored(16, 2560), 16);
+        assert_eq!(stored(10, 1024), 16, "16 exactly");
+        assert_eq!(stored(9, 1024), 14);
+    }
+
+    #[test]
+    fn a_count_of_0_or_less_is_stored_as_0() {
+        for width in [320, 640, 1024] {
+            assert_eq!(stored(0, width), 0, "{width}");
+            assert_eq!(stored(-1, width), 0, "{width}");
+            assert_eq!(stored(-20, width), 0, "{width}");
+        }
+    }
+
+    #[test]
+    fn storing_keeps_the_types() {
+        assert_eq!(spec(4, 0x0005).stored(1024), spec(6, 0x0005));
+        assert_eq!(spec(-1, 0x0005).stored(1024), spec(0, 0x0005));
     }
 
     fn spawned(origin: Origin, spec: FieldSpec, chance: &mut impl Chance) -> Asteroid {

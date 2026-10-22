@@ -74,6 +74,9 @@ pub(super) struct Space {
     /// What the view shows of space about the player's ship (see the
     /// `cloaks` module).
     pub(super) play_area: crate::cloak::Area,
+    /// How wide the view's game window is, which each system's
+    /// `Asteroids` is stored by (see the `asteroids` module); never saved.
+    pub(super) window_width: u32,
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
     pub(super) strikes: Vec<Strike>,
@@ -175,6 +178,7 @@ impl Space {
             // module).
             asteroid_field_due: true,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
+            window_width: crate::asteroid::DEFAULT_WINDOW_WIDTH,
             strikes: Vec::new(),
             frame: 0,
             pass_frame: 0,

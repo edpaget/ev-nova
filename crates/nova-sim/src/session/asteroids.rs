@@ -54,6 +54,32 @@
 //! frame spawns after its kill. A move settled inside a frame kills the
 //! rest of that frame's passes.
 //!
+//! **The count.** A system's field holds its `Asteroids` as
+//! `_LoadObjectData` stores it at runtime +0x94 (@0x77c72-0x77ce7): times
+//! the game window's width / 640, truncated, at most 16
+//! ([`FieldSpec::stored`]), as [`RuleKey::AsteroidCountByWidth`] reads;
+//! the galaxy map's hazard words read the same count (see the
+//! `map_panel` module). The view says the width
+//! ([`Session::set_window_width`]); until it does, the session takes the
+//! original's smallest screen,
+//! [`DEFAULT_WINDOW_WIDTH`](crate::asteroid::DEFAULT_WINDOW_WIDTH).
+//!
+//! *The width read now, not at load.* The original stores the count
+//! only at load: `_InitEVNova` (@0x47280, after its one `_SetupWind`
+//! @0x471ac) and `_DoNewPilot` (@0x190f0). Its window never changes size
+//! after `_SetupWind` (`_SizeWindow` is called only on dialogs'
+//! windows), so every load reads the one width the player plays in, and
+//! the stored count always matches the window on screen. Ours can be
+//! resized in play, so the count is read from the width the view gives
+//! now, at each spawn, placing and panel: the count then matches the
+//! window on screen, as the original's always does. Holding the width
+//! from the session's start instead would, after a resize, pair a count
+//! for one width with a play area of another, which the original never
+//! shows. A resize applies from the next spawn or the next panel; the
+//! asteroids a narrower window leaves above its count stay until they
+//! are culled or broken, which has no counterpart in the original, where
+//! no resize happens.
+//!
 //! **The placed field.** By the other reading of
 //! [`RuleKey::AsteroidEntryField`] a jump's arrival places the field
 //! `_CreateAsteroids` places (@0x6c51a) and keeps it, emptied of the
@@ -185,14 +211,45 @@ impl Session {
         );
     }
 
-    /// The player's system's field: none for one the catalog doesn't
-    /// list.
+    /// Says how wide the view's game window is, `width` logical units,
+    /// which each system's `Asteroids` is stored by (see the module
+    /// docs); [`DEFAULT_WINDOW_WIDTH`](crate::asteroid::DEFAULT_WINDOW_WIDTH)
+    /// until the view says.
+    pub fn set_window_width(&mut self, width: u32) {
+        self.space.window_width = width;
+    }
+
+    /// The player's system's field, as stored for the window (see the
+    /// module docs): none for one the catalog doesn't list.
     fn field_spec(&self) -> FieldSpec {
-        self.statics
+        self.statics.stored_field(
+            self.pilot.system,
+            self.space.window_width,
+            self.setup.rules.source_for(RuleKey::AsteroidCountByWidth),
+        )
+    }
+}
+
+impl Statics {
+    /// `system`'s field as stored for a game window `window_width` wide,
+    /// as [`RuleKey::AsteroidCountByWidth`] reads (`source`): by the
+    /// engine scaled ([`FieldSpec::stored`]), by the Bible raw. None for
+    /// a system the catalog doesn't list.
+    pub(super) fn stored_field(
+        &self,
+        system: SystemId,
+        window_width: u32,
+        source: RuleSource,
+    ) -> FieldSpec {
+        let raw = self
             .asteroid_fields
-            .get(&self.pilot.system)
+            .get(&system)
             .copied()
-            .unwrap_or(FieldSpec::NONE)
+            .unwrap_or(FieldSpec::NONE);
+        match source {
+            RuleSource::Engine => raw.stored(window_width),
+            RuleSource::Bible => raw,
+        }
     }
 }
 
@@ -368,10 +425,20 @@ mod tests {
         }
     }
 
-    /// `catalog`'s session in flight at system 130's centre.
+    /// `catalog`'s session in flight at system 130's centre, in a window
+    /// 640 wide, which stores each system's `Asteroids` unscaled.
     fn flying(catalog: &FakePilotCatalog) -> Session {
-        let session = Session::start(catalog).expect("starts");
+        let session = unscaled(Session::start(catalog).expect("starts"));
         assert_eq!(session.landed(), None);
+        session
+    }
+
+    /// `session` in a window 640 wide, which stores each system's
+    /// `Asteroids` unscaled
+    /// ([`ASTEROID_WIDTH_BASE`](crate::asteroid::ASTEROID_WIDTH_BASE)), so a test's counts
+    /// are its catalog's.
+    fn unscaled(mut session: Session) -> Session {
+        session.set_window_width(640);
         session
     }
 
@@ -398,6 +465,70 @@ mod tests {
 
     fn kinds(session: &Session) -> Vec<u8> {
         session.asteroids().map(|asteroid| asteroid.kind).collect()
+    }
+
+    /// How many asteroids `session`'s field fills to, the passes run
+    /// past any count.
+    fn filled(session: &mut Session) -> usize {
+        for _ in 0..2 * SLOTS {
+            pass(session, &mut NeverFires);
+        }
+        session.asteroids().count()
+    }
+
+    /// `catalog`'s session in flight, under `rules`, in a window `width`
+    /// wide.
+    fn sized(catalog: &FakePilotCatalog, rules: Rulebook, width: u32) -> Session {
+        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
+        session.set_window_width(width);
+        session
+    }
+
+    #[test]
+    fn the_field_fills_to_its_count_scaled_by_the_window_width_by_the_engine_only() {
+        let rocks = rocky(catalog());
+        let bible = other(RuleKey::AsteroidCountByWidth);
+        assert_eq!(filled(&mut sized(&rocks, Rulebook::default(), 1024)), 6);
+        assert_eq!(filled(&mut sized(&rocks, bible, 1024)), 4, "raw");
+        assert_eq!(filled(&mut sized(&rocks, Rulebook::default(), 640)), 4);
+        let dense = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 12, 0x0001)],
+            ..rocky(catalog())
+        };
+        assert_eq!(filled(&mut sized(&dense, Rulebook::default(), 1024)), 16);
+        assert_eq!(filled(&mut sized(&dense, bible, 1024)), 12, "raw");
+        let none = FakePilotCatalog {
+            asteroid_fields: vec![field(130, -1, 0x0001)],
+            ..rocky(catalog())
+        };
+        assert_eq!(filled(&mut sized(&none, Rulebook::default(), 1024)), 0);
+    }
+
+    #[test]
+    fn a_session_no_view_has_sized_scales_by_800() {
+        let catalog = rocky(catalog());
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(filled(&mut session), 5, "4 × 800 / 640");
+    }
+
+    #[test]
+    fn a_placed_field_holds_the_scaled_count() {
+        let catalog = rocky(catalog());
+        let placed = other(RuleKey::AsteroidEntryField);
+        let mut session = sized(&catalog, placed, 1024);
+        session.settle_asteroid_field(&mut NeverFires);
+        assert_eq!(kinds(&session), [0; 6]);
+    }
+
+    #[test]
+    fn a_new_width_applies_from_the_next_spawn() {
+        let catalog = rocky(catalog());
+        let mut session = sized(&catalog, Rulebook::default(), 640);
+        assert_eq!(filled(&mut session), 4);
+        session.set_window_width(1024);
+        pass(&mut session, &mut NeverFires);
+        assert_eq!(session.asteroids().count(), 5, "one more spawned");
+        assert_eq!(filled(&mut session), 6);
     }
 
     #[test]
@@ -586,7 +717,7 @@ mod tests {
     #[test]
     fn a_hypergate_empties_the_field() {
         let catalog = rocky(gated());
-        let mut session = at_gate(&catalog);
+        let mut session = unscaled(at_gate(&catalog));
         grown(&mut session, 2);
         session.open_hypergate(&catalog).expect("opens");
         session
@@ -598,7 +729,7 @@ mod tests {
     #[test]
     fn a_wormhole_empties_the_field() {
         let catalog = rocky(wormholes());
-        let mut session = at_wormhole(&catalog);
+        let mut session = unscaled(at_wormhole(&catalog));
         grown(&mut session, 2);
         session
             .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
@@ -735,7 +866,7 @@ mod tests {
     fn placed_a_gate_or_a_move_still_empties_the_field() {
         let placed = other(RuleKey::AsteroidEntryField);
         let gates = rocky(gated());
-        let mut session = at_gate(&gates).with_rules(placed);
+        let mut session = unscaled(at_gate(&gates)).with_rules(placed);
         grown(&mut session, 2);
         session.open_hypergate(&gates).expect("opens");
         session
@@ -779,8 +910,7 @@ mod tests {
         let catalog = rocky(catalog());
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.stellar = Some(StellarId(128));
-        let mut session = Session::fly(&catalog, pilot)
-            .expect("flies")
+        let mut session = unscaled(Session::fly(&catalog, pilot).expect("flies"))
             .with_rules(other(RuleKey::AsteroidEntryField));
         assert!(session.landed().is_none());
         session.settle_asteroid_field(&mut NeverFires);

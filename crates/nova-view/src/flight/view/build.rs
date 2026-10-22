@@ -37,7 +37,7 @@ use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
 
 use super::{
     BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then,
-    hail_refusal_message, opening_scene,
+    hail_refusal_message, opening_scene, window_width,
 };
 
 impl<
@@ -135,7 +135,11 @@ impl<
     /// The flight of `session` as [`FlightView::flying`] reads it.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
     fn read(catalog: C, session: Result<Session, StartError>) -> Self {
-        let session = session.map_err(|err| err.to_string());
+        let mut session = session.map_err(|err| err.to_string());
+        if let Ok(session) = &mut session {
+            // Sized as the view starts, before anything reads its field.
+            session.set_window_width(window_width(VIEW_SIZE));
+        }
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some(opening_scene(&catalog, session)),

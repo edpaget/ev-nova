@@ -15,8 +15,10 @@
 //!   +0x44);
 //! - whether it is inhabited, [`exploration::inhabited`] as
 //!   [`RuleKey::MapExplore`] reads it;
-//! - its `Asteroids`, the count its asteroid field spawns from, its
-//!   `Interference`, raw, and its `Murk` as loaded ([`murk::loaded_murk`]
+//! - its `Asteroids` as stored for the game window, the count its
+//!   asteroid field spawns from (`_LoadObjectData`'s runtime +0x94,
+//!   @0x77c72-0x77ce7, as [`RuleKey::AsteroidCountByWidth`] reads; see
+//!   the `asteroids` module), its `Interference`, raw, and its `Murk` as loaded ([`murk::loaded_murk`]
 //!   as [`RuleKey::LowMurk`] reads it: the runtime +0xbc the panel reads,
 //!   which `_LoadObjectData` sets @0x77eb7-0x77f08);
 //! - the legal status string in it (`_DrawLegalStatusString(_selSystem)`
@@ -57,6 +59,7 @@ impl Session {
             catalog,
             selected,
             hypergate,
+            self.space.window_width,
         )
     }
 }
@@ -65,8 +68,10 @@ impl Chart {
     /// The galaxy map's two info panels (see the module docs), for the
     /// system `selected` on the map, `catalog` the stellars, names and
     /// commodities are read from; `hypergate`, on the hypergate map, the
-    /// systems its gate offers.
+    /// systems its gate offers; `window_width` the game window's width its
+    /// `Asteroids` is stored by.
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // what it reads outside Chart, then its own four
     fn map_panel(
         &self,
         pilot: &Pilot,
@@ -75,6 +80,7 @@ impl Chart {
         catalog: &impl PilotCatalog,
         selected: Option<SystemId>,
         hypergate: Option<&[SystemId]>,
+        window_width: u32,
     ) -> MapPanel {
         let words = PanelWords::from_list(&setup.strings().string_list(MISC_STRINGS));
         let commodities: Vec<String> = market::commodities(&catalog.commodity_strings())
@@ -85,7 +91,7 @@ impl Chart {
         // An unexplored system's panel reads nothing more of it.
         let facts = selected
             .filter(|&system| pilot.explored_level(system) > ExploredLevel::Unexplored)
-            .map(|system| self.panel_facts(pilot, statics, setup, catalog, system));
+            .map(|system| self.panel_facts(pilot, statics, setup, catalog, system, window_width));
         let facts = facts.as_ref();
         let input = PanelInput {
             words: &words,
@@ -116,6 +122,7 @@ impl Chart {
         setup: &Setup,
         catalog: &impl PilotCatalog,
         system: SystemId,
+        window_width: u32,
     ) -> PanelFacts {
         let map = self.galaxy.map();
         let stellars = overlaid_sites(&self.galaxy, catalog, system)
@@ -153,9 +160,12 @@ impl Chart {
                     .unwrap_or_default()
             }),
             asteroids: statics
-                .asteroid_fields
-                .get(&system)
-                .map_or(0, |field| field.count),
+                .stored_field(
+                    system,
+                    window_width,
+                    setup.rules.source_for(RuleKey::AsteroidCountByWidth),
+                )
+                .count,
             interference: map.interference(system),
             murk: murk::loaded_murk(map.murk(system), setup.rules.source_for(RuleKey::LowMurk)),
             stellars,
@@ -460,11 +470,46 @@ mod tests {
         }];
         catalog.sites[0].1[1].gravity = 5;
         let mut session = session(&catalog, Rulebook::default());
+        // A window 640 wide stores the 2 unscaled.
+        session.set_window_width(640);
         session.pilot.explore(SystemId(130));
         let Strip::Info { hazards, .. } = panel(&session, &catalog, 130).strip else {
             panic!("the info strip");
         };
         assert_eq!(hazards, "#312, #313 #316, #318 #320, #323 #324");
+    }
+
+    /// The hazards of 130, holding `count` asteroids, under `rules` in a
+    /// window `width` wide.
+    fn asteroid_hazards(count: i16, rules: Rulebook, width: u32) -> String {
+        let mut catalog = panelled();
+        catalog.asteroid_fields = vec![AsteroidFieldRecord {
+            system: SystemId(130),
+            count,
+            types: 1,
+        }];
+        let mut session = session(&catalog, rules);
+        session.set_window_width(width);
+        session.pilot.explore(SystemId(130));
+        let Strip::Info { hazards, .. } = panel(&session, &catalog, 130).strip else {
+            panic!("the info strip");
+        };
+        hazards
+    }
+
+    #[test]
+    fn the_asteroid_hazard_reads_the_count_stored_for_the_window_by_the_engine() {
+        // "sparse" (#313) up to 3, "moderate" (#314) up to 6, else
+        // "dense" (#315) (`_MapDialogUpdate` @0x106af-0x1074f).
+        let engine = Rulebook::default();
+        let bible =
+            Rulebook::default().with_override(RuleKey::AsteroidCountByWidth, RuleSource::Bible);
+        assert_eq!(asteroid_hazards(3, engine, 1024), "#314 #316");
+        assert_eq!(asteroid_hazards(3, bible, 1024), "#313 #316");
+        assert_eq!(asteroid_hazards(5, engine, 1024), "#315 #316");
+        assert_eq!(asteroid_hazards(5, bible, 1024), "#314 #316");
+        assert_eq!(asteroid_hazards(3, engine, 640), "#313 #316");
+        assert_eq!(asteroid_hazards(6, engine, 800), "#315 #316", "7");
     }
 
     #[test]

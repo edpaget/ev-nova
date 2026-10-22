@@ -312,11 +312,19 @@ fn asteroid_count(view: &View) -> usize {
     view.session().expect("flying").asteroids().count()
 }
 
+/// `view` in a view 640 wide, whose window stores each system's
+/// `Asteroids` unscaled, so a test's counts are its catalog's.
+fn unscaled(mut view: View) -> View {
+    view.set_view_size((640.0, 768.0));
+    view
+}
+
 #[test]
 fn each_step_spawns_an_asteroid_at_the_edge_until_the_systems_count() {
     // Just off screen, so none is culled as it spawns.
-    let mut view =
-        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidRespawnRing));
+    let mut view = unscaled(
+        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidRespawnRing)),
+    );
     assert_eq!(asteroid_count(&view), 0);
     for count in [1, 2, 3, 3] {
         ticks(&mut view, 1);
@@ -326,8 +334,9 @@ fn each_step_spawns_an_asteroid_at_the_edge_until_the_systems_count() {
 
 #[test]
 fn a_flight_started_in_flight_shows_its_placed_field_before_any_step() {
-    let mut view =
-        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidEntryField));
+    let mut view = unscaled(
+        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidEntryField)),
+    );
     view.tick(Duration::ZERO);
     assert_eq!(asteroid_count(&view), 3, "placed, no step run");
     let list = drawn(&view);
@@ -336,7 +345,7 @@ fn a_flight_started_in_flight_shows_its_placed_field_before_any_step() {
         .filter(|(image, _)| image.id == 1800)
         .count();
     assert_eq!(asteroids, 3);
-    let mut engine = FlightView::new(rocky(catalog()));
+    let mut engine = unscaled(FlightView::new(rocky(catalog())));
     engine.tick(Duration::ZERO);
     assert_eq!(asteroid_count(&engine), 0, "by the engine");
 }

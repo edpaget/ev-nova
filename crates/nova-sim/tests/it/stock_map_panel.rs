@@ -4,7 +4,9 @@
 //!
 //! - Sol (`sÿst` 130), charted: its ports are Earth, Mars and Europa, as
 //!   Jupiter (`Flags` 0x20) and the wormhole (0x21) are uninhabited; its
-//!   hazards are "Sparse asteroid field" (raw `Asteroids` 2); its
+//!   hazards are "Sparse asteroid field" (raw `Asteroids` 2, stored as
+//!   2 for the session's default 800-wide window, 2 × 800 / 640
+//!   truncated, and 3 for a 1024-wide one, both "sparse"); its
 //!   government is "Federation" ("Federation;hates Temmin Shard" cut at
 //!   its last ';'); it trades all six commodities and has Trading,
 //!   Outfitting and the Shipyard.
