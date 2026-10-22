@@ -118,6 +118,8 @@ pub enum Mode {
     /// due through the hold, as goal 0x15 no longer skips the per-type AIs
     /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
     /// defence of a waiting escort or fighter (see the traffic's tick).
+    /// An escort's Defend, Attack or formation think ends it at once
+    /// ([`Npc::end_wait`], `_EscortAI`'s +0x4c = -1.0).
     HeldAtGate {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -1294,6 +1296,23 @@ impl Npc {
         }
     }
 
+    /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a
+    /// ship held at its gate ([`Mode::HeldAtGate`], the wait the hold
+    /// runs on) flies its goal from rest ([`Mode::Flying`]), its velocity
+    /// already none and its gate already let go, as when the hold runs
+    /// out (see [`autopilot`](crate::traffic::autopilot)). `_EscortAI`'s
+    /// Defend, Attack and formation blocks write it (@0x83c73, @0x83d6a,
+    /// @0x83eb0, [`Decision::ends_wait`](crate::ai::Decision::ends_wait)),
+    /// and `_HandleShip` then steers, thrusts and fires it in the same
+    /// frame (@0x34a54-0x34a72). Any other mode is left: only a ship
+    /// flying or held at its gate decides.
+    pub fn end_wait(&mut self) {
+        self.ai_wait = 0;
+        if matches!(self.mode, Mode::HeldAtGate { .. }) {
+            self.mode = Mode::Flying;
+        }
+    }
+
     /// Whether it is entering a gate to leave ([`Mode::EnteringGate`]):
     /// `_AIShipIsEnteringHypergate` (@0x89502), which tests the sub-goal
     /// 0x17 alone.
@@ -2194,6 +2213,34 @@ mod tests {
         let before = flying.clone();
         flying.hold_at_gate();
         assert_eq!(flying, before, "only a ship waiting in its gate is held");
+    }
+
+    #[test]
+    fn ending_the_wait_zeroes_it_and_releases_a_ship_held_at_its_gate() {
+        // `_EscortAI`'s +0x4c = -1.0 (@0x83c73, @0x83d6a, @0x83eb0): the
+        // hold is that wait, so it flies from rest at once.
+        let mut held = Npc {
+            mode: Mode::HeldAtGate { ticks_left: 15 },
+            ai_wait: 30,
+            goal: Goal::Attack(ShipRef::Player),
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        held.end_wait();
+        assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0));
+        assert!(!held.wait_running());
+        for mode in [
+            Mode::Emerging { ticks_left: 15 },
+            Mode::Coasting { ticks_left: 15 },
+            Mode::Flying,
+        ] {
+            let mut npc = Npc {
+                mode,
+                ai_wait: 30,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            npc.end_wait();
+            assert_eq!((npc.mode, npc.ai_wait), (mode, 0), "{mode:?}");
+        }
     }
 
     #[test]

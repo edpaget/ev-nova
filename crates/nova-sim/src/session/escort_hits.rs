@@ -5,8 +5,11 @@
 //! of ammunition they fall back (@0x83b88-0x83bda).
 
 use super::Session;
-use super::fighters::tests::{VIPERS, carrying, fight, fleet, out, pirate, sitting_ai, warship};
+use super::fighters::tests::{
+    PIRATES, VIPERS, carrying, fight, fleet, out, pirate, sitting_ai, warship,
+};
 use crate::ai::Goal;
+use crate::catalog::StellarId;
 use crate::chance::NeverFires;
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
@@ -15,7 +18,7 @@ use crate::escort::EscortOrder;
 use crate::geometry::Vec2;
 use crate::pilot::Escort;
 use crate::testkit::FakePilotCatalog;
-use crate::traffic::npc::NpcId;
+use crate::traffic::npc::{Mode, NpcId};
 
 /// A session with the warship escort following `order`; the session and
 /// the escort.
@@ -114,4 +117,131 @@ fn an_escort_with_no_firepower_on_attack_keeps_formation() {
         "{:?}",
         fighting(&session, escort)
     );
+}
+
+/// Adds a pirate at (`x`, `y`) from the player, attacking `target`.
+fn pirate_at(session: &mut Session, x: f32, y: f32, target: ShipRef) -> NpcId {
+    let at = session.player().position;
+    let id = pirate(session, at.x + x, at.y + y);
+    let npc = session.space.npc_mut(id).expect("there");
+    npc.govt = Some(PIRATES);
+    npc.goal = Goal::Attack(target);
+    npc.target = Some(target);
+    id
+}
+
+/// `session`'s NPC `by` hits its NPC `ship`, for the next traffic tick.
+fn hits(session: &mut Session, ship: NpcId, by: NpcId) {
+    session.space.strikes = vec![strike(ShipRef::Npc(ship), ShipRef::Npc(by))];
+}
+
+#[test]
+fn a_defending_escort_turns_on_a_ship_that_hits_it_near_the_player() {
+    // The hit makes the attacker its target (@0x3bcf6), and Defend keeps
+    // it within 408375 (about 639) of the player (@0x83c67-0x83cd6),
+    // though beyond the 550 it takes a new threat within and another
+    // threatens the player nearer.
+    let catalog = carrying();
+    let (mut session, escort) = escorted(&catalog, EscortOrder::Defend);
+    pirate_at(&mut session, 0.0, 500.0, ShipRef::Player);
+    let attacker = pirate_at(&mut session, 0.0, -600.0, ShipRef::Npc(escort));
+    hits(&mut session, escort, attacker);
+    for tick in 0..5 {
+        session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+        assert_eq!(
+            fighting(&session, escort),
+            (
+                Goal::Attack(ShipRef::Npc(attacker)),
+                Some(ShipRef::Npc(attacker))
+            ),
+            "tick {tick}"
+        );
+    }
+    // Unhit, it would take the nearer threat.
+    let (mut session, escort) = escorted(&catalog, EscortOrder::Defend);
+    let near_again = pirate_at(&mut session, 0.0, 500.0, ShipRef::Player);
+    pirate_at(&mut session, 0.0, -600.0, ShipRef::Npc(escort));
+    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    assert_eq!(
+        fighting(&session, escort).0,
+        Goal::Attack(ShipRef::Npc(near_again))
+    );
+}
+
+#[test]
+fn a_formation_escort_guards_against_its_attacker_while_in_reach() {
+    // Formation keeps its target while `_AIInGunRange` (@0x83eb3-0x83ee4),
+    // and draws among the threats to the player otherwise (@0x83ef4).
+    let catalog = carrying();
+    let mut session = fleet(&catalog, 0, vec![warship(None)]);
+    let escort = session.space.escorts.fleet[0].expect("placed");
+    session
+        .space
+        .npc_mut(escort)
+        .expect("there")
+        .hull
+        .stock_reach = Some(400.0);
+    let at = session.space.npc(escort).expect("there").state.position - session.player().position;
+    let attacker = pirate_at(&mut session, at.x + 300.0, at.y, ShipRef::Npc(escort));
+    // A threat to the player, last in the draw (`NeverFires` draws the
+    // last), so a draw would take it.
+    pirate_at(&mut session, 0.0, -300.0, ShipRef::Player);
+    hits(&mut session, escort, attacker);
+    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    assert_eq!(
+        fighting(&session, escort),
+        (
+            Goal::Formation {
+                guard: Some(ShipRef::Npc(attacker))
+            },
+            Some(ShipRef::Npc(attacker))
+        )
+    );
+}
+
+#[test]
+fn a_player_escort_waiting_in_its_gate_hit_by_an_npc_holds_its_point_defence() {
+    // `_DamageShip` makes the attacker its target (@0x3bcf6), and its
+    // wait's `_AIEscortFireUnprovoked` (@0x8521e-0x85236) runs
+    // `_AIFireTurret`'s point defence on it (@0x80b0d).
+    let catalog = carrying();
+    let (mut session, escort) = escorted(&catalog, EscortOrder::Defend);
+    session
+        .space
+        .npc_mut(escort)
+        .expect("there")
+        .emerge_from_gate(StellarId(128), 60);
+    let attacker = pirate_at(&mut session, 0.0, -200.0, ShipRef::Npc(escort));
+    hits(&mut session, escort, attacker);
+    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    let npc = session.space.npc(escort).expect("there");
+    assert!(npc.emerging(), "{:?}", npc.mode);
+    assert_eq!(npc.target, Some(ShipRef::Npc(attacker)));
+    assert!(npc.trigger.point_defence, "{:?}", npc.trigger);
+}
+
+#[test]
+fn a_player_escort_held_at_its_gate_by_the_players_hit_flies_at_its_first_think() {
+    // `_AIMakeShipAttackPlayer` holds it (goal 4, its wait kept), and its
+    // Defend think writes +0x4c = -1.0 (@0x83c73): it flies this tick.
+    let catalog = carrying();
+    let (mut session, escort) = escorted(&catalog, EscortOrder::Defend);
+    session
+        .space
+        .npc_mut(escort)
+        .expect("there")
+        .emerge_from_gate(StellarId(128), 60);
+    session.space.strikes = vec![strike(ShipRef::Npc(escort), ShipRef::Player)];
+    session.answer_strikes(&sitting_ai());
+    let held = session.space.npc(escort).expect("there");
+    assert!(
+        matches!(held.mode, Mode::HeldAtGate { .. }),
+        "{:?}",
+        held.mode
+    );
+    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    let npc = session.space.npc(escort).expect("there");
+    assert_eq!(npc.mode, Mode::Flying);
+    assert!(!npc.wait_running());
+    assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
 }

@@ -963,11 +963,11 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
 fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
     npc.state.velocity = Vec2::ZERO;
     let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
-        Mode::Flying
+    if left == 0 {
+        npc.end_wait();
     } else {
-        Mode::HeldAtGate { ticks_left: left }
-    };
+        npc.mode = Mode::HeldAtGate { ticks_left: left };
+    }
 }
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at

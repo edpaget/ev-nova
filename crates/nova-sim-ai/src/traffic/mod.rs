@@ -179,6 +179,8 @@ mod display_tests;
 pub mod docked;
 pub mod emerge;
 pub mod escort_orders;
+#[cfg(test)]
+mod escort_wait_tests;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -2289,7 +2291,8 @@ impl Traffic {
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
-    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`]; it, and one that
+    /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`] and ends a hold at
+    /// its gate ([`Npc::end_wait`]), so it flies this tick; it, and one that
     /// leaves its fleet, gives up its warp stage ([`Warp::give_up`](warp_out::Warp::give_up)),
     /// as `_EscortAI` writes +0x50 = -1.0 with them (see
     /// [`jump_with_leader`]); and one that
@@ -2357,7 +2360,7 @@ impl Traffic {
                 npc.warp.give_up();
             }
             if ends_wait {
-                npc.ai_wait = 0;
+                npc.end_wait();
             }
             if let Some(word) = order_word {
                 npc.order_word = word;
