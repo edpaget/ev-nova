@@ -520,6 +520,18 @@ mod tests {
     }
 
     #[test]
+    fn the_box_is_measured_from_the_shot_wherever_it_is() {
+        let shot = Vec2::new(1000.0, 1000.0);
+        for (y, locks) in [(850.0, true), (800.0, false)] {
+            assert_eq!(
+                lock_on(shot, 0.0, &[at(1000.0, y)], PLAIN),
+                locks.then_some(0),
+                "{y}"
+            );
+        }
+    }
+
+    #[test]
     fn an_asteroid_outside_the_cone_is_passed_over_for_a_later_one_inside() {
         let field = [at(150.0, 0.0), at(0.0, -150.0)];
         assert_eq!(lock_on(Vec2::ZERO, 0.0, &field, PLAIN), Some(1));
@@ -552,6 +564,8 @@ mod tests {
         assert_eq!(turned(0.0, 350, 5.0), -5.0);
         // A difference of 360 or more is taken round once.
         assert_eq!(turned(-10.0, 355, 2.0), -8.0);
+        // 549 less 360 is 189, back.
+        assert_eq!(turned(-190.0, 359, 2.0), -192.0);
     }
 
     #[test]
