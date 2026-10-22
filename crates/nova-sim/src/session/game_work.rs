@@ -211,6 +211,8 @@ impl Session {
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
+        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
+        self.warn_fighters_left_behind(chance);
         if self.rescue_if_due(catalog, chance) {
             return true;
         }

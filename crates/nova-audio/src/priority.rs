@@ -157,6 +157,9 @@ pub const EJECT: Priority = Priority::new(50);
 /// A sabotage outfit going off, `_explodSnd[0]`: `_HandlePlayer`
 /// @0x69375.
 pub const ONBOARD_EXPLOSION: Priority = Priority::new(100);
+/// The fighters' "Wait for me!", `_beepSnd[4]`: `_HandlePlayer`'s
+/// `PlaySound(.., 50, ..)` @0x6b542-0x6b565.
+pub const WAIT_FOR_ME: Priority = Priority::new(50);
 /// A collapsed pre-jump, `_beepSnd[1]`: `_HandlePlayer` @0x68aaf.
 pub const JUMP_COLLAPSED: Priority = Priority::new(50);
 /// The shared refusal beep, `_beepSnd[3]`. Most of the sites the event

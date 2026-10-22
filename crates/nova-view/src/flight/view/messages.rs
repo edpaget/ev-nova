@@ -398,6 +398,7 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::FleetArrivalQuote(text)
         | SimMessage::CallForHelp(text)
         | SimMessage::ScanHail(text)
+        | SimMessage::WaitForMe(text)
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
@@ -755,6 +756,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::FleetArrivalQuote(_)
         | SimMessage::CallForHelp(_)
         | SimMessage::ScanHail(_)
+        | SimMessage::WaitForMe(_)
         | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
         | SimMessage::SelfDestruct(_)

@@ -97,6 +97,10 @@ pub enum SimSound {
     /// A ship called for help: `_beepSnd[4]`, `snd ` 154 (`_AICallForHelp`
     /// `_PlaySound` @0x830e0-0x83109).
     CallForHelp,
+    /// The player's jump leaves fighters behind that can't jump, with its
+    /// "Wait for me!" line: `_beepSnd[4]`, `snd ` 154 at priority 50
+    /// (`_HandlePlayer` `PlaySound` @0x6b542-0x6b565).
+    WaitForMe,
     /// An interceptor hailed the player before its scan: `_beepSnd[4]`,
     /// `snd ` 154 (`_InterceptorAI` `ST_PlaySound` @0x8cf9d-0x8cfbc).
     ScanHail,

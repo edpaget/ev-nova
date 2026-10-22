@@ -547,6 +547,7 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod tutorial;
+mod wait_for_me;
 mod warp_stage;
 
 use capture::CaptureFuel;
@@ -1884,6 +1885,8 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        // The player part's warning (the `wait_for_me` module).
+        self.warn_fighters_left_behind(chance);
         if std::mem::take(&mut self.space.reinforcements_held) {
             self.tick_reinforcements(chance);
         }
@@ -2871,6 +2874,8 @@ impl Session {
             }
         })?;
         let bearing = self.chart.jump_aim(&self.pilot, next);
+        // A new jump, for the fighters' warning (the `wait_for_me` module).
+        self.ship.warp.jump_accepted |= self.mode.jump().is_none();
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
