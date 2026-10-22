@@ -40,8 +40,9 @@
 
 use crate::ai::{PlayerSide, Surroundings};
 use crate::area_cloak;
-use crate::cloak::{Observer, visible};
+use crate::cloak::{Cloak, Observer, visible};
 use crate::combat::ShipRef;
+use crate::flight::ShipState;
 use crate::traffic::npc::Npc;
 
 impl Surroundings<'_> {
@@ -57,13 +58,6 @@ impl Surroundings<'_> {
     #[must_use]
     pub fn sees_leader(&self, npc: &Npc) -> bool {
         sees_leader(npc, self.npcs, self.player.as_ref())
-    }
-
-    /// Whether `npc` rides its leader's area cloak: see
-    /// [`rides_area_cloak`].
-    #[must_use]
-    pub fn rides_area_cloak(&self, npc: &Npc) -> bool {
-        rides_area_cloak(npc, self.npcs, self.player.as_ref())
     }
 }
 
@@ -103,23 +97,37 @@ pub fn sees_leader(npc: &Npc, npcs: &[Npc], player: Option<&PlayerSide>) -> bool
 /// mark of its last flight ([`Npc::close_form`]). False with no leader or
 /// a gone one. Sight ([`npc_sees`], [`sees_player`]) and the session's
 /// fight terms read the stored mark, as they run before the frame's
-/// flight; the cloak think builds its ride from its own `Around`, and the
-/// hold from the close formation this tick's flight picks
-/// (`Traffic::hold_cloaks`).
+/// flight. The cloak think (`Traffic::think_cloaks`) reads the same
+/// stored mark, and the hold (`Traffic::hold_cloaks`) the close formation
+/// this tick's flight picks; both take the leader from
+/// [`leader_cloak_and_area`], so all of them agree on one leader.
 #[must_use]
 pub fn rides_area_cloak(npc: &Npc, npcs: &[Npc], player: Option<&PlayerSide>) -> bool {
-    let (cloaked, area) = match npc.leader_ref() {
-        Some(ShipRef::Player) => match player {
-            Some(player) => (player.cloak.is_cloaked(), player.area_cloak),
-            None => return false,
-        },
-        Some(ShipRef::Npc(id)) => match npcs.iter().find(|other| other.id == id) {
-            Some(lead) => (lead.cloak.is_cloaked(), lead.cloak_gear.area),
-            None => return false,
-        },
-        None => return false,
-    };
-    area_cloak::rides(npc.close_form, cloaked, area)
+    leader_cloak_and_area(npc, npcs, player)
+        .is_some_and(|(_, cloak, area)| area_cloak::rides(npc.close_form, cloak.is_cloaked(), area))
+}
+
+/// The leader `npc`'s single parent slot (+0x9a) names among `npcs` and
+/// the `player` (`None` while it isn't in the system), as
+/// `_HasCloak`'s area branch reads it (@0x964c-0x96bf): its state, its
+/// cloak and whether it carries an area cloak. The leader is
+/// [`Npc::leader_ref`]'s, so the player for an escort of the player even
+/// if it still names an NPC lead. `None` with no leader or a gone one.
+/// Every area-cloak ride ([`rides_area_cloak`], the cloak think and the
+/// hold) takes its leader here, passing in its own close formation.
+#[must_use]
+pub fn leader_cloak_and_area(
+    npc: &Npc,
+    npcs: &[Npc],
+    player: Option<&PlayerSide>,
+) -> Option<(ShipState, Cloak, bool)> {
+    match npc.leader_ref()? {
+        ShipRef::Player => player.map(|player| (player.state, player.cloak, player.area_cloak)),
+        ShipRef::Npc(id) => npcs
+            .iter()
+            .find(|other| other.id == id)
+            .map(|lead| (lead.state, lead.cloak, lead.cloak_gear.area)),
+    }
 }
 
 /// Whether `observer` sees NPC `other`: `_ShipVisibleToShip(other,
@@ -504,14 +512,39 @@ mod tests {
             !rides_area_cloak(&led[0], &led, None),
             "no player in the system"
         );
-        let (sites, govts) = (sites(), govts(0, 0));
-        let mut around = around(&sites, &led, &govts, (900.0, 0.0), 0);
-        around.player = Some(area_cloaked_player(true));
-        assert!(around.rides_area_cloak(&led[0]));
-        around.player = Some(area_cloaked_player(false));
-        assert!(
-            !around.rides_area_cloak(&led[0]),
-            "through the surroundings"
+    }
+
+    #[test]
+    fn the_leader_lookup_takes_the_leader_its_parent_slot_names_with_its_cloak_and_area_bit() {
+        use super::leader_cloak_and_area;
+        let npcs = [fleet_escort(false), cloaked_lead(true)];
+        let lead = &npcs[1];
+        assert_eq!(
+            leader_cloak_and_area(&npcs[0], &npcs, None),
+            Some((lead.state, lead.cloak, true)),
+            "its NPC lead, whatever its close formation"
+        );
+        let gone = [fleet_escort(true)];
+        assert_eq!(leader_cloak_and_area(&gone[0], &gone, None), None, "gone");
+        let alone = [warship(), cloaked_lead(true)];
+        assert_eq!(
+            leader_cloak_and_area(&alone[0], &alone, None),
+            None,
+            "no leader"
+        );
+        let mut escort = players_escort(true);
+        escort.leader = Some(NpcId(2));
+        let with_player = [escort, cloaked_lead(false)];
+        let player = area_cloaked_player(true);
+        assert_eq!(
+            leader_cloak_and_area(&with_player[0], &with_player, Some(&player)),
+            Some((player.state, player.cloak, true)),
+            "the player before the NPC lead it still names"
+        );
+        assert_eq!(
+            leader_cloak_and_area(&with_player[0], &with_player, None),
+            None,
+            "no player in the system"
         );
     }
 }

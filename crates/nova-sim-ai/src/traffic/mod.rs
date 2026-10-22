@@ -1739,34 +1739,39 @@ impl Traffic {
     /// waits out +0x4c, so its cloak doesn't think.
     fn think_cloaks(&mut self, world: &World, picked: &[bool]) {
         let player = world.player.map(|player| player.state);
-        let ships: Vec<(NpcId, ShipState, Cloak, bool)> = self
+        let states: Vec<(NpcId, ShipState)> =
+            self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
+        let leaders: Vec<Option<(ShipState, Cloak, bool)>> = self
             .npcs
             .iter()
-            .map(|npc| (npc.id, npc.state, npc.cloak, npc.cloak_gear.area))
+            .map(|npc| {
+                crate::ai::sight::leader_cloak_and_area(npc, &self.npcs, world.player.as_ref())
+            })
             .collect();
-        let npc_at = |id: NpcId| ships.iter().find(|(other, ..)| *other == id);
-        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
-            **picked
-                && matches!(
-                    npc.mode,
-                    Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
-                )
-        }) {
+        for ((npc, _), leader) in
+            self.npcs
+                .iter_mut()
+                .zip(picked)
+                .zip(leaders)
+                .filter(|((npc, picked), _)| {
+                    **picked
+                        && matches!(
+                            npc.mode,
+                            Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
+                        )
+                })
+        {
             let attacking = npc.goal.attacking().and_then(|ship| match ship {
                 ShipRef::Player => player,
-                ShipRef::Npc(id) => npc_at(id).map(|&(_, state, ..)| state),
+                ShipRef::Npc(id) => states
+                    .iter()
+                    .find(|(other, _)| *other == id)
+                    .map(|&(_, state)| state),
             });
-            let leader = match npc.leader_ref() {
-                Some(ShipRef::Player) => {
-                    world.player.map(|player| (player.cloak, player.area_cloak))
-                }
-                Some(ShipRef::Npc(id)) => npc_at(id).map(|&(_, _, cloak, area)| (cloak, area)),
-                None => None,
-            };
             let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),
-                leader: leader.map(|(cloak, _)| cloak),
-                leader_area: leader.is_some_and(|(_, area)| area),
+                leader: leader.map(|(_, cloak, _)| cloak),
+                leader_area: leader.is_some_and(|(_, _, area)| area),
                 mining_rock: world.mining_rock.is_some(),
                 cloak_on_reload: world.cloak_on_reload,
             };
@@ -1802,17 +1807,11 @@ impl Traffic {
             self.npcs
                 .iter()
                 .map(|npc| {
-                    let leader = match npc.leader_ref() {
-                        Some(ShipRef::Player) => world
-                            .player
-                            .map(|player| (player.state, player.cloak, player.area_cloak)),
-                        Some(ShipRef::Npc(id)) => self
-                            .npcs
-                            .iter()
-                            .find(|lead| lead.id == id)
-                            .map(|lead| (lead.state, lead.cloak, lead.cloak_gear.area)),
-                        None => None,
-                    };
+                    let leader = crate::ai::sight::leader_cloak_and_area(
+                        npc,
+                        &self.npcs,
+                        world.player.as_ref(),
+                    );
                     leader.is_some_and(|(state, cloak, area)| {
                         let seen = around.sees_leader(npc);
                         let close = npc.keeps_close_formation(Some(&state), seen, world.flight);
