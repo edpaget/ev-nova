@@ -152,6 +152,9 @@ pub const MISSION_SHIP_BOARDED: Priority = Priority::new(8);
 pub const TRAFFIC_CONTROL: Priority = Priority::new(1);
 /// The klaxon, `_klaxxonSnd`: `_HandlePlayer` @0x6f227.
 pub const KLAXON: Priority = Priority::new(15);
+/// An escort's voice clip: `_HandleVoiceSound`'s `PlaySound(handle, 15,
+/// …)` @0x31f7a.
+pub const VOICE: Priority = Priority::new(15);
 /// The eject, `_escapePodSnd`: `_HandlePlayer` @0x6f920.
 pub const EJECT: Priority = Priority::new(50);
 /// A sabotage outfit going off, `_explodSnd[0]`: `_HandlePlayer`

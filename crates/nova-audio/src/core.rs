@@ -286,6 +286,8 @@ impl<A: Audio> AudioCore<A> {
             | SimSound::SelfDestructCancelled
             | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
+            SimSound::Voice { sound } => self.play(Some(sound), at::VOICE),
+            SimSound::HaltVoice { sound } => self.halt(&[sound]),
         }
     }
 
@@ -1800,6 +1802,32 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn an_escorts_voice_plays_its_clip_at_15_and_its_halt_halts_it() {
+        use crate::priority as at;
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        let clip = SoundId(1523);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Voice { sound: clip })],
+        );
+        assert_eq!(
+            drain_prioritised(&log),
+            [AudioCommand::Play {
+                sound: clip,
+                volume: Volume::new(0.5),
+                priority: at::VOICE,
+            }]
+        );
+        assert_eq!(at::VOICE, Priority::new(15));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::HaltVoice { sound: clip })],
+        );
+        assert_eq!(drain(&log), [AudioCommand::Halt { sound: clip }]);
     }
 
     #[test]

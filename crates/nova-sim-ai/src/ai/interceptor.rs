@@ -826,6 +826,7 @@ mod tests {
                 order_word: None,
                 leaves_fleet: false,
                 follows_jump: false,
+                voice: None,
             },
             "@0x8cb8f-0x8cb9d"
         );

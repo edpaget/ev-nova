@@ -17,8 +17,12 @@
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it ([`Session::player_display_step`]).
 //! 3. The collision passes (@0x43e70-0x44015), their hits settled and
-//!    answered at once, as `_DamageShip`'s reaction block runs in them.
-//! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
+//!    answered at once, as `_DamageShip`'s reaction block runs in them,
+//!    a shot's hit that starts a ship dying queuing the victory of the
+//!    escort attacking it (`_HandleShipHit` @0x36c7f-0x36d45).
+//! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
+//!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
+//!    module), the traffic's think half,
 //!    the damage aimed read after the passes (`_CalculateTargetedDamage`
 //!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the fleets
 //!    announced and the refuel landed, then every NPC's point defence and
@@ -27,7 +31,8 @@
 //!    each fighter launched put in the system as its slot's turn ends
 //!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
 //!    carrier thinking then, and the loop resumed after that slot
-//!    ([`Session::dispatch_npcs`]); then the frame's work on the line,
+//!    ([`Session::dispatch_npcs`]); then the thinks' voice cues answered
+//!    in berth order; then the frame's work on the line,
 //!    every think's calls, scan, plunders and refuel note, the launched
 //!    fighters' among them, settled in slot order
 //!    ([`Session::settle_line_queue`], see the `comm_calls` module). All
@@ -257,6 +262,10 @@ impl Session {
         self.answer_strikes(behaviour);
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
+            // `_HandleVoiceSound` (@0x44219), before `_AIDispatch`
+            // (@0x4429d; see the `voices` module).
+            self.space
+                .handle_voice(&self.statics, &mut self.out, &mut *chance);
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
@@ -264,6 +273,8 @@ impl Session {
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
             self.dispatch_npcs(pass, behaviour, rules, chance);
+            // `_EscortAI`'s variants and target calls, in berth order.
+            self.space.answer_voice_cues(&self.statics, &mut *chance);
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);
@@ -513,7 +524,10 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let (strikes, losses) = self.space.combat.take_landed();
+        let (strikes, losses, finished) = self.space.combat.take_landed();
+        // `_HandleShipHit`'s victories, as the hits landed, before the
+        // answers retarget anyone (see the `voices` module).
+        self.space.speak_victories(&self.statics, &finished);
         let struck = super::struck_npcs(&strikes);
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();

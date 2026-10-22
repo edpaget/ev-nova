@@ -132,7 +132,7 @@ fn its_fighter_docks_once_the_escort_keeps_formation_or_holds_and_the_round_goes
         assert!(until_launched(&mut session, &catalog, 5), "{command:?}");
         let id = vipers(&session)[0].id;
         assert_eq!(aboard(&session, escort), 1, "{command:?}: one out");
-        session.command_escorts(EscortGroup::All, command);
+        session.command_escorts(EscortGroup::All, command, &mut crate::chance::NeverFires);
         fight(&mut session, &catalog, &sitting_ai());
         assert_eq!(
             session.space.npc(id).expect("out").goal,

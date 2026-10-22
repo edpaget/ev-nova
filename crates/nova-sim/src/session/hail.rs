@@ -2725,7 +2725,7 @@ mod tests {
     /// where it is (as a capture does), and targeted.
     fn escorting(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting(catalog);
-        session.join_fleet(NpcId(0));
+        session.join_fleet(NpcId(0), &mut NeverFires);
         session.chart.target = Some(NpcId(0));
         session.take_save_due();
         session

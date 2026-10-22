@@ -547,7 +547,9 @@ mod tests {
                     session.assign(Assignment::MyShip, &mut chance),
                     Some(Assigned::MyShip)
                 );
-                assert_eq!(chance.asked, [bound], "{why}, {order:?}");
+                // Then the old ship's voice, Rand(2) (see the `voices`
+                // module).
+                assert_eq!(chance.asked, [bound, 2], "{why}, {order:?}");
                 assert_eq!(session.reserves().fuel.now, 7.0, "{why}");
             }
         }
@@ -570,7 +572,11 @@ mod tests {
         );
         let mut chance = Draws::of(&[7]);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(chance.asked, [350], "the trader's 300 and the tank's 50");
+        assert_eq!(
+            chance.asked,
+            [350, 2],
+            "the trader's 300 and the tank's 50, then the old ship's voice"
+        );
     }
 
     #[test]

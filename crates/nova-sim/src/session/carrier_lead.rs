@@ -251,7 +251,7 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
 fn players_launched(catalog: &FakePilotCatalog, order: Option<EscortCommand>) -> (Session, NpcId) {
     let mut session = flying_by(catalog, pilot(catalog, 2, Vec::new()), Rulebook::default());
     if let Some(order) = order {
-        session.command_escorts(EscortGroup::All, order);
+        session.command_escorts(EscortGroup::All, order, &mut crate::chance::NeverFires);
     }
     launch(&mut session);
     let fighter = &fleet_npcs(&session)[0];

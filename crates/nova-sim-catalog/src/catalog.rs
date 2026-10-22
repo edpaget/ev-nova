@@ -18,6 +18,7 @@ use crate::blink::Blink;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::voice::Voices;
 use crate::warp::SoundLength;
 use nova_sim_base::fuel::OutfitMod;
 
@@ -2019,6 +2020,13 @@ pub trait PilotCatalog {
     fn warp_out_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// The escorts' voices: every voice clip, `snd ` 1000-1799, with its
+    /// length, and each `gövt`'s `VoiceType` (see the
+    /// [`voice`](crate::voice) module); none by default, no clip and no
+    /// government's voice, so no escort speaks.
+    fn voices(&self) -> Voices {
+        Voices::default()
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// `nova_sim::mission::SpecialShips::uniform_type`).
@@ -2167,6 +2175,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_out_sound()
     }
 
+    fn voices(&self) -> Voices {
+        (**self).voices()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -2297,6 +2309,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         (**self).warp_out_sound()
+    }
+
+    fn voices(&self) -> Voices {
+        (**self).voices()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -2823,6 +2839,20 @@ mod tests {
             })
         }
 
+        /// `gövt` 128 speaks set 3, forced odd, with one acknowledgement.
+        fn voices(&self) -> Voices {
+            Voices::read(
+                &[(
+                    SoundId(1300),
+                    Some(SoundLength {
+                        frames: 22_050,
+                        rate: 22_050,
+                    }),
+                )],
+                &[(GovtId(128), 1003)],
+            )
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -2876,6 +2906,7 @@ mod tests {
             format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
+            format!("{:?}", catalog.voices()),
         ]
     }
 
@@ -3080,6 +3111,10 @@ mod tests {
         assert_eq!(
             direct[35], "[(SystemId(130), StellarId(129))]",
             "forwarded, not the default's 128"
+        );
+        assert!(
+            direct[36].contains("GovtId(128): GovtVoice { set: Some(3)"),
+            "forwarded, not a default: {direct:?}"
         );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);

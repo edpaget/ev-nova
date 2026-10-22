@@ -17,6 +17,7 @@ use crate::catalog::{
     SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::handling::ShipFields;
+use crate::voice::Voices;
 use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -129,6 +130,8 @@ pub struct FakePilotCatalog {
     /// The warp-out sound's length: none, by default, so an arrival's
     /// warp-out never plays on and every jump arrival plays it.
     pub warp_out_sound: Option<SoundLength>,
+    /// The escorts' voices: none, by default, so no escort speaks.
+    pub voices: Voices,
 }
 
 impl FakePilotCatalog {
@@ -221,6 +224,7 @@ pub fn catalog() -> FakePilotCatalog {
         asteroid_fields: Vec::new(),
         box_frames: [None; BOX_GRAPHICS],
         warp_out_sound: None,
+        voices: Voices::default(),
     }
 }
 
@@ -419,6 +423,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         self.warp_out_sound
+    }
+
+    fn voices(&self) -> Voices {
+        self.voices.clone()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -812,6 +820,7 @@ mod tests {
             warp_sound_double_time: Some(sound(2)),
             warp_out_sound: Some(sound(3)),
             dudes: vec![(DudeId(140), dude.clone())],
+            voices: Voices::read(&[], &[(crate::catalog::GovtId(128), 4)]),
             ..catalog()
         };
         assert_eq!(fake.missions(), [mission(128)]);
@@ -823,6 +832,10 @@ mod tests {
         assert_eq!(fake.warp_sound(), Some(sound(1)));
         assert_eq!(fake.warp_sound_double_time(), Some(sound(2)));
         assert_eq!(fake.warp_out_sound(), Some(sound(3)));
+        assert_eq!(
+            fake.voices().set_of(Some(crate::catalog::GovtId(128))),
+            Some(4)
+        );
         assert_eq!(fake.mission_dude(DudeId(140)), Some(dude));
         assert_eq!(fake.mission_dude(DudeId(141)), None);
     }

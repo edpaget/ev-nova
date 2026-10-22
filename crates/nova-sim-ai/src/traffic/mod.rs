@@ -234,6 +234,8 @@ pub mod strength;
 pub mod succession;
 pub mod table;
 pub mod tractor_hold;
+#[cfg(test)]
+mod voice_cue_tests;
 pub mod warp_out;
 pub mod weigh;
 
@@ -854,6 +856,9 @@ pub struct Traffic {
     /// The fuel the ships refuelling the player have given it since it was
     /// last taken ([`Traffic::take_fuel_given`], see [`refuel_dock`]).
     fuel_given: f32,
+    /// Each think's voice cue since they were last taken, in the order
+    /// the ships thought ([`Traffic::take_voice_cues`]).
+    voice_cues: Vec<(NpcId, crate::escort_voice::VoiceCue)>,
 }
 
 /// The docks the ships started and the repairs they completed in one
@@ -935,6 +940,7 @@ impl Traffic {
             left_behind: BTreeMap::new(),
             launch_room: None,
             fuel_given: 0.0,
+            voice_cues: Vec::new(),
         }
     }
 
@@ -1231,6 +1237,12 @@ impl Traffic {
             .zip(&decides)
             .map(|(npc, &due)| due.then(|| behaviour.decision(npc, &around, &mut &mut *chance)))
             .collect();
+        self.voice_cues.extend(
+            self.npcs
+                .iter()
+                .zip(&decisions)
+                .filter_map(|(npc, decision)| Some((npc.id, (*decision)?.voice?))),
+        );
         board_wait::resolve(&self.npcs, &mut decisions);
         let keeps: Vec<bool> = decisions
             .iter()
@@ -2426,6 +2438,14 @@ impl Traffic {
     pub fn take_grudges(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.grudges)
     }
+
+    /// Each think's voice cue ([`Decision::voice`]) since they were last
+    /// taken, with its ship, in the order the ships thought; taking them
+    /// empties the list. The session answers them after the AI loop (see
+    /// `nova_sim::escort_voice`).
+    pub fn take_voice_cues(&mut self) -> Vec<(NpcId, crate::escort_voice::VoiceCue)> {
+        std::mem::take(&mut self.voice_cues)
+    }
     /// The ship types the system's traffic can spawn, by ascending ID.
     #[must_use]
     pub fn ship_types(&self) -> Vec<ShipId> {
@@ -2635,6 +2655,11 @@ impl Traffic {
                 tractor: None,
                 ion: Ion::default(),
                 afterburner,
+                // `_RandomShipSpawn` draws +0xc922 (@0x3c709-0x3c719) and
+                // `_GenericRandomShipSpawn` keeps the slot's last; the
+                // engine leaves it unset, and `_EscortAI` rolls it should
+                // the ship ever be the player's (see `Npc::voice`).
+                voice: None,
                 pursuit: Pursuit::default(),
                 ai_wait: 0,
                 docking: None,
@@ -4931,6 +4956,7 @@ mod tests {
             order_word: None,
             leaves_fleet: false,
             follows_jump: false,
+            voice: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

@@ -78,6 +78,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         tractor: None,
         ion: Ion::default(),
         afterburner: false,
+        voice: None,
         pursuit: Pursuit::default(),
         ai_wait: 0,
         docking: None,

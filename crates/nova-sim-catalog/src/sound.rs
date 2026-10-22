@@ -82,6 +82,25 @@ pub enum SimSound {
     /// The player's escort command changed some escort's order or target
     /// (`_IssueNewEscortCommand` @0x665be-0x665e1, `_beepSnd[1]`).
     EscortsCommanded,
+    /// An escort's voice clip plays: `_HandleVoiceSound`'s
+    /// `PlaySound(handle, 15, …)` (@0x31f7a), at priority 15, of `snd `
+    /// 1000 + 100 × set + 10 × message + clip (see the
+    /// [`voice`](crate::voice) module). The message is a command's
+    /// acknowledgement (`_IssueNewEscortCommand` @0x6667a), `_EscortAI`'s
+    /// 1-in-3 call on a new target (@0x83e34) or a victory
+    /// (`_HandleShipHit` @0x36d35).
+    Voice {
+        /// The clip's `snd `.
+        sound: SoundId,
+    },
+    /// The voice clip `sound` is halted if it is playing: a message
+    /// waiting cuts it off (`ST_HaltSound` @0x31e89), and landing kills it
+    /// (`_KillVoiceSound` @0x31fab). [`SimSound::Halt`] takes the sounds
+    /// it names as `&'static` slices, so the voice's halt is its own.
+    HaltVoice {
+        /// The clip's `snd `.
+        sound: SoundId,
+    },
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,

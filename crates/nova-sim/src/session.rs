@@ -549,6 +549,7 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod tutorial;
+mod voices;
 mod wait_for_me;
 mod warp_stage;
 
@@ -1119,6 +1120,7 @@ impl Session {
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
                 .map(warp::sound_duration),
             warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
+            voices: catalog.voices(),
             goods: Goods::read(catalog),
             date_affixes: catalog.date_affixes(),
             arsenal,
@@ -1479,6 +1481,8 @@ impl Session {
         // them.
         self.ship.warp.warp_ups.step();
         self.ship.warp.warp_out.step();
+        // So does an escort's voice clip (see the `voices` module).
+        self.space.voice.step();
         // The last shot's clock is `TickCount`, real time (see the
         // `ship_display` module).
         self.ship.fit.armament.tick_fire_clock();
@@ -1904,6 +1908,8 @@ impl Session {
                 });
                 self.space
                     .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
+                // No cue outlives its tick (see the `voices` module).
+                self.space.answer_voice_cues(&self.statics, &mut *chance);
                 self.dock_fighters();
                 self.after_traffic_motion(&marks, chance);
             }
@@ -3649,6 +3655,8 @@ impl Session {
         // `warp::WarpUps`, `warp::WarpOut`).
         self.ship.warp.warp_ups.clear();
         self.ship.warp.warp_out.clear();
+        // `_KillVoiceSound` (@0x66daf; see the `voices` module).
+        self.space.kill_voice(&mut self.out);
         self.pilot.stellar = Some(stellar);
         // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
         self.run.drop_leave();
@@ -5265,7 +5273,7 @@ impl Session {
         }
         self.close_plunder();
         self.ship_hook(aboard.ship, ShipHook::Capture, chance);
-        self.join_fleet(aboard.npc);
+        self.join_fleet(aboard.npc, chance);
         Taken::Escorted
     }
 
@@ -5299,8 +5307,9 @@ impl Session {
     /// intact, its armour at half its most, and then as
     /// [`Session::fleet_up`] says: a mission's special ship keeps its mark
     /// and joins as a mission escort (`_DoPlunderDialog`
-    /// @0x9459b-0x947cf; see the `captured_mission_ship` module).
-    fn join_fleet(&mut self, id: NpcId) {
+    /// @0x9459b-0x947cf; see the `captured_mission_ship` module). Its
+    /// voice's variant is rolled on `chance` (see the `voices` module).
+    fn join_fleet(&mut self, id: NpcId, chance: &mut dyn Chance) {
         self.space.lose_captured(
             &mut self.pilot,
             id,
@@ -5319,6 +5328,9 @@ impl Session {
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
         self.fleet_up(id, None);
+        // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
+        // see the `voices` module).
+        self.space.roll_voice(id, &self.statics, chance);
     }
 
     /// NPC `id`, the person hailed, joins the fleet where it is as
@@ -5441,7 +5453,7 @@ impl Session {
         };
         if choice == Assignment::Escort {
             self.ship_hook(npc.ship, ShipHook::Capture, chance);
-            self.join_fleet(npc.id);
+            self.join_fleet(npc.id, chance);
             self.close_plunder();
             return Some(Assigned::Escort);
         }
@@ -5530,9 +5542,11 @@ impl Session {
         self.space.lose_captured(&mut self.pilot, npc.id, true);
         self.leave(npc.id);
         let placed = self.place_old_ship(old_slot, left, hold, chance);
-        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e).
+        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e) and
+        // its voice (@0x41288-0x412db; see the `voices` module).
         if let Some(id) = placed {
             self.roll_escort_afterburner(id, chance);
+            self.space.roll_voice(id, &self.statics, &mut *chance);
         }
         if let Some(slot) = self.space.escorts.fleet.get_mut(old_slot) {
             *slot = placed;
@@ -8222,7 +8236,7 @@ pub(super) mod tests {
             };
             let apart = session.space.traffic.add_npc(apart);
             if capture {
-                session.join_fleet(victim);
+                session.join_fleet(victim, &mut NeverFires);
             } else {
                 session.mark_boarded(victim);
             }
@@ -25329,7 +25343,8 @@ pub(super) mod tests {
             session
                 .command_escorts(
                     crate::escort::EscortGroup::All,
-                    crate::escort::EscortCommand::Hold
+                    crate::escort::EscortCommand::Hold,
+                    &mut NeverFires
                 )
                 .is_some()
         );
@@ -25552,7 +25567,11 @@ pub(super) mod tests {
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        assert_eq!(chance.asked, [300], "the fuel drawn below its Fuel");
+        assert_eq!(
+            chance.asked,
+            [300, 2],
+            "the fuel drawn below its Fuel, then the old ship's voice"
+        );
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
         assert_eq!(
@@ -25694,7 +25713,9 @@ pub(super) mod tests {
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+        // No fuel drawn: only the old ship's voice, Rand(2) (see the
+        // `voices` module).
+        assert_eq!(chance.asked, [2]);
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
 

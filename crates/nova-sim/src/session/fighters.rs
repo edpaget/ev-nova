@@ -194,10 +194,14 @@ impl Session {
         // The glide: +0x4c = the bay's `Count` (@0x3d843-0x3d85b), which
         // its first think ends unless it holds or returns.
         npc.ai_wait = bay.map_or(0, |bay| bay.lifetime);
-        match sortie.carrier {
+        let id = match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),
-        }
+        }?;
+        // `_LaunchFighter` rolls its voice, the player's fighter and an
+        // NPC carrier's alike (@0x3d9cc-0x3da3a; see the `voices` module).
+        self.space.roll_voice(id, &self.statics, &mut *chance);
+        Some(id)
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -658,6 +662,7 @@ fn fighter(
         tractor: None,
         ion: Ion::default(),
         afterburner: false,
+        voice: None,
         pursuit: Pursuit::default(),
         ai_wait: 0,
         docking: None,
@@ -1214,7 +1219,7 @@ pub(super) mod tests {
         ));
         assert!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
                 .is_some()
         );
         assert_eq!(fleet_npcs(&session)[0].target, Some(ShipRef::Npc(quarry)));
@@ -1295,7 +1300,7 @@ pub(super) mod tests {
         let catalog = carrying();
         let mut session = alone(&catalog);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             None,
             "no escort to change"
         );
@@ -1306,14 +1311,14 @@ pub(super) mod tests {
     fn a_fighter_launched_after_return_to_hangar_takes_no_order() {
         let catalog = carrying();
         let mut session = alone(&catalog);
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert_eq!(launched_order(&mut session), None);
     }
 
     /// The fighters' kept class order after a launch from `session`, with
     /// Return to Hangar given every class first.
     fn kept_after_launch(session: &mut Session) -> Option<EscortOrder> {
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert_eq!(
             session.space.escorts.class_orders[0],
             Some(EscortOrder::Dock)
@@ -1725,7 +1730,7 @@ pub(super) mod tests {
             vec![warship(Some(EscortOrder::Defend)), out(), out()],
         );
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Dock),
+            session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Recall,
@@ -1744,13 +1749,13 @@ pub(super) mod tests {
             [None, dock, dock]
         );
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Dock),
+            session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             None,
             "nothing changed"
         );
         let mut session = fleet(&catalog, 0, vec![warship(None), out()]);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Dock),
+            session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Dock,
@@ -1768,7 +1773,7 @@ pub(super) mod tests {
         let fighters = EscortGroup::Class(EscortClass::Fighter);
         assert_eq!(
             session
-                .command_escorts(fighters, EscortCommand::Dock)
+                .command_escorts(fighters, EscortCommand::Dock, &mut NeverFires)
                 .map(|commanded| commanded.command),
             Some(EscortCommand::Dock)
         );
@@ -1809,7 +1814,7 @@ pub(super) mod tests {
         }
         session.take_save_due();
         assert_eq!(session.secondary_line_count(), Some(0));
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let ticks = until_docked(&mut session, &catalog, 600);
         assert!(ticks.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(session.pilot().escorts(), [warship(None)]);
@@ -1832,7 +1837,7 @@ pub(super) mod tests {
         let mut session = fleet(&catalog, 0, vec![out()]);
         let id = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
         let docked = (1..=600).find(|_| {
@@ -1884,7 +1889,7 @@ pub(super) mod tests {
         let npc = session.space.npc_mut(fighter).expect("out");
         npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         session.take_save_due();
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let passes = until_docked_in_game_work(&mut session, &catalog, 600);
         assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(session.pilot().escorts(), [warship(None)]);
@@ -1905,7 +1910,7 @@ pub(super) mod tests {
         let escort = session.space.escorts.fleet[1].expect("placed");
         let npc = session.space.npc_mut(fighter).expect("out");
         npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         session.take_save_due();
         let docked = (1..=600).find(|_| {
@@ -1933,8 +1938,8 @@ pub(super) mod tests {
         let mut session = fleet(&catalog, 0, vec![out()]);
         let id = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
-        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires);
         assert_eq!(until_docked(&mut session, &catalog, 600), None);
         assert_eq!(session.pilot().escorts().len(), 1);
         assert_eq!(session.pilot().owned(VIPERS), 0);
@@ -1946,7 +1951,7 @@ pub(super) mod tests {
         catalog.hulls[0].weapons.clear();
         let mut session = fleet(&catalog, 0, vec![out()]);
         session.take_save_due();
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert!(until_docked(&mut session, &catalog, 600).is_some());
         assert_eq!(session.pilot().escorts(), []);
         assert_eq!(session.npcs(), []);
@@ -3545,7 +3550,7 @@ pub(super) mod tests {
             npcs[0].carrier.map(|carrier| carrier.ship),
             Some(ShipRef::Player)
         );
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert!(until_docked(&mut session, &catalog, 600).is_some());
         assert_eq!(session.pilot().owned(VIPERS), 3);
     }

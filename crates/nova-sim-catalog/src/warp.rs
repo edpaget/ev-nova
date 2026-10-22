@@ -168,7 +168,7 @@ pub fn warp_out_duration(sound: Option<SoundLength>) -> u32 {
 /// `sound`'s frames × 60 over its rate, in Mac ticks, kept wide; none for
 /// a rate under 1 Hz.
 #[allow(clippy::cast_possible_truncation)]
-fn length_ticks(SoundLength { frames, rate }: SoundLength) -> Option<u32> {
+pub(crate) fn length_ticks(SoundLength { frames, rate }: SoundLength) -> Option<u32> {
     (rate > 0).then(|| {
         let ticks = u64::from(frames) * u64::from(MAC_TICKS_PER_SECOND) / u64::from(rate);
         ticks.min(u64::from(u32::MAX)) as u32

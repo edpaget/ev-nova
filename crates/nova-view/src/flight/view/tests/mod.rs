@@ -115,6 +115,8 @@ struct FakeCatalog {
     sol_murk: i16,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
+    /// The escorts' voices: none, by default.
+    voices: nova_sim::voice::Voices,
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     sol_more: Vec<StellarContents>,
@@ -363,6 +365,7 @@ fn catalog() -> FakeCatalog {
         sol_interference: 0,
         sol_murk: 0,
         alpha_buoy: -1,
+        voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
         gates: Vec::new(),
         gate_listers: Vec::new(),
@@ -437,6 +440,10 @@ fn layout() -> StatusBarLayout {
 impl PilotCatalog for FakeCatalog {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         self.character.clone()
+    }
+
+    fn voices(&self) -> nova_sim::voice::Voices {
+        self.voices.clone()
     }
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {

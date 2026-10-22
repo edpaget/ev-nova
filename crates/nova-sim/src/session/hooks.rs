@@ -1079,7 +1079,11 @@ mod tests {
         let (mut session, _) = captured_kitted("", "R(b1 b2)", Rulebook::default());
         let mut chance = Draws::of(&[1, 7]);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(chance.asked, [2, 300], "the roll, then the fuel");
+        assert_eq!(
+            chance.asked,
+            [2, 300, 2],
+            "the roll, then the fuel, then the old ship's voice"
+        );
         assert!(session.control_bit(bit(1)));
         assert_eq!(session.reserves().fuel.now, 7.0);
     }
@@ -1090,7 +1094,11 @@ mod tests {
         let (mut session, _) = captured_kitted("", "R(b1 b2)", rules);
         let mut chance = Draws::of(&[1, 7]);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(chance.asked, [2, 300], "the roll, then the fuel");
+        assert_eq!(
+            chance.asked,
+            [2, 300, 2],
+            "the roll, then the fuel, then the old ship's voice"
+        );
         assert!(session.control_bit(bit(1)));
         assert_eq!(session.reserves().fuel.now, 7.0);
     }

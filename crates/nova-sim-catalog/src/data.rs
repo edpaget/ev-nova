@@ -42,13 +42,14 @@ use crate::catalog::{
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
-    WeaponRecord, loaded_mod_val,
+    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
+    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::voice::Voices;
 use crate::warp::SoundLength;
 
 /// The `spïn` of asteroid type 0's master sprite: type `n`'s is 800 +
@@ -74,6 +75,11 @@ const WARP_UP_DOUBLE_SOUND: i16 = 129;
 /// The warp-out sound, `snd ` 130, which an arrival plays (`_LoadSounds`
 /// @0x1c152, `_HandlePlayer` @0x6bc08 and @0x6c706).
 const WARP_OUT_SOUND: i16 = 130;
+/// The first and last `snd ` of the escorts' voices: set 0's first
+/// acknowledgement and set 7's last victory (see the
+/// [`voice`](crate::voice) module).
+const FIRST_VOICE_CLIP: i16 = 1000;
+const LAST_VOICE_CLIP: i16 = 1799;
 
 /// The length of `data`'s `snd ` `id` as `_ParseSndHeader` gives it: its
 /// frames and the whole part of its rate; none when it is missing or
@@ -720,6 +726,21 @@ impl PilotCatalog for GameData {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         sound_length(self, WARP_OUT_SOUND)
+    }
+
+    /// Every `snd ` 1000-1799 that exists, with its length when it can be
+    /// decoded, as `_LoadSounds` finds them (`_ResourceExists`,
+    /// @0x1c03f-0x1c0b3), and every readable `gövt`'s `VoiceType`.
+    fn voices(&self) -> Voices {
+        let sounds: Vec<(SoundId, Option<SoundLength>)> = (FIRST_VOICE_CLIP..=LAST_VOICE_CLIP)
+            .filter(|&id| self.resource(SND, id).is_some())
+            .map(|id| (SoundId(id), sound_length(self, id)))
+            .collect();
+        let govts: Vec<(GovtId, i16)> = self
+            .records::<Govt>()
+            .filter_map(|(id, govt)| Some((GovtId(id), govt.ok()?.record.voice_type)))
+            .collect();
+        Voices::read(&sounds, &govts)
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -2251,6 +2272,63 @@ mod tests {
             None,
             "undecodable"
         );
+    }
+
+    #[test]
+    fn the_voices_are_each_govts_voice_type_and_the_clips_from_snd_1000() {
+        use crate::voice::{GovtVoice, VoiceMessage, VoiceVariant};
+        let mut federation = govt_bytes();
+        put_i16s(&mut federation, 0x00, &[1003]);
+        let mut silent = govt_bytes();
+        put_i16s(&mut silent, 0x00, &[-1]);
+        let (ty, _, bytes) = warp_up_as(1001, 44_508);
+        let broken = (ty, 1001, bytes[..bytes.len() - 10].to_vec());
+        let data = store(&[
+            (Govt::TYPE, 128, federation),
+            (Govt::TYPE, 129, silent),
+            warp_up_as(1000, 44_508),
+            broken,
+            warp_up_as(1002, 22_254),
+            warp_up_as(1799, 22_254),
+            warp_up_as(1800, 22_254),
+        ]);
+        let voices = data.voices();
+        assert_eq!(
+            voices.govts.get(&GovtId(128)),
+            Some(&GovtVoice {
+                set: Some(3),
+                forced: Some(VoiceVariant::Odd)
+            })
+        );
+        assert_eq!(voices.govts.get(&GovtId(129)), Some(&GovtVoice::default()));
+        assert_eq!(voices.table.count(0, VoiceMessage::Acknowledge), 3);
+        assert_eq!(
+            voices.table.count(7, VoiceMessage::Victory),
+            0,
+            "1799 alone, not from its base"
+        );
+        let clip = |draw| {
+            voices
+                .table
+                .pick(
+                    0,
+                    VoiceMessage::Acknowledge,
+                    None,
+                    &mut nova_sim_base::fixture::Draws::of(&[draw]),
+                )
+                .map(|clip| (clip.sound, clip.length))
+        };
+        assert_eq!(clip(0), Some((SoundId(1000), 120)), "two seconds");
+        assert_eq!(clip(1), Some((SoundId(1001), 0)), "undecodable");
+        assert_eq!(clip(2), Some((SoundId(1002), 60)));
+    }
+
+    #[test]
+    fn a_catalog_of_no_snd_1000_has_no_voice_clips() {
+        use crate::voice::VoiceMessage;
+        let voices = store(&[warp_up(44_508)]).voices();
+        assert_eq!(voices.table.count(0, VoiceMessage::Acknowledge), 0);
+        assert!(voices.govts.is_empty());
     }
 
     #[test]

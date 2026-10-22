@@ -1019,6 +1019,19 @@ pub struct Decision {
     /// follows the jump, or an inertialess NPC's escort detaches
     /// ([`jump_with_leader`](crate::traffic::jump_with_leader)).
     pub follows_jump: bool,
+    /// What the think tells the voice, for a ship the player leads
+    /// ([`escort_voice`](crate::escort_voice)): `_EscortAI`'s every think
+    /// past its lost parent ([`VoiceCue::Thought`], at which a ship with no
+    /// variant rolls one, @0x83980-0x839f6), or a Defend or Attack think
+    /// that took a new threat ([`VoiceCue::NewThreat`], its 1-in-3 target
+    /// call, @0x83df9-0x83e34). The traffic queues it
+    /// ([`Traffic::take_voice_cues`](crate::traffic::Traffic::take_voice_cues))
+    /// for the session to answer. None for every other AI, and for an NPC's
+    /// escort, whose +0x9a is not the player's.
+    ///
+    /// [`VoiceCue::Thought`]: crate::escort_voice::VoiceCue::Thought
+    /// [`VoiceCue::NewThreat`]: crate::escort_voice::VoiceCue::NewThreat
+    pub voice: Option<crate::escort_voice::VoiceCue>,
 }
 
 /// How NPCs decide what to do.

@@ -715,6 +715,19 @@ mod tests {
     }
 
     #[test]
+    fn under_an_npc_lead_it_cues_no_voice_even_taking_a_threat() {
+        // `_EscortAI`'s roll and 1-in-3 call are for a ship the player
+        // leads (+0x9a == 0, @0x83980, @0x83df9).
+        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, 300.0, n(1))];
+        for order in ORDERS {
+            let (decision, _) = decided_with(&npcs, order, (0.0, 5000.0), &[]);
+            assert_eq!(decision.voice, None, "{order:?}");
+        }
+        let (decision, _) = decided_with(&npcs, Some(EscortOrder::Defend), (0.0, 5000.0), &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)), "it took the threat");
+    }
+
+    #[test]
     fn defending_it_takes_the_nearest_threat_within_550_of_its_lead() {
         let defend = Some(EscortOrder::Defend);
         let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, 550.0, n(1))];

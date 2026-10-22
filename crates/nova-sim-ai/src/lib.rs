@@ -103,7 +103,7 @@ use nova_sim_base::{
     ionization, reserves, rulebook, skill, trig,
 };
 #[allow(unused_imports)]
-use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, warp};
+use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, voice, warp};
 #[allow(unused_imports)]
 use nova_sim_combat::message::SimMessage;
 #[allow(unused_imports)]
@@ -115,6 +115,7 @@ pub mod ai;
 pub mod brackets;
 pub mod cargo_box;
 pub mod escort;
+pub mod escort_voice;
 pub mod gate;
 pub mod hail;
 pub mod hover;

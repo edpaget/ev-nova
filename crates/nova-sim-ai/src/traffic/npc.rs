@@ -519,6 +519,13 @@ pub struct Npc {
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
     pub afterburner: bool,
+    /// The variant of its voice (the original's +0xc922): none while it is
+    /// unset (above 1), as it is at every spawn, launch and placing here.
+    /// The session rolls it, the one writer, as `_LaunchFighter`,
+    /// `_DoShipCapture`, `_AIShipCapturedByPlayer` and `_EscortAI` roll
+    /// it, and keeps an escort's across jumps and landings (see
+    /// `nova_sim::voice`). Never saved.
+    pub voice: Option<crate::voice::VoiceVariant>,
     /// The pursuit it keeps from tick to tick (substate 0x10 or 0x11) and
     /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it
     /// spawns. Never saved.

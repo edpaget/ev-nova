@@ -62,6 +62,7 @@ mod stock_swarm;
 mod stock_target_selection;
 mod stock_tractor_hold;
 mod stock_turning;
+mod stock_voices;
 mod stock_warp_end;
 mod story;
 mod swarm;

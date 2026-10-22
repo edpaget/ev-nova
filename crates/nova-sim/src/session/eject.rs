@@ -527,6 +527,7 @@ impl PlayerShip {
             tractor: None,
             ion: Ion::default(),
             afterburner: false,
+            voice: None,
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,

@@ -60,10 +60,15 @@
 //! player leads it (@0x6653f-0x66559). Return to Hangar
 //! ([`EscortCommand::Dock`]) sends the carried fighters home and any
 //! other escort back to formation; its report says Recall when some such
-//! escort had another order. It reports what it
+//! escort had another order. Under any other command a carried fighter
+//! flying home lets go of its target, which counts as a change
+//! (`_IssueNewEscortCommand` @0x6627a-0x662dc). It reports what it
 //! changed ([`Commanded`]) only when some escort's order or target
 //! changed, and then beeps ([`SimSound::EscortsCommanded`](crate::SimSound),
-//! `_beepSnd[1]` @0x665be-0x665e1). A command is taken while a jump is
+//! `_beepSnd[1]` @0x665be-0x665e1); when some escort that isn't mute
+//! (`Flags2` 0x0010) had its order changed, one of the group, drawn in
+//! berth order, acknowledges it in its class's voice (@0x665e6-0x6667a;
+//! see [`voices`](super::voices)). A command is taken while a jump is
 //! under way, the pre-jump stage included, and reported as under way, its
 //! message saying what the escorts will do (`_IssueNewEscortCommand`
 //! @0x66461-0x664e5; see [`EscortCommand::will`](crate::escort::EscortCommand::will)).
@@ -125,6 +130,7 @@ use crate::escort::{
     self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
     FormationSlot,
 };
+use crate::escort_voice::{Speaker, Voter, command_speaker, returning_fighter};
 use crate::flight::ShipState;
 use crate::market;
 use crate::pilot::{Escort, Pilot};
@@ -135,6 +141,7 @@ use crate::skill::random_skill_level;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN, NpcDisplay, Rolls};
 use crate::traffic::table::ShipKind;
+use crate::voice::VoiceMessage;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Space::fleet_kept`]).
@@ -159,6 +166,11 @@ pub(super) struct KeptEscort {
     /// escort rolls it as it is placed (see the `afterburner_roll`
     /// module).
     pub(super) afterburner: Option<bool>,
+    /// Its voice's variant ([`Npc::voice`]), which `_RespawnEscort` never
+    /// writes (+0xc922, @0x3d4b8-0x3d62c); none with no NPC, or while it
+    /// is unset, and it rolls one at its first think (see the `voices`
+    /// module).
+    pub(super) voice: Option<crate::voice::VoiceVariant>,
 }
 
 impl Session {
@@ -166,9 +178,9 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
-    /// mark, its skill, its afterburner, its cloak, and its display and
-    /// fold, with no ionization, or a loaded pilot's fold set with none
-    /// kept
+    /// mark, its skill, its afterburner, its voice, its cloak, and its
+    /// display and fold, with no ionization, or a loaded pilot's fold set
+    /// with none kept
     /// ([`PlayerShip::loaded_escort_set`](super::PlayerShip::loaded_escort_set)).
     /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
@@ -205,6 +217,7 @@ impl Session {
                     .map(|npc| self.ship.loaded_escort_set(&self.setup, &npc.hull.frames));
                 if let Some(npc) = self.space.npc_mut(id) {
                     npc.aux = kept.aux;
+                    npc.voice = kept.voice;
                     npc.ion = Ion::default();
                     npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
@@ -336,6 +349,7 @@ impl Session {
             tractor: None,
             ion: Ion::default(),
             afterburner: false,
+            voice: None,
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,
@@ -675,10 +689,19 @@ impl Session {
     /// takes the escort keys on every frame of a jump but its arrival
     /// (`_HandlePlayer` @0x6dd00-0x6e452, `_IssueNewEscortCommand`
     /// @0x66461).
+    ///
+    /// Under any command but Return to Hangar, a fighter flying home
+    /// ([`returning_fighter`]) lets go of its target and counts as changed
+    /// (@0x6627a-0x662dc). When some escort that isn't mute had its order
+    /// changed, one of the group acknowledges it, drawn on `chance`
+    /// ([`command_speaker`]): "attacking target" when the report says so
+    /// (@0x6660a-0x6663c), else the acknowledgement, queued on the voice
+    /// channel (see the `voices` module).
     pub fn command_escorts(
         &mut self,
         group: EscortGroup,
         command: EscortCommand,
+        chance: &mut dyn Chance,
     ) -> Option<Commanded> {
         if self.mode.landed().is_some() {
             return None;
@@ -698,6 +721,7 @@ impl Session {
             .map(ShipRef::Npc);
         let mut changed = false;
         let mut recalled = false;
+        let mut voters = Vec::new();
         for index in 0..self.pilot.escorts.len() {
             if !group.holds(self.space.escort_class(&self.pilot, &self.statics, index)) {
                 continue;
@@ -705,7 +729,8 @@ impl Session {
             let escort = &mut self.pilot.escorts[index];
             let (order, recall) = order_for(command, escort.carried, escort.order);
             recalled |= recall;
-            changed |= escort.order != order;
+            let reordered = escort.order != order;
+            changed |= reordered;
             escort.order = order;
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
             let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) else {
@@ -714,7 +739,9 @@ impl Session {
             if let Some(duty) = &mut npc.escort {
                 duty.order = order;
             }
-            changed |= take_target(npc, target);
+            let voter = obey(npc, command, target, reordered);
+            changed |= voter.changed;
+            voters.push(voter);
         }
         for (class, kept) in EscortClass::ALL
             .into_iter()
@@ -738,12 +765,15 @@ impl Session {
             };
             let (order, recall) = order_for(command, false, mark.order);
             recalled |= recall;
-            changed |= mark.order != order;
+            let reordered = mark.order != order;
             mark.order = order;
-            changed |= take_target(npc, target);
+            let voter = obey(npc, command, target, reordered);
+            changed |= voter.changed;
+            voters.push(voter);
         }
         if changed {
             self.out.sounds.push(crate::SimSound::EscortsCommanded);
+            self.acknowledge(&mut voters, reported.is_some(), chance);
         }
         changed.then_some(Commanded {
             group,
@@ -755,6 +785,28 @@ impl Session {
             targeted: reported.is_some(),
             underway: self.mode.jump().is_some(),
         })
+    }
+
+    /// `_IssueNewEscortCommand`'s voice (@0x665e6-0x6667a), for a command
+    /// that changed something among `voters`: when some voter that isn't
+    /// mute had its order changed, the speaker drawn on `chance` in berth
+    /// order ([`command_speaker`]) says it attacks the target when
+    /// `targeted`, else acknowledges.
+    fn acknowledge(&mut self, voters: &mut [Voter], targeted: bool, chance: &mut dyn Chance) {
+        if !voters.iter().any(|voter| voter.speaks) {
+            return;
+        }
+        voters.sort_by_key(|voter| voter.berth);
+        let Some(speaker) = command_speaker(voters, chance) else {
+            return;
+        };
+        let message = if targeted {
+            VoiceMessage::Target
+        } else {
+            VoiceMessage::Acknowledge
+        };
+        let speech = self.statics.speech(speaker.ship, message, speaker.voice);
+        self.space.voice.speak(speech);
     }
 
     /// The escort menu's class rows, in its order: whether the player
@@ -855,6 +907,7 @@ impl Space {
                     )),
                     skill: Some(npc.skill),
                     afterburner: Some(npc.afterburner),
+                    voice: npc.voice,
                     cloak: npc.cloak,
                 })
             })
@@ -1035,6 +1088,31 @@ fn order_for(
         (None, order.is_some())
     } else {
         (command.order(), false)
+    }
+}
+
+/// `npc`, an escort of the command's group whose order changed as
+/// `reordered` says, takes `command` with `target` (see
+/// [`take_target`]), and lets go of its target when it is a fighter flying
+/// home ([`returning_fighter`], @0x6627a-0x662b3) and the command is not
+/// Return to Hangar: how it votes on the command's voice
+/// (`_IssueNewEscortCommand` @0x6617c-0x662dc).
+fn obey(npc: &mut Npc, command: EscortCommand, target: Option<ShipRef>, reordered: bool) -> Voter {
+    let retargeted = take_target(npc, target);
+    let returning = command != EscortCommand::Dock && returning_fighter(npc);
+    if returning {
+        npc.target = None;
+    }
+    Voter {
+        berth: npc.berth,
+        changed: reordered || retargeted || returning,
+        speaks: reordered && !npc.hull.mute,
+        returning,
+        mute: npc.hull.mute,
+        speaker: Speaker {
+            ship: npc.ship,
+            voice: npc.voice,
+        },
     }
 }
 
@@ -2408,7 +2486,7 @@ mod tests {
             "not an escort"
         );
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
@@ -2452,7 +2530,7 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
@@ -2463,7 +2541,8 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let freighter = session.space.escorts.fleet[1].expect("placed");
         session.chart.target = Some(freighter);
-        let commanded = session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        let commanded =
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
         assert_eq!(commanded.map(|commanded| commanded.targeted), Some(false));
         assert!(escort_npcs(&session).iter().all(|npc| npc.target.is_none()));
     }
@@ -2475,16 +2554,16 @@ mod tests {
         let first = pirate(&mut session, 0.0, -400.0, Goal::Idle);
         let second = pirate(&mut session, 0.0, 400.0, Goal::Idle);
         session.chart.target = Some(first);
-        session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             None,
             "nothing changed"
         );
         session.chart.target = Some(second);
         assert!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
                 .is_some()
         );
         assert!(
@@ -2500,7 +2579,7 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let warships = EscortGroup::Class(EscortClass::Warship);
         assert_eq!(
-            session.command_escorts(warships, EscortCommand::Hold),
+            session.command_escorts(warships, EscortCommand::Hold, &mut NeverFires),
             Some(Commanded {
                 group: warships,
                 command: EscortCommand::Hold,
@@ -2544,7 +2623,7 @@ mod tests {
         );
         assert!(
             session
-                .command_escorts(warships, EscortCommand::Recall)
+                .command_escorts(warships, EscortCommand::Recall, &mut NeverFires)
                 .is_some()
         );
         assert_eq!(orders(&session), [None, None]);
@@ -2553,7 +2632,7 @@ mod tests {
             escort_npcs(&session)[0].goal,
             Goal::Formation { .. }
         ));
-        session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+        session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
         fight(&mut session, &catalog, &ai);
         assert!(
@@ -2561,7 +2640,7 @@ mod tests {
                 .iter()
                 .all(|npc| npc.goal == Goal::Wait)
         );
-        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires);
         assert_eq!(orders(&session), [None, None]);
     }
 
@@ -2570,23 +2649,23 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Recall),
+            session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires),
             None,
             "no orders to recall from"
         );
         assert!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Hold)
+                .command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires)
                 .is_some()
         );
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             None
         );
         let fighters = EscortGroup::Class(EscortClass::Fighter);
         let before = session.pilot().clone();
         assert_eq!(
-            session.command_escorts(fighters, EscortCommand::Defend),
+            session.command_escorts(fighters, EscortCommand::Defend, &mut NeverFires),
             None
         );
         assert_eq!(session.pilot(), &before, "no fighters: nothing changes");
@@ -2601,7 +2680,7 @@ mod tests {
         begin_jump_now(&mut session).expect("jumps");
         session.take_sounds();
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Hold,
@@ -2636,7 +2715,7 @@ mod tests {
         session.begin_jump().expect("pre-jump");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Defend),
+            session.command_escorts(EscortGroup::All, EscortCommand::Defend, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Defend,
@@ -2658,7 +2737,7 @@ mod tests {
             session.plot_course(SystemId(131)).expect("a route");
             crate::testkit::fly_out(&mut session);
             begin_jump_now(&mut session).expect("jumps");
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
             tick(&mut session, &catalog);
@@ -2680,7 +2759,7 @@ mod tests {
         session.chart.target = Some(quarry);
         assert_eq!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
                 .map(|commanded| commanded.targeted),
             Some(true)
         );
@@ -2713,7 +2792,7 @@ mod tests {
         for streak in 0..2 {
             session.take_sounds();
             assert_eq!(
-                session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+                session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
                 attacked,
                 "attack {streak}"
             );
@@ -2735,9 +2814,9 @@ mod tests {
                 "let go every pass of the warp"
             );
         }
-        session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             None,
             "the warp lets go on its pass, not on a second command in the frame"
         );
@@ -2757,7 +2836,7 @@ mod tests {
         session.space.npc_mut(launched).expect("here").leader = Some(freighter);
         session.chart.target = Some(launched);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
@@ -2778,7 +2857,7 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         land_now(&mut session).expect("lands");
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             None
         );
         assert!(
@@ -2822,6 +2901,7 @@ mod tests {
         session.command_escorts(
             EscortGroup::Class(EscortClass::Freighter),
             EscortCommand::Hold,
+            &mut NeverFires,
         );
         assert_eq!(session.escort_menu()[3].order, Some(EscortOrder::Hold));
         let landed = Session::fly(&catalog, escorted(&catalog)).expect("flies");
@@ -2838,7 +2918,7 @@ mod tests {
     fn an_escort_with_no_command_guards_the_player_from_formation_with_its_turret() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
-        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires);
         let raider = pirate(&mut session, 0.0, -120.0, Goal::Attack(ShipRef::Player));
         let ai = sitting_ai();
         fight(&mut session, &catalog, &ai);
@@ -2877,7 +2957,7 @@ mod tests {
         let mut catalog = fleeted();
         catalog.weapons[0].count = 60;
         let mut session = flying(&catalog, RuleSource::Engine);
-        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires);
         let raider = pirate(&mut session, 0.0, -500.0, Goal::Attack(ShipRef::Player));
         let ai = sitting_ai();
         fight(&mut session, &catalog, &ai);

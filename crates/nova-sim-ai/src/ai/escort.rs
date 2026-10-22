@@ -102,6 +102,7 @@ use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
+use crate::escort_voice::VoiceCue;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -118,34 +119,47 @@ pub struct EscortAi {
 
 impl EscortAi {
     /// The goal of `npc`'s order block under `order` among `around`,
-    /// drawing any guard on `chance` (see the module docs).
+    /// drawing any guard on `chance` (see the module docs), and its voice
+    /// cue: [`VoiceCue::NewThreat`] when a Defend or Attack block took a
+    /// new threat, the branch `_EscortAI`'s 1-in-3 target call sits on
+    /// (@0x83cdc-0x83e34); [`VoiceCue::Thought`] otherwise, a kept target
+    /// included (@0x83cd6, @0x83d6d → @0x83e4b).
     fn goal_by(
         self,
         npc: &Npc,
         order: Option<EscortOrder>,
         around: &Surroundings,
         chance: &mut dyn Chance,
-    ) -> Goal {
+    ) -> (Goal, VoiceCue) {
         if order == Some(EscortOrder::Hold) {
             // Target and +0x6c -1, goal 6 (@0x83e59-0x83e74).
-            return Goal::Wait;
+            return (Goal::Wait, VoiceCue::Thought);
         }
         if order == Some(EscortOrder::Dock) && npc.carrier.is_some() {
-            return Goal::Dock(ShipRef::Player);
+            return (Goal::Dock(ShipRef::Player), VoiceCue::Thought);
         }
         let Some(player) = around.player.map(|player| player.state) else {
-            return Goal::Formation { guard: None };
+            return (Goal::Formation { guard: None }, VoiceCue::Thought);
         };
         match order {
             Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)) => {
                 let target = valid_target(npc, order, around);
                 let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
-                kept_by_order(order, target, player.position, around).map_or_else(
-                    || attack_or_form(best_threat(npc, around, &player, radius)),
-                    Goal::Attack,
-                )
+                if let Some(kept) = kept_by_order(order, target, player.position, around) {
+                    return (Goal::Attack(kept), VoiceCue::Thought);
+                }
+                let threat = best_threat(npc, around, &player, radius);
+                let cue = if threat.is_some() {
+                    VoiceCue::NewThreat
+                } else {
+                    VoiceCue::Thought
+                };
+                (attack_or_form(threat), cue)
             }
-            _ => self.no_command(npc, around, &player, chance),
+            _ => (
+                self.no_command(npc, around, &player, chance),
+                VoiceCue::Thought,
+            ),
         }
     }
 
@@ -191,6 +205,11 @@ impl Behaviour for EscortAi {
     ///    holding or returning to its hangar: a launched fighter told to
     ///    hold or return, or sent home by the fallback, coasts out its
     ///    glide (`_LaunchFighter` @0x3d843-0x3d85b).
+    ///
+    /// Every think past the lost parent tells the voice
+    /// ([`Decision::voice`]): a [`VoiceCue::Thought`], at which a ship with
+    /// no variant rolls one (@0x83980-0x839f6), or a
+    /// [`VoiceCue::NewThreat`] when the order block took a new threat.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if player_breaking_up(around) {
             // Goal 0 ([`Goal::Idle`], the default), its target kept.
@@ -202,14 +221,17 @@ impl Behaviour for EscortAi {
                 goal: Goal::Formation { guard: None },
                 clears_target: true,
                 follows_jump: true,
+                voice: Some(VoiceCue::Thought),
                 ..Decision::default()
             };
         }
         let keeps_wait = order == Some(EscortOrder::Hold)
             || (order == Some(EscortOrder::Dock) && npc.carrier.is_some());
+        let (goal, cue) = self.goal_by(npc, order, around, chance);
         Decision {
-            goal: self.goal_by(npc, order, around, chance),
+            goal,
             ends_wait: !keeps_wait,
+            voice: Some(cue),
             ..Decision::default()
         }
     }
@@ -2019,5 +2041,90 @@ mod tests {
             trigger,
             fire::trigger(&npcs[0], &around, FireRules::default())
         );
+    }
+
+    /// The voice cue of `ai`'s think for `npcs[0]` among `npcs`, the
+    /// player at the centre on its warp stage `stage`.
+    fn cue(ai: EscortAi, npcs: &[Npc], stage: f32) -> Option<VoiceCue> {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            player_warp_stage: stage,
+            ..Surroundings::new(&[], npcs)
+        };
+        ai.decision(&npcs[0], &around, &mut Draws::of(&[0])).voice
+    }
+
+    #[test]
+    fn a_defend_or_attack_think_that_takes_a_threat_cues_the_target_call() {
+        // `_EscortAI`'s 1-in-3 call sits on the branch that searched for a
+        // threat and found one (@0x83cdc-0x83d4e, @0x83d73-0x83df7).
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let npcs = [escort(Some(order)), pirate(2, 0.0, 100.0)];
+            assert_eq!(
+                cue(ENGINE, &npcs, 0.0),
+                Some(VoiceCue::NewThreat),
+                "{order:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_other_think_of_the_players_escort_is_a_thought() {
+        // A kept target skips the call (@0x83cd6, @0x83d6d → @0x83e4b);
+        // every think past the lost parent rolls the variant
+        // (@0x83980-0x839f6), the jump's too.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let kept = having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2)));
+            let npcs = [kept, pirate(2, 0.0, 100.0)];
+            assert_eq!(
+                cue(ENGINE, &npcs, 0.0),
+                Some(VoiceCue::Thought),
+                "{order:?} kept"
+            );
+            let alone = [escort(Some(order))];
+            assert_eq!(
+                cue(ENGINE, &alone, 0.0),
+                Some(VoiceCue::Thought),
+                "{order:?} none"
+            );
+            let npcs = [escort(Some(order)), pirate(2, 0.0, 100.0)];
+            assert_eq!(
+                cue(ENGINE, &npcs, 1.0),
+                Some(VoiceCue::Thought),
+                "{order:?} jump"
+            );
+        }
+        for order in [None, Some(EscortOrder::Hold), Some(EscortOrder::Dock)] {
+            let npcs = [escort(order), pirate(2, 0.0, 100.0)];
+            for ai in [ENGINE, BIBLE] {
+                assert_eq!(cue(ai, &npcs, 0.0), Some(VoiceCue::Thought), "{order:?}");
+            }
+        }
+        let mut fighter = escort(Some(EscortOrder::Dock));
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        let npcs = [fighter, pirate(2, 0.0, 100.0)];
+        assert_eq!(cue(ENGINE, &npcs, 0.0), Some(VoiceCue::Thought), "docking");
+    }
+
+    #[test]
+    fn a_think_under_a_player_breaking_up_cues_nothing() {
+        let govts = govts(0, 0);
+        let npcs = [escort(Some(EscortOrder::Defend)), pirate(2, 0.0, 100.0)];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                condition: Condition::Destroyed,
+                ..player(0.0, 0.0)
+            }),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.voice, None);
     }
 }

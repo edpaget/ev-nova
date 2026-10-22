@@ -906,12 +906,15 @@ impl<C> FlightView<C> {
     }
 
     /// Gives the escorts `command`, through the session, as the menu says
-    /// which; says what it changed, and keeps the menu open for it.
+    /// which, drawing its speaker on the flight's chance; says what it
+    /// changed, and keeps the menu open for it.
     fn command_escorts(&mut self, command: EscortCommand) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        if let Some(commanded) = session.command_escorts(self.escort_menu.group(), command) {
+        let commanded =
+            session.command_escorts(self.escort_menu.group(), command, &mut self.chance);
+        if let Some(commanded) = commanded {
             self.escort_menu.touch(self.elapsed);
             self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
