@@ -48,17 +48,21 @@
 //!   (@0x2d187-0x2d2bb). The view's `cloak_fade` module draws each.
 //!
 //! What an NPC's ship type gives ([`CloakGear`]) comes from its default
-//! items and its `Flags2`: a cloak (an outfit with a `ModType` 17 mod,
-//! `_HasCloak` @0x95f2), whether it decloaks when hit (that mod's
-//! `ModVal` bit 0x8, `_ShipDecloaksWhenHit` @0x3f68), whether it shows on
-//! the radar while cloaked (bit 0x2, `_ShipCloakVisibleOnRadar` @0x40f8),
-//! and the AI-cloak bits of `Flags2` (shïp +0x9ea, loaded from the
-//! resource's offset 0x62, `_LoadObjectData` @0x7a1f2).
+//! items and its `Flags2`: a cloak of its own (an outfit with a `ModType`
+//! 17 mod, `_HasCloak` @0x96c1-0x970b), whether it decloaks when hit
+//! (that mod's `ModVal` bit 0x8, `_ShipDecloaksWhenHit` @0x3f68), whether
+//! it shows on the radar while cloaked (bit 0x2,
+//! `_ShipCloakVisibleOnRadar` @0x40f8), whether it carries an area cloak
+//! (bit [`AREA_CLOAK`], 0x1000, `_HasAreaCloak` @0x3d49), and the AI-cloak
+//! bits of `Flags2` (shïp +0x9ea, loaded from the resource's offset 0x62,
+//! `_LoadObjectData` @0x7a1f2).
 //!
 //! # When an NPC cloaks
 //!
 //! Each think, `_AIHandleCloaking` (@0x833e1, [`think`]) uncloaks a ship
-//! with no cloak or a disabled one (@0x833f3-0x8341d), and otherwise
+//! with no cloak (`_HasCloak`: its own, or its leader's area cloak it
+//! rides, [`Situation::area_cloak`]) or a disabled one (@0x833f3-0x8341d),
+//! and otherwise
 //! cloaks it while one of its ship type's AI-cloak conditions holds and
 //! uncloaks it while none does (@0x83682, @0x83694). The conditions OR
 //! together, in the original's order:
@@ -99,7 +103,10 @@
 //! [`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves), fuel alone
 //! by the engine; and for the player, not jumping unless its `Flags2` has
 //! [`CLOAK_JUMPING`]) uncloaks (`_HandleShip` @0x3413d-0x3415f,
-//! [`hold`]), and a weapon's hit uncloaks a ship whose cloak decloaks when
+//! [`hold`]); a ship riding its leader's area cloak with none of its own
+//! is kept only by the Bible's reading of
+//! [`RuleKey::AreaCloakHold`](crate::RuleKey::AreaCloakHold) (see
+//! [`area_cloak`](crate::area_cloak)); and a weapon's hit uncloaks a ship whose cloak decloaks when
 //! hit while it is fully faded or still fading in (`_DamageShip`
 //! @0x3bf1f-0x3bf4f, [`hit`], [`decloak_on_hit`]).
 //!
@@ -138,8 +145,8 @@
 //! (`_HandleShip` @0x34d74); a cloak's fuel upkeep (the uncloak @0x83422-0x8343a and the drain @0x34164-0x341ac),
 //! which no NPC pays (`_CloakFuelUsage` @0x3e25 is 0 for one,
 //! @0x3e31-0x3e39); `_DoShipCloak`'s `_statusRedraw[1]` (@0xdf35-0xdf4b),
-//! player-only, as the HUD is drawn every frame; area cloaks
-//! (rdm:phase/cloaking-fidelity/phase-10-area-cloaks).
+//! player-only, as the HUD is drawn every frame. Area cloaks are
+//! [`area_cloak`](crate::area_cloak)'s.
 //!
 //! Left out of `_HandleShipDisplay`'s drawing (@0x2d088-0x2d72e): the
 //! 8-bit depth, its hull at translucency 0x10 (@0x2d341-0x2d34c) and its
@@ -155,8 +162,10 @@
 //! `_ShipVisibleToShip(target, observer)` (@0x971c, [`visible`]): a ship
 //! emerging from a hypergate is unseen; an uncloaked one is seen; a
 //! cloaked one is seen by an observer escorting it that has a cloak
-//! itself (@0x9788-0x97a2, never the player, which has no parent), and
-//! otherwise only by an observer with a cloak scanner on screen
+//! (@0x9788-0x97a2, `_HasCloak`: its own, or the target's area cloak it
+//! rides in close formation, the player's included, see
+//! [`area_cloak`](crate::area_cloak); the player, which has no parent,
+//! never is such an observer), and otherwise only by an observer with a cloak scanner on screen
 //! ([`Scanner::on_screen`], `_ShipCanSeeCloakedShips` mode 0 @0x41a9, a
 //! `ModType` 30 mod with `ModVal` bit 0x2) within [`SIGHT_RANGE`] (200)
 //! on both axes (@0x97a4-0x97f8). No stock outfit has a `ModType` 30
@@ -421,7 +430,9 @@ pub fn untargetable(flags2: u16) -> bool {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CloakGear {
-    /// Whether it has a cloak (a `ModType` 17 mod).
+    /// Whether it has a cloak of its own (a `ModType` 17 mod). `_HasCloak`
+    /// is this or a ride on its leader's area cloak
+    /// ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak)).
     pub device: bool,
     /// Whether a hit uncloaks it ([`CLOAK_DECLOAKS_WHEN_HIT`]): the bit of
     /// the first cloak mod, of the first owned cloak outfit for the player
@@ -729,7 +740,9 @@ pub struct Observer {
     pub at: Vec2,
     /// Whether it has a cloak scanner on screen ([`Scanner::on_screen`]).
     pub scanner: bool,
-    /// Whether it escorts the target and has a cloak itself.
+    /// Whether it escorts the target and has a cloak
+    /// ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak): one of its
+    /// own, or the target's area cloak it rides).
     pub cloaked_escort: bool,
 }
 

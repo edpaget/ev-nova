@@ -942,8 +942,11 @@ pub struct Fighter<'a> {
     pub cloak_scanner: bool,
     /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
     /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
-    /// [`Sight::has_cloak`]). The player's reads the outfits it owns; it
-    /// has no leader, so nothing reads it yet.
+    /// [`Sight::has_cloak`]). An NPC's is its own cloak, or the area branch
+    /// (@0x964c-0x96bf): its leader's area cloak it rides in close
+    /// formation ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak)).
+    /// The player's reads the outfits it owns; it has no leader, so nothing
+    /// reads it yet.
     pub has_cloak: bool,
     /// How strongly it jams each jamming type (`_ShipECM`, see
     /// [`jamming`]), whatever its condition: a disabled ship jams nothing.
