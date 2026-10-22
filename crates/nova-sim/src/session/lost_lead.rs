@@ -71,14 +71,16 @@ impl Space {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::Goal;
+    use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::bay::Carrier;
-    use crate::combat::ShipRef;
+    use crate::chance::{Chance, NeverFires};
     use crate::combat::hull::Condition;
+    use crate::combat::{Rules, ShipRef};
     use crate::pilot::Pilot;
+    use crate::rulebook::{RuleKey, Rulebook};
     use crate::session::Session;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, catalog, npc};
+    use crate::testkit::{FAST, FakePilotCatalog, catalog, npc};
     use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// A session flying in an empty system.
@@ -236,6 +238,81 @@ mod tests {
         };
         assert!(lost(RuleSource::Engine));
         assert!(!lost(RuleSource::Bible));
+    }
+
+    // Through the session's ticks.
+
+    /// Thinks nothing: each ship keeps its goal, so only the session's
+    /// own work moves a ship out of its fleet.
+    #[derive(Debug)]
+    struct Keeping;
+
+    impl Behaviour for Keeping {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+    }
+
+    /// A tick of the session, reading the catalog given.
+    type Tick = fn(&mut Session, &FakePilotCatalog);
+
+    /// Each tick that takes a ship out of its fleet, by name.
+    const TICKS: [(&str, Tick); 2] = [("traffic", traffic_tick), ("fight", fight_tick)];
+
+    /// A traffic tick, its work after the motion
+    /// (`Session::after_traffic_motion`) among it.
+    fn traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    }
+
+    /// A fight's tick, its tail (`Session::fight_tail`) among it.
+    fn fight_tick(session: &mut Session, _catalog: &FakePilotCatalog) {
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    /// A pirate lead disabled and its escort as the escort is after a
+    /// `tick` of a session by `rules`, its first traffic tick done before
+    /// the two arrive.
+    fn escort_after(rules: Rulebook, tick: Tick) -> (NpcId, Npc) {
+        let catalog = catalog();
+        let mut session = Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts"))
+            .expect("flies")
+            .with_rules(rules);
+        traffic_tick(&mut session, &catalog);
+        let lead = session.space.traffic.add_npc(pirate());
+        let escort = session.space.traffic.add_npc(escort_of(lead));
+        // Its armour down to 1 of 45 as well, as the fight reads its
+        // condition afresh from its armour.
+        let disabled = session.space.npc_mut(lead).expect("there");
+        disabled.condition = Condition::Disabled;
+        disabled.reserves.armor.now = 1.0;
+        tick(&mut session, &catalog);
+        (lead, ship(&session, escort).clone())
+    }
+
+    #[test]
+    fn by_the_default_rules_either_tick_takes_an_escort_whose_lead_is_disabled_out_of_its_fleet() {
+        for (name, tick) in TICKS {
+            let (_, escort) = escort_after(Rulebook::default(), tick);
+            // The traffic tick lets go of the player as a target by either
+            // reading, so only the fleet's fields are read here.
+            assert_eq!(
+                (escort.leader, escort.carrier, escort.goal, escort.ai_type),
+                (None, None, Goal::Idle, AiType::Warship),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_neither_tick_takes_an_escort_whose_lead_is_disabled_out() {
+        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        for (name, tick) in TICKS {
+            let (lead, escort) = escort_after(rules, tick);
+            assert_eq!(escort.leader, Some(lead), "{name}: {escort:?}");
+            assert_eq!(escort.ai_type, AiType::WimpyTrader, "{name}");
+            assert!(matches!(escort.goal, Goal::Follow { .. }), "{name}");
+        }
     }
 
     #[test]
