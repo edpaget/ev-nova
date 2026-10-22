@@ -51,7 +51,7 @@ use super::{Outbox, Space, Statics};
 use crate::catalog::ShipId;
 use crate::chance::Chance;
 use crate::combat::{EscortLoss, FinishingHit, ShipRef};
-use crate::escort_voice::{VoiceCue, calls_target, victory_speaker};
+use crate::escort_voice::{VoiceCue, Voter, calls_target, command_speaker, victory_speaker};
 use crate::traffic::npc::NpcId;
 use crate::voice::{Speech, VoiceMessage, VoiceVariant, roll_variant};
 
@@ -156,6 +156,34 @@ impl Space {
                 }
             }
         }
+    }
+
+    /// `_IssueNewEscortCommand`'s voice (@0x665e6-0x6667a), for a command
+    /// that changed something among `voters`: when some voter that isn't
+    /// mute had its order changed, the speaker drawn on `chance` in berth
+    /// order ([`command_speaker`]) says it attacks the target when
+    /// `targeted`, else acknowledges, in its voice from `statics`.
+    pub(super) fn acknowledge(
+        &mut self,
+        statics: &Statics,
+        voters: &mut [Voter],
+        targeted: bool,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if !voters.iter().any(|voter| voter.speaks) {
+            return;
+        }
+        voters.sort_by_key(|voter| voter.berth);
+        let Some(speaker) = command_speaker(voters, chance) else {
+            return;
+        };
+        let message = if targeted {
+            VoiceMessage::Target
+        } else {
+            VoiceMessage::Acknowledge
+        };
+        self.voice
+            .speak(statics.speech(speaker.ship, message, speaker.voice));
     }
 
     /// Queues the victory of each of `finished`, in order, the hits that

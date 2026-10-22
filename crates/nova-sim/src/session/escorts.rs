@@ -130,7 +130,7 @@ use crate::escort::{
     self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
     FormationSlot,
 };
-use crate::escort_voice::{Speaker, Voter, command_speaker, returning_fighter};
+use crate::escort_voice::{Speaker, Voter, returning_fighter};
 use crate::flight::ShipState;
 use crate::market;
 use crate::pilot::{Escort, Pilot};
@@ -141,7 +141,6 @@ use crate::skill::random_skill_level;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN, NpcDisplay, Rolls};
 use crate::traffic::table::ShipKind;
-use crate::voice::VoiceMessage;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Space::fleet_kept`]).
@@ -694,9 +693,10 @@ impl Session {
     /// ([`returning_fighter`]) lets go of its target and counts as changed
     /// (@0x6627a-0x662dc). When some escort that isn't mute had its order
     /// changed, one of the group acknowledges it, drawn on `chance`
-    /// ([`command_speaker`]): "attacking target" when the report says so
-    /// (@0x6660a-0x6663c), else the acknowledgement, queued on the voice
-    /// channel (see the `voices` module).
+    /// ([`command_speaker`](crate::escort_voice::command_speaker)):
+    /// "attacking target" when the report says so (@0x6660a-0x6663c), else
+    /// the acknowledgement, queued on the voice channel (see the `voices`
+    /// module).
     pub fn command_escorts(
         &mut self,
         group: EscortGroup,
@@ -773,7 +773,8 @@ impl Session {
         }
         if changed {
             self.out.sounds.push(crate::SimSound::EscortsCommanded);
-            self.acknowledge(&mut voters, reported.is_some(), chance);
+            self.space
+                .acknowledge(&self.statics, &mut voters, reported.is_some(), chance);
         }
         changed.then_some(Commanded {
             group,
@@ -785,28 +786,6 @@ impl Session {
             targeted: reported.is_some(),
             underway: self.mode.jump().is_some(),
         })
-    }
-
-    /// `_IssueNewEscortCommand`'s voice (@0x665e6-0x6667a), for a command
-    /// that changed something among `voters`: when some voter that isn't
-    /// mute had its order changed, the speaker drawn on `chance` in berth
-    /// order ([`command_speaker`]) says it attacks the target when
-    /// `targeted`, else acknowledges.
-    fn acknowledge(&mut self, voters: &mut [Voter], targeted: bool, chance: &mut dyn Chance) {
-        if !voters.iter().any(|voter| voter.speaks) {
-            return;
-        }
-        voters.sort_by_key(|voter| voter.berth);
-        let Some(speaker) = command_speaker(voters, chance) else {
-            return;
-        };
-        let message = if targeted {
-            VoiceMessage::Target
-        } else {
-            VoiceMessage::Acknowledge
-        };
-        let speech = self.statics.speech(speaker.ship, message, speaker.voice);
-        self.space.voice.speak(speech);
     }
 
     /// The escort menu's class rows, in its order: whether the player
