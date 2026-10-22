@@ -109,6 +109,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         idle: goal == Some(Goal::Idle),
         mining: (goal == Some(Goal::Mine) && !around.mining_rock).then_some(MineOrder::Stop),
         close_to_cloaked_parent,
+        area_cloak: false,
     }
 }
 

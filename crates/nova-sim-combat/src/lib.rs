@@ -7,6 +7,10 @@
 //! `nova_sim::Armament`, …), so the rest of the workspace reaches them
 //! through it.
 //!
+//! - [`area_cloak`]: area cloaks: whether an escort in close formation
+//!   rides its cloaked leader's area cloak ([`area_cloak::rides`]), so has
+//!   a cloak ([`area_cloak::has_cloak`]), and whether the frame's hold keeps
+//!   it ([`area_cloak::holds`]).
 //! - [`asteroid`]: a system's asteroid field: the 16 slots
 //!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
 //!   field's edge or in place, how it drifts and spins, and when it is
@@ -87,6 +91,7 @@ use nova_sim_catalog::{ControlBits, buoy, catalog, control};
 #[allow(unused_imports)]
 use nova_sim_state::{clearance, cron, govt, legal};
 
+pub mod area_cloak;
 pub mod asteroid;
 pub mod bay;
 pub mod cloak;

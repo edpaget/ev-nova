@@ -222,6 +222,11 @@ pub const CLOAK_ZEROES_SHIELDS: i16 = 0x0004;
 pub const CLOAK_UPKEEP_RATE: f32 = 0.03333;
 /// A cloak's `ModVal` bit: a hit uncloaks it.
 pub const CLOAK_DECLOAKS_WHEN_HIT: i16 = 0x0008;
+/// A cloak's `ModVal` bit: an area cloak, which an escort in close
+/// formation with its cloaked leader rides (`_HasAreaCloak`
+/// @0x3d9f-0x3daa: the `ModVal`'s high byte, +0xd + 2·slot, bit 0x10; see
+/// [`area_cloak`](crate::area_cloak)).
+pub const AREA_CLOAK: i16 = 0x1000;
 /// A scanner's `ModVal` bit: cloaked ships show on the radar.
 pub const SCAN_RADAR: i16 = 0x0001;
 /// A scanner's `ModVal` bit: cloaked ships show on screen, within
@@ -449,6 +454,13 @@ pub struct CloakGear {
     /// order (the player, @0x556b-0x55ca), or of the last default-item slot
     /// holding a cloak (an NPC, @0x55cc-0x5640). `None` with no cloak.
     pub can_cloak_mod: Option<i16>,
+    /// Whether it carries an area cloak (`_HasAreaCloak` @0x3d49-0x3e24):
+    /// any cloak mod with [`AREA_CLOAK`], in any of the four mod slots, of
+    /// any item it holds (count above 0): an NPC's default items
+    /// (@0x3dc1-0x3e0f), or every outfit the player owns
+    /// (@0x3d85-0x3daa). An escort in close formation with it, cloaked,
+    /// rides it (see [`area_cloak`](crate::area_cloak)).
+    pub area: bool,
     /// What the cloak scanners among its default items give: an NPC's
     /// own scanner (`_ShipCanTargetUntargetableShips` @0x2402 and
     /// `_ShipCanTargetCloakedShips` @0x24d9 read its ship type's default
@@ -471,6 +483,7 @@ impl CloakGear {
             gear.device = true;
             gear.decloaks_when_hit |= mod_val & CLOAK_DECLOAKS_WHEN_HIT != 0;
             gear.on_radar |= mod_val & CLOAK_ON_RADAR != 0;
+            gear.area |= mod_val & AREA_CLOAK != 0;
         }
         gear
     }
@@ -522,6 +535,7 @@ impl CloakGear {
         let gear = Self {
             flags2,
             scanner: Scanner::of(owned, outfits),
+            area: mods(owned, outfits, MOD_CLOAK).any(|mod_val| mod_val & AREA_CLOAK != 0),
             ..Self::default()
         };
         let cloaks: Vec<i16> = owned
@@ -772,6 +786,10 @@ pub struct Situation {
     /// Whether it keeps close formation (sub-goal 0xc) with a cloaked
     /// parent, its AI type above 4.
     pub close_to_cloaked_parent: bool,
+    /// Whether it rides its leader's area cloak
+    /// ([`area_cloak::rides`](crate::area_cloak::rides)), so has a cloak
+    /// without one of its own.
+    pub area_cloak: bool,
 }
 
 /// A miner's order (goal 0x10's sub-goal).
@@ -802,11 +820,13 @@ pub fn cloak_ship(cloak: &mut Cloak, gear: CloakGear, shield: &mut f32) -> bool 
 }
 
 /// `cloak` and `shield` after a think of a ship of `gear` in `situation`
-/// (`_AIHandleCloaking`, see the module docs): a ship whose cloak costs
-/// shield with none left uncloaks before the conditions are asked
-/// (@0x83449-0x83452).
+/// (`_AIHandleCloaking`, see the module docs): a ship with no cloak
+/// ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak): its own or
+/// the area cloak it rides) or a disabled one uncloaks (@0x833f3-0x8341d),
+/// and a ship whose own cloak costs shield with none left uncloaks before
+/// the conditions are asked (@0x83449-0x83452).
 pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation, shield: &mut f32) {
-    if !gear.device || situation.disabled {
+    if !crate::area_cloak::has_cloak(gear.device, situation.area_cloak) || situation.disabled {
         cloak.uncloak();
         return;
     }
@@ -1178,6 +1198,7 @@ mod tests {
                 fuel_usage: 0,
                 zeroes_shields: false,
                 can_cloak_mod: None,
+                area: false,
                 scanner: Scanner::default(),
             },
             "the upkeep needs the slot order (`with_upkeep`)"
@@ -1201,6 +1222,42 @@ mod tests {
         );
         let none_held: BTreeMap<OutfitId, u16> = [(OutfitId(301), 0)].into();
         assert!(!CloakGear::of(0, &none_held, &[in_a_later_slot]).device);
+    }
+
+    #[test]
+    fn an_area_cloak_is_bit_0x1000_of_any_cloak_mod_among_the_items() {
+        assert_eq!(AREA_CLOAK, 0x1000);
+        let second = outfit(301, &[(MOD_CLOAK, 0), (MOD_CLOAK, AREA_CLOAK)]);
+        let gear = CloakGear::of(0, &one(301), std::slice::from_ref(&second));
+        assert!(gear.area, "the bit on the second cloak mod");
+        let scanner = outfit(301, &[(MOD_SCANNER, AREA_CLOAK)]);
+        assert!(
+            !CloakGear::of(0, &one(301), &[scanner]).area,
+            "a `ModType` 30 mod"
+        );
+        let none_held: BTreeMap<OutfitId, u16> = [(OutfitId(301), 0)].into();
+        assert!(!CloakGear::of(0, &none_held, &[second]).area, "none held");
+        assert!(
+            !CloakGear::of(0, &one(300), &[cloak_outfit(0x0fff)]).area,
+            "a cloak without the bit"
+        );
+        let with_upkeep = CloakGear::of(0, &one(300), &[cloak_outfit(AREA_CLOAK)])
+            .with_upkeep(&[(OutfitId(300), 1)], &[cloak_outfit(AREA_CLOAK)]);
+        assert!(with_upkeep.area, "the upkeep leaves it");
+    }
+
+    #[test]
+    fn the_players_area_cloak_is_any_owned_outfits_cloak_mod_with_bit_0x1000() {
+        let outfits = [
+            outfit(300, &[(MOD_CLOAK, 0)]),
+            outfit(301, &[(MOD_CLOAK, 0), (MOD_CLOAK, AREA_CLOAK)]),
+        ];
+        let both = CloakGear::player(0, &owned(&[(300, 1), (301, 1)]), &outfits);
+        assert!(both.area, "a later owned cloak, on its second mod");
+        let first = CloakGear::player(0, &owned(&[(300, 1), (301, 0)]), &outfits);
+        assert!(!first.area, "the area cloak is not owned");
+        let scanner = [outfit(300, &[(MOD_SCANNER, AREA_CLOAK)])];
+        assert!(!CloakGear::player(0, &one(300), &scanner).area);
     }
 
     /// Plenty of fuel and shield, not disabled and not jumping.
@@ -1407,6 +1464,7 @@ mod tests {
                 fuel_usage: 3,
                 zeroes_shields: true,
                 can_cloak_mod: Some(0x0000),
+                area: false,
                 scanner: Scanner {
                     on_screen: true,
                     ..Scanner::default()
@@ -1666,6 +1724,7 @@ mod tests {
         fuel_usage: 0,
         zeroes_shields: false,
         can_cloak_mod: Some(0x080b),
+        area: false,
         scanner: Scanner::NONE,
     };
 
@@ -2289,5 +2348,34 @@ mod tests {
         let mut cloak = Cloak::default();
         think(&mut cloak, zeroing(), close, &mut shield);
         assert_eq!((cloak, shield), (at(0.0, 1), 0.0), "zeroes the shield");
+    }
+
+    #[test]
+    fn the_think_keeps_a_ship_riding_an_area_cloak_and_cloaks_it_with_its_parent() {
+        let riding = Situation {
+            area_cloak: true,
+            close_to_cloaked_parent: true,
+            ..Situation::default()
+        };
+        let mut cloak = Cloak::default();
+        think(&mut cloak, CloakGear::default(), riding, &mut 0.0);
+        assert_eq!(cloak, at(0.0, 1), "it rides, so it has a cloak");
+        let mut kept = CLOAKED;
+        think(&mut kept, CloakGear::default(), riding, &mut 0.0);
+        assert_eq!(kept, CLOAKED);
+        let walking = Situation {
+            area_cloak: false,
+            ..riding
+        };
+        let mut cloaked = CLOAKED;
+        think(&mut cloaked, CloakGear::default(), walking, &mut 0.0);
+        assert_eq!(cloaked, at(FADE_FULL, -1), "no ride, no cloak");
+        let disabled = Situation {
+            disabled: true,
+            ..riding
+        };
+        let mut downed = CLOAKED;
+        think(&mut downed, CloakGear::default(), disabled, &mut 0.0);
+        assert_eq!(downed, at(FADE_FULL, -1), "disabled");
     }
 }

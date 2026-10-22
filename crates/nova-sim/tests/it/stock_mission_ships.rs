@@ -475,6 +475,7 @@ fn the_zephyrs_of_603_and_604_carry_a_cloak_and_no_stock_outfit_scans_for_one() 
                 fuel_usage: 0,
                 zeroes_shields: false,
                 can_cloak_mod: Some(0x080b),
+                area: false,
                 scanner: nova_sim::cloak::Scanner::default(),
             },
             "{id}"

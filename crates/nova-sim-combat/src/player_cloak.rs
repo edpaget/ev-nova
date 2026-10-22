@@ -151,6 +151,7 @@ mod tests {
         fuel_usage: 0,
         zeroes_shields: false,
         can_cloak_mod: Some(0),
+        area: false,
         scanner: crate::cloak::Scanner::NONE,
     };
 

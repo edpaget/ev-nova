@@ -361,6 +361,7 @@ pub use nova_sim_base::ionization;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;
 pub use nova_sim_catalog::control;
+pub use nova_sim_combat::area_cloak;
 pub use nova_sim_combat::asteroid;
 pub use nova_sim_combat::bay;
 pub use nova_sim_combat::cloak;
