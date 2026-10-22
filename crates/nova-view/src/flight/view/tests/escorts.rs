@@ -25,6 +25,7 @@ fn each_key_asks_the_session_for_its_command() {
         (ESCORT_HOLD_KEY, PlayerCommand::Escort),
         (ESCORT_RECALL_KEY, PlayerCommand::Escort),
         (SELECT_KEY, PlayerCommand::SelectWeapon),
+        (DESELECT_KEY, PlayerCommand::DeselectWeapon),
         (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
         (NAV_OFF_KEY, PlayerCommand::Nav),
         (Key::Function(1), PlayerCommand::Nav),
