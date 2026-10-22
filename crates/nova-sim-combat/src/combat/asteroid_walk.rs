@@ -57,8 +57,7 @@
 //!
 //! [`Asteroids::destroy_ghost`]: crate::asteroid::Asteroids::destroy_ghost
 
-use super::asteroid_beam::Rock;
-use super::asteroid_hit;
+use super::asteroid_hit::{self, Rock};
 use super::damage::Hit;
 use super::ion::{Burst, Dose};
 use super::projectile::Shot;

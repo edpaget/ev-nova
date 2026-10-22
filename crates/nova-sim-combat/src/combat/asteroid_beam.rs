@@ -99,6 +99,8 @@
 //!   asteroid is pulled. Stock's one tractor beam (`wëap` 171, `Count` 1)
 //!   never meets this case.
 //!
+//! [`AsteroidType::height`]: crate::asteroid::AsteroidType::height
+//! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 //! [`cone`]: super::beam::cone
 //! [`BEAM_HIT_PART_VARIATION`]: super::asteroid_hit::BEAM_HIT_PART_VARIATION
 //! [`asteroid_hit::damaged_by`]: super::asteroid_hit::damaged_by
@@ -107,47 +109,16 @@
 //! [`self_pull`]: super::impact::self_pull
 //! [`TractorLock::touch_self`]: super::impact::TractorLock::touch_self
 
-use super::asteroid_hit::{BEAM_HIT_PART_VARIATION, broken, damaged_by, push};
+use super::asteroid_hit::{BEAM_HIT_PART_VARIATION, Rock, broken, damaged_by, push};
 use super::asteroid_walk::AsteroidField;
 use super::beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle, HIT_SHORT_PER_WIDTH, cone};
 use super::impact::{ASTEROID_PULL_SHARE, Body, TractorLock, self_pull};
 use super::projectile::contact;
 use super::{Combat, CombatEvent, Fighter, GamePass};
-use crate::asteroid::{Asteroid, AsteroidType, KINDS};
 use crate::chance::Chance;
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::ship_layer::Slot;
-
-/// One asteroid as the pass reads it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rock {
-    /// Its slot in the field, 0-15.
-    pub slot: usize,
-    /// Its centre.
-    pub position: Vec2,
-    /// Its sprite's frame height ([`AsteroidType::height`]).
-    pub height: f32,
-    /// Its hit radius ([`AsteroidType::radius`]), which the segment reads.
-    pub radius: f32,
-}
-
-impl Rock {
-    /// `asteroid` in `slot`, its type read from `types`.
-    #[must_use]
-    pub fn of(slot: usize, asteroid: &Asteroid, types: &[AsteroidType; KINDS]) -> Self {
-        let kind_type = types
-            .get(usize::from(asteroid.kind))
-            .copied()
-            .unwrap_or(AsteroidType::MISSING);
-        Self {
-            slot,
-            position: asteroid.position,
-            height: kind_type.height(),
-            radius: kind_type.radius(),
-        }
-    }
-}
 
 /// Whether `beam` reaches the asteroids at all: not a point-defence beam
 /// held on its missile, and not a weapon of `Seeker` 0x0001 (see the
@@ -591,28 +562,5 @@ mod tests {
         };
         assert_eq!(moves(-10.0, 100, Some(&planet)), Moves::Push);
         assert_eq!(moves(-10.0, 100, None), Moves::Push);
-    }
-
-    #[test]
-    fn a_rock_reads_its_types_height_and_radius() {
-        let mut types = [AsteroidType::MISSING; KINDS];
-        types[2].size = (40.0, 30.0);
-        let asteroid = Asteroid {
-            position: Vec2::new(5.0, 6.0),
-            velocity: Vec2::ZERO,
-            frame: 0.0,
-            spin: 0.0,
-            strength: 1,
-            kind: 2,
-        };
-        assert_eq!(
-            Rock::of(7, &asteroid, &types),
-            Rock {
-                slot: 7,
-                position: Vec2::new(5.0, 6.0),
-                height: 30.0,
-                radius: 20.0,
-            }
-        );
     }
 }

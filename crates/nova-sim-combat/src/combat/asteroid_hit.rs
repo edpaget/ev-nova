@@ -67,13 +67,12 @@
 //!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
-use super::asteroid_beam::Rock;
 use super::damage::Blast;
 use super::impact::speed_limit;
 use super::projectile::{Shot, contact};
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
-use crate::asteroid::Asteroids;
+use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS};
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -116,6 +115,36 @@ impl From<RuleSource> for AsteroidFuse {
         match source {
             RuleSource::Engine => Self::Original,
             RuleSource::Bible => Self::Bible,
+        }
+    }
+}
+
+/// One asteroid as the pass reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rock {
+    /// Its slot in the field, 0-15.
+    pub slot: usize,
+    /// Its centre.
+    pub position: Vec2,
+    /// Its sprite's frame height ([`AsteroidType::height`]).
+    pub height: f32,
+    /// Its hit radius ([`AsteroidType::radius`]), which the segment reads.
+    pub radius: f32,
+}
+
+impl Rock {
+    /// `asteroid` in `slot`, its type read from `types`.
+    #[must_use]
+    pub fn of(slot: usize, asteroid: &Asteroid, types: &[AsteroidType; KINDS]) -> Self {
+        let kind_type = types
+            .get(usize::from(asteroid.kind))
+            .copied()
+            .unwrap_or(AsteroidType::MISSING);
+        Self {
+            slot,
+            position: asteroid.position,
+            height: kind_type.height(),
+            radius: kind_type.radius(),
         }
     }
 }
@@ -259,7 +288,6 @@ pub fn damaged_by(strength: i16, weapon: &WeaponSpec, times: i32) -> i16 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::asteroid::Asteroid;
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -609,5 +637,28 @@ mod tests {
         assert!(!broken(1));
         assert!(broken(-1));
         assert!(broken(i16::MIN));
+    }
+
+    #[test]
+    fn a_rock_reads_its_types_height_and_radius() {
+        let mut types = [AsteroidType::MISSING; KINDS];
+        types[2].size = (40.0, 30.0);
+        let asteroid = Asteroid {
+            position: Vec2::new(5.0, 6.0),
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            spin: 0.0,
+            strength: 1,
+            kind: 2,
+        };
+        assert_eq!(
+            Rock::of(7, &asteroid, &types),
+            Rock {
+                slot: 7,
+                position: Vec2::new(5.0, 6.0),
+                height: 30.0,
+                radius: 20.0,
+            }
+        );
     }
 }
