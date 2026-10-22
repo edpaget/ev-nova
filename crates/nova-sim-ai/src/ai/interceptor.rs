@@ -22,9 +22,9 @@
 //!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
 //!   original retries `Rand(64)` slots, here one draw among them. It
 //!   picks only a ship it sees (`_ShipVisibleToShip`, @0x8cd5f in the
-//!   count, @0x8ce13 in the pick; [`sight`](super::sight)); the player can
-//!   cloak, but this site reads it as seen until
-//!   rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player.
+//!   count, @0x8ce13 in the pick; [`sight`](super::sight)), the player
+//!   too: a cloaked player it can't see is no pick, and so raises no
+//!   pre-scan hail.
 //!   Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
@@ -309,7 +309,8 @@ fn re_pick(
 /// last inspected nor the one it has just looked over.
 fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
     let done = [npc.inspected, npc.goal.inspecting()];
-    let player = around.live(ShipRef::Player).then_some(ShipRef::Player);
+    let player = (around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player))
+        .then_some(ShipRef::Player);
     let npcs = around
         .npcs
         .iter()
@@ -1109,6 +1110,73 @@ mod tests {
         let decision = inspecting(cop, true);
         assert_eq!(decision.goal, Goal::Idle, "@0x8d39a-0x8d3ee");
         assert!(decision.clears_target);
+    }
+
+    // A cloaked player (`_ShipVisibleToShip` with the player the target).
+
+    /// The interceptor's whole decision among `npcs` (it first), the police
+    /// of `police_flags`, a cloaked player at `at`, drawing `draws`.
+    fn by_cloaked_player(
+        police_flags: u16,
+        npcs: &[Npc],
+        at: (f32, f32),
+        draws: &[u32],
+    ) -> Decision {
+        let govts = govts(0, police_flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, at, 0);
+        seen.player = seen.player.map(crate::ai::fixture::cloaked_player);
+        Interceptor::default().decision(&npcs[0], &seen, &mut Draws::of(draws))
+    }
+
+    #[test]
+    fn an_interceptors_0x0004_word_turns_it_on_no_cloaked_player_it_cannot_see() {
+        const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let busy = Npc {
+            goal: Goal::Attack(n(2)),
+            ..police()
+        };
+        let unseen =
+            by_cloaked_player(ALWAYS, &[busy.clone(), pirate.clone()], (0.0, -100.0), &[0]);
+        assert_eq!(unseen.goal, Goal::Attack(n(2)), "it keeps its NPC fight");
+        assert!(!unseen.turns_on_player && !unseen.provokes);
+        let scanned = by_cloaked_player(ALWAYS, &[scanning(busy), pirate], (0.0, -100.0), &[0]);
+        assert_eq!(
+            (scanned.goal, scanned.turns_on_player, scanned.provokes),
+            (Goal::Attack(P), true, true),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_inspects_no_cloaked_player_it_cannot_see_and_raises_no_pre_scan_hail() {
+        let unseen = by_cloaked_player(0, &[police()], (0.0, -1000.0), &[0]);
+        assert_eq!(
+            (unseen.goal, unseen.comm_call),
+            (Goal::Land(StellarId(128)), None),
+            "nothing it sees: it patrols"
+        );
+        let scanned = by_cloaked_player(0, &[scanning(police())], (0.0, -150.0), &[0]);
+        assert_eq!(
+            (scanned.goal, scanned.comm_call),
+            (Goal::Inspect(P), Some(CommCall::PreScan)),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_inspecting_the_player_drops_it_once_the_player_cloaks_out_of_sight() {
+        let cop = Npc {
+            goal: Goal::Inspect(P),
+            ..police()
+        };
+        let decision = by_cloaked_player(0, std::slice::from_ref(&cop), (0.0, -1000.0), &[]);
+        assert_eq!(decision.goal, Goal::Idle, "@0x8d3cd");
+        assert!(decision.clears_target);
+        let scanned = by_cloaked_player(0, &[scanning(cop)], (0.0, -150.0), &[]);
+        assert_eq!(scanned.goal, Goal::Inspect(P), "scanned within 200");
+        assert!(!scanned.clears_target);
     }
 
     #[test]
