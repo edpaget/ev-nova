@@ -395,6 +395,7 @@ pub mod ion_tint;
 pub mod jamming;
 mod lineup;
 pub mod phases;
+pub mod planet_type;
 mod player_berths;
 pub mod plunder;
 pub mod projectile;
@@ -3344,6 +3345,7 @@ impl Fighter<'_> {
             leader: self.leader,
             govt: self.govt,
             booty: self.booty,
+            planet_type: self.hull.planet_type,
         }
     }
 
@@ -3813,6 +3815,7 @@ mod tests {
     mod idle_bays;
     mod ion_lockout_tick;
     mod lineup;
+    mod planet_hits;
     mod plunder_fire;
     mod shot_slots;
     mod shot_visits;
@@ -8981,11 +8984,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_in_the_shots_path_is_hit_before_the_stellar() {
+    fn a_planet_type_ship_in_the_shots_path_is_hit_before_the_stellar() {
+        // Only a planet-type ship: rule 8 passes the shot through an
+        // ordinary one (`_ShotCanHitShip` @0x44a8e-0x44acc).
+        let mut planet = Ship::at(2, 100.0, 0.0);
+        planet.hull.planet_type = true;
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
         let (_, ships, _, strikes) = shoot_once(
             planet_gun(),
-            vec![Ship::at(2, 100.0, 0.0)],
+            vec![planet],
             &mut stellars,
             &Arsenal::default(),
             8,

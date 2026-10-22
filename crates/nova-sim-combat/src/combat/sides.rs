@@ -24,8 +24,15 @@
 //!    ([`projectile`](super::projectile)); as a homing shot, any ship but
 //!    its target, unless `Flags2` 0x0008 (@0x44812-0x44836);
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
-//!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); nothing
-//!    below applies to it.
+//!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); of the
+//!    rules below only rule 8 applies to it, as the branch jumps there,
+//!    and rules 9 and 10 pass for a firer of -1.
+//!
+//! Every shot, a ship's or not, also never hits (rule 8) a ship whose
+//! class's planet-type bit (`Flags` 0x0400) differs from its weapon's
+//! (`Flags2` 0x0400, @0x44a8e-0x44acc; [`planet_type`](super::planet_type)):
+//! a planet-type shot passes through ordinary ships, the player's
+//! included, and an ordinary shot through planet-type ones.
 //!
 //! A ship's shot, its firer read as it is now (see below), also never
 //! hits a ship:
@@ -100,8 +107,7 @@
 //! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
 //! shot's +0x8c clause (@0x44a81), task `planet-domination`; a miner's
 //! shots and beams (6k, @0x44a54; @0x30f4c), asteroids phase 5; the
-//! planet-type match (8, @0x44a8e; the beam's @0x30d4f), stellar-fidelity
-//! phase 2; the beam's system test (@0x30dc1), as only the player's system
+//! beam's planet-type match (@0x30d4f); the beam's system test (@0x30dc1), as only the player's system
 //! is simulated. None of these functions draws or plays a sound.
 
 use super::ShipRef;
@@ -109,6 +115,7 @@ use super::beam::Beam;
 #[cfg(doc)]
 use super::hull::Condition;
 use super::hull::ESCAPE_POD_SHIP;
+use super::planet_type;
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
@@ -134,6 +141,10 @@ pub struct Ties {
     pub govt: Option<GovtId>,
     /// Its `düde`'s `Booty`, or `None` when it has no `düde`.
     pub booty: Option<u16>,
+    /// Whether its class is planet-type (`shïp` `Flags` 0x0400, class
+    /// +0x9e8), which the planet-type rules match against a weapon's
+    /// ([`planet_type`](super::planet_type)).
+    pub planet_type: bool,
 }
 
 impl Ties {
@@ -194,10 +205,16 @@ impl Sides<'_> {
         {
             return false;
         }
+        let matched = planet_type::shot_may_hit(&shot.weapon, target.ties.planet_type);
         let kept = match shot.source {
             Source::Ship(kept) => kept,
-            Source::Other => return shot.aimed_at.is_none_or(|aimed| aimed == target.ship),
+            Source::Other => {
+                return matched && shot.aimed_at.is_none_or(|aimed| aimed == target.ship);
+            }
         };
+        if !matched {
+            return false;
+        }
         let firer = shot.firer;
         let ties = self.ties_of(firer, kept);
         let theirs = target.ties;
