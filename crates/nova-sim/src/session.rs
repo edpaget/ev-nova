@@ -666,7 +666,7 @@ use crate::shipyard::{
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
+use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
@@ -1760,11 +1760,14 @@ impl Session {
     }
 
     /// Fills the system as [`Session::populate`] does, the active
-    /// missions' special ships set up first, `entering` it by a way in
-    /// whose enter-system hook is still to run, if any (see the
+    /// missions' special ships set up first, `entry` the way it is entered,
+    /// if any: the setup predicts the enter-system hook of a way in whose
+    /// hook is still to run ([`Entry::hook_pending`]; see the
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
-    /// order.
+    /// order. A system filled by no way in that names an entrance
+    /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue) puts
+    /// its mission escorts beside the player.
     ///
     /// The ships dropped give their aux ships back, but the fleet's
     /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
@@ -1783,7 +1786,7 @@ impl Session {
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
-        entering: Option<Entrance>,
+        entry: Option<Entry>,
     ) {
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
@@ -1795,7 +1798,8 @@ impl Session {
         let table = self
             .chart
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
-        let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
+        let (missions, set_up) =
+            self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
@@ -1832,7 +1836,7 @@ impl Session {
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
         self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
-        if entering.is_none() {
+        if entry.and_then(Entry::entrance).is_none() {
             self.snap_mission_escorts();
         }
         self.space.hold_derelicts(&self.statics);

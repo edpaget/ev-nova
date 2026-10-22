@@ -503,7 +503,7 @@ impl Session {
     /// ([`spawn::mission_ships`]). `entering`
     /// by an entry whose enter-system hook is still to run, a slot the
     /// hook is about to restart brings none (see the module docs); a
-    /// jump's hook has run already, so it predicts none. With the ships,
+    /// jump's hook has run already, so its entry passes none. With the ships,
     /// the slots it took and their missions, in order, a slot of no
     /// `düde` among them: each is auto-aborted with `Flags` 0x0001
     /// ([`Session::abort_set_up`]).
@@ -529,10 +529,8 @@ impl Session {
                 || left <= 0
                 || state.appear >= 0
                 || entering.is_some_and(|how| {
-                    how != Entrance::Jump
-                        && self
-                            .chart
-                            .hook_restarts(&self.pilot, &self.setup, &record, active, how)
+                    self.chart
+                        .hook_restarts(&self.pilot, &self.setup, &record, active, how)
                 })
             {
                 continue;

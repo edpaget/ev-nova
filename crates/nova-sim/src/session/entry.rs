@@ -128,7 +128,7 @@ impl Entry {
     /// names, a jump's hops left out: none for the escape pod's rescue,
     /// which calls no `_MissionHandlePlayerEnteredNewSystem` and so raises
     /// no enter-system event and runs no enter-system hook.
-    fn entrance(self) -> Option<Entrance> {
+    pub(super) fn entrance(self) -> Option<Entrance> {
         match self {
             Self::Jump { .. } => Some(Entrance::Jump),
             Self::Gate => Some(Entrance::Gate),
@@ -136,6 +136,19 @@ impl Entry {
             Self::ScriptStay => Some(Entrance::ScriptMove { landed: false }),
             Self::Relocate => Some(Entrance::Relocate),
             Self::Rescue => None,
+        }
+    }
+
+    /// The way in ([`Entry::entrance`]) whose enter-system hook is still
+    /// to run as [`Session::enter_system`] populates the system and
+    /// announces it: none for a jump, whose [`Session::arrive`] raised and
+    /// dispatched its [`StoryEvent::EnteredSystem`] before the re-explore
+    /// and the setup (@0x6c15d; see the `jump_exploration` module), nor
+    /// for the rescue, which runs none.
+    pub(super) fn hook_pending(self) -> Option<Entrance> {
+        match self {
+            Self::Jump { .. } => None,
+            _ => self.entrance(),
         }
     }
 }
@@ -775,13 +788,7 @@ impl Session {
         if resets.has(Reset::RedrawOffers) {
             self.run.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(
-            resets.traffic,
-            how.entrance(),
-            (left, system),
-            catalog,
-            chance,
-        );
+        self.bring_in_traffic(resets.traffic, how, (left, system), catalog, chance);
         if resets.has(Reset::PlaceAsteroids) {
             self.place_asteroids(chance);
         }
@@ -972,14 +979,13 @@ impl Session {
         }
     }
 
-    /// Does `step` to the traffic of a system entered `how`, by a way in
-    /// whose enter-system hook is still to run, if any, going `from` one
-    /// system `to` another, reading `catalog` and drawing on `chance` to
-    /// populate: the only draw entering a system makes.
+    /// Does `step` to the traffic of a system entered `how`, going `from`
+    /// one system `to` another, reading `catalog` and drawing on `chance`
+    /// to populate: the only draw entering a system makes.
     fn bring_in_traffic<C, R>(
         &mut self,
         step: TrafficStep,
-        how: Option<Entrance>,
+        how: Entry,
         (from, to): (SystemId, SystemId),
         catalog: &C,
         chance: &mut R,
@@ -989,7 +995,7 @@ impl Session {
     {
         match step {
             TrafficStep::None => {}
-            TrafficStep::Populate => self.populate_as(catalog, chance, how),
+            TrafficStep::Populate => self.populate_as(catalog, chance, Some(how)),
             TrafficStep::Retarget => {
                 let table =
                     self.chart
@@ -1046,9 +1052,9 @@ impl Session {
 
     /// Sounds and raises the arrival in `heard`'s system, as `resets`
     /// says, tells its event, if any ([`scene_event`]), and raises
-    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
-    /// names an entrance ([`Entry::entrance`]) but a jump, whose
-    /// [`Session::arrive`] raised it already. The arrival message is the
+    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in whose
+    /// enter-system hook is still to run ([`Entry::hook_pending`]). The
+    /// arrival message is the
     /// system's buoy, its strings read from `catalog`, or the arrival line
     /// ([`Chart::arrival_message`]); a buoy replaces the
     /// abandoned-fighters suffix too, so it drops the fighter notes this
@@ -1078,9 +1084,7 @@ impl Session {
         if let Some(event) = event {
             self.out.emit(event);
         }
-        // A jump's was raised and dispatched before its re-explore and its
-        // setup (`Session::arrive`; see the `jump_exploration` module).
-        if let Some(how) = how.entrance().filter(|&how| how != Entrance::Jump) {
+        if let Some(how) = how.hook_pending() {
             self.run.raise(StoryEvent::EnteredSystem { system, how });
         }
     }
@@ -1496,6 +1500,27 @@ mod tests {
             assert_eq!(how.entrance(), Some(entrance), "{how:?}");
         }
         assert_eq!(Entry::Rescue.entrance(), None, "the rescue names none");
+    }
+
+    #[test]
+    fn every_way_in_but_a_jump_leaves_its_enter_system_hook_to_the_entry() {
+        for how in [
+            Entry::Gate,
+            Entry::ScriptMove { landed: true },
+            Entry::ScriptMove { landed: false },
+            Entry::ScriptStay,
+            Entry::Relocate,
+            Entry::Rescue,
+        ] {
+            assert_eq!(how.hook_pending(), how.entrance(), "{how:?}");
+        }
+        for (hops, natural_end) in [(0, true), (3, false)] {
+            assert_eq!(
+                Entry::Jump { hops, natural_end }.hook_pending(),
+                None,
+                "a jump's ran in `Session::arrive`"
+            );
+        }
     }
 
     #[test]
