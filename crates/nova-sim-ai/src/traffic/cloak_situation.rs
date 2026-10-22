@@ -22,7 +22,7 @@
 use crate::ai::Goal;
 use crate::cloak::{self, Cloak, MineOrder};
 use crate::combat::hull::Condition;
-use crate::flight::ShipState;
+use crate::flight::{FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Mode, Npc};
@@ -40,6 +40,12 @@ pub struct Around {
     /// How the `cloak_on_reload` rule reads a reloading weapon
     /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
     pub cloak_on_reload: RuleSource,
+    /// Whether it sees its leader (`_ShipVisibleToShip`, see
+    /// [`npc_sees`](crate::ai::sight::npc_sees)): an unseen leader's
+    /// escort brakes rather than closing formation.
+    pub leader_seen: bool,
+    /// The flight rules it flies its formation by.
+    pub flight: FlightRules,
 }
 
 /// What the cloak think of `npc`, with `around`, knows
@@ -79,7 +85,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
     };
     let close_to_cloaked_parent = goal.is_some()
         && around.leader.is_some_and(|(state, cloak)| {
-            cloak.is_cloaked() && npc.keeps_close_formation(Some(&state))
+            cloak.is_cloaked()
+                && npc.keeps_close_formation(Some(&state), around.leader_seen, around.flight)
         });
     cloak::Situation {
         disabled: npc.condition == Condition::Disabled,
@@ -94,7 +101,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
                     | Goal::Wait
                     | Goal::EnterGate(_)
                     | Goal::Inspect(_)
-                    | Goal::Follow(_)
+                    | Goal::Follow { .. }
                     | Goal::Formation { .. }
                     | Goal::Hold
             )
@@ -149,7 +156,13 @@ mod tests {
             (Goal::Wait, travelling),
             (Goal::EnterGate(StellarId(128)), travelling),
             (Goal::Inspect(ShipRef::Player), travelling),
-            (Goal::Follow(NpcId(2)), travelling),
+            (
+                Goal::Follow {
+                    lead: NpcId(2),
+                    guard: None,
+                },
+                travelling,
+            ),
             (Goal::Formation { guard: None }, travelling),
             (Goal::Hold, travelling),
             (
@@ -237,7 +250,10 @@ mod tests {
         };
         for goal in [
             Goal::Formation { guard: None },
-            Goal::Follow(NpcId(2)),
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None,
+            },
             Goal::Hold,
             Goal::Idle,
             Goal::Flee(ShipRef::Player),
@@ -332,7 +348,7 @@ mod tests {
             }),
             ..npc(Goal::Formation { guard: None }, FLYING)
         };
-        assert!(escort.keeps_close_formation(Some(&leader)));
+        assert!(escort.keeps_close_formation(Some(&leader), true, FlightRules::default()));
         (escort, leader)
     }
 
@@ -348,6 +364,7 @@ mod tests {
                 &escort,
                 Around {
                     leader: Some((leader, cloak)),
+                    leader_seen: true,
                     ..Around::default()
                 },
             )
@@ -360,18 +377,26 @@ mod tests {
             position: Vec2::new(5000.0, 5000.0),
             ..leader
         };
-        assert!(!escort.keeps_close_formation(Some(&far_leader)));
+        assert!(!escort.keeps_close_formation(Some(&far_leader), true, FlightRules::default()));
         let far = Around {
             leader: Some((far_leader, cloaked)),
+            leader_seen: true,
             ..Around::default()
         };
         assert!(
             !situation(&escort, far).close_to_cloaked_parent,
             "escort off its slot"
         );
-        for goal in [Goal::Follow(NpcId(2)), Goal::Hold] {
+        for goal in [
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None,
+            },
+            Goal::Hold,
+        ] {
             let around = Around {
                 leader: Some((leader, cloaked)),
+                leader_seen: true,
                 ..Around::default()
             };
             assert!(
@@ -381,12 +406,21 @@ mod tests {
         }
         let gliding = Npc {
             mode: Mode::JumpingIn { tick: 0 },
-            ..escort
+            ..escort.clone()
         };
         let around = Around {
             leader: Some((leader, cloaked)),
+            leader_seen: true,
             ..Around::default()
         };
         assert!(!situation(&gliding, around).close_to_cloaked_parent);
+        let unseen = Around {
+            leader: Some((leader, cloaked)),
+            ..Around::default()
+        };
+        assert!(
+            !situation(&escort, unseen).close_to_cloaked_parent,
+            "an unseen leader's escort brakes rather than closing formation"
+        );
     }
 }

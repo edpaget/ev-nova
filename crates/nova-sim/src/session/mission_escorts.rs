@@ -1406,7 +1406,7 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Hold,
@@ -1420,7 +1420,7 @@ mod tests {
             assert_eq!(npc.goal, Goal::Wait, "the hold's goal 6");
         }
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
             None,
             "nothing changed"
         );
@@ -1436,13 +1436,21 @@ mod tests {
             .find(|&other| other != class)
             .expect("another class");
         assert_eq!(
-            session.command_escorts(EscortGroup::Class(other), EscortCommand::Defend),
+            session.command_escorts(
+                EscortGroup::Class(other),
+                EscortCommand::Defend,
+                &mut NeverFires
+            ),
             None
         );
         assert_eq!(orders(&session), [None; 2]);
         assert!(
             session
-                .command_escorts(EscortGroup::Class(class), EscortCommand::Defend)
+                .command_escorts(
+                    EscortGroup::Class(class),
+                    EscortCommand::Defend,
+                    &mut NeverFires
+                )
                 .is_some()
         );
         assert_eq!(orders(&session), [Some(EscortOrder::Defend); 2]);
@@ -1453,15 +1461,15 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Dock),
+            session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             None,
             "already in formation"
         );
         assert_eq!(orders(&session), [None; 2]);
-        session.command_escorts(EscortGroup::All, EscortCommand::Defend);
+        session.command_escorts(EscortGroup::All, EscortCommand::Defend, &mut NeverFires);
         assert_eq!(
             session
-                .command_escorts(EscortGroup::All, EscortCommand::Dock)
+                .command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires)
                 .map(|done| done.command),
             Some(EscortCommand::Recall)
         );
@@ -1474,7 +1482,7 @@ mod tests {
         let (mut session, ids) = flying_with_escorts(&catalog);
         session.chart.target = Some(ids[0]);
         let done = session
-            .command_escorts(EscortGroup::All, EscortCommand::Attack)
+            .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
             .expect("the orders changed");
         assert!(!done.targeted);
         for npc in session.player_led() {
@@ -1493,14 +1501,14 @@ mod tests {
         session.space.npc_mut(stranger).expect("here").escort = None;
         session.chart.target = Some(stranger);
         let done = session
-            .command_escorts(EscortGroup::All, EscortCommand::Attack)
+            .command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires)
             .expect("changed");
         assert!(done.targeted);
         for npc in of(&session, &ids) {
             assert_eq!(npc.target, Some(crate::combat::ShipRef::Npc(stranger)));
         }
         assert_eq!(
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires),
             None,
             "the same order and target again"
         );
@@ -1527,7 +1535,7 @@ mod tests {
             assert_eq!(other.present, other.class == class, "{:?}", other.class);
             assert_eq!(other.order, None);
         }
-        session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+        session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(row(&session, class).order, Some(EscortOrder::Hold));
         assert!(session.escorts_flying());
     }
@@ -1579,9 +1587,9 @@ mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         session.take_sounds();
-        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires);
         assert_eq!(session.take_sounds(), []);
-        session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+        session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(
             session.take_sounds(),
             [crate::SimSound::EscortsCommanded],
@@ -1599,7 +1607,7 @@ mod tests {
         session.pilot.escorts.push(hired());
         take_off(&mut session, catalog);
         assert!(mission_escorts(&session).is_empty());
-        session.command_escorts(EscortGroup::All, command);
+        session.command_escorts(EscortGroup::All, command, &mut NeverFires);
         ticks(&mut session, catalog, 199);
         assert_eq!(mission_escorts(&session).len(), 2);
         session
@@ -1623,7 +1631,7 @@ mod tests {
             ..hired()
         });
         take_off(&mut session, &catalog);
-        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert_eq!(session.pilot.escorts[0].order, Some(EscortOrder::Dock));
         ticks(&mut session, &catalog, 199);
         assert_eq!(orders(&session), [None; 2]);
@@ -1640,7 +1648,7 @@ mod tests {
             session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
             session.pilot.escorts.push(hired());
             take_off(&mut session, &catalog);
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Attack); 2]);
             jump_to(&mut session, &catalog, 131);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");
@@ -1690,7 +1698,7 @@ mod tests {
             let mut session = accepted(&catalog);
             session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
             take_off(&mut session, &catalog);
-            session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             jump_to(&mut session, &catalog, 131);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");
         }
@@ -1708,10 +1716,18 @@ mod tests {
             .into_iter()
             .find(|&other| other != class)
             .expect("another class");
-        session.command_escorts(EscortGroup::Class(other), EscortCommand::Hold);
+        session.command_escorts(
+            EscortGroup::Class(other),
+            EscortCommand::Hold,
+            &mut NeverFires,
+        );
         jump_to(&mut session, &catalog, 131);
         assert_eq!(orders(&session), [None; 2]);
-        session.command_escorts(EscortGroup::Class(class), EscortCommand::Hold);
+        session.command_escorts(
+            EscortGroup::Class(class),
+            EscortCommand::Hold,
+            &mut NeverFires,
+        );
         jump_to(&mut session, &catalog, 130);
         assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
     }

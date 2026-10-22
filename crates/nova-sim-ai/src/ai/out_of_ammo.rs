@@ -35,9 +35,22 @@
 //!   ship without it. `_PirateWarshipAI` drops the same way (@0x8c848-0x8c887),
 //!   its plunder (goal 0xd) too ([`pirate`](super::pirate)); the
 //!   interceptor has no drop.
+//! - **The escort's fallback** (`_EscortAI` @0x83b88-0x83bda, for every
+//!   parent, [`escort_word`]): an escort or fighter on Defend or Attack
+//!   (word 1 or 2, @0x83b8f-0x83b94) whose hull has `Flags2` 0x0080
+//!   (@0x83ba8) and anything but [`AmmoLeft::Armed`] (@0x83bb5) writes
+//!   its order word: a fighter (AI type 5, @0x83bbf) Return (3,
+//!   @0x83bc9), so it docks; any other ship formation (0, @0x83bda), but
+//!   only [`AmmoLeft::Dry`], so one with unlimited weapons left keeps
+//!   fighting. It runs after the count wait, the assist and the lost
+//!   parent, and before the jump's return (@0x83be3), so it writes the
+//!   word on the frame a ship takes its leader's jump too. The order
+//!   block that follows flies the word. No sound, no draw.
 
 use crate::ai::Goal;
 use crate::ai::fire::{AmmoLeft, ammo_left};
+use crate::escort::EscortOrder;
+use crate::fleet::OrderWord;
 #[cfg(doc)]
 use crate::govt::PLUNDERS;
 use crate::traffic::npc::Npc;
@@ -47,6 +60,34 @@ use crate::traffic::npc::Npc;
 #[must_use]
 pub fn retreats(npc: &Npc) -> bool {
     npc.hull.retreats_dry && ammo_left(npc) != AmmoLeft::Armed
+}
+
+/// The order word `_EscortAI`'s out-of-ammunition fallback writes for
+/// `npc`, an escort or fighter following `order` (@0x83b88-0x83bda, see
+/// the module docs); none when the fallback doesn't run. It runs on
+/// Defend or Attack alone, while `npc` [`retreats`]: a fighter (one with
+/// a [`carrier`](Npc::carrier), the original's AI type 5, @0x83bbf) takes
+/// Return (3, @0x83bc9) short of any ammunition, and any other ship takes
+/// formation (0, @0x83bda) only [`AmmoLeft::Dry`], keeping its order with
+/// unlimited weapons left. It plays no sound and draws nothing.
+#[must_use]
+pub fn escort_word(npc: &Npc, order: Option<EscortOrder>) -> Option<OrderWord> {
+    if !matches!(order, Some(EscortOrder::Defend | EscortOrder::Attack)) || !retreats(npc) {
+        return None;
+    }
+    if npc.carrier.is_some() {
+        Some(OrderWord(3))
+    } else {
+        (ammo_left(npc) == AmmoLeft::Dry).then_some(OrderWord(0))
+    }
+}
+
+/// The order `npc`, an escort or fighter following `order`, flies after
+/// `_EscortAI`'s out-of-ammunition fallback: the order of the word
+/// [`escort_word`] writes, else `order`.
+#[must_use]
+pub fn escort_order(npc: &Npc, order: Option<EscortOrder>) -> Option<EscortOrder> {
+    escort_word(npc, order).map_or(order, OrderWord::order)
 }
 
 /// The goal of a warship `npc` that has decided on `goal`, after its
@@ -92,6 +133,8 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{POLICE, n, ship, short_of_ammo};
     use crate::combat::ShipRef;
+    use crate::escort::EscortOrder;
+    use crate::fleet::OrderWord;
     use crate::traffic::npc::AiType;
 
     fn police(left: AmmoLeft, retreats: bool) -> Npc {
@@ -160,5 +203,75 @@ mod tests {
             "not retreating, inspecting"
         );
         assert!(!stops(&armed, Goal::JumpOut), "not retreating, leaving");
+    }
+
+    /// A ship of `left` ammunition, with `Flags2` 0x0080 as `retreats`
+    /// says, a fighter (AI type 5) as `fighter` says.
+    fn escort(left: AmmoLeft, retreats: bool, fighter: bool) -> Npc {
+        let mut npc = police(left, retreats);
+        if fighter {
+            npc.carrier = Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            });
+        }
+        npc
+    }
+
+    const FIGHTING: [Option<EscortOrder>; 2] =
+        [Some(EscortOrder::Defend), Some(EscortOrder::Attack)];
+
+    #[test]
+    fn a_fighter_short_of_any_ammunition_on_defend_or_attack_returns() {
+        // AI type 5 takes word 3 for a result of 1 or 2 (@0x83bbf-0x83bc9).
+        for order in FIGHTING {
+            for left in [AmmoLeft::OnlyUnlimited, AmmoLeft::Dry] {
+                let fighter = escort(left, true, true);
+                assert_eq!(
+                    escort_word(&fighter, order),
+                    Some(OrderWord(3)),
+                    "{order:?} {left:?}"
+                );
+                assert_eq!(
+                    escort_order(&fighter, order),
+                    Some(EscortOrder::Dock),
+                    "{order:?} {left:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_escort_with_no_firepower_forms_and_one_with_unlimited_weapons_keeps_its_order() {
+        // Any other type takes word 0 for 2 alone (@0x83bda).
+        for order in FIGHTING {
+            let dry = escort(AmmoLeft::Dry, true, false);
+            assert_eq!(escort_word(&dry, order), Some(OrderWord(0)), "{order:?}");
+            assert_eq!(escort_order(&dry, order), None, "{order:?}");
+            let short = escort(AmmoLeft::OnlyUnlimited, true, false);
+            assert_eq!(escort_word(&short, order), None, "{order:?}");
+            assert_eq!(escort_order(&short, order), order, "{order:?}");
+        }
+    }
+
+    #[test]
+    fn the_fallback_needs_flags2_0x0080_and_defend_or_attack() {
+        // The word 1 or 2 (@0x83b8f-0x83b94), `Flags2` 0x0080 (@0x83ba8)
+        // and `_AIShipIsOutOfAmmo` not 0 (@0x83bb5).
+        for fighter in [false, true] {
+            for order in FIGHTING {
+                let armed = escort(AmmoLeft::Armed, true, fighter);
+                assert_eq!(escort_word(&armed, order), None, "{fighter} {order:?}");
+                assert_eq!(escort_order(&armed, order), order, "{fighter} {order:?}");
+                let unflagged = escort(AmmoLeft::Dry, false, fighter);
+                assert_eq!(escort_word(&unflagged, order), None, "{fighter} {order:?}");
+            }
+            for order in [None, Some(EscortOrder::Hold), Some(EscortOrder::Dock)] {
+                let dry = escort(AmmoLeft::Dry, true, fighter);
+                assert_eq!(escort_word(&dry, order), None, "{fighter} {order:?}");
+                assert_eq!(escort_order(&dry, order), order, "{fighter} {order:?}");
+            }
+        }
     }
 }

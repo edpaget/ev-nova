@@ -427,6 +427,8 @@ mod buoys;
 mod capture;
 mod captured_mission_ship;
 mod cargo_boxes;
+#[cfg(test)]
+mod carrier_lead;
 mod chart;
 mod clearance;
 mod cloaks;
@@ -439,9 +441,14 @@ mod deadly_stellars;
 mod derelicts;
 mod display_step;
 mod double_time;
+mod dying_player_escorts;
 mod edit;
 mod eject;
 mod entry;
+#[cfg(test)]
+mod escort_carriers;
+#[cfg(test)]
+mod escort_hits;
 #[cfg(test)]
 mod escort_loss;
 mod escorts;
@@ -449,6 +456,8 @@ mod events;
 #[cfg(test)]
 mod exit_cursors;
 mod explored;
+#[cfg(test)]
+mod fighter_capacity;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
@@ -469,6 +478,7 @@ mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
 mod launch_frame;
+mod lost_lead;
 mod lost_target;
 mod map;
 mod map_borders;
@@ -500,6 +510,7 @@ mod player_info;
 mod player_led;
 mod player_repair;
 mod player_ship;
+mod players_hits;
 mod plunder_loop;
 mod port;
 mod precalced;
@@ -541,6 +552,8 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod tutorial;
+mod voices;
+mod wait_for_me;
 mod warp_stage;
 
 use capture::CaptureFuel;
@@ -681,6 +694,14 @@ struct FightTerms {
     fleet_escort: bool,
     /// Whether it threatens the player ([`Fighter::threatens_player`]).
     threatens_player: bool,
+    /// Its fleet ([`Fighter::fleet`]): the root of its chain of leads
+    /// ([`Npc::fleet_among`]), so a carrier's fighter keeps its carrier's
+    /// lead's side.
+    fleet: ShipRef,
+    /// The shield points it recharges each tick ([`Fighter::shield_regen`]):
+    /// a fighter's as [`RuleKey::FighterCapacity`] reads
+    /// ([`Npc::shield_recharge`]).
+    shield_regen: f32,
     /// Its class's top speed, its `Speed` alone.
     class_speed: f32,
     /// Its top speed.
@@ -701,7 +722,7 @@ impl FightTerms {
     /// warp stage is ([`Fighter::jumping`], the original's +0x50 above 0):
     /// its own jump or its leader's.
     fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
-        let fleet = npc.fleet();
+        let fleet = self.fleet;
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
         let plundering = npc.goal.plundering().is_some();
@@ -745,7 +766,7 @@ impl FightTerms {
             booty: *booty,
             state: *state,
             hull: *hull,
-            shield_regen: stats.shield_regen,
+            shield_regen: self.shield_regen,
             armor_regen: stats.armor_regen,
             trigger,
             target: *target,
@@ -1103,6 +1124,7 @@ impl Session {
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
                 .map(warp::sound_duration),
             warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
+            voices: catalog.voices(),
             goods: Goods::read(catalog),
             date_affixes: catalog.date_affixes(),
             arsenal,
@@ -1463,6 +1485,8 @@ impl Session {
         // them.
         self.ship.warp.warp_ups.step();
         self.ship.warp.warp_out.step();
+        // So does an escort's voice clip (see the `voices` module).
+        self.space.voice.step();
         // The last shot's clock is `TickCount`, real time (see the
         // `ship_display` module).
         self.ship.fit.armament.tick_fire_clock();
@@ -1871,6 +1895,8 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        // The player part's warning (the `wait_for_me` module).
+        self.warn_fighters_left_behind(chance);
         if std::mem::take(&mut self.space.reinforcements_held) {
             self.tick_reinforcements(chance);
         }
@@ -1886,6 +1912,8 @@ impl Session {
                 });
                 self.space
                     .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
+                // No cue outlives its tick (see the `voices` module).
+                self.space.answer_voice_cues(&self.statics, &mut *chance);
                 self.dock_fighters();
                 self.after_traffic_motion(&marks, chance);
             }
@@ -1895,7 +1923,9 @@ impl Session {
 
     /// The session's work before the traffic's AI, reading `catalog` and
     /// drawing on `chance`: the mission ships' arrivals, the inactive ones
-    /// unmarked, the mission escorts joined; then the strikes left for the
+    /// unmarked, the mission escorts joined, and the player's own ships
+    /// freed while it breaks up (the `dying_player_escorts` module); then
+    /// the strikes left for the
     /// traffic to answer, taken, and what the traffic's motion is read
     /// against ([`TrafficMarks`]); then the escorts that attack with a
     /// swarm leader leave the player's formation
@@ -1908,6 +1938,7 @@ impl Session {
         self.mission_ship_arrivals(catalog, None, chance);
         self.unmark_inactive_mission_ships();
         self.join_mission_escorts();
+        self.free_dying_players_escorts();
         let strikes = std::mem::take(&mut self.space.strikes);
         let marks = TrafficMarks {
             last: self.space.last_npc(),
@@ -1919,14 +1950,17 @@ impl Session {
 
     /// The session's work after the traffic's motion, read against
     /// `marks`, drawing on `chance`: each mission ship that left raising
-    /// its fate, the persons' offers resolved, the fighters orphaned, and
+    /// its fate, the persons' offers resolved, the ships whose lead or
+    /// carrier is lost out of their fleets by the other reading of
+    /// [`RuleKey::NpcEscortAi`] (the `lost_lead` module), and
     /// the watched ships observed. The fighters that docked are taken
     /// aboard before it ([`Session::dock_fighters`]), by the ship loop at
     /// each one's own slot.
     fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
         self.mission_ships_left(&marks.marks);
         self.resolve_person_offers(marks.last, &mut &mut *chance);
-        self.space.orphan_fighters();
+        self.space
+            .lose_leads(self.setup.rules.source_for(RuleKey::NpcEscortAi));
         self.observe_watched();
     }
 
@@ -2038,6 +2072,11 @@ impl Session {
                 .ship
                 .tractor_step(&self.pilot, &self.setup, self.mode.jump()),
             weapons: &self.statics.arsenal,
+            frame: self.space.pass_frame,
+            escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
+            npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
+            successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
+            held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2114,6 +2153,11 @@ impl Session {
                 .ship
                 .tractor_step(&self.pilot, &self.setup, self.mode.jump()),
             weapons: &self.statics.arsenal,
+            frame: self.space.pass_frame,
+            escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
+            npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
+            successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
+            held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
         }
     }
 
@@ -2302,6 +2346,7 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let start = game_work::PassStart::of(self);
+        self.space.count_player_berths(&self.setup);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_player(fighters, arena, chance);
             combat.fire_player(fighters, arena, chance);
@@ -2402,7 +2447,9 @@ impl Session {
                 .map(|&(_, rank)| rank)
         };
         let player = FightTerms {
+            fleet: ShipRef::Player,
             held_disabled: false,
+            shield_regen: self.ship.fit.stats.shield_regen,
             fleet_escort: false,
             threatens_player: false,
             class_speed: self.statics.class_speed(self.pilot.ship),
@@ -2413,13 +2460,16 @@ impl Session {
             resists: self.ship.player_hazard_resistance(&self.setup),
         };
         let led_speed = self.led_speed();
+        let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
         let npcs = self
             .space
             .traffic
             .npcs()
             .iter()
             .map(|npc| FightTerms {
+                fleet: npc.fleet_among(self.space.traffic.npcs()),
                 held_disabled: self.held_disabled(npc),
+                shield_regen: npc.shield_recharge(capacity),
                 fleet_escort: self.space.escorts.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.space.traffic.npcs(), self.sees(npc)),
@@ -2459,11 +2509,12 @@ impl Session {
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
     /// before it: weighing whether each is answered, rolling on `chance`
     /// (see the `answer_flag` module), refilling the invincible, convicting
-    /// the player by `law`, crediting kills by the fleet as it stood before
-    /// each of the escort `losses` the strikes made, and letting each hit
-    /// NPC's cloak take its hit; then keeps them for the traffic to answer
-    /// and the app. The persons' grudges are held as the traffic answers
-    /// them, in turn (`Session::step_traffic`).
+    /// the player by `law` and crediting it with kills, for its own hits
+    /// and those of the ships it leads, as the fleet stood before each of
+    /// the escort `losses` the strikes made ([`Space::players_hit`]), and
+    /// letting each hit NPC's cloak take its hit; then keeps them for the
+    /// traffic to answer and the app. The persons' grudges are held as the
+    /// traffic answers them, in turn (`Session::step_traffic`).
     fn settle_strikes(
         &mut self,
         (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
@@ -2473,7 +2524,7 @@ impl Session {
     ) {
         self.weigh_strikes(&mut strikes, chance);
         self.space.refill_invincible(&mut strikes);
-        self.punish(&strikes, was, law);
+        self.punish(&strikes, &losses, was, law);
         self.space
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
         self.space.cloak_hits(&self.statics, &strikes);
@@ -2535,7 +2586,10 @@ impl Session {
     }
 
     /// Convicts the player of its crimes among `strikes`, as `law` says:
-    /// disabling an NPC, and breaking one up, which is disabling it too
+    /// those by itself and by the ships it leads, as the fleet stood
+    /// before each of the escort `losses` the strikes made
+    /// ([`Space::players_hit`]). Its crimes are disabling an NPC, and
+    /// breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
     /// victim's condition, government and mission mark are as it `was`
     /// before the fight's tick. A mission's special ship, of any mark,
@@ -2544,10 +2598,23 @@ impl Session {
     /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
     /// then takes the ranks its crime reaches (see [`rank`](crate::rank)'s
     /// **Crimes**).
-    fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
-        for strike in strikes
+    ///
+    /// The original convicts and credits each hit as it lands; here every
+    /// strike's convictions come first, then every strike's credit
+    /// ([`Space::credit_kills`]). Nothing between reads the records, the
+    /// ranks or the rating, and both settle in the same phase, before the
+    /// frame is drawn.
+    fn punish(
+        &mut self,
+        strikes: &[Strike],
+        losses: &[EscortLoss],
+        was: &[NpcBefore],
+        law: &dyn LegalCode,
+    ) {
+        for (_, strike) in strikes
             .iter()
-            .filter(|strike| strike.by == Some(ShipRef::Player))
+            .enumerate()
+            .filter(|&(index, strike)| self.space.players_hit(index, strike, losses))
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -2845,6 +2912,8 @@ impl Session {
             }
         })?;
         let bearing = self.chart.jump_aim(&self.pilot, next);
+        // A new jump, for the fighters' warning (the `wait_for_me` module).
+        self.ship.warp.jump_accepted |= self.mode.jump().is_none();
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
@@ -3622,6 +3691,8 @@ impl Session {
         // `warp::WarpUps`, `warp::WarpOut`).
         self.ship.warp.warp_ups.clear();
         self.ship.warp.warp_out.clear();
+        // `_KillVoiceSound` (@0x66daf; see the `voices` module).
+        self.space.kill_voice(&mut self.out);
         self.pilot.stellar = Some(stellar);
         // `_PlayerLandOnStellar` clears `_absquatulateStr` (@0x63335).
         self.run.drop_leave();
@@ -5241,7 +5312,7 @@ impl Session {
         }
         self.close_plunder();
         self.ship_hook(aboard.ship, ShipHook::Capture, chance);
-        self.join_fleet(aboard.npc);
+        self.join_fleet(aboard.npc, chance);
         Taken::Escorted
     }
 
@@ -5276,8 +5347,9 @@ impl Session {
     /// zeroed (@0x946e3, @0x946f9), and then as [`Session::fleet_up`]
     /// says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
-    /// `captured_mission_ship` module).
-    fn join_fleet(&mut self, id: NpcId) {
+    /// `captured_mission_ship` module). Its voice's variant is rolled on
+    /// `chance` (see the `voices` module).
+    fn join_fleet(&mut self, id: NpcId, chance: &mut dyn Chance) {
         self.space.lose_captured(
             &mut self.pilot,
             id,
@@ -5297,6 +5369,9 @@ impl Session {
         npc.condition = Condition::Intact;
         npc.cloak = crate::cloak::Cloak::default();
         self.fleet_up(id, None);
+        // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
+        // see the `voices` module).
+        self.space.roll_voice(id, &self.statics, chance);
     }
 
     /// NPC `id`, the person hailed, joins the fleet where it is as
@@ -5419,7 +5494,7 @@ impl Session {
         };
         if choice == Assignment::Escort {
             self.ship_hook(npc.ship, ShipHook::Capture, chance);
-            self.join_fleet(npc.id);
+            self.join_fleet(npc.id, chance);
             self.close_plunder();
             return Some(Assigned::Escort);
         }
@@ -5508,9 +5583,11 @@ impl Session {
         self.space.lose_captured(&mut self.pilot, npc.id, true);
         self.leave(npc.id);
         let placed = self.place_old_ship(old_slot, left, hold, chance);
-        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e).
+        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e) and
+        // its voice (@0x41288-0x412db; see the `voices` module).
         if let Some(id) = placed {
             self.roll_escort_afterburner(id, chance);
+            self.space.roll_voice(id, &self.statics, &mut *chance);
         }
         if let Some(slot) = self.space.escorts.fleet.get_mut(old_slot) {
             *slot = placed;
@@ -6185,16 +6262,11 @@ impl Space {
 
     /// Credits the player's combat rating for each NPC among `strikes`
     /// that a hit started breaking up, when the kill counts (see
-    /// [`rating`](crate::rating)): the shooter is the player or a ship of
-    /// its fleet, its escorts and fighters, and the victim's government,
-    /// from `was`, is not derelict. As the original's `_DamageShip`
-    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
-    /// victim is taken out, and reads the shooter's leader as the hit
-    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
-    /// a kill it scored before the strike that lost it, among `losses`
-    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
-    /// before the escort block clears the leader, @0x3afdd), and not for
-    /// one after.
+    /// [`rating`](crate::rating)): the player answers for the hit
+    /// ([`Space::players_hit`], which reads the escorts the strikes lost,
+    /// `losses`), and the victim's government, from `was`, is not
+    /// derelict. As the original's `_DamageShip` (@0x3ad4f-0x3ae53), the
+    /// credit comes with the hit, before the victim is taken out.
     fn credit_kills(
         &mut self,
         pilot: &mut Pilot,
@@ -6214,21 +6286,7 @@ impl Space {
             else {
                 continue;
             };
-            let by_players_fleet = match strike.by {
-                None => false,
-                Some(ShipRef::Player) => true,
-                Some(ShipRef::Npc(by)) => {
-                    let lost_since = losses
-                        .iter()
-                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
-                    lost_since
-                        || self
-                            .traffic
-                            .npcs()
-                            .iter()
-                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
-                }
-            };
+            let by_players_fleet = self.players_hit(index, strike, losses);
             if !rating::counts(by_players_fleet, statics.govts.derelict(govt)) {
                 continue;
             }
@@ -8200,7 +8258,7 @@ pub(super) mod tests {
             };
             let apart = session.space.traffic.add_npc(apart);
             if capture {
-                session.join_fleet(victim);
+                session.join_fleet(victim, &mut NeverFires);
             } else {
                 session.mark_boarded(victim);
             }
@@ -16545,7 +16603,6 @@ pub(super) mod tests {
         primary: true,
         secondary: None,
         only: None,
-        turrets_only: false,
         bays: false,
         bays_after: false,
         point_defence: false,
@@ -17998,7 +18055,7 @@ pub(super) mod tests {
     }
 
     /// [`armed`], with [`lawful_govts`].
-    fn lawful() -> FakePilotCatalog {
+    pub(super) fn lawful() -> FakePilotCatalog {
         FakePilotCatalog {
             govts: lawful_govts(),
             ..armed()
@@ -18014,8 +18071,8 @@ pub(super) mod tests {
     /// government, and each system a walk starts from, and changes
     /// nothing.
     #[derive(Debug, Default)]
-    struct Witness {
-        seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+    pub(super) struct Witness {
+        pub(super) seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
         from: std::cell::RefCell<Vec<(Crime, SystemId)>>,
     }
 
@@ -19389,7 +19446,7 @@ pub(super) mod tests {
             session
                 .space
                 .credit_kills(&mut session.pilot, &session.statics, &[by_none], &[], &was);
-            session.punish(&[by_none], &was, &witness);
+            session.punish(&[by_none], &[], &was, &witness);
         }
         assert_eq!(session.pilot().combat_rating(), rating);
         assert_eq!(witness.seen.take(), []);
@@ -23150,7 +23207,9 @@ pub(super) mod tests {
     #[test]
     fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
         let terms = |threatens_player| FightTerms {
+            fleet: ShipRef::Npc(NpcId(1)),
             held_disabled: false,
+            shield_regen: 0.0,
             fleet_escort: false,
             threatens_player,
             class_speed: 0.0,
@@ -25308,7 +25367,8 @@ pub(super) mod tests {
             session
                 .command_escorts(
                     crate::escort::EscortGroup::All,
-                    crate::escort::EscortCommand::Hold
+                    crate::escort::EscortCommand::Hold,
+                    &mut NeverFires
                 )
                 .is_some()
         );
@@ -25526,12 +25586,13 @@ pub(super) mod tests {
         );
         let left = *session.player();
         let held = session.pilot().cargo().collect::<Vec<_>>();
-        let mut chance = Draws::of(&[123]);
+        let mut chance = Draws::default().keyed(300, 123);
         assert_eq!(
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        assert_eq!(chance.asked, [300], "the fuel drawn below its Fuel");
+        assert_eq!(chance.times_asked(300), 1, "the fuel drawn below its Fuel");
+        assert!(session.npcs()[1].voice.is_some(), "the old ship's voice");
         assert_eq!(session.ship(), ShipId(129));
         assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
         assert_eq!(
@@ -25673,7 +25734,15 @@ pub(super) mod tests {
             session.assign(Assignment::MyShip, &mut chance),
             Some(Assigned::MyShip)
         );
-        assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+        // No fuel drawn: no draw but the old ship's voice, Rand(2) (see
+        // the `voices` module).
+        assert!(chance.asked.iter().all(|&n| n == 2), "{:?}", chance.asked);
+        let old = session.space.escorts.fleet.iter().flatten().next();
+        let old = *old.expect("the old ship kept");
+        assert!(
+            session.space.npc(old).expect("there").voice.is_some(),
+            "the old ship's voice"
+        );
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
 

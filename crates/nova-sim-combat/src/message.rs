@@ -188,6 +188,11 @@ pub enum SimMessage {
     /// (a mission's drawn ship name when not empty, else its class's),
     /// a colon, two spaces and one of `STR#` 5003's twenty lines.
     CallForHelp(String),
+    /// The player's jump leaves fighters behind that can't jump
+    /// (`_HandlePlayer` @0x6b3de-0x6b565, `nova_sim`'s `wait_for_me`
+    /// module): the text ready to show, "<class>:  <`STR#` 2002 #160 or
+    /// #161>" for one fighter, #162 or #163 for more.
+    WaitForMe(String),
     /// An interceptor about to inspect the player hailed it, the player
     /// carrying mission cargo its government scans for (`_InterceptorAI`
     /// @0x8ce4b-0x8cff5): the text ready to show, "<class>:  <ship
@@ -309,6 +314,8 @@ impl SimMessage {
     ///   @0x68a3d, 0xfa pushed @0x68a32).
     /// - [`CallForHelp`](Self::CallForHelp): 240 (`_AICallForHelp`
     ///   @0x83248, 0xf0 pushed @0x8323d).
+    /// - [`WaitForMe`](Self::WaitForMe): 250 (`_HandlePlayer` @0x6b532,
+    ///   0xfa pushed).
     /// - [`ScanHail`](Self::ScanHail): 400 (`_InterceptorAI` @0x8cff5,
     ///   0x190 pushed @0x8cfea).
     /// - [`CargoStolen`](Self::CargoStolen) and
@@ -355,6 +362,7 @@ impl SimMessage {
             | Self::FighterRepaired
             | Self::PropulsionRepaired
             | Self::JumpCollapsed
+            | Self::WaitForMe(_)
             | Self::DockRequested { .. }
             | Self::NoResponse
             | Self::DockCleared { .. } => 250,
@@ -405,6 +413,15 @@ mod tests {
         for (message, ticks) in cases {
             assert_eq!(message.ticks(), ticks, "{message:?}");
         }
+    }
+
+    #[test]
+    fn wait_for_me_lasts_250_ticks() {
+        // 0xfa pushed for `_DisplayComm` (@0x6b532).
+        assert_eq!(
+            SimMessage::WaitForMe("Viper:  Wait for me!".to_owned()).ticks(),
+            250
+        );
     }
 
     #[test]

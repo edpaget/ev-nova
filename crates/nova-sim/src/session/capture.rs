@@ -593,13 +593,14 @@ mod tests {
                     Taken::Captured
                 );
                 session.ship.fuel_cap_cached = cached;
-                let mut chance = Draws::of(&[7]);
+                let mut chance = Draws::default().keyed(bound, 7);
                 assert_eq!(
                     session.assign(Assignment::MyShip, &mut chance),
                     Some(Assigned::MyShip)
                 );
-                assert_eq!(chance.asked, [bound], "{why}, {order:?}");
+                assert_eq!(chance.times_asked(bound), 1, "{why}, {order:?}");
                 assert_eq!(session.reserves().fuel.now, 7.0, "{why}");
+                assert!(old_ship_voiced(&session), "{why}, {order:?}");
             }
         }
     }
@@ -619,9 +620,22 @@ mod tests {
             take(&mut session, Take::Capture, &[99, 43, 1]).0,
             Taken::Captured
         );
-        let mut chance = Draws::of(&[7]);
+        let mut chance = Draws::default().keyed(350, 7);
         session.assign(Assignment::MyShip, &mut chance);
-        assert_eq!(chance.asked, [350], "the trader's 300 and the tank's 50");
+        assert_eq!(
+            chance.times_asked(350),
+            1,
+            "the trader's 300 and the tank's 50"
+        );
+        assert!(old_ship_voiced(&session));
+    }
+
+    /// Whether the old ship a Use As My Ship kept has rolled its voice
+    /// (see the `voices` module).
+    fn old_ship_voiced(session: &Session) -> bool {
+        let old = session.space.escorts.fleet.iter().flatten().next();
+        let old = *old.expect("the old ship kept");
+        session.space.npc(old).expect("there").voice.is_some()
     }
 
     #[test]

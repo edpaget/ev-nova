@@ -18,8 +18,11 @@
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire; the player's
 //!   escorts to [`EscortAi`](ai::EscortAi), which flies them by their
-//!   standing orders; an NPC carrier's fighters to
-//!   [`CarriedAi`](ai::CarriedAi); and a leaderless miner to
+//!   standing orders; a ship with an NPC parent, a fleet's escort or an
+//!   NPC carrier's fighter, to [`FleetEscortAi`](ai::FleetEscortAi), which
+//!   flies `_EscortAI` under its lead (or, by the rulebook's other
+//!   reading, a led ship by its AI type and a fighter to
+//!   [`CarriedAi`](ai::CarriedAi)); and a leaderless miner to
 //!   [`MinerAi`](ai::MinerAi).
 //! - [`brackets`]: the corner brackets round the nav target and the ship
 //!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
@@ -100,7 +103,7 @@ use nova_sim_base::{
     ionization, reserves, rulebook, skill, trig,
 };
 #[allow(unused_imports)]
-use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, warp};
+use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, voice, warp};
 #[allow(unused_imports)]
 use nova_sim_combat::message::SimMessage;
 #[allow(unused_imports)]
@@ -112,6 +115,7 @@ pub mod ai;
 pub mod brackets;
 pub mod cargo_box;
 pub mod escort;
+pub mod escort_voice;
 pub mod gate;
 pub mod hail;
 pub mod hover;

@@ -35,6 +35,10 @@ pub(super) struct Statics {
     /// The warp-out's duration, in Mac ticks, read when the session
     /// starts from `snd ` 130 ([`warp::warp_out_duration`](crate::warp::warp_out_duration)).
     pub(super) warp_out_sound: u32,
+    /// The escorts' voices, read when the session starts: every voice
+    /// clip with its length and each government's voice (see the
+    /// `voices` module).
+    pub(super) voices: crate::voice::Voices,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     pub(super) goods: Goods,

@@ -133,7 +133,7 @@ mod tests {
             fade: 12.0,
             direction: -1,
         };
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         let npc = session.space.npc(id).expect("here");
         assert!(npc.mission_escort());
         assert_eq!(npc.cloak, crate::cloak::Cloak::default());
@@ -145,7 +145,7 @@ mod tests {
         let mut session = in_flight(catalog);
         fail(&mut session);
         let id = first_marked(&session);
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         (session, id)
     }
 
@@ -174,7 +174,7 @@ mod tests {
             .and_then(|npc| npc.mission)
             .expect("marked");
         session.take_save_due();
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         let npc = session.space.npc(id).expect("still here");
         let mark = npc.mission.expect("keeps its mark (@0x9459b-0x947cf)");
         assert_eq!((mark.slot, mark.behav), (before.slot, before.behav));
@@ -213,7 +213,7 @@ mod tests {
         let counted = session.space.led_escorts(&session.pilot);
         let can_hire = session.can_hire_escorts();
         let id = first_marked(&session);
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         let mut led: Vec<(u32, u8, u8)> = session
             .player_led()
             .filter_map(|npc| {
@@ -283,7 +283,7 @@ mod tests {
             fail(&mut session);
         }
         let id = first_marked(&session);
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         let other = session
             .npcs()
             .iter()
@@ -322,7 +322,7 @@ mod tests {
         let left = ships_of(&session).left;
         fail(&mut session);
         let id = first_marked(&session);
-        session.join_fleet(id);
+        session.join_fleet(id, &mut NeverFires);
         jump_to(&mut session, &catalog, 131);
         assert!(
             session.npcs().iter().all(|npc| !npc.mission_escort()),

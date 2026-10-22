@@ -43,7 +43,9 @@
 //!    [`RuleKey::EscapeShipCut`] says: a shield above 1.0 rolled below its
 //!    own (`Rand(trunc(shield))`), and half the velocity
 //!    (@0x3550a-0x35553). Once its carrier is no longer intact, the
-//!    fighter flies on its own (`Space::orphan_fighters`).
+//!    fighter's next think finds its lead lost
+//!    (`nova_sim_ai::traffic::succession`; by the other reading of
+//!    [`RuleKey::NpcEscortAi`], `Space::lose_leads`).
 //!
 //! The view hears `snd ` 372 for each pod from where the NPC is
 //! ([`ESCAPE_POD_SOUND`](crate::sound::ESCAPE_POD_SOUND)), as a fight
@@ -620,8 +622,10 @@ mod tests {
         assert_eq!(fighter.target, Some(ShipRef::Player));
         let pushed = crate::bay::launch_velocity(Vec2::new(2.0, 4.0), 90.0, 4.0, 6.0);
         assert_eq!(fighter.state.velocity, pushed * 0.5, "half its launch");
-        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(50)");
-        assert!(chance.asked.contains(&50));
+        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(66)");
+        // A fighter's shield, 50 × 1.333 (`_LaunchFighter` @0x3d9e7, AI
+        // type 5), so the cut rolls `Rand(66)`.
+        assert!(chance.asked.contains(&66));
         let carrier = session.space.npc(id).expect("dying");
         assert_eq!(carrier.reserves.shield.now, 40.0, "untouched");
         assert_eq!(carrier.state.velocity, Vec2::new(2.0, 4.0));
@@ -634,6 +638,13 @@ mod tests {
         to_the_end(&mut session, id, &mut chance);
         assert_eq!(chance.rolls(), 1, "no second roll");
         assert_eq!(vipers(&session).len(), 1);
+        // Its next think finds its carrier gone (`_AICheckParentExists`).
+        session.space.traffic.think_holding(
+            &crate::ai::NovaAi::default(),
+            crate::traffic::World::new(&[]),
+            &[],
+            &mut chance,
+        );
         assert_eq!(vipers(&session)[0].carrier, None, "let go of its carrier");
     }
 
@@ -659,7 +670,11 @@ mod tests {
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 2);
         assert_eq!(fighter.state.velocity, pushed, "uncut");
-        assert_eq!(fighter.reserves.shield.now, 50.0);
+        assert_eq!(
+            fighter.reserves.shield.now,
+            crate::bay::fighter_capacity(50.0, RuleSource::Engine),
+            "a fighter's full shield"
+        );
         let held = session.space.npc(id).expect("dying");
         assert_eq!(held.reserves.shield.now, 7.0, "Rand(40)");
         assert!(chance.asked.contains(&40));

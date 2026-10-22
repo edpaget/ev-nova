@@ -580,6 +580,7 @@ impl Session {
             let view = self.world().gate_view();
             self.space.traffic.turn_with_quote(id, view);
         }
+        let held_burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         let Some(npc) = self
             .space
             .traffic
@@ -621,10 +622,11 @@ impl Session {
                 npc.trigger = Trigger::default();
                 npc.provoked = 0.0;
                 // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20): a wait
-                // running is cleared and any docking dropped. Its +0x50,
-                // the hyperspace state, is 0 already for a ship hailed in
-                // flight.
-                npc.ai_wait = 0;
+                // running is cleared, a hold at its gate too, and any
+                // docking dropped. Its +0x50, the hyperspace state, is 0
+                // already for a ship hailed in flight. A ship held at its
+                // gate owes its burst as the rulebook reads.
+                npc.end_wait(held_burst);
                 npc.docking = None;
             }
         }
@@ -2042,25 +2044,49 @@ mod tests {
         assert_eq!(view.reply, "Okay, I'm on my way.", "already on its way");
     }
 
-    #[test]
-    fn a_ship_asked_for_help_drops_its_ai_wait_and_docking() {
-        // `_AIMakeShipRepairPlayer` @0x82df2 and `_AIMakeShipRefuelPlayer`
-        // @0x82dbb: +0x4c = -1.0, sub 0.
-        let catalog = hailable();
-        let mut session = targeting(&catalog);
+    /// `session`'s ship, held at its gate with an AI wait and a docking,
+    /// once the player has hailed it and accepted its refuel.
+    fn asked_for_help_while_held(mut session: Session, catalog: &FakePilotCatalog) -> Npc {
         session.pilot.reserves.fuel.now = 40.0;
         let ship = npc(&mut session);
         ship.ai_wait = 50;
+        ship.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30 };
         ship.docking = Some(crate::traffic::plunder_dock::Docking {
             ship: ShipRef::Npc(NpcId(7)),
             sub: crate::traffic::plunder_dock::DockSub::Close,
         });
-        hail(&mut session, &catalog);
-        press(&mut session, &catalog, 1, 99);
-        haggle(&mut session, &catalog, Haggle::Accept);
-        let helper = &session.npcs()[0];
+        hail(&mut session, catalog);
+        press(&mut session, catalog, 1, 99);
+        haggle(&mut session, catalog, Haggle::Accept);
+        session.npcs()[0].clone()
+    }
+
+    #[test]
+    fn a_ship_asked_for_help_drops_its_ai_wait_and_docking() {
+        // `_AIMakeShipRepairPlayer` @0x82df2 and `_AIMakeShipRefuelPlayer`
+        // @0x82dbb: +0x4c = -1.0, sub 0. The wait a ship held at its gate
+        // runs on is +0x4c too, so its hold ends (`Npc::end_wait`), owing
+        // the burst the hold left in +0x34 (@0x895aa-0x895bd).
+        let catalog = hailable();
+        let helper = asked_for_help_while_held(targeting(&catalog), &catalog);
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
         assert_eq!((helper.ai_wait, helper.docking), (0, None));
+        assert_eq!(
+            helper.mode,
+            crate::traffic::npc::Mode::Flying,
+            "its hold ended"
+        );
+        assert_eq!(helper.owed_burst, Some(30.0));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_held_ship_asked_for_help_owes_no_burst() {
+        let catalog = hailable();
+        let rules = Rulebook::default().with_override(RuleKey::HeldGateBurst, RuleSource::Bible);
+        let helper = asked_for_help_while_held(targeting(&catalog).with_rules(rules), &catalog);
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
+        assert_eq!(helper.owed_burst, None);
     }
 
     #[test]
@@ -2718,7 +2744,7 @@ mod tests {
     /// where it is (as a capture does), and targeted.
     fn escorting(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting(catalog);
-        session.join_fleet(NpcId(0));
+        session.join_fleet(NpcId(0), &mut NeverFires);
         session.chart.target = Some(NpcId(0));
         session.take_save_due();
         session

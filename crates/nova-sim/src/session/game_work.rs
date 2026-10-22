@@ -17,8 +17,12 @@
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it ([`Session::player_display_step`]).
 //! 3. The collision passes (@0x43e70-0x44015), their hits settled and
-//!    answered at once, as `_DamageShip`'s reaction block runs in them.
-//! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
+//!    answered at once, as `_DamageShip`'s reaction block runs in them,
+//!    a shot's hit that starts a ship dying queuing the victory of the
+//!    escort attacking it (`_HandleShipHit` @0x36c7f-0x36d45).
+//! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
+//!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
+//!    module), the traffic's think half,
 //!    the damage aimed read after the passes (`_CalculateTargetedDamage`
 //!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the fleets
 //!    announced and the refuel landed, then every NPC's point defence and
@@ -27,7 +31,8 @@
 //!    each fighter launched put in the system as its slot's turn ends
 //!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
 //!    carrier thinking then, and the loop resumed after that slot
-//!    ([`Session::dispatch_npcs`]); then the frame's work on the line,
+//!    ([`Session::dispatch_npcs`]); then the thinks' voice cues answered
+//!    in berth order; then the frame's work on the line,
 //!    every think's calls, scan, plunders and refuel note, the launched
 //!    fighters' among them, settled in slot order
 //!    ([`Session::settle_line_queue`], see the `comm_calls` module). All
@@ -211,6 +216,8 @@ impl Session {
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
+        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
+        self.warn_fighters_left_behind(chance);
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
@@ -255,6 +262,10 @@ impl Session {
         self.answer_strikes(behaviour);
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
+            // `_HandleVoiceSound` (@0x44219), before `_AIDispatch`
+            // (@0x4429d; see the `voices` module).
+            self.space
+                .handle_voice(&self.statics, &mut self.out, &mut *chance);
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
@@ -262,6 +273,8 @@ impl Session {
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
             self.dispatch_npcs(pass, behaviour, rules, chance);
+            // `_EscortAI`'s variants and target calls, in berth order.
+            self.space.answer_voice_cues(&self.statics, &mut *chance);
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);
@@ -317,6 +330,7 @@ impl Session {
             combat.defend_player(fighters, arena, chance);
         });
         self.sabotage_tick(rules, chance);
+        self.space.count_player_berths(&self.setup);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fire_player(fighters, arena, chance);
         });
@@ -510,7 +524,11 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let (strikes, losses) = self.space.combat.take_landed();
+        let (strikes, losses, finished) = self.space.combat.take_landed();
+        // `_HandleShipHit`'s victories, as the hits landed, before the
+        // answers retarget anyone (see the `voices` module).
+        self.space
+            .speak_victories(&self.statics, &finished, &losses);
         let struck = super::struck_npcs(&strikes);
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
@@ -615,7 +633,8 @@ impl Session {
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
-        self.space.orphan_fighters();
+        self.space
+            .lose_leads(self.setup.rules.source_for(crate::RuleKey::NpcEscortAi));
         self.let_go_of_gone_target();
         self.see_stellars();
         self.space.hold_derelicts(&self.statics);
@@ -1095,5 +1114,53 @@ mod tests {
         assert_eq!(fates(&session), [disabled]);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(fates(&session), [disabled], "once");
+    }
+
+    /// Every NPC keeps its goal.
+    #[derive(Debug)]
+    struct Keeping;
+
+    impl Behaviour for Keeping {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+    }
+
+    /// [`facing_an_npc`] by `rules`, NPC 0 a lead drifting right at 0.3
+    /// holding its course, and a fleet escort of it 250 to its right at
+    /// rest, after a pass: the lead and the escort.
+    fn fleet_after_a_pass(rules: crate::rulebook::Rulebook) -> (Npc, Npc) {
+        let catalog = armed();
+        let mut session = warmed(&catalog).with_rules(rules);
+        let lead = NpcId(0);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.goal = Goal::Hold;
+        npc.state.velocity = Vec2::new(0.3, 0.0);
+        let mut escort = npc.clone();
+        escort.leader = Some(lead);
+        escort.goal = Goal::Follow { lead, guard: None };
+        escort.state.position.x += 250.0;
+        escort.state.velocity = Vec2::ZERO;
+        let escort = session.space.traffic.add_npc(escort);
+        pass(&mut session, &catalog, Controls::default(), &Keeping);
+        let ship = |id| session.space.npc(id).expect("there").clone();
+        (ship(lead), ship(escort))
+    }
+
+    #[test]
+    fn a_pass_gives_a_fleet_escort_its_slot_and_flies_it_in_formation_by_the_rulebook() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        // Slot 2 of its lead's formation, by either reading.
+        let slot = |escort: &Npc| escort.fleet_slot.map(|slot| (slot.slot, slot.ships));
+        // Within 300 of its lead and within 0.525 of its velocity: matched,
+        // it takes the lead's velocity (sub 0xc).
+        let (lead, escort) = fleet_after_a_pass(Rulebook::default());
+        assert_eq!(slot(&escort), Some((2, 2)));
+        assert_eq!(escort.state.velocity, lead.state.velocity);
+        // By the earlier follow it closes on its lead from 250 off.
+        let earlier = Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible);
+        let (lead, escort) = fleet_after_a_pass(earlier);
+        assert_eq!(slot(&escort), Some((2, 2)));
+        assert_ne!(escort.state.velocity, lead.state.velocity);
     }
 }

@@ -18,6 +18,7 @@ use crate::blink::Blink;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::voice::Voices;
 use crate::warp::SoundLength;
 use nova_sim_base::fuel::OutfitMod;
 
@@ -2019,6 +2020,13 @@ pub trait PilotCatalog {
     fn warp_out_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// The escorts' voices: every voice clip, `snd ` 1000-1799, with its
+    /// length, and each `gövt`'s `VoiceType` (see the
+    /// [`voice`](crate::voice) module); none by default, no clip and no
+    /// government's voice, so no escort speaks.
+    fn voices(&self) -> Voices {
+        Voices::default()
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// `nova_sim::mission::SpecialShips::uniform_type`).
@@ -2167,6 +2175,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_out_sound()
     }
 
+    fn voices(&self) -> Voices {
+        (**self).voices()
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -2297,6 +2309,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         (**self).warp_out_sound()
+    }
+
+    fn voices(&self) -> Voices {
+        (**self).voices()
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -2823,6 +2839,20 @@ mod tests {
             })
         }
 
+        /// `gövt` 128 speaks set 3, forced odd, with one acknowledgement.
+        fn voices(&self) -> Voices {
+            Voices::read(
+                &[(
+                    SoundId(1300),
+                    Some(SoundLength {
+                        frames: 22_050,
+                        rate: 22_050,
+                    }),
+                )],
+                &[(GovtId(128), 1003)],
+            )
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -2876,6 +2906,7 @@ mod tests {
             format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
+            format!("{:?}", catalog.voices()),
         ]
     }
 
@@ -3080,6 +3111,10 @@ mod tests {
         assert_eq!(
             direct[35], "[(SystemId(130), StellarId(129))]",
             "forwarded, not the default's 128"
+        );
+        assert!(
+            direct[36].contains("GovtId(128): GovtVoice { set: Some(3)"),
+            "forwarded, not a default: {direct:?}"
         );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
@@ -3315,7 +3350,8 @@ mod tests {
         assert_eq!(asteroids(Rc::new(One)), direct);
     }
 
-    /// `STR#` 3000 holds two replies; no other list exists.
+    /// `STR#` 3000 holds two replies; no other list exists. A plug-in
+    /// patches `STR ` 5000 alone.
     impl CommCatalog for One {
         fn string_list(&self, id: i16) -> Vec<String> {
             if id == 3000 {
@@ -3324,18 +3360,33 @@ mod tests {
                 Vec::new()
             }
         }
+
+        fn plugin_string(&self, id: i16) -> StringPatch {
+            if id == 5000 {
+                StringPatch::Text("Patched.".into())
+            } else {
+                StringPatch::Absent
+            }
+        }
     }
 
-    /// `STR#` 3000 and 3001, as `catalog` gives them.
-    fn comm(catalog: impl CommCatalog) -> Vec<Vec<String>> {
-        vec![catalog.string_list(3000), catalog.string_list(3001)]
+    /// `STR#` 3000 and 3001, and the plug-in's `STR ` 5000, as `catalog`
+    /// gives them.
+    fn comm(catalog: impl CommCatalog) -> (Vec<Vec<String>>, StringPatch) {
+        (
+            vec![catalog.string_list(3000), catalog.string_list(3001)],
+            catalog.plugin_string(5000),
+        )
     }
 
     #[test]
     fn borrowed_and_shared_comm_catalogs_are_catalogs() {
+        // `plugin_string` defaults to `Absent`, so a forwarding impl that
+        // dropped it would still compile: the patch shows it forwards.
         let direct = comm(One);
-        assert_eq!(direct[0], ["Channel open.", "Hello."]);
-        assert!(direct[1].is_empty(), "{direct:?}");
+        assert_eq!(direct.0[0], ["Channel open.", "Hello."]);
+        assert!(direct.0[1].is_empty(), "{direct:?}");
+        assert_eq!(direct.1, StringPatch::Text("Patched.".into()));
         assert_eq!(comm(&One), direct);
         assert_eq!(comm(Rc::new(One)), direct);
     }

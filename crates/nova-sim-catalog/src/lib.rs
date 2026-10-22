@@ -28,6 +28,9 @@
 //! - [`strings`]: the string lists built once at start-up, each entry
 //!   from a plug-in's `'STR '` patch when one exists, else from its
 //!   `STR#`.
+//! - [`voice`]: the escorts' voices: the clips of each voice set and
+//!   message, each government's voice, and the one voice channel the
+//!   session plays them through ([`voice::VoiceChannel`]).
 //! - [`warp`]: the player's warp clock: the warp factor, the warp sound's
 //!   duration, and when the warp's lead-in ends and scans are held.
 //!
@@ -48,6 +51,7 @@ pub mod data;
 pub mod fixture;
 pub mod sound;
 pub mod strings;
+pub mod voice;
 pub mod warp;
 
 pub use catalog::{

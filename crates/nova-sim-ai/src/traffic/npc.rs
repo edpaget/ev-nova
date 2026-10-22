@@ -14,14 +14,17 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, KEEP_FORMATION};
-use crate::flight::{Flyer, ShipState};
+use crate::fleet::OrderWord;
+use crate::flight::{FlightRules, Flyer, FormationFlight, NpcFormation, ShipState};
 use crate::geometry::Vec2;
 use crate::inertialess::{InertialDampener, is_inertialess};
 use crate::market::Good;
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
+use crate::traffic::formation_flight;
 use crate::traffic::plunder_dock::Docking;
 use crate::traffic::ship_display::NpcDisplay;
 use crate::traffic::warp_out::Warp;
@@ -95,8 +98,10 @@ pub enum Mode {
     /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
     /// its target and the damage as provocation, and its wait is cut to
     /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
-    /// through its burst. A hit by the player holds it here instead
-    /// ([`Mode::HeldAtGate`]).
+    /// through its burst. The hit's push moves it (`_DamageShip`
+    /// @0x3aa7d): it drifts on that velocity as it waits, as
+    /// `_HandleShip` moves every ship (@0x34274-0x342aa). A hit by the
+    /// player holds it here instead ([`Mode::HeldAtGate`]).
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -109,13 +114,16 @@ pub enum Mode {
     /// unfaded, it lets go of the gate's sprite (@0x2e8bd-0x2e8d7), and
     /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
     /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
-    /// (@0x34a54-0x34a72), so it holds still, and once the wait is out it
-    /// flies its goal from rest ([`Npc::hold_at_gate`]), with no burst:
-    /// its attack rewrites the burst word +0x34 the step it first thrusts
-    /// (see [`autopilot`](crate::traffic::autopilot)). Its decisions are
+    /// (@0x34a54-0x34a72), so it moves on only at its velocity, at rest
+    /// unless a hit pushed it, and once the wait is out it flies its goal
+    /// ([`Npc::hold_at_gate`]), owing the burst the emerge left in +0x34
+    /// by the engine's reading ([`Npc::owed_burst`], see
+    /// [`held_burst`](crate::traffic::held_burst)). Its decisions are
     /// due through the hold, as goal 0x15 no longer skips the per-type AIs
     /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
     /// defence of a waiting escort or fighter (see the traffic's tick).
+    /// An escort's Defend, Attack or formation think ends it at once
+    /// ([`Npc::end_wait`], `_EscortAI`'s +0x4c = -1.0).
     HeldAtGate {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -250,7 +258,13 @@ pub struct Npc {
     pub govt: Option<GovtId>,
     /// How it behaves.
     pub ai_type: AiType,
-    /// The fleet lead it escorts, if it is an escort.
+    /// The fleet lead it escorts, if it is an escort: the original's +0x9a
+    /// for an NPC parent. A lost lead's followers take its successor, or
+    /// none ([`succession`](crate::traffic::succession)); a disabled ship
+    /// drops it by the engine's reading of
+    /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
+    /// ([`disabled_reset`](crate::traffic::disabled_reset)); and
+    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`.
     pub leader: Option<NpcId>,
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
@@ -304,7 +318,8 @@ pub struct Npc {
     /// damage it took; or 1 once its government's
     /// 0x0004 word turns it on the player (@0x8b7e5, @0x8cb9d,
     /// [`Decision::provokes`](crate::ai::Decision::provokes)); none once it
-    /// goes back to an idle goal or is disabled.
+    /// goes back to an idle goal or is disabled (the disabled reset,
+    /// [`disabled_reset`](crate::traffic::disabled_reset)).
     pub provoked: f32,
     /// Its stray provocation, the original's +0xc910: 1.75 × the weight of
     /// each stray hit of the player's on it, easing by 0.5 a tick, and
@@ -344,7 +359,10 @@ pub struct Npc {
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
-    /// ship.
+    /// ship. Built `None` and changed only through [`Npc::take_carrier`]
+    /// and [`Npc::leave_carrier`], which hold its shield and armour
+    /// capacities to it (see
+    /// [`fighter_capacity`](crate::traffic::fighter_capacity)).
     pub carrier: Option<Carrier>,
     /// The person flying it, if any.
     pub person: Option<NpcPerson>,
@@ -395,9 +413,12 @@ pub struct Npc {
     /// through [`travel::is_set`](crate::ai::travel::is_set), which adds the
     /// stellar goals and the emerge's gate). Its writers are the decisions'
     /// ([`Decision::travel`](crate::ai::Decision::travel), taken by
-    /// [`travel::take`](crate::ai::travel::take)) and the drops that write
-    /// -1 (see [`travel`](crate::ai::travel)). Every spawn clears it
-    /// (@0x1c3c1, @0x3c444, @0x3c9e2).
+    /// [`travel::take`](crate::ai::travel::take)), the drops that write
+    /// -1 (see [`travel`](crate::ai::travel)), the disabled reset
+    /// ([`disabled_reset`](crate::traffic::disabled_reset), @0x8fece) and a
+    /// successor taking over its lost lead's
+    /// ([`succession`](crate::traffic::succession), @0x893b0). Every spawn
+    /// clears it (@0x1c3c1, @0x3c444, @0x3c9e2).
     pub travel_set: bool,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
@@ -502,6 +523,13 @@ pub struct Npc {
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
     pub afterburner: bool,
+    /// The variant of its voice (the original's +0xc922): none while it is
+    /// unset (above 1), as it is at every spawn, launch and placing here.
+    /// The session rolls it, the one writer, as `_LaunchFighter`,
+    /// `_DoShipCapture`, `_AIShipCapturedByPlayer` and `_EscortAI` roll
+    /// it, and keeps an escort's across jumps and landings (see
+    /// `nova_sim::voice`). Never saved.
+    pub voice: Option<crate::voice::VoiceVariant>,
     /// The pursuit it keeps from tick to tick (substate 0x10 or 0x11) and
     /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it
     /// spawns. Never saved.
@@ -509,7 +537,9 @@ pub struct Npc {
     /// Its AI wait (the original's +0x4c) for the waits it takes while it
     /// flies, outside its [`Mode`]: a pirate's dock with its victim
     /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
-    /// took into its fleet (150) (see [`plunder`](crate::traffic::plunder))
+    /// took into its fleet (150, which its first think as an escort ends,
+    /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)) (see
+    /// [`plunder`](crate::traffic::plunder))
     /// and a pirate's count wait (120, see
     /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
     /// in [`Npc::wait_running`], the traffic counts it down as the ship
@@ -541,6 +571,23 @@ pub struct Npc {
     /// next pass reads its new ship. None at every spawn and launch
     /// (`_AISetup` @0x7f415). Never saved.
     pub swarm_leader: Option<u32>,
+    /// Its place in the formation of its NPC formation parent (its leader,
+    /// or its swarm leader while it attacks with a target;
+    /// [`swarm::formation_parent`](crate::ai::swarm::formation_parent)),
+    /// the original's +0x28/+0x2c as `_AICalcFormationPositions` numbers
+    /// it (@0x85137-0x851cc): none for a ship whose parent is the player
+    /// or none. The formation pass sets it each tick, and a fleet's arrival
+    /// as it jumps in (see
+    /// [`fleet_formation`](crate::traffic::fleet_formation)). Never saved.
+    pub fleet_slot: Option<FormationSlot>,
+    /// Its order word, the original's +0xc90a: -1 at every spawn, launch
+    /// and placement ([`OrderWord::NONE`]), then the order its leader last
+    /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth
+    /// frame), which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A
+    /// fighter of the player's escort writes its own each think, and a
+    /// stray beam of `ExitType` 6 steps it (`nova_sim::stray_words`).
+    /// Never saved.
+    pub order_word: OrderWord,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
@@ -553,6 +600,19 @@ pub struct Npc {
     /// and how it was flown this tick (see
     /// [`ship_display`](crate::traffic::ship_display)). Never saved.
     pub display: NpcDisplay,
+    /// The gate burst it still owes, released from its hold at its gate
+    /// ([`Mode::HeldAtGate`]): the speed of the original's negative burst
+    /// word +0x34, |+0x34|, which the emerge set (-30.0, or -15.0 when the
+    /// player leads it, @0x895aa-0x895bd) and the hold left, as nothing
+    /// writes it while +0x4c runs and `_LowLevelAIHandler` keeps a negative
+    /// one (@0x851e9-0x8520d). Set only by [`Npc::end_wait`], by the
+    /// engine's reading of
+    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst); lowered
+    /// by each tick it bursts on, and dropped by the first thrust that
+    /// writes +0x34, by a dogfight's speed cap, by the burst's end and by
+    /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
+    /// None at every spawn. Never saved.
+    pub owed_burst: Option<f32>,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -682,6 +742,32 @@ impl Npc {
         }
     }
 
+    /// Its fleet among `npcs`: the root of its chain of leads, as
+    /// `_ShipsShareParent` walks parents to their root (@0x7926-0x79c1),
+    /// each step its [`fleet`](Npc::fleet): the player once a ship of the
+    /// chain escorts the player, a lead gone from `npcs` where the chain
+    /// leaves them, else the last lead it reaches. A carrier's fighter,
+    /// led by its carrier, so shares the fleet of the carrier's own lead,
+    /// and a fighter of the player's escort is the player's. Ships of one
+    /// fleet count each other's missiles friendly and spare each other.
+    #[must_use]
+    pub fn fleet_among(&self, npcs: &[Npc]) -> ShipRef {
+        let mut at = self;
+        for _ in 0..npcs.len() {
+            if at.escorts_player() {
+                return ShipRef::Player;
+            }
+            let Some(lead) = at.leader else {
+                return ShipRef::Npc(at.id);
+            };
+            match npcs.iter().find(|npc| npc.id == lead) {
+                Some(next) => at = next,
+                None => return ShipRef::Npc(lead),
+            }
+        }
+        at.fleet()
+    }
+
     /// Whether it escorts the player: an escort hired or captured, a
     /// fighter the player launched (both [`Npc::is_players`]), or a mission
     /// escort. Not a fighter one of those launched, which an escort leads
@@ -745,35 +831,90 @@ impl Npc {
             .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
-    /// Whether it keeps close formation with its leader, at `leader`:
-    /// it keeps formation ([`Goal::Formation`]) on a slot
-    /// ([`Npc::formation`]) beside a leader that is there, within
-    /// [`KEEP_FORMATION`] of the slot on each axis, where the autopilot
-    /// moves it with the leader. That is the engine's counterpart of the
-    /// original's substate 0xc, which `_IsShipInCloseForm` tests
-    /// (@0x82f54-0x82f69).
+    /// The slot its goal keeps: its place in the player's formation
+    /// ([`Npc::formation`]) while it keeps formation ([`Goal::Formation`]),
+    /// its place in its NPC parent's ([`Npc::fleet_slot`]) while it keeps
+    /// with a lead ([`Goal::Follow`]); none in any other goal. The goal is
+    /// the one it flies ([`Npc::flown_goal`]): the regroup pause keeps its
+    /// kept formation's.
     #[must_use]
-    pub fn keeps_close_formation(&self, leader: Option<&ShipState>) -> bool {
-        let (Goal::Formation { .. }, Some(leader), Some(place)) =
-            (self.goal, leader, self.formation())
-        else {
-            return false;
-        };
-        let off = place.position(leader) - self.state.position;
-        off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+    pub fn formation_slot(&self) -> Option<FormationSlot> {
+        match self.flown_goal() {
+            Goal::Formation { .. } => self.formation(),
+            Goal::Follow { .. } => self.fleet_slot,
+            _ => None,
+        }
     }
 
-    /// Whether it flies inertialess, its leader at `leader` (see
-    /// [`is_inertialess`]): by its hull, or by an inertial dampener as
-    /// `rule` counts an NPC's; never while it
+    /// Whether it keeps close formation with its leader, at `leader` and
+    /// seen as `leader_seen` says, under `flight`: the original's substate
+    /// 0xc, which `_IsShipInCloseForm` tests (@0x82f54-0x82f69). It keeps
+    /// the slot the goal it flies keeps ([`Npc::formation_slot`]): the player's
+    /// escort in formation ([`Goal::Formation`]), or, by the engine's
+    /// reading of [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation),
+    /// a fleet escort keeping with its lead ([`Goal::Follow`]); by the
+    /// other reading a fleet escort never does. Its leader must be there
+    /// and, by the original's flight
+    /// ([`FlightRules::formation_flight`]), it must be within
+    /// [`KEEP_FORMATION`] of the leader on each axis with the leader seen,
+    /// where goal 0xa picks substate 0xc ([`formation_flight::sub`]); by
+    /// the port's earlier one, within [`KEEP_FORMATION`] of the slot, where
+    /// the autopilot moves it with its leader.
+    #[must_use]
+    pub fn keeps_close_formation(
+        &self,
+        leader: Option<&ShipState>,
+        leader_seen: bool,
+        flight: FlightRules,
+    ) -> bool {
+        let keeps = match self.flown_goal() {
+            Goal::Formation { .. } => true,
+            Goal::Follow { .. } => flight.npc_formation == NpcFormation::Original,
+            _ => false,
+        };
+        let (true, Some(leader), Some(place)) = (keeps, leader, self.formation_slot()) else {
+            return false;
+        };
+        match flight.formation_flight {
+            FormationFlight::Original => {
+                formation_flight::sub(self.state.position, leader.position, leader_seen)
+                    == formation_flight::Sub::Keep
+            }
+            FormationFlight::Earlier => {
+                let off = place.position(leader) - self.state.position;
+                off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+            }
+        }
+    }
+
+    /// Whether it flies inertialess, its leader at `leader` and seen as
+    /// `leader_seen` says, under `flight` (see [`is_inertialess`]): by its
+    /// hull, or by an inertial dampener as `flight` counts an NPC's
+    /// ([`Npc::hull_inertialess`]); never while it
     /// [keeps close formation](Npc::keeps_close_formation).
     #[must_use]
-    pub fn flies_inertialess(&self, leader: Option<&ShipState>, rule: InertialDampener) -> bool {
+    pub fn flies_inertialess(
+        &self,
+        leader: Option<&ShipState>,
+        leader_seen: bool,
+        flight: FlightRules,
+    ) -> bool {
+        !self.keeps_close_formation(leader, leader_seen, flight)
+            && self.hull_inertialess(flight.inertial_dampener)
+    }
+
+    /// Whether its hull or an inertial dampener, counted as `rule` says,
+    /// makes it inertialess, close formation aside: `_ShipIsInertialess`
+    /// for a ship not in substate 0xc, as every ship but a formation
+    /// escort is, and as close formation's own test reads it
+    /// ([`formation_flight`]).
+    #[must_use]
+    pub fn hull_inertialess(&self, rule: InertialDampener) -> bool {
         is_inertialess(
             self.stats.inertialess_hull,
             self.stats.dampener,
             Flyer::Npc,
-            self.keeps_close_formation(leader),
+            false,
             rule,
         )
     }
@@ -827,9 +968,13 @@ impl Npc {
     /// attack, snipe or flight, or a stop's kept target) for the AI states
     /// and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
-    /// [`Npc::threatens`] keeps it, since its one modelled reader
-    /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target))
-    /// sees only flying ships. The "other than itself" test can't
+    /// [`Npc::threatens`] keeps it, since its readers
+    /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target);
+    /// the threat searches for an NPC parent, `_AIFightThreatToParent`
+    /// @0x81e74 and `_IsShipANearbyThreatToParent` @0x83768,
+    /// [`escort::fight_threats`](crate::escort::fight_threats) and
+    /// [`escort::threat_score_to`](crate::escort::threat_score_to)) see
+    /// only flying ships. The "other than itself" test can't
     /// change the answer: a ship led by `ship` is excluded by the leader
     /// test first.
     ///
@@ -992,10 +1137,12 @@ impl Npc {
     ///   `_CommDialogUpdate` @0x90625, `_DrawCommDialogButtons` @0x28d5a,
     ///   `_DoCommDialog` @0x95ce1, @0x960fa, @0x966da;
     ///   [`hail::like`](crate::hail::like));
-    /// - the player's escorts' threat picks (`_AIFightThreatToParent`
+    /// - the escorts' threat picks (`_AIFightThreatToParent`
     ///   @0x81e5c-0x81f7d, `_IsShipANearbyThreatToParent` @0x83744;
     ///   [`escort::threats`](crate::escort::threats),
-    ///   [`escort::threat_score`](crate::escort::threat_score)).
+    ///   [`escort::threat_score`](crate::escort::threat_score)), and an NPC
+    ///   lead's own (`_AIFightThreatToParent` @0x81e83-0x81e9d,
+    ///   [`escort::fight_threats`](crate::escort::fight_threats)).
     ///
     /// The stellar-defender clause above is planet-domination's.
     #[must_use]
@@ -1110,6 +1257,8 @@ impl Npc {
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+        // Its own burst is the one `Mode::LeavingGate` flies.
+        self.owed_burst = None;
     }
 
     /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
@@ -1163,13 +1312,39 @@ impl Npc {
     /// Holds it where it waits in its gate, attacking the player
     /// ([`Mode::HeldAtGate`], its wait kept): `_AIMakeShipAttackPlayer`
     /// sets goal 4, target the player and travel stellar +0x6c = -1
-    /// (@0x89d3e-0x89d4d), keeping sub-goal 0. A ship not waiting in a
-    /// gate is left as it is.
+    /// (@0x89d3e-0x89d4d), keeping sub-goal 0 and the burst word +0x34
+    /// its emerge set, which it owes as the hold ends ([`Npc::end_wait`]).
+    /// A ship not waiting in a gate is left as it is.
     pub fn hold_at_gate(&mut self) {
         if let Mode::Emerging { ticks_left } = self.mode {
             self.mode = Mode::HeldAtGate { ticks_left };
             self.emerges_from = None;
             self.goal = Goal::Attack(ShipRef::Player);
+        }
+    }
+
+    /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a
+    /// ship held at its gate ([`Mode::HeldAtGate`], the wait the hold
+    /// runs on) flies its goal ([`Mode::Flying`]), its gate already let
+    /// go, as when the hold runs out (see
+    /// [`autopilot`](crate::traffic::autopilot)). By `burst`'s engine
+    /// reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
+    /// it still owes its emerge's burst ([`Npc::owed_burst`]): 30, or 15
+    /// when the player led it out (@0x895aa-0x895bd), the burst word +0x34
+    /// the hold left; by the other it owes none. `_EscortAI`'s Defend,
+    /// Attack and formation blocks write it (@0x83c73, @0x83d6a, @0x83eb0,
+    /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)), as do
+    /// `_AIMakeShipRefuelPlayer` and `_AIMakeShipRepairPlayer` (@0x82de9,
+    /// @0x82e20), and `_HandleShip` then steers, thrusts and fires it in
+    /// the same frame (@0x34a54-0x34a72). Any other mode is left: only a
+    /// ship flying or held at its gate decides.
+    pub fn end_wait(&mut self, burst: RuleSource) {
+        self.ai_wait = 0;
+        if matches!(self.mode, Mode::HeldAtGate { .. }) {
+            self.mode = Mode::Flying;
+            if burst == RuleSource::Engine {
+                self.owed_burst = Some(crate::traffic::emerge::exit_speed(self.led_out, 0));
+            }
         }
     }
 
@@ -1346,6 +1521,46 @@ mod tests {
     }
 
     #[test]
+    fn an_npcs_fleet_among_the_traffic_is_the_root_of_its_chain_of_leads() {
+        // A fighter led by its carrier, which escorts NPC 3, shares NPC 3's
+        // fleet, as `_ShipsShareParent` walks the parents to their root
+        // (@0x7926-0x79c1); a fighter of the player's escort is the
+        // player's; a lead gone from the system ends the chain.
+        let ship = |id, leader| Npc {
+            leader,
+            ..crate::traffic::fixture::npc(id, ShipStats::default())
+        };
+        let mut escort = ship(6, None);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [
+            ship(3, None),
+            ship(4, Some(NpcId(3))),
+            ship(5, Some(NpcId(4))),
+            escort,
+            ship(7, Some(NpcId(6))),
+            ship(8, Some(NpcId(9))),
+        ];
+        let fleets: Vec<ShipRef> = npcs.iter().map(|npc| npc.fleet_among(&npcs)).collect();
+        assert_eq!(
+            fleets,
+            [
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Player,
+                ShipRef::Player,
+                ShipRef::Npc(NpcId(9)),
+            ]
+        );
+        // Two ships leading each other end at one of them.
+        let looped = [ship(1, Some(NpcId(2))), ship(2, Some(NpcId(1)))];
+        assert!(matches!(looped[0].fleet_among(&looped), ShipRef::Npc(_)));
+    }
+
+    #[test]
     fn a_ship_the_player_leads_has_its_top_speed_times_the_led_speed_and_any_other_its_own() {
         let fields = crate::handling::ShipFields {
             speed: 300,
@@ -1477,6 +1692,47 @@ mod tests {
             })
         );
         assert!(!hired.mission_escort());
+    }
+
+    #[test]
+    fn the_slot_a_goal_keeps_is_the_players_in_formation_and_the_fleets_in_follow() {
+        let players = FormationSlot {
+            slot: 2,
+            ships: 4,
+            spacing: 35.0,
+        };
+        let fleets = FormationSlot {
+            slot: 3,
+            ships: 3,
+            spacing: 42.0,
+        };
+        let both = Npc {
+            escort: Some(EscortDuty {
+                formation: players,
+                order: None,
+            }),
+            fleet_slot: Some(fleets),
+            ..crate::traffic::fixture::npc(6, ShipStats::default())
+        };
+        let in_goal = |goal| Npc {
+            goal,
+            ..both.clone()
+        };
+        assert_eq!(
+            in_goal(Goal::Formation { guard: None }).formation_slot(),
+            Some(players)
+        );
+        assert_eq!(
+            in_goal(Goal::Follow {
+                lead: NpcId(1),
+                guard: None
+            })
+            .formation_slot(),
+            Some(fleets)
+        );
+        for goal in [Goal::Hold, Goal::Wait, Goal::Attack(ShipRef::Player)] {
+            assert_eq!(in_goal(goal).formation_slot(), None, "{goal:?}");
+        }
     }
 
     #[test]
@@ -1995,6 +2251,69 @@ mod tests {
     }
 
     #[test]
+    fn ending_the_wait_zeroes_it_and_releases_a_ship_held_at_its_gate() {
+        // `_EscortAI`'s +0x4c = -1.0 (@0x83c73, @0x83d6a, @0x83eb0): the
+        // hold is that wait, so it flies at once.
+        let mut held = Npc {
+            mode: Mode::HeldAtGate { ticks_left: 15 },
+            ai_wait: 30,
+            goal: Goal::Attack(ShipRef::Player),
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        held.end_wait(RuleSource::Engine);
+        assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0));
+        assert!(!held.wait_running());
+        for mode in [
+            Mode::Emerging { ticks_left: 15 },
+            Mode::Coasting { ticks_left: 15 },
+            Mode::Flying,
+        ] {
+            let mut npc = Npc {
+                mode,
+                ai_wait: 30,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            npc.end_wait(RuleSource::Engine);
+            assert_eq!((npc.mode, npc.ai_wait), (mode, 0), "{mode:?}");
+            assert_eq!(npc.owed_burst, None, "{mode:?}: no hold, no burst");
+        }
+    }
+
+    #[test]
+    fn a_ship_whose_hold_at_its_gate_ends_owes_its_emerges_burst_by_the_engine_only() {
+        // The hold leaves +0x34 at the emerge's -30.0, or -15.0 when the
+        // player leads it (@0x895aa-0x895bd): nothing writes it while
+        // +0x4c runs (`_LowLevelAIHandler` @0x851e9-0x8520d).
+        let held = |led_out| Npc {
+            mode: Mode::HeldAtGate { ticks_left: 15 },
+            goal: Goal::Attack(ShipRef::Player),
+            led_out,
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        for (led_out, owed) in [(false, 30.0), (true, 15.0)] {
+            let mut npc = held(led_out);
+            npc.end_wait(RuleSource::Engine);
+            assert_eq!(npc.owed_burst, Some(owed), "led out: {led_out}");
+            assert_eq!(npc.mode, Mode::Flying);
+            let mut npc = held(led_out);
+            npc.end_wait(RuleSource::Bible);
+            assert_eq!(npc.owed_burst, None, "led out: {led_out}");
+            assert_eq!(npc.mode, Mode::Flying);
+        }
+    }
+
+    #[test]
+    fn coming_out_of_a_gate_drops_an_owed_burst() {
+        // Its own -30.0 or -15.0 is the burst `Mode::LeavingGate` flies.
+        let mut npc = Npc {
+            owed_burst: Some(12.0),
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.owed_burst, None);
+    }
+
+    #[test]
     fn only_the_traders_trade() {
         assert!(AiType::WimpyTrader.trades());
         assert!(AiType::BraveTrader.trades());
@@ -2153,7 +2472,10 @@ mod tests {
             Goal::Assist(crate::ai::Help::Refuel),
             Goal::Assist(crate::ai::Help::Repair),
             Goal::Dock(ShipRef::Npc(NpcId(5))),
-            Goal::Follow(NpcId(5)),
+            Goal::Follow {
+                lead: NpcId(5),
+                guard: None,
+            },
             Goal::Formation { guard: None },
             Goal::Hold,
         ] {

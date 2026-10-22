@@ -1,7 +1,8 @@
 //! What is in the system around the player: the traffic, the fight and
 //! its strikes, the cargo boxes jettisons left, the asteroid field, the
-//! stellars' damage and the sprites shown, the message line, and the
-//! escorts' and encounters' state ([`Escorts`]). The coordinators that
+//! stellars' damage and the sprites shown, the message line, the
+//! escorts' and encounters' state ([`Escorts`]), and the escorts' voice
+//! channel (see the `voices` module). The coordinators that
 //! read other state too (`step_traffic`, `tick_combat`, `ship_loop`,
 //! `populate`, `reform`, `world` and `settle_line_queue`) stay on
 //! `Session`.
@@ -118,6 +119,10 @@ pub(super) struct Space {
     pub(super) stellar_sprites: StellarSpritePool,
     /// The escorts' and encounters' state.
     pub(super) escorts: Escorts,
+    /// The one voice channel the escorts speak through: the message
+    /// waiting and the clip playing (see the `voices` module); never
+    /// saved, as the original saves neither.
+    pub(super) voice: crate::voice::VoiceChannel,
 }
 
 /// The escorts' and encounters' state: the fleet and its class orders,
@@ -188,6 +193,7 @@ impl Space {
                 class_orders: [None; 4],
                 quote_clock: persons::QuoteClock::default(),
             },
+            voice: crate::voice::VoiceChannel::default(),
         }
     }
 }

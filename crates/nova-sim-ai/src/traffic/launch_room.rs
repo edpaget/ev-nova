@@ -248,7 +248,6 @@ mod tests {
         only: Some(WeaponId(149)),
         primary: false,
         secondary: None,
-        turrets_only: false,
         point_defence: false,
         keep: Some(WeaponId(149)),
     };

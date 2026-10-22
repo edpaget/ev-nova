@@ -29,8 +29,14 @@
 //!   +0x68, @0x8522d). It thrusts while off the heading it wants by less
 //!   than its turn and [`THRUST_SLACK`], whole degrees. Closing, within
 //!   [`CLOSE_CAP_BOX`] on both axes, it thrusts up to half its top speed
-//!   ([`CLOSE_CAP`]). Both fire nothing: they end in
+//!   ([`CLOSE_CAP`]). Closing with a swarm leader (+0xc906 > 0), it first
+//!   takes its swarm leader's glow ([`swarm_branch`], @0x87364-0x873a3);
+//!   its nudge toward a formation slot there is none, as a docking ship
+//!   has no formation parent (+0xc92e) and `_AIMaintainFormation` returns
+//!   at once (@0x84f30). Both fire nothing: they end in
 //!   `_AIEscortFireUnprovoked`, which does nothing for AI type 4 or below.
+//!   An escort keeping formation flies them too
+//!   ([`formation_flight`](crate::traffic::formation_flight)).
 //! - **Dock** (sub 0xf, [`DockSub::Dock`]), while it is intact
 //!   (`_LowLevelAIHandler`'s -0x32d flag, `!_IsDisabled`, @0x85240):
 //!   - **Matching** while its velocity differs from the victim's by
@@ -42,8 +48,9 @@
 //!     to the victim's plus it (@0x86c08-0x86cb2). An inertialess ship
 //!     matching instead takes a tick's acceleration off its speed
 //!     ([`Npc::speed`]), down to none and not capped at its top speed, with
-//!     no turn, thrust or damping (@0x86aaa-0x86b38); its velocity follows
-//!     its heading at that speed as it flies.
+//!     no thrust or damping (@0x86aaa-0x86b38), wanting its own whole
+//!     heading (the low level's default +0x68, @0x8522d); its velocity
+//!     follows its heading at that speed as it flies.
 //!   - **Aligned** (@0x86cb7): it wants the victim's heading and takes its
 //!     velocity. Outside [`DOCKED_BOX`] on either axis it creeps a pixel a
 //!     tick towards it, its speed zeroed, inertialess or not
@@ -59,13 +66,17 @@
 //!     (@0x86fa4-0x8700a): the victim boarded, its AI wait [`DOCK_WAIT`] +
 //!     `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the victim's
 //!     ([`DockOutcome::Started`]).
+//! - **The turn**: subs 9, 0xb and 0xf set only the heading they want
+//!   (+0x68), and `_HandleShip` turns the ship to it
+//!   ([`flight::turn_to`], @0x34460-0x3458e): by its turn while it is off
+//!   by more than that, whole degrees, and onto it otherwise. Sub 1's stop
+//!   still turns by [`autopilot::steer`](crate::traffic::autopilot::steer)'s reading, which isn't
+//!   `_HandleShip`'s (see its docs).
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
-//!   (@0x34a54-0x34a72): it moves on at the velocity the substate left it.
+//!   (@0x3443f-0x34454, @0x34a54-0x34a72): it moves on at the velocity
+//!   the substate left it, its heading where it was.
 //!
-//! Left out, owned elsewhere: sub 0xb's formation branch
-//! (@0x87364-0x873a3) is
-//! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. A ship
-//! repairing the player, or an NPC, flies these substates too, by its own high level
+//! A ship repairing the player, or an NPC, flies these substates too, by its own high level
 //! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)),
 //! and a ship refuelling another flies subs 0xb and 1, the stop
 //! ([`DockSub::Stop`], [`refuel_dock`](crate::traffic::refuel_dock)).
@@ -73,6 +84,7 @@
 
 use crate::ai::Goal;
 use crate::ai::fire::off_by;
+use crate::ai::swarm::SwarmLead;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::flight::{self, Controls, FlightRules, ShipState};
@@ -80,10 +92,12 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
-use crate::traffic::autopilot::{self, steer};
+use crate::traffic::formation_flight;
+use crate::traffic::held_burst::{self, Word};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
+use crate::traffic::ship_display::GlowCopy;
 use nova_sim_base::trig;
 
 /// The turns a docking box is worked out from, less the class's turn (the
@@ -188,7 +202,7 @@ pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener
     }
     let side = dock_box(npc.hull.class_turn);
     // `_ShipIsInertialess` with no leader: a plunder is no formation.
-    let side = if npc.flies_inertialess(None, rule) {
+    let side = if npc.hull_inertialess(rule) {
         side * INERTIALESS_BOX
     } else {
         side
@@ -231,32 +245,39 @@ pub enum DockOutcome {
 
 /// Flies `npc` one tick of its docking with a victim at `victim`, on
 /// `handling` under `flight` (an inertialess ship as the autopilot flies
-/// one, see [`inertialess`](crate::traffic::inertialess)), the dock's wait
-/// rolled on `chance` (see the module docs). It flies nothing without a
-/// docking.
+/// one, see [`inertialess`](crate::traffic::inertialess)), with `swarm`
+/// its swarm lead, the dock's wait rolled on `chance` (see the module
+/// docs). It flies nothing without a docking.
 pub fn fly(
     npc: &mut Npc,
     victim: &ShipState,
     handling: &Handling,
     flight: FlightRules,
+    swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
 ) -> DockOutcome {
     let Some(docking) = npc.docking else {
         return DockOutcome::Flying;
     };
-    let inertia = Inertia::of(npc, Some(victim), flight);
-    let (controls, flown, outcome) = match docking.sub {
+    // A plunderer holds no formation goal, so the sight is moot.
+    let inertia = Inertia::of(npc, Some(victim), true, flight);
+    let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, true);
-            (controls, flown, DockOutcome::Flying)
+            (controls, flown, None, DockOutcome::Flying)
         }
         DockSub::Dock => {
-            let (controls, outcome) = dock(npc, (docking.ship, victim), handling, inertia, chance);
-            (controls, *handling, outcome)
+            let (controls, wanted, outcome) =
+                dock(npc, (docking.ship, victim), handling, inertia, chance);
+            (controls, *handling, Some(wanted), outcome)
         }
         sub => {
-            let (controls, flown) = approach(npc, victim, handling, sub == DockSub::Close);
-            (controls, flown, DockOutcome::Flying)
+            let close = sub == DockSub::Close;
+            if close {
+                swarm_branch(npc, swarm, None, handling);
+            }
+            let (controls, flown, wanted) = approach(npc, victim, handling, close);
+            (controls, flown, Some(wanted), DockOutcome::Flying)
         }
     };
     if npc.ai_wait > 0 {
@@ -265,19 +286,57 @@ pub fn fly(
             Inertia::Inertialess { .. } => inertialess::drift(npc, &flown),
         }
     } else {
-        autopilot::step(npc, &flown, controls, flight, inertia);
+        let turn = wanted.map_or(controls.turn, |wanted| {
+            flight::turn_to(&mut npc.state, wanted, handling.turn_rate)
+        });
+        let controls = Controls { turn, ..controls };
+        // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
+        // bursts an owed burst out.
+        let word = if docking.sub == DockSub::Stop {
+            Word::stop(controls, &flown, inertia)
+        } else {
+            Word::Writes
+        };
+        held_burst::step(npc, &flown, controls, flight, inertia, word);
     }
     outcome
 }
 
-/// Subs 9 and 0xb (see the module docs): the controls, and the handling
-/// they fly by, closing (sub 0xb) capped within [`CLOSE_CAP_BOX`].
-fn approach(
+/// Sub 0xb's swarm branch (@0x87364-0x873a3), before it steers: with a
+/// swarm leader (+0xc906 > 0, [`Npc::swarm_leader`]), `npc` is nudged
+/// toward its formation slot at `slot`, when it has one, by its thrust on
+/// `handling` (`_AIMaintainFormation(ship, 0)`,
+/// [`formation_flight::maintain`]), and takes the glow of its swarm
+/// leader, `swarm`'s, when that ship is there (the original reads
+/// whatever ship holds the slot). Nothing without a swarm leader.
+pub(crate) fn swarm_branch(
+    npc: &mut Npc,
+    swarm: Option<SwarmLead>,
+    slot: Option<Vec2>,
+    handling: &Handling,
+) {
+    if npc.swarm_leader.is_none() {
+        return;
+    }
+    if let Some(slot) = slot {
+        formation_flight::maintain(npc, slot, handling, false);
+    }
+    if let Some(lead) = swarm {
+        npc.display.drive.glow = GlowCopy::Swarm(lead.glow);
+    }
+}
+
+/// Subs 9 and 0xb (see the module docs) of `npc` steering at a ship at
+/// `victim`: the controls but the turn, the handling they fly by,
+/// closing (sub 0xb) capped within [`CLOSE_CAP_BOX`], and the heading it
+/// wants (+0x68), which `_HandleShip` turns it to
+/// ([`flight::turn_to`]).
+pub(crate) fn approach(
     npc: &Npc,
     victim: &ShipState,
     handling: &Handling,
     close: bool,
-) -> (Controls, Handling) {
+) -> (Controls, Handling, i16) {
     let state = &npc.state;
     let bearing = trig::intercept_angle(state.position, victim.position);
     let off = state.position - victim.position;
@@ -309,64 +368,78 @@ fn approach(
     };
     let controls = Controls {
         thrust,
-        turn: steer(state.heading, f32::from(wanted), handling),
-        reverse: false,
         ..Controls::default()
     };
-    (controls, flown)
+    (controls, flown, wanted)
+}
+
+/// The heading against the gap between the velocity of a ship at `state`
+/// and `velocity`, the one it matches (the table angle of the gap + 180),
+/// the gap at most [`DAMP_BELOW`] on either axis cut to [`DAMPING`] of
+/// itself in doubles and `state`'s velocity set to `velocity` plus it:
+/// matching's turn and damping, sub 0xf's (@0x86b3d-0x86cb2) and sub
+/// 0xc's (@0x879b9-0x87b45).
+pub(crate) fn counter(state: &mut ShipState, velocity: Vec2) -> i16 {
+    let gap = state.velocity - velocity;
+    let against = trig::intercept_angle(Vec2::ZERO, gap * 100.0);
+    // In 0..360.
+    #[allow(clippy::cast_possible_truncation)]
+    let wanted = (i32::from(against) + 180).rem_euclid(360) as i16;
+    if gap.x.abs() <= DAMP_BELOW || gap.y.abs() <= DAMP_BELOW {
+        // Doubles, back to floats (@0x86c52-0x86c7c, @0x87aed-0x87b14).
+        #[allow(clippy::cast_possible_truncation)]
+        let damped = Vec2::new(
+            (f64::from(gap.x) * DAMPING) as f32,
+            (f64::from(gap.y) * DAMPING) as f32,
+        );
+        state.velocity = velocity + damped;
+    }
+    wanted
+}
+
+/// Whether a velocity `gap` off the one matched is [`MATCH_SLACK`] or
+/// more on either axis, each axis's `_FloatAbs` widened to a double
+/// (@0x86a30-0x86aa4, @0x8796f-0x879b3).
+#[must_use]
+pub(crate) fn mismatched(gap: Vec2) -> bool {
+    let off = |axis: f32| f64::from(axis.abs()) >= MATCH_SLACK;
+    off(gap.x) || off(gap.y)
 }
 
 /// Sub 0xf (see the module docs) of a docking with `ship` at `victim`,
-/// flown as `inertia` says: the controls, and what became of the docking,
-/// its velocity, speed and AI wait set as the substate sets them.
+/// flown as `inertia` says: the controls but the turn, the heading it
+/// wants (+0x68, which `_HandleShip` turns it to, [`flight::turn_to`]),
+/// and what became of the docking, its velocity, speed and AI wait set
+/// as the substate sets them.
 fn dock(
     npc: &mut Npc,
     (ship, victim): (ShipRef, &ShipState),
     handling: &Handling,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
-) -> (Controls, DockOutcome) {
-    let gap = npc.state.velocity - victim.velocity;
-    let matching = |axis: f32| f64::from(axis.abs()) >= MATCH_SLACK;
-    if (matching(gap.x) || matching(gap.y)) && matches!(inertia, Inertia::Inertialess { .. }) {
+) -> (Controls, i16, DockOutcome) {
+    let mismatched = mismatched(npc.state.velocity - victim.velocity);
+    if mismatched && matches!(inertia, Inertia::Inertialess { .. }) {
         // A tick's acceleration off its speed, down to none and not capped
         // at its top speed, in doubles (@0x86aee-0x86b33); no thrust, cap
         // or heading (@0x86ac8-0x86acd).
         #[allow(clippy::cast_possible_truncation)]
         let speed = (f64::from(npc.speed) - f64::from(handling.accel)).max(0.0) as f32;
         npc.speed = speed;
-        return (Controls::default(), DockOutcome::Flying);
+        // The low level's own whole heading (@0x8522d).
+        let wanted = trig::whole(npc.state.heading);
+        return (Controls::default(), wanted, DockOutcome::Flying);
     }
-    if matching(gap.x) || matching(gap.y) {
-        let against = trig::intercept_angle(Vec2::ZERO, gap * 100.0);
-        let wanted = (i32::from(against) + 180).rem_euclid(360);
-        // In 0..360.
-        #[allow(clippy::cast_possible_truncation)]
-        let wanted = wanted as i16;
-        if gap.x.abs() <= DAMP_BELOW || gap.y.abs() <= DAMP_BELOW {
-            // Doubles, back to floats (@0x86c52-0x86c7c).
-            #[allow(clippy::cast_possible_truncation)]
-            let damped = Vec2::new(
-                (f64::from(gap.x) * DAMPING) as f32,
-                (f64::from(gap.y) * DAMPING) as f32,
-            );
-            npc.state.velocity = victim.velocity + damped;
-        }
+    if mismatched {
+        let wanted = counter(&mut npc.state, victim.velocity);
         let controls = Controls {
             thrust: off_by(npc.state.heading, wanted) < handling.turn_rate + THRUST_SLACK,
-            turn: steer(npc.state.heading, f32::from(wanted), handling),
-            reverse: false,
             ..Controls::default()
         };
-        return (controls, DockOutcome::Flying);
+        return (controls, wanted, DockOutcome::Flying);
     }
-    let wanted = f32::from(trig::whole(victim.heading));
-    let controls = Controls {
-        thrust: false,
-        turn: steer(npc.state.heading, wanted, handling),
-        reverse: false,
-        ..Controls::default()
-    };
+    let wanted = trig::whole(victim.heading);
+    let controls = Controls::default();
     npc.state.velocity = victim.velocity;
     let off = npc.state.position - victim.position;
     if off.x.abs() > DOCKED_BOX || off.y.abs() > DOCKED_BOX {
@@ -374,7 +447,7 @@ fn dock(
         npc.speed = 0.0;
         let towards = trig::intercept_angle(npc.state.position, victim.position);
         npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * CREEP;
-        return (controls, DockOutcome::Flying);
+        return (controls, wanted, DockOutcome::Flying);
     }
     let outcome = match npc.ai_wait {
         wait if wait > DOCK_WAIT => DockOutcome::Flying,
@@ -388,7 +461,7 @@ fn dock(
             DockOutcome::Started { victim: ship, wait }
         }
     };
-    (controls, outcome)
+    (controls, wanted, outcome)
 }
 
 #[cfg(test)]
@@ -486,6 +559,7 @@ mod tests {
             victim,
             &HANDLING,
             FlightRules::default(),
+            None,
             &mut Scripted::rolling(rolls),
         );
         (ship, outcome)
@@ -500,7 +574,7 @@ mod tests {
             &victim,
             &[],
         );
-        assert!((ship.state.heading - 0.9).abs() < 1e-5, "turned left");
+        assert_eq!(ship.state.heading, 0.0, "3 whole degrees off: onto it");
         assert!(ship.state.velocity.y < 0.0, "thrust");
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, 0.0, 4.0), DockSub::Approach),
@@ -508,6 +582,26 @@ mod tests {
             &[],
         );
         assert_eq!(ship.state.velocity, Vec2::ZERO, "4 is not below 4");
+        assert_eq!(ship.state.heading, 1.0, "4 off: it turns by 3");
+    }
+
+    #[test]
+    fn approaching_and_closing_it_turns_as_handle_ship_does_onto_a_heading_within_its_turn() {
+        // Bearing 0, 1.4 off it: within half a turn, yet `_HandleShip`
+        // puts it on the bearing.
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        for sub in [DockSub::Approach, DockSub::Close] {
+            let (ship, _) = flown(pirate(at(0.0, 0.0, 0.0, 0.0, 1.4), sub), &victim, &[]);
+            assert_eq!(ship.state.heading, 0.0, "{sub:?}");
+        }
+        // Near it, keeping its heading, it keeps its whole heading.
+        let near = at(0.0, -150.0, 0.0, 0.0, 0.0);
+        let (ship, _) = flown(
+            pirate(at(0.0, 0.0, 0.0, -2.0, 90.6), DockSub::Approach),
+            &near,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 90.0);
     }
 
     #[test]
@@ -551,6 +645,33 @@ mod tests {
         assert!((i32::from(direction) - i32::from(bearing)).abs() <= VELOCITY_SLACK);
         let (ship, _) = flown(pirate(near, DockSub::Approach), &victim, &[]);
         assert_eq!(ship.state.heading, 180.0);
+    }
+
+    #[test]
+    fn closing_with_a_swarm_leader_it_takes_its_glow_and_has_no_slot_to_be_nudged_to() {
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let lead = SwarmLead {
+            aim: Vec2::ZERO,
+            leads_it: false,
+            glow: 9,
+        };
+        let glow_of = |sub: DockSub, swarm_leader: Option<u32>| {
+            let mut ship = pirate(at(0.0, 0.0, 0.0, 0.0, 90.0), sub);
+            ship.swarm_leader = swarm_leader;
+            fly(
+                &mut ship,
+                &victim,
+                &HANDLING,
+                FlightRules::default(),
+                Some(lead),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(ship.state.position, Vec2::ZERO, "no nudge, no thrust");
+            ship.display.drive.glow
+        };
+        assert_eq!(glow_of(DockSub::Close, Some(4)), GlowCopy::Swarm(9));
+        assert_eq!(glow_of(DockSub::Approach, Some(4)), GlowCopy::None);
+        assert_eq!(glow_of(DockSub::Close, None), GlowCopy::None);
     }
 
     #[test]
@@ -635,7 +756,7 @@ mod tests {
             &[],
         );
         assert_eq!(outcome, DockOutcome::Flying);
-        assert_eq!(ship.state.heading, 13.0, "turning to 12");
+        assert_eq!(ship.state.heading, 12.0, "2 off: onto 12");
         assert_eq!(ship.state.velocity, victim.velocity);
         assert_eq!(
             ship.state.position,
@@ -675,6 +796,7 @@ mod tests {
             &victim,
             &HANDLING,
             FlightRules::default(),
+            None,
             &mut chance,
         );
         assert_eq!(chance.sides_asked, [DOCK_WAIT_SPREAD]);
@@ -757,6 +879,12 @@ mod tests {
         assert_eq!(ship.state.heading, 90.0);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9));
         assert_eq!(ship.state.position, Vec2::new(50.0, 1.9));
+        // Docked and holding, a fraction off the victim's heading: not
+        // put on it.
+        let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.5), DockSub::Dock);
+        ship.ai_wait = 150;
+        let (ship, _) = flown(ship, &victim, &[]);
+        assert_eq!(ship.state.heading, 0.5);
     }
 
     #[test]
@@ -782,14 +910,15 @@ mod tests {
     #[test]
     fn approaching_it_corrects_by_the_gap_to_its_top_speed_on_one_axis_alone() {
         // The bearing 90; its velocity's direction far off it, short of the
-        // top speed (4, 0) by (3.9, 0.2): it turns to the gap, about 93.
+        // top speed (4, 0) by (3.9, 0.2): it turns to the gap, 92, within
+        // its turn.
         let victim = at(150.0, 0.0, 0.0, 0.0, 0.0);
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.1, -0.2, 90.0), DockSub::Approach),
             &victim,
             &[],
         );
-        assert_eq!(ship.state.heading, 93.0, "turning right to the gap");
+        assert_eq!(ship.state.heading, 92.0, "onto the gap");
     }
 
     #[test]
@@ -849,6 +978,13 @@ mod tests {
             &[],
         );
         assert_eq!(ship.state.heading, 277.0);
+        // 1.4 off it: `_HandleShip` puts it on 270.
+        let (ship, _) = flown(
+            pirate(at(50.0, 0.0, 3.0, 0.0, 271.4), DockSub::Dock),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 270.0);
     }
 
     #[test]
@@ -922,13 +1058,16 @@ mod tests {
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         // 2 apart going down, facing across: an inertial one would damp
         // the gap and turn to 0.
-        let start = at(50.0, 0.0, 0.0, 2.0, 90.0);
+        let start = at(50.0, 0.0, 0.0, 2.0, 90.6);
         let matched = |speed: f32| {
             let mut ship = inertialess(pirate(start, DockSub::Dock));
             ship.speed = speed;
             let (ship, outcome) = flown(ship, &victim, &[]);
             assert_eq!(outcome, DockOutcome::Flying);
-            assert_eq!(ship.state.heading, 90.0, "no turn");
+            assert_eq!(
+                ship.state.heading, 90.0,
+                "no turn but onto its whole heading"
+            );
             assert_eq!(ship.display.drive.thrust, Thrust::None);
             let velocity = adjust_velocity(
                 start.velocity,
@@ -1019,6 +1158,7 @@ mod tests {
             &at(0.0, 0.0, 0.0, 0.0, 0.0),
             &HANDLING,
             FlightRules::default(),
+            None,
             &mut Draws::of(&[]),
         );
         assert_eq!((ship, outcome), (before, DockOutcome::Flying));

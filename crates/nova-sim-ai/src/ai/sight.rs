@@ -39,19 +39,24 @@ impl Surroundings<'_> {
         let ShipRef::Npc(id) = ship else {
             return true;
         };
-        self.npc(id).is_none_or(|other| {
-            visible(
-                other.cloak,
-                other.state.position,
-                other.emerging(),
-                Observer {
-                    at: observer.state.position,
-                    scanner: observer.cloak_gear.scanner.on_screen,
-                    cloaked_escort: observer.leader == Some(other.id) && observer.cloak_gear.device,
-                },
-            )
-        })
+        self.npc(id).is_none_or(|other| npc_sees(observer, other))
     }
+}
+
+/// Whether `observer` sees NPC `other`: `_ShipVisibleToShip(other,
+/// observer)` for two NPCs (@0x971c; see the module docs).
+#[must_use]
+pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
+    visible(
+        other.cloak,
+        other.state.position,
+        other.emerging(),
+        Observer {
+            at: observer.state.position,
+            scanner: observer.cloak_gear.scanner.on_screen,
+            cloaked_escort: observer.leader == Some(other.id) && observer.cloak_gear.device,
+        },
+    )
 }
 
 #[cfg(test)]

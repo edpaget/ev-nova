@@ -21,7 +21,9 @@
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
-//!   orders; and an NPC carrier's fighters to [`CarriedAi`].
+//!   orders; and a ship with an NPC parent, a fleet's escort or an NPC
+//!   carrier's fighter, to [`FleetEscortAi`] (or, by the rulebook's other
+//!   reading, a led ship by its AI type and a fighter to [`CarriedAi`]).
 //! - [`asteroid`]: a system's asteroid field: the 16 slots
 //!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
 //!   field's edge or in place, how it drifts and spins, and when it is
@@ -110,6 +112,9 @@
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`escort_voice`]: who among the player's escorts speaks, and when:
+//!   a command's acknowledgement, the 1-in-3 call on a new target and the
+//!   victory.
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
@@ -334,6 +339,9 @@
 //! - [`tutorial`]: the new pilot's first-flight [`Tutorial`]: its hints
 //!   ([`TutorialHint`]), the take-off greeting and the newbie-only "No
 //!   destination".
+//! - [`voice`]: the escorts' voices: the clips of each voice set and
+//!   message, each government's voice, and the one voice channel a session
+//!   plays them through.
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
@@ -362,6 +370,7 @@ pub use nova_sim_port::board;
 pub use nova_sim_state::clearance;
 pub mod course;
 pub use nova_sim_ai::escort;
+pub use nova_sim_ai::escort_voice;
 pub use nova_sim_catalog::data;
 pub use nova_sim_port::escape;
 pub use nova_sim_port::npc_escape;
@@ -447,13 +456,14 @@ pub use nova_sim_story::text_tags;
 pub mod top_speed;
 pub use nova_sim_ai::traffic;
 pub use nova_sim_base::trig;
+pub use nova_sim_catalog::voice;
 pub use nova_sim_catalog::warp;
 pub use nova_sim_combat::tutorial;
 pub use nova_sim_port::wares;
 
 pub use ai::{
-    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,
-    Reaction, Surroundings, Warship, WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, FleetEscortAi, Goal, Interceptor, NovaAi,
+    Peaceful, PlayerSide, Reaction, Surroundings, Warship, WimpyTrader,
 };
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};

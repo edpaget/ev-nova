@@ -30,11 +30,14 @@
 //!   just out, [`Mode::LeavingGate`] at tick 0, @0x8ff18): a ship flying,
 //!   coasting, entering a gate or held at its gate verifies. The check sits
 //!   behind the AI timer's stagger (@0x8fe36-0x8fe6f), so a ship off its
-//!   timer keeps its swarm leader unchecked. It also skips a ship in
+//!   timer keeps its swarm leader unchecked, and so does a ship held in the
+//!   regroup pause, goal 0x13, whose dispatch stops before it
+//!   (@0x8fe73-0x8febb, [`regroup`](crate::ai::regroup); the traffic
+//!   leaves it out). It also skips a ship in
 //!   substate 4 (its warp out) or 0xd (an escort jumping with its
-//!   leader, @0x8fd83-0x8fd9a), which here is no ship: one departs as it
-//!   reaches sub 4, and sub 0xd is rdm
-//!   phase escort-fleet-fidelity/phase-8-jump-with-leader's.
+//!   leader, @0x8fd83-0x8fd9a), which takes the jump path before it: one
+//!   with a warp goal (see
+//!   [`jump_with_leader`](crate::traffic::jump_with_leader)).
 //! - **The swarm lead** ([`lead`]): where a swarmer aims, its swarm
 //!   leader's position plus [`SWARM_AHEAD`] times its own `_ShipMaxSpeed`
 //!   along the leader's whole-degree heading (`_Accel`, @0x8526e-0x852c4),
@@ -61,7 +64,7 @@
 //! - The swarm leader's slot formation for an escort or fighter, the
 //!   `_AIMaintainFormation` calls and glow copies in substates 5, 0x11 and
 //!   7, the stale parent of a ship whose AI type `_AICheckParentExists`
-//!   dropped, goal 0x13's skip of the check, a leftover substate 0x12
+//!   dropped, a leftover substate 0x12
 //!   outside state 4, and a beam of `ExitType` 4 stepping its firer's
 //!   swarm leader as an exit cursor (`_SpawnBeam` @0x450fa-0x4511e): rdm
 //!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14.
@@ -157,6 +160,10 @@ pub struct SwarmLead {
     pub aim: Vec2,
     /// Whether its swarm leader is its own leader (+0xc906 == +0x9a).
     pub leads_it: bool,
+    /// Its swarm leader's glow (+0xc8d4), which sub-goal 0xb copies
+    /// (@0x87364-0x873a3, see
+    /// [`plunder_dock::swarm_branch`](crate::traffic::plunder_dock::swarm_branch)).
+    pub glow: i16,
 }
 
 /// `npc`'s swarm lead among `around` (see the module docs): none with no
@@ -168,6 +175,7 @@ pub fn lead(npc: &Npc, around: &Surroundings) -> Option<SwarmLead> {
     Some(SwarmLead {
         aim: leader.state.position + trig::accel(trig::whole(leader.state.heading), ahead),
         leads_it: npc.leader_ref() == Some(ShipRef::Npc(leader.id)),
+        glow: leader.display.glow,
     })
 }
 
@@ -189,9 +197,9 @@ pub enum FormationParent {
     Player,
     /// The ship at this berth: its swarm leader.
     Berth(u32),
-    /// Its NPC leader ([`Npc::leader`]), whose berth the formation of any
-    /// NPC parent will read (rdm phase
-    /// escort-fleet-fidelity/phase-6-npc-formations).
+    /// Its NPC leader ([`Npc::leader`]), whose formation the formation
+    /// pass gives it a slot in
+    /// ([`fleet_formation`](crate::traffic::fleet_formation)).
     Leader(NpcId),
 }
 
@@ -491,6 +499,7 @@ mod tests {
         assert_eq!(formation_parent(&no_target), Some(FormationParent::Player));
         let no_swarm_leader = Npc {
             swarm_leader: None,
+            fleet_slot: None,
             ..npc.clone()
         };
         assert_eq!(
@@ -535,6 +544,7 @@ mod tests {
             heading: 90.9,
             ..ShipState::default()
         };
+        leader.display.glow = 17;
         let mut ship = swarmer(1, 2);
         ship.swarm_leader = Some(1);
         let npcs = [leader.clone(), ship.clone()];
@@ -545,7 +555,8 @@ mod tests {
             lead(&ship, &around),
             Some(SwarmLead {
                 aim,
-                leads_it: false
+                leads_it: false,
+                glow: 17,
             })
         );
         // Its own leader too.

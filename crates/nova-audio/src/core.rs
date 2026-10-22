@@ -224,6 +224,7 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.call_for_help, at::CALL_FOR_HELP);
             }
             SimSound::ScanHail => self.play(self.table.scan_hail, at::SCAN_HAIL),
+            SimSound::WaitForMe => self.play(self.table.wait_for_me, at::WAIT_FOR_ME),
             SimSound::ReinforcementsApproaching => {
                 self.play(self.table.reinforcements, at::REINFORCEMENTS);
             }
@@ -287,6 +288,8 @@ impl<A: Audio> AudioCore<A> {
             | SimSound::SelfDestructCancelled
             | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
+            SimSound::Voice { sound } => self.play(Some(sound), at::VOICE),
+            SimSound::HaltVoice { sound } => self.halt(&[sound]),
         }
     }
 
@@ -966,6 +969,7 @@ mod tests {
                 at::ONBOARD_EXPLOSION,
             ),
             (Sound::Sim(SimSound::JumpCollapsed), at::JUMP_COLLAPSED),
+            (Sound::Sim(SimSound::WaitForMe), at::WAIT_FOR_ME),
             (Sound::Sim(SimSound::Refused), at::REFUSED),
             (Sound::Ui(UiSound::EscortMenuToggled), at::ESCORT_MENU),
             (Sound::Ui(UiSound::EscortGroupSelected), at::ESCORT_GROUP),
@@ -1337,10 +1341,11 @@ mod tests {
     }
 
     #[test]
-    fn a_distress_call_a_pre_scan_hail_and_reinforcements_approaching_beep_154() {
+    fn a_distress_call_a_pre_scan_hail_reinforcements_approaching_and_wait_for_me_beep_154() {
         for sound in [
             SimSound::CallForHelp,
             SimSound::ScanHail,
+            SimSound::WaitForMe,
             SimSound::ReinforcementsApproaching,
         ] {
             let (mut core, log) = original();
@@ -1814,6 +1819,32 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn an_escorts_voice_plays_its_clip_at_15_and_its_halt_halts_it() {
+        use crate::priority as at;
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        let clip = SoundId(1523);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Voice { sound: clip })],
+        );
+        assert_eq!(
+            drain_prioritised(&log),
+            [AudioCommand::Play {
+                sound: clip,
+                volume: Volume::new(0.5),
+                priority: at::VOICE,
+            }]
+        );
+        assert_eq!(at::VOICE, Priority::new(15));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::HaltVoice { sound: clip })],
+        );
+        assert_eq!(drain(&log), [AudioCommand::Halt { sound: clip }]);
     }
 
     #[test]

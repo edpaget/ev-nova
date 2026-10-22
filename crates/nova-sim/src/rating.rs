@@ -19,7 +19,12 @@
 //! - **Which kills count** ([`counts`], @0x3ad4f-0x3ae53): the shooter is
 //!   the player or a ship of its fleet, its escorts and fighters (parent
 //!   the player, @0x3ad54-0x3ad7b), and the victim's government is not
-//!   derelict (`_ShipIsDerelict` @0x8225). The original also skips a
+//!   derelict (`_ShipIsDerelict` @0x8225). The test reads the shooter's
+//!   own parent (+0x9a) and goes no further: a fighter launched by the
+//!   player's escort is led by the escort (`_LaunchFighter` @0x3d866), so
+//!   its kills do not count, though its fleet's root is the player. The
+//!   same test convicts the player of the hit's crimes (see the session's
+//!   `players_hits` module). The original also skips a
 //!   stellar's defence ships and the shareware nag ship, which the engine
 //!   does not have.
 //! - **The start**: a new pilot's rating is its `chär`'s `Kills`, sign

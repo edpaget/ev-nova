@@ -60,6 +60,7 @@ use crate::ai::plunder_contents::{
     CAPTURED_ARMOR_SHARE, CAPTURED_WAIT, CargoLine, Led, PLUNDER_HOLD, Side, Taken, Victim,
     captures, cargo_line, roll_odds, steal, taken,
 };
+use crate::ai::swarm::SwarmLead;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -233,8 +234,8 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
 }
 
 /// Flies `npc`'s docking one tick at `victim` (none when that ship is gone,
-/// which drops the docking), at `speeds` under `flight`, its dock's wait rolled on
-/// `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
+/// which drops the docking), at `speeds` under `flight`, with `swarm` its
+/// swarm lead, its dock's wait rolled on `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
 /// no docking to fly, is not intact or not flying, for the autopilot to
 /// fly it instead.
 pub fn fly_docking(
@@ -242,6 +243,7 @@ pub fn fly_docking(
     victim: Option<&ShipState>,
     speeds: TopSpeeds,
     flight: FlightRules,
+    swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<DockOutcome> {
     npc.docking?;
@@ -253,7 +255,9 @@ pub fn fly_docking(
         return None;
     };
     let handling = npc.flying_handling(speeds.own, flight);
-    Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
+    Some(plunder_dock::fly(
+        npc, victim, &handling, flight, swarm, chance,
+    ))
 }
 
 /// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
@@ -690,6 +694,60 @@ mod tests {
         ship
     }
 
+    /// The traffic once a docked pirate has taken a former escort into
+    /// its fleet, a tick on.
+    fn captured() -> Traffic {
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = former();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 1);
+        traffic
+    }
+
+    #[test]
+    fn a_captured_ships_wait_ends_at_its_first_think_as_a_fleet_escort() {
+        // Its first think as an AI type 6 escort with order -1 runs the
+        // formation block, which sets +0x4c = -1.0 (@0x83ea8-0x83eb0).
+        let mut traffic = captured();
+        traffic.tick_in(
+            &crate::ai::NovaAi::default(),
+            World::new(&[]),
+            &[],
+            &mut Draws::of(&[0; 64]),
+        );
+        let taken = ship(&traffic, VICTIM);
+        assert_eq!(taken.ai_wait, 0);
+        assert_eq!(
+            taken.goal,
+            Goal::Follow {
+                lead: PIRATE,
+                guard: None
+            }
+        );
+        // By the other reading of `npc_escort_ai`, its 150 ticks run out.
+        let mut traffic = captured();
+        let bible = crate::rulebook::Rulebook::default().with_override(
+            crate::rulebook::RuleKey::NpcEscortAi,
+            crate::rulebook::RuleSource::Bible,
+        );
+        traffic.tick_in(
+            &crate::ai::NovaAi::from_rulebook(&bible),
+            World::new(&[]),
+            &[],
+            &mut Draws::of(&[0; 64]),
+        );
+        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2);
+    }
+
     #[test]
     fn a_captured_former_escort_joins_the_pirates_fleet_and_every_ship_targeting_it_drops_it() {
         let mut onlooker = npc(5, ShipStats::new(FAST, &[]));
@@ -767,8 +825,8 @@ mod tests {
         busy.berth = 6;
         busy.goal = Goal::Attack(ShipRef::Player);
         busy.target = Some(ShipRef::Player);
-        // Disabled, so no think of its own rewrites its target.
-        busy.condition = Condition::Disabled;
+        // With no AI, so no think of its own rewrites its target.
+        busy.no_ai = true;
         let mut docked = pirate(1000);
         docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         docked.target = Some(ShipRef::Npc(VICTIM));
@@ -852,6 +910,7 @@ mod tests {
                 Some(&victim),
                 speeds,
                 FlightRules::default(),
+                None,
                 &mut Draws::of(&[])
             ),
             Some(DockOutcome::Flying)
@@ -877,6 +936,7 @@ mod tests {
                     Some(&victim),
                     speeds,
                     FlightRules::default(),
+                    None,
                     &mut Draws::of(&[])
                 ),
                 None,
@@ -890,6 +950,7 @@ mod tests {
                 None,
                 speeds,
                 FlightRules::default(),
+                None,
                 &mut Draws::of(&[])
             ),
             None

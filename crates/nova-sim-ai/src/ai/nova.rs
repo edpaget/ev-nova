@@ -8,9 +8,15 @@
 //! flying as the rulebook's [`RuleKey::EscortAi`] entry says, and so does a
 //! mission escort, a `ShipBehav` 1 mission ship that has joined the
 //! player's formation (`_AIDispatch` @0x8fc03-0x8fc22 gives it AI type 6
-//! and leader 0 on every think), with no standing order; and an NPC
-//! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
-//! original's AI type 5 with an NPC parent), until their carrier is gone.
+//! and leader 0 on every think), with no standing order. A ship with an
+//! NPC parent, whatever its AI type, goes to [`FleetEscortAi`], which
+//! flies `_EscortAI` under its lead: a fleet's escort or a ship a pirate
+//! took into its fleet (a [`leader`](Npc::leader), the original's AI type
+//! 5), until it leaves its fleet ([`Decision::leaves_fleet`]) or its
+//! lead's loss gives it another lead (`traffic::succession`). By
+//! the other reading of the rulebook's [`RuleKey::NpcEscortAi`], the
+//! port's earlier routing, a fighter goes to [`CarriedAi`] and a led ship
+//! to its AI type's behaviour, following its lead.
 //! A leaderless miner (`shïp` `Flags3` & 3 with leader +0x9a -1,
 //! `_AIDispatch` @0x8ff64-0x8ff96), whatever its AI type, decides and
 //! targets as [`MinerAi`] instead of its type's think, but fires, waits in
@@ -27,11 +33,8 @@
 //! A leaderless warship of a government with `Flags` 0x1000 goes to the
 //! pirate's AI ([`PirateWarship`], `_PirateWarshipAI`, `_AIDispatch`
 //! @0x8ffc8-0x8fff0), which disables, docks with and plunders its victim
-//! (see [`plunder`](crate::traffic::plunder)). A ship a pirate takes into
-//! its fleet (AI type 6, its leader the pirate) is routed by its own AI
-//! type as any fleet escort is, following its lead, until
-//! rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts flies the
-//! original's AI type 6 under an NPC.
+//! (see [`plunder`](crate::traffic::plunder)); a pirate with a leader is
+//! one of its fleet's escorts.
 //!
 //! Each decision ([`Behaviour::decision`]) carries whether the think
 //! turned the ship on the player through `_AIMakeShipAttackPlayer`: the
@@ -50,8 +53,8 @@ use crate::ai::miner::{self, MinerAi};
 use crate::ai::pirate::PirateWarship;
 use crate::ai::target::TargetRules;
 use crate::ai::{
-    Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
-    Surroundings, Warship, WimpyTrader, reinforcements,
+    Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, FleetEscortAi, GateWait, Goal,
+    Interceptor, Reaction, Surroundings, Warship, WimpyTrader, reinforcements,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -69,6 +72,7 @@ pub struct NovaAi {
     interceptor: Rc<dyn Behaviour>,
     escorts: Rc<dyn Behaviour>,
     carried: Rc<dyn Behaviour>,
+    fleet_escorts: Rc<dyn Behaviour>,
     miner: Rc<dyn Behaviour>,
     pirate: Rc<dyn Behaviour>,
     /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
@@ -77,6 +81,9 @@ pub struct NovaAi {
     /// The source of [`RuleKey::LedAllyAttack`]: which allies a fleeing
     /// ship gives up fleeing ([`flee_drop`]).
     led_ally: RuleSource,
+    /// The source of [`RuleKey::NpcEscortAi`]: whether a ship with an NPC
+    /// parent flies [`FleetEscortAi`], or as the port flew it before.
+    npc_escort_ai: RuleSource,
 }
 
 impl Default for NovaAi {
@@ -97,10 +104,11 @@ impl NovaAi {
     /// the warships' and interceptors' government's 0x0004 word reaches a
     /// blessed player as its [`RuleKey::BlessingAlwaysAttacks`] entry says,
     /// the interceptors' patrol picks an uninhabited stellar as its
-    /// [`RuleKey::PatrolUninhabited`] entry says,
-    /// and every one of them, the escorts and the carried fighters aim
-    /// their quadrant turrets as its [`RuleKey::QuadrantTurretArc`] entry
-    /// says.
+    /// [`RuleKey::PatrolUninhabited`] entry says, the ships with an NPC
+    /// parent fly as its [`RuleKey::NpcEscortAi`] entry says,
+    /// and every one of them, the escorts, the fleet escorts and the
+    /// carried fighters aim their quadrant turrets as its
+    /// [`RuleKey::QuadrantTurretArc`] entry says.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
@@ -143,6 +151,7 @@ impl NovaAi {
                 fire,
             }),
             carried: Rc::new(CarriedAi { fire }),
+            fleet_escorts: Rc::new(FleetEscortAi { fire }),
             miner: Rc::new(MinerAi),
             pirate: Rc::new(PirateWarship {
                 piracy_police,
@@ -151,6 +160,7 @@ impl NovaAi {
             }),
             hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
             led_ally,
+            npc_escort_ai: rulebook.source_for(RuleKey::NpcEscortAi),
         }
     }
 
@@ -161,10 +171,20 @@ impl NovaAi {
         self
     }
 
-    /// This AI with `behaviour` for an NPC carrier's fighters.
+    /// This AI with `behaviour` for an NPC carrier's fighters under the
+    /// other reading of [`RuleKey::NpcEscortAi`].
     #[must_use]
     pub fn with_carried(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
         self.carried = behaviour;
+        self
+    }
+
+    /// This AI with `behaviour` for the ships with an NPC parent, a
+    /// fleet's escorts and an NPC carrier's fighters, under the engine's
+    /// reading of [`RuleKey::NpcEscortAi`].
+    #[must_use]
+    pub fn with_fleet_escorts(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.fleet_escorts = behaviour;
         self
     }
 
@@ -202,16 +222,22 @@ impl NovaAi {
 
     /// The behaviour for `npc` among `around`: the escorts' for the
     /// player's escort (its fighters too) and for a mission escort
-    /// ([`Npc::mission_escort`]), the carried fighters' for one an NPC
-    /// launched, the pirate's for a leaderless warship of a government
-    /// with `Flags` 0x1000 ([`PLUNDERS`], `_AIDispatch` @0x8ffc8-0x8fff0:
-    /// a ship with a leader is the original's AI type 5 or 6, so a fleet's
-    /// escort keeps the warship's until
-    /// rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts), otherwise
-    /// the one for its AI type.
+    /// ([`Npc::mission_escort`]); for a ship with an NPC parent, a leader
+    /// or a carrier (the original's AI types 6 and 5, `_AIDispatch`
+    /// @0x90011-0x90016), the fleet escorts' ([`FleetEscortAi`]) by the
+    /// engine's reading of [`RuleKey::NpcEscortAi`], and by its other
+    /// reading the carried fighters' for one an NPC launched and its own
+    /// AI type's for a led ship; the pirate's for a leaderless warship of
+    /// a government with `Flags` 0x1000 ([`PLUNDERS`], `_AIDispatch`
+    /// @0x8ffc8-0x8fff0); otherwise the one for its AI type.
     fn of(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
         if npc.escorts_player() {
             return &*self.escorts;
+        }
+        if (npc.leader.is_some() || npc.carrier.is_some())
+            && self.npc_escort_ai == RuleSource::Engine
+        {
+            return &*self.fleet_escorts;
         }
         if npc.carrier.is_some() {
             return &*self.carried;
@@ -308,6 +334,11 @@ impl Behaviour for NovaAi {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -555,14 +586,15 @@ mod tests {
     }
 
     #[test]
-    fn an_npc_carriers_fighter_goes_to_the_carried_behaviour_whatever_its_ai_type() {
+    fn by_the_other_reading_an_npc_carriers_fighter_goes_to_the_carried_behaviour() {
         let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
         let fighters = Marked::new(8);
         let escorts = Marked::new(9);
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
         let ai = TYPES
             .into_iter()
             .zip(&marks)
-            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+            .fold(NovaAi::from_rulebook(&bible), |ai, (ai_type, mark)| {
                 ai.with(ai_type, mark.clone())
             })
             .with_escorts(escorts.clone())
@@ -603,6 +635,124 @@ mod tests {
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(marks[2].ship())
         );
+    }
+
+    /// `npc` led by NPC 30.
+    fn led_by_30(mut npc: Npc) -> Npc {
+        npc.leader = Some(NpcId(30));
+        npc
+    }
+
+    /// Nova's AI as `rulebook` says, with marks 1-4 for the four types, 8
+    /// for the carried fighters and 7 for the NPC-led ships.
+    fn fleet_marked(rulebook: &Rulebook) -> (NovaAi, Vec<Rc<Marked>>, [Rc<Marked>; 2]) {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let others = [Marked::new(8), Marked::new(7)];
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::from_rulebook(rulebook), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_carried(others[0].clone())
+            .with_fleet_escorts(others[1].clone());
+        (ai, marks, others)
+    }
+
+    /// Every one of `mark`'s answers, as [`routed`] reads them.
+    fn all_of(mark: &Marked) -> (Goal, Option<ShipRef>, [f32; 3]) {
+        (
+            Goal::Attack(mark.ship()),
+            Some(mark.ship()),
+            [mark.mark as f32; 3],
+        )
+    }
+
+    #[test]
+    fn by_default_a_led_ship_and_an_npc_carriers_fighter_go_to_the_fleet_escort_behaviour() {
+        // The original's AI types 6 and 5 under an NPC parent: `_AIDispatch`
+        // calls `_EscortAI` for AI type above 4 (@0x90011-0x90016).
+        let (ai, marks, [fighters, fleet]) = fleet_marked(&Rulebook::default());
+        let npcs: Vec<Npc> = TYPES
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, ai_type)| {
+                let id = 10 + 2 * i as u32;
+                [
+                    led_by_30(of(id, ai_type)),
+                    carried(of(id + 1, ai_type), ShipRef::Npc(NpcId(30))),
+                ]
+            })
+            .collect();
+        let around = Surroundings::new(&[], &npcs);
+        for npc in &npcs {
+            assert_eq!(routed(&ai, npc, &around), all_of(&fleet), "{:?}", npc.id);
+        }
+        assert_eq!(fleet.asked.borrow().len(), 5 * npcs.len());
+        assert!(fighters.asked.borrow().is_empty());
+        assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
+        // The player's escorts and their fighters stay the escorts'.
+        let players = escorting(carried(of(20, AiType::Warship), ShipRef::Player));
+        let around = Surroundings::new(&[], std::slice::from_ref(&players));
+        assert_ne!(routed(&ai, &players, &around), all_of(&fleet));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_led_ship_flies_by_its_type_and_a_fighter_by_the_carried_ai() {
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        let (ai, marks, [fighters, fleet]) = fleet_marked(&bible);
+        for (ai_type, mark) in TYPES.into_iter().zip(&marks) {
+            let npcs = [
+                led_by_30(of(10, ai_type)),
+                carried(of(11, ai_type), ShipRef::Npc(NpcId(30))),
+            ];
+            let around = Surroundings::new(&[], &npcs);
+            assert_eq!(routed(&ai, &npcs[0], &around), all_of(mark), "{ai_type:?}");
+            assert_eq!(
+                routed(&ai, &npcs[1], &around),
+                all_of(&fighters),
+                "{ai_type:?}"
+            );
+        }
+        assert!(fleet.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn nova_ai_flies_a_fleet_escort_under_its_lead_as_its_rulebook_says() {
+        use crate::ai::fixture::{PIRATES, TRADERS, ship};
+        let mut lead = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
+        lead.goal = Goal::Attack(ShipRef::Npc(NpcId(4)));
+        let mut escort = ship(2, PIRATES, AiType::WimpyTrader, 0.0, 50.0);
+        escort.leader = Some(NpcId(1));
+        escort.order_word = crate::fleet::OrderWord(2);
+        let mut raider = ship(3, TRADERS, AiType::Warship, 0.0, 300.0);
+        raider.goal = Goal::Attack(ShipRef::Npc(NpcId(1)));
+        let victim = ship(4, TRADERS, AiType::WimpyTrader, 0.0, -300.0);
+        let npcs = [lead, escort, raider, victim];
+        let govts = crate::ai::fixture::govts(0, 0);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decide = |ai: &NovaAi| ai.decision(&npcs[1], &around, &mut Draws::of(&[0]));
+        let decision = decide(&NovaAi::default());
+        assert_eq!(
+            decision.goal,
+            Goal::Attack(ShipRef::Npc(NpcId(3))),
+            "its stored Attack: the nearest threat to its lead"
+        );
+        assert!(decision.ends_wait);
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        let decision = decide(&NovaAi::from_rulebook(&bible));
+        assert_eq!(
+            decision.goal,
+            Goal::Follow {
+                lead: NpcId(1),
+                guard: None
+            },
+            "its trader's way: following its lead"
+        );
+        assert!(!decision.ends_wait);
     }
 
     #[test]
@@ -662,7 +812,8 @@ mod tests {
     }
 
     /// Nova's AI with marks 1-4 for the four types, 9 for the escorts, 8
-    /// for the carried fighters and 5 for the miners.
+    /// for the NPC-led ships and carried fighters (the fleet escorts' and,
+    /// unused by default, the carried fighters') and 5 for the miners.
     fn marked() -> (NovaAi, Vec<Rc<Marked>>, [Rc<Marked>; 3]) {
         let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
         let others = [Marked::new(9), Marked::new(8), Marked::new(5)];
@@ -674,6 +825,7 @@ mod tests {
             })
             .with_escorts(others[0].clone())
             .with_carried(others[1].clone())
+            .with_fleet_escorts(others[1].clone())
             .with_miner(others[2].clone());
         (ai, marks, others)
     }
@@ -765,7 +917,7 @@ mod tests {
             all(&marks[2]),
             all(&escorts),
             all(&fighters),
-            all(&marks[2]),
+            all(&fighters),
             all(&marks[2]),
             all(&marks[1]),
         ];
@@ -876,15 +1028,15 @@ mod tests {
     }
 
     #[test]
-    fn a_led_miner_flies_its_leaders_way_by_its_type() {
-        let (ai, marks, [_, _, miners]) = marked();
+    fn a_led_miner_flies_under_its_lead_not_as_a_miner() {
+        let (ai, _, [_, fleet, miners]) = marked();
         let mut led = mining(of(2, AiType::Warship), MINER_BITS);
         led.leader = Some(NpcId(1));
         let npcs = [of(1, AiType::Warship), led];
         let around = Surroundings::new(&[], &npcs);
         assert_eq!(
             ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
-            Goal::Attack(marks[2].ship())
+            Goal::Attack(fleet.ship())
         );
         assert!(miners.asked.borrow().is_empty());
         let nova = NovaAi::default().with_miner(miners.clone());
@@ -894,7 +1046,10 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         assert_eq!(
             nova.decide(&npcs[1], &around, &mut Draws::of(&[])),
-            Goal::Follow(NpcId(1))
+            Goal::Follow {
+                lead: NpcId(1),
+                guard: None
+            }
         );
         assert!(miners.asked.borrow().is_empty());
     }
@@ -958,7 +1113,7 @@ mod tests {
                 ai.with(ai_type, mark.clone())
             })
             .with_escorts(escorts.clone())
-            .with_carried(fighters.clone());
+            .with_fleet_escorts(fighters.clone());
         let mut npcs: Vec<Npc> = TYPES
             .into_iter()
             .enumerate()
@@ -1026,23 +1181,29 @@ mod tests {
     }
 
     #[test]
-    fn nova_ai_flies_npc_fighters_by_the_carried_ai() {
+    fn nova_ai_docks_an_npc_fighter_with_its_idle_carrier_by_either_reading() {
         use crate::ai::fixture::{PIRATES, player, ship};
         let mut carrier = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
         carrier.goal = Goal::Idle;
-        let fighter = carried(
+        let mut fighter = carried(
             ship(2, PIRATES, AiType::Interceptor, 50.0, 0.0),
             ShipRef::Npc(NpcId(1)),
         );
+        fighter.leader = Some(NpcId(1));
+        // The Return (3) its idle carrier issues it.
+        fighter.order_word = crate::fleet::OrderWord(3);
         let npcs = [carrier, fighter];
         let around = Surroundings {
             player: Some(player(0.0, 300.0)),
             ..Surroundings::new(&[], &npcs)
         };
-        assert_eq!(
-            NovaAi::default().decide(&npcs[1], &around, &mut Draws::of(&[])),
-            Goal::Dock(ShipRef::Npc(NpcId(1)))
-        );
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        for ai in [NovaAi::default(), NovaAi::from_rulebook(&bible)] {
+            assert_eq!(
+                ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
+                Goal::Dock(ShipRef::Npc(NpcId(1)))
+            );
+        }
     }
 
     #[test]
@@ -1134,7 +1295,7 @@ mod tests {
             let rulebook = Rulebook::default().with_override(RuleKey::QuadrantTurretArc, source);
             let ai = format!("{:?}", NovaAi::from_rulebook(&rulebook));
             let expected = format!("quadrant_arc: {source:?}");
-            assert_eq!(ai.matches(&expected).count(), 7, "all seven: {ai}");
+            assert_eq!(ai.matches(&expected).count(), 8, "all eight: {ai}");
         }
     }
 
@@ -1757,6 +1918,11 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             }
         }
     }
@@ -1787,6 +1953,11 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                ends_wait: false,
+                order_word: None,
+                leaves_fleet: false,
+                follows_jump: false,
+                voice: None,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );
@@ -1876,14 +2047,20 @@ mod tests {
         use crate::ai::lost_sight::LostSight;
         let mark = Marked::new(3);
         let escorts = NovaAi::default().with_escorts(mark.clone());
-        let carriers = NovaAi::default().with_carried(mark.clone());
+        let carriers = NovaAi::default().with_fleet_escorts(mark.clone());
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        let earlier = NovaAi::from_rulebook(&bible).with_carried(mark.clone());
         let mut escort = of(1, AiType::WimpyTrader);
         escort.escort = Some(crate::escort::EscortDuty {
             formation: crate::escort::FormationSlot::default(),
             order: None,
         });
         let fighter = carried(of(1, AiType::WimpyTrader), ShipRef::Npc(NpcId(2)));
-        for (ai, npc) in [(&escorts, escort), (&carriers, fighter)] {
+        for (ai, npc) in [
+            (&escorts, escort),
+            (&carriers, fighter.clone()),
+            (&earlier, fighter),
+        ] {
             let npcs = [npc, of(2, AiType::Warship), cloaked(of(3, AiType::Warship))];
             let around = with_player(&npcs, Condition::Intact);
             let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));

@@ -7,9 +7,11 @@ use super::*;
 
 /// A ship launching from the carrier's bay ([`carrier_bay`]) as `trigger`
 /// says, holding 2 fighters, point defence of the Quad Light Blaster
-/// Turret too.
+/// Turret too. It targets ship A, itself when it is A, as a launching
+/// ship has a target in the fight: with none, `_HandleShip` holds its bay
+/// at its full `Reload` (@0x3390a-0x3394e).
 fn carrying(id: u32, x: f32, trigger: Trigger) -> Ship {
-    let mut ship = Ship::at(id, x, 0.0).facing(0.0);
+    let mut ship = Ship::at(id, x, 0.0).facing(0.0).targeting(A);
     ship.armament = Armament::new([
         (WeaponSpec::new(&carrier_bay()), 1),
         (WeaponSpec::new(&quad()), 1),

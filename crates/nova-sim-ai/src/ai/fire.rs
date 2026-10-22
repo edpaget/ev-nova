@@ -518,9 +518,9 @@ pub enum AmmoLeft {
 /// [`AmmoLeft::Dry`] to refuse a new target; the warship's and
 /// interceptor's out-of-ammo retreat reads anything but
 /// [`AmmoLeft::Armed`], and the warship's fully-dry drop
-/// [`AmmoLeft::Dry`] (see [`out_of_ammo`](crate::ai::out_of_ammo)). The
-/// escort's fallback that reads them (`_EscortAI` @0x83bb5) stays with
-/// rdm:task/escorts-follow-up.
+/// [`AmmoLeft::Dry`], and the escort's fallback (`_EscortAI` @0x83bb5)
+/// anything but [`AmmoLeft::Armed`] (see
+/// [`out_of_ammo`](crate::ai::out_of_ammo)).
 #[must_use]
 pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     let mut held = 0_usize;
@@ -558,7 +558,22 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 /// one-tick lag the player cannot see.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
-    let bays = launches(npc, around);
+    fight_trigger(npc, around, rules, launches(npc, around))
+}
+
+/// The weapon `npc` fires among `around` from its fight's substate alone,
+/// as `_LowLevelAIHandler` runs it with no `_HighLevelAIHandler` before it
+/// (the regroup pause, [`regroup`](crate::ai::regroup)): [`trigger`]
+/// without the high level's fighter launch (@0x8e6fa), so its passes and
+/// a snipe's own launch after them (@0x8732f) as a goal-4 ship whose high
+/// level launched nothing.
+#[must_use]
+pub fn low_level_trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
+    fight_trigger(npc, around, rules, false)
+}
+
+/// [`trigger`], launching its fighters first as `bays` says.
+fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool) -> Trigger {
     let second = second_bay(npc, around, bays);
     let after = launches_after_passes(npc, around, second);
     let (only, keep) = pick(npc, around, rules, (bays, second.filter(|_| after)));
@@ -567,21 +582,6 @@ pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
         keep,
         bays,
         bays_after: after,
-        point_defence: asks_turret(npc, around),
-        ..Trigger::default()
-    }
-}
-
-/// [`trigger`] for a ship whose attack launches no fighters: the player's
-/// escort, whose launch the engine doesn't fly yet (rdm
-/// escort-fleet-fidelity/phase-4-carriers-and-fighters), so its bay is
-/// never its pick either.
-#[must_use]
-pub fn trigger_holding_fighters(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
-    let (only, keep) = pick(npc, around, rules, (false, None));
-    Trigger {
-        only,
-        keep,
         point_defence: asks_turret(npc, around),
         ..Trigger::default()
     }
@@ -851,15 +851,10 @@ impl Passes {
         if !sight.seen {
             return;
         }
-        if let Some(found) = sight.gun(false) {
+        if let Some(found) = sight.gun_find(self.pick) {
             self.pick = Some(found);
         }
         if self.pick.is_some() {
-            self.flag = true;
-        } else if !sight.armed()
-            && let Some(found) = sight.gun(true)
-        {
-            self.pick = Some(found);
             self.flag = true;
         }
     }
@@ -919,6 +914,24 @@ pub fn turret_find(
         return None;
     }
     sight_of(npc, ship, around, rules)?.turret()
+}
+
+/// The gun `npc` finds to fire at `ship` among `around` by `rules`, if
+/// any: `_AIFireGun(ship, 0)`'s search on its target +0x70, whatever its
+/// goal, as `_EscortAI`'s formation runs it under an NPC parent
+/// (@0x83f3c). Its find is a ready forward gun of the target's planet-type
+/// in reach and clear of its fuse; with none, no pick held ([`Npc::pick`])
+/// and no armed gun, it tries again with homing allowed
+/// (@0x80226-0x80243), as [`trigger`]'s gun pass does. None for a target
+/// it doesn't see, or one not live or gone from the system.
+#[must_use]
+pub fn gun_find(
+    npc: &Npc,
+    ship: ShipRef,
+    around: &Surroundings,
+    rules: FireRules,
+) -> Option<WeaponId> {
+    sight_of(npc, ship, around, rules)?.gun_find(npc.pick)
 }
 
 /// How `npc` sizes up `ship`, by `rules`; none for a ship not live or
@@ -1090,6 +1103,22 @@ impl Sight<'_> {
         let gun =
             |spec: &WeaponSpec| forward(spec) || (homing && spec.guidance == Guidance::Homing);
         self.best(|mount| gun(&mount.spec) && self.suits(&mount.spec) && usable(mount))
+    }
+
+    /// `_AIFireGun`'s find, holding `held` as its pick: a forward gun,
+    /// else, holding no pick and no armed gun, a homing one too
+    /// (@0x80226-0x80243); none for a target it doesn't see.
+    fn gun_find(&self, held: Option<WeaponId>) -> Option<WeaponId> {
+        if !self.seen {
+            return None;
+        }
+        self.gun(false).or_else(|| {
+            if held.is_none() && !self.armed() {
+                self.gun(true)
+            } else {
+                None
+            }
+        })
     }
 
     /// The turret it fires, if any (see the module docs).
@@ -1429,6 +1458,71 @@ mod tests {
             ..gun(130, 1, 1)
         };
         holds_fire_while_unseen(&shooter(&[gun], ATTACK));
+    }
+
+    /// What `gun_find` finds for `npc` at NPC 2, (`x`, `y`) from
+    /// [`SHOOTER`], as `target` makes it.
+    fn gun_found(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Option<WeaponId> {
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = SHOOTER + Vec2::new(x, y);
+        target(&mut other);
+        let npcs = [npc.clone(), other];
+        gun_find(
+            npc,
+            ShipRef::Npc(NpcId(2)),
+            &Surroundings::new(&[], &npcs),
+            FireRules::default(),
+        )
+    }
+
+    #[test]
+    fn gun_find_takes_a_forward_gun_in_reach_whatever_the_goal() {
+        // `_AIFireGun(ship, 0)` from `_EscortAI`'s formation (@0x83f3c).
+        let armed = shooter(&[gun(140, 5, 5)], Goal::Idle);
+        assert_eq!(gun_found(&armed, 0.0, -100.0, |_| {}), Some(WeaponId(140)));
+        assert_eq!(gun_found(&armed, 0.0, -300.0, |_| {}), None, "beyond it");
+        assert_eq!(
+            gun_found(&armed, 0.0, -100.0, |other| other.cloak = cloaked_fully()),
+            None,
+            "unseen"
+        );
+        assert_eq!(
+            gun_found(&armed, 0.0, -100.0, |other| {
+                other.condition = Condition::Destroyed;
+            }),
+            None,
+            "not live"
+        );
+    }
+
+    #[test]
+    fn gun_find_tries_a_homing_gun_holding_no_pick_and_no_armed_gun() {
+        // @0x80226-0x80243.
+        let homing = shooter(&[missile(141)], Goal::Idle);
+        assert_eq!(gun_found(&homing, 0.0, -100.0, |_| {}), Some(WeaponId(141)));
+        let held = Npc {
+            pick: Some(WeaponId(150)),
+            ..homing.clone()
+        };
+        assert_eq!(gun_found(&held, 0.0, -100.0, |_| {}), None, "a pick held");
+        let beside_a_gun = shooter(&[gun(140, 5, 5), missile(141)], Goal::Idle);
+        assert_eq!(
+            gun_found(&beside_a_gun, 0.0, -100.0, |_| {}),
+            Some(WeaponId(140))
+        );
+        assert_eq!(
+            gun_found(&beside_a_gun, 0.0, -250.0, |_| {}),
+            None,
+            "an armed gun out of reach: no homing retry"
+        );
+    }
+
+    /// A cloak faded out fully.
+    fn cloaked_fully() -> crate::cloak::Cloak {
+        crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        }
     }
 
     /// Whether `npc` asks for its point defence with the player (`x`,
@@ -3393,7 +3487,6 @@ mod tests {
         primary: true,
         secondary: Some(WeaponId(131)),
         only: Some(WeaponId(128)),
-        turrets_only: true,
         bays: true,
         bays_after: true,
         point_defence: true,
@@ -3538,7 +3631,7 @@ mod tests {
             },
             &[],
         );
-        assert!(npc.flies_inertialess(None, crate::inertialess::InertialDampener::PlayerOnly));
+        assert!(npc.hull_inertialess(crate::inertialess::InertialDampener::PlayerOnly));
         npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
         npc.state.velocity = Vec2::new(0.0, -0.36);
         npc.speed = 0.36;

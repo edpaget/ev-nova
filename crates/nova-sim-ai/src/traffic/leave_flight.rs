@@ -33,14 +33,18 @@
 //!   thrust (@0x85592-0x855e1); a leave (goal 2 or 3) keeps it. [`stop`]
 //!   flies sub 1 for both, its `refuelling` flag saying which.
 //!
-//!   Left out of sub 1, as it can't run on a leave or a refuel: its settle
-//!   below 0.35 on both axes (velocity × 0.95, sub 0, @0x855e3-0x85624),
+//!   Below [`MOVING`](inertialess::MOVING) on both axes, inertial or
+//!   not, it settles instead: its velocity cut to [`SETTLE`] of itself,
+//!   with no thrust or turn (@0x855e3-0x85624). A leave never reaches it,
 //!   as the high level sets sub 1 only while an axis is at 0.35 or more
-//!   and the low level reads the same velocity. It, and the formation's
-//!   use of sub 1, are
-//!   rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. Its cut of
-//!   +0x48, the speed along the heading, with the velocity is
-//!   rdm:task/ai-drags-scale-the-npc-speed's. Nothing here plays a sound.
+//!   and the low level reads the same velocity; a refuel's stop and a
+//!   formation escort near a leader it can't see do
+//!   ([`formation_flight`](crate::traffic::formation_flight), which flies
+//!   [`stop`] with `refuelling` false). Its cut of +0x48, the speed along
+//!   the heading, with the velocity is
+//!   rdm:task/ai-drags-scale-the-npc-speed's. Sub 1 writes the thrust word
+//!   +0x30 alone, so a ship owing its gate burst bursts out on this brake
+//!   instead ([`held_burst`]). Nothing here plays a sound.
 //! - [`Leg::Jump`] (sub 4): it begins its warp out where it is, with no
 //!   move that tick ([`Npc::begin_own_jump`]). Sub 4 itself, the warp out
 //!   (`_LowLevelAIHandler` @0x8585e-0x859c5), is
@@ -54,7 +58,8 @@ use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
-use crate::traffic::autopilot::{self, Outcome, steer};
+use crate::traffic::autopilot::{Outcome, steer};
+use crate::traffic::held_burst::{self, Flight};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use crate::trig;
@@ -74,6 +79,9 @@ pub const SOFT_BRAKE: f32 = 0.5;
 /// What a braking ship's velocity is cut to there, each tick it thrusts
 /// (the double 0.94 @0xdda78).
 pub const BRAKE_DAMPING: f64 = 0.94;
+/// What a ship stopping below 0.35 on both axes settles its velocity to
+/// each tick (the double 0.95 @0xdd618, @0x855e3-0x85624).
+pub const SETTLE: f64 = 0.95;
 
 /// Flies `npc` one tick of `leg` on `handling` under `flight`, as
 /// `inertia` says (see the module docs): flying on, on [`Leg::Jump`]
@@ -85,15 +93,19 @@ pub fn fly(
     flight: FlightRules,
     inertia: Inertia,
 ) -> Outcome {
-    let (controls, flown) = match (leg, inertia) {
-        (Leg::Jump, _) => {
+    let (flown, chosen) = match leg {
+        Leg::Jump => {
             npc.begin_own_jump();
             return Outcome::Flying;
         }
-        (Leg::RunOut, _) => (run_out(&npc.state, handling), *handling),
-        (Leg::Brake, _) => stop(&mut npc.state, handling, inertia, false),
+        Leg::RunOut => (*handling, Flight::from(run_out(&npc.state, handling))),
+        // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
+        Leg::Brake => {
+            let (controls, flown) = stop(&mut npc.state, handling, inertia, false);
+            (flown, Flight::stop(controls, &flown, inertia))
+        }
     };
-    autopilot::step(npc, &flown, controls, flight, inertia);
+    held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
     Outcome::Flying
 }
 
@@ -128,18 +140,28 @@ pub fn fleeing_afar(
     fly(npc, leg, handling, flight, inertia)
 }
 
-/// Substate 1's brake (@0x853d1-0x855e1, see the module docs) for a ship
-/// at `state` on `handling`, as `inertia` says: the controls, and the
-/// handling they fly by, its velocity cut as the substate cuts it. A
-/// `refuelling` ship (goal 9, +0xc8c8) also has its velocity cut to
-/// [`BRAKE_DAMPING`] of itself while off its retro heading
-/// (@0x85592-0x855e1).
+/// Substate 1 (@0x8536d-0x85633, see the module docs) for a ship at
+/// `state` on `handling`, as `inertia` says: the controls, and the
+/// handling they fly by, its velocity cut as the substate cuts it. Moving
+/// ([`inertialess::moving`]) it brakes (@0x853d1-0x855e1); a `refuelling`
+/// ship (goal 9, +0xc8c8) also has its velocity cut to [`BRAKE_DAMPING`]
+/// of itself while off its retro heading (@0x85592-0x855e1). Otherwise
+/// it settles, inertial or not, as the speed test comes before
+/// `_ShipIsInertialess`: its velocity cut to [`SETTLE`] of itself in
+/// doubles, with no thrust or turn (@0x855e3-0x85624).
 pub(crate) fn stop(
     state: &mut ShipState,
     handling: &Handling,
     inertia: Inertia,
     refuelling: bool,
 ) -> (Controls, Handling) {
+    if !inertialess::moving(state.velocity) {
+        // Doubles, back to floats.
+        #[allow(clippy::cast_possible_truncation)]
+        let settle = |axis: f32| (f64::from(axis) * SETTLE) as f32;
+        state.velocity = Vec2::new(settle(state.velocity.x), settle(state.velocity.y));
+        return (Controls::default(), *handling);
+    }
     match inertia {
         Inertia::Inertial => brake(state, handling, refuelling),
         Inertia::Inertialess { .. } => (inertialess::brake(state), *handling),
@@ -349,6 +371,34 @@ mod tests {
     }
 
     #[test]
+    fn below_0_35_on_both_axes_it_settles_to_0_95_of_its_velocity_with_no_thrust_or_turn() {
+        // The float 0.35 widens below the double: not moving.
+        for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 0.3 }] {
+            for refuelling in [false, true] {
+                let mut state = braking(0.35, -0.2, 90.0);
+                let (controls, by) = stop(&mut state, &HANDLING, inertia, refuelling);
+                assert_eq!(controls, Controls::default(), "{inertia:?}");
+                assert_eq!(by, HANDLING);
+                #[allow(clippy::cast_possible_truncation)]
+                let settled = |axis: f32| (f64::from(axis) * SETTLE) as f32;
+                assert_eq!(
+                    state.velocity,
+                    Vec2::new(settled(0.35), settled(-0.2)),
+                    "{inertia:?}"
+                );
+                assert_eq!(state.heading, 90.0);
+            }
+        }
+        // Moving on one axis, it brakes.
+        let above = f32::from_bits(0.35_f32.to_bits() + 1);
+        let mut state = braking(0.0, -above, 0.0);
+        let (controls, _) = stop(&mut state, &HANDLING, Inertia::Inertial, false);
+        assert_eq!(controls.turn, Turn::Right, "to its retro heading");
+        assert_eq!(state.velocity, Vec2::new(0.0, -above));
+        assert_eq!(SETTLE, 0.95);
+    }
+
+    #[test]
     fn braking_off_its_retro_heading_on_a_leave_it_keeps_its_velocity() {
         let mut state = braking(0.0, -0.5, 0.0);
         let (flown, by) = stop(&mut state, &HANDLING, Inertia::Inertial, false);
@@ -406,7 +456,7 @@ mod tests {
         let mut expected = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
         expected.speed = 1.0;
         let (controls, by) = stop(&mut expected.state, &HANDLING, inertia, false);
-        autopilot::step(&mut expected, &by, controls, rules, inertia);
+        autopilot::plain_step(&mut expected, &by, controls, rules, inertia);
         assert_eq!(
             (inertialess.state, inertialess.speed),
             (expected.state, expected.speed)
@@ -421,7 +471,7 @@ mod tests {
     use crate::fuel::OutfitMod;
     use crate::handling::ShipFields;
     use crate::stats::{HYPERSPACE_DISTANCE, INERTIALESS_HULL, ShipStats};
-    use crate::traffic::autopilot::{Readings, TopSpeeds};
+    use crate::traffic::autopilot::{self, Readings, TopSpeeds};
     use crate::traffic::npc::NpcPerson;
     use nova_sim_base::fixture::{Draws, FAST};
     use std::collections::BTreeMap;
@@ -464,7 +514,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
-            None,
+            crate::traffic::autopilot::Beside::default(),
             speeds,
             flight,
             readings,
