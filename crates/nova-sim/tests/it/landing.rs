@@ -49,9 +49,7 @@ impl CombatCatalog for Pilot {
 }
 
 /// No traffic: the system takes off into is empty.
-struct NoTraffic;
-
-impl TrafficCatalog for NoTraffic {
+impl TrafficCatalog for Pilot {
     fn system_traffic(&self, _id: SystemId) -> Option<SystemTraffic> {
         None
     }
@@ -292,7 +290,10 @@ fn a_new_pilot_is_denied_where_a_record_is_needed() {
 
 #[test]
 fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
-    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
+    let catalog = Pilot {
+        sites: vec![at_centre(StellarFlags::CAN_LAND, 0)],
+    };
+    let mut session = Session::start(&catalog).expect("starts");
     let thrust = Controls {
         thrust: true,
         ..Controls::default()
@@ -333,7 +334,7 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
     assert_eq!(
-        session.take_off(&NoTraffic, &mut NeverFires),
+        session.take_off(&catalog, &mut NeverFires),
         Some(StellarId(128))
     );
     assert_eq!(session.landed(), None);

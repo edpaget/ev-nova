@@ -37,8 +37,10 @@
 //! **Ordering.** The take-off's `OnExplore`s run at once, inside the
 //! take-off, before its aux restart (@0x634df) and its setup (@0x674c2),
 //! through an events-only settling with no catalog
-//! ([`NoCatalog`](super::story::NoCatalog)), the moves they queue held
-//! for the caller's settling, as a map grant's are.
+//! ([`NoCatalog`](super::story::NoCatalog)). The moves they make are the
+//! take-off's landed moves, applied at their operator (see the
+//! `take_off_moves` module); a map grant's are held for the caller's
+//! settling.
 //!
 //! [`StoryEvent::Explored`]: crate::story::StoryEvent::Explored
 
@@ -157,7 +159,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -176,7 +178,12 @@ mod tests {
 
     /// A nebula, `id`, around the system at `at` alone, active by
     /// `active_on`, running `on_explore`.
-    fn around(id: i16, at: (i16, i16), active_on: &str, on_explore: &str) -> NebulaRecord {
+    pub(in crate::session) fn around(
+        id: i16,
+        at: (i16, i16),
+        active_on: &str,
+        on_explore: &str,
+    ) -> NebulaRecord {
         nebula(
             id,
             (at.0 - 100, at.1 - 100, 200, 200),
@@ -187,7 +194,7 @@ mod tests {
 
     /// [`catalog`] on `stars`, each of them a system, with `nebulae`, and
     /// outfit 300 a map of `outer`, 301 one of `inner`.
-    fn galaxy(
+    pub(in crate::session) fn galaxy(
         stars: Vec<StarSystem>,
         nebulae: Vec<NebulaRecord>,
         outer: i16,
@@ -204,7 +211,7 @@ mod tests {
 
     /// 130 - 131 - 132 - 133 in a line, 600 apart, each linking the
     /// next and back.
-    fn line() -> Vec<StarSystem> {
+    pub(in crate::session) fn line() -> Vec<StarSystem> {
         vec![
             star(130, (0.0, 0.0), &[131]),
             star(131, (600.0, 0.0), &[130, 132]),
@@ -229,7 +236,7 @@ mod tests {
         session.run_set(&SetExpr::parse(script).expect("parses"), &mut NeverFires);
     }
 
-    fn charted(session: &Session) -> Vec<i16> {
+    pub(in crate::session) fn charted(session: &Session) -> Vec<i16> {
         session.pilot().charted().map(|system| system.0).collect()
     }
 

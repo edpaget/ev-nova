@@ -331,7 +331,6 @@ mod tests {
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
-    use crate::session::entry::NoTraffic;
     use crate::session::mission_ships::tests::crowd;
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
@@ -1500,7 +1499,7 @@ mod tests {
         let mut session = docked(1000, RuleSource::Engine);
         assert_eq!(session.pilot().cash(), 1000, "landing pays nothing");
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 600);
         assert_eq!(session.take_pay_notes(), []);
@@ -1521,7 +1520,7 @@ mod tests {
             let landed = session.date();
             session.port.stay.ship_bought = true;
             session
-                .take_off(&NoTraffic, &mut NeverFires)
+                .take_off(&catalog(), &mut NeverFires)
                 .expect("takes off");
             assert_eq!(session.pilot().cash(), cash, "{rule:?}");
             let mut days = std::iter::successors(Some(landed), |date| Some(date.next_day()));
@@ -1537,7 +1536,7 @@ mod tests {
             RuleSource::Engine
         );
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
@@ -1554,7 +1553,7 @@ mod tests {
             RuleSource::Bible
         );
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);

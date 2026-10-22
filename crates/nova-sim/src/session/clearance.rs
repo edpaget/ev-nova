@@ -621,7 +621,7 @@ mod tests {
         let mut session = session();
         land_now(&mut session).expect("lands");
         session.port.dock = request(128, CLEARED);
-        session.take_off(&crate::session::entry::NoTraffic, &mut NeverFires);
+        session.take_off(&catalog(), &mut NeverFires);
         assert_eq!(session.dock_request(), None);
         assert_eq!(session.land(), requested(128));
     }

@@ -48,6 +48,9 @@
 //! due. In flight a move gives up a jump being prepared. From a jump's end
 //! to its entry an in-flight move does not queue: it is the jump's own,
 //! applied at its operator with no catalog (see the `jump_moves` module).
+//! Nor does a move during a take-off, from the ship leaving the spaceport
+//! to the take-off's last nebula pass: it is a landed move, applied at its
+//! operator (see the `take_off_moves` module).
 //!
 //! [`Session::run_set`] stays catalog-free, so a script it runs in the
 //! middle of something else (a record's hook) always queues.

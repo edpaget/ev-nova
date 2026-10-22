@@ -173,16 +173,23 @@ impl Session {
         self.kill_jump_explosions(window);
     }
 
-    /// Applies as the jump's own, at once, each move queued from `from`
-    /// on, while a jump's window is open (see the module docs), drawing on
-    /// `chance` for what the moves' dispatch runs. Otherwise the moves
-    /// stay queued for the caller's settling.
+    /// Applies at once each move queued from `from` on: as the jump's
+    /// own while a jump's window is open (see the module docs), drawing on
+    /// `chance` for what the moves' dispatch runs, or as a take-off's
+    /// landed move while a take-off's window is (see the `take_off_moves`
+    /// module). Otherwise the moves stay queued for the caller's settling.
     pub(super) fn absorb_moves(&mut self, from: usize, chance: &mut dyn Chance) {
-        if !self.chart.in_jump_window() || self.run.queued.moves.len() <= from {
+        if self.run.queued.moves.len() <= from {
             return;
         }
-        for step in self.run.queued.moves.split_off(from) {
-            self.move_in_jump(step, chance);
+        if self.chart.in_jump_window() {
+            for step in self.run.queued.moves.split_off(from) {
+                self.move_in_jump(step, chance);
+            }
+        } else if self.chart.in_take_off_window() {
+            for step in self.run.queued.moves.split_off(from) {
+                self.move_at_take_off(step);
+            }
         }
     }
 
@@ -264,7 +271,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -290,13 +297,16 @@ mod tests {
     };
 
     /// Where 133's first stellar, 150, is.
-    const FIRST_150: Vec2 = Vec2::new(300.0, -200.0);
+    pub(in crate::session) const FIRST_150: Vec2 = Vec2::new(300.0, -200.0);
 
     /// [`catalog`] (130 to 131 to 132) with 132 and 133 (at (-600, 0),
     /// unlinked): 133's first stellar 150 at [`FIRST_150`], then 151, and
     /// two ships of traffic, düde 128 flying ship 129; with `nebulae` and
     /// `crons`.
-    fn moving(nebulae: Vec<NebulaRecord>, crons: Vec<CronRecord>) -> FakePilotCatalog {
+    pub(in crate::session) fn moving(
+        nebulae: Vec<NebulaRecord>,
+        crons: Vec<CronRecord>,
+    ) -> FakePilotCatalog {
         let mut dude_types = [(-1, 0); 8];
         dude_types[0] = (128, 100);
         let mut catalog = FakePilotCatalog {
@@ -338,7 +348,7 @@ mod tests {
 
     /// `catalog`'s new pilot flown by `rules`, by `MultiJumpRule::Engine`,
     /// its load settled.
-    fn flown(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+    pub(in crate::session) fn flown(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = Session::fly(catalog, Pilot::new(catalog, "").expect("starts"))
             .expect("flies")
             .with_rules(rules)
@@ -350,10 +360,10 @@ mod tests {
     /// The NPCs in the system as each `A` operator applies, with the
     /// mission it names.
     #[derive(Debug, Default)]
-    struct Hooks(RefCell<Vec<(i16, usize)>>);
+    pub(in crate::session) struct Hooks(RefCell<Vec<(i16, usize)>>);
 
     impl Hooks {
-        fn seen(&self) -> Vec<(i16, usize)> {
+        pub(in crate::session) fn seen(&self) -> Vec<(i16, usize)> {
             self.0.borrow().clone()
         }
     }
@@ -369,7 +379,11 @@ mod tests {
     /// `session` with a fixture subscription, `record`, to `system`'s
     /// `EnteredSystem` running `A{record}`, a mission never active, which
     /// the [`Hooks`] given back sees.
-    fn watching_entries(mut session: Session, record: i16, system: i16) -> (Session, Rc<Hooks>) {
+    pub(in crate::session) fn watching_entries(
+        mut session: Session,
+        record: i16,
+        system: i16,
+    ) -> (Session, Rc<Hooks>) {
         session
             .register_story(Subscription::new(
                 SubscriptionId {
