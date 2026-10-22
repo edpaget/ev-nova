@@ -407,6 +407,43 @@ mod tests {
     }
 
     #[test]
+    fn a_later_docked_n_merged_into_a_pending_m_docks_at_none() {
+        let catalog = moving(Vec::new(), Vec::new());
+        let mut session = flown(&catalog, Rulebook::default());
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        run(&mut session, "M131 N133");
+        assert_eq!(session.system(), SystemId(133));
+        let settled = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(settled.moved, Some(SystemId(133)));
+        assert_eq!(session.pilot().stellar, None, "the last move's `N`");
+    }
+
+    #[test]
+    fn a_later_in_flight_move_merged_into_a_pending_stay_completes_as_a_move() {
+        let catalog = moving(Vec::new(), Vec::new());
+        let rules = Rulebook::default().with_override(RuleKey::OutOfRangeMove, RuleSource::Engine);
+        let mut session = flown(&catalog, rules);
+        session.take_events();
+        run(&mut session, "N9999 M133");
+        assert_eq!(session.system(), SystemId(133));
+        let settled = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(settled.moved, Some(SystemId(133)));
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(150), StellarId(151)]
+        );
+        assert_eq!(
+            session
+                .take_events()
+                .iter()
+                .filter(|event| **event == crate::session::SessionEvent::SystemChanged)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn an_in_flight_move_to_no_system_runs_the_tail_where_the_player_is() {
         for (script, key) in [
             ("N9999", RuleKey::OutOfRangeMove),
