@@ -36,6 +36,7 @@
 //! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see `nova_sim::story`) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see `nova_sim::landing`) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
+//! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
@@ -290,7 +291,8 @@
 //! `move_keep_flag`, `script_sound`, `out_of_range_move`, `missing_system_move`,
 //! `ship_info_rounding`,
 //! `stale_secondary`,
-//! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
+//! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
+//! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
 //! `desc_movie_globals`,
 //! `pay_millions`,
@@ -892,6 +894,23 @@ rule_keys! {
     /// the sheet it draws, from the moment it is swapped (see the
     /// `nova_sim::story` module's "Built by stellar-fidelity phase 1").
     StellarFrameCount => "stellar_frame_count",
+    /// What a whole stellar whose `Type` has no readable sheet (no
+    /// `spïn`, an `rlëD` that cannot be read, or outside 0 to 255) draws,
+    /// is clicked by and is shot by: by the engine, from the first rebuild
+    /// point that shows it, what its sprite slot holds, which is graphic
+    /// type 0 (`spïn` 1000), the sheet the original's rebuild means an
+    /// empty slot to get (its fill @0x33231-0x332d0; its own code faults
+    /// first, `_SWSetCurrentFrameIndex` @0xa90e7/@0xa90f7 called from
+    /// `_HandleStellarSystemVisibility` @0x33096), or a `DeadType` sheet a
+    /// flight frame cloned in since, the per-frame sprite tick's clone of
+    /// the null `Type` master failing (`_HandleStellarSprites`
+    /// @0x2e7c7-0x2e7e5, `_SWCloneFramesFromMaster` @0xac448-0xac462); by
+    /// the other reading, the engine's placeholder box and the reason,
+    /// which shows the broken data. The Bible says nothing of an
+    /// unreadable sheet, so the other reading is the intended alternative,
+    /// not anything the Bible says (see the `nova_sim::story` module's
+    /// "Built by stellar-fidelity phase 3").
+    TypeSheetFallback => "type_sheet_fallback",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -6000,6 +6019,11 @@ mod tests {
             RuleKey::from_key("stellar_frame_count"),
             Some(RuleKey::StellarFrameCount)
         );
+        assert_eq!(RuleKey::TypeSheetFallback.key(), "type_sheet_fallback");
+        assert_eq!(
+            RuleKey::from_key("type_sheet_fallback"),
+            Some(RuleKey::TypeSheetFallback)
+        );
     }
 
     #[test]
@@ -6028,6 +6052,7 @@ mod tests {
                 RuleKey::DeadTypeFallback,
                 RuleKey::LandingDistance,
                 RuleKey::StellarFrameCount,
+                RuleKey::TypeSheetFallback,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
