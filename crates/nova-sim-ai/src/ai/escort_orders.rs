@@ -635,6 +635,14 @@ mod tests {
         // about to jump (sub 4, which issues nothing once under way).
         let runs_out = fleeing((500.0, 0.0), true, (0.0, 0.0));
         assert_eq!(issued(&runs_out), [1, 1, 2, 0]);
+        // Warships and freighters keep their bands: a low shield's Defend,
+        // a full shield's formation on stale odds.
+        let mut low = fleeing((500.0, 0.0), true, (0.0, 0.0));
+        low[0].reserves.shield.now = 32.99;
+        assert_eq!(issued(&low), [1, 1, 1, 0], "low shield");
+        let mut stale = fleeing((500.0, 0.0), true, (0.0, 0.0));
+        stale[0].odds = -1.0;
+        assert_eq!(issued(&stale), [1, 1, 0, 0], "stale odds");
         let close = fleeing((1100.0, 0.0), true, (1100.0, 250.0));
         assert_eq!(issued(&close), [1, 1, 2, 0]);
         let still = fleeing((1100.0, 0.0), false, (0.0, 0.0));
