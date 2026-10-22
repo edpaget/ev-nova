@@ -1,7 +1,8 @@
 //! The fight's tests of `_HandleBeams`' asteroid pass (rdm asteroids
 //! phase 6, see the `asteroid_beam` module): the ship pass first, the
 //! mining NPC's beam passing every ship, a later beam meeting the
-//! fragments an earlier one broke, and a tractor's lock on its firer.
+//! fragments an earlier one broke, a tractor's lock on its firer, and the
+//! engine's nearest weighing asteroid k by berth k's ship, live or gone.
 
 use super::*;
 use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS};
@@ -187,4 +188,70 @@ fn double_times_second_pass_cuts_nothing() {
             .any(|event| matches!(event, CombatEvent::Exploded { .. })),
         "{events:?}"
     );
+}
+
+/// A field of two kind-0 asteroids at rest, slot 0 at (60, 0) and slot 1,
+/// farther along the beam, at (150, 0).
+fn near_and_far() -> Asteroids {
+    let mut field = rock_at(60.0, 0.0, 100);
+    field.place(Asteroid {
+        position: Vec2::new(150.0, 0.0),
+        ..*field.get(0).expect("placed")
+    });
+    field
+}
+
+/// A fight weighing the nearest asteroid by `BeamConeQuirks`' engine
+/// reading, by ship slot k's distance.
+fn by_the_engines_nearest() -> Combat {
+    let mut combat = Combat::default();
+    combat.set_beam_cone_quirks(RuleSource::Engine);
+    combat
+}
+
+/// The player in slot 0, unarmed, at (`x`, 0), behind the beam.
+fn player_at(x: f32) -> Ship {
+    Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        slot: Slot::Player,
+        ..Ship::at(0, x, 0.0)
+    }
+}
+
+/// Where the beam of C, in berth 3 at the centre facing right, ends among
+/// `near_and_far`, with `others` in the fight.
+fn cut_by_berth_3(combat: &mut Combat, others: Vec<Ship>) -> Vec2 {
+    let mut field = near_and_far();
+    let mut ships = others;
+    ships.push(Ship::at(3, 0.0, 0.0).armed(cutter(0)));
+    beams_amid(combat, &mut ships, &mut field, &types(), ADVANCE);
+    combat.beams()[0].end
+}
+
+#[test]
+fn by_the_engines_nearest_asteroid_1_is_weighed_by_the_npc_in_berth_1() {
+    // The player (slot 0) 100 behind weighs asteroid 0 at 100² = 10,000;
+    // A in berth 1, 10 behind, weighs asteroid 1 at 10² = 100, so the
+    // farther asteroid wins. Its own distance, 150² = 22,500, would lose.
+    let others = || vec![player_at(-100.0), Ship::at(1, -10.0, 0.0)];
+    let end = cut_by_berth_3(&mut by_the_engines_nearest(), others());
+    // trunc(150 − 0.2 × 30).
+    assert!(close_by(end, Vec2::new(144.0, 0.0)), "{end:?}");
+    // By the other reading, each by its own distance: the nearer.
+    let end = cut_by_berth_3(&mut Combat::default(), others());
+    assert!(close_by(end, Vec2::new(54.0, 0.0)), "{end:?}");
+}
+
+#[test]
+fn by_the_engines_nearest_a_berth_its_ship_left_weighs_by_where_it_was_noted() {
+    // A, noted in berth 1, leaves the fight: the slot keeps its position
+    // (`_HandleShip` @0x3359a), and asteroid 1 is weighed by it.
+    for (noted, end) in [(-10.0, 144.0), (-200.0, 54.0)] {
+        let mut combat = by_the_engines_nearest();
+        let mut left = [Ship::at(1, noted, 0.0)];
+        combat.note_slots(&left.iter_mut().map(Ship::fighter).collect::<Vec<_>>());
+        let cut = cut_by_berth_3(&mut combat, vec![player_at(-100.0)]);
+        assert!(close_by(cut, Vec2::new(end, 0.0)), "{noted}: {cut:?}");
+    }
 }
