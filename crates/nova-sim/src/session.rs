@@ -1116,6 +1116,11 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
+        let lives: BTreeMap<StellarId, crate::catalog::StellarLife> = catalog
+            .stellar_lives()
+            .into_iter()
+            .map(|life| (life.id, life))
+            .collect();
         let statics = Statics {
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
@@ -1133,11 +1138,12 @@ impl Session {
             )),
             box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
             asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
-            lives: catalog
-                .stellar_lives()
-                .into_iter()
-                .map(|life| (life.id, life))
+            destroyable: lives
+                .values()
+                .filter(|life| crate::story::wreck::destroyable(life))
+                .map(|life| life.id)
                 .collect(),
+            lives,
             fallback_frame: catalog.fallback_frame_size(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,
@@ -1833,6 +1839,7 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            destroyable: &self.statics.destroyable,
             // No tractor's step: the entry flies no ship.
             ..World::new(&self.chart.sites)
         };
@@ -2076,6 +2083,7 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2156,6 +2164,7 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            destroyable: &self.statics.destroyable,
         }
     }
 

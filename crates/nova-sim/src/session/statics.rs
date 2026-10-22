@@ -1,7 +1,7 @@
 //! The catalog data [`Session::load`](super::Session::load) reads once and
 //! nothing writes again, shared by every clone of the session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::catalog::{
@@ -65,6 +65,12 @@ pub(super) struct Statics {
     /// and the daily step read of a stellar's destruction and
     /// regeneration (see the `stellars` module).
     pub(super) lives: BTreeMap<StellarId, StellarLife>,
+    /// The stellars shots can shoot down, those of [`lives`](Self::lives)
+    /// of `Strength` above 0
+    /// ([`wreck::destroyable`](crate::story::wreck::destroyable)), among
+    /// which a stellar attacker picks its quarry
+    /// ([`death_star`](crate::ai::death_star)).
+    pub(super) destroyable: BTreeSet<StellarId>,
     /// Graphic type 0's sheet's frame size, or `None` when it cannot be
     /// read, read from the catalog as the session starts: what a rebuild
     /// point fills an empty sprite slot with, and the box a click on that

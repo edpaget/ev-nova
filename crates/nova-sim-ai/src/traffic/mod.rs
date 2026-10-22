@@ -658,6 +658,9 @@ pub struct World<'a> {
     /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), see
     /// [`held_burst`]).
     pub held_burst: RuleSource,
+    /// The stellars shots can shoot down ([`Surroundings::destroyable`]),
+    /// among which a stellar attacker picks its quarry.
+    pub destroyable: &'a BTreeSet<StellarId>,
 }
 
 /// Nova's disable rule, a world's default.
@@ -676,7 +679,8 @@ impl<'a> World<'a> {
     /// no government marked by an IFF scrambler, Nova's disable rule,
     /// no player's warp under way with warp sounds of no length, no
     /// tractor's pull, no weapon records
-    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)) and frame 0.
+    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)), frame 0 and no stellar
+    /// shots can shoot down ([`NO_DESTROYABLE`](crate::ai::NO_DESTROYABLE)).
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -717,6 +721,7 @@ impl<'a> World<'a> {
             npc_escort_ai: RuleSource::Engine,
             successor_repairer: RuleSource::Engine,
             held_burst: RuleSource::Engine,
+            destroyable: bare.destroyable,
         }
     }
 
@@ -773,6 +778,7 @@ impl<'a> World<'a> {
             weapons: self.weapons,
             gone: &[],
             player_warp_stage: self.warp.player.stage,
+            destroyable: self.destroyable,
         }
     }
 }

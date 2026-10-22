@@ -44,6 +44,7 @@ pub mod brave;
 pub mod call_for_help;
 pub mod candidates;
 pub mod carried;
+pub mod death_star;
 pub mod dispatch_gate;
 pub mod escort;
 pub mod escort_orders;
@@ -689,10 +690,17 @@ pub struct Surroundings<'a> {
     /// on, when every ship it leads takes its jump (`_EscortAI`
     /// @0x83a41-0x83a5f, [`EscortAi`]).
     pub player_warp_stage: f32,
+    /// The stellars shots can shoot down, those of `Strength` above 0
+    /// (`nova_sim::story::wreck::destroyable`), among which a stellar
+    /// attacker picks its quarry ([`death_star`]).
+    pub destroyable: &'a BTreeSet<StellarId>,
 }
 
 /// No government marked by an IFF scrambler.
 pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
+
+/// No stellar that shots can shoot down.
+pub static NO_DESTROYABLE: BTreeSet<StellarId> = BTreeSet::new();
 
 /// No weapon records: a placeholder for surroundings in which nothing
 /// pursues, as every lead then takes the table bearing.
@@ -704,8 +712,9 @@ impl<'a> Surroundings<'a> {
     /// cloak scanner, no government marked by an IFF scrambler, room for
     /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus), no
     /// pass's [`wanted`](Surroundings::wanted) headings, the engine's jump
-    /// fuel and cached odds, a led speed of 1 and no weapon records
-    /// ([`NO_WEAPONS`]).
+    /// fuel and cached odds, a led speed of 1, no weapon records
+    /// ([`NO_WEAPONS`]) and no stellar shots can shoot down
+    /// ([`NO_DESTROYABLE`]).
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -729,6 +738,7 @@ impl<'a> Surroundings<'a> {
             weapons: &NO_WEAPONS,
             gone: &[],
             player_warp_stage: 0.0,
+            destroyable: &NO_DESTROYABLE,
         }
     }
 
