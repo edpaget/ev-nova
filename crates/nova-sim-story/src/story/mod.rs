@@ -1326,14 +1326,17 @@
 //!   (`_ShotCanHitShip` tests a ship's +0x86 against 0, @0x448db). An
 //!   escort's or a fighter's shot has its own slot, so only the player's
 //!   own shots are punished.
-//! - **Planet-type shots and ships.** `_ShotCanHitShip`
-//!   (@0x4477e-0x44b6f), `_HandleShipHit` (@0x36a45) and
-//!   `_ShipCollisionHandler` (@0x36f87) never test `Flags2` 0x0400, so a
-//!   planet-type shot hits ordinary ships as any shot does. The bit's
-//!   other readers are a detonation blasting no ships (`_HandleShot`
+//! - **Planet-type shots and ships.** This bullet once said
+//!   `_ShotCanHitShip` never tests `Flags2` 0x0400. That was wrong:
+//!   its rule 8 (@0x44a8e-0x44acc) matches the bit against the ship
+//!   class's `Flags` 0x0400, so a planet-type shot hits only planet-type
+//!   ships (corrected by stellar-fidelity phase 2; see "Checked for
+//!   stellar-fidelity phase 2"). `_HandleShipHit` (@0x36a45) and
+//!   `_ShipCollisionHandler` (@0x36f87) do not test it. The bit's other
+//!   readers are a detonation blasting no ships (`_HandleShot`
 //!   @0x35fb9), an asteroid hit's blast sparing ships (`_HandleAsteroidHit`
-//!   @0x36734) and the AI (@0x804a9, @0x8c1f2, @0x8f94d): story-runtime
-//!   phase 13's.
+//!   @0x36734) and the AI (@0x804a9, @0x8c1f2, @0x8f94d): stellar-fidelity
+//!   phase 2's.
 //! - **No blast and no sub-munitions.** The `movb $0x1, 0x16` after the
 //!   hit (@0x373fe) writes the shot's sprite (its first field), not the
 //!   shot: the byte `_SWSetSpriteVisible` itself sets on hiding
@@ -1791,6 +1794,166 @@
 //!   sets 0 otherwise (@0xac504-0xac532). The rebuild sets each slot to
 //!   the current frame (@0x33096), and a slot it fills with graphic type
 //!   0 to frame 0 (@0x332d0).
+//!
+//! ## Checked for stellar-fidelity phase 2
+//!
+//! Planet-type weapons (`wëap` `Flags2` 0x0400) and planet-type ships
+//! (`shïp` `Flags` 0x0400, the class's +0x9e8), and the AI that shoots
+//! stellars.
+//!
+//! - **Who a shot may hit.** `_ShotCanHitShip`'s rule 8
+//!   (@0x44a8e-0x44acc) returns false when `(class Flags & 0x0400) !=
+//!   (wëap Flags2 (+0x22) & 0x0400)`: a planet-type shot hits only
+//!   planet-type ships, and an ordinary shot never hits a planet-type
+//!   ship, the player's included. A shot no ship fired (+0x2c above 63,
+//!   @0x44a71-0x44a88) jumps to rule 8 too, and rules 9 (@0x44ad2-0x44b2f)
+//!   and 10 (@0x44b35-0x44b60) then pass for it (firer -1 is above 0x3e
+//!   and 0x3f). Rule 8 covers every caller: the contact passes, the
+//!   proximity fuse, `_FindNearestValidShotTarget`'s seeking sub-munitions
+//!   and point defence's shots at ships.
+//! - **Who a beam may hit.** `_HandleBeams`' candidate filter
+//!   (@0x30d34-0x30d82) reads the beam's weapon at +0x20, which
+//!   `_LoadObjectData` fills from the resource's +0x1c (@0x793ca-0x793ce):
+//!   `Flags`, not `Flags2` (+0x22 from +0x48, @0x793d9-0x793dd). So a beam
+//!   matches its `Flags` 0x0400 (the "big smoke" bit) against the ship's
+//!   `Flags` 0x0400 (@0x30d6c), and `Flags2` 0x0400 does nothing for it.
+//!   No stock beam has `Flags` 0x0400 (the 16 stock beams' are
+//!   0x10-0x6010), no stock `wëap` has `Flags2` 0x0400 and no stock `shïp`
+//!   has `Flags` 0x0400, so the bug changes nothing in stock play.
+//! - **Beams never touch stellars.** `_HandleBeams` (@0x30295-0x31e1f)
+//!   reads neither the stellar table (0x3b5010) nor `_StellarIsDestroyed`,
+//!   nor any sprite-slot array. Its calls are `_Accel`,
+//!   `_XYFloatSquaredDist`, `_CalcInterceptAngle`, `_FloatAbs`,
+//!   `_SpeedLimit`, `_AlliedWithPlayer`, `_AdjustedAccel`,
+//!   `_SpawnParticles`, `_ShipMaxSpeed`, `_GetSpriteYSize`,
+//!   `_GetMasterShipSpriteXSize`, `_CreateExplosion`, `_SWSetSpriteVisible`,
+//!   `_SpawnExplod`, `_Rand`, `_IonizeShip`, `_DestroyAsteroid`,
+//!   `_DamageShip`, `_AIShipIsAttackingAsteroid` and `_TickCount`, none of
+//!   which plays a sound.
+//! - **The expiry blast** (`_HandleShot` @0x35f97-0x36106).
+//!   `_CreateExplosion` (@0x35f97) comes first, for every weapon. The
+//!   blast pass is skipped when `BlastRadius` (+0x18) is 0 or less
+//!   (@0x35fae) or the weapon is planet-type (@0x35fb9), and inside it each
+//!   ship whose class is planet-type is skipped (@0x3602e). So a
+//!   planet-type detonation blasts no ship, and no detonation blasts a
+//!   planet-type ship. The ionization is inside the per-ship pass, so a
+//!   skipped ship is not ionized.
+//! - **The on-hit blast** (`_HandleShipHit` @0x36d4b-0x36efb) tests
+//!   neither bit: a planet-type shot hitting a planet-type ship blasts the
+//!   ordinary ships around it, and an ordinary shot's on-hit blast reaches
+//!   a planet-type ship near its victim.
+//! - **The asteroid-hit blast** (`_HandleAsteroidHit` @0x36734, @0x367a8)
+//!   makes the expiry blast's two skips.
+//! - **Every reader of the class's `Flags` 0x0400** (every `0x9e8(` read
+//!   and every `testb $0x4, 0x9e9`): `_ShipAccelRate` @0x3601 and
+//!   `_ShipMaxSpeed` @0x37b5 (still hull), `_AIHasAfterburner` @0x654c,
+//!   `_HandleShipDisplay` @0x2d90d (no shockwave), `_HandleBeams` @0x31210,
+//!   @0x31385, @0x31b12, @0x31bc7 (tractor), `_DamageShip` @0x3aacb
+//!   (push), the expiry blast @0x3602e, the asteroid blast @0x367a8, the
+//!   beam match @0x30d6c, the shot match @0x44aa8, and `_AIFireGun`
+//!   @0x7ffc6-0x7ffdf, `_AIFireTurret` @0x80c04-0x80c23 and
+//!   `_AIFireMissile` @0x812df-0x812fb.
+//! - **Every reader of `Flags2` 0x0400**: `_HandleShot` @0x35fb9,
+//!   `_HandleAsteroidHit` @0x36734, `_CheckShotProximities` @0x37224,
+//!   `_AIFireGunUntargeted` @0x804a9 (the miner's untargeted gun skips
+//!   planet-type weapons; asteroids phase 5's), `_DeathStarAI` @0x8c1f2 and
+//!   `_HighLevelAIHandler` @0x8f94d.
+//! - **`_DeathStarAI`** (@0x8c125-0x8c2d1).
+//!   1. If `_IsDisabled`, `_IsDying` or goal 0x16 (count wait), it returns
+//!      at once, writing nothing and calling no `_WarshipAI`
+//!      (@0x8c12e-0x8c159).
+//!   2. It walks the 16 stellar slots of the ship's system (sÿst +0x2a +
+//!      2i, stride 0x1fc, from ship +0x74) in order, skipping -1, the
+//!      destroyed (`_StellarIsDestroyed` @0x8c19e) and `Strength` (+0x40)
+//!      0 or less (@0x8c1b1-0x8c1b6), and takes the first for which
+//!      `_GovtEnemies(ship +0x98, stellar Govt +0x0a)` holds
+//!      (@0x8c15f-0x8c1de). It writes +0x6c = that stellar at once
+//!      (@0x8c286), before any weapon test.
+//!   3. Whether or not a stellar was found, it walks weapon indices 0-255
+//!      and takes the lowest with `Flags2` 0x0400 (@0x8c1f2), the
+//!      **class's** stock count above 0 (class +0x5e8[i], @0x8c20e), ammo
+//!      (`_WeaponHasAmmo` @0x8c21f) and guidance not 0, not 3 and at most
+//!      7 signed (-1, 1, 2, 4, 5, 6, 7; @0x8c230-0x8c244).
+//!   4. With both: goal (+0xc8c8) 0x12 and +0x6c = +0x70 = the stellar
+//!      (@0x8c25a-0x8c280), and it returns without `_WarshipAI`.
+//!   5. Otherwise, when the goal is 0x12, it clears +0x70 and +0x6c to -1
+//!      and the goal and sub (+0xc8ca) to 0; in every case it then
+//!      tail-calls `_WarshipAI` (@0x8c293-0x8c2c5), never the ship's own
+//!      type. `_WarshipAI` writes +0x6c but never reads it (@0x8b8ed,
+//!      @0x8b90b, @0x8ba31, @0x8ba4f, @0x8c00c, @0x8c02a, @0x8c117), and
+//!      the high level reads it for goal 1, landing (@0x8d8c9, @0x8daea;
+//!      the gate hand-off @0x8d8b8-0x8d8fe), and goal 0x14, gate entry
+//!      (@0x8db70). So a landing or gate entry the warship keeps is
+//!      redirected to the enemy stellar.
+//!   6. No sound and no `_Rand`.
+//! - **Routing.** `_AIDispatch` sets a local flag (edi) on every think
+//!   from the mark (+0xc8d2) when its mission slot is active and its
+//!   `ShipBehav` (+0xc) is 2 (@0x8fbcd-0x8fc38), writing nothing on the
+//!   ship. With it, `_DeathStarAI` runs in place of the whole type
+//!   dispatch (@0x8ff3a-0x8ff43): `_DefenseShipAI`, `_MinerAI` and every AI
+//!   type, `_EscortAI` included (@0x90016), after the disabled reset
+//!   (@0x8fece-0x8ff13) and the goal-0x15 skip (@0x8ff18). No AI type
+//!   reaches `_DeathStarAI`. Goal 0x12 is in the always-think set
+//!   (@0x8fe30), which changes nothing at a think interval of 1.
+//! - **The high level's goal 0x12** (`_HighLevelAIHandler`
+//!   @0x8f906-0x8faeb) aims at +0x6c's spöb x and y (+0x4, +0x6). The
+//!   weapon is `_DeathStarAI`'s scan (lowest index, class count, ammo,
+//!   guidance, no reload test), and r its range (+0x5c); with none, r² is
+//!   1.0 (0xdd068). With d² the squared distance: above 0.5625 r² (0xddaa0)
+//!   sub 2, approach; else below 0.0625 r² (0xddaa8) sub 3, run out; else
+//!   sub 1, brake, when |vx| or |vy| is at least 0.35 (0xdda68), and sub
+//!   0x16, aim, otherwise. In those last two, vx, vy and the speed along
+//!   the heading (+0x48) are each multiplied by 0.98 (0xdd988,
+//!   @0x8faaf-0x8faeb).
+//! - **The low level** zeroes +0x30 and the fire flag +0xba in its
+//!   preamble (@0x851e6-0x851f6). Sub 1 (@0x8536d-0x85633) is the brake.
+//!   Sub 2 (@0x8563b-0x857bd), gated on +0x6c != -1 and not disabled,
+//!   turns to `_CalcInterceptAngle(ship, stellar)` and, within turn + 5.0
+//!   (0xdd67c) strictly, thrusts at its full `_ShipAccelRate`: capped at
+//!   +0x34 = `_ShipMaxSpeed` × 0.25 (0xdd684) within 500 on both axes
+//!   (0xdd080, strictly), uncapped (+0x34 = 0) beyond; it writes +0x34
+//!   with +0x30. Sub 3 (@0x857bd-0x8585b) runs out from the system centre
+//!   (0,0), not the stellar, within turn + 3.0. Sub 0x16
+//!   (@0x88645-0x886f4) turns to the intercept angle and, within turn +
+//!   15.0 (0xdda30) strictly, calls `_AIFirePlanetGun`; it does not
+//!   thrust and is not gated on disabled.
+//! - **`_AIFirePlanetGun`** (@0x80536-0x805c9) walks 0-255 and keeps the
+//!   **highest** index with the ship's **own** count (+0xc8 + i·0xc8)
+//!   above 0, guidance -1, 1, 2, 4, 5, 6 or 7, ammo and reload (+0xf8 +
+//!   i·0xc8) 0 or less, then sets +0x72 to it and +0xba to 1. It does not
+//!   test `Flags2` 0x0400, so a ready ordinary gun above the planet gun
+//!   fires instead, and its shots pass through ordinary ships. No range
+//!   or damage ranking.
+//! - **Goal 0x12 to other readers.** It is spared as a threat with goals
+//!   7, 9, 0xf, 0xa, 0xb, 5 and 0xc (`_IsThreatToPlayer` @0x7f567,
+//!   `_ExtendedIsThreatToShip` @0x81aff, @0x81b49,
+//!   `_ExtendedIsThreatToPlayer` @0x81c24, @0x81c86, @0x81cce, @0x81d69,
+//!   @0x81da8, `_IsThreatToShip` @0x82055), and `_AIIsShipBusy`
+//!   (@0x82fac-0x82fe4) finds it busy, as every goal but 0, 1, 2, 7 and
+//!   0x14.
+//! - **Sub-munitions on their release tick.** `_CheckShotProximities`
+//!   tests a shot against stellars only when `Count - ProxSafety > life`
+//!   strictly (@0x371fc-0x3721e), and a fresh shot's life is `Count`
+//!   (`_SpawnShot` @0x3e801-0x3e808). So a sub-munition of `ProxSafety` 0
+//!   or more is never tested on the frame it is released, whether a fuse
+//!   in `_CheckShotProximities`' loop or an end of life in the later
+//!   `_HandleShot` released it.
+//! - **Sounds.** None of `_DeathStarAI`, `_AIFirePlanetGun`, the goal-0x12
+//!   block, subs 2 and 0x16, `_ShotCanHitShip`, the expiry blast's skip or
+//!   `_HandleBeams`' filter plays one. The planet gun's shot sounds as any
+//!   NPC fire does, through `_FireAIShipWeapon`.
+//! - **Recorded, not built** (memory-layout accidents). In goal 0x12,
+//!   +0x70 holds a stellar index (@0x8c278), and readers that take it for
+//!   a ship slot are not copied: `_HighLevelAIHandler`'s target check reads
+//!   ship slot [stellar index]'s active byte, past the 64-slot table for
+//!   an index of 64 or more, and may clear it (@0x8d4e4-0x8d50d);
+//!   `_FireAIShipWeapon` aims a turret (4) or homing (1) pick at ship slot
+//!   [stellar index]; and stellar index 0 reads as "targeting the player"
+//!   wherever +0x70 == 0 is tested without the goal. A sub-munition of
+//!   negative `ProxSafety` released by a fuse into a later slot would be
+//!   tested against stellars in the same loop by a stale sprite rectangle
+//!   (`_SpawnShot` places no sprite; `_SWRLECollision` reads the slot's
+//!   rectangle, +0x1a, +0x1c, @0xabfbd-0xac049); no stock weapon has one.
 
 //! # Mission lifecycle
 //!
