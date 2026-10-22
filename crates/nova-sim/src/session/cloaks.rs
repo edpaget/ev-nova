@@ -41,6 +41,12 @@
 //! - **Reserves**: whether an NPC can cloak, for its frame hold,
 //!   cloak-when-hit and the observe goal, reads
 //!   [`RuleKey::CloakReserves`] (see `Npc::can_cloak`).
+//! - **Area cloaks** (see [`area_cloak`](crate::area_cloak)): the traffic's
+//!   world carries the player's area cloak, from the outfits it owns
+//!   (`Session::player_side`), and whether an NPC's frame hold keeps a ship
+//!   riding one, by [`RuleKey::AreaCloakHold`]. An NPC fights with a cloak
+//!   (`_HasCloak`) when it has one of its own or rides its leader's area
+//!   cloak, so its homing shots see that leader cloaked.
 //!
 //! The player's own cloak, its draw and its hit decloak, are the
 //! `player_cloak` module's.
@@ -684,5 +690,139 @@ mod tests {
                 "{source:?}: the observe goal"
             );
         }
+    }
+
+    /// [`armed`], with outfit 300, an area cloak (a `ModType` 17 mod of
+    /// `ModVal` 0x1000).
+    fn area_cloaking() -> nova_sim_catalog::fixture::FakePilotCatalog {
+        use crate::cloak::{AREA_CLOAK, MOD_CLOAK};
+        let mut catalog = armed();
+        catalog.outfits.push(nova_sim_catalog::fixture::outfit(
+            300,
+            &[(MOD_CLOAK, AREA_CLOAK)],
+        ));
+        catalog
+    }
+
+    /// `catalog`'s [`facing_an_npc`] under `source`'s reading of
+    /// `area_cloak_hold`, the player owning outfit 300 and fuel to spare,
+    /// its NPC 0 its hired escort in close formation with it, keeping
+    /// formation, with no cloak of its own.
+    fn riding(
+        catalog: &nova_sim_catalog::fixture::FakePilotCatalog,
+        source: crate::rulebook::RuleSource,
+    ) -> Session {
+        use crate::rulebook::{RuleKey, Rulebook};
+        let rules = Rulebook::default().with_override(RuleKey::AreaCloakHold, source);
+        let mut session = facing_an_npc(catalog, 180).with_rules(rules);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        session.pilot.reserves.fuel.now = 100.0;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        npc.goal = crate::ai::Goal::Formation { guard: None };
+        npc.close_form = true;
+        assert!(!npc.cloak_gear.device, "no cloak of its own");
+        session
+    }
+
+    #[test]
+    fn the_player_side_carries_the_area_cloak_of_the_outfits_it_owns() {
+        let catalog = area_cloaking();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(!session.player_side().area_cloak, "not owned");
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        assert!(session.player_side().area_cloak);
+        assert!(
+            session
+                .world()
+                .player
+                .is_some_and(|player| player.area_cloak)
+        );
+        let plain = super::super::tests::scanning(crate::cloak::SCAN_SCREEN);
+        assert!(!holding_260(&plain).player_side().area_cloak, "a scanner");
+    }
+
+    #[test]
+    fn the_traffic_holds_npc_cloaks_in_a_world_holding_the_rulebooks_area_cloak_hold() {
+        use crate::rulebook::RuleSource;
+        use nova_sim_base::fixture::Draws;
+        let catalog = area_cloaking();
+        for (source, holds) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let mut session = riding(&catalog, source);
+            assert_eq!(session.world().area_cloak_hold, source);
+            session.ship.cloak.cloak = CLOAKED;
+            session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            assert_eq!(session.npcs()[0].cloak.direction >= 0, holds, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn an_escort_in_close_formation_keeps_formation_on_the_area_cloaked_player() {
+        use crate::chance::NeverFires;
+        use crate::combat::Rules;
+        use crate::rulebook::RuleSource;
+        use nova_sim_base::fixture::Draws;
+        let catalog = area_cloaking();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = riding(&catalog, source);
+            session.hold_cloak(true);
+            let mut read_cloaked = false;
+            for frame in 0..120 {
+                session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                let escort = &session.npcs()[0];
+                assert!(escort.close_form, "{source:?} {frame}: keeps formation");
+                read_cloaked |= escort.cloak.is_cloaked();
+                if source == RuleSource::Engine {
+                    assert!(!escort.cloak.full(), "{frame}: uncloaked each time");
+                }
+            }
+            assert!(session.player_cloak().full(), "the player cloaked");
+            assert!(read_cloaked, "{source:?}: its think cloaks it");
+            let escort = &session.npcs()[0];
+            if source == RuleSource::Bible {
+                assert_eq!(escort.cloak, CLOAKED, "faded in and held");
+            }
+            assert!(
+                crate::ai::sight::sees_player(escort, &session.player_side()),
+                "{source:?}: it sees its cloaked player"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fleet_escort_riding_its_leaders_area_cloak_fights_with_a_cloak() {
+        // `_HandleShotGuidance` (@0x322d8) asks `_ShipVisibleToShip`, whose
+        // cloaked-escort term asks `_HasCloak`, area branch and all.
+        let catalog = armed();
+        let has_cloak = |close_form: bool, area: bool| {
+            let mut session = facing_an_npc(&catalog, 180);
+            let mut leader = crate::testkit::npc(7, crate::stats::ShipStats::default());
+            leader.cloak = CLOAKED;
+            leader.cloak_gear.area = area;
+            let lead = session.space.traffic.add_npc(leader);
+            let escort = &mut session.space.traffic.npcs_mut()[0];
+            escort.leader = Some(lead);
+            escort.close_form = close_form;
+            let (_, npcs) = session.fight_terms();
+            npcs[0].has_cloak
+        };
+        assert!(has_cloak(true, true));
+        assert!(!has_cloak(false, true), "out of close formation");
+        assert!(!has_cloak(true, false), "no area cloak");
     }
 }

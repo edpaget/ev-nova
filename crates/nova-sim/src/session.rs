@@ -687,6 +687,8 @@ pub use crate::combat::hull::ESCAPE_POD_SHIP;
 
 /// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
 /// beyond what the ship carries.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
 struct FightTerms {
     /// Whether it is held disabled.
@@ -716,6 +718,11 @@ struct FightTerms {
     sprite: Option<SpriteRank>,
     /// Which stellar hazards it resists ([`Fighter::resists`]).
     resists: HazardResistance,
+    /// Whether it has a cloak ([`Fighter::has_cloak`], `_HasCloak`): its
+    /// own, or its leader's area cloak it rides
+    /// ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak),
+    /// [`sight::rides_area_cloak`](crate::ai::sight::rides_area_cloak)).
+    has_cloak: bool,
 }
 
 impl FightTerms {
@@ -734,7 +741,6 @@ impl FightTerms {
                 .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
-        let cloak_device = npc.cloak_gear.device;
         // A waiting ship's fire block is skipped (`_HandleShip`
         // @0x34a54-0x34a72).
         let trigger = crate::ai::fire::gated(npc);
@@ -781,7 +787,7 @@ impl FightTerms {
             docked,
             emerging,
             cloak_scanner,
-            has_cloak: cloak_device,
+            has_cloak: self.has_cloak,
             jamming: self.jamming,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
@@ -2057,6 +2063,7 @@ impl Session {
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
             cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
+            area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2139,6 +2146,7 @@ impl Session {
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
             cloak_reserves: self.setup.rules.source_for(RuleKey::CloakReserves),
+            area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2198,7 +2206,7 @@ impl Session {
             boarded: self.ship.fate.player_boarded,
             speed: self.ship.player_speed,
             cloak: self.ship.cloak.cloak,
-            area_cloak: false,
+            area_cloak: self.ship.cloak_gear(&self.pilot, &self.statics).area,
         }
     }
 
@@ -2463,15 +2471,20 @@ impl Session {
             jamming: self.player_jamming(),
             sprite: sprite(ShipRef::Player),
             resists: self.ship.player_hazard_resistance(&self.setup),
+            // The player's own fighter reads its gear elsewhere.
+            has_cloak: false,
         };
         let led_speed = self.led_speed();
         let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
-        let npcs = self
-            .space
-            .traffic
-            .npcs()
+        let player_side = self.player_side();
+        let all = self.space.traffic.npcs();
+        let npcs = all
             .iter()
             .map(|npc| FightTerms {
+                has_cloak: crate::area_cloak::has_cloak(
+                    npc.cloak_gear.device,
+                    crate::ai::sight::rides_area_cloak(npc, all, Some(&player_side)),
+                ),
                 fleet: npc.fleet_among(self.space.traffic.npcs()),
                 held_disabled: self.held_disabled(npc),
                 shield_regen: npc.shield_recharge(capacity),
@@ -23256,6 +23269,7 @@ pub(super) mod tests {
             jamming: Jamming([5, 0, 0, 9]),
             sprite: None,
             resists: HazardResistance::default(),
+            has_cloak: false,
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
@@ -23313,8 +23327,11 @@ pub(super) mod tests {
         assert!(fighter.emerging && fighter.cloak_scanner);
         assert_eq!(fighter.jamming, Jamming([5, 0, 0, 9]));
         assert!(!fighter.has_cloak);
-        npc.cloak_gear.device = true;
-        assert!(terms(false).fighter(&mut npc).has_cloak);
+        let cloaked = FightTerms {
+            has_cloak: true,
+            ..terms(false)
+        };
+        assert!(cloaked.fighter(&mut npc).has_cloak);
     }
 
     #[test]

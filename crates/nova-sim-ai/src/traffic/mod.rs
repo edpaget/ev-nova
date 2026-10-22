@@ -160,6 +160,8 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+#[cfg(test)]
+mod area_cloak_tests;
 pub mod assist_think;
 pub mod autopilot;
 pub mod berth_blink;
@@ -596,6 +598,12 @@ pub struct World<'a> {
     /// alone by the engine, by the cloak mod's `ModVal` by the Bible
     /// ([`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves)).
     pub cloak_reserves: RuleSource,
+    /// Whether an NPC's frame hold keeps a ship riding its leader's area
+    /// cloak ([`area_cloak::holds`](crate::area_cloak::holds)): by the
+    /// engine only one that can cloak by its own gear, by the Bible a ship
+    /// riding too
+    /// ([`RuleKey::AreaCloakHold`](crate::RuleKey::AreaCloakHold)).
+    pub area_cloak_hold: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -716,6 +724,7 @@ impl<'a> World<'a> {
             refuel_cap: RuleSource::Engine,
             cloak_on_reload: RuleSource::Engine,
             cloak_reserves: RuleSource::Engine,
+            area_cloak_hold: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -1780,12 +1789,43 @@ impl Traffic {
     /// ([`Traffic::step_fades`]). Then each that was cloaked pays its
     /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204),
     /// even one the hold just uncloaked. Whether it can cloak reads
-    /// `reserves` ([`World::cloak_reserves`]).
-    fn hold_cloaks(&mut self, reserves: RuleSource) {
-        for npc in &mut self.npcs {
+    /// [`World::cloak_reserves`]; whether the hold keeps a ship riding its
+    /// leader's area cloak, [`World::area_cloak_hold`]
+    /// ([`area_cloak::holds`](crate::area_cloak::holds)). The ride is the
+    /// one this tick's flight picks: the hold follows the frame's high
+    /// level (`_AIDispatch` @0x4429d before `_HandleShip` @0x444ad), so it
+    /// reads close formation fresh ([`Npc::keeps_close_formation`] with
+    /// its sight of its leader), not the last flight's [`Npc::close_form`].
+    fn hold_cloaks(&mut self, world: &World) {
+        let rides: Vec<bool> = {
+            let around = world.around(&self.npcs);
+            self.npcs
+                .iter()
+                .map(|npc| {
+                    let leader = match npc.leader_ref() {
+                        Some(ShipRef::Player) => world
+                            .player
+                            .map(|player| (player.state, player.cloak, player.area_cloak)),
+                        Some(ShipRef::Npc(id)) => self
+                            .npcs
+                            .iter()
+                            .find(|lead| lead.id == id)
+                            .map(|lead| (lead.state, lead.cloak, lead.cloak_gear.area)),
+                        None => None,
+                    };
+                    leader.is_some_and(|(state, cloak, area)| {
+                        let seen = around.sees_leader(npc);
+                        let close = npc.keeps_close_formation(Some(&state), seen, world.flight);
+                        crate::area_cloak::rides(close, cloak.is_cloaked(), area)
+                    })
+                })
+                .collect()
+        };
+        for (npc, ride) in self.npcs.iter_mut().zip(rides) {
             if npc.cloak.is_cloaked() {
-                let able = npc.can_cloak(reserves);
-                cloak::hold(&mut npc.cloak, able);
+                let able = npc.can_cloak(world.cloak_reserves);
+                let keeps = crate::area_cloak::holds(able, ride, world.area_cloak_hold);
+                cloak::hold(&mut npc.cloak, keeps);
                 let usage = npc.cloak_gear.shield_usage;
                 cloak::drain_shield(&mut npc.reserves.shield.now, usage, true);
             }
