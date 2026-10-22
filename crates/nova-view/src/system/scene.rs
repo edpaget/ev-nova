@@ -165,8 +165,10 @@ impl SystemScene {
     /// Its problems are the catalog's, then each stellar's `DeadType`
     /// sheet that exists but cannot be read, then graphic type 0's sheet
     /// when it cannot be read and some stellar might fall back to it (one
-    /// with no `DeadType` sheet that could be read), whatever the reading
-    /// of [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback):
+    /// with no `DeadType` sheet that could be read, or with a `Type` sheet
+    /// that cannot be), whatever the readings of
+    /// [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback)
+    /// and [`RuleKey::TypeSheetFallback`](nova_sim::RuleKey::TypeSheetFallback):
     /// the sheet is broken either way.
     pub fn load(catalog: &impl SystemCatalog, id: SystemId) -> Self {
         Self::loaded(catalog, id, |_| true)
@@ -207,7 +209,9 @@ impl SystemScene {
             }
         }
         if let Err(reason) = &type_zero
-            && stellars.iter().any(|stellar| !stellar.has_dead_sheet())
+            && stellars
+                .iter()
+                .any(|stellar| !stellar.has_dead_sheet() || stellar.sprite.is_err())
         {
             problems.push(format!("spïn 1000 (graphic type 0): {reason}"));
         }
@@ -948,6 +952,24 @@ mod tests {
         catalog.systems[0].stellars = vec![first];
         let scene = SystemScene::load(&catalog, SystemId(134));
         assert_eq!(scene.problems(), [] as [String; 0], "150 has its DeadType");
+    }
+
+    #[test]
+    fn a_missing_type_zero_sheet_is_a_problem_when_a_stellar_has_no_type_sheet() {
+        let mut broken = system(
+            135,
+            vec![StellarContents {
+                dead_sprite: Some(Ok(sheet(1009, 1))),
+                ..stellar(160, 0, 0, Err("no spïn 1010".to_owned()))
+            }],
+        );
+        broken.type_zero_sprite = Err("no spïn 1000".to_owned());
+        let scene = SystemScene::load(&FakeCatalog::new(vec![broken]), SystemId(135));
+        assert_eq!(
+            scene.problems(),
+            ["spïn 1000 (graphic type 0): no spïn 1000"],
+            "whole, it may fall back to graphic type 0"
+        );
     }
 
     #[test]
