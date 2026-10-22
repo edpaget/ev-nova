@@ -2402,6 +2402,51 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_jumps_setup_auto_aborts_before_its_goal_check_could_meet_the_goals() {
+        // No goal, `Flags` 0x0001, `ShipStart` 0, its ships in 131 and none
+        // arrived: a check would meet it, but the setup comes first, brings
+        // the ships and auto-aborts it (@0x43169-0x4317e), so the check
+        // after finds the slot free and shows no `ShipDoneText`.
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        let _ = shown(&mut session);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(session.npcs().len(), 2, "set up");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+    }
+
+    #[test]
+    fn a_jumps_goal_check_finds_an_escort_unmet_once_the_hook_restarts_its_ships() {
+        // An escort goal met, its two ships arrived, `ShipStart` 1 in 131:
+        // the hook zeroes the arrived count (@0x99fae), so the first check
+        // after the setup finds ships still to come (@0x9e852-0x9e85d).
+        let escorts = MissionShip {
+            goal: 3,
+            ..shipping(131, 1)
+        };
+        let catalog = ships_catalog(escorts);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = true;
+            active.ships.arrived = 2;
+            active.ships.appear = -1;
+        }
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(ships_of(&session).arrived, 0, "restarted");
+        assert!(!goals_met(&session), "checked after the setup");
+    }
+
+    #[test]
     fn a_move_in_flight_into_the_ships_system_restarts_their_timer() {
         let catalog = ships_catalog(shipping(131, 1));
         let mut session = accepted(&catalog);
