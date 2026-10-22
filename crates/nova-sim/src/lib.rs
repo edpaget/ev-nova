@@ -305,9 +305,11 @@
 //! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
 //!   disabled at the bottom, then the ships the player leads, then the
 //!   rest with the player.
-//! - [`sprite_layer`]: the order the ship and shot layers are drawn in
-//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), shots under or over the
-//!   ships as `_SpawnShot` and `_SetupSpriteWorld` place them.
+//! - [`sprite_layer`]: the order the flight world's 14 sprite layers
+//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), the beams and the
+//!   particles are drawn in ([`WORLD_PASSES`](sprite_layer::WORLD_PASSES)),
+//!   shots under or over the ships as `_SpawnShot` and `_SetupSpriteWorld`
+//!   place them.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
