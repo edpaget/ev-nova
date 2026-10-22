@@ -227,14 +227,6 @@ fn positions(market: &Market) -> Vec<Option<usize>> {
     positions
 }
 
-/// `rect` inset by `dx` across and `dy` down, as `InsetRect` does.
-fn inset(rect: Bounds, dx: f32, dy: f32) -> Bounds {
-    Bounds {
-        min: Point::new(rect.min.x + dx, rect.min.y + dy),
-        max: Point::new(rect.max.x - dx, rect.max.y - dy),
-    }
-}
-
 /// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
 /// covers it: both ends included.
 fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
@@ -673,7 +665,7 @@ impl TradeScreen {
             } else {
                 self.colors.background
             };
-            fill_rect(list, inset(slot, 1.0, 1.0), fill);
+            fill_rect(list, slot.inset(1.0, 1.0), fill);
             let (left, top) = (slot.min.x, slot.min.y);
             let (right, bottom) = (slot.max.x - 1.0, slot.max.y - 1.0);
             rule(
@@ -739,7 +731,7 @@ impl TradeScreen {
         if let Some(summary) = laid.dialog.item_bounds(SUMMARY_ITEM) {
             let (dx, dy) = SUMMARY_INSET;
             let text = self.market.summary.text(&self.market.words);
-            inverted_box(laid, list, &text, inset(summary, dx, dy));
+            inverted_box(laid, list, &text, summary.inset(dx, dy));
             frame(list, summary, DARK_GREY);
         }
         if !self.market.events.is_empty()

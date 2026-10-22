@@ -180,15 +180,6 @@ impl TextBacking {
     };
 }
 
-/// `bounds` with `dx` taken off its left and right and `dy` off its top
-/// and bottom, as `InsetRect` does.
-fn inset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {
-    Bounds {
-        min: Point::new(bounds.min.x + dx, bounds.min.y + dy),
-        max: Point::new(bounds.max.x - dx, bounds.max.y - dy),
-    }
-}
-
 /// A dialog's frame: three pictures stacked top to bottom over its bounds,
 /// the middle one stretched.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -683,7 +674,7 @@ fn widget(
             let (text_rect, fill) = match backing {
                 None => (bounds, None),
                 Some(backing) => (
-                    inset(bounds, backing.text_inset.0, backing.text_inset.1),
+                    bounds.inset(backing.text_inset.0, backing.text_inset.1),
                     Some((bounds.grown(-backing.fill_inset), backing.fill)),
                 ),
             };
