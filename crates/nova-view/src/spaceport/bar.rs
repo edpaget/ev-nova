@@ -93,7 +93,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
@@ -297,12 +297,15 @@ impl BarScreen {
                 (HIRE_ITEM, Role::Button(HIRE_ESCORT.to_owned())),
                 (
                     TEXT_ITEM,
+                    // White on a black box: `_BarDialogUpdate` sets it
+                    // with `TETextBox` (@0x4794e) and inverts the item
+                    // (`InvertRect` @0x47959).
                     Role::ScrollText {
                         text,
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
-                        backing: None,
+                        backing: Some(TextBacking::BLACK_BOX),
                     },
                 ),
             ];
@@ -808,12 +811,13 @@ mod tests {
     use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::{Bounds, Point};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog};
     use crate::spaceport::shipyard::ShipBaseImages;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -1087,6 +1091,46 @@ mod tests {
             "Gamble shown"
         );
         assert_eq!(screen.problem(), None);
+    }
+
+    #[test]
+    fn the_bar_text_draws_over_a_black_box_filling_its_item() {
+        let screen = bar();
+        let area = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(TEXT_ITEM))
+            .expect("the text item");
+        let commands = drawn(&screen);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(area, Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Text { text, .. } if text == "dësc 10029.")
+            })
+            .expect("the bar text");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_bar_text() {
+        let mut screen = bar();
+        let desc = screen.take_description_request().expect("asked");
+        let long: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        screen.show_description(desc, &long.join("\r"));
+        let first = |screen: &BarScreen| {
+            screen
+                .dialog()
+                .and_then(|dialog| dialog.text(TEXT_ITEM))
+                .map(ScrollText::first)
+        };
+        screen.input(&key(Key::Down, false));
+        screen.input(&key(Key::Down, true));
+        assert_eq!(first(&screen), Some(2));
+        screen.input(&key(Key::Up, false));
+        assert_eq!(first(&screen), Some(1));
     }
 
     #[test]

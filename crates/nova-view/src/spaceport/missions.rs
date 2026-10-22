@@ -66,7 +66,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
@@ -174,20 +174,25 @@ impl MissionComputerScreen {
                     found.enabled = true;
                 }
             }
-            let text = |text: &str| Role::ScrollText {
+            let text = |text: &str, backing| Role::ScrollText {
                 text: text.to_owned(),
                 font: Font::Geneva,
                 size: BODY_SIZE,
                 color: BODY_COLOR,
-                backing: None,
+                backing,
             };
+            // The offer's text and name are white on black boxes, selected
+            // or not: `_MissionDialogUpdate` inverts each under its
+            // `TETextBox` (item 5 @0x9f47a, item 4 @0x9f575) and paints it
+            // black with no selection (@0x9f481-0x9f496, @0x9f57c-0x9f591).
+            let black = Some(TextBacking::BLACK_BOX);
             let roles = [
                 (ACCEPT_ITEM, Role::Button(ACCEPT_LABEL.to_owned())),
                 (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
-                (TEXT_ITEM, text("")),
-                (NAME_ITEM, text("")),
-                (HEADING_ITEM, text(AVAILABLE_HERE)),
-                (DATE_ITEM, text("")),
+                (TEXT_ITEM, text("", black)),
+                (NAME_ITEM, text("", black)),
+                (HEADING_ITEM, text(AVAILABLE_HERE, None)),
+                (DATE_ITEM, text("", None)),
             ];
             let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
@@ -486,19 +491,23 @@ impl MissionInfoScreen {
         style: ButtonStyle,
     ) -> Self {
         let laid = layout.map(|(template, metrics)| {
-            let text = |text: &str| Role::ScrollText {
+            let text = |text: &str, backing| Role::ScrollText {
                 text: text.to_owned(),
                 font: Font::Geneva,
                 size: BODY_SIZE,
                 color: BODY_COLOR,
-                backing: None,
+                backing,
             };
+            // The QuickBrief is white on a black box, selected or not:
+            // `_MissionInfoDialogUpdate` inverts it under its `TETextBox`
+            // (@0x987ca) and paints it black with no selection
+            // (@0x987d1-0x987e6).
             let roles = [
                 (INFO_DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),
                 (ABORT_ITEM, Role::Button(ABORT_LABEL.to_owned())),
-                (INFO_HEADING_ITEM, text(ACTIVE_MISSIONS)),
-                (INFO_TEXT_ITEM, text("")),
-                (INFO_DATE_ITEM, text("")),
+                (INFO_HEADING_ITEM, text(ACTIVE_MISSIONS, None)),
+                (INFO_TEXT_ITEM, text("", Some(TextBacking::BLACK_BOX))),
+                (INFO_DATE_ITEM, text("", None)),
             ];
             let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
@@ -759,7 +768,7 @@ mod tests {
     use nova_sim::ComputerRow;
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -1082,6 +1091,64 @@ mod tests {
         );
     }
 
+    /// Where in `commands` item `area`'s black fill is, and where its first
+    /// text run is, if it has one.
+    fn fill_and_text(commands: &[DrawCommand], area: Bounds) -> (usize, Option<usize>) {
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(area, Color::BLACK))
+            .expect("filled black");
+        let text = commands.iter().position(
+            |command| matches!(command, DrawCommand::Text { origin, .. } if area.contains(*origin)),
+        );
+        (fill, text)
+    }
+
+    #[test]
+    fn the_offers_text_and_name_draw_over_black_boxes_filling_their_items() {
+        let mut screen = screen();
+        let _ = screen.take_text_request();
+        screen.show_row(&row(130, "Run to Mars", "Take this to Mars."));
+        let commands = drawn(&screen);
+        let dialog = screen.dialog().expect("laid out");
+        for item in [TEXT_ITEM, NAME_ITEM] {
+            let area = dialog.item_bounds(item).expect("an item");
+            let (fill, text) = fill_and_text(&commands, area);
+            let text = text.unwrap_or_else(|| panic!("item {item}'s text: {commands:#?}"));
+            assert!(fill < text, "item {item}: the box is under the text");
+        }
+    }
+
+    #[test]
+    fn with_no_offer_selected_the_text_and_name_are_still_black_boxes() {
+        // `_MissionDialogUpdate` paints items 5 (@0x9f481-0x9f496) and 4
+        // (@0x9f57c-0x9f591) black with no selection.
+        let screen = screen_of(MissionComputer {
+            rows: Vec::new(),
+            ..computer()
+        });
+        let commands = drawn(&screen);
+        let dialog = screen.dialog().expect("laid out");
+        for item in [TEXT_ITEM, NAME_ITEM] {
+            let area = dialog.item_bounds(item).expect("an item");
+            assert_eq!(fill_and_text(&commands, area).1, None, "item {item}");
+        }
+    }
+
+    #[test]
+    fn the_heading_and_date_have_no_box() {
+        let screen = screen();
+        let dialog = screen.dialog().expect("laid out");
+        let commands = drawn(&screen);
+        for item in [HEADING_ITEM, DATE_ITEM] {
+            let area = dialog.item_bounds(item).expect("an item");
+            assert!(
+                !commands.contains(&fill_command(area, Color::BLACK)),
+                "item {item}"
+            );
+        }
+    }
+
     #[test]
     fn without_its_dialog_it_says_why_and_escape_leaves() {
         let mut screen = MissionComputerScreen::new(
@@ -1296,6 +1363,39 @@ mod tests {
             "Loaded brief.",
             "not selected"
         );
+    }
+
+    #[test]
+    fn the_quickbrief_draws_over_a_black_box_filling_its_item_selected_or_not() {
+        // `_MissionInfoDialogUpdate` paints item 4 black with no selection
+        // (@0x987d1-0x987e6) and inverts it under the text with one.
+        let screen = info_screen();
+        let area = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_TEXT_ITEM))
+            .expect("item 4");
+        let commands = info_drawn(&screen);
+        let (fill, text) = fill_and_text(&commands, area);
+        assert!(fill < text.expect("the QuickBrief"), "under the text");
+        let empty = MissionInfoScreen::new(
+            Ok((info_template(), Rc::new(MonoMetrics))),
+            MissionInfo {
+                rows: Vec::new(),
+                ..info()
+            },
+            ButtonStyle::STOCK,
+        );
+        assert_eq!(fill_and_text(&info_drawn(&empty), area).1, None);
+        for item in [INFO_HEADING_ITEM, INFO_DATE_ITEM] {
+            let area = screen
+                .dialog()
+                .and_then(|dialog| dialog.item_bounds(item))
+                .expect("an item");
+            assert!(
+                !commands.contains(&fill_command(area, Color::BLACK)),
+                "item {item}"
+            );
+        }
     }
 
     #[test]

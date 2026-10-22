@@ -208,7 +208,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
@@ -578,12 +578,17 @@ impl SpaceportView {
                 (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
                 (
                     TEXT_ITEM,
+                    // White on a black box: `_PortDialogUpdate` sets it with
+                    // `TETextBox` (@0x4ef64) and inverts the item
+                    // (`InvertRect` @0x4ef72) when it is visible
+                    // (`RectInRgn` @0x4ef08), which `Dialog` models as the
+                    // item being inside the dialog.
                     Role::ScrollText {
                         text: text.clone(),
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
-                        backing: None,
+                        backing: Some(TextBacking::BLACK_BOX),
                     },
                 ),
             ];
@@ -2370,13 +2375,14 @@ mod tests {
     use nova_sim::landing::StellarFlags;
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::Bounds;
     use crate::input::MouseButton;
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
     use crate::spaceport::layout::SERVICE_ITEMS;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     /// Stellar 140, Earth: a planet with a trade center and a bar, of
@@ -2658,6 +2664,41 @@ mod tests {
         };
         assert_eq!(origin, on_screen(160.0, 327.0, 0.0, 0.0).min);
         assert_eq!((font, size, color), (Font::Geneva, 10.0, Color::WHITE));
+    }
+
+    #[test]
+    fn the_description_draws_over_a_black_box_filling_its_item() {
+        let view = earth();
+        let commands = drawn(&view);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(item(&view, TEXT_ITEM), Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Blue and green."))
+            .expect("the description");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_description() {
+        let long: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        let catalog = FakePort {
+            description: Ok(long.join("\r")),
+            ..catalog()
+        };
+        let mut view = view_of(&catalog);
+        let first = |view: &SpaceportView| {
+            view.dialog()
+                .and_then(|dialog| dialog.text(TEXT_ITEM))
+                .map(ScrollText::first)
+        };
+        view.input(&key(Key::Down));
+        view.input(&key(Key::Down));
+        assert_eq!(first(&view), Some(2));
+        view.input(&key(Key::Up));
+        assert_eq!(first(&view), Some(1));
     }
 
     #[test]
