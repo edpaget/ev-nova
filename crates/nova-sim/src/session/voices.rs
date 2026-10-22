@@ -213,7 +213,7 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
     use crate::stats::ShipStats;
-    use crate::testkit::{FAST, FakePilotCatalog, Ranged, hull, jump, ship};
+    use crate::testkit::{Draws, FAST, FakePilotCatalog, Ranged, hull, jump, ship};
     use crate::traffic::npc::{AiType, Npc};
     use crate::voice::Voices;
     use crate::warp::SoundLength;
@@ -343,7 +343,7 @@ mod tests {
         session: &mut Session,
         catalog: &FakePilotCatalog,
         behaviour: &impl Behaviour,
-        chance: &mut Ranged,
+        chance: &mut impl Chance,
     ) -> Vec<SimSound> {
         session.take_sounds();
         let rescued = session.game_work(
@@ -775,6 +775,67 @@ mod tests {
                 "{ship:?}"
             );
         }
+    }
+
+    /// `ships`' fleet raided as [`raided`] makes it, the first two
+    /// escorts' berths swapped, so berth order runs against the fleet's
+    /// order and the order the thinks queue their cues in.
+    fn raided_swapped(
+        catalog: &FakePilotCatalog,
+        ships: &[ShipId],
+    ) -> (Session, crate::traffic::npc::NpcId) {
+        let (mut session, raider) = raided(catalog, ships);
+        let berths = [
+            escort_npc(&mut session, 0).berth,
+            escort_npc(&mut session, 1).berth,
+        ];
+        assert!(berths[0] < berths[1]);
+        escort_npc(&mut session, 0).berth = berths[1];
+        escort_npc(&mut session, 1).berth = berths[0];
+        (session, raider)
+    }
+
+    #[test]
+    fn of_two_escorts_taking_a_threat_in_one_pass_the_lower_berth_calls_it() {
+        // Both call their targets and both draw Rand(3) of 0, but the
+        // first in berth order, the even medium, closes the gate: the
+        // medium's call, said after, would overwrite it. Set 4's target
+        // calls are 1410-1417, the even voice Rand(4) × 2; set 3's,
+        // 1310-1312, Rand(3).
+        let catalog = voiced();
+        let (mut session, _) = raided_swapped(&catalog, &[MEDIUM, MEDIUM_EVEN]);
+        for index in 0..2 {
+            escort_npc(&mut session, index).voice = Some(VoiceVariant::Even);
+        }
+        let mut chance = Ranged::of(&[(3, 0), (4, 1)]);
+        assert_eq!(
+            heard(&mut session, &catalog, &sitting_ai(), &mut chance),
+            []
+        );
+        assert_eq!(
+            heard(&mut session, &catalog, &sitting_ai(), &mut chance),
+            [voice(1412)],
+            "the even medium's set 4, at the lower berth"
+        );
+    }
+
+    #[test]
+    fn of_two_escorts_with_no_variant_the_lower_berth_rolls_first() {
+        // Rand(2) of 0 then 1: the first to roll takes the even voice.
+        // Neither calls its target, on Rand(3) of 1.
+        let catalog = voiced();
+        let (mut session, _) = raided_swapped(&catalog, &[MEDIUM, MEDIUM]);
+        heard(
+            &mut session,
+            &catalog,
+            &sitting_ai(),
+            &mut Draws::of(&[0, 1]).keyed(3, 1),
+        );
+        assert_eq!(
+            [0, 1].map(|index| escort_npc(&mut session, index).voice),
+            [Some(VoiceVariant::Odd), Some(VoiceVariant::Even)],
+            "the second of the fleet, at the lower berth, rolled first"
+        );
     }
 
     #[test]
