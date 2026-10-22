@@ -492,6 +492,21 @@ mod tests {
     }
 
     #[test]
+    fn the_blasters_reach_is_measured_between_the_two_ships_wherever_they_are() {
+        // Off the centre, and across: 382 within, 383 beyond.
+        let at = |x: f32| {
+            let mut high = aiming(leader(Goal::Attack(n(2)), 66.0), n(2));
+            high.state.position = Vec2::new(1000.0, 1000.0);
+            let mut across = attacker(2, 0.0);
+            across.state.position = Vec2::new(1000.0 + x, 1000.0);
+            issued(&[high, across])[0]
+        };
+        assert_eq!(at(382.0), 1, "within");
+        assert_eq!(at(383.0), 2, "beyond");
+        assert_eq!(at(-382.0), 1, "within, the other side");
+    }
+
+    #[test]
     fn with_no_weapon_129_by_the_engine_no_ship_is_within_reach() {
         let npcs = [
             aiming(leader(Goal::Attack(n(2)), 66.0), n(2)),
