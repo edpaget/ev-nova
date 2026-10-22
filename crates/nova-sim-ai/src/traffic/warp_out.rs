@@ -120,6 +120,7 @@ use crate::traffic::Outcome;
 use crate::traffic::World;
 use crate::traffic::autopilot::{position_step, steer, step};
 use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::jump_with_leader;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::ship_display;
 use crate::trig::{accel, angular_difference, intercept_angle, whole};
@@ -256,7 +257,8 @@ pub struct LeaderWarp {
     /// Its velocity.
     pub velocity: Vec2,
     /// Whether it is on its way out, the original's sub-goal 1 or 4
-    /// (goal 0xb's test, @0x8defc-0x8df13): an NPC's goal to jump out.
+    /// (goal 0xb's test, @0x8defc-0x8df13): an NPC's own jump or goal 2's
+    /// brake ([`jump_with_leader::leaves_by_substate`]).
     pub leaving: bool,
     /// Its engine glow's base, +0xc8d4, which a follower keeping formation
     /// copies (see [`follow_jump`], and the close formation's copy in
@@ -514,7 +516,7 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
                 heading: npc.state.heading,
                 aim: npc.warp.aim,
                 velocity: npc.state.velocity,
-                leaving: npc.goal == Goal::JumpOut,
+                leaving: jump_with_leader::leaves_by_substate(npc),
                 glow: npc.display.glow,
             };
             (npc.id, view)
@@ -524,17 +526,23 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
 
 /// Goal 0xb's push of an NPC leader onto its own jump (goal 2,
 /// @0x8dedf-0x8defa): each leader of a ship in `npcs` that follows its
-/// jump and is intact is set to jump out.
+/// jump, is intact and whose high level runs ([`Npc::high_level_waits`])
+/// is set to jump out. A leader the player leads is not: the original
+/// pushes it too, but its own next hold puts it back on goal 0xb
+/// (@0x8d542-0x8d54c), as it is under way only on the player's jump.
 pub fn send_leaders_out(npcs: &mut [Npc]) {
     let sent: Vec<NpcId> = npcs
         .iter()
-        .filter(|npc| npc.condition == Condition::Intact)
+        .filter(|npc| npc.condition == Condition::Intact && !npc.high_level_waits())
         .filter_map(|npc| match npc.warp.goal {
             Some(WarpGoal::Follow(ShipRef::Npc(leader))) => Some(leader),
             _ => None,
         })
         .collect();
-    for npc in npcs.iter_mut().filter(|npc| sent.contains(&npc.id)) {
+    for npc in npcs
+        .iter_mut()
+        .filter(|npc| sent.contains(&npc.id) && !npc.escorts_player())
+    {
         npc.goal = Goal::JumpOut;
     }
 }
@@ -594,6 +602,10 @@ pub fn fly_jump(
                 match check {
                     FollowCheck::Own => npc.begin_own_jump(),
                     FollowCheck::GiveUp => {
+                        // Goal 0, sub 0, target -1 (@0x8deb9-0x8ded1,
+                        // @0x8df31-0x8df49).
+                        npc.goal = Goal::Idle;
+                        npc.target = None;
                         npc.warp.goal = None;
                         return None;
                     }
@@ -1214,6 +1226,30 @@ mod tests {
     }
 
     #[test]
+    fn goal_0xb_sends_no_leader_out_for_a_waiting_follower_nor_one_the_player_leads() {
+        let lead = NpcId(2);
+        let pushed = |wait: u32, escorts_player: bool| {
+            let mut follower = ship();
+            follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+            follower.ai_wait = wait;
+            let mut leader = ship();
+            leader.id = lead;
+            if escorts_player {
+                leader.escort = Some(crate::escort::EscortDuty {
+                    formation: crate::escort::FormationSlot::default(),
+                    order: None,
+                });
+            }
+            let mut ships = [follower, leader];
+            send_leaders_out(&mut ships);
+            ships[1].goal == Goal::JumpOut
+        };
+        assert!(pushed(0, false));
+        assert!(!pushed(5, false), "its high level waits (@0x8d4b9)");
+        assert!(!pushed(0, true), "held back by its own hold (@0x8d542)");
+    }
+
+    #[test]
     fn settling_runs_the_warp_out_of_a_ship_whose_stage_is_under_way() {
         let views = BTreeMap::new();
         let mut ship = warping(3.0, 100);
@@ -1369,9 +1405,26 @@ mod tests {
         let views = BTreeMap::new();
         let world = in_world(world());
         let mut follower = ship();
+        follower.goal = Goal::Formation { guard: None };
+        follower.target = Some(ShipRef::Npc(NpcId(9)));
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
         assert_eq!(fly_jump(&mut follower, &views, &world, true), None);
-        assert_eq!(follower.warp.goal, None, "goal 0");
+        assert_eq!(follower.warp.goal, None, "sub 0");
+        assert_eq!(follower.goal, Goal::Idle, "goal 0 (@0x8deb9-0x8ded1)");
+        assert_eq!(follower.target, None);
+        let lead = NpcId(4);
+        let mut views = BTreeMap::new();
+        views.insert(lead, LeaderWarp::default());
+        let mut follower = ship();
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.target = Some(ShipRef::Player);
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        assert_eq!(fly_jump(&mut follower, &views, &world, true), None);
+        assert_eq!(
+            (follower.goal, follower.target, follower.warp.goal),
+            (Goal::Idle, None, None),
+            "an NPC's too (@0x8df31-0x8df49)"
+        );
     }
 
     #[test]

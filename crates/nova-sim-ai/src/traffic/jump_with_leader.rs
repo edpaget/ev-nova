@@ -25,6 +25,7 @@
 use crate::ai::Goal;
 #[cfg(doc)]
 use crate::ai::dispatch_gate;
+use crate::ai::leave::{self, Leg};
 #[cfg(doc)]
 use crate::traffic::Traffic;
 use crate::traffic::npc::Npc;
@@ -59,6 +60,19 @@ impl Npc {
     }
 }
 
+/// Whether `npc`, a leader, is on its way out by its substate, as goal
+/// 0xb's NPC-parent test reads it (sub 1 or 4, @0x8defc-0x8df13): on its
+/// own jump (sub 4), or in goal 2 braking before it ([`Leg::Brake`]). A
+/// leader running out inside 1000 (sub 3), or itself following a jump
+/// (sub 0xd), is not, so its followers give it up.
+#[must_use]
+pub fn leaves_by_substate(npc: &Npc) -> bool {
+    npc.warp.goal == Some(WarpGoal::Own)
+        || (npc.goal == Goal::JumpOut
+            && npc.warp.goal.is_none()
+            && leave::leg(&npc.state, leave::expedites(npc)) == Leg::Brake)
+}
+
 /// Whether each of `npcs`, whose think is `due`, makes its type's think:
 /// none on the jump path, sub 4 or 0xd (see the module docs). Its high
 /// level, its board wait's lapse, its plunder drift and its fresh trigger
@@ -73,7 +87,8 @@ pub(super) fn deciding(npcs: &[Npc], due: &[bool]) -> Vec<bool> {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use crate::ai::{Behaviour, Goal, Surroundings};
+    use super::*;
+    use crate::ai::{Behaviour, Surroundings};
     use crate::chance::{Chance, NeverFires};
     use crate::combat::ShipRef;
     use crate::flight::ShipState;
@@ -245,6 +260,77 @@ mod tests {
         let ship = of(&traffic, follower);
         assert_eq!(ship.goal, Goal::Follow { lead, guard: None }, "no hold");
         assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(lead))));
+    }
+
+    // A leader's leave by its substate.
+
+    /// Whether a follower of a lead that `setup` set, at rest 3000 out
+    /// east, keeps following it through a tick.
+    fn keeps_following(setup: impl Fn(&mut Npc)) -> bool {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        setup(&mut lead);
+        let lead = traffic.add_npc(lead);
+        let mut follower = far(0);
+        follower.state.position = Vec2::new(3000.0, 100.0);
+        follower.leader = Some(lead);
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let follower = traffic.add_npc(follower);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead)))
+    }
+
+    #[test]
+    fn a_leader_braking_or_on_its_own_jump_keeps_its_followers() {
+        assert!(keeps_following(|lead| {
+            lead.goal = Goal::JumpOut;
+            lead.state.velocity = Vec2::new(2.0, 0.0);
+        }));
+        assert!(keeps_following(Npc::begin_own_jump));
+    }
+
+    #[test]
+    fn a_leader_running_out_inside_1000_or_following_another_gives_its_followers_up() {
+        assert!(!keeps_following(|lead| {
+            lead.goal = Goal::JumpOut;
+            lead.state.position = Vec2::new(500.0, 0.0);
+        }));
+        assert!(!keeps_following(|lead| {
+            lead.goal = Goal::Follow {
+                lead: NpcId(77),
+                guard: None,
+            };
+            lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(77))));
+        }));
+        assert!(!keeps_following(|lead| lead.goal = Goal::Idle));
+    }
+
+    #[test]
+    fn a_leaders_leave_reads_sub_4_or_goal_2s_brake() {
+        let mut lead = far(1);
+        assert!(!leaves_by_substate(&lead), "idle");
+        lead.goal = Goal::JumpOut;
+        assert!(
+            !leaves_by_substate(&lead),
+            "at rest beyond 1000: sub 4 next"
+        );
+        lead.state.velocity = Vec2::new(0.0, 0.4);
+        assert!(leaves_by_substate(&lead), "sub 1");
+        lead.stats.fast_jump = true;
+        assert!(
+            !leaves_by_substate(&lead),
+            "an expediting ship doesn't brake"
+        );
+        lead.warp.goal = Some(WarpGoal::Own);
+        assert!(leaves_by_substate(&lead), "sub 4");
+        lead.goal = Goal::Flee(ShipRef::Player);
+        assert!(leaves_by_substate(&lead), "goal 3's sub 4");
+        let mut inside = far(1);
+        inside.goal = Goal::JumpOut;
+        inside.state.position = Vec2::new(500.0, 0.0);
+        inside.state.velocity = Vec2::new(2.0, 0.0);
+        assert!(!leaves_by_substate(&inside), "sub 3");
     }
 
     // The jump path skips the type think.
