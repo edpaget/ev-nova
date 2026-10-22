@@ -20,7 +20,11 @@
 //!   first, then the NPCs in order), but not the one it last inspected
 //!   nor another interceptor (AI type 4, @0x8cd4e, @0x8cdfe: a ship with
 //!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
-//!   original retries `Rand(64)` slots, here one draw among them. Within [`INSPECT_REACH`] of it on both axes
+//!   original retries `Rand(64)` slots, here one draw among them. It
+//!   picks only a ship it sees (`_ShipVisibleToShip`, @0x8cd5f in the
+//!   count, @0x8ce13 in the pick; [`sight`](super::sight)); the player is
+//!   always seen until rdm:phase/cloaking-fidelity/phase-8-cloaking-device
+//!   gives it a cloak. Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
 //!   looked the player over, it has scanned the player
@@ -310,7 +314,7 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
         .iter()
         .filter(|other| other.id != npc.id && (other.no_ai || other.ai_type != AiType::Interceptor))
         .map(|other| ShipRef::Npc(other.id))
-        .filter(|&ship| around.live(ship));
+        .filter(|&ship| around.live(ship) && around.sees(npc, ship));
     let candidates: Vec<ShipRef> = player
         .into_iter()
         .chain(npcs)
@@ -332,7 +336,8 @@ mod tests {
     use crate::ai::CommCall;
     use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{
-        NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
+        NEUTRAL, PIRATES, POLICE, TRADERS, around, cloaked, govts, n, scanning, ship,
+        short_of_ammo, sites,
     };
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -457,6 +462,43 @@ mod tests {
                 "the player and two NPCs; not another interceptor"
             );
         }
+    }
+
+    #[test]
+    fn idle_it_never_picks_a_cloaked_ship_it_cant_see_to_inspect() {
+        let npcs = [
+            police(),
+            cloaked(ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)),
+            ship(3, TRADERS, AiType::WimpyTrader, 900.0, 0.0),
+        ];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+        assert_eq!(
+            (goal, asked),
+            (Goal::Inspect(n(3)), vec![2]),
+            "the player and the trader it sees"
+        );
+        let sites = sites();
+        let govts = govts(0, 0);
+        let alone = &npcs[..2];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&sites, alone)
+        };
+        assert_eq!(
+            Interceptor::default().decide(&alone[0], &around, &mut Draws::of(&[0])),
+            Goal::Land(StellarId(128)),
+            "nothing it sees: it patrols"
+        );
+    }
+
+    #[test]
+    fn it_inspects_a_cloaked_ship_its_scanner_sees() {
+        let npcs = [
+            scanning(police()),
+            cloaked(ship(2, TRADERS, AiType::WimpyTrader, 150.0, 0.0)),
+        ];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+        assert_eq!((goal, asked), (Goal::Inspect(n(2)), vec![2]));
     }
 
     #[test]
@@ -1040,15 +1082,6 @@ mod tests {
             Goal::JumpOut,
             "leaving, state 2"
         );
-    }
-
-    /// `npc` fully cloaked.
-    fn cloaked(mut npc: Npc) -> Npc {
-        npc.cloak = crate::cloak::Cloak {
-            fade: crate::cloak::FADE_FULL,
-            direction: 0,
-        };
-        npc
     }
 
     /// The decision of `cop` inspecting NPC 2, a trader 500 off, cloaked

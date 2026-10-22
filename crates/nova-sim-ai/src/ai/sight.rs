@@ -15,9 +15,11 @@
 //! its target holds its fire), the lost-sight search
 //! ([`lost_sight`](crate::ai::lost_sight)) and the player's escort's pick
 //! of a nearby threat ([`escort::threat_score`](crate::escort::threat_score),
-//! `_IsShipANearbyThreatToParent` @0x8370e).
-//! rdm:phase/cloaking-fidelity/phase-4-npc-cloak-visibility asks it next,
-//! in the target picks.
+//! `_IsShipANearbyThreatToParent` @0x8370e), the target picks'
+//! candidates ([`target`](crate::ai::target), `_SelectWarshipTarget`
+//! @0x8a0d2, @0x8a538, @0x8aa7b, @0x8ad92) and the interceptor's pick of
+//! a ship to inspect ([`interceptor`](crate::ai::interceptor),
+//! `_InterceptorAI` @0x8cd5f, @0x8ce13).
 //!
 //! # Not modelled
 //!
@@ -54,18 +56,9 @@ impl Surroundings<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ai::fixture::{TRADERS, around, govts, n, ship, sites};
-    use crate::cloak::{Cloak, FADE_FULL};
+    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, ship, sites};
     use crate::combat::ShipRef;
     use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
-
-    fn cloaked(mut npc: Npc) -> Npc {
-        npc.cloak = Cloak {
-            fade: FADE_FULL,
-            direction: 0,
-        };
-        npc
-    }
 
     fn sees(observer: &Npc, other: Npc) -> bool {
         let (sites, govts) = (sites(), govts(0, 0));

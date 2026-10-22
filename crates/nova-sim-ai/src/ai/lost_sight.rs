@@ -250,21 +250,12 @@ pub fn after_inspection(npc: &Npc, decision: Decision, around: &Surroundings) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::fixture::{TRADERS, around, govts, n, ship, sites};
+    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, ship, sites};
     use crate::bay::Carrier;
-    use crate::cloak::{Cloak, FADE_FULL};
     use crate::combat::ShipRef;
     use crate::rulebook::RuleSource;
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
-
-    fn cloaked(mut npc: Npc) -> Npc {
-        npc.cloak = Cloak {
-            fade: FADE_FULL,
-            direction: 0,
-        };
-        npc
-    }
 
     /// NPC 1 of `ai_type` at the centre, its timer `timer`.
     fn hunter(ai_type: AiType, timer: SearchTimer) -> Npc {
