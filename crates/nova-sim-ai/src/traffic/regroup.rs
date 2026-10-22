@@ -87,6 +87,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::ai::pursuit::Frame;
     use crate::ai::{Behaviour, GateWait, Surroundings};
     use crate::catalog::WeaponId;
     use crate::chance::NeverFires;
@@ -196,6 +197,54 @@ mod tests {
         uncloaking.cloak();
         uncloaking.uncloak();
         assert_eq!(held.cloak, uncloaking, "no device: its think uncloaks it");
+    }
+
+    /// A frame worked out under `goal`, running nothing.
+    fn frame_of(goal: Goal) -> Frame {
+        Frame {
+            goal,
+            bodies: [None; 2],
+            speed_cap: None,
+        }
+    }
+
+    /// The frame a ship paused keeping `kept`, holding `frame`, holds after
+    /// its release draw comes up `draw`.
+    fn frame_after(kept: Kept, frame: Frame, draw: u32) -> Option<Frame> {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = paused_with(kept);
+        ship.pursuit.frame = Some(frame);
+        let id = traffic.add_npc(ship);
+        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, draw);
+        traffic.release_regroups(&mut chance);
+        assert_eq!(chance.times_asked(RELEASE_DRAW), 1);
+        of(&traffic, id).pursuit.frame
+    }
+
+    #[test]
+    fn held_a_fight_drops_its_stale_frame_and_the_rest_keep_theirs() {
+        let foe = ShipRef::Player;
+        let fight = frame_of(Goal::Attack(foe));
+        for kept in [Kept::Attack(foe), Kept::Snipe(foe)] {
+            assert_eq!(frame_after(kept, fight, 99), None, "{kept:?}");
+        }
+        let flying = frame_of(Goal::Hold);
+        for kept in [
+            Kept::Formation { guard: Some(foe) },
+            Kept::Coast,
+            Kept::Stop,
+        ] {
+            assert_eq!(frame_after(kept, flying, 99), Some(flying), "{kept:?}");
+        }
+    }
+
+    #[test]
+    fn released_its_frame_is_left_to_its_think() {
+        let foe = ShipRef::Player;
+        let fight = frame_of(Goal::Attack(foe));
+        for kept in [Kept::Attack(foe), Kept::Snipe(foe), Kept::Coast] {
+            assert_eq!(frame_after(kept, fight, 0), Some(fight), "{kept:?}");
+        }
     }
 
     #[test]
