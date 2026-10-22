@@ -142,3 +142,32 @@ fn a_fuse_in_the_proximity_pass_is_set_off_by_a_fragment_a_contact_hit_seated() 
     assert_eq!(rocks.at(1).strength, 46, "the fragment takes its 4");
     assert_eq!(rocks.get(0), None);
 }
+
+#[test]
+fn a_later_layers_walk_skips_a_destroyed_slot_another_asteroids_fragment_took() {
+    // s1 destroys A0 in slot 0, its fragment taking slot 2; s2 then
+    // destroys A1 in slot 1, its fragment taking slot 0, free now. A0's
+    // sprite was hidden as it was destroyed (@0xb01c) and the fragment's
+    // is not shown (@0x3638a), so the homing layer's walk passes slot 0:
+    // the missile crosses the fragment's 50-pixel circle, not A1's 10.
+    let mut combat = Combat::default();
+    let mut rocks = breaking(
+        Rocks::of([worn(0, 0.0, 0.0, 1), worn(1, 200.0, 0.0, 1)]),
+        100.0,
+        50,
+    );
+    blast_from(&mut combat, Vec2::new(0.0, -50.0), Vec2::new(0.0, 50.0));
+    blast_from(&mut combat, Vec2::new(200.0, -50.0), Vec2::new(200.0, 50.0));
+    let missile = put(
+        &mut combat,
+        missile(),
+        A,
+        Vec2::new(170.0, -60.0),
+        Vec2::new(0.0, 120.0),
+    );
+    test_amid(&mut combat, &mut rocks);
+    assert_eq!(rocks.at(0).position, Vec2::new(200.0, 0.0), "A1's fragment");
+    assert_eq!(rocks.at(2).position, Vec2::ZERO, "A0's fragment");
+    assert!(flying(&combat, missile).is_some(), "slot 0 passed");
+    assert_eq!(rocks.at(0).strength, 50, "untouched");
+}
