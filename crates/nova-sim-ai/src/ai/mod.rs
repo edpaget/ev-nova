@@ -442,6 +442,17 @@ impl Goal {
         }
     }
 
+    /// Whether it is the original's goal 0xa, an escort flying in form
+    /// (see [`Goal::spares_player_threat`]'s table): [`Goal::Follow`],
+    /// [`Goal::Formation`] or [`Goal::Hold`].
+    #[must_use]
+    pub fn flies_in_form(self) -> bool {
+        matches!(
+            self,
+            Self::Follow { .. } | Self::Formation { .. } | Self::Hold
+        )
+    }
+
     /// Whether a ship in this goal is no threat to the player by its
     /// target, as `_ExtendedIsThreatToPlayer` leaves out the original's
     /// goals 7, 9, 0xf, 0xa, 0xb, 5, 0xc and 0x12 (@0x81bf3-0x81c28, again

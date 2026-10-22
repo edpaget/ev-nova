@@ -572,21 +572,6 @@ pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
     }
 }
 
-/// [`trigger`] for a ship whose attack launches no fighters: the player's
-/// escort, whose launch the engine doesn't fly yet (rdm
-/// escort-fleet-fidelity/phase-4-carriers-and-fighters), so its bay is
-/// never its pick either.
-#[must_use]
-pub fn trigger_holding_fighters(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
-    let (only, keep) = pick(npc, around, rules, (false, None));
-    Trigger {
-        only,
-        keep,
-        point_defence: asks_turret(npc, around),
-        ..Trigger::default()
-    }
-}
-
 /// Whether `npc` launches its fighters: attacking or sniping at a ship
 /// live in the system (`_AILaunchFighter` from `_HighLevelAIHandler`'s
 /// attack block, @0x8e6fa).

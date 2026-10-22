@@ -5,7 +5,8 @@
 //! carrier's fighter (AI type 5). The original flies each by `_EscortAI`
 //! (@0x838d2-0x83f5d) under its parent (+0x9a), here [`Npc::leader`]; the
 //! engine has no AI types 5 and 6, so a ship with a leader stands for 6 and
-//! one with a [`carrier`](Npc::carrier) for 5. [`NovaAi`](crate::ai::NovaAi)
+//! one with a [`carrier`](Npc::carrier) for 5. A fighter's leader is its
+//! carrier (`_LaunchFighter` @0x3d866-0x3d870). [`NovaAi`](crate::ai::NovaAi)
 //! routes them here by the rulebook's
 //! [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi).
 //!
@@ -25,8 +26,13 @@
 //! 3. **Target validity** (@0x83a9b-0x83ad2,
 //!    [`valid_target`](escort::valid_target)): a target gone is dropped,
 //!    and a disabled one unless the order is Attack.
-//! 4. **By its order** (+0xc90a), which [`stand_in_order`] reads off its
-//!    lead until rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
+//! 4. **By its order** (+0xc90a, [`order_of`]). Under a lead that is the
+//!    player's escort (@0x83b36-0x83b7f), the lead's Defend or Attack
+//!    while the lead's goal isn't 0xa ([`Goal::flies_in_form`]), else
+//!    Return: the player's escort carrier's fighters fight with it and
+//!    dock once it keeps formation or holds any other order. Under any
+//!    other lead, [`stand_in_order`] reads it off the lead until
+//!    rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
 //!    ports `_AIIssueEscortOrders`:
 //!    - **Defend** (@0x83c56-0x83d4e): it keeps its target within
 //!      [`DEFEND_KEEP_SQ`] of its lead, inclusive (@0x83cbc), else attacks
@@ -80,10 +86,6 @@
 //! **Not built here**, each a later phase's:
 //! - jumping with the parent (@0x839fd-0x83a92) and goal 0xb
 //!   (@0x83be3-0x83c51), with every +0x50 write: phase 8's;
-//! - the order a fighter of the player's escort takes from its parent
-//!   (@0x83b36-0x83b7f): phase 4's, as is a fighter's parent being its
-//!   carrier (until then its parent is its leader and it docks with its
-//!   carrier);
 //! - out of ammunition (@0x83b88-0x83bda): phase 9's;
 //! - formation flight on slots, steering at the guard: phase 6's; until
 //!   then [`Goal::Follow`] flies within the follow distance of the lead;
@@ -123,7 +125,9 @@ pub struct FleetEscortAi {
 /// leader-goal override orders outside goals 3, 4, 0xd and 0x13. Return too
 /// with its lead gone. Until phase 5, every NPC escort's own order word is
 /// -1 (`_GenericRandomShipSpawn` @0x3cbb3), so this is the only order it
-/// takes.
+/// takes under an NPC lead. A fighter of the player's escort takes the
+/// original's order instead ([`order_of`], @0x83b36-0x83b7f), which phase
+/// 5 must keep.
 #[must_use]
 pub fn stand_in_order(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     let fights =
@@ -139,6 +143,31 @@ pub fn stand_in_order(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
         EscortOrder::Attack
     } else {
         EscortOrder::Dock
+    })
+}
+
+/// The order `npc` follows under its NPC parent among `around`
+/// (`_EscortAI` @0x83b36-0x83b7f): under a lead that is the player's
+/// escort, the lead's Defend or Attack while its goal isn't 0xa
+/// ([`Goal::flies_in_form`]), else Return (3), which docks a fighter;
+/// under any other lead, [`stand_in_order`]. The first branch is the
+/// original's, which
+/// rdm:phase/escort-fleet-fidelity/phase-5-fleet-leaders-issue-orders
+/// must keep as it replaces the stand-in.
+#[must_use]
+pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
+    let players_escort = npc
+        .leader
+        .and_then(|id| around.npc(id))
+        .filter(|lead| lead.escorts_player());
+    let Some(lead) = players_escort else {
+        return stand_in_order(npc, around);
+    };
+    Some(match lead.escort_order() {
+        Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !lead.goal.flies_in_form() => {
+            order
+        }
+        _ => EscortOrder::Dock,
     })
 }
 
@@ -240,9 +269,9 @@ impl Behaviour for FleetEscortAi {
         self.decision(npc, around, chance).goal
     }
 
-    /// [`decide_by`] under [`stand_in_order`].
+    /// [`decide_by`] under [`order_of`].
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        decide_by(npc, stand_in_order(npc, around), around, chance)
+        decide_by(npc, order_of(npc, around), around, chance)
     }
 
     /// Attacking or sniping, [`fire::trigger`]; in formation with a guard,
@@ -843,6 +872,73 @@ mod tests {
             stand_in_order(&alone[0], &Surroundings::new(&[], &alone)),
             dock,
             "its lead gone"
+        );
+    }
+
+    /// The order a fighter of the lead, NPC 1, takes when the lead is the
+    /// player's escort following `order` with `goal`.
+    fn players_escorts_fighter_order(
+        order: Option<EscortOrder>,
+        goal: Goal,
+    ) -> Option<EscortOrder> {
+        let mut escort = lead(goal);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order,
+        });
+        let npcs = [escort, fighter(n(1))];
+        order_of(&npcs[1], &Surroundings::new(&[], &npcs))
+    }
+
+    #[test]
+    fn a_fighter_of_the_players_escort_takes_its_defend_or_attack_out_of_formation_else_return() {
+        // `_EscortAI` @0x83b36-0x83b7f: a parent whose own parent is the
+        // player; its order 1 or 2 unless its goal is 0xa, else 3.
+        let fighting = Goal::Attack(n(3));
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            assert_eq!(
+                players_escorts_fighter_order(Some(order), fighting),
+                Some(order)
+            );
+            for idle in [Goal::Idle, Goal::Wait] {
+                assert_eq!(
+                    players_escorts_fighter_order(Some(order), idle),
+                    Some(order),
+                    "goal {idle:?} isn't 0xa"
+                );
+            }
+            for in_form in [
+                Goal::Formation { guard: None },
+                Goal::Follow {
+                    lead: NpcId(9),
+                    guard: None,
+                },
+                Goal::Hold,
+            ] {
+                assert_eq!(
+                    players_escorts_fighter_order(Some(order), in_form),
+                    Some(EscortOrder::Dock),
+                    "goal 0xa: {in_form:?}"
+                );
+            }
+        }
+        for order in [None, Some(EscortOrder::Hold), Some(EscortOrder::Dock)] {
+            assert_eq!(
+                players_escorts_fighter_order(order, fighting),
+                Some(EscortOrder::Dock),
+                "{order:?}"
+            );
+        }
+        // Under any other lead, the stand-in order.
+        let npcs = [lead(Goal::Formation { guard: None }), fighter(n(1))];
+        assert_eq!(
+            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+            stand_in_order(&npcs[1], &Surroundings::new(&[], &npcs))
+        );
+        let npcs = [lead(fighting), fighter(n(1))];
+        assert_eq!(
+            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+            Some(EscortOrder::Attack)
         );
     }
 

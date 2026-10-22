@@ -712,7 +712,7 @@ pub(super) mod tests {
     /// energy and 2 mass damage.
     pub(in crate::session) const GUN: WeaponId = WeaponId(141);
     /// A warship escort's ship type.
-    const WARSHIP: ShipId = ShipId(150);
+    pub(in crate::session) const WARSHIP: ShipId = ShipId(150);
 
     /// The Viper's fields: as fast as the player, of `Maneuver` 80 and a
     /// jump's fuel.
@@ -1535,7 +1535,7 @@ pub(super) mod tests {
     }
 
     /// A warship escort following `order`.
-    fn warship(order: Option<EscortOrder>) -> Escort {
+    pub(in crate::session) fn warship(order: Option<EscortOrder>) -> Escort {
         Escort {
             ship: WARSHIP,
             reserves: Reserves::full(30.0, 45.0, 300.0),
@@ -1564,7 +1564,11 @@ pub(super) mod tests {
 
     /// `escorts` flying with `vipers` aboard, the bay selected, the
     /// orders kept as they enter.
-    fn fleet(catalog: &FakePilotCatalog, vipers: u16, escorts: Vec<Escort>) -> Session {
+    pub(in crate::session) fn fleet(
+        catalog: &FakePilotCatalog,
+        vipers: u16,
+        escorts: Vec<Escort>,
+    ) -> Session {
         let session = Session::fly(catalog, pilot(catalog, vipers, escorts))
             .expect("flies")
             .with_rules(kept_orders());

@@ -445,6 +445,8 @@ mod edit;
 mod eject;
 mod entry;
 #[cfg(test)]
+mod escort_carriers;
+#[cfg(test)]
 mod escort_loss;
 mod escorts;
 mod events;

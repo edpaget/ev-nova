@@ -48,8 +48,13 @@
 //! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
 //! An escort hit takes its attacker as its target, as any ship does
-//! ([`react::victim`]), but never comes to another ship's help. It never
-//! launches the fighters it carries ([`Trigger::bays`]).
+//! ([`react::victim`]), but never comes to another ship's help. Attacking,
+//! it fires as any ship does ([`fire::trigger`]), launching the fighters
+//! it carries ([`Trigger::bays`]: the high level's `_AILaunchFighter` is
+//! every type's, @0x8e6fa). Each flies `_EscortAI` under it
+//! ([`FleetEscortAi`](crate::ai::FleetEscortAi)), taking its Defend or
+//! Attack, or Return while it keeps formation
+//! ([`order_of`](crate::ai::fleet_escort::order_of)).
 
 use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, react};
@@ -152,7 +157,7 @@ impl Behaviour for EscortAi {
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
-            Goal::Attack(_) => fire::trigger_holding_fighters(npc, around, self.fire),
+            Goal::Attack(_) => fire::trigger(npc, around, self.fire),
             // Keeping formation, `_LowLevelAIHandler`'s substates 1, 9,
             // 0xb and 0xc call `_AIEscortFireUnprovoked` on the guard the
             // think left in +0x70 (@0x85633, @0x878f4, @0x87692,
@@ -1016,15 +1021,8 @@ mod tests {
                 govts: &govts,
                 ..Surroundings::new(&[], &npcs)
             };
-            let fires = Trigger {
-                bays: false,
-                ..fire::trigger(&npcs[0], &around, FireRules::default())
-            };
-            assert_eq!(
-                command(ENGINE, &npcs),
-                (fires, Some(n(2))),
-                "{order:?}: launching no fighters"
-            );
+            let fires = fire::trigger(&npcs[0], &around, FireRules::default());
+            assert_eq!(command(ENGINE, &npcs), (fires, Some(n(2))), "{order:?}");
             assert_eq!(
                 fire::trigger(&npcs[0], &around, FireRules::default()).only,
                 Some(WeaponId(141)),
@@ -1476,26 +1474,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_escort_launches_the_fighters_it_carries() {
-        let npcs = [
-            having(
-                escort(Some(EscortOrder::Attack)),
-                Goal::Attack(n(2)),
-                Some(n(2)),
-            ),
-            pirate(2, 100.0, 0.0),
-        ];
-        let (trigger, target) = command(ENGINE, &npcs);
-        assert_eq!(target, Some(n(2)));
-        assert!(!trigger.bays, "{trigger:?}");
-        assert!(trigger.only.is_some(), "it still fires: {trigger:?}");
-    }
-
-    #[test]
-    fn an_escort_attacking_with_a_ready_bay_neither_keeps_nor_fires_its_bay() {
-        // Review 2026-10-15-1835-a4d7: `trigger_holding_fighters` writes
-        // no bay as the pick, so a gun pass that finds nothing fires none.
+    /// The escort attacking NPC 2, carrying a bay too (weapon 150, two
+    /// fighters aboard, ready), and the pirate it attacks 600 ahead, beyond
+    /// its gun and turret.
+    fn attacking_carrier() -> [Npc; 2] {
         let bay = WeaponSpec::new(&crate::catalog::WeaponRecord {
             guidance: 99,
             ammo_type: 200,
@@ -1517,10 +1499,26 @@ mod tests {
         mounts.push((bay, 1));
         carrier.armament = Armament::new(mounts);
         carrier.rounds = crate::combat::armament::LauncherRounds::from([(WeaponId(150), 2)]);
-        // The pirate 600 ahead: beyond its gun and its turret.
-        let npcs = [carrier, pirate(2, 0.0, -600.0)];
-        let (trigger, _) = command(ENGINE, &npcs);
-        assert_ne!(trigger.keep, Some(WeaponId(150)), "{trigger:?}");
-        assert_ne!(trigger.only, Some(WeaponId(150)), "{trigger:?}");
+        [carrier, pirate(2, 0.0, -600.0)]
+    }
+
+    #[test]
+    fn an_escort_attacking_launches_the_fighters_it_carries_as_any_ship_does() {
+        // The high level's `_AILaunchFighter` is every type's (@0x8e6fa),
+        // the player's escorts' too, and its bay is its pick as any ship's.
+        let npcs = attacking_carrier();
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let (trigger, target) = command(ENGINE, &npcs);
+        assert_eq!(target, Some(n(2)));
+        assert!(trigger.bays, "{trigger:?}");
+        assert_eq!(
+            trigger,
+            fire::trigger(&npcs[0], &around, FireRules::default())
+        );
     }
 }
