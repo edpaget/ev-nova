@@ -50,7 +50,7 @@
 use super::{Outbox, Space, Statics};
 use crate::catalog::ShipId;
 use crate::chance::Chance;
-use crate::combat::ShipRef;
+use crate::combat::{EscortLoss, FinishingHit, ShipRef};
 use crate::escort_voice::{VoiceCue, calls_target, victory_speaker};
 use crate::traffic::npc::NpcId;
 use crate::voice::{Speech, VoiceMessage, VoiceVariant, roll_variant};
@@ -158,13 +158,29 @@ impl Space {
         }
     }
 
-    /// Queues the victory over each of `victims`, in order, the ships a
-    /// shot's direct hit started dying (`_HandleShipHit` @0x36c7f-0x36d45):
-    /// said by [`victory_speaker`] among the ships the player leads, if
-    /// any, so the last victim's stands.
-    pub(super) fn speak_victories(&mut self, statics: &Statics, victims: &[ShipRef]) {
-        for &victim in victims {
-            let speech = victory_speaker(self.player_led(), victim)
+    /// Queues the victory of each of `finished`, in order, the hits that
+    /// started their ships dying (`_HandleShipHit` @0x36c7f-0x36d45): said
+    /// by [`victory_speaker`] among the ships the player leads, if any, so
+    /// the last one's stands. A ship of the fleet the phase lost, among
+    /// `lost`, is led only until the strike that lost it, as `_DamageShip`
+    /// takes it out of the fleet as that hit lands (@0x3afdd).
+    ///
+    /// The original speaks inside each hit; these settle after the
+    /// phase's hits, before anything else reads or writes the channel, so
+    /// the difference crosses no boundary the player hears.
+    pub(super) fn speak_victories(
+        &mut self,
+        statics: &Statics,
+        finished: &[FinishingHit],
+        lost: &[EscortLoss],
+    ) {
+        for hit in finished {
+            let gone = |id: NpcId| {
+                lost.iter()
+                    .any(|loss| loss.ship == ShipRef::Npc(id) && loss.strike < hit.strike)
+            };
+            let led = self.player_led().filter(|npc| !gone(npc.id));
+            let speech = victory_speaker(led, hit.ship)
                 .map(|npc| statics.speech(npc.ship, VoiceMessage::Victory, npc.voice));
             if let Some(speech) = speech {
                 self.voice.speak(speech);
@@ -1012,6 +1028,43 @@ mod tests {
             [voice(1323)],
             "the warship, higher now"
         );
+    }
+
+    #[test]
+    fn an_escort_the_phase_lost_before_the_finishing_hit_says_no_victory() {
+        // `_DamageShip` takes a disabled escort out of the fleet as its hit
+        // lands (@0x3afdd), so a later hit's victory never reads it led.
+        let mut catalog = armed_voiced();
+        for record in &mut catalog.ship_records {
+            if record.id == FREIGHTER {
+                record.inherent_ai = 3;
+                record.inherent_govt = Some(EVEN);
+            }
+        }
+        let (mut session, victim) = attacking(&catalog, &[WARSHIP, FREIGHTER]);
+        let higher = crate::combat::ShipRef::Npc(escort_npc(&mut session, 1).id);
+        let said = |session: &mut Session, lost_at: usize| {
+            session.space.voice = crate::voice::VoiceChannel::default();
+            session.space.speak_victories(
+                &session.statics,
+                &[FinishingHit {
+                    ship: victim,
+                    strike: 1,
+                }],
+                &[EscortLoss {
+                    ship: higher,
+                    strike: lost_at,
+                }],
+            );
+            session.space.voice.pending().and_then(|speech| speech.set)
+        };
+        assert_eq!(said(&mut session, 0), Some(3), "lost first: the warship");
+        assert_eq!(
+            said(&mut session, 1),
+            Some(4),
+            "lost by that hit: still led"
+        );
+        assert_eq!(said(&mut session, 2), Some(4), "lost after");
     }
 
     #[test]

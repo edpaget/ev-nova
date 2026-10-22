@@ -1,9 +1,7 @@
-//! The hits that start a ship dying, which an escort's victory voice reads
-//! (`_HandleShipHit` @0x36c7f-0x36d45, rdm escort-fleet-fidelity phase
-//! 10): a shot's direct hit on a ship not dying before it (`_IsDying`
-//! @0x36ad5) and dying after it (@0x36c85). A beam's hit (`_HandleBeams`
-//! → `_DamageShip` @0x316a1), a blast's (@0x36ec0) and a missile lock's
-//! never note one.
+//! The fight's tests of the hits that start a ship dying (see
+//! [`finishing_hit`](crate::combat::finishing_hit), rdm
+//! escort-fleet-fidelity phase 10), through the collision passes, the
+//! beams and the shots' locks.
 
 use super::collision_walk::{INTO_C, fly, three};
 use super::*;
@@ -17,11 +15,11 @@ fn shell() -> WeaponRecord {
 }
 
 /// Each strike of a collision pass among `ships` (its ship and
-/// attacker), and the ships its hits finished, in order.
+/// attacker), and the hits that finished their ships, in order.
 fn walk(
     combat: &mut Combat,
     ships: &mut [Ship],
-) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<ShipRef>) {
+) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<FinishingHit>) {
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let arena = Arena {
@@ -45,9 +43,28 @@ fn a_shots_direct_hit_that_takes_the_last_armour_finishes_its_ship() {
     let mut ships = three();
     let mut combat = Combat::default();
     fly(&mut combat, (shell(), A, ShotLayer::Shots), INTO_C, None);
-    assert_eq!(walk(&mut combat, &mut ships), (vec![(C, Some(A))], vec![C]));
+    let finished = FinishingHit { ship: C, strike: 0 };
+    assert_eq!(
+        walk(&mut combat, &mut ships),
+        (vec![(C, Some(A))], vec![finished])
+    );
     assert!(ships[1].condition.is_dying(ships[1].reserves.armor));
     assert_eq!(combat.take_landed().2, [], "taken");
+}
+
+#[test]
+fn a_finishing_hit_carries_the_index_of_its_strike() {
+    let mut ships = three();
+    let mut combat = Combat::default();
+    fly(&mut combat, (blaster(), A, ShotLayer::Shots), INTO_C, None);
+    fly(&mut combat, (shell(), A, ShotLayer::Shots), INTO_C, None);
+    assert_eq!(
+        walk(&mut combat, &mut ships),
+        (
+            vec![(C, Some(A)), (C, Some(A))],
+            vec![FinishingHit { ship: C, strike: 1 }]
+        )
+    );
 }
 
 #[test]

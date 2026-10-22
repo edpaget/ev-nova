@@ -383,6 +383,7 @@ mod display;
 mod escort_loss;
 pub mod exits;
 mod expiry;
+pub mod finishing_hit;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flags;
@@ -424,6 +425,7 @@ use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 pub use escort_loss::EscortLoss;
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord};
+pub use finishing_hit::FinishingHit;
 use hull::{
     Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
 };
@@ -1152,10 +1154,9 @@ pub struct Combat {
     /// The ships of the player's fleet lost as the strikes landed, each
     /// with its strike's index ([`Combat::take_landed`]).
     escort_losses: Vec<EscortLoss>,
-    /// The ships a shot's direct hit started dying as the strikes landed,
-    /// in order, which an escort's victory voice reads
-    /// ([`Combat::take_landed`]).
-    finished: Vec<ShipRef>,
+    /// The hits that started their ships dying as the strikes landed,
+    /// each with its strike's index ([`Combat::take_landed`]).
+    finished: Vec<FinishingHit>,
     stellar_strikes: Vec<StellarStrike>,
     /// The words outside the fight that stray beams stepped this tick,
     /// with their firers ([`Combat::take_stray_steps`]).
@@ -2836,15 +2837,18 @@ impl Combat {
             let was_dying = fighter.condition.dying_or_destroyed(fighter.reserves.armor);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
             // `_HandleShipHit`'s victory voice (@0x36c7f-0x36d45): a
-            // shot's direct hit that starts its ship dying. A beam's hit
-            // is direct too, but `_HandleBeams` speaks none; a lock takes
-            // no armour, so it never starts one dying.
+            // shot's direct hit that starts its ship dying. A beam's hit is
+            // direct too, but `_HandleBeams` speaks none; a lock takes no
+            // armour, so it never starts one dying.
             if landed.direct
                 && !beam
                 && !was_dying
                 && fighter.condition.dying_or_destroyed(fighter.reserves.armor)
             {
-                self.finished.push(landed.ship);
+                self.finished.push(FinishingHit {
+                    ship: landed.ship,
+                    strike: self.strikes.len(),
+                });
             }
             if escort_loss::leave_fleet_if_disabled(fighter, rule) {
                 self.escort_losses.push(EscortLoss {
@@ -3215,13 +3219,11 @@ impl Combat {
 
     /// The strikes made since they were last taken, in order; the ships
     /// of the player's fleet they lost, each with the index of the strike
-    /// that lost it, in order ([`EscortLoss`]); and the ships a shot's
-    /// direct hit started dying, in order: not dying before the hit
-    /// (`_IsDying` @0x36ad5) and dying after it (@0x36c85), which
-    /// `_HandleShipHit`'s victory voice reads (@0x36c7f-0x36d45). A beam's
-    /// hit, a blast's, a shockwave's and a missile lock never start one.
+    /// that lost it, in order ([`EscortLoss`]); and the hits that started
+    /// their ships dying, each with its strike's index, in order
+    /// ([`FinishingHit`]), which `_HandleShipHit`'s victory voice reads.
     /// Taking them empties the three lists.
-    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>, Vec<ShipRef>) {
+    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>, Vec<FinishingHit>) {
         (
             std::mem::take(&mut self.strikes),
             std::mem::take(&mut self.escort_losses),

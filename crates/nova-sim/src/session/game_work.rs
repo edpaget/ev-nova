@@ -527,7 +527,8 @@ impl Session {
         let (strikes, losses, finished) = self.space.combat.take_landed();
         // `_HandleShipHit`'s victories, as the hits landed, before the
         // answers retarget anyone (see the `voices` module).
-        self.space.speak_victories(&self.statics, &finished);
+        self.space
+            .speak_victories(&self.statics, &finished, &losses);
         let struck = super::struck_npcs(&strikes);
         self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
