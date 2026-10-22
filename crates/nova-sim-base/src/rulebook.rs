@@ -38,6 +38,7 @@
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
+//! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
 //! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
@@ -295,7 +296,7 @@
 //! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
-//! `eight_bit_sheet`, `npc_landing`, `landing_speed`,
+//! `eight_bit_sheet`, `uncounted_sheet`, `npc_landing`, `landing_speed`,
 //! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
 //! `desc_movie_globals`,
@@ -936,6 +937,32 @@ rule_keys! {
     /// (`nova_render::GameImages`; see the `nova_sim::story` module's
     /// "Checked for stellar-fidelity phase 4").
     EightBitSheet => "eight_bit_sheet",
+    /// What a stellar's sprite slot shows when the graphic it clones has a
+    /// `spïn` whose `xTiles` × `yTiles` is 0 or less, the master's frame
+    /// count (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97). By the engine,
+    /// the slot keeps the frame it showed, as the clone copies the count
+    /// into it (`_SWCloneFramesFromMaster` @0xac4ec) and
+    /// `_SWSetCurrentFrameIndex` refuses an index for a count of 0 or
+    /// less, returning before it writes the frame (@0xa90e7-0xa90ee): so
+    /// from a rebuild point, which empties every cloned slot (@0x32e7a), it
+    /// shows no frame, nothing drawn and the landing reach 75
+    /// (`_HandlePlayerDockRequest` @0x66cc7), and between rebuild points a
+    /// slot that showed a frame keeps it, frozen at its index and placed
+    /// as a 32-pixel sprite, its top left at the stellar's centre less 16
+    /// on each axis (`_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a;
+    /// `_GetSpriteXSize`/`_GetSpriteYSize` @0x26d4-0x2731); a stellar whose
+    /// last rebuild point copied such a count (@0x331c6-0x331c9) never
+    /// animates until the next. The original faults on a product of 0
+    /// (#DE @0xa90e7) and on cloning such a master into a slot showing no
+    /// frame (@0xac519-0xac51c): the engine follows the state its code
+    /// leaves, reading 0 as negative. By the other reading, the sheet's own
+    /// decoded frames are drawn and animated and the slot shows a frame,
+    /// which is what the rebuild's repair (@0x332f7) means such a slot to
+    /// get. The Bible says nothing of `xTiles` × `yTiles`, so the other
+    /// reading is the intended alternative, not anything the Bible says
+    /// (see the `nova_sim::story` module's "Built by stellar-fidelity
+    /// phase 8").
+    UncountedSheet => "uncounted_sheet",
     /// How an NPC lands on a stellar: by the engine, as
     /// `_HighLevelAIHandler` state 1 flies it (@0x8d903-0x8db5a): it lands
     /// once its whole-pixel offset from the stellar's centre is at most 40
@@ -6082,6 +6109,12 @@ mod tests {
             Some(RuleKey::EightBitSheet)
         );
         assert_eq!(RuleKey::EightBitSheet.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::UncountedSheet.key(), "uncounted_sheet");
+        assert_eq!(
+            RuleKey::from_key("uncounted_sheet"),
+            Some(RuleKey::UncountedSheet)
+        );
+        assert_eq!(RuleKey::UncountedSheet.default_source(), RuleSource::Engine);
         assert_eq!(RuleKey::NpcLanding.key(), "npc_landing");
         assert_eq!(RuleKey::from_key("npc_landing"), Some(RuleKey::NpcLanding));
         assert_eq!(RuleKey::NpcLanding.default_source(), RuleSource::Engine);
@@ -6119,6 +6152,7 @@ mod tests {
                 RuleKey::StellarFrameCount,
                 RuleKey::TypeSheetFallback,
                 RuleKey::EightBitSheet,
+                RuleKey::UncountedSheet,
                 RuleKey::NpcLanding,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
