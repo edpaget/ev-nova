@@ -20,9 +20,9 @@
 //! original's sub-goal does.
 
 use crate::ai::Goal;
+use crate::area_cloak;
 use crate::cloak::{self, Cloak, MineOrder};
 use crate::combat::hull::Condition;
-use crate::flight::{FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Mode, Npc};
@@ -33,19 +33,17 @@ use crate::traffic::warp_out::WarpGoal;
 pub struct Around {
     /// Where the ship its goal attacks is from it, if it attacks one.
     pub attacking: Option<Vec2>,
-    /// Its leader, where it is and its cloak, if it has one with a cloak.
-    pub leader: Option<(ShipState, Cloak)>,
+    /// Its leader's cloak, if it has a leader here.
+    pub leader: Option<Cloak>,
+    /// Whether its leader carries an area cloak
+    /// ([`CloakGear::area`](crate::cloak::CloakGear::area), or the
+    /// player's [`PlayerSide::area_cloak`](crate::ai::PlayerSide::area_cloak)).
+    pub leader_area: bool,
     /// Whether the system's asteroid slot 0 holds a rock.
     pub mining_rock: bool,
     /// How the `cloak_on_reload` rule reads a reloading weapon
     /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
     pub cloak_on_reload: RuleSource,
-    /// Whether it sees its leader (`_ShipVisibleToShip`, see
-    /// [`npc_sees`](crate::ai::sight::npc_sees)): an unseen leader's
-    /// escort brakes rather than closing formation.
-    pub leader_seen: bool,
-    /// The flight rules it flies its formation by.
-    pub flight: FlightRules,
 }
 
 /// What the cloak think of `npc`, with `around`, knows
@@ -67,9 +65,17 @@ pub struct Around {
 ///   doesn't fly until rdm:phase/asteroids/phase-5-ai-mining, so it
 ///   reads no mining at all: reading it as either would hold a stock
 ///   Zephyr's cloak (missions 603 and 604) for good or never.
-/// - It keeps close formation with a cloaked leader
-///   ([`Npc::keeps_close_formation`], which holds only for the player's
-///   escorts, AI type 5 or 6).
+/// - Its last flight kept close formation ([`Npc::close_form`], the
+///   stored sub-goal 0xc, which the parent rule reads directly at
+///   @0x83633-0x8366d: the think runs before the high level writes it,
+///   @0x8fcaa before @0x901e5) with its leader cloaked:
+///   [`close_to_cloaked_parent`](cloak::Situation::close_to_cloaked_parent).
+///   Only a formation flight sets the mark, so the rule's AI type above 4
+///   holds of it. Outside goal 8 and 0xb.
+/// - That, with its leader carrying an area cloak, is a ride on it
+///   ([`area_cloak::rides`],
+///   [`area_cloak`](cloak::Situation::area_cloak)): `_HasCloak`'s area
+///   branch (@0x964c-0x96bf), which tests no goal, so a glide in keeps it.
 #[must_use]
 pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
     let arriving = match npc.mode {
@@ -83,11 +89,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         _ if following_jump => None,
         _ => Some(npc.goal),
     };
-    let close_to_cloaked_parent = goal.is_some()
-        && around.leader.is_some_and(|(state, cloak)| {
-            cloak.is_cloaked()
-                && npc.keeps_close_formation(Some(&state), around.leader_seen, around.flight)
-        });
+    let leader_cloaked = around.leader.is_some_and(Cloak::is_cloaked);
+    let close_to_cloaked_parent = goal.is_some() && npc.close_form && leader_cloaked;
     cloak::Situation {
         disabled: npc.condition == Condition::Disabled,
         retreating: matches!(goal, Some(Goal::Flee(_))),
@@ -109,7 +112,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         idle: goal == Some(Goal::Idle),
         mining: (goal == Some(Goal::Mine) && !around.mining_rock).then_some(MineOrder::Stop),
         close_to_cloaked_parent,
-        area_cloak: false,
+        area_cloak: area_cloak::rides(npc.close_form, leader_cloaked, around.leader_area),
     }
 }
 
@@ -335,10 +338,10 @@ mod tests {
         assert!(by(RuleSource::Bible));
     }
 
-    /// An escort keeping its slot beside a leader at the centre.
-    fn on_slot() -> (Npc, ShipState) {
-        let leader = ShipState::default();
-        let escort = Npc {
+    /// The player's escort, its last flight in close formation as
+    /// `close_form` says.
+    fn escort(close_form: bool) -> Npc {
+        Npc {
             escort: Some(EscortDuty {
                 formation: FormationSlot {
                     slot: 0,
@@ -347,81 +350,75 @@ mod tests {
                 },
                 order: None,
             }),
+            close_form,
             ..npc(Goal::Formation { guard: None }, FLYING)
-        };
-        assert!(escort.keeps_close_formation(Some(&leader), true, FlightRules::default()));
-        (escort, leader)
+        }
     }
 
+    const CLOAKED: Cloak = Cloak {
+        fade: FADE_FULL,
+        direction: 0,
+    };
+
     #[test]
-    fn an_escort_in_close_formation_with_a_cloaked_leader_reads_it() {
-        let (escort, leader) = on_slot();
-        let cloaked = Cloak {
-            fade: FADE_FULL,
-            direction: 0,
-        };
-        let with = |cloak| {
+    fn the_parent_rule_reads_the_stored_close_formation() {
+        // `_AIHandleCloaking` runs before the high level writes +0xc8ca
+        // (@0x8fcaa before @0x901e5), so it reads the last flight's.
+        let with = |npc: &Npc, cloak| {
             situation(
-                &escort,
+                npc,
                 Around {
-                    leader: Some((leader, cloak)),
-                    leader_seen: true,
+                    leader: Some(cloak),
                     ..Around::default()
                 },
             )
             .close_to_cloaked_parent
         };
-        assert!(with(cloaked));
-        assert!(!with(Cloak::default()), "leader uncloaked");
-        assert!(!situation(&escort, Around::default()).close_to_cloaked_parent);
-        let far_leader = ShipState {
-            position: Vec2::new(5000.0, 5000.0),
-            ..leader
-        };
-        assert!(!escort.keeps_close_formation(Some(&far_leader), true, FlightRules::default()));
-        let far = Around {
-            leader: Some((far_leader, cloaked)),
-            leader_seen: true,
-            ..Around::default()
-        };
+        assert!(with(&escort(true), CLOAKED));
+        assert!(!with(&escort(true), Cloak::default()), "leader uncloaked");
+        assert!(!with(&escort(false), CLOAKED), "its last flight out of it");
         assert!(
-            !situation(&escort, far).close_to_cloaked_parent,
-            "escort off its slot"
+            !situation(&escort(true), Around::default()).close_to_cloaked_parent,
+            "no leader"
         );
-        for goal in [
-            Goal::Follow {
-                lead: NpcId(2),
-                guard: None,
-            },
-            Goal::Hold,
-        ] {
-            let around = Around {
-                leader: Some((leader, cloaked)),
-                leader_seen: true,
-                ..Around::default()
-            };
-            assert!(
-                !situation(&npc(goal, FLYING), around).close_to_cloaked_parent,
-                "{goal:?} is not an escort"
-            );
-        }
         let gliding = Npc {
             mode: Mode::JumpingIn { tick: 0 },
-            ..escort.clone()
+            ..escort(true)
         };
-        let around = Around {
-            leader: Some((leader, cloaked)),
-            leader_seen: true,
-            ..Around::default()
+        assert!(!with(&gliding, CLOAKED), "goal 8 reads no goal term");
+    }
+
+    #[test]
+    fn an_escort_riding_its_leaders_area_cloak_has_a_cloak() {
+        let rides = |npc: &Npc, cloak, leader_area| {
+            situation(
+                npc,
+                Around {
+                    leader: Some(cloak),
+                    leader_area,
+                    ..Around::default()
+                },
+            )
+            .area_cloak
         };
-        assert!(!situation(&gliding, around).close_to_cloaked_parent);
-        let unseen = Around {
-            leader: Some((leader, cloaked)),
-            ..Around::default()
+        assert!(rides(&escort(true), CLOAKED, true));
+        assert!(!rides(&escort(true), CLOAKED, false), "no area cloak");
+        assert!(!rides(&escort(true), Cloak::default(), true), "uncloaked");
+        assert!(
+            !rides(&escort(false), CLOAKED, true),
+            "out of close formation"
+        );
+        let gliding = Npc {
+            mode: Mode::JumpingIn { tick: 0 },
+            ..escort(true)
         };
         assert!(
-            !situation(&escort, unseen).close_to_cloaked_parent,
-            "an unseen leader's escort brakes rather than closing formation"
+            rides(&gliding, CLOAKED, true),
+            "the stored sub-goal survives a glide in"
+        );
+        assert!(
+            !situation(&escort(true), Around::default()).area_cloak,
+            "no leader"
         );
     }
 }

@@ -1716,60 +1716,50 @@ impl Traffic {
     /// in from hyperspace or bursting out of a gate thinks its cloak
     /// (`_AIHandleCloaking`, see [`cloak`]), in the
     /// [situation](cloak_situation::situation) it reads in `world`: where
-    /// the ship it attacks is, among the NPCs and the player, its leader
-    /// and that leader's cloak, and the asteroid in slot 0. Its leader is
-    /// [`Npc::leader_ref`]'s, so a ship that escorts the player takes the
-    /// player, with the cloak the player's display step left it this pass,
-    /// as the parent rule reads the player's slot (+0x9a 0,
-    /// @0x83633-0x8366d); its sight of it is
-    /// [`Surroundings::sees_leader`](crate::ai::Surroundings::sees_leader). The original thinks a glide and a burst too
+    /// the ship it attacks is, among the NPCs and the player, its leader's
+    /// cloak and whether the leader carries an area cloak, and the asteroid
+    /// in slot 0. Its leader is [`Npc::leader_ref`]'s, so a ship that
+    /// escorts the player takes the player, with the cloak the player's
+    /// display step left it this pass, as the parent rule reads the
+    /// player's slot (+0x9a 0, @0x83633-0x8366d). Whether it keeps close
+    /// formation is its last flight's ([`Npc::close_form`]), as the think
+    /// runs before the high level writes the sub-goal (@0x8fcaa before
+    /// @0x901e5). The original thinks a glide and a burst too
     /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
     /// emerging, held at its gate, coasting, entering a gate or adrift
     /// waits out +0x4c, so its cloak doesn't think.
     fn think_cloaks(&mut self, world: &World, picked: &[bool]) {
         let player = world.player.map(|player| player.state);
-        let ships: Vec<(NpcId, ShipState, Cloak)> = self
+        let ships: Vec<(NpcId, ShipState, Cloak, bool)> = self
             .npcs
             .iter()
-            .map(|npc| (npc.id, npc.state, npc.cloak))
+            .map(|npc| (npc.id, npc.state, npc.cloak, npc.cloak_gear.area))
             .collect();
         let npc_at = |id: NpcId| ships.iter().find(|(other, ..)| *other == id);
-        let leaders_seen: Vec<bool> = {
-            let around = world.around(&self.npcs);
-            self.npcs
-                .iter()
-                .map(|npc| around.sees_leader(npc))
-                .collect()
-        };
-        for ((npc, _), leader_seen) in
-            self.npcs
-                .iter_mut()
-                .zip(picked)
-                .zip(leaders_seen)
-                .filter(|((npc, picked), _)| {
-                    **picked
-                        && matches!(
-                            npc.mode,
-                            Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
-                        )
-                })
-        {
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
+            **picked
+                && matches!(
+                    npc.mode,
+                    Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
+                )
+        }) {
             let attacking = npc.goal.attacking().and_then(|ship| match ship {
                 ShipRef::Player => player,
-                ShipRef::Npc(id) => npc_at(id).map(|&(_, state, _)| state),
+                ShipRef::Npc(id) => npc_at(id).map(|&(_, state, ..)| state),
             });
             let leader = match npc.leader_ref() {
-                Some(ShipRef::Player) => world.player.map(|player| (player.state, player.cloak)),
-                Some(ShipRef::Npc(id)) => npc_at(id).map(|&(_, state, cloak)| (state, cloak)),
+                Some(ShipRef::Player) => {
+                    world.player.map(|player| (player.cloak, player.area_cloak))
+                }
+                Some(ShipRef::Npc(id)) => npc_at(id).map(|&(_, _, cloak, area)| (cloak, area)),
                 None => None,
             };
             let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),
-                leader,
+                leader: leader.map(|(cloak, _)| cloak),
+                leader_area: leader.is_some_and(|(_, area)| area),
                 mining_rock: world.mining_rock.is_some(),
                 cloak_on_reload: world.cloak_on_reload,
-                leader_seen,
-                flight: world.flight,
             };
             let situation = cloak_situation::situation(npc, around);
             cloak::think(

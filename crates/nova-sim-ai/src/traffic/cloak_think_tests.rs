@@ -3,9 +3,11 @@
 //! (@0x8fc9e-0x8fcaa), which it is through a hyperspace arrival's glide
 //! and a gate burst (see [`cloak_situation`](super::cloak_situation)).
 
+use std::collections::BTreeSet;
+
 use super::{Traffic, World};
 use crate::ai::{Behaviour, Goal, Surroundings};
-use crate::chance::Chance;
+use crate::chance::{Chance, NeverFires};
 use crate::cloak::{CLOAK_JUMPING, CLOAK_PRESSING, Cloak, CloakGear, FADE_FULL};
 use crate::geometry::Vec2;
 use crate::stats::ShipStats;
@@ -116,7 +118,8 @@ fn a_cloaked_pressing_miner_keeps_its_cloak_until_the_world_shows_it_a_rock() {
     assert_eq!(mining_thought(Some(rock)).direction, -1, "a live rock");
 }
 
-/// The cloak, after one think half, of the player's hired escort at `at`,
+/// The cloak, after a fly half and a think half ([`fly_then_think`]), of
+/// the player's hired escort at `at`,
 /// keeping slot 0 of its formation with the player at the centre, its
 /// ship type carrying a cloak or not as `device` says and no AI-cloak
 /// bit, the player's cloak `player_cloak`.
@@ -145,8 +148,16 @@ fn escort_thought(device: bool, at: Vec2, player_cloak: Cloak) -> Cloak {
         player: Some(player),
         ..World::new(&[])
     };
-    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    fly_then_think(&mut traffic, &world);
     traffic.npcs()[0].cloak
+}
+
+/// A fly half of `traffic` in `world`, which marks each escort's close
+/// formation ([`Npc::close_form`]), then a think half, whose parent rule
+/// reads the mark.
+fn fly_then_think(traffic: &mut Traffic, world: &World) {
+    traffic.fly_holding(*world, &BTreeSet::new(), &mut NeverFires);
+    traffic.think_holding(&Keep, *world, &[], &mut Draws::of(&[]));
 }
 
 /// Fading in, as a think's cloak starts it.
@@ -173,6 +184,45 @@ fn the_players_escort_without_a_cloak_stays_uncloaked_by_its_cloaked_player() {
 }
 
 #[test]
+fn the_players_escort_without_a_cloak_rides_the_area_cloaked_players_cloak() {
+    // `_HasCloak`'s area branch (@0x964c-0x96bf): in close formation with
+    // its cloaked, area-cloaked parent it has a cloak, and the parent rule
+    // cloaks it. It was in close formation before the player cloaked.
+    let ride = |area: bool, close_form: bool| {
+        use crate::escort::{EscortDuty, FormationSlot};
+        let mut ship = npc(1, ShipStats::default());
+        ship.goal = Goal::Formation { guard: None };
+        ship.escort = Some(EscortDuty {
+            formation: FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        ship.close_form = close_form;
+        let mut traffic = Traffic::with_interval(1);
+        traffic.npcs = vec![ship];
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.cloak = CLOAKED;
+        player.area_cloak = area;
+        let world = World {
+            player: Some(player),
+            ..World::new(&[])
+        };
+        fly_then_think(&mut traffic, &world);
+        traffic.npcs()[0].cloak
+    };
+    assert_eq!(ride(true, true), CLOAKING);
+    assert_eq!(ride(false, true), Cloak::default(), "no area cloak");
+    assert_eq!(
+        ride(true, false),
+        Cloak::default(),
+        "out of close formation, it can't see its cloaked player to close in"
+    );
+}
+
+#[test]
 fn the_players_escort_out_of_close_formation_takes_no_parent_rule() {
     assert_eq!(
         escort_thought(true, Vec2::new(5000.0, 5000.0), CLOAKED),
@@ -183,7 +233,8 @@ fn the_players_escort_out_of_close_formation_takes_no_parent_rule() {
 /// A ship with a cloak, keeping slot 0 of a formation beside NPC 2 at the
 /// centre with `leader`'s cloak and mode, `own_leader` its leader or not,
 /// escorting the player or not as `escorts_player` says; the player
-/// cloaked at the centre. Its cloak after one think half.
+/// cloaked at the centre. Its cloak after a fly half and a think half
+/// ([`fly_then_think`]).
 fn led_thought(leader: Npc, own_leader: bool, escorts_player: bool) -> Cloak {
     use crate::escort::{EscortDuty, FormationSlot};
     let slot = FormationSlot {
@@ -220,7 +271,7 @@ fn led_thought(leader: Npc, own_leader: bool, escorts_player: bool) -> Cloak {
         player: Some(player),
         ..World::new(&[])
     };
-    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    fly_then_think(&mut traffic, &world);
     traffic.npcs()[0].cloak
 }
 
