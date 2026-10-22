@@ -71,8 +71,11 @@ pub fn can_hit(shot: &Shot) -> bool {
 }
 
 /// The stellar among `stellars`, by its index, that `shot`, having flown
-/// here from `was`, met first, and where: the nearest along its way of
-/// those still standing; none when the shot cannot hit one.
+/// here from `was`, met, and where it first came within its radius: the
+/// first still standing in the order they are given, which is the
+/// system's list (`nav_def`), as `_CheckShotProximities`' stellar loop
+/// walks it and stops at the first it hits (@0x37230-0x37527), not the
+/// nearest along the move; none when the shot cannot hit one.
 #[must_use]
 pub fn met(shot: &Shot, was: Vec2, stellars: &[StellarTarget]) -> Option<(usize, Vec2)> {
     if !can_hit(shot) {
@@ -82,14 +85,10 @@ pub fn met(shot: &Shot, was: Vec2, stellars: &[StellarTarget]) -> Option<(usize,
         .iter()
         .enumerate()
         .filter(|(_, stellar)| !shot_down(stellar.strength))
-        .filter_map(|(index, stellar)| {
-            Some((
-                contact(was, shot.position, stellar.position, stellar.radius)?,
-                index,
-            ))
+        .find_map(|(index, stellar)| {
+            let t = contact(was, shot.position, stellar.position, stellar.radius)?;
+            Some((index, was + (shot.position - was) * t))
         })
-        .min_by(|(a, _), (b, _)| a.total_cmp(b))
-        .map(|(t, index)| (index, was + (shot.position - was) * t))
 }
 
 #[cfg(test)]

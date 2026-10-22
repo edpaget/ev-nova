@@ -17,8 +17,11 @@
 //!   shots touch asteroids too. Here an asteroid is a circle of its
 //!   sprite's radius ([`AsteroidType::radius`]): the engine has no pixel
 //!   masks. The shot's path is swept from where it was, as against a
-//!   ship, and the nearest asteroid along it is the one it touches
-//!   ([`touched`]).
+//!   ship ([`touches`]). The asteroid layer is the outer list of each
+//!   pass, its sprites added in slot order (`_InitSprites` @0x2000d), so
+//!   each asteroid in slot order meets every shot of the layer, and a
+//!   shot that touches two is spent on the one in the lower slot,
+//!   wherever each is along its move (`Combat::meet_asteroids`).
 //! - **The fuse** (`_CheckShotProximities` @0x376ab-0x37758): only when no
 //!   ship set the fuse off, skipped under `Seeker` 0x0001
 //!   (@0x37566-0x37575), and only with a `ProxRadius` above none, the
@@ -52,14 +55,18 @@
 //!   no source gate ([`impact`](super::impact)); then `_IonizeShip`
 //!   (@0x368b7) ionizes it over the blast's circle ([`ion`](super::ion)).
 //!
-//! A broken asteroid is skipped by every later shot in the tick, as its
-//! hidden sprite is.
+//! A broken asteroid is skipped by every later shot in the tick: by a
+//! later layer's pass and the proximity pass as its hidden sprite and
+//! cleared slot are (@0xacba3, @0x376dd), and within the walk that broke
+//! it as the engine's skip until
+//! rdm:phase/asteroids/phase-10-shots-break-asteroids-inline, as the
+//! original's walk goes on meeting it (@0xacd5b-0xacd6d).
 //!
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
 use super::damage::Blast;
 use super::impact::speed_limit;
-use super::projectile::{Shot, nearest_contact};
+use super::projectile::{Shot, contact};
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
 use crate::bay::launch_velocity;
@@ -133,24 +140,17 @@ pub fn broken(strength: i16) -> bool {
     strength < 0
 }
 
-/// The asteroid among `targets`, by its index, that `shot`, having flown
-/// here from `was`, touched first, and where: the nearest along its way
-/// of those not broken, within each one's radius; none for a weapon that
+/// Where `shot`, having flown here from `was`, first came within
+/// `target`'s radius on its way, if it did: where it was for a shot that
+/// started within. None for a broken asteroid, or for a weapon that
 /// ignores asteroids (see the module docs).
 #[must_use]
-pub fn touched(shot: &Shot, was: Vec2, targets: &[AsteroidTarget]) -> Option<(usize, Vec2)> {
-    if shot.weapon.ignores_asteroids() {
+pub fn touches(shot: &Shot, was: Vec2, target: &AsteroidTarget) -> Option<Vec2> {
+    if shot.weapon.ignores_asteroids() || broken(target.strength) {
         return None;
     }
-    nearest_contact(
-        was,
-        shot.position,
-        targets
-            .iter()
-            .enumerate()
-            .filter(|(_, target)| !broken(target.strength))
-            .map(|(index, target)| (index, target.position, target.radius)),
-    )
+    let t = contact(was, shot.position, target.position, target.radius)?;
+    Some(was + (shot.position - was) * t)
 }
 
 /// The asteroid among `targets`, by its index, that sets `shot`'s armed
@@ -319,40 +319,32 @@ mod tests {
     #[test]
     fn a_fast_shot_touches_an_asteroid_it_passed_through_between_ticks() {
         let (shot, was) = fast(weapon(128));
-        let hit = touched(&shot, was, &[rock(0, 50.0, 0.0, 10.0)]);
-        let (index, at) = hit.expect("touched");
-        assert_eq!(index, 0);
+        let at = touches(&shot, was, &rock(0, 50.0, 0.0, 10.0)).expect("touched");
         assert!((at - Vec2::new(40.0, 0.0)).length() < 1e-3, "{at:?}");
     }
 
     #[test]
     fn a_shot_that_passes_outside_the_radius_touches_nothing() {
         let (shot, was) = fast(weapon(128));
-        assert_eq!(touched(&shot, was, &[rock(0, 50.0, 10.5, 10.0)]), None);
-        assert!(touched(&shot, was, &[rock(0, 50.0, 9.5, 10.0)]).is_some());
+        assert_eq!(touches(&shot, was, &rock(0, 50.0, 10.5, 10.0)), None);
+        assert!(touches(&shot, was, &rock(0, 50.0, 9.5, 10.0)).is_some());
     }
 
     #[test]
-    fn the_nearest_asteroid_along_the_path_is_touched_whatever_their_order() {
+    fn a_shot_starting_within_an_asteroid_touches_it_where_it_was() {
         let (shot, was) = fast(weapon(128));
-        let targets = [rock(0, 80.0, 0.0, 10.0), rock(1, 30.0, 0.0, 5.0)];
-        let (index, at) = touched(&shot, was, &targets).expect("touched");
-        assert_eq!(index, 1);
-        assert!((at - Vec2::new(25.0, 0.0)).length() < 1e-3, "{at:?}");
+        let at = touches(&shot, was, &rock(0, 5.0, 0.0, 10.0)).expect("touched");
+        assert_eq!(at, was);
     }
 
     #[test]
-    fn a_broken_asteroid_is_passed_for_the_next() {
+    fn a_broken_asteroid_is_touched_by_no_shot() {
         let (shot, was) = fast(weapon(128));
-        let mut targets = [rock(0, 30.0, 0.0, 5.0), rock(1, 80.0, 0.0, 10.0)];
-        targets[0].strength = -1;
-        assert_eq!(touched(&shot, was, &targets).map(|(i, _)| i), Some(1));
-        targets[0].strength = 0;
-        assert_eq!(
-            touched(&shot, was, &targets).map(|(i, _)| i),
-            Some(0),
-            "at 0, whole"
-        );
+        let mut target = rock(0, 30.0, 0.0, 5.0);
+        target.strength = -1;
+        assert_eq!(touches(&shot, was, &target), None);
+        target.strength = 0;
+        assert!(touches(&shot, was, &target).is_some(), "at 0, whole");
     }
 
     #[test]
@@ -364,7 +356,7 @@ mod tests {
                 ..weapon(128)
             });
             assert_eq!(
-                touched(&shot, was, &[rock(0, 50.0, 0.0, 10.0)]),
+                touches(&shot, was, &rock(0, 50.0, 0.0, 10.0)),
                 None,
                 "{guidance}"
             );
@@ -374,7 +366,7 @@ mod tests {
             ..weapon(128)
         });
         assert!(
-            touched(&homing, was, &[rock(0, 50.0, 0.0, 10.0)]).is_some(),
+            touches(&homing, was, &rock(0, 50.0, 0.0, 10.0)).is_some(),
             "a homing shot without it touches"
         );
     }

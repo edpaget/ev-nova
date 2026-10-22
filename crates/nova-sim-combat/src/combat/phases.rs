@@ -287,7 +287,7 @@ impl Combat {
     ///
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
-    /// have already tested and let it go (`Combat::test_hidden`).
+    /// have already tested and let it go (`Combat::proximity_pass`).
     ///
     /// It lends the guidance no asteroids: it is [`Combat::fly_shots_in`]
     /// with none.
