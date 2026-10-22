@@ -3034,7 +3034,12 @@ impl Combat {
     /// explodes where it hit, with no blast and no sub-munitions, and
     /// takes its damage off the stellar's strength. A sub-munition
     /// released in the pass has not moved, so it is first checked the
-    /// next tick.
+    /// next tick, as the original tests a shot against the stellars only
+    /// when `Count - ProxSafety > life` (@0x371fc-0x3721e) and a fresh
+    /// shot's life is `Count` (`_SpawnShot` @0x3e801-0x3e808): one of
+    /// `ProxSafety` 0 or more is never tested on the frame it is released.
+    /// One an end of life seats in a slot `_HandleShot` has already
+    /// visited first moves, and so is first checked, a tick later still.
     fn strike_stellars(&mut self, stellars: &mut [StellarTarget]) {
         let mut kept = Vec::with_capacity(self.shots.len());
         for shot in std::mem::take(&mut self.shots) {

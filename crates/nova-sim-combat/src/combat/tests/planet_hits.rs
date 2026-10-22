@@ -376,3 +376,97 @@ fn by_the_bible_a_beam_matches_its_flags2_0x0400_against_the_ships_planet_type()
     assert_eq!(beam_hits((BIG_SMOKE, 0), bible), ORDINARY_HITS);
     assert_eq!(beam_hits((BIG_SMOKE, PLANET_TYPE), bible), PLANET_HITS);
 }
+
+// Sub-munitions on their release tick.
+
+/// A shell releasing 2 planet-type sub-munitions (weapon 148, 5 pixels a
+/// tick, of 1 mass damage and `ProxSafety` 0), and the arsenal holding
+/// them.
+fn planet_cluster() -> (WeaponRecord, Arsenal) {
+    cluster_of(WeaponRecord {
+        count: 50,
+        speed: 500,
+        mass_dmg: 1,
+        prox_safety: 0,
+        flags2: PLANET_TYPE,
+        ..weapon(148)
+    })
+}
+
+/// The strikes on stellar 128, at (20, 0) and 60 across, on each of
+/// `ticks` ticks among `ships`, of the shots in flight.
+fn strikes_each_tick(
+    combat: &mut Combat,
+    ships: &mut [Ship],
+    arsenal: &Arsenal,
+    ticks: usize,
+) -> Vec<usize> {
+    let mut stellars = [stellar_at(20.0, 0.0, 60.0, 1000)];
+    (0..ticks)
+        .map(|_| {
+            tick_by(combat, ships, arsenal, &mut stellars);
+            combat.take_stellar_strikes().len()
+        })
+        .collect()
+}
+
+#[test]
+fn a_planet_type_sub_munition_a_fuse_releases_over_a_stellar_strikes_it_the_tick_after() {
+    // An ordinary rocket's fuse is set off by B, ordinary, inside the
+    // stellar's disc, in the hit pass; the stellar pass that ends it
+    // finds the sub-munitions unmoved. They move later that tick, in
+    // `_HandleShot`, and the next tick's pass strikes the stellar
+    // (`Count - ProxSafety > life`, @0x371fc-0x3721e).
+    let (shell, arsenal) = planet_cluster();
+    let fused = WeaponRecord {
+        prox_radius: 20,
+        ..shell
+    };
+    let mut combat = Combat::default();
+    combat.put_in_flight(Shot {
+        target: Some(B),
+        aimed_at: Some(B),
+        ..flown_by_c(fused, Vec2::new(20.0, 0.0))
+    });
+    let mut ships = [Ship::at(2, 40.0, 20.0)];
+    let strikes = strikes_each_tick(&mut combat, &mut ships, &arsenal, 3);
+    assert_eq!(
+        strikes,
+        [0, 2, 0],
+        "none on the release tick, both the next"
+    );
+}
+
+/// A shot of C's of `record`, at `at`, whose last move spent it.
+fn spent_by_c(record: WeaponRecord, at: Vec2) -> Shot {
+    let shot = flown_by_c(record, at);
+    Shot {
+        age: shot.weapon.lifetime,
+        ..shot
+    }
+}
+
+#[test]
+fn a_sub_munition_an_expiry_seats_in_an_earlier_slot_strikes_a_tick_later_than_one_in_a_later_slot()
+{
+    // Slot 0 holds a shot of no life, which `_HandleShot` drops at its
+    // visit; slot 1 the planet-type shell, spent over the stellar, whose
+    // end of life seats its first sub-munition in slot 0, already visited,
+    // and its second in slot 2. Only the second moves that tick, so it
+    // strikes the tick after; the first moves the tick after and strikes
+    // the one after that: the original's frame order.
+    let (shell, arsenal) = planet_cluster();
+    let shell = WeaponRecord {
+        flags2: PLANET_TYPE,
+        ..shell
+    };
+    let lifeless = WeaponRecord {
+        count: 0,
+        ..blaster()
+    };
+    let mut combat = Combat::default();
+    combat.put_in_flight(flown_by_c(lifeless, Vec2::new(500.0, 500.0)));
+    combat.put_in_flight(spent_by_c(shell, Vec2::new(20.0, 0.0)));
+    let strikes = strikes_each_tick(&mut combat, &mut [], &arsenal, 4);
+    assert_eq!(strikes, [0, 1, 1, 0]);
+}
