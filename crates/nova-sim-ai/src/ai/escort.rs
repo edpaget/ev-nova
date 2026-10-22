@@ -71,8 +71,19 @@
 //! mission's still, as the dispatch leads it again each frame
 //! (@0x8fbcd-0x8fc22).
 //!
+//! **Out of ammunition** (`_EscortAI` @0x83b88-0x83bda,
+//! [`out_of_ammo::escort_order`]), on Defend or Attack with `Flags2`
+//! 0x0080: a fighter short of any ammunition returns to its hangar, its
+//! wait kept, and any other escort fully dry keeps formation as with no
+//! standing command (order 0), whichever
+//! [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) reading, its wait
+//! ended. It runs again at each think while the ship is short, as the
+//! word of a ship the player leads is rewritten from its class's order at
+//! every think (@0x83ae4-0x83b0f).
+//!
 //! An escort hit takes its attacker as its target, as any ship does
-//! ([`react::victim`]), but never comes to another ship's help. Attacking,
+//! ([`react::victim`]), and keeps it by its order as any target, but
+//! never comes to another ship's help. Attacking,
 //! it fires as any ship does ([`fire::trigger`]), launching the fighters
 //! it carries ([`Trigger::bays`]: the high level's `_AILaunchFighter` is
 //! every type's, @0x8e6fa). Each flies `_EscortAI` under it
@@ -81,7 +92,9 @@
 //! ([`order_of`](crate::ai::fleet_escort::order_of)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, react};
+use crate::ai::{
+    Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, out_of_ammo, react,
+};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -102,36 +115,15 @@ pub struct EscortAi {
 }
 
 impl EscortAi {
-    /// What `npc`, with no standing command, does among `around`, the
-    /// player at `player`, drawing any guard on `chance`.
-    fn no_command(
+    /// The goal of `npc`'s order block under `order` among `around`,
+    /// drawing any guard on `chance` (see the module docs).
+    fn goal_by(
         self,
         npc: &Npc,
+        order: Option<EscortOrder>,
         around: &Surroundings,
-        player: &ShipState,
         chance: &mut dyn Chance,
     ) -> Goal {
-        match self.escort_ai {
-            RuleSource::Engine => Goal::Formation {
-                guard: guard(npc, around, chance),
-            },
-            RuleSource::Bible if npc.ai_type.trades() => Goal::Formation { guard: None },
-            RuleSource::Bible => attack_or_form(best_threat(npc, around, player, None)),
-        }
-    }
-}
-
-impl Behaviour for EscortAi {
-    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        if player_breaking_up(around) {
-            // `_EscortAI`'s lost parent with `_IsDying(player)`
-            // (@0x83917-0x8397b): goal 0, its target kept.
-            return Goal::Idle;
-        }
-        if takes_players_jump(around) {
-            return Goal::Formation { guard: None };
-        }
-        let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
             // Target and +0x6c -1, goal 6 (@0x83e59-0x83e74).
             return Goal::Wait;
@@ -155,30 +147,68 @@ impl Behaviour for EscortAi {
         }
     }
 
-    /// [`EscortAi::decide`]'s goal, ending its AI wait
-    /// ([`Decision::ends_wait`]) in the Defend, Attack and formation blocks
-    /// (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not holding or
-    /// returning to its hangar: a launched fighter told to hold or return
-    /// coasts out its glide (`_LaunchFighter` @0x3d843-0x3d85b).
+    /// What `npc`, with no standing command, does among `around`, the
+    /// player at `player`, drawing any guard on `chance`.
+    fn no_command(
+        self,
+        npc: &Npc,
+        around: &Surroundings,
+        player: &ShipState,
+        chance: &mut dyn Chance,
+    ) -> Goal {
+        match self.escort_ai {
+            RuleSource::Engine => Goal::Formation {
+                guard: guard(npc, around, chance),
+            },
+            RuleSource::Bible if npc.ai_type.trades() => Goal::Formation { guard: None },
+            RuleSource::Bible => attack_or_form(best_threat(npc, around, player, None)),
+        }
+    }
+}
+
+impl Behaviour for EscortAi {
+    /// [`EscortAi::decision`]'s goal.
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    /// `_EscortAI` for the player's escort, in its order:
     ///
-    /// From the player's brake on it takes the player's jump instead
-    /// ([`takes_players_jump`]): its target dropped, following the jump
-    /// ([`Decision::follows_jump`]), its wait kept, as no order block runs.
+    /// 1. While the player breaks up, the lost parent: goal 0, its target
+    ///    kept, no +0x4c write (@0x83917-0x8397b).
+    /// 2. The out-of-ammunition fallback (@0x83b88-0x83bda,
+    ///    [`out_of_ammo::escort_order`]): the order the rest flies.
+    /// 3. From the player's brake on, the player's jump
+    ///    ([`takes_players_jump`]): formation, its target dropped,
+    ///    following the jump ([`Decision::follows_jump`]), its wait kept,
+    ///    as no order block runs. The engine keeps no word for a ship the
+    ///    player leads, so the fallback has nothing to write here.
+    /// 4. The order block ([`EscortAi::goal_by`]), ending its AI wait
+    ///    ([`Decision::ends_wait`]) in the Defend, Attack and formation
+    ///    blocks (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not
+    ///    holding or returning to its hangar: a launched fighter told to
+    ///    hold or return, or sent home by the fallback, coasts out its
+    ///    glide (`_LaunchFighter` @0x3d843-0x3d85b).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        if !player_breaking_up(around) && takes_players_jump(around) {
+        if player_breaking_up(around) {
             return Decision {
-                goal: self.decide(npc, around, chance),
+                goal: Goal::Idle,
+                ..Decision::default()
+            };
+        }
+        let order = out_of_ammo::escort_order(npc, npc.escort_order());
+        if takes_players_jump(around) {
+            return Decision {
+                goal: Goal::Formation { guard: None },
                 clears_target: true,
                 follows_jump: true,
                 ..Decision::default()
             };
         }
-        let order = npc.escort_order();
         let keeps_wait = order == Some(EscortOrder::Hold)
-            || (order == Some(EscortOrder::Dock) && npc.carrier.is_some())
-            || player_breaking_up(around);
+            || (order == Some(EscortOrder::Dock) && npc.carrier.is_some());
         Decision {
-            goal: self.decide(npc, around, chance),
+            goal: self.goal_by(npc, order, around, chance),
             ends_wait: !keeps_wait,
             ..Decision::default()
         }
@@ -231,11 +261,8 @@ impl Behaviour for EscortAi {
     /// any ship does. It is never a Good Samaritan (AI 3 and 4 alone,
     /// @0x8289f-0x828bb).
     ///
-    /// Its next think may set another target, as its standing order
-    /// reads its target ([`EscortAi::decide`]). Keeping the hit's attacker
-    /// by order is rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
-    /// Until then the target can hold for as little as one tick, until
-    /// that think. Nothing the player sees reads it in that time.
+    /// Its next think keeps the hit's attacker as its order keeps any
+    /// target ([`kept_by_order`], the player included), or sets another.
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::victim(npc, strike, around)
     }
@@ -416,6 +443,7 @@ fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Sh
 mod tests {
     use super::*;
     use crate::ai::PlayerSide;
+    use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{PIRATES, govts, n, player, ship};
     use crate::catalog::WeaponId;
     use crate::combat::armament::Armament;
@@ -1271,11 +1299,6 @@ mod tests {
                 };
                 let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
                 assert_eq!(decision.ends_wait, ends, "{order:?} {threat}");
-                assert_eq!(
-                    decision.goal,
-                    ai.decide(&npcs[0], &around, &mut Draws::of(&[0])),
-                    "{order:?} {threat}"
-                );
             }
         }
         let npcs = [escort(None)];
@@ -1325,13 +1348,7 @@ mod tests {
                 player_warp_stage: stage,
                 ..Surroundings::new(&[], &npcs)
             };
-            let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
-            assert_eq!(
-                decision.goal,
-                ENGINE.decide(&npcs[0], &around, &mut Draws::of(&[0])),
-                "{order:?} {stage}"
-            );
-            decision
+            ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]))
         };
         for order in [
             None,
@@ -1755,6 +1772,111 @@ mod tests {
                 reach: 40.0,
             }),
             ..escort(order)
+        }
+    }
+
+    /// `npc` short of ammunition as `left` says, its hull of `Flags2`
+    /// 0x0080.
+    fn short(npc: Npc, left: AmmoLeft) -> Npc {
+        crate::ai::fixture::short_of_ammo(npc, left, true)
+    }
+
+    /// What `ai` decides for `npcs[0]` among `npcs`, the player at the
+    /// centre with its warp stage at `stage`, drawing on `draws`.
+    fn decision_of(ai: EscortAi, npcs: &[Npc], stage: f32, draws: &[u32]) -> Decision {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            player_warp_stage: stage,
+            ..Surroundings::new(&[], npcs)
+        };
+        ai.decision(&npcs[0], &around, &mut Draws::of(draws))
+    }
+
+    #[test]
+    fn a_fighter_on_attack_out_of_ammunition_docks_with_the_player_keeping_its_wait() {
+        // `_EscortAI`'s fallback writes word 3 for AI type 5 (@0x83bc9),
+        // and the Return block docks it, +0x4c kept (@0x83e79-0x83ea3).
+        for order in [EscortOrder::Attack, EscortOrder::Defend] {
+            for left in [AmmoLeft::OnlyUnlimited, AmmoLeft::Dry] {
+                let mut dry = short(
+                    having(fighter(Some(order)), Goal::Attack(n(2)), Some(n(2))),
+                    left,
+                );
+                dry.ai_wait = 30;
+                let npcs = [dry, pirate(2, 0.0, 100.0)];
+                for ai in [ENGINE, BIBLE] {
+                    let decision = decision_of(ai, &npcs, 0.0, &[0]);
+                    assert_eq!(
+                        decision.goal,
+                        Goal::Dock(ShipRef::Player),
+                        "{order:?} {left:?}"
+                    );
+                    assert!(!decision.ends_wait, "{order:?} {left:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_defending_escort_with_no_firepower_keeps_formation_ending_its_wait() {
+        // Any other type takes word 0 fully dry (@0x83bda), and the
+        // formation block ends its wait (+0x4c = -1.0, @0x83ea8-0x83eb0);
+        // with unlimited weapons left it keeps its order.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            let dry = short(
+                having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2))),
+                AmmoLeft::Dry,
+            );
+            let npcs = [dry.clone(), pirate(2, 0.0, 100.0)];
+            let decision = decision_of(ENGINE, &npcs, 0.0, &[0]);
+            assert_eq!(
+                decision.goal,
+                Goal::Formation { guard: Some(n(2)) },
+                "{order:?}: it guards, by the engine"
+            );
+            assert!(decision.ends_wait, "{order:?}");
+            // Order 0 is no standing command, whichever reading.
+            let mut formed = dry.clone();
+            if let Some(duty) = &mut formed.escort {
+                duty.order = None;
+            }
+            let plain = [formed, pirate(2, 0.0, 100.0)];
+            assert_eq!(
+                decision_of(BIBLE, &npcs, 0.0, &[0]).goal,
+                decision_of(BIBLE, &plain, 0.0, &[0]).goal,
+                "{order:?}: by the Bible"
+            );
+            let unlimited = short(
+                having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2))),
+                AmmoLeft::OnlyUnlimited,
+            );
+            let npcs = [unlimited, pirate(2, 0.0, 100.0)];
+            assert_eq!(
+                decision_of(ENGINE, &npcs, 0.0, &[0]).goal,
+                Goal::Attack(n(2)),
+                "{order:?}: unlimited weapons left"
+            );
+        }
+    }
+
+    #[test]
+    fn on_the_players_jump_an_escort_out_of_ammunition_still_takes_the_jump() {
+        // The fallback (@0x83b88-0x83bda) runs before goal 0xb's return
+        // (@0x83be3), which then returns with no order block.
+        for npc in [
+            fighter(Some(EscortOrder::Attack)),
+            escort(Some(EscortOrder::Defend)),
+        ] {
+            let npcs = [short(npc, AmmoLeft::Dry), pirate(2, 0.0, 100.0)];
+            for ai in [ENGINE, BIBLE] {
+                let decision = decision_of(ai, &npcs, 1.0, &[0]);
+                assert_eq!(decision.goal, Goal::Formation { guard: None });
+                assert!(decision.follows_jump);
+                assert!(decision.clears_target);
+                assert!(!decision.ends_wait);
+            }
         }
     }
 
