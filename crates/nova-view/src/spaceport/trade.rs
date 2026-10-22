@@ -1203,6 +1203,24 @@ mod tests {
         Point::new(x, baseline - 9.0)
     }
 
+    /// `rect` with `dx` off each side and `dy` off its top and bottom,
+    /// worked out here rather than by the screen's own `inset`.
+    fn shrunk(rect: Bounds, dx: f32, dy: f32) -> Bounds {
+        Bounds::at(
+            Point::new(rect.min.x + dx, rect.min.y + dy),
+            rect.width() - 2.0 * dx,
+            rect.height() - 2.0 * dy,
+        )
+    }
+
+    /// How many times `part` is drawn in `commands`.
+    fn count(commands: &[DrawCommand], part: &[DrawCommand]) -> usize {
+        commands
+            .windows(part.len())
+            .filter(|window| *window == part)
+            .count()
+    }
+
     /// `rect` filled in `color`.
     fn filled(rect: Bounds, color: Color) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
@@ -1260,7 +1278,7 @@ mod tests {
         let first_slot = index_of(
             &commands,
             &filled(
-                inset(item(&screen, 4), 1.0, 1.0),
+                shrunk(item(&screen, 4), 1.0, 1.0),
                 Color::rgba(0x80, 0, 0, 255),
             ),
         );
@@ -1341,7 +1359,7 @@ mod tests {
         for number in [5, 6, 7, 9, 11] {
             let slot = item(&screen, number);
             assert!(
-                contains(&commands, &filled(inset(slot, 1.0, 1.0), Color::BLACK)),
+                contains(&commands, &filled(shrunk(slot, 1.0, 1.0), Color::BLACK)),
                 "{number} filled"
             );
             assert!(
@@ -1367,7 +1385,7 @@ mod tests {
             hilite: Color::rgba(7, 8, 9, 255),
         };
         let mut screen = screen().with_colors(colors);
-        let slot = |screen: &TradeScreen, number| inset(item(screen, number), 1.0, 1.0);
+        let slot = |screen: &TradeScreen, number| shrunk(item(screen, number), 1.0, 1.0);
         let commands = drawn(&screen);
         assert!(contains(
             &commands,
@@ -1416,11 +1434,9 @@ mod tests {
                 number == 4,
                 "{number} top"
             );
-            assert_eq!(
-                contains(&commands, &ruled(l, b, r, b)),
-                number == 11,
-                "{number} bottom"
-            );
+            // Item 11's bottom is also item 12's frame's top: drawn twice.
+            let bottoms = count(&commands, &ruled(l, b, r, b));
+            assert_eq!(bottoms, if number == 11 { 2 } else { 0 }, "{number} bottom");
         }
     }
 
@@ -1485,7 +1501,7 @@ mod tests {
             assert_eq!(inside, 0, "{number}");
             assert!(contains(
                 &commands,
-                &filled(inset(slot, 1.0, 1.0), Color::BLACK)
+                &filled(shrunk(slot, 1.0, 1.0), Color::BLACK)
             ));
         }
         assert_eq!(screen.selected(), None);
@@ -1537,7 +1553,7 @@ mod tests {
             ..market()
         });
         let summary = item(&screen, 12);
-        let boxed = inset(summary, 5.0, 3.0);
+        let boxed = shrunk(summary, 5.0, 3.0);
         let commands = drawn(&screen);
         let fill = index_of(&commands, &filled(boxed, Color::BLACK));
         let frame = index_of(&commands, &framed(summary));
@@ -1739,7 +1755,7 @@ mod tests {
         let good_2 = item(&screen, 11);
         assert!(contains(
             &drawn(&screen),
-            &filled(inset(good_2, 1.0, 1.0), Color::rgba(0x80, 0, 0, 255))
+            &filled(shrunk(good_2, 1.0, 1.0), Color::rgba(0x80, 0, 0, 255))
         ));
         press(&mut screen, Key::Down);
         assert_eq!((screen.selected(), screen.top()), (Some(3), 2));
