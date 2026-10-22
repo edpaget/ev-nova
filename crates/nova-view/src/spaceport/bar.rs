@@ -302,6 +302,7 @@ impl BarScreen {
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
+                        backing: None,
                     },
                 ),
             ];

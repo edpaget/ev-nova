@@ -179,6 +179,7 @@ impl MissionComputerScreen {
                 font: Font::Geneva,
                 size: BODY_SIZE,
                 color: BODY_COLOR,
+                backing: None,
             };
             let roles = [
                 (ACCEPT_ITEM, Role::Button(ACCEPT_LABEL.to_owned())),
@@ -490,6 +491,7 @@ impl MissionInfoScreen {
                 font: Font::Geneva,
                 size: BODY_SIZE,
                 color: BODY_COLOR,
+                backing: None,
             };
             let roles = [
                 (INFO_DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),

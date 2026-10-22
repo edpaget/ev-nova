@@ -223,6 +223,7 @@ fn text_role(text: String) -> Role {
         font: Font::Geneva,
         size: TEXT_SIZE,
         color: TEXT_COLOR,
+        backing: None,
     }
 }
 

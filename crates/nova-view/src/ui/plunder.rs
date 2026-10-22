@@ -227,6 +227,7 @@ impl PlunderDialog {
                 font: Font::Geneva,
                 size: TEXT_SIZE,
                 color: TEXT_COLOR,
+                backing: None,
             },
         ));
         let template = enabling(template, TAKE_BUTTONS.iter().map(|&(item, ..)| item));
@@ -404,6 +405,7 @@ impl AssignmentDialog {
                     font: Font::Geneva,
                     size: TEXT_SIZE,
                     color: TEXT_COLOR,
+                    backing: None,
                 },
             ),
         ];

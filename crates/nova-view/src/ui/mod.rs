@@ -98,6 +98,7 @@ pub use comm::{CommDialog, CommPress, HaggleDialog};
 pub use desc::DescDialog;
 pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
+    TextBacking,
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};

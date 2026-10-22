@@ -82,6 +82,7 @@ impl NoteDialog {
                     font: Font::Geneva,
                     size: STATIC_TEXT_SIZE,
                     color: STATIC_TEXT_COLOR,
+                    backing: None,
                 },
             ),
         ];
