@@ -137,13 +137,15 @@ pub fn mining(npc: &Npc, around: &Surroundings) -> Trigger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::NO_WEAPONS;
     use crate::ai::miner::SCOOPS;
     use crate::catalog::WeaponRecord;
-    use crate::combat::armament::Armament;
+    use crate::combat::armament::{Armament, Arsenal};
     use crate::combat::weapon::{IGNORES_ASTEROIDS, WeaponSpec};
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::weapon;
+    use nova_sim_combat::asteroid::Asteroid;
 
     /// A gun of `id` doing `mass` mass damage.
     fn gun(id: i16, mass: i16) -> WeaponRecord {
@@ -350,6 +352,85 @@ mod tests {
         assert_eq!(waiting.trigger.only, id(128));
         waiting.ai_wait = 5;
         assert_eq!(crate::ai::fire::gated(&waiting).only, None);
+    }
+
+    /// A miner of [`mining_at`] at (100, 100) heading `heading`, carrying
+    /// and holding the guidance -1 gun 128 of `speed`, and the global
+    /// records holding that gun.
+    fn picking(speed: i16, heading: f32) -> (Npc, Arsenal) {
+        let record = WeaponRecord {
+            guidance: -1,
+            speed,
+            ..gun(128, 1)
+        };
+        let mut npc = mining_at(100.0, 100.0, heading);
+        npc.armament = Armament::new([(WeaponSpec::new(&record), 1)]);
+        npc.pick = id(128);
+        (npc, Arsenal::of_specs([WeaponSpec::new(&record)]))
+    }
+
+    /// What `npc` fires by [`crate::ai::fire::trigger`] with `slot0` in
+    /// slot 0 and the global weapon records `weapons`.
+    fn fired_among(npc: &Npc, slot0: Asteroid, weapons: &Arsenal) -> Trigger {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            mining_rock: Some(slot0),
+            weapons,
+            ..Surroundings::new(&[], &npcs)
+        };
+        crate::ai::fire::trigger(npc, &around, crate::ai::fire::FireRules::default())
+    }
+
+    /// Slot 0 at the origin moving by (`v`, −`v`): across the line of
+    /// fire of a miner at (100, 100), whose bearing to it is 314.
+    fn crossing(v: f32) -> Asteroid {
+        Asteroid {
+            velocity: crate::geometry::Vec2::new(v, -v),
+            ..rock(0.0, 0.0)
+        }
+    }
+
+    #[test]
+    fn a_miner_fires_facing_the_lead_for_its_pick_and_not_the_bare_bearing() {
+        // Gun 128 at 10 px a tick: 141 px off, slot 0 moving by (3, −3)
+        // and the miner eased to (0.27, −0.27), the lead is 337, 23
+        // degrees off the bearing, beyond a turn of 3 and 10.
+        let (lead, weapons) = picking(1000, 337.0);
+        assert_eq!(
+            fired_among(&lead, crossing(3.0), &weapons).only,
+            id(128),
+            "facing the lead"
+        );
+        let (bearing, weapons) = picking(1000, 314.0);
+        assert_eq!(
+            fired_among(&bearing, crossing(3.0), &weapons),
+            Trigger::default(),
+            "facing the bearing"
+        );
+        assert_eq!(
+            fired_among(&bearing, crossing(3.0), &NO_WEAPONS).only,
+            id(128),
+            "the bearing, with no record of its pick"
+        );
+    }
+
+    #[test]
+    fn a_miner_leads_from_the_velocity_its_hold_has_eased() {
+        // Gun 128 at 1 px a tick, slot 0 moving by (0.5, −0.5): from the
+        // miner at rest the lead would be 351; the hold first eases it to
+        // (0.27, −0.27), and from there the lead is 334.
+        let (held, weapons) = picking(100, 334.0);
+        assert_eq!(
+            fired_among(&held, crossing(0.5), &weapons).only,
+            id(128),
+            "facing the lead after the hold"
+        );
+        let (unheld, weapons) = picking(100, 351.0);
+        assert_eq!(
+            fired_among(&unheld, crossing(0.5), &weapons),
+            Trigger::default(),
+            "facing the lead before the hold"
+        );
     }
 
     #[test]

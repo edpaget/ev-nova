@@ -157,6 +157,12 @@ mod tests {
 
     /// `npc` flown a tick by the autopilot with `beside`.
     fn flown(npc: &mut Npc, beside: Beside) -> Outcome {
+        flown_among(npc, beside, &Arsenal::EMPTY)
+    }
+
+    /// `npc` flown a tick by the autopilot with `beside` and the global
+    /// weapon records `weapons`.
+    fn flown_among(npc: &mut Npc, beside: Beside, weapons: &Arsenal) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
         autopilot::fly(
             npc,
@@ -168,7 +174,7 @@ mod tests {
             speeds,
             FlightRules::default(),
             Readings::default(),
-            &Arsenal::EMPTY,
+            weapons,
             &mut Draws::of(&[]),
         )
     }
@@ -233,6 +239,29 @@ mod tests {
         assert_eq!(held.state.velocity, Vec2::ZERO);
         let turn = handling(&held).turn_rate;
         assert_eq!(held.state.heading, 300.0 + turn, "toward 314");
+    }
+
+    #[test]
+    fn the_hold_turns_to_the_lead_for_its_pick_not_the_bearing() {
+        // Slot 0 crosses the line of fire by (3, −3); the miner at rest
+        // at (100, 100) faces the bearing, 314. Eased to (0.27, −0.27),
+        // its lead for gun 128 at 10 px a tick is 337.
+        let slot0 = rock(0.0, 0.0, 3.0, -3.0);
+        let gun = crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+            guidance: -1,
+            speed: 1000,
+            ..nova_sim_catalog::fixture::weapon(128)
+        });
+        let weapons = Arsenal::of_specs([gun]);
+        let mut picking = miner(Goal::Mine, at(100.0, 100.0, 0.0, 0.0, 314.0));
+        picking.pick = Some(crate::catalog::WeaponId(128));
+        let mut bare = picking.clone();
+        let turn = handling(&picking).turn_rate;
+        flown_among(&mut picking, mining(slot0), &weapons);
+        assert_eq!(picking.state.heading, 314.0 + turn, "toward 337");
+        bare.pick = None;
+        flown_among(&mut bare, mining(slot0), &weapons);
+        assert_eq!(bare.state.heading, 314.0, "on the bearing with no pick");
     }
 
     #[test]
