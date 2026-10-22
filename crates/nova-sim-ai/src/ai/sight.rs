@@ -6,23 +6,31 @@
 //! out of a gate is seen by nobody (@0x972d); an uncloaked one is seen;
 //! a cloaked one is seen by an escort of it that has a cloak itself
 //! (@0x9788-0x97a2), or by a ship with a cloak scanner on screen within
-//! 200 of it on both axes (@0x97a4-0x97f8). The player can cloak, but
-//! [`Surroundings::sees`] reads it as seen until
-//! rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player;
-//! [`sees_player`] is the rule for it, which only the player's escorts'
-//! parent rule asks so far. `_ShipVisibleToShip` tests no presence, so a ship not
-//! in the system reads as seen: the gates that drop a gone target
-//! (`target::dropped`, [`Surroundings::live`]) are not a search's.
+//! 200 of it on both axes (@0x97a4-0x97f8). The player is seen by the
+//! same rule ([`sees_player`]), its escorts with a cloak of their own
+//! seeing it cloaked. `_ShipVisibleToShip` tests no presence, so a ship
+//! not in the system (or no player in it) reads as seen: the gates that
+//! drop a gone target (`target::dropped`, [`Surroundings::live`]) are not
+//! a search's.
 //!
 //! Its readers: an NPC's fire ([`fire`](crate::ai::fire), whose sight of
-//! its target holds its fire), the lost-sight search
-//! ([`lost_sight`](crate::ai::lost_sight)) and the player's escort's pick
-//! of a nearby threat ([`escort::threat_score`](crate::escort::threat_score),
-//! `_IsShipANearbyThreatToParent` @0x8370e), the target picks'
-//! candidates ([`target`](crate::ai::target), `_SelectWarshipTarget`
-//! @0x8a0d2, @0x8a538, @0x8aa7b, @0x8ad92) and the interceptor's pick of
-//! a ship to inspect ([`interceptor`](crate::ai::interceptor),
-//! `_InterceptorAI` @0x8cd5f, @0x8ce13).
+//! its target holds its fire: `_AIFireGun` @0x7ff25, `_AIFireTurret`
+//! @0x80b69), the lost-sight search ([`lost_sight`](crate::ai::lost_sight),
+//! @0x8d738), the escorts' pick of a nearby threat
+//! ([`escort::threat_score`](crate::escort::threat_score),
+//! [`escort::player_threat_score`](crate::escort::player_threat_score),
+//! `_IsShipANearbyThreatToParent` @0x8370e), the target picks
+//! ([`target`](crate::ai::target), `_SelectWarshipTarget` @0x89f04,
+//! @0x89f7d, @0x8a0d2, @0x8a140, @0x8a538, @0x8a6df, @0x8a748, @0x8a9ba,
+//! @0x8aa7b, @0x8ad92), the governments' 0x0004 word
+//! ([`warship`](crate::ai::warship), `_WarshipAI` @0x8b7ce,
+//! `_InterceptorAI` @0x8cb80), the interceptor's pick of a ship to
+//! inspect ([`interceptor`](crate::ai::interceptor), `_InterceptorAI`
+//! @0x8cd5f, @0x8ce13, @0x8d3cd), the mission hunter's attack call
+//! ([`nova`](crate::ai::nova), `_HighLevelAIHandler` @0x8d6a8), the scan
+//! ([`scan`](crate::scan), `_ScanPlayer` @0x7e53f), the person's hail
+//! quotes (`nova_sim::Session`, `_HandleShip` @0x33c87) and the escort's
+//! formation flight ([`fly_pass`](crate::traffic::fly_pass), @0x8ed5f).
 //!
 //! # Not modelled
 //!
@@ -39,10 +47,13 @@ impl Surroundings<'_> {
     /// observer)` (@0x971c; see the module docs).
     #[must_use]
     pub fn sees(&self, observer: &Npc, ship: ShipRef) -> bool {
-        let ShipRef::Npc(id) = ship else {
-            return true;
-        };
-        self.npc(id).is_none_or(|other| npc_sees(observer, other))
+        match ship {
+            ShipRef::Npc(id) => self.npc(id).is_none_or(|other| npc_sees(observer, other)),
+            ShipRef::Player => self
+                .player
+                .as_ref()
+                .is_none_or(|player| sees_player(observer, player)),
+        }
     }
 }
 
@@ -66,10 +77,10 @@ pub fn npc_sees(observer: &Npc, other: &Npc) -> bool {
 /// observer)` (@0x971c) with the player the target. The player never
 /// emerges from a gate as an NPC does, and a cloaked player is seen by an
 /// escort of it with a cloak itself (@0x9788-0x97a2, the player its
-/// parent) or by a scanner on screen within 200 on both axes. The parent
-/// rule of the player's close-formation escorts reads it
-/// (`Traffic::think_cloaks`); [`Surroundings::sees`] does not ask it yet
-/// (rdm:phase/cloaking-fidelity/phase-9-npc-sight-of-cloaked-player).
+/// parent) or by a scanner on screen within 200 on both axes.
+/// [`Surroundings::sees`] asks it for [`ShipRef::Player`]; the parent
+/// rule of the player's close-formation escorts (`Traffic::think_cloaks`)
+/// and the session's own sites read it directly.
 #[must_use]
 pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
     visible(
@@ -176,11 +187,43 @@ mod tests {
     }
 
     #[test]
-    fn the_player_is_always_seen_and_a_ship_not_in_the_system_reads_seen() {
+    fn the_player_is_seen_by_its_cloak_and_a_ship_not_in_the_system_reads_seen() {
+        use crate::ai::fixture::{cloaked_player, player, scanning};
+        use crate::escort::{EscortDuty, FormationSlot};
         let (sites, govts) = (sites(), govts(0, 0));
+        let sees_player = |observer: Npc, at: (f32, f32), cloak: bool| {
+            let npcs = [observer];
+            let mut around = around(&sites, &npcs, &govts, at, 0);
+            if cloak {
+                around.player = Some(cloaked_player(player(at.0, at.1)));
+            }
+            around.sees(&npcs[0], ShipRef::Player)
+        };
+        assert!(sees_player(warship(), (900.0, 0.0), false), "uncloaked");
+        assert!(!sees_player(warship(), (900.0, 0.0), true), "cloaked");
+        assert!(
+            sees_player(scanning(warship()), (200.0, -200.0), true),
+            "scanned within 200"
+        );
+        assert!(
+            !sees_player(scanning(warship()), (200.5, 0.0), true),
+            "scanner too far"
+        );
+        let mut escort = warship();
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        escort.cloak_gear.device = true;
+        assert!(
+            sees_player(escort, (900.0, 0.0), true),
+            "its cloaked escort"
+        );
+
         let npcs = [warship()];
-        let around = around(&sites, &npcs, &govts, (0.0, 0.0), 0);
-        assert!(around.sees(&npcs[0], ShipRef::Player));
+        let mut around = around(&sites, &npcs, &govts, (0.0, 0.0), 0);
+        around.player = None;
+        assert!(around.sees(&npcs[0], ShipRef::Player), "no player here");
         assert!(around.sees(&npcs[0], n(9)));
     }
 }

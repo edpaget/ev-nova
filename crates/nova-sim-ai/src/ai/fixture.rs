@@ -178,3 +178,12 @@ pub(crate) fn scanning(mut npc: Npc) -> Npc {
     npc.cloak_gear.scanner.on_screen = true;
     npc
 }
+
+/// `player` fully cloaked.
+pub(crate) fn cloaked_player(mut player: PlayerSide) -> PlayerSide {
+    player.cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+    player
+}
