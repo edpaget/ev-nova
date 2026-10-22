@@ -64,12 +64,21 @@
 //!    ([`Traffic::take_attack_quotes`], [`Traffic::turn_with_quote`]). A
 //!    flight answers the fight's strikes in the hit's own step instead
 //!    ([`Traffic::answer`]), so this step answers only those left;
-//! 3. an NPC not intact loses its provocation;
+//! 3. by the engine's reading of [`World::npc_escort_ai`], each ship whose
+//!    NPC lead is lost takes a new lead, leads, or is left alone
+//!    ([`succession`]); each ship led by an NPC takes its slot in that
+//!    NPC's formation ([`fleet_formation`]); each fleet's leader due on the
+//!    frame issues its orders ([`escort_orders`]); each ship in the regroup
+//!    pause draws its release ([`regroup`]); and each disabled ship's warp
+//!    is cancelled and, past the dispatch's gates and not paused, its AI
+//!    reset, its provocation with it ([`disabled_reset`]);
 //! 4. the decisions due on the AI timer, never for an escape pod
 //!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
-//!    gate to leave, one that is not intact, or one assisting the player
+//!    gate to leave, one that is not intact, one held in the regroup pause
+//!    (which holds its gate wait's fire in place of a decision's, and
+//!    flies its kept substate in step 6), or one assisting the player
 //!    whose type's think returns at once for the help, provoked or not
 //!    (any but a leaderless miner, [`assist_think`]): first every goal (a
 //!    pirate's wait on a boarded victim settled in berth order,
@@ -1151,9 +1160,11 @@ impl Traffic {
     /// The think half of a tick in `world` (steps 1 to 5 of the module
     /// docs), `_DoPlayGameWork`'s advance-pass AI after the collision
     /// passes: the arrivals pass (`_EnterMoreShips` @0x44237), the answers
-    /// to the `strikes` left, the NPC formations ([`fleet_formation`]),
-    /// the fleet leaders' orders
-    /// ([`escort_orders`]), the decisions as `behaviour` says, rolling
+    /// to the `strikes` left, the lost leads' succession ([`succession`]),
+    /// the NPC formations ([`fleet_formation`]), the fleet leaders' orders
+    /// ([`escort_orders`]), the regroup pause's draws ([`regroup`]), the
+    /// disabled ships' reset ([`disabled_reset`]), the decisions as
+    /// `behaviour` says, rolling
     /// on `chance`, their goals, pursuit, fire commands and targets, the
     /// gate waits, each flying NPC's cloak think and each escape pod's
     /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`

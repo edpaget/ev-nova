@@ -63,8 +63,9 @@
 //!   (@0x8e228-0x8e23d) ([`fight_on_gone`]). A think that ends its own
 //!   fight so leaves no flight of its old goal for [`flight_ended`].
 //! - **The rest of the traffic**: the count wait's start (@0x8c713,
-//!   [`board_wait::enter`]); a ship not intact (`_AIDispatch` @0x8feef,
-//!   the tick's third step); a pirate's capture of a ship, for each ship
+//!   [`board_wait::enter`]); a disabled ship's reset (`_AIDispatch`
+//!   @0x8feef, [`disabled_reset`](crate::traffic::disabled_reset)), past
+//!   the dispatch's gates and not held in the regroup pause; a pirate's capture of a ship, for each ship
 //!   then targeting it (`_AIPlunderShipContents` @0x84872-0x8489b,
 //!   [`plunder`](crate::traffic::plunder)); and -1 for each follower a
 //!   lead entering its gate releases (@0x8dd14,

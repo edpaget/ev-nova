@@ -30,7 +30,10 @@
 //!   just out, [`Mode::LeavingGate`] at tick 0, @0x8ff18): a ship flying,
 //!   coasting, entering a gate or held at its gate verifies. The check sits
 //!   behind the AI timer's stagger (@0x8fe36-0x8fe6f), so a ship off its
-//!   timer keeps its swarm leader unchecked. It also skips a ship in
+//!   timer keeps its swarm leader unchecked, and so does a ship held in the
+//!   regroup pause, goal 0x13, whose dispatch stops before it
+//!   (@0x8fe73-0x8febb, [`regroup`](crate::ai::regroup); the traffic
+//!   leaves it out). It also skips a ship in
 //!   substate 4 (its warp out) or 0xd (an escort jumping with its
 //!   leader, @0x8fd83-0x8fd9a), which here is no ship: one departs as it
 //!   reaches sub 4, and sub 0xd is rdm
@@ -61,7 +64,7 @@
 //! - The swarm leader's slot formation for an escort or fighter, the
 //!   `_AIMaintainFormation` calls and glow copies in substates 5, 0x11 and
 //!   7, the stale parent of a ship whose AI type `_AICheckParentExists`
-//!   dropped, goal 0x13's skip of the check, a leftover substate 0x12
+//!   dropped, a leftover substate 0x12
 //!   outside state 4, and a beam of `ExitType` 4 stepping its firer's
 //!   swarm leader as an exit cursor (`_SpawnBeam` @0x450fa-0x4511e): rdm
 //!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14.

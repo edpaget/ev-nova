@@ -252,7 +252,13 @@ pub struct Npc {
     pub govt: Option<GovtId>,
     /// How it behaves.
     pub ai_type: AiType,
-    /// The fleet lead it escorts, if it is an escort.
+    /// The fleet lead it escorts, if it is an escort: the original's +0x9a
+    /// for an NPC parent. A lost lead's followers take its successor, or
+    /// none ([`succession`](crate::traffic::succession)); a disabled ship
+    /// drops it by the engine's reading of
+    /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
+    /// ([`disabled_reset`](crate::traffic::disabled_reset)); and
+    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`.
     pub leader: Option<NpcId>,
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
@@ -306,7 +312,8 @@ pub struct Npc {
     /// damage it took; or 1 once its government's
     /// 0x0004 word turns it on the player (@0x8b7e5, @0x8cb9d,
     /// [`Decision::provokes`](crate::ai::Decision::provokes)); none once it
-    /// goes back to an idle goal or is disabled.
+    /// goes back to an idle goal or is disabled (the disabled reset,
+    /// [`disabled_reset`](crate::traffic::disabled_reset)).
     pub provoked: f32,
     /// Its stray provocation, the original's +0xc910: 1.75 × the weight of
     /// each stray hit of the player's on it, easing by 0.5 a tick, and
@@ -400,9 +407,12 @@ pub struct Npc {
     /// through [`travel::is_set`](crate::ai::travel::is_set), which adds the
     /// stellar goals and the emerge's gate). Its writers are the decisions'
     /// ([`Decision::travel`](crate::ai::Decision::travel), taken by
-    /// [`travel::take`](crate::ai::travel::take)) and the drops that write
-    /// -1 (see [`travel`](crate::ai::travel)). Every spawn clears it
-    /// (@0x1c3c1, @0x3c444, @0x3c9e2).
+    /// [`travel::take`](crate::ai::travel::take)), the drops that write
+    /// -1 (see [`travel`](crate::ai::travel)), the disabled reset
+    /// ([`disabled_reset`](crate::traffic::disabled_reset), @0x8fece) and a
+    /// successor taking over its lost lead's
+    /// ([`succession`](crate::traffic::succession), @0x893b0). Every spawn
+    /// clears it (@0x1c3c1, @0x3c444, @0x3c9e2).
     pub travel_set: bool,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself

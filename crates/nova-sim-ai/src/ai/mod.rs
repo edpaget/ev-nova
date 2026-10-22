@@ -325,7 +325,10 @@ pub enum Goal {
     /// ship swapped in for a person by a `ShipGoal` 3 mission gets
     /// (`_AIMakeEscortFlyInForm` @0x89bbd-0x89bcd) and which no goal
     /// block of `_HighLevelAIHandler` flies without a leader
-    /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and
+    /// (@0x8ed18-0x8ed31), and which a fleet's new lead takes over from a
+    /// lost lead keeping formation
+    /// ([`succession`](crate::traffic::succession), @0x893b0-0x893e1). It
+    /// coasts with no thrust and no fire, and
     /// keeps the hold until provoked or its type's think lifts it (see
     /// [`idle`]). It fights nothing: its quarry is none.
     Hold,

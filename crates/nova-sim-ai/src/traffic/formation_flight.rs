@@ -95,10 +95,14 @@
 //!   (@0x83da3, @0x83e40, @0x83f00), and at full speed every frame is a
 //!   think, so the high level never sees it.
 //! - Goal 0xa's +0x8c gate, as a defence-fleet ship runs
-//!   `_DefenseShipAI`, not `_EscortAI`; its leader -1 gate, as `_EscortAI`
-//!   resets a leaderless ship to goal 0 (@0x83942-0x8397b, rdm phase
-//!   escort-fleet-fidelity/phase-7). Here an escort with no leader or
-//!   slot brakes, as before.
+//!   `_DefenseShipAI`, not `_EscortAI`; its leader -1 gate, as a ship of
+//!   goal 0xa never flies it with no leader: `_AICheckParentExists` moves
+//!   a lost lead's followers to its successor or out of the goal
+//!   ([`succession`](crate::traffic::succession)), and `_EscortAI`'s lost
+//!   parent resets a leaderless ship to goal 0 (@0x83942-0x8397b,
+//!   [`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet)). Here
+//!   an escort with no leader or slot brakes, and one in the regroup pause
+//!   keeping formation with no leader holds ([`Goal::flown`]).
 //! - Sub 1's settle cuts the speed (+0x48) too:
 //!   rdm:task/ai-drags-scale-the-npc-speed.
 //! - `_AIMaintainFormation`'s snap (snap 1) is passed only by
