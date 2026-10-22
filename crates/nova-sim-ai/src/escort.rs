@@ -71,9 +71,10 @@ pub use crate::catalog::{EscortClass, FIGHTER_MASS, FREIGHTER_AI, MEDIUM_MASS};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 pub use crate::fleet::EscortOrder;
-use crate::flight::{ShipState, facing};
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
+use crate::trig::{accel, whole};
 
 /// `STR#` 2002 #51: E with no escorts.
 pub const NO_ESCORTS: &str = "You don't have any escorts.";
@@ -352,13 +353,17 @@ pub fn slot_offset(slot: u8, ships: u8) -> (f32, f32) {
 
 /// Where slot `slot` of a formation of `ships` spaced `spacing` apart
 /// is, behind a leader at `leader` along its heading; its right is the
-/// heading turned 90 degrees clockwise.
+/// heading turned 90 degrees clockwise (`_AICalcShipFormPos`
+/// @0x84e64-0x84ef7). Both pushes go by whole degrees and the table sine
+/// and cosine ([`trig::accel`](crate::trig::accel)): behind along
+/// trunc(heading), to the right along trunc(heading + 90.0) % 360 (90.0
+/// @0xdd4d8, C's signed remainder), summed from nothing and then added
+/// to the leader's position, in that order.
 #[must_use]
 pub fn slot_position(leader: &ShipState, slot: u8, ships: u8, spacing: f32) -> Vec2 {
     let (behind, right) = slot_offset(slot, ships);
-    leader.position
-        + facing(leader.heading) * (-behind * spacing)
-        + facing(leader.heading + 90.0) * (right * spacing)
+    let side = whole(leader.heading + 90.0) % 360;
+    accel(whole(leader.heading), -behind * spacing) + accel(side, right * spacing) + leader.position
 }
 
 /// The radius around the player, in pixels, a defending escort takes a
@@ -853,6 +858,52 @@ mod tests {
             "two behind, two left: {at:?}"
         );
         assert!(near(slot_position(&right, 1, 7, 30.0), right.position));
+    }
+
+    #[test]
+    fn a_slot_sits_on_the_leaders_whole_degree_heading() {
+        let whole = ShipState {
+            position: Vec2::new(100.0, 50.0),
+            heading: 45.0,
+            ..ShipState::default()
+        };
+        let fractional = ShipState {
+            heading: 45.9,
+            ..whole
+        };
+        for slot in [2, 4] {
+            assert_eq!(
+                slot_position(&fractional, slot, 6, 40.0),
+                slot_position(&whole, slot, 6, 40.0),
+                "slot {slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slots_side_push_turns_by_the_whole_degree_wrapped() {
+        let leader = ShipState {
+            heading: 270.5,
+            ..ShipState::default()
+        };
+        // Slot 3 is one behind and one to the right: the right is
+        // trunc(270.5 + 90) % 360 = 0, straight up.
+        let at = slot_position(&leader, 3, 6, 40.0);
+        let expected = crate::trig::accel(270, -40.0) + crate::trig::accel(0, 40.0);
+        assert_eq!(at, expected + leader.position);
+    }
+
+    #[test]
+    fn a_slot_is_the_two_table_pushes_then_the_leaders_place() {
+        let leader = ShipState {
+            position: Vec2::new(-1234.567, 891.25),
+            heading: 123.75,
+            ..ShipState::default()
+        };
+        // Slot 9 is three behind and three to the left.
+        let at = slot_position(&leader, 9, 12, 37.0);
+        let pushes = crate::trig::accel(123, -3.0 * 37.0) + crate::trig::accel(213, -3.0 * 37.0);
+        assert_eq!(at, pushes + leader.position);
     }
 
     /// NPC `id` of `class` at (`x`, `y`), attacking the player when
