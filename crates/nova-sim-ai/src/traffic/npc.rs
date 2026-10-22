@@ -685,6 +685,31 @@ impl Npc {
         }
     }
 
+    /// Its fleet among `npcs`: the root of its chain of leads, as
+    /// `_ShipsShareParent` walks parents to their root (@0x7926-0x79c1),
+    /// each step its [`fleet`](Npc::fleet): the player once a ship of the
+    /// chain escorts the player, a lead gone from `npcs` where the chain
+    /// leaves them, else the last lead it reaches. A carrier's fighter,
+    /// led by its carrier, so shares the fleet of the carrier's own lead,
+    /// and a fighter of the player's escort is the player's. Ships of one
+    /// fleet count each other's missiles friendly and spare each other.
+    #[must_use]
+    pub fn fleet_among(&self, npcs: &[Npc]) -> ShipRef {
+        let mut at = self;
+        for _ in 0..npcs.len() {
+            match at.fleet() {
+                ShipRef::Npc(lead) if lead != at.id => {
+                    match npcs.iter().find(|npc| npc.id == lead) {
+                        Some(next) => at = next,
+                        None => return ShipRef::Npc(lead),
+                    }
+                }
+                fleet => return fleet,
+            }
+        }
+        at.fleet()
+    }
+
     /// Whether it escorts the player: an escort hired or captured, a
     /// fighter the player launched (both [`Npc::is_players`]), or a mission
     /// escort. Not a fighter one of those launched, which an escort leads
@@ -1379,6 +1404,46 @@ mod tests {
             ..crate::traffic::fixture::npc(6, ShipStats::default())
         };
         assert_eq!(players.fleet(), ShipRef::Player);
+    }
+
+    #[test]
+    fn an_npcs_fleet_among_the_traffic_is_the_root_of_its_chain_of_leads() {
+        // A fighter led by its carrier, which escorts NPC 3, shares NPC 3's
+        // fleet, as `_ShipsShareParent` walks the parents to their root
+        // (@0x7926-0x79c1); a fighter of the player's escort is the
+        // player's; a lead gone from the system ends the chain.
+        let ship = |id, leader| Npc {
+            leader,
+            ..crate::traffic::fixture::npc(id, ShipStats::default())
+        };
+        let mut escort = ship(6, None);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [
+            ship(3, None),
+            ship(4, Some(NpcId(3))),
+            ship(5, Some(NpcId(4))),
+            escort,
+            ship(7, Some(NpcId(6))),
+            ship(8, Some(NpcId(9))),
+        ];
+        let fleets: Vec<ShipRef> = npcs.iter().map(|npc| npc.fleet_among(&npcs)).collect();
+        assert_eq!(
+            fleets,
+            [
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Npc(NpcId(3)),
+                ShipRef::Player,
+                ShipRef::Player,
+                ShipRef::Npc(NpcId(9)),
+            ]
+        );
+        // Two ships leading each other end at one of them.
+        let looped = [ship(1, Some(NpcId(2))), ship(2, Some(NpcId(1)))];
+        assert!(matches!(looped[0].fleet_among(&looped), ShipRef::Npc(_)));
     }
 
     #[test]

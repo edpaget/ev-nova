@@ -52,7 +52,7 @@
 //! launches the fighters it carries ([`Trigger::bays`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, fire, react};
+use crate::ai::{Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -131,6 +131,22 @@ impl Behaviour for EscortAi {
                 )
             }
             _ => self.no_command(npc, around, &player, chance),
+        }
+    }
+
+    /// [`EscortAi::decide`]'s goal, ending its AI wait
+    /// ([`Decision::ends_wait`]) in the Defend, Attack and formation blocks
+    /// (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not holding or
+    /// returning to its hangar: a launched fighter told to hold or return
+    /// coasts out its glide (`_LaunchFighter` @0x3d843-0x3d85b).
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        let order = npc.escort_order();
+        let keeps_wait = order == Some(EscortOrder::Hold)
+            || (order == Some(EscortOrder::Dock) && npc.carrier.is_some());
+        Decision {
+            goal: self.decide(npc, around, chance),
+            ends_wait: !keeps_wait,
+            ..Decision::default()
         }
     }
 
@@ -1015,6 +1031,65 @@ mod tests {
                 "the gun ahead"
             );
         }
+    }
+
+    #[test]
+    fn defend_attack_and_formation_end_its_ai_wait_and_hold_and_return_keep_it() {
+        // +0x4c = -1.0 in the Defend, Attack and formation blocks
+        // (@0x83c6b, @0x83d62, @0x83ea8); Hold and Return leave it, so a
+        // launched fighter told to hold or return coasts its glide.
+        let mut fighter = escort(None);
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter.ai_wait = 30;
+        let govts = govts(0, 0);
+        for (order, threat, ends) in [
+            (None, false, true),
+            (Some(EscortOrder::Defend), true, true),
+            (Some(EscortOrder::Defend), false, true),
+            (Some(EscortOrder::Attack), true, true),
+            (Some(EscortOrder::Attack), false, true),
+            (Some(EscortOrder::Hold), true, false),
+            (Some(EscortOrder::Dock), true, false),
+        ] {
+            let mut ordered = fighter.clone();
+            if let Some(duty) = &mut ordered.escort {
+                duty.order = order;
+            }
+            let npcs = if threat {
+                vec![ordered, pirate(2, 0.0, 100.0)]
+            } else {
+                vec![ordered]
+            };
+            for ai in [ENGINE, BIBLE] {
+                let around = Surroundings {
+                    player: Some(player(0.0, 0.0)),
+                    govts: &govts,
+                    ..Surroundings::new(&[], &npcs)
+                };
+                let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+                assert_eq!(decision.ends_wait, ends, "{order:?} {threat}");
+                assert_eq!(
+                    decision.goal,
+                    ai.decide(&npcs[0], &around, &mut Draws::of(&[0])),
+                    "{order:?} {threat}"
+                );
+            }
+        }
+        let npcs = [escort(None)];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(
+            (decision.goal, decision.ends_wait),
+            (Goal::Formation { guard: None }, true),
+            "with the player gone, formation"
+        );
     }
 
     #[test]

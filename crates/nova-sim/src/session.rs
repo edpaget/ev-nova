@@ -427,6 +427,8 @@ mod buoys;
 mod capture;
 mod captured_mission_ship;
 mod cargo_boxes;
+#[cfg(test)]
+mod carrier_lead;
 mod chart;
 mod clearance;
 mod cloaks;
@@ -681,6 +683,10 @@ struct FightTerms {
     fleet_escort: bool,
     /// Whether it threatens the player ([`Fighter::threatens_player`]).
     threatens_player: bool,
+    /// Its fleet ([`Fighter::fleet`]): the root of its chain of leads
+    /// ([`Npc::fleet_among`]), so a carrier's fighter keeps its carrier's
+    /// lead's side.
+    fleet: ShipRef,
     /// The shield points it recharges each tick ([`Fighter::shield_regen`]):
     /// a fighter's as [`RuleKey::FighterCapacity`] reads
     /// ([`Npc::shield_recharge`]).
@@ -705,7 +711,7 @@ impl FightTerms {
     /// warp stage is ([`Fighter::jumping`], the original's +0x50 above 0):
     /// its own jump or its leader's.
     fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
-        let fleet = npc.fleet();
+        let fleet = self.fleet;
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
         let plundering = npc.goal.plundering().is_some();
@@ -2401,6 +2407,7 @@ impl Session {
                 .map(|&(_, rank)| rank)
         };
         let player = FightTerms {
+            fleet: ShipRef::Player,
             held_disabled: false,
             shield_regen: self.ship.fit.stats.shield_regen,
             fleet_escort: false,
@@ -2420,6 +2427,7 @@ impl Session {
             .npcs()
             .iter()
             .map(|npc| FightTerms {
+                fleet: npc.fleet_among(self.space.traffic.npcs()),
                 held_disabled: self.held_disabled(npc),
                 shield_regen: npc.shield_recharge(capacity),
                 fleet_escort: self.space.escorts.fleet.contains(&Some(npc.id)),
@@ -23138,6 +23146,7 @@ pub(super) mod tests {
     #[test]
     fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
         let terms = |threatens_player| FightTerms {
+            fleet: ShipRef::Npc(NpcId(1)),
             held_disabled: false,
             shield_regen: 0.0,
             fleet_escort: false,

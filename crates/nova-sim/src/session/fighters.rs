@@ -30,13 +30,25 @@
 //!   @0x83ae4-0x83b34); by the other reading, launched while the player
 //!   targets a ship that is not one of its escorts, it attacks that ship
 //!   at once. Launching makes no save due, as firing ammunition does not.
-//! - **An NPC's fighter** joins its carrier's fleet (its leader the
-//!   carrier's lead, or the carrier), of the carrier's government, and
-//!   attacks the carrier's target unless that is the carrier or of its
-//!   fleet (@0x3dc00-0x3dd47); it flies by
-//!   [`FleetEscortAi`](crate::FleetEscortAi) under its lead, or by the
+//! - **An NPC's fighter** is led by its carrier (+0x9a = the carrier,
+//!   @0x3d866-0x3d870), of the carrier's government, with goal 0 and no
+//!   order of its own (`_AISetup` @0x7f3e8, @0x7f40c), and takes the
+//!   carrier's target unless that is the carrier or a ship the carrier
+//!   leads (@0x3dbdf-0x3dc11, @0x3dd0f-0x3dd47): the carrier's own lead
+//!   and that lead's other escorts are kept. It flies by
+//!   [`FleetEscortAi`](crate::FleetEscortAi) under the carrier, or by the
 //!   other reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
-//!   by [`CarriedAi`](crate::CarriedAi).
+//!   by [`CarriedAi`](crate::CarriedAi). Its side for hits, sparing and
+//!   point defence is still its carrier's lead's: the root of its chain
+//!   of leads (`_ShipsShareParent` @0x7926-0x79c1,
+//!   [`Npc::fleet_among`]).
+//!
+//! **Every fighter** launches full at a fighter's capacities
+//! ([`RuleKey::FighterCapacity`]) and glides: its AI wait is its bay's
+//! `Count` (+0x4c, @0x3d843-0x3d85b), so its high level, thrust and fire
+//! are skipped until a think ends the wait, as `_EscortAI`'s Defend,
+//! Attack and formation blocks do (@0x83c6b, @0x83d62, @0x83ea8). Under
+//! Hold or Return it coasts the whole `Count`.
 //!
 //! **Docking.** A fighter that docks ([`Outcome::Docked`]) goes back
 //! aboard its carrier ([`Armament::stow`](crate::Armament::stow)): the
@@ -131,11 +143,8 @@ impl Session {
             .traffic
             .free_berth(self.setup.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.statics.ship_record(sortie.ship).cloned()?;
-        let push = self
-            .statics
-            .arsenal
-            .weapon(sortie.bay)
-            .map_or(0.0, |bay| bay.speed);
+        let bay = self.statics.arsenal.weapon(sortie.bay).copied();
+        let push = bay.map_or(0.0, |bay| bay.speed);
         let kind = self.setup.ship_kind(&self.statics, &record);
         let carrier = Carrier {
             ship: sortie.carrier,
@@ -175,6 +184,9 @@ impl Session {
         };
         npc.state.velocity = launch_velocity(sortie.from.velocity, sortie.heading, push, top_speed);
         npc.afterburner = self.rolls_afterburner(&kind.hull, berth, chance);
+        // The glide: +0x4c = the bay's `Count` (@0x3d843-0x3d85b), which
+        // its first think ends unless it holds or returns.
+        npc.ai_wait = bay.map_or(0, |bay| bay.lifetime);
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),
@@ -497,29 +509,23 @@ impl PlayerShip {
 }
 
 impl Space {
-    /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,
-    /// attacking its target unless that is the carrier or of its fleet:
-    /// its number, or none with its carrier gone.
+    /// NPC `carrier`'s fighter `npc` joins it (see the module docs): led
+    /// by the carrier, of its government, idle, its target the carrier's
+    /// unless that is the carrier or a ship the carrier leads: its number,
+    /// or none with its carrier gone.
     fn join_carrier(&mut self, mut npc: Npc, carrier: NpcId) -> Option<NpcId> {
         let launcher = self.npc(carrier).cloned()?;
-        let fleet = launcher.fleet();
-        let target = launcher
-            .target
-            .filter(|&ship| ship != ShipRef::Npc(carrier) && self.fleet_of(ship) != Some(fleet));
+        let parent = Some(ShipRef::Npc(carrier));
+        let target = launcher.target.filter(|&ship| {
+            Some(ship) != parent
+                && !matches!(ship, ShipRef::Npc(id)
+                    if self.npc(id).is_some_and(|led| led.leader_ref() == parent))
+        });
         npc.take_govt_of(&launcher);
-        npc.leader = Some(launcher.leader.unwrap_or(launcher.id));
+        npc.leader = Some(carrier);
         npc.aggression = launcher.aggression;
         npc.target = target;
-        npc.goal = target.map_or(Goal::Idle, Goal::Attack);
         Some(self.traffic.add_npc(npc))
-    }
-
-    /// `ship`'s fleet, if it is in the system.
-    fn fleet_of(&self, ship: ShipRef) -> Option<ShipRef> {
-        match ship {
-            ShipRef::Player => Some(ShipRef::Player),
-            ShipRef::Npc(id) => self.npc(id).map(Npc::fleet),
-        }
     }
 
     /// Puts the fighter of `sortie` back into its bay, a round again.
@@ -1807,14 +1813,29 @@ pub(super) mod tests {
         }
     }
 
-    /// Nova's AI with every warship raiding and every interceptor
-    /// sitting, by the other reading of [`RuleKey::NpcEscortAi`], the
-    /// port's earlier routing: the carrier, which escorts its lead, raids
-    /// by its type, and its fighters fly [`CarriedAi`](crate::CarriedAi).
-    /// These tests are of the launch and the dock, which
-    /// rdm:phase/escort-fleet-fidelity/phase-4-carriers-and-fighters moves
-    /// under the fleet escorts' AI.
+    /// Nova's AI with every leaderless warship raiding and every
+    /// interceptor sitting: a carrier with a lead flies `_EscortAI` under
+    /// it ([`FleetEscortAi`](crate::FleetEscortAi)), attacking while its
+    /// lead does, and its fighters fly it under the carrier, attacking
+    /// while it attacks and docking once it stops.
     pub(in crate::session) fn raiding_ai() -> NovaAi {
+        NovaAi::default()
+            .with(AiType::Interceptor, Rc::new(Sitting))
+            .with(AiType::WimpyTrader, Rc::new(Sitting))
+            .with(AiType::Warship, Rc::new(Raiding))
+    }
+
+    /// [`raiding_ai`] with the ships with an NPC parent raiding too: a
+    /// led carrier keeps whatever goal a test gives it, a snipe among them.
+    fn sniping_ai() -> NovaAi {
+        raiding_ai().with_fleet_escorts(Rc::new(Raiding))
+    }
+
+    /// [`raiding_ai`] by the other reading of [`RuleKey::NpcEscortAi`],
+    /// the port's earlier routing: the carrier, which escorts its lead,
+    /// raids by its type, and its fighters fly
+    /// [`CarriedAi`](crate::CarriedAi).
+    fn earlier_raiding_ai() -> NovaAi {
         NovaAi::from_rulebook(&earlier_escorts())
             .with(AiType::Interceptor, Rc::new(Sitting))
             .with(AiType::WimpyTrader, Rc::new(Sitting))
@@ -1873,23 +1894,38 @@ pub(super) mod tests {
     }
 
     /// A session with a pirate carrier of 2 Vipers attacking the player,
-    /// and the carrier's lead far off; the carrier and the lead.
-    fn raided(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
+    /// and the carrier's lead far off, attacking it too; the carrier and
+    /// the lead.
+    pub(in crate::session) fn raided(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
         raided_by(catalog, RuleSource::Engine)
     }
 
-    /// [`raided`], by the other reading of [`RuleKey::NpcEscortAi`] (see
-    /// [`raiding_ai`]), an NPC's pick spending as `spend` reads
+    /// [`raided`], an NPC's pick spending as `spend` reads
     /// [`RuleKey::AiSpendWithoutShot`]: by the other reading the carrier's
     /// kept bay, fired as its pick on the tick its reload runs out, drains
     /// no fighter (see `an_npc_carrier_launches_its_fighters_at_its_target`),
     /// so both its fighters launch.
-    fn raided_by(catalog: &FakePilotCatalog, spend: RuleSource) -> (Session, NpcId, NpcId) {
-        let rules = earlier_escorts()
-            .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
-            .with_override(RuleKey::AiSpendWithoutShot, spend);
+    pub(in crate::session) fn raided_by(
+        catalog: &FakePilotCatalog,
+        spend: RuleSource,
+    ) -> (Session, NpcId, NpcId) {
+        raided_by_rules(
+            catalog,
+            Rulebook::default().with_override(RuleKey::AiSpendWithoutShot, spend),
+        )
+    }
+
+    /// [`raided`] by `rules`, the fighters' launch by the engine.
+    pub(in crate::session) fn raided_by_rules(
+        catalog: &FakePilotCatalog,
+        rules: Rulebook,
+    ) -> (Session, NpcId, NpcId) {
+        let rules = rules.with_override(RuleKey::FighterLaunch, RuleSource::Engine);
         let mut session = flying_by(catalog, pilot(catalog, 0, Vec::new()), rules);
         let lead = pirate(&mut session, 2000.0, 2000.0);
+        let npc = session.space.npc_mut(lead).expect("there");
+        npc.goal = Goal::Attack(ShipRef::Player);
+        npc.target = Some(ShipRef::Player);
         let raider = carrier(&mut session, lead, 2);
         (session, raider, lead)
     }
@@ -1930,9 +1966,15 @@ pub(super) mod tests {
                 reach: 60.0,
             })
         );
-        assert_eq!(fighter.leader, Some(lead), "the carrier's lead");
+        // Its parent is the carrier (`_LaunchFighter` @0x3d866-0x3d870),
+        // its target the carrier's, and `_AISetup` leaves it goal 0
+        // (@0x7f3e8), gliding its bay's `Count` (@0x3d843-0x3d85b) until
+        // its first think.
+        assert_eq!(fighter.leader, Some(raider), "the carrier, not its lead");
+        assert_ne!(fighter.leader, Some(lead));
         assert_eq!(fighter.target, Some(ShipRef::Player));
-        assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(fighter.goal, Goal::Idle);
+        assert_eq!(fighter.ai_wait, 30);
         assert_eq!(fighter.escort, None);
         assert_eq!(aboard(&session, raider), 1);
         // The launch sets the bay's reload to 60 in `_AIDispatch`
@@ -2021,7 +2063,7 @@ pub(super) mod tests {
             for n in 0..ships - 2 {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
-            fight(&mut session, &catalog, &raiding_ai());
+            fight(&mut session, &catalog, &sniping_ai());
             (session, raider)
         };
         let (mut full, raider) = sniped(55);
@@ -2077,7 +2119,7 @@ pub(super) mod tests {
         for n in 0..ships - 2 {
             pirate(&mut session, 1000.0 + n as f32, 1000.0);
         }
-        fight(&mut session, catalog, &raiding_ai());
+        fight(&mut session, catalog, &sniping_ai());
         (session, raider)
     }
 
@@ -2641,7 +2683,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_carrier_without_a_lead_leads_its_fighters_and_a_target_of_its_own_fleet_is_dropped() {
+    fn a_carrier_without_a_lead_leads_its_fighters_and_a_target_it_leads_is_dropped() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 0, Vec::new()), RuleSource::Engine);
         let lead = pirate(&mut session, 2000.0, 2000.0);
@@ -2656,7 +2698,7 @@ pub(super) mod tests {
         fight(&mut session, &catalog, &ai);
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.leader, Some(raider));
-        assert_eq!(fighter.target, None, "one of its own fleet");
+        assert_eq!(fighter.target, None, "a ship its carrier leads");
         assert_eq!(fighter.goal, Goal::Idle);
     }
 
@@ -2676,6 +2718,30 @@ pub(super) mod tests {
         });
         assert!(docked.is_some(), "{:?}", vipers(&session));
         assert_eq!(aboard(&session, raider), 2);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_npc_carriers_fighters_fly_carried_ai_attacking_then_docking() {
+        // The port's earlier routing: the led carrier raids by its type,
+        // and its fighters attack its quarry and dock once it stops.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided_by_rules(&catalog, earlier_escorts());
+        let ai = earlier_raiding_ai();
+        fight(&mut session, &catalog, &ai);
+        let id = vipers(&session)[0].id;
+        fight(&mut session, &catalog, &ai);
+        assert_eq!(
+            session.space.npc(id).expect("out").goal,
+            Goal::Attack(ShipRef::Player),
+            "its carrier's quarry"
+        );
+        session.space.npc_mut(raider).expect("there").goal = Goal::Idle;
+        let docked = (0..600).find(|_| {
+            fight(&mut session, &catalog, &ai);
+            session.space.npc(id).is_none()
+        });
+        assert!(docked.is_some(), "{:?}", vipers(&session));
+        assert_eq!(aboard(&session, raider), 2, "the fighter aboard again");
     }
 
     #[test]

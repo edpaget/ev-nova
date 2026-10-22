@@ -9,8 +9,8 @@
 
 use super::Session;
 use super::fighters::tests::{
-    VIPER_FIELDS, carrier, carrying, earlier_escorts, fight, fleet_npcs, flying_by, launch, out,
-    pilot, pirate, raiding_ai, vipers,
+    VIPER_FIELDS, carrying, fight, fleet_npcs, flying_by, launch, out, pilot, raided_by_rules,
+    raiding_ai, vipers,
 };
 use crate::bay::fighter_capacity;
 use crate::chance::NeverFires;
@@ -81,12 +81,7 @@ fn the_players_launched_fighter_holds_1_333_times_its_classs_full_by_the_engine(
 fn an_npc_carriers_launched_fighter_holds_1_333_times_its_classs_full_by_the_engine() {
     let catalog = carrying();
     for (capacity, held) in [(RuleSource::Engine, SCALED), (RuleSource::Bible, CLASS)] {
-        let rules = earlier_escorts()
-            .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
-            .with_override(RuleKey::FighterCapacity, capacity);
-        let mut session = flying_by(&catalog, pilot(&catalog, 0, Vec::new()), rules);
-        let lead = pirate(&mut session, 2000.0, 2000.0);
-        carrier(&mut session, lead, 2);
+        let (mut session, _, _) = raided_by_rules(&catalog, by(capacity));
         fight(&mut session, &catalog, &raiding_ai());
         let launched = vipers(&session);
         assert_eq!(launched.len(), 1, "{capacity:?}");

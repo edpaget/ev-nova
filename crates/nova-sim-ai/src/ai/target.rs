@@ -580,14 +580,17 @@ fn leads_or_is_player(ship: ShipRef, around: &Surroundings) -> bool {
 }
 
 /// Whether `npc` spares `ship` among `around` by `rules`: the player once
-/// it has paid to be spared, or an NPC of its own fleet or an ally it
-/// spares (see the module docs).
+/// it has paid to be spared, or an NPC of its own fleet (the root of its
+/// chain of leads, [`Npc::fleet_among`], so a carrier's fighter and its
+/// carrier's lead's other escorts spare each other) or an ally it spares
+/// (see the module docs).
 #[must_use]
 pub fn spares(npc: &Npc, ship: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
     match ship {
         ShipRef::Player => npc.spared,
         ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            other.fleet() == npc.fleet() || spares_ally(npc, other, around, rules.led_ally)
+            other.fleet_among(around.npcs) == npc.fleet_among(around.npcs)
+                || spares_ally(npc, other, around, rules.led_ally)
         }),
     }
 }
@@ -2496,6 +2499,38 @@ mod tests {
         escort.leader = Some(NpcId(1));
         let npcs = [me(), escort, ship(3, RIVAL, 900.0, 0.0)];
         assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+    }
+
+    #[test]
+    fn a_carriers_fighter_spares_its_fleet_leads_other_escorts_and_they_it() {
+        // Ship 1 leads carrier 2 and escort 3; carrier 2 leads fighter 4.
+        // The fighter's government (145) is allied with none of the others'
+        // (140, 142), so only the fleet spares. The fleet is the root of
+        // the leads (`_ShipsShareParent`).
+        let mut carrier = ship(2, ENEMY, 100.0, 0.0);
+        carrier.leader = Some(NpcId(1));
+        let mut escort = ship(3, ENEMY, 200.0, 0.0);
+        escort.leader = Some(NpcId(1));
+        let mut fighter = ship(4, RIVAL, 300.0, 0.0);
+        fighter.leader = Some(NpcId(2));
+        let npcs = [me(), carrier, escort, fighter, ship(5, ENEMY, 400.0, 0.0)];
+        let govts = govts(0);
+        let around = Surroundings {
+            player: Some(player(0.0, -100.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let rules = TargetRules::default();
+        assert!(
+            spares(&npcs[3], n(3), &around, rules),
+            "the fighter, escort 3"
+        );
+        assert!(
+            spares(&npcs[2], n(4), &around, rules),
+            "escort 3, the fighter"
+        );
+        assert!(spares(&npcs[3], n(1), &around, rules), "its fleet's lead");
+        assert!(!spares(&npcs[3], n(5), &around, rules), "a stranger");
     }
 
     #[test]

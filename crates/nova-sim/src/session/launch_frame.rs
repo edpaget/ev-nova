@@ -17,7 +17,10 @@
 //!   as `_GenericRandomShipSpawn` clears its fire flag (@0x3cb60);
 //! - whichever slot it took, every slot whose `_AIDispatch` comes after
 //!   the launch can choose it in its point defence's ship branch, which
-//!   walks the live table (@0x394ce-0x3969d); a slot before the carrier's
+//!   walks the live table (@0x394ce-0x3969d), once it fights the
+//!   defender: it launches with goal 0 (`_AISetup` @0x7f3e8), so one
+//!   above its carrier is a candidate after its launch-frame think, and
+//!   one below only from its next frame's; a slot before the carrier's
 //!   cannot.
 //!
 //! Every fighter moves and is displayed in its launch frame either way,
@@ -166,9 +169,11 @@ mod tests {
         catalog
     }
 
-    /// Keeps every goal and target; the carrier asks for its goal-4
-    /// launch (and the snipe's after it when `twice`), each defender for
-    /// its point defence, and every Viper for `fighter`.
+    /// Keeps every goal and target but a Viper's, which attacks its
+    /// target and ends its glide, as `_EscortAI`'s Attack block does under
+    /// a fighting carrier (+0x4c = -1.0, @0x83d62); the carrier asks for
+    /// its goal-4 launch (and the snipe's after it when `twice`), each
+    /// defender for its point defence, and every Viper for `fighter`.
     #[derive(Debug)]
     struct Scripted {
         carrier: NpcId,
@@ -178,8 +183,25 @@ mod tests {
     }
 
     impl Behaviour for Scripted {
-        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
-            npc.goal
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(
+            &self,
+            npc: &Npc,
+            _around: &Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Decision {
+            let viper = npc.ship == VIPER;
+            Decision {
+                goal: match npc.target {
+                    Some(target) if viper => Goal::Attack(target),
+                    _ => npc.goal,
+                },
+                ends_wait: viper,
+                ..Decision::default()
+            }
         }
 
         fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
@@ -444,7 +466,10 @@ mod tests {
         };
         let (berth, fired) = defended_against(RuleSource::Engine, &below);
         assert_eq!(berth, 1);
-        assert_eq!(fired, [["high"], ["low"]]);
+        // Below its carrier it thinks first the next tick: it launched with
+        // goal 0 (`_AISetup` @0x7f3e8), fighting no one, so neither
+        // defender fires at it until then.
+        assert_eq!(fired, [vec![], vec!["low", "high"]]);
     }
 
     #[test]
@@ -470,9 +495,8 @@ mod tests {
 
         fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
             Decision {
-                goal: self.0.decide(npc, around, chance),
                 comm_call: (npc.ship == VIPER).then_some(CommCall::Distress),
-                ..Decision::default()
+                ..self.0.decision(npc, around, chance)
             }
         }
 
