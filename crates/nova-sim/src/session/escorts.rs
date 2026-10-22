@@ -366,6 +366,12 @@ impl Session {
             no_ai: false,
         };
         npc.independent();
+        // A carried fighter holds a fighter's capacities, keeping what its
+        // record holds (`_ShipShieldCapacity`, `_ShipArmorCapacity` for AI
+        // type 5, @0x2a91-0x2aa7, @0x2cb9-0x2cd2).
+        if npc.carrier.is_some() {
+            npc.hold_capacities(self.setup.rules.source_for(RuleKey::FighterCapacity));
+        }
         Some(match berth {
             Some(berth) => self.space.traffic.add_npc_at(npc, berth),
             None => self.space.traffic.add_npc(npc),
@@ -2048,13 +2054,24 @@ mod tests {
             assert_eq!(npc.condition, Condition::Disabled);
             let former = npc.former.expect("remembers");
             assert_eq!(former.kind(), kind);
+            // The fighter holds a fighter's capacities, 1.333 × its
+            // class's, by `RuleKey::FighterCapacity`.
+            let (shield_max, armor_max) = if record.carried {
+                (39.99, 59.985)
+            } else {
+                (record.reserves.shield.max, 45.0)
+            };
             assert_eq!(
                 former.record,
                 Escort {
                     reserves: Reserves {
+                        shield: Gauge {
+                            max: shield_max,
+                            ..record.reserves.shield
+                        },
                         armor: Gauge {
                             now: 10.0,
-                            max: 45.0,
+                            max: armor_max,
                         },
                         ..record.reserves
                     },

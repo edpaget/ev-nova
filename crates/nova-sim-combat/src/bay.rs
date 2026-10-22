@@ -62,6 +62,7 @@
 
 use crate::combat::ShipRef;
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 use crate::speed_cap::adjusted_accel;
 
 /// The `wëap` `Guidance` of a fighter bay.
@@ -85,6 +86,26 @@ pub const DOCK_TURN_SLACK: f32 = 1.0;
 pub const ABANDONED_ONE: &str = "fighter abandoned";
 /// `STR#` 2002 #165: several fighters abandoned.
 pub const ABANDONED_MANY: &str = "fighters abandoned";
+
+/// What a fighter's shield and armour capacities and its shield recharge
+/// rate are scaled by (1.333, a double @0xdd0a0): `_ShipShieldCapacity`,
+/// `_ShipArmorCapacity` and `_ShipShieldRechargeRate` for AI type 5
+/// (@0x2a91-0x2aa7, @0x2cb9-0x2cd2, @0x2b96-0x2bac).
+pub const FIGHTER_CAPACITY: f64 = 1.333;
+
+/// A fighter's shield or armour capacity, or its shield recharge rate, of
+/// its class's `amount`, by `reading` of the rulebook's
+/// [`RuleKey::FighterCapacity`](crate::RuleKey::FighterCapacity): by the
+/// engine, `amount` × [`FIGHTER_CAPACITY`], taken in doubles and stored
+/// as a float, as the original's products are; by the other reading,
+/// `amount` itself.
+#[must_use]
+pub fn fighter_capacity(amount: f32, reading: RuleSource) -> f32 {
+    match reading {
+        RuleSource::Engine => (f64::from(amount) * FIGHTER_CAPACITY) as f32,
+        RuleSource::Bible => amount,
+    }
+}
 
 /// The ship that launched a fighter, which it docks with, and the reach
 /// of the docking.
@@ -180,6 +201,18 @@ mod tests {
         assert_eq!(capacity(0, 1, -1), 0, "Max below none");
         assert_eq!(capacity(4, 0, 9999), 0, "no bays");
         assert_eq!(capacity(0, 0, 9999), 0, "no bays");
+    }
+
+    #[test]
+    fn a_fighter_holds_1_333_times_by_the_engine_taken_in_doubles() {
+        // 30 × 1.333 in doubles, stored as a float, is the float nearest
+        // 39.99, where a float product falls a float short of it.
+        assert_eq!(fighter_capacity(30.0, RuleSource::Engine), 39.99);
+        assert_ne!(fighter_capacity(30.0, RuleSource::Engine), 30.0 * 1.333_f32);
+        assert_eq!(fighter_capacity(1000.0, RuleSource::Engine), 1333.0);
+        assert_eq!(fighter_capacity(0.0, RuleSource::Engine), 0.0);
+        assert_eq!(fighter_capacity(30.0, RuleSource::Bible), 30.0);
+        assert_eq!(FIGHTER_CAPACITY, 1.333);
     }
 
     #[test]

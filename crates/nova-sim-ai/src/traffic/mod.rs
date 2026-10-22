@@ -168,6 +168,7 @@ pub mod destination;
 mod display_tests;
 pub mod docked;
 pub mod emerge;
+pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fly_pass;
@@ -1567,7 +1568,7 @@ impl Traffic {
         for &(lead, gate, ai_type) in reached {
             for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
                 follower.leader = None;
-                follower.carrier = None;
+                follower.leave_carrier();
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
                 follower.target = None;
                 follower.provoked = gate_entry::RELEASED_PROVOCATION;
@@ -4322,6 +4323,9 @@ mod tests {
             window: 100.0,
             reach: 30.0,
         });
+        traffic.npcs[2].stats.armor = 45.0;
+        traffic.npcs[2].hold_capacities(RuleSource::Engine);
+        assert_eq!(traffic.npcs[2].reserves.armor.max, 59.985, "a fighter's");
         traffic.npcs[3].leader = Some(NpcId(9));
         traffic.npcs[3].goal = Goal::Follow {
             lead: NpcId(9),
@@ -4343,6 +4347,10 @@ mod tests {
             assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
             assert_eq!(follower.mode, Mode::Flying, "it enters on its own");
         }
+        assert_eq!(
+            traffic.npcs[2].reserves.armor.max, 45.0,
+            "no longer AI type 5, its class's"
+        );
         assert_eq!(traffic.npcs[3].goal, untouched.goal);
         assert_eq!(traffic.npcs[3].leader, untouched.leader);
         let mut left = Vec::new();

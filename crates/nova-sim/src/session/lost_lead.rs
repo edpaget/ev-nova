@@ -10,7 +10,9 @@
 //! and takes its class's `InherentAI` as its AI type, as `_EscortAI`'s
 //! lost-parent branch has it (@0x83917-0x8397b, the AI type written
 //! @0x83c4a from class +0x12). Its target is kept, as the branch writes
-//! none. For an NPC parent the original reaches that branch only with
+//! none. A fighter that leaves holds its class's shield and armour
+//! capacities again, keeping what it holds ([`Npc::leave_carrier`](crate::traffic::npc::Npc::leave_carrier)),
+//! as its AI type is no longer 5. For an NPC parent the original reaches that branch only with
 //! the parent already -1: `_AICheckParentExists` runs first on every frame
 //! (`_DoPlayGameWork` @0x440c6-0x44101) and handles a parent inactive or
 //! disabled. This pass stands in for it until
@@ -61,7 +63,7 @@ impl Space {
                 RuleSource::Bible if carrier_lost => {}
                 _ => continue,
             }
-            npc.carrier = None;
+            npc.leave_carrier();
             npc.leader = None;
             npc.goal = Goal::Idle;
         }
@@ -222,6 +224,36 @@ mod tests {
                 );
             }
             assert_eq!(ship(&session, carrier).leader, Some(lead), "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_fighter_whose_carrier_is_lost_holds_its_classs_capacities_again_keeping_what_it_has() {
+        // Its AI type no longer 5, `_ShipShieldCapacity` and
+        // `_ShipArmorCapacity` read its class's (@0x2a91, @0x2cb9); the
+        // original keeps +0x54 and +0x58 as they are.
+        for reading in RuleSource::ALL {
+            let mut session = session();
+            let lead = session.space.traffic.add_npc(pirate());
+            let carrier = session.space.traffic.add_npc(escort_of(lead));
+            let mut scaled = fighter_of(lead, carrier);
+            scaled.hold_capacities(RuleSource::Engine);
+            scaled.reserves.shield.now = 35.0;
+            scaled.reserves.armor.now = 50.0;
+            let fighter = session.space.traffic.add_npc(scaled);
+            session.space.npc_mut(carrier).expect("there").condition = Condition::Destroyed;
+            session.space.lose_leads(reading);
+            let reserves = ship(&session, fighter).reserves;
+            assert_eq!(
+                (reserves.shield.now, reserves.shield.max),
+                (35.0, 30.0),
+                "{reading:?}"
+            );
+            assert_eq!(
+                (reserves.armor.now, reserves.armor.max),
+                (50.0, 45.0),
+                "{reading:?}"
+            );
         }
     }
 

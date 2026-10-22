@@ -620,8 +620,10 @@ mod tests {
         assert_eq!(fighter.target, Some(ShipRef::Player));
         let pushed = crate::bay::launch_velocity(Vec2::new(2.0, 4.0), 90.0, 4.0, 6.0);
         assert_eq!(fighter.state.velocity, pushed * 0.5, "half its launch");
-        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(50)");
-        assert!(chance.asked.contains(&50));
+        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(66)");
+        // A fighter's shield, 50 × 1.333 (`_LaunchFighter` @0x3d9e7, AI
+        // type 5), so the cut rolls `Rand(66)`.
+        assert!(chance.asked.contains(&66));
         let carrier = session.space.npc(id).expect("dying");
         assert_eq!(carrier.reserves.shield.now, 40.0, "untouched");
         assert_eq!(carrier.state.velocity, Vec2::new(2.0, 4.0));
@@ -659,7 +661,11 @@ mod tests {
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 2);
         assert_eq!(fighter.state.velocity, pushed, "uncut");
-        assert_eq!(fighter.reserves.shield.now, 50.0);
+        assert_eq!(
+            fighter.reserves.shield.now,
+            crate::bay::fighter_capacity(50.0, RuleSource::Engine),
+            "a fighter's full shield"
+        );
         let held = session.space.npc(id).expect("dying");
         assert_eq!(held.reserves.shield.now, 7.0, "Rand(40)");
         assert!(chance.asked.contains(&40));

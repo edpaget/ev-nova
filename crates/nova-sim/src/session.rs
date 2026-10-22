@@ -449,6 +449,8 @@ mod events;
 #[cfg(test)]
 mod exit_cursors;
 mod explored;
+#[cfg(test)]
+mod fighter_capacity;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
@@ -679,6 +681,10 @@ struct FightTerms {
     fleet_escort: bool,
     /// Whether it threatens the player ([`Fighter::threatens_player`]).
     threatens_player: bool,
+    /// The shield points it recharges each tick ([`Fighter::shield_regen`]):
+    /// a fighter's as [`RuleKey::FighterCapacity`] reads
+    /// ([`Npc::shield_recharge`]).
+    shield_regen: f32,
     /// Its class's top speed, its `Speed` alone.
     class_speed: f32,
     /// Its top speed.
@@ -743,7 +749,7 @@ impl FightTerms {
             booty: *booty,
             state: *state,
             hull: *hull,
-            shield_regen: stats.shield_regen,
+            shield_regen: self.shield_regen,
             armor_regen: stats.armor_regen,
             trigger,
             target: *target,
@@ -2396,6 +2402,7 @@ impl Session {
         };
         let player = FightTerms {
             held_disabled: false,
+            shield_regen: self.ship.fit.stats.shield_regen,
             fleet_escort: false,
             threatens_player: false,
             class_speed: self.statics.class_speed(self.pilot.ship),
@@ -2406,6 +2413,7 @@ impl Session {
             resists: self.ship.player_hazard_resistance(&self.setup),
         };
         let led_speed = self.led_speed();
+        let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
         let npcs = self
             .space
             .traffic
@@ -2413,6 +2421,7 @@ impl Session {
             .iter()
             .map(|npc| FightTerms {
                 held_disabled: self.held_disabled(npc),
+                shield_regen: npc.shield_recharge(capacity),
                 fleet_escort: self.space.escorts.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.space.traffic.npcs(), self.sees(npc)),
@@ -23130,6 +23139,7 @@ pub(super) mod tests {
     fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
         let terms = |threatens_player| FightTerms {
             held_disabled: false,
+            shield_regen: 0.0,
             fleet_escort: false,
             threatens_player,
             class_speed: 0.0,

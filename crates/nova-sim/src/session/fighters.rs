@@ -153,7 +153,8 @@ impl Session {
             velocity: sortie.from.velocity,
             heading: sortie.heading,
         };
-        let mut npc = fighter(&kind, sortie.ship, at, speed, carrier);
+        let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
+        let mut npc = fighter(&kind, sortie.ship, at, speed, carrier, capacity);
         // `_GenericRandomShipSpawn` rolls its skill (@0x3cad1, from
         // `_LaunchFighter` @0x3d657), and it takes its carrier's government
         // and factor.
@@ -540,14 +541,17 @@ impl Space {
 
 /// A fighter of ship type `ship`, as `kind` gives it, at `state` and
 /// `speed` along its heading, launched by `carrier`: its shield and armour
-/// full, carrying its class's stock weapons and rounds, its AI type its
-/// `InherentAI`, idle.
+/// full at a fighter's capacities by `capacity`'s reading of
+/// [`RuleKey::FighterCapacity`] (`_LaunchFighter` @0x3d9e7, @0x3d9f7,
+/// [`Npc::hold_capacities`]), carrying its class's stock weapons and
+/// rounds, its AI type its `InherentAI`, idle.
 fn fighter(
     kind: &ShipKind,
     ship: crate::catalog::ShipId,
     state: ShipState,
     speed: f32,
     carrier: Carrier,
+    capacity: RuleSource,
 ) -> Npc {
     let mut fighter = Npc {
         id: NpcId::default(),
@@ -633,6 +637,10 @@ fn fighter(
         no_ai: false,
     };
     fighter.independent();
+    fighter.hold_capacities(capacity);
+    let reserves = &mut fighter.reserves;
+    reserves.shield.now = reserves.shield.max;
+    reserves.armor.now = reserves.armor.max;
     fighter
 }
 
@@ -672,7 +680,7 @@ pub(super) mod tests {
     /// The fighter, a Viper.
     pub(in crate::session) const VIPER: ShipId = ShipId(144);
     /// The fighter outfit, the bay's rounds.
-    const VIPERS: OutfitId = OutfitId(158);
+    pub(in crate::session) const VIPERS: OutfitId = OutfitId(158);
     /// The outfit holding the Viper Bay.
     const VIPER_BAY: OutfitId = OutfitId(157);
     /// The fighter's gun: 10 pixels a tick for 30 ticks, every 5, 5
@@ -683,7 +691,7 @@ pub(super) mod tests {
 
     /// The Viper's fields: as fast as the player, of `Maneuver` 80 and a
     /// jump's fuel.
-    const VIPER_FIELDS: ShipFields = ShipFields {
+    pub(in crate::session) const VIPER_FIELDS: ShipFields = ShipFields {
         maneuver: 80,
         fuel: 300,
         ..FAST
@@ -803,7 +811,7 @@ pub(super) mod tests {
     }
 
     /// Holds the secondary trigger, on the bay, for a fight's tick.
-    fn launch(session: &mut Session) {
+    pub(in crate::session) fn launch(session: &mut Session) {
         assert_eq!(session.secondary(), Some(BAY));
         session.hold_fire(false, true);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -811,7 +819,7 @@ pub(super) mod tests {
     }
 
     /// The fleet's NPCs, in fleet order.
-    fn fleet_npcs(session: &Session) -> Vec<Npc> {
+    pub(in crate::session) fn fleet_npcs(session: &Session) -> Vec<Npc> {
         session
             .space
             .escorts
@@ -835,14 +843,14 @@ pub(super) mod tests {
 
     /// Nova's AI, but every interceptor and wimpy trader sits as it is:
     /// the pirates and the traders here.
-    fn sitting_ai() -> NovaAi {
+    pub(in crate::session) fn sitting_ai() -> NovaAi {
         NovaAi::default()
             .with(AiType::Interceptor, Rc::new(Sitting))
             .with(AiType::WimpyTrader, Rc::new(Sitting))
     }
 
     /// Adds a pirate interceptor, a medium ship, at (`x`, `y`), idle.
-    fn pirate(session: &mut Session, x: f32, y: f32) -> NpcId {
+    pub(in crate::session) fn pirate(session: &mut Session, x: f32, y: f32) -> NpcId {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.ship = ShipId(152);
         npc.ai_type = AiType::Interceptor;
@@ -853,14 +861,18 @@ pub(super) mod tests {
 
     /// A tick of the player at rest, then of the traffic by `ai`, then of
     /// the fight.
-    fn fight(session: &mut Session, catalog: &FakePilotCatalog, ai: &NovaAi) {
+    pub(in crate::session) fn fight(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        ai: &NovaAi,
+    ) {
         session.tick(Controls::default());
         session.tick_traffic(catalog, ai, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
 
     /// Whether `ship`'s shield drops within `ticks` of [`fight`].
-    fn shield_drops(
+    pub(in crate::session) fn shield_drops(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         ai: &NovaAi,
@@ -895,7 +907,14 @@ pub(super) mod tests {
             window: 0.0,
             reach: 0.0,
         };
-        let npc = fighter(&kind, ShipId(204), ShipState::default(), 0.0, carrier);
+        let npc = fighter(
+            &kind,
+            ShipId(204),
+            ShipState::default(),
+            0.0,
+            carrier,
+            RuleSource::Engine,
+        );
         assert_eq!(npc.cloak_gear, gear);
     }
 
@@ -1019,7 +1038,12 @@ pub(super) mod tests {
         assert!(record.carried);
         assert_eq!(record.ship, VIPER);
         assert_eq!(record.order, None);
-        assert_eq!(record.reserves, ShipStats::new(VIPER_FIELDS, &[]).full());
+        // Full at a fighter's capacities, 1.333 × its class's
+        // (`RuleKey::FighterCapacity`; see the `fighter_capacity` tests).
+        let mut full = ShipStats::new(VIPER_FIELDS, &[]).full();
+        full.shield = crate::reserves::Gauge::full(39.99);
+        full.armor = crate::reserves::Gauge::full(59.985);
+        assert_eq!(record.reserves, full);
         assert_eq!(fighter.state.position, session.player().position);
         assert_eq!(fighter.state.heading, 0.0, "the player's heading");
         assert_eq!(
@@ -1036,7 +1060,7 @@ pub(super) mod tests {
                 reach: 40.0,
             })
         );
-        assert_eq!(fighter.reserves, ShipStats::new(VIPER_FIELDS, &[]).full());
+        assert_eq!(fighter.reserves, full);
         assert_eq!(fighter.condition, Condition::Intact);
         assert_eq!(fighter.ai_type, AiType::Interceptor, "its InherentAI");
         assert_eq!(fighter.class, EscortClass::Fighter);
@@ -1424,7 +1448,7 @@ pub(super) mod tests {
     // Return to Hangar and docking.
 
     /// A Viper out of its bay, full, with no standing command.
-    fn out() -> Escort {
+    pub(in crate::session) fn out() -> Escort {
         Escort {
             ship: VIPER,
             reserves: ShipStats::new(VIPER_FIELDS, &[]).full(),
@@ -1790,7 +1814,7 @@ pub(super) mod tests {
     /// These tests are of the launch and the dock, which
     /// rdm:phase/escort-fleet-fidelity/phase-4-carriers-and-fighters moves
     /// under the fleet escorts' AI.
-    fn raiding_ai() -> NovaAi {
+    pub(in crate::session) fn raiding_ai() -> NovaAi {
         NovaAi::from_rulebook(&earlier_escorts())
             .with(AiType::Interceptor, Rc::new(Sitting))
             .with(AiType::WimpyTrader, Rc::new(Sitting))
@@ -1798,7 +1822,7 @@ pub(super) mod tests {
     }
 
     /// The rules by the other reading of [`RuleKey::NpcEscortAi`].
-    fn earlier_escorts() -> Rulebook {
+    pub(in crate::session) fn earlier_escorts() -> Rulebook {
         Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible)
     }
 
@@ -1807,7 +1831,7 @@ pub(super) mod tests {
     /// Adds a pirate carrier, a warship 60 across, 200 above the player
     /// and attacking it, escorting `lead`, carrying a Viper Bay with
     /// `vipers` fighters aboard.
-    fn carrier(session: &mut Session, lead: NpcId, vipers: u32) -> NpcId {
+    pub(in crate::session) fn carrier(session: &mut Session, lead: NpcId, vipers: u32) -> NpcId {
         session.space.traffic.add_npc(carrier_npc(lead, vipers))
     }
 
@@ -1831,7 +1855,7 @@ pub(super) mod tests {
     }
 
     /// The Vipers in the system.
-    fn vipers(session: &Session) -> Vec<Npc> {
+    pub(in crate::session) fn vipers(session: &Session) -> Vec<Npc> {
         session
             .npcs()
             .iter()
@@ -1841,7 +1865,7 @@ pub(super) mod tests {
     }
 
     /// The fighters `carrier` holds.
-    fn aboard(session: &Session, carrier: NpcId) -> u32 {
+    pub(in crate::session) fn aboard(session: &Session, carrier: NpcId) -> u32 {
         session
             .space
             .npc(carrier)
@@ -1939,7 +1963,8 @@ pub(super) mod tests {
         assert!(
             vipers(&session)
                 .iter()
-                .all(|npc| npc.reserves.shield.now == 30.0)
+                .all(|npc| npc.reserves.shield.now == 39.99),
+            "full at a fighter's capacity"
         );
     }
 
