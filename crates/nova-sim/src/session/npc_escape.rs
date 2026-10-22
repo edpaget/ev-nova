@@ -43,7 +43,9 @@
 //!    [`RuleKey::EscapeShipCut`] says: a shield above 1.0 rolled below its
 //!    own (`Rand(trunc(shield))`), and half the velocity
 //!    (@0x3550a-0x35553). Once its carrier is no longer intact, the
-//!    fighter leaves its fleet (`Space::lose_leads`).
+//!    fighter's next think finds its lead lost
+//!    (`nova_sim_ai::traffic::succession`; by the other reading of
+//!    [`RuleKey::NpcEscortAi`], `Space::lose_leads`).
 //!
 //! The view hears `snd ` 372 for each pod from where the NPC is
 //! ([`ESCAPE_POD_SOUND`](crate::sound::ESCAPE_POD_SOUND)), as a fight
@@ -636,6 +638,13 @@ mod tests {
         to_the_end(&mut session, id, &mut chance);
         assert_eq!(chance.rolls(), 1, "no second roll");
         assert_eq!(vipers(&session).len(), 1);
+        // Its next think finds its carrier gone (`_AICheckParentExists`).
+        session.space.traffic.think_holding(
+            &crate::ai::NovaAi::default(),
+            crate::traffic::World::new(&[]),
+            &[],
+            &mut chance,
+        );
         assert_eq!(vipers(&session)[0].carrier, None, "let go of its carrier");
     }
 

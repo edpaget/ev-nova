@@ -1932,7 +1932,8 @@ impl Session {
     /// The session's work after the traffic's motion, read against
     /// `marks`, drawing on `chance`: each mission ship that left raising
     /// its fate, the persons' offers resolved, the ships whose lead or
-    /// carrier is lost out of their fleets (the `lost_lead` module), and
+    /// carrier is lost out of their fleets by the other reading of
+    /// [`RuleKey::NpcEscortAi`] (the `lost_lead` module), and
     /// the watched ships observed. The fighters that docked are taken
     /// aboard before it ([`Session::dock_fighters`]), by the ship loop at
     /// each one's own slot.
@@ -2054,6 +2055,7 @@ impl Session {
             frame: self.space.pass_frame,
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
+            successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2132,6 +2134,7 @@ impl Session {
             frame: self.space.pass_frame,
             escort_order_reach: self.setup.rules.source_for(RuleKey::EscortOrderReach),
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
+            successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
         }
     }
 

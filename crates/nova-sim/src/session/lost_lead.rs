@@ -1,47 +1,39 @@
-//! A ship of an NPC's fleet whose lead or carrier is lost leaves the
-//! fleet ([`Space::lose_leads`]), after each traffic tick's motion and
-//! each fight (`Session::after_traffic_motion`, `fight_tail`).
+//! The port's earlier lost-lead pass ([`Space::lose_leads`]), after each
+//! traffic tick's motion and each fight (`Session::after_traffic_motion`,
+//! `fight_tail`), by the other reading of the rulebook's
+//! [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi): only a fighter
+//! whose carrier is gone or not intact leaves its fleet, keeping its AI
+//! type, its class's shield and armour capacities held again
+//! ([`Npc::leave_carrier`](crate::traffic::npc::Npc::leave_carrier)), and
+//! idles; a fleet escort whose lead dies keeps its lead.
 //!
-//! By the engine's reading of the rulebook's
-//! [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), every ship with
-//! an NPC parent (a fleet's escort, a ship a pirate took, an NPC
-//! carrier's fighter) whose lead is gone from the system or not intact,
-//! or whose carrier is, loses its lead and its carrier, idles (goal 0)
-//! and takes its class's `InherentAI` as its AI type, as `_EscortAI`'s
-//! lost-parent branch has it (@0x83917-0x8397b, the AI type written
-//! @0x83c4a from class +0x12). Its target is kept, as the branch writes
-//! none. A fighter that leaves holds its class's shield and armour
-//! capacities again, keeping what it holds ([`Npc::leave_carrier`](crate::traffic::npc::Npc::leave_carrier)),
-//! as its AI type is no longer 5. For an NPC parent the original reaches that branch only with
-//! the parent already -1: `_AICheckParentExists` runs first on every frame
-//! (`_DoPlayGameWork` @0x440c6-0x44101) and handles a parent inactive or
-//! disabled. This pass stands in for it until
-//! rdm:phase/escort-fleet-fidelity/phase-7-leader-succession replaces its
-//! NPC-parent half with `_AICheckParentExists`'s succession and goal 0x13.
-//! Its +0x50 write (-1.0) is
-//! rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
-//!
-//! By the other reading, the port's earlier pass: only a fighter whose
-//! carrier is gone or not intact leaves, keeping its AI type, and a fleet
-//! escort whose lead dies keeps its lead.
-//!
-//! The original leaves the fleet in the escort's own think or the frame's
-//! parent check; the engine settles it after the motion and the fight,
-//! before the frame is drawn: a lag of under a tick, which crosses no
-//! boundary the player sees.
+//! By the engine's reading it does nothing. A ship whose lead is lost is
+//! the traffic's think half's, as the original's: `_AICheckParentExists`
+//! gives every ship of a lost lead a successor to follow, or makes it lead,
+//! or leaves it alone in the regroup pause (`nova_sim_ai::traffic::succession`),
+//! before the formation pass; `_AIDispatch`'s disabled reset drops a
+//! disabled ship's leader (`nova_sim_ai::traffic::disabled_reset`); and
+//! `_EscortAI`'s lost parent takes a ship with no leader, whole again,
+//! out of its fleet with its class's `InherentAI`
+//! (`nova_sim_ai::ai::fleet_escort`). A lead lost in a fight is so
+//! succeeded at the next think, where the original's marking pass runs
+//! (@0x4405e-0x441f7) before the frame's dispatches.
 
 use super::Space;
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{AiType, NpcId};
+use crate::traffic::npc::NpcId;
 
 impl Space {
-    /// Every ship whose lead or carrier is lost leaves its fleet, as
-    /// `reading` reads [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
-    /// (see the module docs).
+    /// Every fighter whose carrier is lost leaves its fleet, as the other
+    /// reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
+    /// has it; nothing by the engine's `reading` (see the module docs).
     pub(super) fn lose_leads(&mut self, reading: RuleSource) {
+        if reading == RuleSource::Engine {
+            return;
+        }
         let intact: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -49,23 +41,15 @@ impl Space {
             .filter(|npc| npc.condition == Condition::Intact)
             .map(|npc| npc.id)
             .collect();
-        let lost = |id: NpcId| !intact.contains(&id);
         for npc in self.traffic.npcs_mut() {
-            let carrier_lost = matches!(
+            if matches!(
                 npc.carrier,
-                Some(crate::bay::Carrier { ship: ShipRef::Npc(carrier), .. }) if lost(carrier)
-            );
-            let lead_lost = npc.leader.is_some_and(lost);
-            match reading {
-                RuleSource::Engine if carrier_lost || lead_lost => {
-                    npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
-                }
-                RuleSource::Bible if carrier_lost => {}
-                _ => continue,
+                Some(crate::bay::Carrier { ship: ShipRef::Npc(carrier), .. }) if !intact.contains(&carrier)
+            ) {
+                npc.leave_carrier();
+                npc.leader = None;
+                npc.goal = Goal::Idle;
             }
-            npc.leave_carrier();
-            npc.leader = None;
-            npc.goal = Goal::Idle;
         }
     }
 }
@@ -73,6 +57,7 @@ impl Space {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::regroup::Kept;
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::bay::Carrier;
     use crate::chance::{Chance, NeverFires};
@@ -128,154 +113,116 @@ mod tests {
         session.space.npc(id).expect("in the system")
     }
 
-    /// Whether `ship` has left its fleet: no lead, no carrier, idle, and
-    /// flying by `ai_type`, its target kept.
-    fn left(ship: &Npc, ai_type: AiType) -> bool {
-        ship.leader.is_none()
-            && ship.carrier.is_none()
-            && ship.goal == Goal::Idle
-            && ship.ai_type == ai_type
-            && ship.target == Some(ShipRef::Player)
-    }
-
     #[test]
-    fn a_pirate_escort_whose_lead_dies_leaves_the_fleet_with_its_classs_inherent_ai() {
-        // `_EscortAI`'s lost parent (@0x83917-0x8397b): parent -1, AI type
-        // the class's `InherentAI` (+0x12, @0x83c4a), goal 0.
-        for condition in [
-            Condition::Dying {
-                ticks_left: 3,
-                starting: false,
-            },
-            Condition::Disabled,
-            Condition::Destroyed,
-        ] {
-            let mut session = session();
-            let lead = session.space.traffic.add_npc(pirate());
-            let escort = session.space.traffic.add_npc(escort_of(lead));
-            session.space.npc_mut(lead).expect("there").condition = condition;
-            session.space.lose_leads(RuleSource::Engine);
-            assert!(
-                left(ship(&session, escort), AiType::Warship),
-                "{condition:?}: {:?}",
-                ship(&session, escort)
-            );
-        }
-    }
-
-    #[test]
-    fn a_fleet_escort_whose_lead_has_left_the_system_leaves_the_fleet() {
-        let mut session = session();
-        let escort = session.space.traffic.add_npc(escort_of(NpcId(99)));
-        session.space.lose_leads(RuleSource::Engine);
-        assert!(left(ship(&session, escort), AiType::Warship));
-    }
-
-    #[test]
-    fn a_fleet_escort_whose_lead_is_intact_keeps_it() {
-        for reading in RuleSource::ALL {
-            let mut session = session();
-            let lead = session.space.traffic.add_npc(pirate());
-            let escort = session.space.traffic.add_npc(escort_of(lead));
-            let before = ship(&session, escort).clone();
-            session.space.lose_leads(reading);
-            assert_eq!(ship(&session, escort), &before, "{reading:?}");
-        }
-    }
-
-    #[test]
-    fn by_the_other_reading_a_pirate_escort_whose_lead_dies_keeps_it_as_before() {
+    fn by_the_other_reading_a_fighter_whose_carrier_is_lost_leaves_keeping_its_type() {
         let mut session = session();
         let lead = session.space.traffic.add_npc(pirate());
-        let escort = session.space.traffic.add_npc(escort_of(lead));
-        let gone = session.space.traffic.add_npc(escort_of(NpcId(99)));
-        session.space.npc_mut(lead).expect("there").condition = Condition::Dying {
-            ticks_left: 3,
-            starting: false,
-        };
-        let before = (ship(&session, escort).clone(), ship(&session, gone).clone());
+        let carrier = session.space.traffic.add_npc(escort_of(lead));
+        let fighter = session.space.traffic.add_npc(fighter_of(carrier, carrier));
+        let gone = session
+            .space
+            .traffic
+            .add_npc(fighter_of(NpcId(99), NpcId(99)));
+        session.space.npc_mut(carrier).expect("there").condition = Condition::Disabled;
         session.space.lose_leads(RuleSource::Bible);
-        assert_eq!(
-            (ship(&session, escort), ship(&session, gone)),
-            (&before.0, &before.1)
-        );
-    }
-
-    #[test]
-    fn a_fighter_whose_carrier_is_lost_leaves_by_either_reading() {
-        // The port's earlier orphaning keeps the fighter's AI type; the
-        // original's gives it its class's.
-        for (reading, ai_type) in [
-            (RuleSource::Engine, AiType::Warship),
-            (RuleSource::Bible, AiType::WimpyTrader),
-        ] {
-            let mut session = session();
-            let lead = session.space.traffic.add_npc(pirate());
-            let carrier = session.space.traffic.add_npc(escort_of(lead));
-            let fighter = session.space.traffic.add_npc(fighter_of(lead, carrier));
-            let gone = session.space.traffic.add_npc(fighter_of(lead, NpcId(99)));
-            session.space.npc_mut(carrier).expect("there").condition = Condition::Disabled;
-            session.space.lose_leads(reading);
-            for id in [fighter, gone] {
-                assert!(
-                    left(ship(&session, id), ai_type),
-                    "{reading:?}: {:?}",
-                    ship(&session, id)
-                );
-            }
-            assert_eq!(ship(&session, carrier).leader, Some(lead), "{reading:?}");
-        }
-    }
-
-    #[test]
-    fn a_fighter_whose_carrier_is_lost_holds_its_classs_capacities_again_keeping_what_it_has() {
-        // Its AI type no longer 5, `_ShipShieldCapacity` and
-        // `_ShipArmorCapacity` read its class's (@0x2a91, @0x2cb9); the
-        // original keeps +0x54 and +0x58 as they are.
-        for reading in RuleSource::ALL {
-            let mut session = session();
-            let lead = session.space.traffic.add_npc(pirate());
-            let carrier = session.space.traffic.add_npc(escort_of(lead));
-            let mut scaled = fighter_of(lead, carrier);
-            scaled.hold_capacities(RuleSource::Engine);
-            scaled.reserves.shield.now = 35.0;
-            scaled.reserves.armor.now = 50.0;
-            let fighter = session.space.traffic.add_npc(scaled);
-            session.space.npc_mut(carrier).expect("there").condition = Condition::Destroyed;
-            session.space.lose_leads(reading);
-            let reserves = ship(&session, fighter).reserves;
+        for id in [fighter, gone] {
+            let left = ship(&session, id);
             assert_eq!(
-                (reserves.shield.now, reserves.shield.max),
-                (35.0, 30.0),
-                "{reading:?}"
-            );
-            assert_eq!(
-                (reserves.armor.now, reserves.armor.max),
-                (50.0, 45.0),
-                "{reading:?}"
+                (
+                    left.leader,
+                    left.carrier,
+                    left.goal,
+                    left.ai_type,
+                    left.target
+                ),
+                (
+                    None,
+                    None,
+                    Goal::Idle,
+                    AiType::WimpyTrader,
+                    Some(ShipRef::Player)
+                ),
+                "{id:?}"
             );
         }
+        assert_eq!(ship(&session, carrier).leader, Some(lead), "its lead kept");
     }
 
     #[test]
-    fn a_fighter_whose_carrier_is_intact_but_lead_is_lost_leaves_by_the_engine_alone() {
-        let lost = |reading: RuleSource| {
+    fn by_the_other_reading_a_fighter_whose_carrier_is_lost_holds_its_classs_capacities() {
+        // The original keeps +0x54 and +0x58 as they are.
+        let mut session = session();
+        let carrier = session.space.traffic.add_npc(pirate());
+        let mut scaled = fighter_of(carrier, carrier);
+        scaled.hold_capacities(RuleSource::Engine);
+        scaled.reserves.shield.now = 35.0;
+        scaled.reserves.armor.now = 50.0;
+        let fighter = session.space.traffic.add_npc(scaled);
+        session.space.npc_mut(carrier).expect("there").condition = Condition::Destroyed;
+        session.space.lose_leads(RuleSource::Bible);
+        let reserves = ship(&session, fighter).reserves;
+        assert_eq!((reserves.shield.now, reserves.shield.max), (35.0, 30.0));
+        assert_eq!((reserves.armor.now, reserves.armor.max), (50.0, 45.0));
+    }
+
+    #[test]
+    fn the_pass_leaves_a_ship_whose_lead_alone_is_lost_and_does_nothing_by_the_engine() {
+        // By the engine a lost lead or carrier is the traffic's think's.
+        for (reading, fighters_kept) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
             let mut session = session();
             let lead = session.space.traffic.add_npc(pirate());
             let carrier = session.space.traffic.add_npc(pirate());
-            let fighter = session.space.traffic.add_npc(fighter_of(lead, carrier));
+            let escort = session.space.traffic.add_npc(escort_of(lead));
+            let fighter = session.space.traffic.add_npc(fighter_of(carrier, carrier));
             session.space.npc_mut(lead).expect("there").condition = Condition::Disabled;
+            session.space.npc_mut(carrier).expect("there").condition = Condition::Destroyed;
+            let before = (
+                ship(&session, escort).clone(),
+                ship(&session, fighter).clone(),
+            );
             session.space.lose_leads(reading);
-            ship(&session, fighter).leader.is_none()
-        };
-        assert!(lost(RuleSource::Engine));
-        assert!(!lost(RuleSource::Bible));
+            assert_eq!(ship(&session, escort), &before.0, "{reading:?}");
+            assert_eq!(
+                ship(&session, fighter) == &before.1,
+                fighters_kept,
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_players_ships_and_a_ship_with_no_lead_are_left_as_they_are() {
+        for reading in RuleSource::ALL {
+            let mut session = session();
+            let mut players = pirate();
+            players.carrier = Some(Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            });
+            players.ai_type = AiType::WimpyTrader;
+            let fighter = session.space.traffic.add_npc(players);
+            let mut alone = pirate();
+            alone.ai_type = AiType::Interceptor;
+            let alone = session.space.traffic.add_npc(alone);
+            let before = (
+                ship(&session, fighter).clone(),
+                ship(&session, alone).clone(),
+            );
+            session.space.lose_leads(reading);
+            assert_eq!(
+                (ship(&session, fighter), ship(&session, alone)),
+                (&before.0, &before.1),
+                "{reading:?}"
+            );
+        }
     }
 
     // Through the session's ticks.
 
     /// Thinks nothing: each ship keeps its goal, so only the session's
-    /// own work moves a ship out of its fleet.
+    /// own work and the traffic's succession move a ship out of its
+    /// fleet.
     #[derive(Debug)]
     struct Keeping;
 
@@ -288,87 +235,104 @@ mod tests {
     /// A tick of the session, reading the catalog given.
     type Tick = fn(&mut Session, &FakePilotCatalog);
 
-    /// Each tick that takes a ship out of its fleet, by name.
-    const TICKS: [(&str, Tick); 2] = [("traffic", traffic_tick), ("fight", fight_tick)];
-
-    /// A traffic tick, its work after the motion
+    /// A traffic tick, its think half and its work after the motion
     /// (`Session::after_traffic_motion`) among it.
     fn traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) {
         session.tick_traffic(catalog, &Keeping, &mut NeverFires);
     }
 
-    /// A fight's tick, its tail (`Session::fight_tail`) among it.
+    /// An advance pass, its AI and its fight's tail among it.
+    fn advance_pass(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.game_work(
+            crate::flight::Controls::default(),
+            catalog,
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// A fight's tick alone, its tail (`Session::fight_tail`) among it.
     fn fight_tick(session: &mut Session, _catalog: &FakePilotCatalog) {
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
 
-    /// A pirate lead disabled and its escort as the escort is after a
-    /// `tick` of a session by `rules`, its first traffic tick done before
-    /// the two arrive.
-    fn escort_after(rules: Rulebook, tick: Tick) -> (NpcId, Npc) {
+    /// A pirate lead disabled, a heavy escort and a light one, as the
+    /// escorts are after a `tick` of a session by `rules`, its first
+    /// traffic tick done before they arrive: (lead, heavy, light).
+    fn fleet_after(rules: Rulebook, tick: Tick) -> (NpcId, Npc, Npc) {
         let catalog = catalog();
         let mut session = Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts"))
             .expect("flies")
             .with_rules(rules);
         traffic_tick(&mut session, &catalog);
         let lead = session.space.traffic.add_npc(pirate());
-        let escort = session.space.traffic.add_npc(escort_of(lead));
+        let mut heavy = escort_of(lead);
+        heavy.hull.signed_mass = 300;
+        let heavy = session.space.traffic.add_npc(heavy);
+        let mut light = escort_of(lead);
+        light.hull.signed_mass = 100;
+        let light = session.space.traffic.add_npc(light);
         // Its armour down to 1 of 45 as well, as the fight reads its
         // condition afresh from its armour.
         let disabled = session.space.npc_mut(lead).expect("there");
         disabled.condition = Condition::Disabled;
         disabled.reserves.armor.now = 1.0;
         tick(&mut session, &catalog);
-        (lead, ship(&session, escort).clone())
+        (
+            lead,
+            ship(&session, heavy).clone(),
+            ship(&session, light).clone(),
+        )
     }
 
     #[test]
-    fn by_the_default_rules_either_tick_takes_an_escort_whose_lead_is_disabled_out_of_its_fleet() {
-        for (name, tick) in TICKS {
-            let (_, escort) = escort_after(Rulebook::default(), tick);
-            // The traffic tick lets go of the player as a target by either
-            // reading, so only the fleet's fields are read here.
+    fn by_the_default_rules_a_think_makes_the_heaviest_escort_lead_and_the_other_pause() {
+        for (name, tick) in [
+            ("traffic", traffic_tick as Tick),
+            ("advance", advance_pass as Tick),
+        ] {
+            let (_, heavy, light) = fleet_after(Rulebook::default(), tick);
             assert_eq!(
-                (escort.leader, escort.carrier, escort.goal, escort.ai_type),
-                (None, None, Goal::Idle, AiType::Warship),
+                (heavy.leader, heavy.ai_type),
+                (None, AiType::Warship),
+                "{name}"
+            );
+            assert_eq!(light.leader, Some(heavy.id), "{name}");
+            assert_eq!(
+                light.goal,
+                Goal::Regroup {
+                    kept: Kept::Formation { guard: None }
+                },
                 "{name}"
             );
         }
     }
 
     #[test]
-    fn by_the_other_reading_neither_tick_takes_an_escort_whose_lead_is_disabled_out() {
-        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
-        for (name, tick) in TICKS {
-            let (lead, escort) = escort_after(rules, tick);
-            assert_eq!(escort.leader, Some(lead), "{name}: {escort:?}");
-            assert_eq!(escort.ai_type, AiType::WimpyTrader, "{name}");
-            assert!(matches!(escort.goal, Goal::Follow { .. }), "{name}");
+    fn a_fight_alone_changes_nothing_until_the_next_think() {
+        let (lead, heavy, light) = fleet_after(Rulebook::default(), fight_tick);
+        for escort in [heavy, light] {
+            assert_eq!(escort.leader, Some(lead));
+            assert!(matches!(escort.goal, Goal::Follow { .. }));
+            assert_eq!(escort.ai_type, AiType::WimpyTrader);
         }
     }
 
     #[test]
-    fn the_players_ships_and_a_ship_with_no_lead_are_left_as_they_are() {
-        let mut session = session();
-        let mut players = pirate();
-        players.carrier = Some(Carrier {
-            ship: ShipRef::Player,
-            window: 100.0,
-            reach: 40.0,
-        });
-        players.ai_type = AiType::WimpyTrader;
-        let fighter = session.space.traffic.add_npc(players);
-        let mut alone = pirate();
-        alone.ai_type = AiType::Interceptor;
-        let alone = session.space.traffic.add_npc(alone);
-        let before = (
-            ship(&session, fighter).clone(),
-            ship(&session, alone).clone(),
-        );
-        session.space.lose_leads(RuleSource::Engine);
-        assert_eq!(
-            (ship(&session, fighter), ship(&session, alone)),
-            (&before.0, &before.1)
-        );
+    fn by_the_other_reading_no_tick_takes_an_escort_whose_lead_is_disabled_out() {
+        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        for (name, tick) in [
+            ("traffic", traffic_tick as Tick),
+            ("advance", advance_pass as Tick),
+            ("fight", fight_tick as Tick),
+        ] {
+            let (lead, heavy, light) = fleet_after(rules, tick);
+            for escort in [heavy, light] {
+                assert_eq!(escort.leader, Some(lead), "{name}: {escort:?}");
+                assert_eq!(escort.ai_type, AiType::WimpyTrader, "{name}");
+                assert!(matches!(escort.goal, Goal::Follow { .. }), "{name}");
+            }
+        }
     }
 }

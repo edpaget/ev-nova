@@ -58,8 +58,12 @@
 //! player's leaves the fleet, its round going to the first fighter
 //! outfit of its bay, with no save due; one no bay of the player's
 //! launches is lost, which makes one. An NPC's fighter whose carrier is
-//! gone from the system or not intact leaves its fleet, with no carrier
-//! and no leader (see the `lost_lead` module).
+//! gone from the system or not intact is succeeded at the next think, its
+//! carrier being its leader (`nova_sim_ai::traffic::succession`): it leads
+//! the carrier's fleet or follows the fighter that does, an escort now,
+//! off its carrier. By the other reading of
+//! [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) it leaves its
+//! fleet with no carrier and no leader (see the `lost_lead` module).
 
 use std::collections::BTreeMap;
 
@@ -2929,9 +2933,15 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_carriers_fighters_fly_by_their_own_ai_once_it_is_destroyed() {
+    fn by_the_other_reading_a_carriers_fighters_fly_by_their_own_ai_once_it_is_destroyed() {
+        // The port's earlier lost-lead pass (`lost_lead`).
         let catalog = carrying();
-        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
+        let (mut session, raider, _) = raided_by_rules(
+            &catalog,
+            Rulebook::default()
+                .with_override(RuleKey::AiSpendWithoutShot, RuleSource::Bible)
+                .with_override(RuleKey::NpcEscortAi, RuleSource::Bible),
+        );
         let ai = raiding_ai();
         for _ in 0..61 {
             fight(&mut session, &catalog, &ai);
@@ -2961,6 +2971,44 @@ pub(super) mod tests {
             vipers(&landed).iter().all(|npc| npc.goal == Goal::Idle),
             "the interceptors sit, by their AI type"
         );
+    }
+
+    #[test]
+    fn by_default_a_destroyed_carriers_fighters_are_succeeded_at_the_next_think() {
+        // `_AICheckParentExists` reads the carrier's record, gone from its
+        // slot: the first fighter by berth (equal mass) leads, the other
+        // follows it, both off the carrier.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
+        let ai = raiding_ai();
+        for _ in 0..61 {
+            fight(&mut session, &catalog, &ai);
+        }
+        session
+            .space
+            .npc_mut(raider)
+            .expect("there")
+            .reserves
+            .armor
+            .now = 0.0;
+        for _ in 0..3 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.space.npc(raider), None, "destroyed");
+        assert!(
+            vipers(&session)
+                .iter()
+                .all(|npc| npc.leader == Some(raider) && npc.carrier.is_some()),
+            "until the next think"
+        );
+        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        let mut fighters = vipers(&session);
+        fighters.sort_by_key(|npc| npc.berth);
+        let [first, second] = &fighters[..] else {
+            panic!("two fighters: {fighters:?}");
+        };
+        assert_eq!((first.leader, first.carrier), (None, None));
+        assert_eq!((second.leader, second.carrier), (Some(first.id), None));
     }
 
     #[test]

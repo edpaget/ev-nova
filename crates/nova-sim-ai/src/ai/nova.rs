@@ -12,8 +12,8 @@
 //! NPC parent, whatever its AI type, goes to [`FleetEscortAi`], which
 //! flies `_EscortAI` under its lead: a fleet's escort or a ship a pirate
 //! took into its fleet (a [`leader`](Npc::leader), the original's AI type
-//! 6) and an NPC carrier's fighter (a [`carrier`](Npc::carrier), AI type
-//! 5), until the session takes it out of the fleet with its lead gone. By
+//! 5), until it leaves its fleet ([`Decision::leaves_fleet`]) or its
+//! lead's loss gives it another lead (`traffic::succession`). By
 //! the other reading of the rulebook's [`RuleKey::NpcEscortAi`], the
 //! port's earlier routing, a fighter goes to [`CarriedAi`] and a led ship
 //! to its AI type's behaviour, following its lead.

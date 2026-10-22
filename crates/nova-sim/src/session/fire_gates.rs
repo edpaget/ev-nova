@@ -139,6 +139,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_escort_ai() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_successor_repairer() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::SuccessorRepairer, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().successor_repairer, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.successor_repairer));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_pass_frame() {
     let catalog = armed();
     let mut session = Session::start(&catalog).expect("starts");

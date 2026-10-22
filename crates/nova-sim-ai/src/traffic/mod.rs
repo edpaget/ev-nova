@@ -630,6 +630,11 @@ pub struct World<'a> {
     /// its leader ([`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi),
     /// see [`succession`] and [`disabled_reset`]).
     pub npc_escort_ai: RuleSource,
+    /// What a fleet's new lead of another government does with the player
+    /// it was repairing
+    /// ([`RuleKey::SuccessorRepairer`](crate::RuleKey::SuccessorRepairer),
+    /// see [`succession`]).
+    pub successor_repairer: RuleSource,
 }
 
 /// Nova's disable rule, a world's default.
@@ -687,6 +692,7 @@ impl<'a> World<'a> {
             frame: 0,
             escort_order_reach: RuleSource::Engine,
             npc_escort_ai: RuleSource::Engine,
+            successor_repairer: RuleSource::Engine,
         }
     }
 
@@ -1163,6 +1169,7 @@ impl Traffic {
         self.on_line.next_frame();
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
+        self.succeed_leaders(&world);
         self.form_fleets();
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
@@ -4372,8 +4379,8 @@ mod tests {
     #[test]
     fn a_lead_reaching_its_gates_box_releases_its_followers_to_enter_on_their_own() {
         // NPC 0, an interceptor, leads 1 and its fighter 2; NPC 3 is led
-        // by another ship.
-        let mut traffic = populated(4, 1);
+        // by another ship, NPC 4.
+        let mut traffic = populated(5, 1);
         let lead = NpcId(0);
         traffic.npcs[0].ai_type = AiType::Interceptor;
         traffic.npcs[0].goal = Goal::EnterGate(GATE);
@@ -4391,9 +4398,9 @@ mod tests {
         traffic.npcs[2].stats.armor = 45.0;
         traffic.npcs[2].hold_capacities(RuleSource::Engine);
         assert_eq!(traffic.npcs[2].reserves.armor.max, 59.985, "a fighter's");
-        traffic.npcs[3].leader = Some(NpcId(9));
+        traffic.npcs[3].leader = Some(NpcId(4));
         traffic.npcs[3].goal = Goal::Follow {
-            lead: NpcId(9),
+            lead: NpcId(4),
             guard: None,
         };
         let untouched = traffic.npcs[3].clone();
@@ -4431,7 +4438,11 @@ mod tests {
                 (NpcId(2), Outcome::EnteredGate(GATE))
             ]
         );
-        assert_eq!(traffic.npcs().len(), 1, "the other lead's");
+        assert_eq!(
+            traffic.npcs().len(),
+            2,
+            "the other lead's ship and its lead"
+        );
     }
 
     #[test]
