@@ -9,7 +9,7 @@
 //! | `PICT` ([`PICT`]) | [`decode_pict`] | one image the size of `picFrame` |
 //! | `cicn` | [`decode_cicn`] | one image, the mask as alpha |
 //! | `ppat` | [`decode_ppat`] | one opaque image |
-//! | `rlëD` ([`RLED`]) | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
+//! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`] | a [`SpriteSheet`] of equal-sized frames |
 //!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
 //! its mask, as Nova masks its button caps.
@@ -53,7 +53,11 @@
 //!   the whole frame: 598 16-bit (word PackBits) and 73 32-bit (byte
 //!   PackBits of red, green and blue planes). Their opcodes are only
 //!   HeaderOp, DefHilite, Clip, LongComment, DirectBitsRect and EndPic.
-//! - 282 `rlëD`s, all 16-bit, using tokens 0 to 4.
+//! - 282 `rlëD`s, all 16-bit, using tokens 0 to 4. Plug-ins may also hold
+//!   8-bit sheets, which decode as the original's 16-bit world draws them
+//!   ([`EightBitReading::AsDrawn`]), or through the Mac's standard palette
+//!   ([`EightBitReading::SystemPalette`]); other depths are
+//!   [`GraphicsError::UnsupportedDepth`].
 //! - 29 `cicn`s (2, 4 and 8-bit) and 10 `ppat`s (8-bit, 64x64), all
 //!   indexed through sparse colour tables looked up by `value`.
 //!
@@ -99,7 +103,9 @@ mod pict;
 mod pixmap;
 mod reader;
 mod rled;
+mod rled8;
 mod sheet;
+mod system_clut;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -111,5 +117,6 @@ pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
-pub use rled::{RLED, decode_rled};
+pub use rled::{RLED, decode_rled, decode_rled_as};
+pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

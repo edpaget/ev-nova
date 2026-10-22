@@ -371,17 +371,17 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let eight_bit = RledBuilder::new(2, 1).depth(8).build();
-        let data = store(&[("Bad Paint", fork(&[(RLED, 1000, eight_bit)]))]);
-        let err = data.ship_sprite(ShipId(128)).expect_err("8-bit");
+        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
+        let err = data.ship_sprite(ShipId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             SpriteError::Graphics {
                 image_id: 1000,
-                source: GraphicsError::UnsupportedDepth { depth: 8 },
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 8");
+        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 32");
     }
 
     /// A plug-in, `Layers`, giving ship 128 a `shän` with glow image `glow`
@@ -518,23 +518,23 @@ mod tests {
 
     #[test]
     fn a_corrupt_layer_sheet_is_a_graphics_error_for_that_layer_only() {
-        let eight_bit = RledBuilder::new(2, 1).depth(8).build();
+        let deep = RledBuilder::new(2, 1).depth(32).build();
         let data = store(&[layered(
             1100,
             1200,
-            &[(1100, eight_bit), (1200, sheet(12, 0x001F))],
+            &[(1100, deep), (1200, sheet(12, 0x001F))],
         )]);
         let layers = data.ship_layers(ShipId(128)).expect("resolves");
-        let err = layers.glow.expect("defined").expect_err("8-bit");
+        let err = layers.glow.expect("defined").expect_err("32-bit");
         assert_eq!(
             err,
             LayerError::Graphics {
                 layer: ShipLayer::Glow,
                 image_id: 1100,
-                source: GraphicsError::UnsupportedDepth { depth: 8 },
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
             }
         );
-        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 8");
+        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 32");
         assert_eq!(
             layers.lights.expect("defined").expect("resolves").image_id,
             1200

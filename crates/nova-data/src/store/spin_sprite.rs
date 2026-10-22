@@ -213,16 +213,16 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let eight_bit = RledBuilder::new(2, 1).depth(8).build();
-        let data = store(&[("Bad Paint", fork(&[(RLED, 2000, eight_bit)]))]);
-        let err = data.spin_sheet(3000).expect_err("8-bit");
+        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
+        let err = data.spin_sheet(3000).expect_err("32-bit");
         assert_eq!(
             err,
             SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 8 },
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 8");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
     }
 }

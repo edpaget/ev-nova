@@ -105,7 +105,7 @@ pub enum GraphicsError {
         /// `patType`.
         pat_type: u16,
     },
-    /// An `rlëD` sheet with a depth other than 16 bits.
+    /// An `rlëD` sheet with a depth other than 16 or 8 bits.
     #[error("unsupported rlëD depth {depth}")]
     UnsupportedDepth {
         /// The header's depth.
@@ -258,7 +258,7 @@ mod tests {
             (E::BadPackedRow { row: 1, offset: 7 }, Some(7)),
             (E::MaskMismatch, None),
             (E::UnsupportedPatternType { pat_type: 2 }, None),
-            (E::UnsupportedDepth { depth: 8 }, None),
+            (E::UnsupportedDepth { depth: 32 }, None),
             (E::NoFrames, None),
             (
                 E::UnsupportedToken {
@@ -380,8 +380,8 @@ mod tests {
                 "unsupported ppat pattern type 2",
             ),
             (
-                GraphicsError::UnsupportedDepth { depth: 8 },
-                "unsupported rlëD depth 8",
+                GraphicsError::UnsupportedDepth { depth: 32 },
+                "unsupported rlëD depth 32",
             ),
             (GraphicsError::NoFrames, "the rlëD sheet has no frames"),
             (
