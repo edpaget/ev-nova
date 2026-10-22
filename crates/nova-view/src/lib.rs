@@ -97,6 +97,7 @@ pub mod ships;
 pub mod sound;
 pub mod spaceport;
 pub mod system;
+pub mod target_picture;
 pub mod text;
 mod time;
 pub mod ui;

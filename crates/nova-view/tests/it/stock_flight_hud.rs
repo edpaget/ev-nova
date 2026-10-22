@@ -226,6 +226,32 @@ fn the_first_ships_target_card_has_its_picture() {
     assert_eq!(card.picture, Some(3000));
 }
 
+/// The status bar and the pilot panel show the same target picture for
+/// every stock `shïp`, and some take their base ship's.
+#[test]
+fn every_stock_ships_target_card_matches_the_pilot_panel() {
+    use nova_data::graphics::PICT;
+    use nova_data::records::ship::Ship;
+    use nova_view::menu::PilotPanelSource;
+    let Some(data) = open() else {
+        return;
+    };
+    let mut borrowed = Vec::new();
+    for &id in data.ids(Ship::TYPE) {
+        let card = data.target_card(ShipId(id)).picture;
+        assert_eq!(
+            card,
+            data.panel_ship(ShipId(id)).picture.map(|p| p.picture),
+            "shïp {id}"
+        );
+        assert!(card.is_some(), "shïp {id} has a target picture");
+        if data.resource(PICT, 3000 + (id - 128)).is_none() {
+            borrowed.push(id);
+        }
+    }
+    assert_ne!(borrowed, Vec::<i16>::new(), "some ship borrows its base's");
+}
+
 /// A grant's message is built from `STR#` 2002 #106, #108, #393 and
 /// #394, and a boarding pickup's from #106-#108, as the stock strings
 /// read.

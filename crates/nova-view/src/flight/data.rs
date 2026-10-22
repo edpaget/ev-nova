@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{CICN, PICT, decode_cicn};
+use nova_data::graphics::{CICN, decode_cicn};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -151,11 +151,6 @@ pub const CURSOR_SPIN: i16 = 650;
 /// The stars' `spïn`, which `_LoadSprites` makes the master star sprite
 /// from with `_GetSpriteInfo(0x2bc)` (@0x21037).
 pub const STAR_SPIN: i16 = 700;
-/// The first target picture, `PICT` 3000 for `shïp` 128
-/// (`_LoadSprites`).
-pub const FIRST_TARGET_PICTURE: i16 = 3000;
-/// The first `shïp`.
-const FIRST_SHIP: i16 = 128;
 /// `FrameAdvance` per frame a tick (the double @0xdd098).
 pub const FRAME_ADVANCE_UNIT: f32 = 0.01;
 
@@ -226,10 +221,9 @@ impl CombatLooks for GameData {
         let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
             return TargetCard::default();
         };
-        let picture = FIRST_TARGET_PICTURE.saturating_add(ship.0 - FIRST_SHIP);
         TargetCard {
             subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: self.resource(PICT, picture).map(|_| picture),
+            picture: crate::target_picture::game_target_picture(self, ship).map(|p| p.picture),
         }
     }
 
@@ -368,8 +362,8 @@ mod tests {
     use std::path::Path;
 
     use nova_data::Record;
-    use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::{PICT, RLED};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
@@ -1217,6 +1211,8 @@ mod tests {
         let data = named_store(&[
             (Ship::TYPE, 128, None, subtitled("Light Transport")),
             (Ship::TYPE, 129, None, subtitled("Freighter")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1100, 1, 8)),
             (PICT, 3000, None, picture(2, 2)),
         ]);
         assert_eq!(
@@ -1235,6 +1231,32 @@ mod tests {
             "without a PICT 3001"
         );
         assert_eq!(data.target_card(ShipId(130)), TargetCard::default());
+    }
+
+    #[test]
+    fn a_target_card_falls_back_to_the_base_ships_picture() {
+        let data = named_store(&[
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Variant")),
+            (Ship::TYPE, 130, None, subtitled("Other Hull")),
+            (Ship::TYPE, 131, None, subtitled("No Anim")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 130, None, anim(1200, 1, 8)),
+            (PICT, 3000, None, picture(2, 2)),
+            (PICT, 3003, None, picture(2, 2)),
+        ]);
+        assert_eq!(
+            data.target_card(ShipId(129)).picture,
+            Some(3000),
+            "128's, the base sharing BaseImage 1000"
+        );
+        assert_eq!(data.target_card(ShipId(130)).picture, None, "no sharer");
+        assert_eq!(
+            data.target_card(ShipId(131)).picture,
+            None,
+            "no shän, though PICT 3003 exists (@0x23ef3)"
+        );
     }
 
     /// A `gövt` whose `TargetCode` is `code`.
