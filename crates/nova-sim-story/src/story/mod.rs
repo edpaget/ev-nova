@@ -1384,8 +1384,12 @@
 //! A destroyed stellar whose `DeadType` has no sheet that can be read (-1,
 //! outside 0 to 255, no `spïn`, or an `rlëD` the engine cannot read) draws
 //! graphic type 0, `spïn` 1000, from the next rebuild point until a
-//! flight frame finds it whole, as the original's rebuild fills the sprite
-//! slot it left empty; before that rebuild point it draws its `Type`.
+//! flight frame finds it whole, as the original's rebuild means to fill
+//! the sprite slot it left empty (its own code faults first; see
+//! "Checked for phase 9", as corrected by stellar-fidelity phase 3);
+//! before that rebuild point it draws its `Type`. A whole stellar whose
+//! `Type` cannot be read does the same (see "Built by stellar-fidelity
+//! phase 3").
 //!
 //! - **The state** is the sim's, kept for the stellars shown: `Rebuilt`
 //!   (the `rebuild` submodule) holds those a rebuild point found destroyed
@@ -1437,11 +1441,18 @@
 //!   cloned in (`_SWCloneFramesFromMaster` @0x332be), and frame 0
 //!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is
 //!   stellar-fidelity phase 1's).
-//!   This is any empty slot, whether its `Type` or its `DeadType` is the
-//!   missing one; a whole stellar with an unreadable `Type` is
-//!   story-runtime phase 14. When `spïn` 1000 cannot be loaded either,
-//!   the clone has no master and the slot stays empty, drawing nothing;
-//!   the engine draws its placeholder box and the reason.
+//!   Corrected by stellar-fidelity phase 3: the pass reaches only the
+//!   slots no stellar uses this time (the rebuild's clear set their +0xd0
+//!   to -1, @0x32e8f, and hid them, @0x32ea6). A slot in use whose
+//!   stellar's graphic has no master faults first, at the unconditional
+//!   `_SWSetCurrentFrameIndex` (@0x33096): a divide by zero in a newly
+//!   made slot (@0xa90e7), a read through a null frame table in a reused
+//!   one (@0xa90f7). So graphic type 0 for an empty slot of a stellar,
+//!   whether its `Type` or its `DeadType` is the missing one, is the
+//!   original's intent (the "had no data" log), not its behaviour; the
+//!   engine follows the intent (see "Checked for stellar-fidelity phase
+//!   3"). When `spïn` 1000 cannot be loaded either, the slot stays empty,
+//!   drawing nothing; the engine draws its placeholder box and the reason.
 //! - **Index -1** of `_masterStellarSprite` is an unwritten word of
 //!   `_masterStarSprite` (see "Checked for phase 7"), and other
 //!   out-of-range indexes read neighbouring statics. That is a
@@ -2012,6 +2023,148 @@
 //!   tested against stellars in the same loop by a stale sprite rectangle
 //!   (`_SpawnShot` places no sprite; `_SWRLECollision` reads the slot's
 //!   rectangle, +0x1a, +0x1c, @0xabfbd-0xac049); no stock weapon has one.
+//!
+//! ## Built by stellar-fidelity phase 3
+//!
+//! A whole stellar whose `Type` has no sheet that can be read (no `spïn`,
+//! an `rlëD` the engine cannot read, or a `Type` outside 0 to 255; the
+//! catalog's `LandingSite::frame_size` is `None`) draws, is clicked by
+//! and is shot by what its sprite slot holds, from the first rebuild point
+//! that shows it: graphic type 0, as the rebuild means an empty slot to
+//! get, or a `DeadType` sheet a flight frame cloned in since.
+//!
+//! - **The state** is `Rebuilt::held` (the `rebuild` submodule): the sheet
+//!   whose frames each shown stellar's slot holds. A rebuild point sets it
+//!   to the clone's sheet when the stellar shows a graphic that can be
+//!   read, to graphic type 0 when it shows none and `spïn` 1000 reads, and
+//!   leaves it when neither reads (the slot shows no frame, its count
+//!   +0x54 kept). A flight frame sets it only for a stellar showing a
+//!   graphic that can be read. The counted sheet at a rebuild point is the
+//!   clone's, or what the slot held before (stellar-fidelity phase 1's
+//!   rule, generalised).
+//! - **The sheet rule** (`Session::drawn_sheet`, `Space::site_sheet`): a
+//!   destroyed stellar with a `DeadType` sheet draws it, a whole one with a
+//!   `Type` sheet draws that; any other draws, by the engine's reading of
+//!   [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback) while
+//!   destroyed or [`type_sheet_fallback`](crate::RuleKey::TypeSheetFallback)
+//!   while whole, graphic type 0 when its slot shows no frame (the view's
+//!   placeholder with `spïn` 1000's reason) and what its slot holds
+//!   otherwise; its `Type` by the other reading. For a destroyed stellar
+//!   with a readable `Type`, "holds graphic type 0, or shows no frame" is
+//!   exactly "dead since the last rebuild point", so phase 9's rule is
+//!   unchanged.
+//! - **The click box, the landing reach and the shots** read the same
+//!   answer: the click box and the shots' disc are the drawn sheet's frame
+//!   (`Space::drawn_frame_size`; `Session::stellar_targets`), and the
+//!   landing reach reads 150 for the `Type` master that is never loaded
+//!   (F3, already phase 10's model).
+//! - **The counted sheet** (`Session::counted_sheet`) reads a counted
+//!   graphic type 0 as `Type` only where the rules never let the stellar
+//!   draw graphic type 0.
+//! - **Problems.** The scene lists a `Type` sheet that cannot be read
+//!   (`spöb <id> Type: <reason>`), so the reason is reported though the
+//!   engine's reading draws graphic type 0 over the placeholder, and
+//!   `spïn` 1000 when it cannot be read and some stellar has no `DeadType`
+//!   sheet or no `Type` sheet, whatever the readings.
+//!
+//! **Readings.** The Rulebook key
+//! [`type_sheet_fallback`](crate::RuleKey::TypeSheetFallback) defaults to
+//! the engine: what the slot holds. The other reading, the intended
+//! alternative since the Bible says nothing of an unreadable sheet, keeps
+//! the placeholder box and the reason, which shows the broken data. No
+//! sound: none of these routines calls `PlaySound` or `_beepSnd`.
+//!
+//! ## Checked for stellar-fidelity phase 3
+//!
+//! - **F1. The rebuild faults before its fill for a slot in use.**
+//!   `_HandleStellarSystemVisibility` (@0x32aa5), for each stellar of the
+//!   player's system, picks `DeadType` (+0x10) when it is destroyed and
+//!   `Type` (+0x0e) otherwise (@0x32f0f-0x32f2f), loads that master if it
+//!   is missing (@0x32f37-0x32f46), makes the stellar's slot if there is
+//!   none (`_SWCreateEmptySprite` @0x32f80, which nulls the frames +0x4c
+//!   and the count +0x54, @0xa8e0f, @0xa8eb6), skips the clone when the
+//!   master is null (@0x32fe0-0x32fea), then calls
+//!   `_SWSetCurrentFrameIndex(slot, current frame)` with no condition
+//!   (@0x33096). That divides the index by the slot's count (`idivl`
+//!   @0xa90e7) and reads the frame table through +0x4c (@0xa90f4-0xa90f7).
+//!   Each clone sets +0xda (@0xac4c7), and the rebuild's clear nulls +0x4c,
+//!   +0x50 and +0xd4 of every slot with +0xda set while keeping +0x54
+//!   (@0x32e68-0x32e83). So a stellar whose shown graphic has no master
+//!   divides by zero in a newly made slot (#DE @0xa90e7), and in a reused
+//!   one reads through a null +0x4c below 4 × count, inside the 4 KB
+//!   `__PAGEZERO` (@0xa90f7). The fill pass (@0x33231-0x332d0) tests +0x4c
+//!   and +0xd4 (@0x33241-0x33250) but fills only the 16 slots no stellar
+//!   uses this time: the clear set their +0xd0 to -1 (@0x32e8f), so the
+//!   `ja` at @0x33260 skips the "had no data" log, and hid them
+//!   (@0x32ea6). The log for a stellar's index (+0xd0 ≤ 0x7ff,
+//!   @0x33256-0x3329c) shows the authors meant an empty slot of a stellar
+//!   to get `spïn` 1000. The fault is the original's bug (the game ends at
+//!   the rebuild point that shows such a stellar); the engine defaults to
+//!   the intent, as phase 9 does for `DeadType`. Stock never reaches it:
+//!   every stock `Type` sheet reads, no stock script uses `Y`, no stock
+//!   `spöb` has `Flags2` 0x0040, and no stock weapon is planet-type.
+//! - **F2. The per-frame sprite tick** (`_HandleStellarSprites`, as it
+//!   would run if the rebuild survived; it also runs mid-system) loads the
+//!   null `Type` master again each frame (@0x2e7c7-0x2e7d1). With no
+//!   `spïn`, `_GetSpriteInfo` fails and `_LoadMasterStellarSprite` returns
+//!   silently (@0x1ebb9-0x1ebc0); with an `rlëD` that
+//!   `_SWCreateSpriteFromRLEResource` fails on, it raises
+//!   `_ReportSpriteLoadError` (@0x1ec71), a stop alert through the import
+//!   at 0x3b6257 (@0x1eb62) whenever the error code is non-zero
+//!   (@0x1ea8a). The clone then gets a null master and returns -1 without
+//!   touching the slot (@0xac448-0xac462). So the slot keeps its frames:
+//!   graphic type 0's from the rebuild's intent, or a `DeadType`'s that a
+//!   frame finding the stellar destroyed cloned in (@0x2e79b, @0x2e7e5),
+//!   kept after a `U` until the next rebuild point. Animation is
+//!   unchanged (stellar-fidelity phase 1's +0x474 rule).
+//! - **F3. Landing radius.** `_GetStellarSpriteXSize` (@0xac91) gives 150
+//!   for a null `Type` master (@0xacdf, returned @0xad2d). The dock
+//!   request lands within trunc(150 × 1.75) = 262 when the slot shows a
+//!   frame, and within 75 when it does not (@0x66cc7-0x66cfd). `Rebuilt`
+//!   already models this (a `Type` with no sheet is never loaded, so its
+//!   width is `Unloaded`), and this phase pins it with tests.
+//! - **F4. Clicking.** `_HandlePlayer` (@0x6a5f9-0x6a686) uses the slot's
+//!   rect (+0x1a), so such a stellar is clicked by the frame its slot
+//!   holds.
+//! - **F5. Shots.** `_CheckShotProximities` collides a planet-type shot
+//!   with the stellar's slot sprite (stellar +0x00, `_SWRLECollision`
+//!   @0x37288-0x372a8) after skipping the destroyed (@0x3727b), so a whole
+//!   stellar with no `Type` sheet is hit by the frame its slot holds.
+//! - **Sounds.** None of these routines calls `PlaySound` or `_beepSnd`;
+//!   the stop alert's sound belongs to the alert, left out below.
+//! - **Left out.**
+//!   - The fault at the rebuild (@0x33096 → `_SWSetCurrentFrameIndex`
+//!     @0xa90e7 in a newly made slot, @0xa90f7 in a reused one): the
+//!     original's bug, which ends the game. Not copied, and no key, as a
+//!     crash is not a reading; the engine follows the fill pass's intent
+//!     (@0x33241-0x332d0), as stellar-fidelity phase 8 does for its divide
+//!     by zero.
+//!   - The stop alert for an unreadable `rlëD` (`_ReportSpriteLoadError`
+//!     @0x1ea6c, alert through 0x3b6257 @0x1eb62), raised at the rebuild's
+//!     load (@0x32f46 → @0x1ec71) and, if the slot survived, every frame
+//!     (@0x2e7d1). For a `Type` sheet the original faults straight after
+//!     the rebuild's alert, so the per-frame alert is unreachable. The
+//!     engine reports the broken sheet once in the scene's problems.
+//!   - The crash log lines ("had no data" @0x33256-0x3329c; @0x332de and
+//!     @0x33304 in the check after the fill): diagnostics with no effect on
+//!     play.
+//!   - NPC landing's width for such a stellar (150, read as a quarter by
+//!     `_HighLevelAIHandler` @0x8dbdf-0x8dbfa): stellar-fidelity phase 5.
+//!   - The click rectangle's shape (width margin, half-open edges, first
+//!     slot wins; `_HandlePlayer` @0x6a649-0x6a686): stellar-fidelity
+//!     phase 9.
+//!   - A `Type` outside 0 to 255 indexing neighbouring statics
+//!     (`_masterStellarSprite` @0x2e7c7): a memory-layout accident; the
+//!     engine reads it as no sheet, so it draws graphic type 0.
+//! - **Left out, depending on unlanded work.**
+//!   - `Type` sheets the original loads but the engine cannot read yet: a
+//!     `spïn` with no `rlëD` (the `PICT` pair,
+//!     `_SWCreateSpriteFromSinglePictXY` @0x1ece3) and an 8-bit `rlëD`
+//!     (stellar-fidelity phase 4). Until it lands, such a `Type` reads as
+//!     no sheet and draws graphic type 0 where the original draws the
+//!     sheet. Stock has none.
+//!   - A `spïn` whose tiles multiply to 0 or less (stellar-fidelity phase
+//!     8). Such a `Type` reads, so it is outside this phase's rule.
 
 //! # Mission lifecycle
 //!

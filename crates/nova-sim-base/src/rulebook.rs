@@ -33,7 +33,7 @@
 //! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see `nova_sim::story`) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
 //! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see `nova_sim::story`) | a landing forgets them, and each is drawn the first time a list asks for it‡‡‡‡‡‡ |
 //! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see `nova_sim::story`) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
-//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see `nova_sim::story`) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
+//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get; its own code faults first, @0x33096 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, its fill @0x33231-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see `nova_sim::story`) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see `nova_sim::landing`) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
@@ -858,9 +858,12 @@ rule_keys! {
     /// (-1, outside 0 to 255, no `spïn`, or an `rlëD` that cannot be
     /// read) draws: by the engine, from the next rebuild point until a
     /// flight frame sees it whole, graphic type 0 (`spïn` 1000), the
-    /// sheet the original's rebuild gives a sprite slot it left empty
-    /// (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f,
-    /// @0x33244-0x332d0), which its per-frame sprite tick replaces only
+    /// sheet the original's rebuild means an empty sprite slot to get
+    /// (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, its fill
+    /// @0x33231-0x332d0; its own code faults first, at
+    /// `_SWSetCurrentFrameIndex` @0x33096, see the `nova_sim::story`
+    /// module's "Checked for stellar-fidelity phase 3"), which its
+    /// per-frame sprite tick replaces only
     /// once it finds the stellar whole (`_HandleStellarSprites`
     /// @0x2e77b-0x2e7e5); by the Bible, whose `DeadType` -1 is "Don't
     /// display different graphic type when destroyed", its `Type` sheet
