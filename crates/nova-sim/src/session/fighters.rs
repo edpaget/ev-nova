@@ -206,6 +206,11 @@ impl Session {
     /// The player's fighter `npc` joins the fleet, launched while the
     /// player targets `target` (see the module docs): its number.
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
+        let escort_type = self
+            .statics
+            .ship_record(npc.ship)
+            .map(|record| record.escort_type);
+        self.space.clear_lone_return(escort_type);
         let target = target
             .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
@@ -509,6 +514,20 @@ impl PlayerShip {
 }
 
 impl Space {
+    /// The player launches a fighter of `EscortType` `escort_type` (none
+    /// with no record): when it is 0 and no other ship of the player's is
+    /// in the system, a kept Return to Hangar for the fighters' class is
+    /// none (`_LaunchFighter` @0x3db0f-0x3db4d: the fighters' order,
+    /// 0x3b5394[0], becomes -1 when it is 3 and no other active slot has
+    /// the player as its parent).
+    fn clear_lone_return(&mut self, escort_type: Option<i16>) {
+        let alone = self.player_led().next().is_none();
+        let fighters = &mut self.escorts.class_orders[0];
+        if escort_type == Some(0) && alone && *fighters == Some(EscortOrder::Dock) {
+            *fighters = None;
+        }
+    }
+
     /// NPC `carrier`'s fighter `npc` joins it (see the module docs): led
     /// by the carrier, of its government, idle, its target the carrier's
     /// unless that is the carrier or a ship the carrier leads: its number,
@@ -1266,6 +1285,56 @@ pub(super) mod tests {
         let mut session = alone(&catalog);
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         assert_eq!(launched_order(&mut session), None);
+    }
+
+    /// The fighters' kept class order after a launch from `session`, with
+    /// Return to Hangar given every class first.
+    fn kept_after_launch(session: &mut Session) -> Option<EscortOrder> {
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        assert_eq!(
+            session.space.escorts.class_orders[0],
+            Some(EscortOrder::Dock)
+        );
+        launch(session);
+        session.space.escorts.class_orders[0]
+    }
+
+    #[test]
+    fn a_fighter_launched_with_no_other_ship_of_the_players_out_clears_a_kept_return() {
+        // `_LaunchFighter` @0x3db0f-0x3db4d: the player's carrier, a
+        // fighter of `EscortType` 0, no other active ship of parent 0, and
+        // the fighters' order (0x3b5394[0]) Return becomes -1.
+        let catalog = carrying();
+        assert_eq!(kept_after_launch(&mut alone(&catalog)), None, "alone");
+        let mut escorted = fleet(&catalog, 2, vec![warship(None)]);
+        assert_eq!(
+            kept_after_launch(&mut escorted),
+            Some(EscortOrder::Dock),
+            "an escort out"
+        );
+        let mut session = alone(&catalog);
+        launch(&mut session);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(
+            kept_after_launch(&mut session),
+            Some(EscortOrder::Dock),
+            "a fighter out"
+        );
+        let mut catalog = carrying();
+        catalog.ship_records[1].escort_type = 2;
+        let mut session = alone(&catalog);
+        assert_eq!(
+            kept_after_launch(&mut session),
+            Some(EscortOrder::Dock),
+            "not of EscortType 0"
+        );
+        assert_eq!(
+            session.space.escorts.class_orders[2],
+            Some(EscortOrder::Dock),
+            "its own class's kept too"
+        );
     }
 
     #[test]
