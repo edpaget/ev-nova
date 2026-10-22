@@ -1098,4 +1098,52 @@ mod tests {
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(fates(&session), [disabled], "once");
     }
+
+    /// Every NPC keeps its goal.
+    #[derive(Debug)]
+    struct Keeping;
+
+    impl Behaviour for Keeping {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+    }
+
+    /// [`facing_an_npc`] by `rules`, NPC 0 a lead drifting right at 0.3
+    /// holding its course, and a fleet escort of it 250 to its right at
+    /// rest, after a pass: the lead and the escort.
+    fn fleet_after_a_pass(rules: crate::rulebook::Rulebook) -> (Npc, Npc) {
+        let catalog = armed();
+        let mut session = warmed(&catalog).with_rules(rules);
+        let lead = NpcId(0);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.goal = Goal::Hold;
+        npc.state.velocity = Vec2::new(0.3, 0.0);
+        let mut escort = npc.clone();
+        escort.leader = Some(lead);
+        escort.goal = Goal::Follow { lead, guard: None };
+        escort.state.position.x += 250.0;
+        escort.state.velocity = Vec2::ZERO;
+        let escort = session.space.traffic.add_npc(escort);
+        pass(&mut session, &catalog, Controls::default(), &Keeping);
+        let ship = |id| session.space.npc(id).expect("there").clone();
+        (ship(lead), ship(escort))
+    }
+
+    #[test]
+    fn a_pass_gives_a_fleet_escort_its_slot_and_flies_it_in_formation_by_the_rulebook() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        // Slot 2 of its lead's formation, by either reading.
+        let slot = |escort: &Npc| escort.fleet_slot.map(|slot| (slot.slot, slot.ships));
+        // Within 300 of its lead and within 0.525 of its velocity: matched,
+        // it takes the lead's velocity (sub 0xc).
+        let (lead, escort) = fleet_after_a_pass(Rulebook::default());
+        assert_eq!(slot(&escort), Some((2, 2)));
+        assert_eq!(escort.state.velocity, lead.state.velocity);
+        // By the earlier follow it closes on its lead from 250 off.
+        let earlier = Rulebook::default().with_override(RuleKey::NpcFormation, RuleSource::Bible);
+        let (lead, escort) = fleet_after_a_pass(earlier);
+        assert_eq!(slot(&escort), Some((2, 2)));
+        assert_ne!(escort.state.velocity, lead.state.velocity);
+    }
 }
