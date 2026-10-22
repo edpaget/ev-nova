@@ -2,31 +2,73 @@
 //! sheets, the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
 //! `ppat` pixel patterns and `cicn` colour icons, decoded on request.
 
+use std::borrow::Borrow;
+
 use nova_data::graphics::{
-    CICN, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict, decode_ppat, decode_rled,
+    CICN, EightBitReading, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict,
+    decode_ppat, decode_rled_as,
 };
-use nova_data::{GameData, SpinSpriteError};
+use nova_data::{GameData, SheetKind, SpinSpriteError};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
 
-/// Looks resources up in the store (later files winning) and decodes them
-/// on every call; the renderer keeps what it needs in the atlas. A masked
-/// picture is its picture with the mask picture applied
+/// The game data as an image source, decoding an 8-bit `rlëD` by
+/// `eight_bit` (the rulebook's `eight_bit_sheet` reading).
+///
+/// It looks resources up in the store (later files winning) and decodes
+/// them on every call; the renderer keeps what it needs in the atlas. A
+/// masked picture is its picture with the mask picture applied
 /// ([`apply_mask`]); either one missing is [`ImageError::Missing`].
-impl ImageSource for GameData {
+#[derive(Clone, Debug)]
+pub struct GameImages<D> {
+    data: D,
+    eight_bit: EightBitReading,
+}
+
+impl<D: Borrow<GameData>> GameImages<D> {
+    /// `data`'s images, with 8-bit sheets read as `eight_bit` says.
+    pub fn new(data: D, eight_bit: EightBitReading) -> Self {
+        Self { data, eight_bit }
+    }
+
+    /// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): an
+    /// `rlëD`'s as [`ImageKind::Rled`] decodes them, or its `PICT` pair
+    /// cut. A link that is not there is [`ImageError::Missing`], a sheet
+    /// that does not decode or cut is [`ImageError::Decode`].
+    fn spin_frames(&self, id: i16) -> Result<Vec<Image>, ImageError> {
+        match self.data.borrow().spin_sheet(id) {
+            Ok(spin) if spin.kind == SheetKind::Rled => self.frames(ImageKind::Rled, spin.image_id),
+            Ok(spin) => Ok(spin.sheet.into_frames()),
+            Err(
+                SpinSpriteError::Graphics { source, .. } | SpinSpriteError::Picture { source, .. },
+            ) => Err(ImageError::Decode(source)),
+            Err(
+                SpinSpriteError::NoSpin(_)
+                | SpinSpriteError::Decode(_)
+                | SpinSpriteError::NoSheet { .. }
+                | SpinSpriteError::NoMask { .. },
+            ) => Err(ImageError::Missing),
+        }
+    }
+}
+
+impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         let bytes = |ty, id| {
-            self.resource(ty, id)
+            self.data
+                .borrow()
+                .resource(ty, id)
                 .map(|found| found.resource.data())
                 .ok_or(ImageError::Missing)
         };
+        let rled = |id| -> Result<_, ImageError> {
+            Ok(decode_rled_as(bytes(RLED, id)?, None, self.eight_bit)?)
+        };
         Ok(match kind {
             ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
-            ImageKind::Rled => decode_rled(bytes(RLED, id)?, None)?.into_frames(),
-            ImageKind::RledSolid => decode_rled(bytes(RLED, id)?, None)?
-                .into_solid_frames()
-                .ok_or(ImageError::Missing)?,
+            ImageKind::Rled => rled(id)?.into_frames(),
+            ImageKind::RledSolid => rled(id)?.into_solid_frames().ok_or(ImageError::Missing)?,
             ImageKind::MaskedPict { mask } => {
                 let picture = decode_pict(bytes(PICT, id)?)?;
                 let mask = decode_pict(bytes(PICT, mask)?)?;
@@ -34,26 +76,16 @@ impl ImageSource for GameData {
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
-            ImageKind::SpinSheet => spin_frames(self, id)?,
+            ImageKind::SpinSheet => self.spin_frames(id)?,
         })
     }
 }
 
-/// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): a link
-/// that is not there is [`ImageError::Missing`], a sheet that does not
-/// decode or cut is [`ImageError::Decode`].
-fn spin_frames(data: &GameData, id: i16) -> Result<Vec<Image>, ImageError> {
-    match data.spin_sheet(id) {
-        Ok(spin) => Ok(spin.sheet.into_frames()),
-        Err(SpinSpriteError::Graphics { source, .. } | SpinSpriteError::Picture { source, .. }) => {
-            Err(ImageError::Decode(source))
-        }
-        Err(
-            SpinSpriteError::NoSpin(_)
-            | SpinSpriteError::Decode(_)
-            | SpinSpriteError::NoSheet { .. }
-            | SpinSpriteError::NoMask { .. },
-        ) => Err(ImageError::Missing),
+/// The game data's images as the original draws them: [`GameImages`] with
+/// 8-bit sheets [`EightBitReading::AsDrawn`].
+impl ImageSource for GameData {
+    fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+        GameImages::new(self, EightBitReading::AsDrawn).frames(kind, id)
     }
 }
 
@@ -396,6 +428,70 @@ mod tests {
             bad.frames(ImageKind::SpinSheet, 3000),
             Err(ImageError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn an_8_bit_sheet_is_drawn_as_the_reading_says() {
+        // One 2x1 frame: a 1-byte run of 35 (pure red in the palette),
+        // then the byte 0x7C.
+        let eight_bit = RledBuilder::new(2, 1)
+            .depth(8)
+            .frame(|f| f.line().run8(1, [35, 0, 0, 0]).pixels8(&[0x7C]))
+            .build();
+        let data = store(&[(RLED, 200, eight_bit), (Spin::TYPE, 3000, spin(200, -1))]);
+        let (red, clear) = ([255, 0, 0, 255], [0; 4]);
+        let pixels = |frames: Vec<Image>| -> Vec<_> {
+            frames
+                .iter()
+                .flat_map(|frame| [frame.pixel(0, 0), frame.pixel(1, 0)])
+                .collect()
+        };
+        // As drawn, the run's byte 0 and the byte 0x7C make pixel 0, red at
+        // RGB555 0x7C00; through the palette each byte is a pixel.
+        let as_drawn = vec![Some(red), Some(clear)];
+        let palette = vec![Some(red), Some([0x66, 0x99, 0x33, 255])];
+        let reading = |eight_bit| GameImages::new(&data, eight_bit);
+        for (images, expected) in [
+            (reading(EightBitReading::AsDrawn), &as_drawn),
+            (reading(EightBitReading::SystemPalette), &palette),
+        ] {
+            assert_eq!(
+                pixels(images.frames(ImageKind::Rled, 200).unwrap()),
+                *expected
+            );
+            // A spïn that names an rlëD reads it the same way.
+            assert_eq!(
+                pixels(images.frames(ImageKind::SpinSheet, 3000).unwrap()),
+                *expected
+            );
+        }
+        assert_eq!(
+            pixels(data.frames(ImageKind::Rled, 200).unwrap()),
+            as_drawn,
+            "the game data alone draws it as the original does"
+        );
+        // The solid runs follow the reading too: as drawn, the run wrote
+        // only half of pixel 0.
+        let solid = |eight_bit| {
+            pixels(
+                reading(eight_bit)
+                    .frames(ImageKind::RledSolid, 200)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(solid(EightBitReading::AsDrawn), [Some(clear); 2]);
+        assert_eq!(
+            solid(EightBitReading::SystemPalette),
+            [Some(red), Some(clear)]
+        );
+        // A shared store is a store.
+        let shared = std::rc::Rc::new(data);
+        assert_eq!(
+            GameImages::new(std::rc::Rc::clone(&shared), EightBitReading::SystemPalette)
+                .frames(ImageKind::Rled, 200)
+                .map(pixels),
+            Ok(palette)
+        );
     }
 
     #[test]
