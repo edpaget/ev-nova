@@ -27,7 +27,7 @@ use crate::input::Key;
 use crate::text::TextMetrics;
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
-use crate::ui::scroll_text::ScrollText;
+use crate::ui::text_box::TextBox;
 
 /// How many cells across the grid shows.
 pub const COLUMNS: usize = 4;
@@ -386,8 +386,10 @@ pub fn draw_arrows(
 pub struct Shown {
     /// The `PICT`, when there is one.
     pub picture: Option<i16>,
-    /// The description, scrolling in its box.
-    pub description: ScrollText,
+    /// The description in its box, drawn as `TETextBox` draws it
+    /// (`_OutfitDialogUpdate` @0x57f2b, `_ShipyardDialogUpdate` @0x597ac):
+    /// static, a line straddling the box's bottom clipped to it.
+    pub description: TextBox,
 }
 
 impl Shown {
@@ -423,7 +425,7 @@ impl Shown {
     ) -> Self {
         Self {
             picture,
-            description: ScrollText::new(text, Font::Geneva, BODY_SIZE, BODY_COLOR, area, metrics),
+            description: TextBox::new(text, Font::Geneva, BODY_SIZE, BODY_COLOR, area, metrics),
         }
     }
 
@@ -431,7 +433,9 @@ impl Shown {
     /// "Available" centred across it in white, [`NO_PICTURE_OFFSET`] above
     /// and below the floor of its vertical middle (`_OutfitDialogUpdate`
     /// @0x579e0-0x57aa3, `_ShipyardDialogUpdate` @0x59164-0x59227); then
-    /// the description.
+    /// the description's box filled black and the description in white
+    /// over it, as `TETextBox` then `InvertRect` show it (@0x57f2b-0x57f39,
+    /// @0x597ac-0x597ba).
     pub fn draw(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
         if let Some(id) = self.picture {
             list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
@@ -444,6 +448,7 @@ impl Shown {
                 draw_centred_text(list, metrics, area, baseline, words);
             }
         }
+        fill_rect(list, self.description.rect(), Color::BLACK);
         self.description.draw(list);
     }
 }
@@ -656,6 +661,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_description_is_white_on_black_and_clips_its_straddling_line() {
+        // Geneva 10, 12 a line, in a box 30 high: the third line's top, 24,
+        // is inside it and its bottom, 36, past it; the fourth's top is
+        // below it.
+        let picture_area = rect(100.0, 40.0, 200.0, 200.0);
+        let boxed = rect(320.0, 40.0, 100.0, 30.0);
+        let metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
+        let shown = Shown::read_text("l0\rl1\rl2\rl3", Some(5000), boxed, &metrics);
+        let mut list = DrawList::new();
+        shown.draw(&mut list, picture_area, &MonoMetrics);
+        let line = |text: &str, row: f32| DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Geneva,
+            origin: Point::new(320.0, 40.0 + 12.0 * row),
+            size: BODY_SIZE,
+            wrap_width: None,
+            color: Color::WHITE,
+        };
+        let mut black = DrawList::new();
+        fill_rect(&mut black, boxed, Color::BLACK);
+        let mut expected = vec![DrawCommand::StretchedPicture {
+            image: ImageKey::picture(5000),
+            top_left: picture_area.min,
+            width: 200.0,
+            height: 200.0,
+        }];
+        expected.extend(commands(&black));
+        expected.extend([
+            line("l0", 0.0),
+            line("l1", 1.0),
+            DrawCommand::Clipped {
+                clip: boxed,
+                command: Box::new(line("l2", 2.0)),
+            },
+        ]);
+        assert_eq!(commands(&list), expected);
+    }
+
     fn shown(picture: Option<i16>, area: Bounds) -> Shown {
         let metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
         Shown::read_text("", picture, area, &metrics)
@@ -710,14 +754,19 @@ mod tests {
         let area = rect(10.0, 20.0, 201.0, 101.0);
         let mut list = DrawList::new();
         shown(Some(6000), area).draw(&mut list, area, &MonoMetrics);
+        let mut expected = vec![DrawCommand::StretchedPicture {
+            image: ImageKey::picture(6000),
+            top_left: area.min,
+            width: 201.0,
+            height: 101.0,
+        }];
+        let mut black = DrawList::new();
+        fill_rect(&mut black, area, Color::BLACK);
+        expected.extend(commands(&black));
         assert_eq!(
             commands(&list),
-            [DrawCommand::StretchedPicture {
-                image: ImageKey::picture(6000),
-                top_left: area.min,
-                width: 201.0,
-                height: 101.0,
-            }]
+            expected,
+            "only the empty description's box"
         );
     }
 

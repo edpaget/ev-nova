@@ -13,7 +13,8 @@
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
-//!   line clipped to the box.
+//!   line clipped to the box. The news, exchange, flight message,
+//!   shipyard weapons, player info and shop descriptions draw through it.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
 //!   selected by a click or the arrow keys.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`

@@ -2,11 +2,21 @@
 //!
 //! `TETextBox` wraps its text to the box's width and draws every line
 //! whose top is inside the box, clipped to the box: a line that straddles
-//! the bottom edge shows its top part, and the text never scrolls. The
-//! news dialog draws its commercial and story this way
-//! (`_NewsDialogUpdate` @0x47d7b and @0x47e2c in the `EV Nova`
-//! executable). [`ScrollText`](super::scroll_text::ScrollText) differs:
-//! it shows only whole lines and scrolls.
+//! the bottom edge shows its top part, and the text never scrolls. In the
+//! `EV Nova` executable these draw this way: the news dialog's commercial
+//! and story (`_NewsDialogUpdate` @0x47d7b and @0x47e2c), the exchange's
+//! cargo summary and event line (`_TradeDialogUpdate` @0x4dc59 and
+//! @0x4dfa7), the flight message (`_DisplayComm` @0x902f5), the shipyard
+//! info panel's weapons (`_ShipDescDialogUpdate` @0x50cd8), the player
+//! info's Cargo, Extras and Honors texts (`_PlayerInfoDialogUpdate`
+//! @0x53799 and @0x539bb), and the outfitter's, shipyard's and hiring
+//! dialog's description (`_OutfitDialogUpdate` @0x57f2b,
+//! `_ShipyardDialogUpdate` @0x597ac).
+//! [`ScrollText`](super::scroll_text::ScrollText) differs: it shows only
+//! whole lines and scrolls. The dialog texts the player scrolls with the
+//! arrow keys (bar, port, comm, captured assignment, mission computer and
+//! mission info) keep it, though the original sets them with `TETextBox`
+//! too.
 
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList};
