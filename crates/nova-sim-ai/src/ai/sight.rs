@@ -508,5 +508,10 @@ mod tests {
         let mut around = around(&sites, &led, &govts, (900.0, 0.0), 0);
         around.player = Some(area_cloaked_player(true));
         assert!(around.rides_area_cloak(&led[0]));
+        around.player = Some(area_cloaked_player(false));
+        assert!(
+            !around.rides_area_cloak(&led[0]),
+            "through the surroundings"
+        );
     }
 }
