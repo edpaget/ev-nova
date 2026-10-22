@@ -8,7 +8,7 @@
 
 use super::Session;
 use super::fighters::tests::{
-    BAY, VIPER, WARSHIP, carrying, fight, fleet, pirate, sitting_ai, vipers, warship,
+    BAY, WARSHIP, carrying, fight, fleet, pirate, sitting_ai, vipers, warship,
 };
 use crate::ai::Goal;
 use crate::catalog::StockWeapon;
@@ -131,6 +131,7 @@ fn its_fighter_docks_once_the_escort_keeps_formation_or_holds_and_the_round_goes
         let (mut session, escort, _) = raided_escort(&catalog, EscortOrder::Attack, 0);
         assert!(until_launched(&mut session, &catalog, 5), "{command:?}");
         let id = vipers(&session)[0].id;
+        assert_eq!(aboard(&session, escort), 1, "{command:?}: one out");
         session.command_escorts(EscortGroup::All, command);
         fight(&mut session, &catalog, &sitting_ai());
         assert_eq!(
@@ -143,11 +144,12 @@ fn its_fighter_docks_once_the_escort_keeps_formation_or_holds_and_the_round_goes
             session.space.npc(id).is_none()
         });
         assert!(docked, "{command:?}: {:?}", session.space.npc(id));
-        assert!(
-            aboard(&session, escort) >= 1,
-            "{command:?}: back in the escort's bay"
+        assert_eq!(
+            aboard(&session, escort),
+            2,
+            "{command:?}: its round back in the escort's bay"
         );
-        assert!(vipers(&session).iter().all(|npc| npc.ship == VIPER));
+        assert!(vipers(&session).is_empty(), "{command:?}: none out");
     }
 }
 
