@@ -206,6 +206,16 @@ pub enum SimSound {
     /// @0x6a585): `_beepSnd[0]`, `snd ` 150. With no target either is
     /// silent.
     TargetCleared,
+    /// A secondary-weapon key was taken (`_HandlePlayer`'s secondary
+    /// block; see `nova_sim::session`'s `secondary_select`): Weapon Select
+    /// picking a secondary, even the one already selected when it is the
+    /// only candidate, before its step (@0x6acce-0x6acf1), and Weapon
+    /// Safety letting go of the selection (@0x6adf8-0x6ae1b), on every pass
+    /// it is held with one selected: `_beepSnd[2]`, `snd ` 152, at
+    /// priority 1. Weapon Select with no candidate raises
+    /// [`SimSound::Refused`] instead; the let-go of a secondary that runs
+    /// out is silent.
+    SecondarySelected,
     /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
     /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
     /// `nova_sim::tutorial`).
@@ -321,6 +331,9 @@ pub enum SimSound {
     /// `nova_sim::landing::LandingRefusal::beeps`),
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
     /// `nova_sim::Session::select_target`),
+    /// and Weapon Select finding no secondary to pick (`_HandlePlayer`
+    /// @0x6ad90-0x6adb3, priority 1; see `nova_sim::session`'s
+    /// `secondary_select`),
     /// as does each board refusal said, #131 too far (@0x65f9a), #132 too
     /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
     /// pickup's too (@0x65ffe), all at priority 1, not modelled (see

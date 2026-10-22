@@ -95,6 +95,9 @@ pub struct SoundTable {
     pub target_selected: Option<SoundId>,
     /// Plays as Option-backquote lets go of the ship target.
     pub target_cleared: Option<SoundId>,
+    /// Plays as Weapon Select picks a secondary, and as Weapon Safety lets
+    /// go of one.
+    pub secondary_selected: Option<SoundId>,
     /// Plays as a first-flight tutorial hint is shown.
     pub tutorial_hint: Option<SoundId>,
     /// Plays as the player's ship is newly disabled or newly starts to
@@ -287,6 +290,9 @@ impl SoundTable {
     /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
     ///   of the ship target (@0x69a7d), or a click on the player's own
     ///   ship does (@0x6a585).
+    /// - `secondary_selected`: 152, `_beepSnd[2]`, as Weapon Select picks
+    ///   a secondary (@0x6acce-0x6acf1) and as Weapon Safety lets go of
+    ///   the selection (@0x6adf8-0x6ae1b).
     /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
     ///   first-flight tutorial hint (@0x70a1c, @0x70c12, @0x70dab,
     ///   @0x70e59).
@@ -426,6 +432,7 @@ impl SoundTable {
         hyper_selected: Some(SoundId(152)),
         target_selected: Some(SoundId(152)),
         target_cleared: Some(SoundId(150)),
+        secondary_selected: Some(SoundId(152)),
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
@@ -519,6 +526,7 @@ mod tests {
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.secondary_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");

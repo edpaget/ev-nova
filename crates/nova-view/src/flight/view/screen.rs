@@ -156,9 +156,12 @@ impl<
                 TargetPick::NearestThreat
             }),
             Some(SELECT_KEY) => {
+                // Option is read at the press, the original reading it at
+                // the pass (@0x6acf6): the press is taken on the next
+                // step, before a frame is drawn.
                 let backwards = self.held.contains(&Key::Alt);
                 if let Ok(session) = &mut self.session {
-                    session.select_secondary(backwards);
+                    session.press_weapon_select(backwards);
                 }
             }
             Some(key) => self.nav_key(key),

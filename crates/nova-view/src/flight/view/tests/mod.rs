@@ -1413,6 +1413,13 @@ fn tap(view: &mut View, k: Key) {
     view.input(&key(k, false));
 }
 
+/// Taps `k`, then runs the step whose secondary block takes it (see
+/// `nova_sim::session`'s `secondary_select`).
+fn tap_and_step(view: &mut View, k: Key) {
+    tap(view, k);
+    ticks(view, 1);
+}
+
 /// Where system `id` is on the course map, brought into item 3 first: the
 /// map opens at 0.5625 on the current system and shows little of the
 /// galaxy.

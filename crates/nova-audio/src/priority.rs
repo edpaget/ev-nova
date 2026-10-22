@@ -116,6 +116,9 @@ pub const TARGET_SELECTED: Priority = Priority::new(1);
 /// The ship target let go, `_beepSnd[0]`: `_HandlePlayer` @0x69a7d,
 /// @0x6a585.
 pub const TARGET_CLEARED: Priority = Priority::new(1);
+/// Weapon Select picking a secondary, or Weapon Safety letting go of one,
+/// `_beepSnd[2]`: `_HandlePlayer` @0x6acf1, @0x6ae1b.
+pub const SECONDARY_SELECTED: Priority = Priority::new(1);
 /// A tutorial hint, `_beepSnd[4]`: `_HandlePlayer` @0x70a1c, @0x70c12,
 /// @0x70dab, @0x70e59.
 pub const TUTORIAL_HINT: Priority = Priority::new(1);
@@ -252,6 +255,7 @@ mod tests {
             (HYPER_SELECTED, 1, "hyper selected"),
             (TARGET_SELECTED, 1, "target selected"),
             (TARGET_CLEARED, 1, "target cleared"),
+            (SECONDARY_SELECTED, 1, "secondary selected"),
             (TUTORIAL_HINT, 1, "tutorial hint"),
             (SHIP_DOWNED, 1, "ship downed"),
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),

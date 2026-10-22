@@ -725,6 +725,16 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
     };
     assert_eq!(tint_after_two(AFTERBURNER_KEY), Some(239), "held: 30 of 32");
     assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
+    assert_eq!(
+        tint_after_two(SELECT_KEY),
+        Some(239),
+        "W: every pass, @0x6ac2a"
+    );
+    assert_eq!(
+        tint_after_two(DESELECT_KEY),
+        tint_after_two(Key::Char('q')),
+        "S with none selected: only its press, @0x6ade1"
+    );
 }
 
 #[test]

@@ -52,6 +52,7 @@ mod stock_refuel_dock;
 mod stock_reinforcements;
 mod stock_repair_dock;
 mod stock_scan;
+mod stock_secondary_select;
 mod stock_ship_display;
 mod stock_ship_goal_walk;
 mod stock_ship_lights;

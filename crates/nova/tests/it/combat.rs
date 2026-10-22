@@ -3321,6 +3321,8 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.frame();
     assert_eq!(game.fighters_out(), 0, "no fighter out");
     game.tap(Key::Char('w'));
+    // Two frames make a tick, whose secondary block takes the press.
+    game.frame();
     assert!(text_at(&game.frame(), "Bay - 2").is_some());
 }
 

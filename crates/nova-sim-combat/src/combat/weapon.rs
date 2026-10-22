@@ -442,6 +442,11 @@ pub const ONE_AT_A_TIME: u16 = 0x0004;
 /// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
 /// while it has no rounds.
 pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
+/// `Flags`: more persistent smoke, by the Bible. The original's let-go of
+/// a selected secondary that runs out tests it too (`_HandlePlayer`
+/// @0x6abe9; see
+/// [`RuleKey::EmptySecondary`](crate::RuleKey::EmptySecondary)).
+pub const PERSISTENT_SMOKE: u16 = 0x0800;
 /// `Flags`: point defence cannot target its shots
 /// (`_HandleShipPointDefense` @0x393f4), though a point-defence shot that
 /// touches one still meets it (see [`defence`](super::defence)).

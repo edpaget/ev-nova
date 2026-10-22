@@ -245,6 +245,9 @@ impl<A: Audio> AudioCore<A> {
             SimSound::TargetCleared => {
                 self.play(self.table.target_cleared, at::TARGET_CLEARED);
             }
+            SimSound::SecondarySelected => {
+                self.play(self.table.secondary_selected, at::SECONDARY_SELECTED);
+            }
             SimSound::TutorialHint => {
                 self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
             }
@@ -902,6 +905,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one case for each of the sounds
     fn each_event_plays_at_its_priority() {
         use crate::priority as at;
         let script = |exclusive| {
@@ -952,6 +956,10 @@ mod tests {
             (Sound::Sim(SimSound::TargetSelected), at::TARGET_SELECTED),
             (Sound::Sim(SimSound::HyperSelected), at::HYPER_SELECTED),
             (Sound::Sim(SimSound::TargetCleared), at::TARGET_CLEARED),
+            (
+                Sound::Sim(SimSound::SecondarySelected),
+                at::SECONDARY_SELECTED,
+            ),
             (Sound::Sim(SimSound::TutorialHint), at::TUTORIAL_HINT),
             (Sound::Sim(SimSound::ShipDowned), at::SHIP_DOWNED),
             (
@@ -1295,6 +1303,31 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_secondary_selected_or_let_go_beeps_152_and_one_refused_153() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::SecondarySelected),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            secondary_selected: Some(SoundId(160)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::SecondarySelected)],
+        );
+        assert_eq!(drain(&log), [play(160, EFFECTS)]);
     }
 
     #[test]

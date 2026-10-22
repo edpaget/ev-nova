@@ -45,13 +45,13 @@ use crate::{Color, DrawList, Input, Key, Point, UiSound};
 use nova_sim::RuleSource;
 
 use super::{
-    AFTERBURNER_KEY, BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
-    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView,
-    HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
-    OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
-    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading,
-    shown_position,
+    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY,
+    FLIGHT_KEYS, FlightView, HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
+    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY,
+    NEAREST_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY,
+    STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
+    drawn_size, npc_tint, shown_heading, shown_position,
 };
 
 impl<C> FlightView<C> {
@@ -116,14 +116,17 @@ impl<C> FlightView<C> {
     /// hovering as the pointer is over something targetable now
     /// ([`FlightView::hovering`]), once the session's steps have run and
     /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it.
+    /// last step, or a flight key held, fades it; the weapon safety key
+    /// ([`DESELECT_KEY`]) only by its press, as `_HandlePlayer` sets
+    /// *0x3b5550 for it only on the pass it lets go of a secondary
+    /// (@0x6ade1), which its press has faded already.
     pub(super) fn step_cursor(&mut self, steps: u32) {
         if steps == 0 {
             return;
         }
         let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
         let hovering = self.hovering();
-        let held = !self.held.is_empty();
+        let held = self.held.iter().any(|&key| key != DESELECT_KEY);
         for _ in 0..steps {
             self.cursor.step(hovering, frames, held);
         }
@@ -491,6 +494,7 @@ impl<C> FlightView<C> {
             | ESCORT_RECALL_KEY => PlayerCommand::Escort,
             _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
             SELECT_KEY => PlayerCommand::SelectWeapon,
+            DESELECT_KEY => PlayerCommand::DeselectWeapon,
             NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
                 PlayerCommand::Nav
             }
@@ -888,7 +892,10 @@ impl<C> FlightView<C> {
     /// - Target Select, Tab, with Shift and Option ([`TARGET_KEY`],
     ///   @0x69f1c-0x69ffb), and Closest Target, R and Option-R
     ///   ([`NEAREST_KEY`], @0x6a9b7-0x6aae7);
-    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf);
+    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf).
+    ///   Weapon Safety, S ([`DESELECT_KEY`], @0x6adc2-0x6ae1b), reads no
+    ///   jump state either; it is held, not pressed, so no press filter
+    ///   applies to it;
     /// - Option-\` ([`NAV_OFF_KEY`] with Option, @0x69a17-0x69a90), which
     ///   lets go of the ship target;
     /// - Board, B ([`BOARD_KEY`], @0x6a98b-0x6a9a8);

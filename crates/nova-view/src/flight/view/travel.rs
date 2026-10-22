@@ -27,17 +27,19 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
-    CLOAK_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
-    HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
-    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY,
-    SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with,
-    assigned_message, assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay,
-    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
-    pay_said, play_area, point, refusal_message, show_combat, show_destroyed, show_gate_frames,
-    shown_scene, stellar_name,
+    CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS,
+    HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
+    MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
+    SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead,
+    arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
+    gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
+    landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area, point, refusal_message,
+    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
+// Each is its own key or chord, held on its own.
+#[allow(clippy::struct_excessive_bools)]
 struct HeldTriggers {
     /// The primary and secondary fire keys.
     fire: (bool, bool),
@@ -47,6 +49,8 @@ struct HeldTriggers {
     self_destruct: bool,
     /// The cloak key.
     cloak: bool,
+    /// The weapon safety key.
+    safety: bool,
 }
 
 impl<
@@ -543,9 +547,9 @@ impl<
     }
 
     /// The triggers held as the steps run: the primary and secondary
-    /// fire keys, the eject chord, the self-destruct chord and the cloak
-    /// key, each chord and the cloak only while the player's fate takes
-    /// its command. The cloak key needs no Command (`_QuickKeyCheck`
+    /// fire keys, the eject chord, the self-destruct chord, the cloak key
+    /// and the weapon safety key, each chord, the cloak and the safety
+    /// only while the player's fate takes its command. The cloak key needs no Command (`_QuickKeyCheck`
     /// @0x705b7).
     fn held_triggers(&self) -> HeldTriggers {
         let fire = (
@@ -560,6 +564,7 @@ impl<
             eject: chord(PlayerCommand::Eject, EJECT_KEY),
             self_destruct: chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY),
             cloak: self.takes(PlayerCommand::Cloak) && self.held.contains(&CLOAK_KEY),
+            safety: self.takes(PlayerCommand::DeselectWeapon) && self.held.contains(&DESELECT_KEY),
         }
     }
 
@@ -585,6 +590,7 @@ impl<
             eject,
             self_destruct,
             cloak,
+            safety,
         } = self.held_triggers();
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
@@ -596,6 +602,7 @@ impl<
             session.hold_eject(eject);
             session.hold_self_destruct(self_destruct);
             session.hold_cloak(cloak);
+            session.hold_weapon_safety(safety);
             session.set_double_time_key(self.double_time);
             session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));

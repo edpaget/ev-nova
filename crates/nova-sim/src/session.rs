@@ -331,10 +331,17 @@
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
 //! fires its primary weapons and the secondary selected
-//! ([`Session::hold_fire`], [`Session::select_secondary`]). No secondary
+//! ([`Session::hold_fire`]). In `_HandlePlayer`'s secondary block, after
+//! the fire, the Weapon Select key ([`Session::press_weapon_select`])
+//! steps the selection through the ship's secondaries in `wëap` ID order,
+//! the Weapon Safety key ([`Session::hold_weapon_safety`]) lets go of it,
+//! and a selection that runs out is let go as
+//! [`RuleKey::EmptySecondary`] says (see the `secondary_select` module).
+//! No secondary
 //! is selected to start with, as `_ResetPlayer` (@0x1d4dd) leaves it, a
-//! reload included; it is set by [`Session::select_secondary`] alone, and
-//! let go on a ship purchase (`_DoShipyardDialog` @0x5f01c), a capture as
+//! reload included; it is set by the Weapon Select key alone, and let go
+//! by the Weapon Safety key, by running out, on a ship purchase
+//! (`_DoShipyardDialog` @0x5f01c), a capture as
 //! the player's ship (`_DoShipCapture` @0x4173e) and the outfitter's sale
 //! of the last outfit mounting it (`_DoOutfitDialog` @0x5ce82), even
 //! while another outfit still mounts the weapon
@@ -540,6 +547,7 @@ mod rescue;
 mod sabotage;
 mod script_effects;
 mod script_move;
+mod secondary_select;
 mod self_destruct;
 mod self_repair;
 mod setup;
@@ -631,9 +639,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::ai_fire::PlayerRating;
-use crate::combat::armament::{
-    Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
-};
+use crate::combat::armament::{Armament, Arsenal, Trigger, fit_stock, outfit_rounds};
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, HullSpec};
@@ -2252,23 +2258,20 @@ impl Session {
     }
 
     /// Holds the player's fire keys: the `primary` trigger, and the
-    /// `secondary` one on the secondary weapon selected.
+    /// `secondary` one on the secondary weapon selected as each step finds
+    /// it, so a selection let go mid-frame fires no more (see the
+    /// `secondary_select` module).
     pub fn hold_fire(&mut self, primary: bool, secondary: bool) {
         self.ship.hold_fire(primary, secondary);
     }
 
-    /// Selects the next secondary weapon, or the one before it when
-    /// `backwards`, in the order they were mounted, wrapping (see
-    /// [`next_secondary`]).
-    pub fn select_secondary(&mut self, backwards: bool) {
-        self.ship
-            .select_secondary(&self.pilot, &self.statics, backwards);
-    }
-
     /// The secondary weapon selected, if any: none when the session
-    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
-    /// and let go on a ship purchase, a capture as the player's ship and
-    /// the sale of the last outfit mounting it (see the module docs). By
+    /// starts, set by the Weapon Select key alone
+    /// ([`Session::press_weapon_select`]), and let go by the Weapon Safety
+    /// key ([`Session::hold_weapon_safety`]), by running out (see the
+    /// `secondary_select` module), on a ship purchase, a capture as the
+    /// player's ship and the sale of the last outfit mounting it (see the
+    /// module docs). By
     /// the engine it may name a weapon the ship no longer carries, which
     /// fires nothing, as the original's `_DrawStatusWeap` still names it
     /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
@@ -2401,6 +2404,9 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
             combat.regenerate_player(fighters, arena);
         });
+        // `_HandlePlayer`'s secondary block, after its fire (see the
+        // `secondary_select` module).
+        self.secondary_block();
         self.player_display_step(pass, rules, start.player_head(), chance);
         // The traffic tick's work on the line, after `_HandlePlayer`'s
         // lines (the sabotage's, the eject's), as the AI loop's calls
@@ -6159,46 +6165,10 @@ impl PlayerShip {
         }
     }
 
-    /// Holds `trigger`, the player's fire command, until another is held.
-    fn hold_trigger(&mut self, trigger: Trigger) {
-        self.trigger = trigger;
-    }
-
-    /// Holds the player's fire keys: the `primary` trigger, and the
-    /// `secondary` one on the secondary weapon selected.
-    fn hold_fire(&mut self, primary: bool, secondary: bool) {
-        self.hold_trigger(Trigger {
-            primary,
-            secondary: self.secondary.filter(|_| secondary),
-            ..Trigger::default()
-        });
-    }
-
-    /// The secondary after `current`, `backwards` or not (see
-    /// [`next_secondary`]), skipping one hidden while the pilot owns none
-    /// of its rounds.
-    fn next_secondary(
-        &self,
-        pilot: &Pilot,
-        statics: &Statics,
-        current: Option<WeaponId>,
-        backwards: bool,
-    ) -> Option<WeaponId> {
-        next_secondary(self.fit.armament.mounts(), current, backwards, |ammo| {
-            outfit_rounds(&pilot.outfits, &statics.ammo_outfits, ammo)
-        })
-    }
-
-    /// Selects the next secondary weapon, or the one before it when
-    /// `backwards`, in the order they were mounted, wrapping (see
-    /// [`next_secondary`]).
-    fn select_secondary(&mut self, pilot: &Pilot, statics: &Statics, backwards: bool) {
-        self.secondary = self.next_secondary(pilot, statics, self.secondary, backwards);
-    }
-
     /// The secondary weapon selected, if any: none when the session
-    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
-    /// and let go on a ship purchase, a capture as the player's ship and
+    /// starts, set by the Weapon Select key alone, and let go by the
+    /// Weapon Safety key, by running out (see the `secondary_select`
+    /// module), on a ship purchase, a capture as the player's ship and
     /// the sale of the last outfit mounting it (see the module docs). By
     /// the engine it may name a weapon the ship no longer carries, which
     /// fires nothing, as the original's `_DrawStatusWeap` still names it
@@ -21609,7 +21579,7 @@ pub(super) mod tests {
     use crate::combat::weapon::PASSES_SHIELDS;
 
     /// The weapons the player fired in `events`.
-    fn fired_by_the_player(events: &[CombatEvent]) -> Vec<WeaponId> {
+    pub(super) fn fired_by_the_player(events: &[CombatEvent]) -> Vec<WeaponId> {
         events
             .iter()
             .filter_map(|event| match event {
@@ -21995,9 +21965,9 @@ pub(super) mod tests {
 
     use crate::combat::weapon::SECONDARY;
 
-    const ROCKET: WeaponId = WeaponId(140);
-    const MISSILE: WeaponId = WeaponId(141);
-    const TORCH: WeaponId = WeaponId(142);
+    pub(super) const ROCKET: WeaponId = WeaponId(140);
+    pub(super) const MISSILE: WeaponId = WeaponId(141);
+    pub(super) const TORCH: WeaponId = WeaponId(142);
 
     /// Secondary weapon `id`, a [`blaster`] spending `ammo_type`.
     fn secondary(id: i16, ammo_type: i16) -> WeaponRecord {
@@ -22030,7 +22000,7 @@ pub(super) mod tests {
     /// ([`MISSILE`]), unlimited; and a torch ([`TORCH`]) burning fuel. Ship
     /// 129 carries a blaster, a torch and missiles. Outfits 311-314 hold
     /// the blaster and the three secondaries, in that order.
-    fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
+    pub(super) fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
         let mut outfits = catalog.outfits.clone();
         outfits.push(outfit(310, &[(MOD_AMMO, 140)]));
         outfits.extend(

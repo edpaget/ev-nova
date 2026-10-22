@@ -695,6 +695,8 @@ pub struct FlightOverlays {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
+/// the weapon select key, whose hold fades the cursor, the weapon safety
+/// key, which lets go of the secondary on every pass it is held,
 /// Command, which the jettison, eject and self-destruct keys need, the
 /// eject key and the self-destruct key, which work only held with Command,
 /// the cloak key, which toggles once a hold, the land key, which holds the dock
@@ -704,7 +706,7 @@ pub struct FlightOverlays {
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 19] = [
+const FLIGHT_KEYS: [Key; 21] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -713,6 +715,8 @@ const FLIGHT_KEYS: [Key; 19] = [
     AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
+    SELECT_KEY,
+    DESELECT_KEY,
     Key::Alt,
     Key::Shift,
     Key::Command,
@@ -744,8 +748,18 @@ pub const FIRE_KEY: Key = Key::Space;
 /// The secondary fire key: the original's default (`fireKey1`).
 pub const SECONDARY_KEY: Key = Key::Control;
 /// The secondary weapon select key: the original's default
-/// (`weapSelect`); with Alt (Option) it selects the one before.
+/// (`weapSelect`); with Alt (Option) it selects the one before, in `wëap`
+/// ID order, on the next pass (see `nova_sim::session`'s
+/// `secondary_select`). Held, it fades the cursor, as `_HandlePlayer` sets
+/// *0x3b5550 on every pass it is down (@0x6ac2a).
 pub const SELECT_KEY: Key = Key::Char('w');
+/// The weapon safety key: the original's default for key-preference slot
+/// 0x2 (`weapSafe`, Keys.nib's "Weapon Safety:"), keycode 0x01, S, which
+/// `_loadKeys` falls back to when the defaults hold none
+/// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
+/// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
+/// [`Session::hold_weapon_safety`](nova_sim::Session::hold_weapon_safety)).
+pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
 pub const TARGET_KEY: Key = Key::Tab;

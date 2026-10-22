@@ -1046,7 +1046,7 @@ fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
 #[test]
 fn space_fires_the_primaries_and_control_the_secondary_while_held() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     view.input(&key(FIRE_KEY, true));
     ticks(&mut view, 2);
     view.input(&held(FIRE_KEY));
@@ -1080,7 +1080,7 @@ fn the_flight_keys_are_held_until_let_go_or_released() {
 #[test]
 fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     view.input(&key(FIRE_KEY, true));
     view.input(&key(SECONDARY_KEY, true));
     ticks(&mut view, 1);
@@ -1094,31 +1094,93 @@ fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE, TORCH]), &[]);
     assert_eq!(secondary_of(&view), None);
     tap(&mut view, SELECT_KEY);
+    assert_eq!(secondary_of(&view), None, "until the next step");
+    ticks(&mut view, 1);
     assert_eq!(secondary_of(&view), Some(ROCKET));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(MISSILE));
     view.input(&held(SELECT_KEY));
+    ticks(&mut view, 1);
     assert_eq!(secondary_of(&view), Some(MISSILE), "a repeat does nothing");
     view.input(&key(Key::Alt, true));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(ROCKET));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(TORCH), "wrapping");
     view.input(&key(Key::Alt, false));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(ROCKET));
     view.input(&key(Key::Alt, true));
     view.release_keys();
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(MISSILE), "Alt let go");
     assert_eq!(SELECT_KEY, Key::Char('w'));
+}
+
+#[test]
+fn w_beeps_as_it_selects_and_is_refused_with_no_secondary() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    sims(&mut view);
+    tap_and_step(&mut view, SELECT_KEY);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 1);
+    let mut unarmed = fighting(armed(0, &[BLASTER]), &[]);
+    sims(&mut unarmed);
+    tap_and_step(&mut unarmed, SELECT_KEY);
+    assert_eq!(count(&mut unarmed, SimSound::Refused), 1);
+    assert_eq!(secondary_of(&unarmed), None);
+}
+
+#[test]
+fn s_held_lets_go_of_the_secondary_on_the_next_step_and_beeps_once() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    tap_and_step(&mut view, SELECT_KEY);
+    sims(&mut view);
+    view.input(&key(DESELECT_KEY, true));
+    assert_eq!(secondary_of(&view), Some(ROCKET), "until the next step");
+    ticks(&mut view, 1);
+    assert_eq!(secondary_of(&view), None);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 1);
+    ticks(&mut view, 2);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 0, "held");
+    view.input(&key(DESELECT_KEY, false));
+    tap_and_step(&mut view, SELECT_KEY);
+    assert_eq!(secondary_of(&view), Some(ROCKET), "let go of");
+    assert_eq!(DESELECT_KEY, Key::Char('s'));
+}
+
+#[test]
+fn s_with_no_secondary_selected_is_silent() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    sims(&mut view);
+    view.input(&key(DESELECT_KEY, true));
+    ticks(&mut view, 2);
+    assert_eq!(secondary_of(&view), None);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 0);
+}
+
+#[test]
+fn s_pressed_while_the_map_is_open_does_nothing_once_it_closes() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    tap_and_step(&mut view, SELECT_KEY);
+    tap(&mut view, MAP);
+    view.input(&key(DESELECT_KEY, true));
+    tap(&mut view, MAP);
+    ticks(&mut view, 2);
+    assert_eq!(secondary_of(&view), Some(ROCKET));
 }
 
 #[test]
 fn the_combat_keys_do_nothing_while_the_map_is_open() {
     let mut view = fighting(armed(2, &[BLASTER, ROCKET, MISSILE]), &two_npcs());
     tap(&mut view, MAP);
-    for k in [Key::Tab, NEAREST_KEY, SELECT_KEY, FIRE_KEY, SECONDARY_KEY] {
+    for k in [
+        Key::Tab,
+        NEAREST_KEY,
+        SELECT_KEY,
+        DESELECT_KEY,
+        FIRE_KEY,
+        SECONDARY_KEY,
+    ] {
         view.input(&key(k, true));
     }
     tap(&mut view, MAP);
@@ -2810,7 +2872,7 @@ fn the_hud_shows_no_target_and_the_secondary_weapon() {
     let list = texts(&drawn(&view));
     assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
     assert!(list.contains(&NO_SECONDARY.to_owned()), "{list:?}");
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     let list = texts(&drawn(&view));
     assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
     let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));

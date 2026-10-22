@@ -346,7 +346,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 44] = [
+    const GAME_CHARACTER_KEYS: [Key; 45] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -356,6 +356,7 @@ mod tests {
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
         nova_view::flight::view::SELECT_KEY,
+        nova_view::flight::view::DESELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
         nova_view::flight::view::HYPERSPACE_MODE_KEY,
