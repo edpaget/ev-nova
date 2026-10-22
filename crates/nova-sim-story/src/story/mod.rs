@@ -1595,8 +1595,8 @@
 //! - **The dock request** (`_HandlePlayerDockRequest`): after the
 //!   clearance state 0x3b544c above 0x2ed (@0x66c18), the ship's +0x4c at
 //!   most 0 (@0x66c32) and each velocity axis at most 0.75 (the float at
-//!   0xdd658, @0x66c3c-0x66c66; story-runtime phase 17,
-//!   per-axis-landing-speed), it takes |trunc(dx)| and |trunc(dy)|
+//!   0xdd658, @0x66c3c-0x66c66; built by stellar-fidelity phase 6), it
+//!   takes |trunc(dx)| and |trunc(dy)|
 //!   (@0x66c78-0x66cc3), sets the reach to 75 (@0x66cc7), and when the
 //!   slot (the stellar's +0x00) has a current frame (+0x50, @0x66ccf)
 //!   replaces it with cvttsd2si(width × 1.75), 0xdd6e8 being the double
@@ -2455,6 +2455,60 @@
 //! stellar's landing radius at or below 1.0 a tick, flying its own
 //! approach; the Bible says nothing of how an NPC lands. The landing's end
 //! and its wait are the original's under either reading.
+//!
+//! ## Built by stellar-fidelity phase 6
+//!
+//! - **The player's landing speed.** `nova_sim_state::landing::check_landing`
+//!   reads the speed by [`landing_speed`](crate::RuleKey::LandingSpeed):
+//!   by the engine a ship is too fast unless |vx| and |vy| are each at
+//!   most `PER_AXIS_LANDING_SPEED`, 0.75, compared in single precision,
+//!   inclusive, a NaN on either axis refused. So a ship at 0.7 on each
+//!   axis (about 0.99 overall) lands, and one at 0.8 on one axis is too
+//!   fast. `Session::land_press` passes the session's reading to
+//!   `land_or_select`. The refusal, its wording and its beep are as
+//!   before.
+//!
+//! **Readings.** The Rulebook key
+//! [`landing_speed`](crate::RuleKey::LandingSpeed) defaults to the
+//! engine's per-axis gate. The other reading is the port's earlier check,
+//! the overall speed at most 1.0 a tick. The Bible says nothing of a
+//! landing speed (the manual says only "moving too fast").
+//!
+//! ## Checked for stellar-fidelity phase 6
+//!
+//! `_HandlePlayerDockRequest` (@0x66691-0x67ef9), after the request's
+//! earlier steps (landability @0x6695c-0x669ae, the fee @0x669b4-0x66a80,
+//! the cloak @0x66a85-0x66ae9, disabled and dying silently to the
+//! epilogue @0x66aee-0x66b14, the station byte @0x66b1a-0x66b3f, and
+//! uninhabited "No response." @0x66b51-0x66bcd), gates the landing in
+//! this order:
+//!
+//! 1. The target is the request's (@0x66bd2-0x66be5), else the request
+//!    branch at 0x6788f.
+//! 2. `_FloatAbs` of vx (+0x20) and vy (+0x24), each stored as a float
+//!    (@0x66beb-0x66c1d).
+//! 3. The counter `_dockPermission` (0x3b544c) above 0x2ed
+//!    (@0x66c13-0x66c23; a 16-bit `cmpw`, not replicated), else 0x676db.
+//! 4. The AI wait: the ship's +0x4c above 0 refuses (@0x66c29-0x66c36).
+//!    The player's +0x4c is never above 0 (zeroed @0x66b6d; see
+//!    ship-handling-fidelity phase 2), so this always passes.
+//! 5. |vx| against the **single-precision float** 0.75 at 0xdd658 (bytes
+//!    `0000403f`; the phase plan said a double, which it is not):
+//!    `ucomiss`, `ja` refusing above and `jp` on NaN (@0x66c3c-0x66c51).
+//! 6. |vy| against it, `jb` refusing above and, the compare unordered, on
+//!    NaN (@0x66c57-0x66c66). So the gate is per axis and inclusive.
+//! 7. The reach box (@0x66c6c-0x66cfd, built by phase 10), else "too far"
+//!    at 0x67687.
+//!
+//! The refusal (@0x676db-0x67838) beeps `_beepSnd[3]`, `snd ` 153
+//! (@0x676fe; silent for a `_dockTarget` above 0x7ff, @0x67711),
+//! recomputes the reach (@0x67720-0x677b2) and says "too fast" (`STR#`
+//! 2002 #69-#72) only when the ship is inside it on both axes and the
+//! counter is above 0x2ed (@0x677b2-0x677c0), else "too far" (#65-#68),
+//! for 360 ticks (@0x6787f). The engine's refusal order already matched;
+//! only the speed compare changed. The fee's branches (@0x669b4-0x66a80,
+//! @0x66db9-0x66df5) are stellar-fidelity phase 15's; the cloak refusal
+//! is cloaking-fidelity phase 8's; every other branch was already built.
 
 //! # Mission lifecycle
 //!
