@@ -193,10 +193,8 @@ impl Behaviour for EscortAi {
     ///    glide (`_LaunchFighter` @0x3d843-0x3d85b).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if player_breaking_up(around) {
-            return Decision {
-                goal: Goal::Idle,
-                ..Decision::default()
-            };
+            // Goal 0 ([`Goal::Idle`], the default), its target kept.
+            return Decision::default();
         }
         let order = out_of_ammo::escort_order(npc, npc.escort_order());
         if takes_players_jump(around) {
