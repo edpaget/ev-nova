@@ -538,4 +538,48 @@ mod tests {
             *session = session.clone().with_rules(blessing_now);
         }));
     }
+
+    /// [`armed_128`] with stellar 128 independent: no government of its
+    /// own, in the Federation's system 130.
+    fn independent_128() -> FakePilotCatalog {
+        let mut catalog = armed_128();
+        let site = &mut catalog.sites[0].1[0];
+        assert_eq!(site.id, StellarId(128));
+        site.govt = None;
+        catalog
+    }
+
+    #[test]
+    fn an_independent_stellar_judges_by_its_systems_government() {
+        let catalog = independent_128();
+        assert!(
+            !fires_at(&catalog, -6, |_| {}),
+            "at the Federation's -CrimeTol"
+        );
+        assert!(fires_at(&catalog, -7, |_| {}));
+    }
+
+    #[test]
+    fn an_iff_mark_on_its_systems_government_spares_a_criminal_from_an_independent_stellar() {
+        let catalog = independent_128();
+        assert!(!fires_at(&catalog, -7, |session| {
+            session.space.iff_marked.insert(FEDERATION);
+        }));
+    }
+
+    #[test]
+    fn its_systems_governments_blessing_leaves_an_independent_stellar_firing() {
+        let mut catalog = independent_128();
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            affil_govt: Some(FEDERATION),
+            flags: crate::rank::BLESSES_PEACE,
+            ..rank(200)
+        }];
+        let blessing_now =
+            Rulebook::default().with_override(RuleKey::BlessingRefresh, RuleSource::Bible);
+        assert!(fires_at(&catalog, -7, |session| {
+            *session = session.clone().with_rules(blessing_now);
+            session.pilot.ranks.insert(crate::catalog::RankId(200));
+        }));
+    }
 }
