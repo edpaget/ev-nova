@@ -591,4 +591,9 @@ exclude_re = [
     # `PilotCatalog::voices`' default body is `Voices::default()`, so
     # replacing it with `Default::default()` is the same body.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::voices -> Voices with Default::default\\(\\)$",
+    # Right onto an empty cell: testing the cell itself (`cell * 1`) for
+    # the next one lets the cell move on, but the step back after it
+    # (@0x5835a-0x583b8) returns to the last listed, the cell it left, so
+    # the filter's own check (@0x5823c-0x5824a) changes nothing seen.
+    "nova-view/src/spaceport/grid_arrows\\.rs:167:37: replace \\+ with \\* in filter$",
 ]
