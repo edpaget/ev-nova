@@ -80,10 +80,10 @@ pub const GREY: Color = Color::DIM;
 /// then `GridDim` (@0x57848-0x578c7, @0x58f44-0x58fbf).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridColors {
-    /// Every listed cell's frame, `_shopGridColor`[1].
+    /// Every listed cell's frame, `_shopGridColor[1]`.
     pub dim: Color,
     /// The selected cell's frame, drawn over the dim ones,
-    /// `_shopGridColor`[0].
+    /// `_shopGridColor[0]`.
     pub bright: Color,
 }
 
