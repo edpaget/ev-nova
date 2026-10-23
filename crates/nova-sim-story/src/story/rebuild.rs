@@ -263,8 +263,11 @@ impl Rebuilt {
             || held != self.held
             || empty != self.empty
             || marked(&uncounted) != marked(&self.uncounted)
-            || !self.stale.is_empty()
             || still != self.still;
+        // A frame kept through a clone that counts none (`stale`) is
+        // cleared here, but only ever with a change above: it was kept
+        // because the slot's frames counted none, and a rebuild point
+        // that keeps them uncounted empties the slot.
         self.dead = dead;
         self.masters = masters;
         self.empty = empty;
@@ -1093,6 +1096,22 @@ mod tests {
         rebuilt.frame(&sites, destroyed(&[128]), Bible);
         assert!(rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Bible));
         assert!(!rebuilt.still(StellarId(128)));
+    }
+
+    #[test]
+    fn a_rebuild_point_reports_a_frame_kept_through_a_rules_change_let_go() {
+        // A `DeadType` that counts no frames by the engine's reading,
+        // destroyed throughout.
+        let sites = [counting(128, true, false)];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Bible);
+        // The engine's reading for one frame: its clone keeps the frame.
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        assert!(rebuilt.frozen(me));
+        assert!(rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Bible));
+        assert!(!rebuilt.frozen(me));
+        assert_eq!(rebuilt.showing(me), Some(Dead));
     }
 
     #[test]
