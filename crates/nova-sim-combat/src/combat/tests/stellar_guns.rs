@@ -99,3 +99,97 @@ fn a_stellars_shot_passes_through_a_ship_in_its_way_and_strikes_its_target_by_no
     assert_eq!(on_a[0].by, None, "by no one");
     assert!(combat.shots().is_empty(), "spent on A");
 }
+
+/// [`turret`] doing no mass damage, which passes over a disabled ship.
+fn massless() -> WeaponRecord {
+    WeaponRecord {
+        mass_dmg: 0,
+        ..turret()
+    }
+}
+
+/// A pirate, NPC `id`, `distance` above the stellar.
+fn pirate(id: u32, distance: f32) -> Ship {
+    Ship {
+        govt: Some(PIRATES),
+        ..Ship::at(id, 0.0, -distance)
+    }
+}
+
+/// The ship [`stellar`]'s gun, armed with `record`, aims its shot at among
+/// `ships`, if it fires.
+fn aimed_at(ships: &mut [Ship], record: WeaponRecord) -> Option<ShipRef> {
+    let arsenal = Arsenal::new(&[record], Vec::new());
+    let govts = govts();
+    let mut combat = Combat::default();
+    let fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    combat.fire_stellar_guns(&fighters, arena, &mut [stellar()], &mut NeverFires);
+    combat.shots().first().and_then(|shot| shot.aimed_at)
+}
+
+#[test]
+fn the_gun_passes_over_a_fighter_cloaked_disabled_jumping_in_or_destroyed() {
+    let near = || pirate(1, 100.0);
+    let far = || pirate(2, 300.0);
+    assert_eq!(
+        aimed_at(&mut [near(), far()], massless()),
+        Some(A),
+        "nearer"
+    );
+    let breaking_up = || Ship {
+        condition: Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        },
+        ..near()
+    };
+    let held_disabled = || Ship {
+        held_disabled: true,
+        ..near()
+    };
+    for (state, decoy) in [("breaking up", breaking_up()), ("held", held_disabled())] {
+        assert_eq!(
+            aimed_at(&mut [decoy, far()], turret()),
+            Some(A),
+            "{state}: an ordinary gun fires at a disabled ship"
+        );
+    }
+    let passed_over = [
+        (
+            "cloaked",
+            Ship {
+                cloaked: true,
+                ..near()
+            },
+            turret(),
+        ),
+        ("breaking up", breaking_up(), massless()),
+        ("held disabled", held_disabled(), massless()),
+        (
+            "jumping in",
+            Ship {
+                jumping_in: true,
+                ..near()
+            },
+            turret(),
+        ),
+        (
+            "destroyed",
+            Ship {
+                condition: Condition::Destroyed,
+                ..near()
+            },
+            turret(),
+        ),
+    ];
+    for (state, decoy, record) in passed_over {
+        assert_eq!(aimed_at(&mut [decoy, far()], record), Some(B), "{state}");
+    }
+}

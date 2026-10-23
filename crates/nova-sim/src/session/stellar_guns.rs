@@ -407,6 +407,25 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_jumping_in_draws_no_fire() {
+        let catalog = gunned(armed(), &[128], 1);
+        let fires = |mode: Option<crate::traffic::npc::Mode>| {
+            let mut session = facing_an_npc(&catalog, 90);
+            place_player(&mut session, 0);
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.state.position = Vec2::new(30.0, -60.0);
+            if let Some(mode) = mode {
+                npc.mode = mode;
+            }
+            fight(&mut session);
+            !fired(&mut session).is_empty()
+        };
+        assert!(fires(None), "at the NPC, the player clean");
+        let gliding = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        assert!(!fires(Some(gliding)));
+    }
+
+    #[test]
     fn a_stellar_another_visible_system_holds_still_fires_unshown() {
         let mut catalog = gunned(catalog(), &[129], 1);
         catalog.systems.push(SystemId(125));
