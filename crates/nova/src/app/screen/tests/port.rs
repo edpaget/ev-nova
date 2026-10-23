@@ -851,42 +851,140 @@ fn port_nav_mode(screen: &AppScreen) -> Option<nova_sim::NavMode> {
         .map(nova_sim::Session::nav_mode)
 }
 
-/// Opens the map from what `screen` shows with M, clears the route on it,
-/// and closes it with Escape, back to the spaceport with the nav put
-/// back.
-fn map_from_a_port_screen(screen: &mut AppScreen, what: &str) {
-    let landed = port_nav_mode(screen);
+/// The router over [`shipbuying_data`]'s shops, Alpha (128) linking
+/// Beta (129) and back, the booster's `OnPurchase` `outfit_hook` and ship 129's
+/// `ship_hook`, the planner's click writing the nav in port
+/// (`MapPlotting`'s Bible reading), flying a new pilot named Ada,
+/// landed.
+fn landed_planning(outfit_hook: &[u8], ship_hook: &[u8]) -> AppScreen {
+    let mut built = game_data_fork(true, true, true, 100, b"", outfit_hook, None).build();
+    let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+    built.put_u16(alpha + 0x04, 129);
+    let beta = built.layout.data_entry(System::TYPE, 129) + 4;
+    built.put_u16(beta + 0x04, 128);
+    // `OnPurchase`, at 0x26A.
+    let second = built.layout.data_entry(Ship::TYPE, 129) + 4 + 0x26A;
+    built.bytes[second..second + ship_hook.len()].copy_from_slice(ship_hook);
+    let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+        .with_rules(Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible))
+        .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(&MemoryPilots::new())), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    assert_eq!(port_nav_mode(&screen), Some(LANDED_NAV));
+    screen
+}
+
+/// The nav a landing at Earth (128) shows.
+const LANDED_NAV: nova_sim::NavMode = nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)));
+
+/// Opens the map from what `screen` shows with M, plots `system` on it
+/// with the planner's click, which cues it, and closes it with
+/// Escape, back to the spaceport: the nav after the close. A map that
+/// put back no nav would keep the cue.
+fn plot_on_a_port_screens_map(
+    screen: &mut AppScreen,
+    system: SystemId,
+    what: &str,
+) -> Option<nova_sim::NavMode> {
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::FlightMap, "{what}");
-    screen.input(&key(Key::Char('c'), true));
-    screen.input(&key(Key::Char('c'), false));
-    assert_ne!(port_nav_mode(screen), landed, "{what}: Clear Route");
+    let at = scrolled_to(screen, system);
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+    assert_eq!(
+        port_nav_mode(screen),
+        Some(nova_sim::NavMode::Hyperspace(Some(system))),
+        "{what}: plotted and cued"
+    );
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
     assert_eq!(screen.showing(), Showing::Spaceport, "{what}: closed");
-    assert_eq!(port_nav_mode(screen), landed, "{what}: put back");
+    port_nav_mode(screen)
 }
 
 #[test]
 fn the_map_key_opens_the_map_over_the_spaceport_and_the_exchange_which_stay_open() {
-    let store = MemoryPilots::new();
-    let mut screen = landed_trader(&store);
-    map_from_a_port_screen(&mut screen, "the spaceport");
+    // The bare spaceport has no port dialog's save, so the exchange's
+    // put-back would keep the cue, as would the bar's and none. Nothing
+    // in the exchange writes the nav, so its save is the nav as its map
+    // opens: the outfitter's test tells that put-back from the
+    // spaceport's.
+    let mut screen = landed_planning(b"", b"");
+    assert_eq!(
+        plot_on_a_port_screens_map(&mut screen, SystemId(129), "the spaceport"),
+        Some(LANDED_NAV),
+        "the nav as the map opened"
+    );
     assert!(spaceport(&screen).open_trade().is_none());
     assert!(!spaceport(&screen).left(), "still docked");
     click_port_item(&mut screen, 7);
-    map_from_a_port_screen(&mut screen, "the exchange");
+    assert!(spaceport(&screen).open_trade().is_some(), "trading");
+    assert_eq!(
+        plot_on_a_port_screens_map(&mut screen, SystemId(129), "the exchange"),
+        Some(LANDED_NAV),
+        "the exchange's save put back"
+    );
     assert!(spaceport(&screen).open_trade().is_some(), "still trading");
 }
 
 #[test]
+fn the_outfitters_map_puts_back_the_nav_the_outfitter_opened_with() {
+    // A purchase's landed `M` writes the nav after the outfitter's save,
+    // so the nav as the map opens isn't the save the outfitter puts
+    // back.
+    let mut screen = landed_planning(b"M129", b"");
+    click_port_item(&mut screen, 8);
+    assert!(spaceport(&screen).open_outfitter().is_some(), "outfitting");
+    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::Char('b'), false));
+    assert_ne!(
+        port_nav_mode(&screen),
+        Some(LANDED_NAV),
+        "the purchase's M writes the nav"
+    );
+    assert_eq!(
+        plot_on_a_port_screens_map(&mut screen, SystemId(128), "the outfitter"),
+        Some(LANDED_NAV),
+        "the outfitter's save put back"
+    );
+    assert!(
+        spaceport(&screen).open_outfitter().is_some(),
+        "still outfitting"
+    );
+}
+
+#[test]
 fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
-    let mut screen = landed_shipyard(&MemoryPilots::new());
+    // A purchase's landed `M` writes the nav after the shipyard's save,
+    // so the nav as each map opens isn't the save.
+    let mut screen = landed_planning(b"", b"M129");
     click_port_item(&mut screen, 9);
-    map_from_a_port_screen(&mut screen, "the shipyard");
+    press_b(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+    let bought = port_nav_mode(&screen);
+    assert_ne!(bought, Some(LANDED_NAV), "the purchase's M writes the nav");
+    assert_eq!(
+        plot_on_a_port_screens_map(&mut screen, SystemId(128), "the shipyard"),
+        bought,
+        "the shipyard: the nav as the map opened"
+    );
     screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
-    map_from_a_port_screen(&mut screen, "its Info panel");
+    assert_eq!(
+        plot_on_a_port_screens_map(&mut screen, SystemId(128), "its Info panel"),
+        bought,
+        "the Info panel: the nav as the map opened"
+    );
     assert!(
         spaceport(&screen)
             .open_shipyard()
