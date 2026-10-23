@@ -112,7 +112,7 @@ pub(crate) const TEST_GRID_COLORS: GridColors = GridColors {
 
 /// Frames `cell` in `color`, as the dialog updates `FrameRect` each listed
 /// cell and then the selected one.
-pub fn frame_cell(list: &mut DrawList, cell: Bounds, color: Color) {
+fn frame_cell(list: &mut DrawList, cell: Bounds, color: Color) {
     frame_rect(list, cell, color);
 }
 
@@ -415,10 +415,16 @@ impl CellGrid {
     #[must_use]
     pub fn shown_bounds(&self, grid: Bounds, index: usize, count: usize) -> Option<Bounds> {
         let first = self.top_row * COLUMNS;
-        let shown = first..count.min(first + COLUMNS * GRID_ROWS);
-        shown
+        self.shown_range(count)
             .contains(&index)
             .then(|| cell_bounds(grid, index - first))
+    }
+
+    /// The indexes of the cells of `count` shown: the grid's rows from its
+    /// first shown.
+    fn shown_range(&self, count: usize) -> std::ops::Range<usize> {
+        let first = self.top_row * COLUMNS;
+        first..count.min(first + COLUMNS * GRID_ROWS)
     }
 
     /// The cells of `count` shown, each index with where its cell is in a
@@ -426,9 +432,35 @@ impl CellGrid {
     #[must_use]
     pub fn shown(&self, grid: Bounds, count: usize) -> Vec<(usize, Bounds)> {
         let first = self.top_row * COLUMNS;
-        (first..count.min(first + COLUMNS * GRID_ROWS))
+        self.shown_range(count)
             .map(|index| (index, cell_bounds(grid, index - first)))
             .collect()
+    }
+
+    /// Draws the cells of `count` shown in a grid item at `grid`: each
+    /// one's contents (`draw_contents`, given its index and bounds), then
+    /// its frame in `colors.dim`; then, after every dim frame, the
+    /// `selected` cell, when it is shown, framed again in `colors.bright`
+    /// over its neighbours' shared lines. No cell is filled, as
+    /// `_OutfitDialogUpdate` (@0x573ef-0x57895, @0x578a1-0x578c7) and
+    /// `_ShipyardDialogUpdate`, which also draws the hire screen's grid
+    /// (@0x58b30-0x58f91, @0x58f9d-0x58fbf), draw them.
+    pub fn draw_cells(
+        &self,
+        list: &mut DrawList,
+        grid: Bounds,
+        count: usize,
+        selected: Option<usize>,
+        colors: GridColors,
+        mut draw_contents: impl FnMut(&mut DrawList, usize, Bounds),
+    ) {
+        for (index, cell) in self.shown(grid, count) {
+            draw_contents(list, index, cell);
+            frame_cell(list, cell, colors.dim);
+        }
+        if let Some(cell) = selected.and_then(|index| self.shown_bounds(grid, index, count)) {
+            frame_cell(list, cell, colors.bright);
+        }
     }
 }
 
@@ -951,6 +983,71 @@ mod tests {
             scrolled.cell_under(area, Point::new(10.0 + 84.0, 20.0 + 55.0)),
             Some(4 + 5),
             "a row down from the scroll"
+        );
+    }
+
+    /// What [`CellGrid::draw_cells`] draws, with each cell's contents a
+    /// one-colour text naming its index.
+    fn drawn_cells(
+        grid: &CellGrid,
+        area: Bounds,
+        count: usize,
+        selected: Option<usize>,
+    ) -> DrawList {
+        let mut list = DrawList::new();
+        grid.draw_cells(
+            &mut list,
+            area,
+            count,
+            selected,
+            TEST_GRID_COLORS,
+            |list, index, cell| {
+                text(list, &index.to_string(), cell.min, TEXT_COLOR);
+            },
+        );
+        list
+    }
+
+    #[test]
+    fn each_shown_cell_is_framed_dim_after_its_contents_and_the_selected_one_bright_last() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let mut grid = CellGrid::default();
+        grid.scroll(true, 22);
+        let mut expected = DrawList::new();
+        for (index, cell) in grid.shown(area, 22) {
+            text(&mut expected, &index.to_string(), cell.min, TEXT_COLOR);
+            frame_rect(&mut expected, cell, TEST_GRID_COLORS.dim);
+        }
+        let selected = grid.shown_bounds(area, 9, 22).expect("shown");
+        frame_rect(&mut expected, selected, TEST_GRID_COLORS.bright);
+        assert_eq!(
+            commands(&drawn_cells(&grid, area, 22, Some(9))),
+            commands(&expected),
+            "rows 1 to 5, each framed after its contents, then cell 9 bright"
+        );
+    }
+
+    #[test]
+    fn a_selection_not_shown_or_none_is_not_framed_bright() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let mut grid = CellGrid::default();
+        grid.scroll(true, 22);
+        let mut unselected = DrawList::new();
+        for (index, cell) in grid.shown(area, 22) {
+            text(&mut unselected, &index.to_string(), cell.min, TEXT_COLOR);
+            frame_rect(&mut unselected, cell, TEST_GRID_COLORS.dim);
+        }
+        let unselected = commands(&unselected);
+        assert_eq!(commands(&drawn_cells(&grid, area, 22, None)), unselected);
+        assert_eq!(
+            commands(&drawn_cells(&grid, area, 22, Some(2))),
+            unselected,
+            "scrolled off the top"
+        );
+        assert_eq!(
+            commands(&drawn_cells(&CellGrid::default(), area, 0, Some(0))),
+            [],
+            "nothing listed"
         );
     }
 

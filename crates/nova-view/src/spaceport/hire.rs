@@ -394,21 +394,22 @@ impl HireScreen {
             return;
         };
         let count = self.list.rows.len();
-        for (index, cell) in self.grid.shown(area, count) {
-            let row = &self.list.rows[index];
-            let mut y = cell.min.y + INSET;
-            for (line, color) in name_lines(&row.short_name) {
-                text(list, line, Point::new(cell.min.x + INSET, y), color);
-                y += line_height;
-            }
-            grid::frame_cell(list, cell, self.colors.dim);
-        }
-        if let Some(cell) = self
-            .selected()
-            .and_then(|index| self.grid.shown_bounds(area, index, count))
-        {
-            grid::frame_cell(list, cell, self.colors.bright);
-        }
+        let selected = self.selected();
+        self.grid.draw_cells(
+            list,
+            area,
+            count,
+            selected,
+            self.colors,
+            |list, index, cell| {
+                let row = &self.list.rows[index];
+                let mut y = cell.min.y + INSET;
+                for (line, color) in name_lines(&row.short_name) {
+                    text(list, line, Point::new(cell.min.x + INSET, y), color);
+                    y += line_height;
+                }
+            },
+        );
     }
 
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
@@ -1209,51 +1210,26 @@ mod tests {
         framed(screen, index, grid::TEST_GRID_COLORS.bright)
     }
 
-    fn position(commands: &[DrawCommand], part: &[DrawCommand]) -> Option<usize> {
-        commands
-            .windows(part.len())
-            .position(|window| window == part)
-    }
-
     fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
-        position(commands, part).is_some()
+        commands.windows(part.len()).any(|window| window == part)
     }
 
+    /// The frame rule itself is `grid::CellGrid::draw_cells`'s, tested
+    /// there; this checks the hire screen hands it its grid item, rows,
+    /// selection and `cölr` colours.
     #[test]
-    fn every_shown_cell_is_framed_dim_and_the_selected_one_bright_last_and_unfilled() {
+    fn the_grid_is_drawn_by_the_shared_cell_rule_on_its_item_in_the_catalogs_colours() {
         let mut screen = screen_of(&art(), long(22));
         let grid_item = item(&screen, GRID_ITEM);
         let commands = drawn(&screen);
-        let mut last_dim = 0;
         for index in 0..20 {
             assert_eq!(
                 screen.cell_bounds(index),
                 Some(grid::cell_bounds(grid_item, index))
             );
-            let at = position(&commands, &frame(&screen, index)).expect("framed");
-            last_dim = last_dim.max(at);
+            assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
-        let named = |n: usize| {
-            texts(&screen)
-                .iter()
-                .any(|(text, _, _)| *text == format!("{}", 200 + n))
-        };
-        assert!(named(19) && !named(20), "20 cells shown");
-        assert!(
-            !contains(&commands, &frame(&screen, 20)),
-            "none past the fifth row"
-        );
-        let bright = position(&commands, &bright_frame(&screen, 0)).expect("selected");
-        assert!(bright > last_dim, "after every dim frame");
-        let cell = screen.cell_bounds(0).expect("a cell");
-        assert!(
-            !commands.iter().any(|command| matches!(
-                command,
-                DrawCommand::Line { from, to, width, .. }
-                    if from.x == cell.min.x && to.x == cell.max.x && *width == cell.height()
-            )),
-            "the selected cell is not filled"
-        );
+        assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
         screen.input(&key(Key::Right, false));
         let commands = drawn(&screen);
         assert!(!contains(&commands, &bright_frame(&screen, 0)));
