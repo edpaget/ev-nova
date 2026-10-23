@@ -1634,6 +1634,25 @@ mod tests {
         }
     }
 
+    /// The limit is measured from the ship, wherever it is.
+    #[test]
+    fn by_the_engine_the_gate_limit_is_measured_from_the_ship() {
+        let from = Vec2::new(1000.0, -400.0);
+        for gate in GATES {
+            let sites = [site(128, 5000.0, 0.0), gate(130, 1100.0, -400.0)];
+            assert_eq!(
+                nearest_stellar(from, &sites, RuleSource::Engine),
+                Some(StellarId(130))
+            );
+            let sites = [site(128, 5000.0, 0.0), gate(130, 1300.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(from, &sites, RuleSource::Engine),
+                Some(StellarId(128)),
+                "exactly 500 away"
+            );
+        }
+    }
+
     /// An untargeted L selects as the pick does, by each reading.
     #[test]
     fn untargeted_l_selects_by_the_gate_reading() {

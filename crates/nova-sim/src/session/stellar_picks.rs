@@ -368,4 +368,20 @@ pub(super) mod tests {
             "140, shown, at the centre"
         );
     }
+
+    /// A stellar shown stays a candidate though its system is hidden
+    /// since the last rebuild point: its +0x44 is set at the rebuild
+    /// points, and the stellars shown stand for it until the next.
+    #[test]
+    fn a_stellar_shown_stays_a_candidate_after_its_system_is_hidden() {
+        let catalog = twice_listed(wormhole);
+        let mut session = in_131(&catalog, engine(), NEAR_140);
+        crate::session::tests::hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(140)]
+        );
+        assert!(session.land().is_ok());
+        assert_eq!(session.nav_target(), Some(StellarId(140)));
+    }
 }
