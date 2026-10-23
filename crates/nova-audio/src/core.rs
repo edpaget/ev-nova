@@ -339,6 +339,7 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.escort_group, at::ESCORT_GROUP);
             }
             UiSound::NoEscorts => self.play(self.table.no_escorts, at::NO_ESCORTS),
+            UiSound::BuyRefused => self.play(self.table.buy_refused, at::BUY_REFUSED),
             UiSound::EnterRefused => {
                 self.play(self.table.enter_refused, at::ENTER_REFUSED);
             }
@@ -993,6 +994,7 @@ mod tests {
             (Sound::Ui(UiSound::EscortMenuToggled), at::ESCORT_MENU),
             (Sound::Ui(UiSound::EscortGroupSelected), at::ESCORT_GROUP),
             (Sound::Ui(UiSound::NoEscorts), at::NO_ESCORTS),
+            (Sound::Ui(UiSound::BuyRefused), at::BUY_REFUSED),
             (Sound::Ui(UiSound::EnterRefused), at::ENTER_REFUSED),
             (Sound::Ui(UiSound::NewsOpened), at::NEWS_OPEN),
             (Sound::Ui(UiSound::MissionInfoOpened), at::NEWS_OPEN),

@@ -1830,6 +1830,15 @@ fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
     landed_shipyard_of(shipbuying_data(), store)
 }
 
+/// Selects the open shipyard's first cell, as Right picks it from none:
+/// by the engine the shipyard opens with nothing selected
+/// (`_DoShipyardDialog` @0x5e6d8-0x5e705, `_ShipyardFilter`
+/// @0x60734-0x607b7).
+fn select_first_ship(screen: &mut AppScreen) {
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Right, false));
+}
+
 /// [`landed_shipyard`], on `data`.
 fn landed_shipyard_of(data: Rc<GameData>, store: &MemoryPilots) -> AppScreen {
     let mut screen = AppScreen::new(data)

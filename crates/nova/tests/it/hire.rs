@@ -814,6 +814,8 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     }
     game.tap(Key::Char('h'));
     assert!(game.hiring());
+    // It opens with nothing selected: Right picks the first ship.
+    game.tap(Key::Right);
     let shown = texts(&game.frame());
     for text in [
         "Hiring Price:",
@@ -997,6 +999,7 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
     });
     game.open_bar();
     game.tap(Key::Char('h'));
+    game.tap(Key::Right);
     let shown = texts(&game.frame());
     for text in ["Hiring Price:", "7 cr"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
@@ -1037,6 +1040,7 @@ fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
     game.open_bar();
     game.tap(Key::Char('h'));
     assert!(game.hiring());
+    game.tap(Key::Right);
     game.tap(nova_view::spaceport::shipyard::INFO_KEY);
     let bounds = game
         .app

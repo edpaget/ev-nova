@@ -299,6 +299,14 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             let picture = decode_pict(picture.resource.data()).expect("decodes");
             assert_eq!((picture.width(), picture.height()), size, "{id}");
         }
+        // It opens with nothing selected, as `_DoShipyardDialog` does;
+        // Right picks the first cell.
+        assert_eq!(screen.selected(), None, "nothing selected as it opens");
+        screen.input(&nova_view::Input::Key {
+            key: nova_view::Key::Right,
+            pressed: true,
+            repeat: false,
+        });
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(

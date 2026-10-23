@@ -332,6 +332,10 @@ pub struct HireList {
     pub cash: i64,
     /// Whether the fleet has room for another escort.
     pub room: bool,
+    /// How each disputed rule reads, the bar's ([`Bar::rules`]): the
+    /// hire screen reads its grid's
+    /// ([`RuleKey::GridSelection`]) from it.
+    pub rules: Rulebook,
 }
 
 impl HireList {
@@ -483,6 +487,7 @@ impl Bar<'_> {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: self.cash,
             room: self.room,
+            rules: self.rules,
         }
     }
 }
@@ -696,6 +701,7 @@ mod tests {
             rows: vec![row(128), row(129)],
             cash: 0,
             room: true,
+            rules: Rulebook::default(),
         };
         assert_eq!(list.row(ShipId(129)).map(|row| row.id), Some(ShipId(129)));
         assert_eq!(list.row(ShipId(130)), None);
@@ -904,6 +910,13 @@ mod tests {
         );
         assert_eq!(open.check(ShipId(129)), Err(HireRefusal::NotForHire));
         assert_eq!(open.check(ShipId(130)), Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn the_list_carries_the_bars_rules_to_the_hire_screen() {
+        let rules = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+        let list = hire_list(&[for_hire(129)], 5000, (true, true), &AllowAll, rules);
+        assert_eq!(list.rules, rules);
     }
 
     #[test]

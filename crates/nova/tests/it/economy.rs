@@ -940,6 +940,8 @@ fn outfit_for_the_ship(game: &mut Harness, store: &MemoryPilots) {
     // 4. The shipyard lists the new ship, greyed: its licence is missing.
     //    The old one, never for sale, is not listed.
     game.open(9);
+    // It opens with nothing selected: Right picks the first ship.
+    game.press(KeyCode::ArrowRight);
     let ids: Vec<_> = game
         .shipyard()
         .shipyard()
@@ -995,6 +997,7 @@ fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
     //    without the interface file's "Text Input", and Return takes the
     //    default and buys the ship: 6,650 - 8,000 + 3,500.
     game.open(9);
+    game.press(KeyCode::ArrowRight);
     assert_eq!(game.shipyard().shipyard().check(NEW), Ok(()));
     let shown = texts(&game.frame());
     for text in [

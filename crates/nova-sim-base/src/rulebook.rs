@@ -89,7 +89,7 @@
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; `nova_sim::Outfitter::check_at`) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; `nova_sim::Session`) | the ordered outfit and the pass index are kept††††† |
 //! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; `nova_sim::Session`) | the selected cell is kept and the outfitter stays open§§§§§ |
-//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`) | the selection is the highlighted cell: a press on an empty cell is ignored, and the description follows the cell¶¶¶¶¶ |
+//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`); the shipyard's and the hire screen's selection is `_ShipyardFilter`'s ship (`*0xdece4`), which can be none: they open with nothing selected (`_DoShipyardDialog` @0x5e6d8-0x5e705), a press on an empty cell selects nothing (@0x60a5d-0x60a73), and a scroll arrow that scrolls selects nothing (@0x5f580-0x5f5be, @0x5f60b-0x5f670), greying Buy Ship (Hire Escort) and Info and blanking the picture, info box and description (nova-view's `ShipyardScreen` and `HireScreen`) | the selection is the highlighted cell: the first cell is selected on opening, a press on an empty cell is ignored, a scroll keeps the selection, and the outfitter's description follows the cell¶¶¶¶¶ |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; `nova_sim::outfitter::unit_price`) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; `nova_sim::outfitter::unit_mass`) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; `nova_sim::Session`) | an unsellable outfit is left out too†††† |
@@ -467,10 +467,17 @@
 //! reading is the port's earlier behaviour, the selected cell kept and
 //! the outfitter left open after any order, not anything the Bible says.
 //!
-//! ¶¶¶¶¶ The Bible says nothing of the outfitter's grid. The other
-//! reading is the port's earlier behaviour, a press on an empty cell
-//! ignored and the description read whenever the highlighted cell shows
-//! an outfit not already described, not anything the Bible says.
+//! ¶¶¶¶¶ The Bible says nothing of the outfitter's, the shipyard's or
+//! the hire screen's grid. The other reading is the port's earlier
+//! behaviour, a press on an empty cell ignored and the description read
+//! whenever the highlighted cell shows an outfit not already described,
+//! and the shipyard and hire screen opening on their first cell and
+//! keeping it through a scroll, not anything the Bible says. A second
+//! press on a cell within 15 Mac ticks opens Shipyard Info by both
+//! readings (`_ShipyardFilter` @0x60cd7-0x60d12): the port had no
+//! double-click, not a reading of its own. The outfitter's opening and
+//! scroll arrows are not covered by this key yet
+//! (rdm:phase/shop-fidelity-followups/phase-8-outfitter-opens-and-scrolls-off-unselected).
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -1540,6 +1547,31 @@ rule_keys! {
     /// outfit not already described. The Bible says nothing of the grid,
     /// so the other reading is the port's earlier behaviour, not anything
     /// the Bible says (see nova-view's `OutfitterScreen`).
+    ///
+    /// The shipyard and the hire screen read it too, as `_DoShipyardDialog`
+    /// (@0x5e679), which runs both (`*0xdeda0` the hire flag), and its
+    /// `_ShipyardFilter` (@0x60449) keep their selection. By the engine,
+    /// the selected ship (`*0xdece4`) is kept apart from the highlighted
+    /// cell (`*0xded3c`, a visible position 0-19) and can be none (-1).
+    /// Both screens open with nothing selected (@0x5e6d8-0x5e705): Buy
+    /// Ship (Hire Escort) and Info grey (`_CalcShipCanBuy` @0x4f6e3,
+    /// `_DrawShipyardButtons` @0x2a3f7-0x2a405), and the picture, the info
+    /// box and the description are blank (`_ShipyardDialogUpdate`
+    /// @0x58fd0-0x58fda). A press on an empty cell position sets both to
+    /// -1 (@0x60a5d-0x60a73) and reaches no dialog item (@0x60d73-0x60de0).
+    /// A scroll arrow that scrolls (items 12 and 13) sets both to -1 and
+    /// empties the description (@0x5f580-0x5f5be, @0x5f60b-0x5f670); one
+    /// that cannot scroll changes nothing. By the other reading, the
+    /// first cell is selected on opening, a press on an empty cell is
+    /// ignored, falling through to the dialog, and a scroll keeps the
+    /// selection. By both, a second press on the same listed position
+    /// within 15 Mac ticks opens Shipyard Info (@0x60cd7-0x60d12), the
+    /// position counted on screen, not by ship, so a press across a
+    /// scroll opens the ship now there; an empty press between forgets
+    /// the last. The outfitter's opening and scroll arrows are not
+    /// covered yet: that is
+    /// rdm:phase/shop-fidelity-followups/phase-8-outfitter-opens-and-scrolls-off-unselected,
+    /// which joins this key when it is built.
     GridSelection => "grid_selection",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a

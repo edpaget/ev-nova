@@ -20,8 +20,18 @@
 //! shows an escort's daily pay only once it is hired, in the escort dialog,
 //! which the port's comm dialog stands in for.
 //!
+//! Its grid's selection follows
+//! [`RuleKey::GridSelection`] as the shipyard's does (see
+//! [`shipyard`](super::shipyard)): by the engine it opens with nothing
+//! selected, and an empty cell pressed or a scroll that moves selects
+//! nothing; by the other reading it opens on the first cell and keeps
+//! it. By both, a second press on a cell within 15 Mac ticks opens Info,
+//! as `_ShipyardFilter` does in hire mode too (@0x60cd7-0x60d12).
+//!
 //! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
-//! selected ship, and is greyed when it cannot be hired. H acts on a
+//! selected ship, and is greyed when it cannot be hired; H with no ship
+//! selected, or one that cannot be hired, beeps
+//! ([`UiSound::BuyRefused`], @0x5f22a-0x5f256). H acts on a
 //! press only, never a key repeat, so a held H hires one ship. The screen
 //! only records the order ([`HireScreen::take_order`]): whoever holds the
 //! session hires it, and the spaceport closes the screen back to the bar
@@ -34,12 +44,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
-use nova_sim::{HireList, HireRow, ShipId};
+use nova_sim::{HireList, HireRow, RuleKey, RuleSource, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{
     self, CellGrid, GridColors, INSET, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
 };
+use super::grid_clicks::CellClicks;
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
@@ -52,6 +63,7 @@ use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
@@ -133,6 +145,8 @@ pub struct HireScreen {
     bases: Vec<(ShipId, i16)>,
     style: ButtonStyle,
     grid: CellGrid,
+    /// The last cell position pressed, for a double-click.
+    clicks: CellClicks,
     /// The info panel, while it is open.
     panel: Option<Panel>,
     /// The ship asked for, until it is taken.
@@ -140,6 +154,7 @@ pub struct HireScreen {
     closed: bool,
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
+    sounds: Vec<Sound>,
 }
 
 impl HireScreen {
@@ -148,7 +163,10 @@ impl HireScreen {
     /// there are none; the info panel by `info`, "Shipyard Info" (Info is
     /// greyed without it). Its buttons are labelled in `style`, and each
     /// ship's picture and description read from `catalog`, which gives
-    /// the ships' base images once, now. The first cell is selected.
+    /// the ships' base images once, now. By the engine nothing is
+    /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
+    /// reading of [`RuleKey::GridSelection`], read from `list`'s rules,
+    /// the first cell is.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -199,13 +217,26 @@ impl HireScreen {
             bases,
             style,
             grid: CellGrid::default(),
+            clicks: CellClicks::default(),
             panel: None,
             order: None,
             closed: false,
             description_request: None,
+            sounds: Vec::new(),
         };
-        screen.select(0);
+        if screen.follows_shipyard_filter() {
+            screen.grid.clear();
+            screen.selected_changed();
+        } else {
+            screen.select(0);
+        }
         screen
+    }
+
+    /// Whether the grid's selection follows `_ShipyardFilter`'s, which can
+    /// be none ([`RuleKey::GridSelection`] by the engine).
+    fn follows_shipyard_filter(&self) -> bool {
+        self.list.rules.source_for(RuleKey::GridSelection) == RuleSource::Engine
     }
 
     /// The ships shown.
@@ -305,8 +336,11 @@ impl HireScreen {
         self.selected_changed();
     }
 
-    /// Greys Hire Escort when the selected ship cannot be hired, and
-    /// reads its picture and description if they are not shown already.
+    /// Greys Hire Escort when the selected ship cannot be hired, and Info
+    /// with none selected (`_DrawShipyardButtons` @0x2a3f7-0x2a405) or
+    /// without its panel, and reads the ship's picture and description if
+    /// they are not shown already. With none selected, none is shown
+    /// (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
     fn selected_changed(&mut self) {
         let hires = self.selected_row().is_some_and(|row| row.hire.is_ok());
         let ship = self.selected_row().map(|row| row.id);
@@ -315,6 +349,8 @@ impl HireScreen {
             return;
         };
         laid.dialog.set_greyed(HIRE_ITEM, !hires);
+        laid.dialog
+            .set_greyed(INFO_ITEM, laid.info.plain.is_err() || ship.is_none());
         let Some(ship) = ship else {
             laid.shown = None;
             return;
@@ -333,10 +369,15 @@ impl HireScreen {
         laid.shown = Some((ship, shown));
     }
 
-    /// Asks for the selected ship, if it can be hired.
+    /// Asks for the selected ship, if it can be hired; otherwise beeps
+    /// ([`UiSound::BuyRefused`]), as `_DoShipyardDialog`'s item 1 does in
+    /// hire mode with no ship or one it cannot hire (@0x5e9bb-0x5e9d6,
+    /// @0x5f22a-0x5f256).
     fn ask(&mut self) {
         if let Some(row) = self.selected_row().filter(|row| row.hire.is_ok()) {
             self.order = Some(row.id);
+        } else {
+            self.sounds.push(Sound::Ui(UiSound::BuyRefused));
         }
     }
 
@@ -367,21 +408,56 @@ impl HireScreen {
     /// opens the panel, and the arrows scroll. Any other item does
     /// nothing.
     fn activate(&mut self, item: usize) {
-        let count = self.list.rows.len();
         match item {
             DONE_ITEM => self.closed = true,
             HIRE_ITEM => self.ask(),
             INFO_ITEM => self.open_info(),
-            SCROLL_UP_ITEM => self.grid.scroll(false, count),
-            SCROLL_DOWN_ITEM => self.grid.scroll(true, count),
+            SCROLL_UP_ITEM => self.scroll(false),
+            SCROLL_DOWN_ITEM => self.scroll(true),
             _ => {}
         }
     }
 
-    /// The cell index under `at` on the grid, if a listed ship is there.
-    fn cell_at(&self, at: Point) -> Option<usize> {
+    /// Scrolls the grid a row down, or up, never past either end. By the
+    /// engine, a scroll that moves selects nothing, as the shipyard's
+    /// does (`_DoShipyardDialog` @0x5f580-0x5f5be, @0x5f60b-0x5f670).
+    fn scroll(&mut self, down: bool) {
+        if self.grid.scroll(down, self.list.rows.len()) && self.follows_shipyard_filter() {
+            self.grid.clear();
+            self.selected_changed();
+        }
+    }
+
+    /// A press on the grid at list index `index`, listed or not, and says
+    /// whether the grid took it, as the shipyard's does
+    /// ([`ShipyardScreen`](super::shipyard::ShipyardScreen)): a listed cell
+    /// is selected; an empty one selects nothing by the engine and is left
+    /// to the dialog by the other reading; and a second press on a listed
+    /// position soon after the first opens Info ([`CellClicks`],
+    /// `_ShipyardFilter` @0x60a5d-0x60a73, @0x60cd7-0x60d71).
+    fn press_cell(&mut self, index: usize) -> bool {
+        let listed = index < self.list.rows.len();
+        let position = self.grid.visible_position(index);
+        let double = self.clicks.press(listed.then_some(position));
+        if listed {
+            self.select(index);
+        } else if self.follows_shipyard_filter() {
+            self.grid.clear();
+            self.selected_changed();
+        } else {
+            return false;
+        }
+        if double {
+            self.open_info();
+        }
+        true
+    }
+
+    /// The list index under `at` on the grid, listed or not
+    /// ([`CellGrid::cell_under`]).
+    fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_at(grid, at, self.list.rows.len())
+        self.grid.cell_under(grid, at)
     }
 
     /// The shown cells, each its name's lines, then its frame in `GridDim`;
@@ -456,19 +532,22 @@ impl Screen for HireScreen {
             _ => false,
         };
         let pressed_once = |wanted: Key| matches!(*input, Input::Key { key, pressed: true, repeat: false } if key == wanted);
+        let on_grid = match *input {
+            Input::PointerButton {
+                pressed: true, at, ..
+            } => self
+                .cell_under(at)
+                .is_some_and(|index| self.press_cell(index)),
+            _ => false,
+        };
         if arrow {
             self.selected_changed();
         } else if pressed_once(HIRE_KEY) {
             self.ask();
         } else if pressed_once(INFO_KEY) {
             self.open_info();
-        } else if let Some(index) = match *input {
-            Input::PointerButton {
-                pressed: true, at, ..
-            } => self.cell_at(at),
-            _ => None,
-        } {
-            self.select(index);
+        } else if on_grid {
+            // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
             if let Some(DialogEvent::Item(item)) = event {
@@ -478,8 +557,10 @@ impl Screen for HireScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The time since the last press on the grid runs on.
+    fn tick(&mut self, dt: Duration) {
+        self.clicks.advance(dt);
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -520,6 +601,12 @@ impl Screen for HireScreen {
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
+    }
+
+    /// The refused hire's beep ([`UiSound::BuyRefused`]); the buttons are
+    /// silent.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -727,6 +814,7 @@ mod tests {
     /// the cash does not cover; 25,000 credits in hand.
     fn list() -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: vec![
                 row(128, 970, 100, Ok(())),
                 row(140, 50_000, 1, Err(HireRefusal::CannotAfford)),
@@ -736,7 +824,8 @@ mod tests {
         }
     }
 
-    fn screen_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
+    /// The hire screen as it opens, with nothing selected by the engine.
+    fn opened_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         HireScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
@@ -745,6 +834,17 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         )
+    }
+
+    /// The hire screen opened, then the first cell selected, as Right
+    /// picks it from no selection (an arrow, so no press is remembered
+    /// for a double-click).
+    fn screen_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
+        let mut screen = opened_of(art, list);
+        if screen.selected().is_none() {
+            screen.input(&key(Key::Right, false));
+        }
+        screen
     }
 
     fn screen() -> HireScreen {
@@ -932,6 +1032,7 @@ mod tests {
         let screen = screen_of(
             &art(),
             HireList {
+                rules: nova_sim::Rulebook::default(),
                 rows: vec![row(128, 2_500_000, 100, Ok(()))],
                 cash: -1_500,
                 room: true,
@@ -1052,6 +1153,7 @@ mod tests {
                 art,
                 ButtonStyle::STOCK,
             );
+            bare.input(&key(Key::Right, false));
             assert!(!enabled(&bare, INFO_LABEL));
             assert_eq!(bare.selected(), Some(0));
             bare.input(&key(INFO_KEY, false));
@@ -1073,6 +1175,7 @@ mod tests {
             let mut screen = screen_of(
                 &art(),
                 HireList {
+                    rules: nova_sim::Rulebook::default(),
                     rows: vec![row],
                     ..list()
                 },
@@ -1145,6 +1248,7 @@ mod tests {
         let empty = screen_of(
             &art(),
             HireList {
+                rules: nova_sim::Rulebook::default(),
                 rows: Vec::new(),
                 cash: 0,
                 room: true,
@@ -1158,6 +1262,7 @@ mod tests {
     /// `count` ships, numbered from 200, two lines each.
     fn long(count: usize) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..count)
                 .map(|n| row(200 + i16::try_from(n).expect("few"), 10, 1, Ok(())))
                 .collect(),
@@ -1288,6 +1393,7 @@ mod tests {
         let mut row = row(128, 970, 100, Ok(()));
         row.specs.long_name = "The Long 128".to_owned();
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: vec![row],
             ..list()
         }
@@ -1464,5 +1570,190 @@ mod tests {
             }
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
+    }
+
+    // The selection as `_ShipyardFilter` keeps it in hire mode
+    // (`RuleKey::GridSelection`).
+
+    /// The Bible's reading of the grid's selection: the port's, where the
+    /// selection is the highlighted cell.
+    fn bible() -> nova_sim::Rulebook {
+        nova_sim::Rulebook::default().with_override(
+            nova_sim::RuleKey::GridSelection,
+            nova_sim::RuleSource::Bible,
+        )
+    }
+
+    fn click_cell(screen: &mut HireScreen, index: usize) {
+        let at = screen.cell_bounds(index).expect("a cell").center();
+        click(screen, at);
+    }
+
+    /// Whether the screen shows no ship: Hire Escort and Info greyed, and
+    /// no cell bright, no picture, no info box and no description drawn.
+    fn shows_no_ship(screen: &HireScreen) -> bool {
+        let commands = drawn(screen);
+        let bright = (0..20).any(|index| contains(&commands, &bright_frame(screen, index)));
+        let picture = item(screen, PICTURE_ITEM);
+        let pictured = commands.iter().any(|c| {
+            matches!(c, DrawCommand::StretchedPicture { top_left, .. } if *top_left == picture.min)
+        }) || texts(screen).iter().any(|(_, at, _)| picture.contains(*at));
+        !enabled(screen, HIRE_ESCORT)
+            && !enabled(screen, INFO_LABEL)
+            && !bright
+            && !pictured
+            && info_box(screen).is_empty()
+            && !texts(screen).iter().any(|(w, _, _)| w.starts_with("dësc"))
+    }
+
+    #[test]
+    fn by_the_engine_it_opens_with_nothing_selected() {
+        let art = art();
+        let mut screen = opened_of(&art, list());
+        assert_eq!(screen.selected(), None);
+        assert!(shows_no_ship(&screen));
+        assert_eq!(screen.take_description_request(), None, "none to load");
+        assert!(art.asked.borrow().is_empty(), "no description read");
+    }
+
+    #[test]
+    fn by_the_engine_an_empty_cell_pressed_selects_nothing() {
+        let mut screen = opened_of(&art(), list());
+        click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(!shows_no_ship(&screen));
+        click_cell(&mut screen, 2);
+        assert_eq!(screen.selected(), None, "the empty position past the last");
+        assert!(shows_no_ship(&screen));
+        assert_eq!(screen.take_order(), None, "it reaches no button");
+        assert!(!screen.closed());
+        assert_eq!(screen.take_sounds(), [], "silent");
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_moves_selects_nothing() {
+        let mut screen = opened_of(&art(), long(30));
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (1, None));
+        assert!(shows_no_ship(&screen));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_cell(&mut screen, 2);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (3, Some(14)),
+            "at the bottom it neither scrolls nor clears"
+        );
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (2, None));
+    }
+
+    #[test]
+    fn by_the_other_reading_it_opens_on_the_first_cell_and_keeps_it() {
+        let mut screen = opened_of(
+            &art(),
+            HireList {
+                rules: bible(),
+                ..long(30)
+            },
+        );
+        assert_eq!(screen.selected(), Some(0), "the first cell");
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (1, Some(5)),
+            "a scroll keeps it"
+        );
+        let mut short = opened_of(
+            &art(),
+            HireList {
+                rules: bible(),
+                ..list()
+            },
+        );
+        click_cell(&mut short, 0);
+        click_cell(&mut short, 2);
+        assert_eq!(short.selected(), Some(0), "an empty cell is ignored");
+        assert!(enabled(&short, HIRE_ESCORT));
+    }
+
+    #[test]
+    fn a_second_press_on_a_cell_within_15_mac_ticks_opens_info_by_either_reading() {
+        use nova_sim::mission::screens::mac_ticks;
+        for rules in [nova_sim::Rulebook::default(), bible()] {
+            let opened = || opened_of(&art(), HireList { rules, ..list() });
+            let mut screen = opened();
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_none(), "one press");
+            screen.tick(mac_ticks(15));
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_some(), "{rules:?}");
+            assert!(texts(&screen).iter().any(|(w, _, _)| w == "Ship 140"));
+
+            let mut slow = opened();
+            click_cell(&mut slow, 1);
+            slow.tick(mac_ticks(16));
+            click_cell(&mut slow, 1);
+            assert!(slow.info_panel().is_none(), "16 ticks apart");
+
+            let mut broken = opened();
+            click_cell(&mut broken, 1);
+            click_cell(&mut broken, 2);
+            click_cell(&mut broken, 1);
+            assert!(broken.info_panel().is_none(), "an empty press between");
+        }
+    }
+
+    #[test]
+    fn a_double_click_is_by_position_so_one_across_a_scroll_opens_the_ship_now_shown() {
+        let mut screen = opened_of(&art(), long(30));
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert!(screen.info_panel().is_none());
+        click_cell(&mut screen, 5);
+        assert_eq!(screen.selected(), Some(9), "the ship now at position 5");
+        assert!(screen.info_panel().is_some());
+        assert!(texts(&screen).iter().any(|(w, _, _)| w == "Ship 209"));
+    }
+
+    #[test]
+    fn h_refused_beeps_and_space_with_nothing_selected_is_silent() {
+        let mut screen = opened_of(&art(), list());
+        press_key(&mut screen, HIRE_KEY);
+        assert_eq!(screen.take_order(), None, "nothing selected");
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::BuyRefused)]);
+        press_key(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_none());
+        assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
+        for rules in [nova_sim::Rulebook::default(), bible()] {
+            let mut screen = opened_of(&art(), HireList { rules, ..list() });
+            click_cell(&mut screen, 1);
+            press_key(&mut screen, HIRE_KEY);
+            assert_eq!(screen.take_order(), None, "too dear");
+            assert_eq!(
+                screen.take_sounds(),
+                [Sound::Ui(UiSound::BuyRefused)],
+                "{rules:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
+        let mut screen = opened_of(&art(), long(30));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        press_key(&mut screen, Key::Left);
+        assert_eq!(screen.selected(), Some(23), "the last shown");
+        let mut short = opened_of(&art(), list());
+        press_key(&mut short, Key::Down);
+        assert_eq!(short.selected(), Some(0), "the first shown");
+        assert!(enabled(&short, HIRE_ESCORT));
+    }
+
+    fn press_key(screen: &mut HireScreen, k: Key) {
+        screen.input(&key(k, false));
     }
 }

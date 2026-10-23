@@ -45,6 +45,9 @@ pub struct SoundTable {
     pub escort_group: Option<SoundId>,
     /// Plays as the player asks for the escort menu with no escorts.
     pub no_escorts: Option<SoundId>,
+    /// Plays as the shipyard's B or the hire screen's H asks with no ship
+    /// selected, or one that cannot be bought or hired.
+    pub buy_refused: Option<SoundId>,
     /// Plays as the main menu's E finds no pilot to enter the game with.
     pub enter_refused: Option<SoundId>,
     /// Plays as a disabled former escort repairs itself and rejoins.
@@ -222,6 +225,9 @@ impl SoundTable {
     ///   (`_HandlePlayer` @0x6e126-0x6e149).
     /// - `no_escorts`: 153, `_beepSnd[3]`, with "You don't have any
     ///   escorts." (`_HandlePlayer` @0x6de08-0x6de87).
+    /// - `buy_refused`: 153, `_beepSnd[3]`, which `_DoShipyardDialog`'s
+    ///   item 1 plays when it has no ship to buy or hire, or one it
+    ///   cannot (`PlaySound` @0x5f238-0x5f256).
     /// - `enter_refused`: 153, `_beepSnd[3]` again, which
     ///   `_MainScreenChoice(3)` plays as the main screen's E finds no game
     ///   in progress, or a dying pilot (`PlaySound` @0x1aa89-0x1aaac).
@@ -409,6 +415,7 @@ impl SoundTable {
         escorts_commanded: Some(SoundId(151)),
         escort_group: Some(SoundId(152)),
         no_escorts: Some(SoundId(153)),
+        buy_refused: Some(SoundId(153)),
         enter_refused: Some(SoundId(153)),
         escort_repaired: Some(SoundId(154)),
         propulsion_repaired: Some(SoundId(154)),
@@ -503,6 +510,7 @@ mod tests {
         assert_eq!(table.escorts_commanded, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.escort_group, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.buy_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.enter_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.propulsion_repaired, Some(SoundId(154)), "_beepSnd[4]");

@@ -1011,6 +1011,7 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     let mut screen = landed_shipyard(&MemoryPilots::new());
     click_port_item(&mut screen, 9);
     check(&mut screen, "the shipyard");
+    select_first_ship(&mut screen);
     screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
     assert!(
         spaceport(&screen)

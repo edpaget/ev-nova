@@ -470,8 +470,12 @@ impl BarScreen {
     }
 
     /// Ticks only its offers' timer, as covered: something is open over
-    /// the bar.
+    /// the bar. The hire screen's time runs on too, the gap between two
+    /// presses on its grid measured by the clock.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(hire) = &mut self.hire {
+            hire.tick(dt);
+        }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -753,9 +757,13 @@ impl Screen for BarScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down, the hire screen or the news
-    /// covering the bar while either is open; once it is out the bar asks.
+    /// The hire screen's time runs on while it is open, and the wait for
+    /// the next offer runs down, the hire screen or the news covering the
+    /// bar while either is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
+        if let Some(hire) = &mut self.hire {
+            hire.tick(dt);
+        }
         let covered = self.hire.is_some() || self.news.is_some();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
@@ -1031,6 +1039,7 @@ mod tests {
     /// A list of `rows` ships, all hireable, the fleet with room.
     fn list(rows: usize) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -1272,6 +1281,7 @@ mod tests {
         let mut screen = laid_hire_bar();
         let bar_desc = screen.take_description_request().expect("the bar's");
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         assert_eq!(screen.take_description_request(), Some(14_000));
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(14_000, "Loaded pilot.");
@@ -1299,6 +1309,7 @@ mod tests {
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(MISSION_INFO_KEY, false));
         assert!(screen.take_info_request());
         assert!(screen.hire_screen().is_some(), "still open");
@@ -1308,6 +1319,7 @@ mod tests {
     fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
         assert!(
             screen
@@ -1331,6 +1343,7 @@ mod tests {
     fn the_map_key_asks_for_the_shipyards_map_from_the_hire_screen_and_its_info_panel() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(MAP_KEY, false));
         assert_eq!(
             screen.take_map_request(),
@@ -1359,6 +1372,7 @@ mod tests {
     fn the_mission_info_key_asks_nothing_from_a_hire_screen_without_its_dialog() {
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         assert!(
             screen
                 .hire_screen()
@@ -1372,6 +1386,7 @@ mod tests {
     fn the_hire_screen_opens_over_the_bar_and_takes_every_input_until_it_closes() {
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         let hire = screen.hire_screen().expect("open");
         assert_eq!(hire.problem(), Some("no DLOG 1004"), "its own template");
         assert_eq!(hire.list().rows.len(), 2);
@@ -1423,10 +1438,12 @@ mod tests {
         );
         assert_eq!(screen.take_hire(), None, "no hire screen");
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(Key::Char('h'), false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_hire(), None, "once");
         let full = HireList {
+            rules: nova_sim::Rulebook::default(),
             room: false,
             rows: vec![HireRow {
                 hire: Err(HireRefusal::FleetFull),
@@ -1462,6 +1479,7 @@ mod tests {
                 .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR)
         );
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.hire_screen().is_none());
         screen.input(&key(Key::Char('h'), false));
         assert!(!screen.take_hire_request());
@@ -1532,6 +1550,7 @@ mod tests {
             true,
         );
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         let hire = screen
             .hire_screen()
             .and_then(HireScreen::dialog)
@@ -1552,6 +1571,50 @@ mod tests {
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_sounds(), []);
+    }
+
+    /// The bar's time reaches its hire screen, whose double-click reads
+    /// the gap between two presses.
+    #[test]
+    fn the_bar_ticks_its_hire_screen_for_the_double_click() {
+        use nova_sim::mission::screens::mac_ticks;
+        for (gap, opens, covered) in [
+            (mac_ticks(10), true, false),
+            (mac_ticks(16), false, false),
+            (mac_ticks(16), false, true),
+        ] {
+            let mut screen = laid_hire_bar();
+            screen.open_hire(list(2));
+            let at = screen
+                .hire_screen()
+                .and_then(|hire| hire.cell_bounds(1))
+                .expect("a cell")
+                .center();
+            let press = |screen: &mut BarScreen| {
+                for pressed in [true, false] {
+                    screen.input(&Input::PointerButton {
+                        button: MouseButton::Left,
+                        pressed,
+                        at,
+                    });
+                }
+            };
+            press(&mut screen);
+            if covered {
+                screen.tick_covered(gap);
+            } else {
+                screen.tick(gap);
+            }
+            press(&mut screen);
+            assert_eq!(
+                screen
+                    .hire_screen()
+                    .and_then(HireScreen::info_panel)
+                    .is_some(),
+                opens,
+                "{gap:?}, covered: {covered}"
+            );
+        }
     }
 
     #[test]
@@ -1700,6 +1763,7 @@ mod tests {
     fn by_the_engine_an_offer_due_under_the_hire_screen_is_asked_for_as_it_closes() {
         let mut screen = offering();
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.take_offer_restart(), "the hire screen restarts it");
         screen.rearm(ms(600));
         screen.tick(ms(10_000));
@@ -1719,6 +1783,7 @@ mod tests {
         screen.tick(ms(500));
         assert!(!screen.take_offer_restart());
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.take_offer_restart());
         assert!(!screen.take_offer_restart(), "once");
         screen.rearm(ms(600));
@@ -1747,6 +1812,7 @@ mod tests {
     fn by_the_other_reading_the_hire_screen_neither_restarts_nor_runs_the_wait() {
         let mut screen = offering().with_offer_clock(RuleSource::Bible);
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(!screen.take_offer_restart());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
@@ -2185,6 +2251,7 @@ mod tests {
 
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(MAP_KEY, false));
         assert_eq!(
             screen.take_map_request(),

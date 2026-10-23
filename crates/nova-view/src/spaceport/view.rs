@@ -4263,6 +4263,7 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_ship(), None, "nothing open");
         view.set_shipyard(yard(16_000));
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         assert_eq!(
             view.open_shipyard()
                 .map(|open| open.shipyard().rows[0].price),
@@ -4321,6 +4322,7 @@ pub(in crate::spaceport) mod tests {
     fn a_ship_declined_at_its_prompt_is_taken_through_the_spaceport() {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         let buy = shipyard_item(&view, 7);
         click(&mut view, buy);
         assert_eq!(view.take_ship_request(), Some(ShipId(129)));
@@ -4461,6 +4463,7 @@ pub(in crate::spaceport) mod tests {
     /// `rows` ships for hire, the fleet with `room` or not.
     fn hirelings(rows: usize, room: bool) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -4545,6 +4548,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.take_hire_request());
         assert!(!view.take_hire_request(), "once");
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         let hire = view
             .open_bar()
             .and_then(BarScreen::hire_screen)
@@ -4578,6 +4582,7 @@ pub(in crate::spaceport) mod tests {
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert!(!view.take_hire_closed(), "opening is not closing");
         view.input(&key(Key::Char('h')));
         assert_eq!(view.take_hire(), Some(ShipId(128)));
@@ -5427,6 +5432,10 @@ pub(in crate::spaceport) mod tests {
             let mut view = venues();
             assert_eq!(view.take_description_request(), Some(140), "the port's");
             click_item(&mut view, item);
+            if item == 9 {
+                // The shipyard opens with nothing selected by the engine.
+                view.input(&key(Key::Right));
+            }
             let id = view.take_description_request().expect("asked");
             assert_ne!(id, 140, "{item}");
             assert_eq!(view.take_description_request(), None, "{item}: once");
@@ -6841,6 +6850,7 @@ pub(in crate::spaceport) mod tests {
     fn the_shipyards_naming_prompt_holds_a_leave() {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         let buy = shipyard_item(&view, 7);
         click(&mut view, buy);
         view.open_ship_naming(&naming());
@@ -7080,6 +7090,9 @@ pub(in crate::spaceport) mod tests {
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
+        // By the engine nothing is selected as it opens: Right picks the
+        // first cell.
+        view.input(&key(Key::Right));
         view
     }
 
@@ -7227,6 +7240,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.take_hire_request());
         assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         assert_eq!(view.take_port_dialog_opened(), None, "once");
         view.open_hire(hirelings(2, true));
@@ -7244,6 +7258,7 @@ pub(in crate::spaceport) mod tests {
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         view.input(&key(Key::Char('h')));
         assert_eq!(view.take_hire(), Some(ShipId(128)));
@@ -7292,6 +7307,7 @@ pub(in crate::spaceport) mod tests {
     pub(in crate::spaceport) fn in_the_shipyards_panel() -> SpaceportView {
         let mut view = shipbuying_with_info();
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         view.input(&key(INFO_KEY));
         let shipyard = view.open_shipyard().expect("shipbuying");
         assert!(shipyard.info_panel().is_some());
@@ -7443,6 +7459,7 @@ pub(in crate::spaceport) mod tests {
             |info| {
                 let mut view = with_info(shipbuying_with_info(), info);
                 click_item(&mut view, 9);
+                view.input(&key(Key::Right));
                 view.input(&key(INFO_KEY));
                 view
             },

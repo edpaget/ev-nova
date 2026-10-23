@@ -374,6 +374,7 @@ fn an_empty_outfitter_draws_the_nav_a_shipyard_left_marked_and_an_empty_shipyard
     let mut screen = landed_shipyard_of(empty_shops_after_a_move_data(), &store);
     assert_eq!(nav_named(&screen), ["Alpha Prime"], "landed");
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     press_b(&mut screen);
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
@@ -461,6 +462,70 @@ fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
             first.filter(|_| kept),
             "kept: {kept}"
         );
+    }
+}
+
+/// [`landed_shipyard`], with Nova's rules as `rulebook` chooses.
+fn landed_shipyard_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
+    let mut screen = AppScreen::new(shipbuying_data())
+        .with_rulebook(rulebook)
+        .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    screen
+}
+
+#[test]
+fn an_empty_shipyard_cell_clicked_follows_the_grid_selection_rule() {
+    let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+    for (rulebook, engine) in [(Rulebook::default(), true), (other, false)] {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_by(&store, &rulebook);
+        click_port_item(&mut screen, 9);
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        let opened = (!engine).then_some(0);
+        assert_eq!(open.selected(), opened, "as it opens, engine: {engine}");
+        let empty = open
+            .cell_bounds(open.shipyard().rows.len())
+            .expect("a cell")
+            .center();
+        if engine {
+            select_first_ship(&mut screen);
+        }
+        assert_eq!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(ShipyardScreen::selected),
+            Some(0)
+        );
+        click_at(&mut screen, empty);
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        assert_eq!(open.selected(), opened, "an empty cell, engine: {engine}");
+    }
+}
+
+#[test]
+fn the_hire_screen_opens_by_the_grid_selection_rule() {
+    let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+    for (rulebook, opened) in [(Rulebook::default(), None), (other, Some(0))] {
+        // Ship 128 always for hire (`HireRandom` 100).
+        let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x38A, 100);
+        let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+            .with_rules(rulebook)
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
+        land(&mut screen);
+        click_port_item(&mut screen, 10);
+        screen.input(&key(Key::Char('h'), true));
+        let hire = spaceport(&screen)
+            .open_bar()
+            .and_then(BarScreen::hire_screen)
+            .expect("the hire screen");
+        assert_eq!(hire.selected(), opened, "{rulebook:?}");
     }
 }
 
@@ -968,6 +1033,7 @@ fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
     // so the nav as each map opens isn't the save.
     let mut screen = landed_planning(b"", b"M129");
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     press_b(&mut screen);
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
@@ -1385,6 +1451,7 @@ fn a_ship_order_changes_the_pilots_ship_refreshes_the_shops_and_saves() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard(&store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     let writes = store.writes();
     press_b(&mut screen);
     assert_eq!(pilot(&screen).ship(), ShipId(128), "named first");
@@ -1424,6 +1491,7 @@ fn a_refused_ship_order_changes_nothing_and_saves_nothing() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard_of(dear_shipbuying_data(), &store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     press_b(&mut screen);
     screen.input(&key(Key::Enter, true));
     let writes = store.writes();
@@ -1447,6 +1515,7 @@ fn buying_a_ship_asks_its_name_and_keeps_the_name_confirmed() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard(&store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     assert_eq!(pilot(&screen).ship_name(), Some("First"));
     let writes = store.writes();
     press_b(&mut screen);
@@ -1494,6 +1563,7 @@ fn typing_a_ship_name_never_opens_the_dialogs_under_it() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard(&store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     press_b(&mut screen);
     for c in ['p', 'i', 'f'] {
         screen.input(&key(Key::Char(c), true));
@@ -1520,6 +1590,7 @@ fn cancelling_the_name_prompt_buys_nothing_and_saves_nothing() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard(&store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     let writes = store.writes();
     let before = pilot(&screen).clone();
     press_b(&mut screen);
@@ -1607,6 +1678,7 @@ fn a_ship_declined_is_named_again_on_the_list_built_at_opening() {
     let store = MemoryPilots::new();
     let (mut screen, rolls) = rolling_shipyard(&store, &[true, false]);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     assert!(lists_second(&screen));
     assert_eq!(rolls.borrow().asked, 1, "drawn as the list was built");
     press_b(&mut screen);
@@ -1624,6 +1696,7 @@ fn a_ship_declined_draws_its_roll_again_when_the_list_is_next_built() {
     let store = MemoryPilots::new();
     let (mut screen, rolls) = rolling_shipyard(&store, &[true, false]);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     press_b(&mut screen);
     click_cancel(&mut screen);
     assert!(lists_second(&screen), "the list is kept for the visit");
@@ -1901,6 +1974,7 @@ fn a_ship_bought_carrying_iff_turns_the_bars_radar_black_at_once() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard_of(barred_shipbuying_data(), &store);
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     assert!(!radar_black(&drawn(&screen)), "without IFF");
     press_b(&mut screen);
     screen.input(&key(Key::Enter, true));
@@ -2176,6 +2250,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
         "the shipyard's description",
         |screen| {
             click_port_item(screen, 9);
+            select_first_ship(screen);
             screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
         },
         |port| {
@@ -2197,6 +2272,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
         |screen| {
             click_port_item(screen, 10);
             screen.input(&key(Key::Char('h'), true));
+            select_first_ship(screen);
             screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
         },
         |port| {

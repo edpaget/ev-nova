@@ -57,6 +57,9 @@ pub const ESCORT_GROUP: Priority = Priority::new(1);
 /// "You don't have any escorts.", `_beepSnd[3]`: `_HandlePlayer`
 /// @0x6de82.
 pub const NO_ESCORTS: Priority = Priority::new(1);
+/// The shipyard's or the hire screen's buy refused, `_beepSnd[3]`:
+/// `_DoShipyardDialog` @0x5f238-0x5f256.
+pub const BUY_REFUSED: Priority = Priority::new(1);
 /// The main screen's E refused, `_beepSnd[3]`: `_MainScreenChoice`
 /// @0x1aaac.
 pub const ENTER_REFUSED: Priority = Priority::new(10);
@@ -234,6 +237,7 @@ mod tests {
             (ESCORTS_COMMANDED, 1, "escorts commanded"),
             (ESCORT_GROUP, 1, "escort group"),
             (NO_ESCORTS, 1, "no escorts"),
+            (BUY_REFUSED, 1, "buy refused"),
             (ENTER_REFUSED, 10, "enter refused"),
             (ESCORT_REPAIRED, 8, "escort repaired"),
             (PROPULSION_REPAIRED, 1, "propulsion repaired"),

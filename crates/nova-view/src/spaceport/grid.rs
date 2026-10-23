@@ -10,8 +10,9 @@
 //! listed cell is framed in the `cölr` `GridDim` colour and the selected one
 //! framed again, last, in `GridBright` ([`GridColors`]); no cell is filled. A
 //! press is hit-tested on the frame's size, not the pitch. One cell is
-//! selected; the grid scrolls a row at a time, never past either end, and
-//! always shows the selected cell when the selection moves.
+//! selected, or none once cleared (the shipyard's and the hire screen's,
+//! by the engine); the grid scrolls a row at a time, never past either
+//! end, and always shows the selected cell when the selection moves.
 //!
 //! A cell shows its item's picture, stretched to [`ICON_SIZE`] square,
 //! centred across the cell near its top; its `ShortName` centred across
@@ -307,19 +308,60 @@ pub fn cell_bounds(grid: Bounds, index: usize) -> Bounds {
 }
 
 /// The grid's selection and scrolling, over a number of cells.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// By default cell 0 is selected; [`CellGrid::clear`] leaves no cell
+/// highlighted, as `_ShipyardFilter` sets its cell to -1 (the shipyard and
+/// the hire screen under
+/// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s engine
+/// reading), until a cell is selected or an arrow picks one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellGrid {
-    /// The selected cell, by index into the cells.
+    /// The selected cell, by index into the cells, while
+    /// [`CellGrid::highlighted`]; the last one selected otherwise.
     selected: usize,
+    /// Whether a cell is highlighted at all.
+    highlighted: bool,
     /// The grid's first row shown.
     top_row: usize,
 }
 
+impl Default for CellGrid {
+    /// Cell 0 selected, the grid at its top.
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            highlighted: true,
+            top_row: 0,
+        }
+    }
+}
+
 impl CellGrid {
-    /// The selected cell's index, if there are any of `count` cells.
+    /// The selected cell's index, if one is highlighted and there are any
+    /// of `count` cells.
     #[must_use]
     pub fn selected(&self, count: usize) -> Option<usize> {
-        (self.selected < count).then_some(self.selected)
+        (self.highlighted && self.selected < count).then_some(self.selected)
+    }
+
+    /// Whether a cell is highlighted: false once [`CellGrid::clear`]ed,
+    /// until a cell is selected.
+    #[must_use]
+    pub fn highlighted(&self) -> bool {
+        self.highlighted
+    }
+
+    /// Leaves no cell highlighted, the scroll as it is.
+    pub fn clear(&mut self) {
+        self.highlighted = false;
+    }
+
+    /// Where listed cell `index` is among the cells shown: its visible
+    /// position, 0-19 while it is shown (`column + 4·row`), as
+    /// `_ShipyardFilter` keeps its cell (`*0xded3c`, `*0xdecb4`).
+    #[must_use]
+    pub fn visible_position(&self, index: usize) -> usize {
+        index.saturating_sub(self.top_row * COLUMNS)
     }
 
     /// The selected cell's index, whether or not there is such a cell.
@@ -343,6 +385,7 @@ impl CellGrid {
     /// Selects cell `index` of `count`, or the last when there is no such
     /// cell, and scrolls the grid to show it.
     pub fn select(&mut self, index: usize, count: usize) {
+        self.highlighted = true;
         self.selected = index.min(count.saturating_sub(1));
         let row = self.selected / COLUMNS;
         self.top_row = self
@@ -353,13 +396,22 @@ impl CellGrid {
     }
 
     /// Moves the selection for an arrow `key` going down, among `count`
-    /// cells, and says whether it was an arrow.
+    /// cells, and says whether it was an arrow. With no cell highlighted
+    /// ([`CellGrid::clear`]), an arrow highlights one without scrolling:
+    /// Right and Down the first cell shown, and Left and Up the last cell
+    /// shown, position 19 (`andl $0x13`), or the last listed when fewer
+    /// are, as `_ShipyardFilter` does (@0x60734-0x607b7) and
+    /// `_OutfitFilter` after a reset (@0x583bd-0x58440). Page Up and Page
+    /// Down are not arrows here.
     pub fn arrow(&mut self, key: Key, count: usize) -> bool {
-        let index = match key {
-            Key::Left => self.selected.saturating_sub(1),
-            Key::Right => self.selected + 1,
-            Key::Up => self.selected.saturating_sub(COLUMNS),
-            Key::Down => self.selected + COLUMNS,
+        let first = self.top_row * COLUMNS;
+        let index = match (key, self.highlighted) {
+            (Key::Left, true) => self.selected.saturating_sub(1),
+            (Key::Right, true) => self.selected + 1,
+            (Key::Up, true) => self.selected.saturating_sub(COLUMNS),
+            (Key::Down, true) => self.selected + COLUMNS,
+            (Key::Right | Key::Down, false) => first,
+            (Key::Left | Key::Up, false) => first + COLUMNS * GRID_ROWS - 1,
             _ => return false,
         };
         self.select(index, count);
@@ -367,13 +419,15 @@ impl CellGrid {
     }
 
     /// Scrolls the grid of `count` cells a row down, or up, never past
-    /// either end.
-    pub fn scroll(&mut self, down: bool, count: usize) {
+    /// either end, and says whether it moved.
+    pub fn scroll(&mut self, down: bool, count: usize) -> bool {
+        let before = self.top_row;
         self.top_row = if down {
             (self.top_row + 1).min(Self::last_top_row(count))
         } else {
             self.top_row.saturating_sub(1)
         };
+        self.top_row != before
     }
 
     /// Whether the grid can scroll up, and down, with `count` cells.
@@ -1095,5 +1149,78 @@ mod tests {
         let empty = Point::new(10.0 + 84.0 * 3.5, 20.0 + 55.0 * 4.5);
         assert_eq!(scrolled.cell_under(area, empty), Some(23));
         assert_eq!(scrolled.cell_at(area, empty, 22), None);
+    }
+
+    #[test]
+    fn a_cleared_grid_selects_nothing_until_a_cell_is_selected() {
+        let mut grid = CellGrid::default();
+        assert_eq!(grid.selected(22), Some(0), "the default selects cell 0");
+        grid.select(5, 22);
+        grid.clear();
+        assert_eq!(grid.selected(22), None);
+        assert!(!grid.highlighted());
+        grid.select(6, 22);
+        assert_eq!(grid.selected(22), Some(6));
+        assert!(grid.highlighted());
+    }
+
+    #[test]
+    fn a_scroll_says_whether_it_moved() {
+        let mut grid = CellGrid::default();
+        assert!(!grid.scroll(false, 30), "at the top");
+        assert!(grid.scroll(true, 30));
+        assert!(grid.scroll(true, 30));
+        assert!(grid.scroll(true, 30));
+        assert_eq!(grid.top_row(), 3, "30 listed: the last first row is 3");
+        assert!(!grid.scroll(true, 30), "at the bottom");
+        assert!(grid.scroll(false, 30));
+        assert!(!CellGrid::default().scroll(true, 20), "nothing to scroll");
+    }
+
+    #[test]
+    fn an_arrow_from_no_highlight_picks_the_first_or_the_last_cell_shown() {
+        let cleared = |top_rows: usize, count: usize| {
+            let mut grid = CellGrid::default();
+            for _ in 0..top_rows {
+                grid.scroll(true, count);
+            }
+            grid.clear();
+            grid
+        };
+        for (key, top_rows, count, expected) in [
+            (Key::Right, 0, 30, 0),
+            (Key::Down, 0, 30, 0),
+            (Key::Left, 0, 30, 19),
+            (Key::Up, 0, 30, 19),
+            (Key::Right, 1, 30, 4),
+            (Key::Down, 1, 30, 4),
+            (Key::Left, 1, 30, 23),
+            (Key::Up, 1, 30, 23),
+            (Key::Left, 0, 7, 6),
+            (Key::Up, 0, 7, 6),
+            (Key::Left, 1, 22, 21),
+            (Key::Right, 0, 7, 0),
+        ] {
+            let mut grid = cleared(top_rows, count);
+            assert!(grid.arrow(key, count), "{key:?}");
+            assert_eq!(
+                grid.selected(count),
+                Some(expected),
+                "{key:?} from top row {top_rows} of {count}"
+            );
+            assert_eq!(grid.top_row(), top_rows, "{key:?} does not scroll");
+        }
+        let mut grid = cleared(0, 30);
+        assert!(!grid.arrow(Key::Enter, 30));
+        assert_eq!(grid.selected(30), None, "not an arrow");
+    }
+
+    #[test]
+    fn a_cells_visible_position_is_its_index_less_the_scroll() {
+        let mut grid = CellGrid::default();
+        assert_eq!(grid.visible_position(9), 9);
+        grid.scroll(true, 30);
+        assert_eq!(grid.visible_position(9), 5);
+        assert_eq!(grid.visible_position(4), 0);
     }
 }
