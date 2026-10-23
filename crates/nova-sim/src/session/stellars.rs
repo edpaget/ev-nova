@@ -128,11 +128,14 @@ use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
+use crate::geometry::Vec2;
 use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landing_reach};
 use crate::legal::{Crime, LegalCode};
+use crate::navigation::SpriteRect;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::rebuild::Fallback;
+use crate::story::sprite_pool;
 use crate::story::wreck::{self, Tick};
 use crate::story::{Countdown, DrawnSheet};
 use std::collections::BTreeMap;
@@ -620,20 +623,52 @@ impl Space {
     }
 
     /// The frame size of the sheet drawn for `site`, one of the stellars
-    /// shown ([`Session::drawn_sheet`]), or `None` when no sheet is: the
-    /// box a click on it reads (see the module docs).
+    /// shown ([`Session::drawn_sheet`]), or `None` when no sheet is.
     pub(super) fn drawn_frame_size(
         &self,
         statics: &Statics,
         setup: &Setup,
         site: &LandingSite,
     ) -> Option<(u32, u32)> {
-        match self.site_sheet(statics, setup, site) {
-            DrawnSheet::Type => site.frame_size,
-            DrawnSheet::Dead => site.dead_frame_size,
-            DrawnSheet::TypeZero => statics.fallback_frame,
-            DrawnSheet::NoFrame => None,
+        sheet_frame_size(self.site_sheet(statics, setup, site), statics, site)
+    }
+
+    /// The rect a click and the hover read of `site`'s sprite slot (+0x1a,
+    /// `_HandlePlayer` @0x6a63d, `_HandleMouse` @0x38233) with the player at
+    /// `player`: none for a slot showing no frame ([`DrawnSheet::NoFrame`],
+    /// a state the original never survives, its rebuild faulting first,
+    /// `_SWSetSpriteLocation` @0xab665 from @0x331aa); else the frame drawn
+    /// ([`Space::drawn_frame_size`], the [`PLACEHOLDER_FRAME`] when no
+    /// sheet is) placed where the slot is: its top left at
+    /// `sprite_pool::offset(site.position, player, slot size)` from the
+    /// player (`_HandleStellarSprites` @0x2ee3d-0x2ef1a), the slot size
+    /// [`Space::slot_sprite_size`] gives. A frame frozen is so placed as a
+    /// 32-pixel sprite, its top left at the centre less 16, and keeps its
+    /// stale frame's size (`_SWSetSpriteLocation` @0xab66d-0xab693 moves
+    /// the rect without resizing it).
+    pub(super) fn click_rect(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+        player: Vec2,
+    ) -> Option<SpriteRect> {
+        let sheet = self.site_sheet(statics, setup, site);
+        if sheet == DrawnSheet::NoFrame {
+            return None;
         }
+        let frame = sheet_frame_size(sheet, statics, site).unwrap_or(PLACEHOLDER_FRAME);
+        let placed_as = self.slot_sprite_size(statics, setup, site).unwrap_or(frame);
+        let (dx, dy) = sprite_pool::offset(site.position, player, placed_as);
+        // A screen offset is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let (dx, dy) = (dx as f32, dy as f32);
+        Some(SpriteRect {
+            left: player.x + dx,
+            top: player.y + dy,
+            width: frame.0,
+            height: frame.1,
+        })
     }
 
     /// The size `_GetSpriteXSize` and `_GetSpriteYSize` give `site`'s
@@ -691,6 +726,27 @@ impl Space {
             shown,
             setup.rules.source_for(RuleKey::LandingDistance),
         )
+    }
+}
+
+/// The 64-pixel placeholder the views draw for a stellar with no sheet to
+/// read (twice
+/// [`UNKNOWN_STELLAR_RADIUS`](crate::landing::UNKNOWN_STELLAR_RADIUS)), and the frame a click reads of
+/// it.
+const PLACEHOLDER_FRAME: (u32, u32) = (64, 64);
+
+/// The frame size of `sheet` as `site` draws it, or `None` when it has no
+/// frame to read.
+fn sheet_frame_size(
+    sheet: DrawnSheet,
+    statics: &Statics,
+    site: &LandingSite,
+) -> Option<(u32, u32)> {
+    match sheet {
+        DrawnSheet::Type => site.frame_size,
+        DrawnSheet::Dead => site.dead_frame_size,
+        DrawnSheet::TypeZero => statics.fallback_frame,
+        DrawnSheet::NoFrame => None,
     }
 }
 
@@ -3173,10 +3229,16 @@ mod tests {
         }
     }
 
+    /// `session` with the player at (`x`, `y`).
+    fn player_at(session: &mut Session, x: f32, y: f32) {
+        session.ship.player.position = Vec2::new(x, y);
+    }
+
     #[test]
     fn a_slot_showing_no_frame_has_no_frame_size_and_a_frozen_one_its_kept_sheets() {
         let catalog = frozen_on_dead();
         let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
         let site = session.chart.sites[0];
         let frame_size = |session: &Session| {
             session
@@ -3184,13 +3246,14 @@ mod tests {
                 .drawn_frame_size(&session.statics, &session.setup, &site)
         };
         assert_eq!(frame_size(&session), None);
-        // The 64-pixel placeholder: 32 a side.
-        assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
-        assert_eq!(click(&mut session, 34.0, 0.0), None);
+        // No rect: never clicked.
+        assert_eq!(click(&mut session, 0.0, 0.0), None);
+        assert_eq!(click(&mut session, 31.0, 0.0), None);
         keeps_a_dead_frame(&mut session);
         assert_eq!(frame_size(&session), Some((200, 200)));
-        // Clicked by its `DeadType` box, centred (see "Left out").
+        // Clicked by its `DeadType` rect from the centre less 16.
         assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, -90.0, 0.0), None);
         assert_eq!(
             session
                 .stellar_targets()
@@ -3199,6 +3262,93 @@ mod tests {
                 .collect::<Vec<_>>(),
             [100.0]
         );
+    }
+
+    #[test]
+    fn a_frozen_slot_is_clicked_by_its_stale_frame_from_the_centre_less_16() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        keeps_a_dead_frame(&mut session);
+        assert!(session.frame_frozen(StellarId(128)));
+        // [-16, 184) on each axis, 200 wide so with no margin.
+        for (x, y) in [(-16.0, -16.0), (90.0, 0.0), (183.5, 183.5)] {
+            assert_eq!(
+                click(&mut session, x, y),
+                Some(StellarId(128)),
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(-17.0, 0.0), (-90.0, 0.0), (184.0, 0.0), (0.0, 184.0)] {
+            assert_eq!(click(&mut session, x, y), None, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_frozen_small_frame_gets_the_margin_by_its_own_width() {
+        let mut catalog = frozen_on_dead();
+        catalog.sites[0].1[0].type_counts_frames = true;
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert!(session.frame_frozen(StellarId(128)));
+        // Its 40-pixel `Type` frame at [-16, 24), grown to [-32, 40).
+        for x in [-32.0, 39.5] {
+            assert_eq!(click(&mut session, x, 0.0), Some(StellarId(128)), "{x}");
+        }
+        for x in [-32.5, 40.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+        }
+    }
+
+    #[test]
+    fn a_frameless_slot_is_never_clicked_or_hovered() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        for x in [0.0, 31.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+            assert_eq!(
+                session.hover(Vec2::new(x, 0.0), &crate::testkit::NoShips),
+                None,
+                "{x}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_frozen_type_is_clicked_by_its_type_centred() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog).with_rules(uncounted_sheet(RuleSource::Bible));
+        player_at(&mut session, 0.0, 0.0);
+        rebuild(&mut session, &catalog);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        // 40 square centred, [-20, 20), grown to [-36, 36).
+        for x in [-36.0, 35.5] {
+            assert_eq!(click(&mut session, x, 0.0), Some(StellarId(128)), "{x}");
+        }
+        for x in [-36.5, 36.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+        }
+    }
+
+    #[test]
+    fn a_slot_rect_sits_at_whole_pixels_from_the_player() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        player_at(&mut session, 0.75, 0.25);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        // 0.75 + trunc(-0.75) - 100: its left at -99.25, its right at
+        // 100.75.
+        assert_eq!(click(&mut session, -99.25, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, -99.5, 0.0), None);
+        assert_eq!(click(&mut session, 100.5, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 100.75, 0.0), None);
     }
 
     #[test]

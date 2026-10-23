@@ -31,8 +31,12 @@ impl Session {
         .or_else(|| {
             self.mode.jump().is_none().then(|| {
                 stellar_under(&self.chart.sites, at, |site| {
-                    self.space
-                        .drawn_frame_size(&self.statics, &self.setup, site)
+                    self.space.click_rect(
+                        &self.statics,
+                        &self.setup,
+                        site,
+                        self.ship.player.position,
+                    )
                 })
                 .map(Hover::Stellar)
             })?
@@ -66,18 +70,25 @@ impl Session {
     /// modelled.
     ///
     /// **Stellars** (@0x6a5e9-0x6a717), only when the target did not
-    /// change and no jump is under way (+0x50 > 0, @0x6a5ef): the first
-    /// stellar under the click, the one selected in mode 2 passed over so
+    /// change and no jump is under way (+0x50 > 0, @0x6a5ef): the walk
+    /// over the 16 sprite slots, which the rebuild hands out in ascending
+    /// `spöb` ID (@0x32ee4-0x32fda), so the lowest ID under the click
+    /// ([`stellar_under_past`]), the one selected in mode 2 passed over so
     /// the walk goes on to any under it (@0x6a69d → @0x6a703), becomes the
     /// selection in mode 2 with [`SimSound::NavSelected`] (`_beepSnd[0]`,
     /// @0x6a6c1), its brackets flying in and the dock request dropped
-    /// (@0x6a6c6-0x6a6fc). A click on none is silent.
+    /// (@0x6a6c6-0x6a6fc). A click on none is silent. Each slot's rect
+    /// (`Space::click_rect`) is grown by 16 a side when no wider than 47,
+    /// and its right and bottom edges miss (@0x6a649-0x6a686); a slot
+    /// frozen on a stale frame is clicked by that frame from the centre
+    /// less 16, and a slot showing no frame by no rect. The spöb +0x44
+    /// skip (@0x6a632) matches `sites`, the stellars shown, as HSSV sets
+    /// +0x44 for exactly those (@0x32c42, @0x32cdf). `_statusRedraw` := 1
+    /// (@0x6a6e4) needs no model: the status panel is drawn every frame.
     ///
     /// Left out: the floating map's clicks (@0x6a130-0x6a342,
     /// @0x6a719-0x6a762, hud-fidelity phase 24, as the engine draws no
-    /// floating map), the hidden-stellar skip (spob +0x44, @0x6a632,
-    /// task nav-selection-follow-up) and the box's shape (stellar-fidelity
-    /// phase 9).
+    /// floating map).
     pub fn click_in_space(&mut self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
         if self.mode.landed().is_some() {
             return None;
@@ -114,7 +125,7 @@ impl Session {
         let selected = self.chart.nav.stellar();
         let picked = stellar_under_past(&self.chart.sites, at, selected, |site| {
             self.space
-                .drawn_frame_size(&self.statics, &self.setup, site)
+                .click_rect(&self.statics, &self.setup, site, self.ship.player.position)
         })?;
         self.out.sounds.push(SimSound::NavSelected);
         self.chart.nav_fly_in.start();
@@ -492,6 +503,36 @@ mod tests {
         );
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_hover_and_the_click_pick_the_lowest_id_under_them() {
+        let mut catalog = catalog();
+        catalog.sites[0].1 = vec![
+            crate::testkit::planet(200, 20.0, 0.0),
+            crate::testkit::planet(130, 0.0, 0.0),
+        ];
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session
+                .chart
+                .sites
+                .iter()
+                .map(|site| site.id)
+                .collect::<Vec<_>>(),
+            [StellarId(200), StellarId(130)],
+            "200 first in NavDef order"
+        );
+        let none = Drawn::default();
+        let at = Vec2::new(10.0, 0.0);
+        assert_eq!(
+            session.hover(at, &none),
+            Some(Hover::Stellar(StellarId(130)))
+        );
+        assert_eq!(
+            session.click_in_space(at, &none),
+            Some(Hover::Stellar(StellarId(130)))
+        );
     }
 
     #[test]
