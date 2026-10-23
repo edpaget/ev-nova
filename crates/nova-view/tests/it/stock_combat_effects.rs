@@ -59,7 +59,7 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
     };
     assert_eq!(count(BoomId(129)), 5);
     assert_eq!(count(BoomId(128)), 23);
-    let main = effects.explosions().last().expect("the main one");
+    let main = *effects.explosions().last().expect("the main one");
     assert_eq!(main.boom, explosion.boom);
     assert_eq!(main.at, Point::new(100.0, 50.0));
     assert_eq!(effects.explosions().len(), 29);

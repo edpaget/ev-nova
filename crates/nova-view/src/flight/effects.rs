@@ -17,7 +17,12 @@
 //!   still heard, as `_CreateExplosion` plays its sound whether
 //!   `_SpawnExplod` found it a slot or not (@0x3f91a). The extras take
 //!   their slots first, so a size of 163 or more fills the pool alone and
-//!   the main one is lost, heard. At most [`MAX_PARTICLES`] particles are
+//!   the main one is lost, heard. Each explosion takes the first free
+//!   slot (`_SpawnExplod` @0x3f5dc-0x3f697, the first of 32 whose frame
+//!   is below 0.0), and `_explodLayer` draws them in slot order, so a new
+//!   one in a freed lower slot draws under an older one in a higher slot
+//!   ([`Effects::explosions`], [`Effects::draw_explosions`]). Without the
+//!   caps the pool is unbounded but still first-free. At most [`MAX_PARTICLES`] particles are
 //!   kept, of a burst or of debris, one more dropped; and a particle of
 //!   no life is never moved, drawn or freed, holding its count of the
 //!   pool until it is cleared (`_MoveParticles` @0xc6134-0xc613a).
@@ -110,6 +115,7 @@ use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::pods::{EscapePods, Pod};
+use super::slot_pool::SlotPool;
 use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
@@ -299,7 +305,7 @@ pub struct Dying {
 /// The fight's explosions, debris and sounds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Effects {
-    explosions: Vec<Explosion>,
+    explosions: SlotPool<Explosion>,
     particles: Vec<Particle>,
     sounds: Vec<CombatSound>,
     /// Each looped weapon sound still playing, by firer and weapon, with
@@ -488,17 +494,18 @@ impl Effects {
     /// Sets off `boom` at `at`, hidden for `delay`, unless the `caps` hold
     /// the pool full or its look was not read; whether it went off.
     fn spawn(&mut self, boom: BoomId, at: Point, delay: f32, looks: &Looks, caps: bool) -> bool {
-        let room = !caps || self.explosions.len() < MAX_EXPLOSIONS;
-        let spawned = room && looks.boom(boom).is_some();
-        if spawned {
-            self.explosions.push(Explosion {
-                boom,
-                at,
-                frame: 0.0,
-                delay,
-            });
+        if looks.boom(boom).is_none() {
+            return false;
         }
-        spawned
+        let explosion = Explosion {
+            boom,
+            at,
+            frame: 0.0,
+            delay,
+        };
+        self.explosions
+            .insert(explosion, caps.then_some(MAX_EXPLOSIONS))
+            .is_some()
     }
 
     /// Sets off `explosion` at `at` with `size`, heard from the player in
@@ -646,16 +653,16 @@ impl Effects {
         self.pods.draw(list, camera, looks);
     }
 
-    /// The escape pods adrift.
+    /// The escape pods adrift, in slot order.
     #[must_use]
-    pub fn pods(&self) -> &[Pod] {
+    pub fn pods(&self) -> Vec<Pod> {
         self.pods.pods()
     }
 
-    /// The explosions going off.
+    /// The explosions going off, in slot order (see the module docs).
     #[must_use]
-    pub fn explosions(&self) -> &[Explosion] {
-        &self.explosions
+    pub fn explosions(&self) -> Vec<Explosion> {
+        self.explosions.to_vec()
     }
 
     /// The particles flying: debris and bursts.
@@ -980,6 +987,30 @@ mod tests {
         // `_SpawnExplod` found it a slot (@0x3f91a).
         assert_eq!(effects.take_sounds().len(), 33, "the 33rd still heard");
         assert_eq!(MAX_EXPLOSIONS, 32);
+    }
+
+    #[test]
+    fn a_new_explosion_takes_a_freed_lower_slot_and_draws_under_an_older_one() {
+        let mut effects = Effects::default();
+        exploded(&mut effects, 129, at(1.0, 0.0));
+        exploded(&mut effects, 130, at(2.0, 0.0));
+        steps(&mut effects, 2);
+        let [older] = effects.explosions()[..] else {
+            panic!("the 2-frame one ended: {:?}", effects.explosions());
+        };
+        exploded(&mut effects, 128, at(3.0, 0.0));
+        let slots: Vec<_> = effects.explosions().iter().map(|e| e.boom).collect();
+        assert_eq!(slots, [BoomId(128), older.boom], "in slot order");
+        let mut list = DrawList::new();
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks());
+        let drawn: Vec<_> = list
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, .. } => Some(image.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, [400, 402], "the new one first, under the older");
     }
 
     #[test]

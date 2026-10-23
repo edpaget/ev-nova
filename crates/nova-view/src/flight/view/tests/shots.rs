@@ -309,7 +309,7 @@ fn turning_smoke_trails_off_stops_new_smoke_and_the_puffs_left_age_out() {
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
     }
-    let left = view.shot_looks.smoke().puffs().to_vec();
+    let left = view.shot_looks.smoke().puffs();
     view.set_smoke_trails(false);
     let particles = view.effects().particles().len();
     for _ in 0..3 {

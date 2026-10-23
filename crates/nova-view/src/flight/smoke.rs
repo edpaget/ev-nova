@@ -21,7 +21,12 @@
 //!   set is dropped. Under the original's caps
 //!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
 //!   reading) it takes the first of [`MAX_PUFFS`] slots free, and a full
-//!   pool drops it; without them any number is kept.
+//!   pool drops it; without them any number is kept, each still taking
+//!   the first free slot. `_smokeLayer` draws the puffs in slot order
+//!   (`_InitSprites` adds them once, @0x1fe8f, and nothing moves them),
+//!   so a new puff in a freed lower slot draws under an older one in a
+//!   higher slot ([`SmokePuffs::puffs`], [`SmokePuffs::draw`]); under
+//!   [`Blend::Or`](crate::draw::Blend::Or) the order rarely shows.
 //! - Each frame a puff is shown at full `AddOver`, [`Blend::Or`](crate::draw::Blend::Or)
 //!   at [`lights_tint`]`(32)` (+0xa8 and its channels 0x20,
 //!   @0x2e377-0x2e3b3), murked by where it is ([`sprite_murk`],
@@ -47,6 +52,7 @@ use nova_sim::Vec2;
 
 use super::catalog::SmokeSheet;
 use super::murk::{murk_tint, sprite_murk};
+use super::slot_pool::SlotPool;
 use crate::draw::lights_tint;
 use crate::system::camera::Camera;
 use crate::{DrawList, ImageKey, Point};
@@ -134,7 +140,7 @@ impl Puff {
 /// The puffs of smoke.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SmokePuffs {
-    puffs: Vec<Puff>,
+    puffs: SlotPool<Puff>,
 }
 
 impl SmokePuffs {
@@ -145,15 +151,13 @@ impl SmokePuffs {
         let Some(sheet) = sheet else {
             return;
         };
-        if caps && self.puffs.len() >= MAX_PUFFS {
-            return;
-        }
-        self.puffs.push(Puff {
+        let puff = Puff {
             at,
             kind,
             sheet,
             age: 0.0,
-        });
+        };
+        self.puffs.insert(puff, caps.then_some(MAX_PUFFS));
     }
 
     /// Ages every puff a tick, freeing each past its last frame, as
@@ -169,7 +173,7 @@ impl SmokePuffs {
     /// full and murked as seen from the player's ship at `viewer` in a
     /// system of effective murk `murk`.
     pub fn draw(&self, list: &mut DrawList, camera: &Camera, viewer: Vec2, murk: u8) {
-        for puff in &self.puffs {
+        for puff in self.puffs.iter() {
             let image = ImageKey::icon(puff.sheet.icon(puff.frame()));
             let at = camera.world_to_screen(Point::new(puff.at.x, puff.at.y));
             let level = sprite_murk(puff.at, viewer, murk);
@@ -177,10 +181,10 @@ impl SmokePuffs {
         }
     }
 
-    /// The puffs kept.
+    /// The puffs kept, in slot order (see the module docs).
     #[must_use]
-    pub fn puffs(&self) -> &[Puff] {
-        &self.puffs
+    pub fn puffs(&self) -> Vec<Puff> {
+        self.puffs.to_vec()
     }
 
     /// Frees every puff.
@@ -216,7 +220,7 @@ mod tests {
         let mut frames = Vec::new();
         loop {
             puffs.step();
-            let Some(puff) = puffs.puffs().first() else {
+            let Some(puff) = puffs.puffs().first().copied() else {
                 return frames;
             };
             frames.push(puff.frame());
@@ -281,6 +285,33 @@ mod tests {
         }
         capped.spawn(Vec2::ZERO, 0, Some(SET_0), true);
         assert_eq!(capped.puffs().len(), 1, "the freed slots taken again");
+    }
+
+    #[test]
+    fn a_new_puff_takes_a_freed_lower_slot_and_draws_under_an_older_one() {
+        let mut puffs = SmokePuffs::default();
+        puffs.spawn(Vec2::new(10.0, 0.0), 1, Some(SET_0), false);
+        puffs.spawn(Vec2::new(20.0, 0.0), 0, Some(SET_0), false);
+        for _ in 0..24 {
+            puffs.step();
+        }
+        let xs =
+            |puffs: &SmokePuffs| -> Vec<f32> { puffs.puffs().iter().map(|p| p.at.x).collect() };
+        assert_eq!(xs(&puffs), [20.0], "the kind-1 puff ended at age 6");
+        puffs.spawn(Vec2::new(30.0, 0.0), 0, Some(SET_0), false);
+        assert_eq!(xs(&puffs), [30.0, 20.0], "in slot order");
+        let camera = Camera::centred_on(Point::default());
+        let mut list = DrawList::new();
+        puffs.draw(&mut list, &camera, Vec2::ZERO, 0);
+        let drawn: Vec<f32> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Sprite { center, .. } => Some(center.x),
+                _ => None,
+            })
+            .collect();
+        let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
+        assert_eq!(drawn, [screen(30.0), screen(20.0)], "the new one first");
     }
 
     #[test]

@@ -38,6 +38,8 @@
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
 //!   one is added to what is under it ([`ShotShade`](shot_fade::ShotShade)).
+//! - `slot_pool`: the original's fixed sprite tables, a new item taking
+//!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
@@ -77,6 +79,7 @@ pub mod pods;
 pub mod radar;
 pub mod ship_layers;
 pub mod shot_fade;
+pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
 pub mod spin;

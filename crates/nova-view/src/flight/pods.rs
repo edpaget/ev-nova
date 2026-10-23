@@ -19,7 +19,11 @@
 //!   reading, [`Scene::caps`](super::effects::Scene::caps)) there are
 //!   [`MAX_PODS`] slots, a pod taking the first whose life is below 0
 //!   (@0x45564-0x456bf), and one more is not kept; by default nothing is
-//!   capped. Either way the pod is heard ([`Effects`](super::effects::Effects)
+//!   capped, and the pool is unbounded but still first-free. `_boxLayer`
+//!   draws the pods in slot order (`_InitSprites` adds them once, and
+//!   nothing moves them), so a new pod in a freed lower slot draws under
+//!   an older one in a higher slot ([`EscapePods::pods`],
+//!   [`EscapePods::draw`]). Either way the pod is heard ([`Effects`](super::effects::Effects)
 //!   plays `snd ` 372 for each event), as the sound is `_HandleShip`'s.
 //! - **Each step** ([`EscapePods::step`]): it drifts by its velocity and a
 //!   tick comes off its life. It is held, unseen, at a life of 0, and its
@@ -53,6 +57,7 @@ use nova_sim::trig::intercept_angle;
 use nova_sim::{Chance, Vec2};
 
 use super::catalog::Looks;
+use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, ImageKey, Point};
 
@@ -116,7 +121,7 @@ pub fn pod_frame(velocity: Point, frames: NonZeroU16) -> u16 {
 /// The escape pods adrift.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EscapePods {
-    pods: Vec<Pod>,
+    pods: SlotPool<Pod>,
 }
 
 impl EscapePods {
@@ -132,7 +137,8 @@ impl EscapePods {
         looks: &Looks,
         chance: &mut dyn Chance,
     ) {
-        if caps && self.pods.len() >= MAX_PODS {
+        let cap = caps.then_some(MAX_PODS);
+        if cap.is_some_and(|cap| self.pods.len() >= cap) {
             return;
         }
         let life = POD_LIFE_MIN + chance.below(POD_LIFE_ROLL);
@@ -150,15 +156,15 @@ impl EscapePods {
             frame,
         };
         pod.step();
-        self.pods.push(pod);
+        self.pods.insert(pod, cap);
     }
 
     /// Steps every pod, then frees those whose life is below 0.
     pub fn step(&mut self) {
-        for pod in &mut self.pods {
+        self.pods.retain_mut(|pod| {
             pod.step();
-        }
-        self.pods.retain(|pod| pod.life >= 0);
+            pod.life >= 0
+        });
     }
 
     /// Draws each pod shown, as `looks` says, where `camera` shows it.
@@ -166,7 +172,7 @@ impl EscapePods {
         let Some(sheet) = looks.pod_sheet() else {
             return;
         };
-        for pod in &self.pods {
+        for pod in self.pods.iter() {
             let Some(tint) = pod.tint() else {
                 continue;
             };
@@ -180,10 +186,11 @@ impl EscapePods {
         }
     }
 
-    /// The pods adrift, the unseen ones at a life of 0 too.
+    /// The pods adrift, the unseen ones at a life of 0 too, in slot order
+    /// (see the module docs).
     #[must_use]
-    pub fn pods(&self) -> &[Pod] {
-        &self.pods
+    pub fn pods(&self) -> Vec<Pod> {
+        self.pods.to_vec()
     }
 
     /// Frees every pod.
@@ -250,7 +257,7 @@ mod tests {
     fn a_pod_leaves_its_ship_pushed_off_and_takes_its_first_step() {
         // Life 150 + 20, pushed (5 + 10) x 0.1 = 1.5 along 90°.
         let pods = spawned(&[20, 90, 5]);
-        let [pod] = pods.pods() else {
+        let [pod] = pods.pods()[..] else {
             panic!("one pod");
         };
         assert_eq!(pod.life, 169, "170 less its first step");
@@ -401,6 +408,41 @@ mod tests {
         assert_eq!(pods.pods().len(), MAX_PODS, "no slot free at 0");
         pods.step();
         assert!(pods.pods().is_empty(), "all free below 0");
+    }
+
+    #[test]
+    fn a_new_pod_takes_a_freed_lower_slot_and_draws_under_an_older_one() {
+        let spawn = |pods: &mut EscapePods, x: f32, life: u32| {
+            pods.spawn(
+                Point::new(x, 0.0),
+                Point::default(),
+                false,
+                &looks(),
+                &mut script(&[life, 0, 0]),
+            );
+        };
+        let mut pods = EscapePods::default();
+        spawn(&mut pods, 10.0, 0);
+        spawn(&mut pods, 20.0, 99);
+        for _ in 0..150 {
+            pods.step();
+        }
+        let xs = |pods: &EscapePods| -> Vec<f32> { pods.pods().iter().map(|p| p.at.x).collect() };
+        assert_eq!(xs(&pods), [20.0], "the first freed below 0");
+        spawn(&mut pods, 30.0, 0);
+        assert_eq!(xs(&pods), [30.0, 20.0], "in slot order");
+        let camera = Camera::centred_on(Point::default());
+        let mut list = DrawList::new();
+        pods.draw(&mut list, &camera, &looks());
+        let drawn: Vec<f32> = list
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { center, .. } => Some(center.x),
+                _ => None,
+            })
+            .collect();
+        let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
+        assert_eq!(drawn, [screen(30.0), screen(20.0)], "the new one first");
     }
 
     #[test]
