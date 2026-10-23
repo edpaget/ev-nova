@@ -192,6 +192,81 @@ fn proxima_in_sol() -> FakeCatalog {
     catalog
 }
 
+/// Sol owning a wormhole, Hole (150), 300 below the centre the ship
+/// starts at, and a hypergate, Gate (151), 300 above it, each a square
+/// on the radar as the data adapter reads them, after Earth and the
+/// Moon.
+fn sol_with_gates() -> View {
+    let mut catalog = catalog();
+    catalog.sites.extend([
+        LandingSite {
+            flags2: 0x2000,
+            ..site(
+                150,
+                (0.0, 300.0),
+                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            )
+        },
+        LandingSite {
+            flags2: 0x1000,
+            ..site(151, (0.0, -300.0), StellarFlags::CAN_LAND)
+        },
+    ]);
+    catalog.sol_more = vec![
+        StellarContents {
+            radar_square: true,
+            ..stellar(150, "Hole", (0, 300), 1)
+        },
+        StellarContents {
+            radar_square: true,
+            ..stellar(151, "Gate", (0, -300), 1)
+        },
+    ];
+    FlightView::new(catalog)
+}
+
+/// `_HandleStellarSprites` draws every active stellar the system owns,
+/// gates too (@0x2e713-0x2e74f): no gate test.
+#[test]
+fn the_flight_scene_draws_the_systems_wormhole_and_hypergate() {
+    let view = sol_with_gates();
+    let ids = scene_ids(&view);
+    assert!(ids.contains(&StellarId(150)), "{ids:?}");
+    assert!(ids.contains(&StellarId(151)), "{ids:?}");
+}
+
+/// `_DrawStatusRadar` draws every nav slot, gates as squares
+/// (@0x498a0-0x49a8e): no gate test.
+#[test]
+fn the_radar_shows_the_systems_wormhole_and_hypergate_as_squares() {
+    let mut view = sol_with_gates();
+    ticks(&mut view, 1);
+    let radar = view.radar_shown();
+    let gates: Vec<(Point, bool)> = radar
+        .stellars
+        .iter()
+        .filter(|stellar| stellar.position.x == 0.0 && stellar.position.y.abs() == 300.0)
+        .map(|stellar| (stellar.position, stellar.square))
+        .collect();
+    assert_eq!(
+        gates,
+        [
+            (Point::new(0.0, 300.0), true),
+            (Point::new(0.0, -300.0), true)
+        ]
+    );
+}
+
+/// `_DrawStatusNav` names any selected stellar (@0x4a09c-0x4a18c): F5
+/// within 500 pixels selects the wormhole, and the nav area names it.
+#[test]
+fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
+    let mut view = sol_with_gates();
+    tap(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Hole"]);
+}
+
 #[test]
 fn the_flight_scene_shows_only_the_sessions_stellars() {
     let view = FlightView::new(FakeCatalog {
