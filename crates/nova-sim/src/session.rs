@@ -3391,11 +3391,12 @@ impl Session {
         };
         let blessing = self.blessing();
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        let candidates = self.chart.pick_candidates(&self.pilot, &self.statics);
         let press = land_or_select(
             self.nav_target(),
             self.port.dock,
             &self.ship.player,
-            &self.chart.sites,
+            &candidates,
             |site| self.chart.held_here(&self.pilot, &self.statics, site.id),
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| {

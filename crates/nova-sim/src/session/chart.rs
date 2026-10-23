@@ -31,7 +31,10 @@ pub(super) struct Chart {
     /// the ship is docked at a stellar of another system.
     pub(super) shown: SystemId,
     /// The player's nav mode and its selection (see the `nav` module): a
-    /// stellar selected is one of `sites`.
+    /// stellar selected is one of [`Chart::pick_candidates`], a stellar
+    /// the system lists that is active, not only one of `sites`: the land
+    /// key selects one another visible system owns (see the
+    /// `stellar_picks` module).
     pub(super) nav: NavMode,
     /// The Con slot the mode-3 selection was written from, while it still
     /// stands (see the `nav` module's `NavSlot`).

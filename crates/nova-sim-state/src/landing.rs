@@ -20,9 +20,11 @@
 //!    [`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)
 //!    (@0x2838-0x2853), which the press selects ([`DockPress::selected`])
 //!    and goes on with (@0x6a8ed-0x6a956); a pick it can't land on is
-//!    selected and then refused at step 2. (The "no longer in the system"
-//!    fallback can't be reached from the `Session`: its selection only
-//!    ever holds stellars of `sites`, see hud-fidelity phase 37.) With
+//!    selected and then refused at step 2. The `nova_sim::Session` passes
+//!    as `sites` every active stellar its system lists, owned there or
+//!    not, which are what its selection holds, so a held pick another
+//!    system owns is found and refused again (stellar-fidelity phase 14).
+//!    With
 //!    stellars but none with the can-land flag it selects nothing and
 //!    refuses with
 //!    [`LandingRefusal::NothingLandable`]; with no stellars,

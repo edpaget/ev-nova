@@ -4,7 +4,7 @@
 //! @0x6699a-0x669a4). See the `story` module's "Checked for
 //! stellar-fidelity phase 7".
 //!
-//! The session reads it in three places, each through
+//! The session reads it in four places, each through
 //! [`Chart::held_here`]:
 //!
 //! - the player's landing reach (`Space::landing_reach`), which gives a
@@ -14,14 +14,19 @@
 //! - the land press, which refuses such a stellar as not landable before
 //!   any reach (`_HandlePlayerDockRequest` @0x6699a-0x669a4, then the
 //!   not-landable line and `snd ` 153 @0x67cda-0x67e8f);
+//! - F5, which drops a nearest pick another system owns, writing nothing
+//!   and making no sound (`_HandlePlayer` @0x69e73-0x69e94; see the
+//!   `stellar_picks` module);
 //! - the NPCs' gate entry box (`Session::gate_type_widths`), which takes
 //!   a quarter of the same 150 (`_HighLevelAIHandler` state 20
 //!   @0x8dbdf).
 //!
 //! A stellar the player's system shows is always held there
 //! ([`OverlaidGalaxy::shows`](crate::story::OverlaidGalaxy::shows)), so
-//! the test bites only on a stellar still among the sites after the
-//! player's system has changed without a rebuild point.
+//! the test bites on a stellar the system lists but another visible
+//! system owns, which the land key and F5 pick among
+//! ([`Chart::pick_candidates`]), and on a stellar still among the sites
+//! after the player's system has changed without a rebuild point.
 
 use super::{Chart, Statics};
 use crate::catalog::StellarId;
