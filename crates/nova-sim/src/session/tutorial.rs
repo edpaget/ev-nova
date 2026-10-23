@@ -72,11 +72,12 @@ impl Session {
         let position = self.ship.player.position;
         let distance_squared = position.x * position.x + position.y * position.y;
         let sites = &self.chart.sites;
+        let gates = self.setup.rules.source_for(RuleKey::GatePickRange);
         let hints = self.tutorial.check(
             frame,
             self.ship.condition == Condition::Intact,
             distance_squared,
-            || nearest_stellar_station(position, sites),
+            || nearest_stellar_station(position, sites, gates),
         );
         for hint in hints {
             self.space.say(&mut self.out, SimMessage::Tutorial(hint));
@@ -150,6 +151,36 @@ mod tests {
         assert_eq!(session.tutorial().flag(), -2);
         for _ in 0..200 {
             assert_eq!(tick(&mut session), (vec![], vec![]));
+        }
+    }
+
+    /// The land hint names `_FindNearestStellar`'s pick, gate limit and
+    /// all: by the engine, a wormhole 650 from the new pilot's (50, 50) is
+    /// passed over for a planet 950 away; by the other reading it is
+    /// named.
+    #[test]
+    fn the_land_hint_passes_over_a_far_gate_by_the_engine() {
+        let mut catalog = catalog();
+        catalog.sites[0].1 = vec![
+            crate::session::stellar_picks::tests::wormhole(150, 50.0, 700.0),
+            crate::testkit::planet(128, 50.0, 1000.0),
+        ];
+        for (rules, named) in [
+            (Rulebook::default(), 128),
+            (
+                Rulebook::default().with_override(RuleKey::GatePickRange, RuleSource::Bible),
+                150,
+            ),
+        ] {
+            let mut session = seasoned(&catalog).with_rules(rules);
+            session.begin(&catalog, &mut Scripted::default());
+            session.take_messages();
+            session.take_sounds();
+            let hint = SimMessage::Tutorial(TutorialHint::Land {
+                stellar: StellarId(named),
+                station: false,
+            });
+            assert_eq!(tick(&mut session).0, vec![hint], "{rules:?}");
         }
     }
 

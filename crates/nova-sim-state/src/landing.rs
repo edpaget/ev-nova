@@ -15,7 +15,10 @@
 //! 1. **The stellar.** The navigation target; with none, or one no
 //!    longer in the system, the nearest stellar with the can-land flag,
 //!    destroyed or not ([`nearest_stellar`], `_FindNearestStellar`),
-//!    station or planet, which the press selects ([`DockPress::selected`])
+//!    station or planet, a hypergate or wormhole counting only strictly
+//!    within 500 pixels by the engine's reading of
+//!    [`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)
+//!    (@0x2838-0x2853), which the press selects ([`DockPress::selected`])
 //!    and goes on with (@0x6a8ed-0x6a956); a pick it can't land on is
 //!    selected and then refused at step 2. (The "no longer in the system"
 //!    fallback can't be reached from the `Session`: its selection only
@@ -569,7 +572,9 @@ pub struct DockPress {
 /// traffic control clears the pilot to request docking at an inhabited
 /// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`],
 /// the speed read by `speed`
-/// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)): see the
+/// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)) and the
+/// untargeted pick's gate limit by `gates`
+/// ([`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)): see the
 /// module docs.
 // One argument per thing the original's dock request reads.
 #[allow(clippy::too_many_arguments)]
@@ -582,6 +587,7 @@ pub fn land_or_select(
     cleared: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
     speed: RuleSource,
+    gates: RuleSource,
 ) -> DockPress {
     let refused = |refusal| DockPress {
         selected: None,
@@ -592,7 +598,7 @@ pub fn land_or_select(
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
     let (site, selected) = match target {
         Some(site) => (site, None),
-        None => match nearest_stellar_site(player.position, sites) {
+        None => match nearest_stellar_site(player.position, sites, gates) {
             Some(site) => (site, Some(site.id)),
             None if sites.is_empty() => return refused(LandingRefusal::NoStellars),
             None => return refused(LandingRefusal::NothingLandable),
@@ -700,47 +706,94 @@ pub fn is_dockable_destroyed_or_not(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && has(site, StellarFlags::CAN_LAND)
 }
 
-/// The stellar among `sites` whose centre is nearest `position`, as
-/// `_FindNearestStellar` (@0x276c-0x2888) picks it: it skips only a
-/// stellar without the can-land flag (`Flags` 0x01, @0x27cd), so a
-/// destroyed one counts, and so does an intact one landable only once
-/// destroyed. Inactive stellars are never in `sites`. The earlier in
-/// `sites` of any equally near wins (@0x285a-0x285d); `None` when none has
-/// the flag. Left out: the hypergate/wormhole 500 px limit
-/// (@0x2838-0x2853) and candidates owned by another visible system, both
-/// rdm:task/gate-stellar-targeting-fidelity.
+/// The squared distance, 250000.0 (500 pixels), a hypergate or wormhole
+/// must be strictly within for [`nearest_stellar`] to count it by the
+/// engine's reading of
+/// [`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange): the float at
+/// 0xdd050, compared by `ucomiss` @0x284a.
+pub const GATE_PICK_RANGE_SQUARED: f32 = 250_000.0;
+
+/// The stellar among `sites` (in navigation order) whose centre is nearest
+/// `position`, as `_FindNearestStellar` (@0x276c-0x2888) picks it, the
+/// gate limit read by `gates`
+/// ([`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)). The whole
+/// function:
+///
+/// - F1: it starts with no best, its best distance -1.0 (@0x2777-0x2785).
+/// - F2, F3: it walks the system's sixteen `NavDefs` slots, skipping an
+///   empty one and one whose stellar is not active (+0x44,
+///   @0x278a-0x27c7). Which stellars those are is the caller's: `sites`
+///   holds them (see `nova_sim::Session`'s pick candidates).
+/// - F4: it skips a stellar without the can-land flag (`Flags` 0x01,
+///   @0x27cd). Being destroyed and `Flags` 0x80 are not read, so a
+///   destroyed stellar counts, and so does an intact one landable only
+///   once destroyed.
+/// - F5: it reads no owner (+0x14), so a stellar another visible system
+///   owns counts. Refusing it is the caller's.
+/// - F6: the distance is squared, `dx·dx + dy·dy` in single precision
+///   (@0x27d7-0x2844), never rooted.
+/// - F7: by the engine's reading, a hypergate or wormhole (`Flags2` &
+///   0x3000, @0x2838-0x2841) counts only when that is strictly below
+///   [`GATE_PICK_RANGE_SQUARED`] (@0x284a-0x2853); every other stellar
+///   counts at any distance (@0x2848). By the other reading, a gate counts
+///   at any distance.
+/// - F8: the nearest wins, the earlier of any at an equal squared distance
+///   (`ja` @0x285a-0x285d).
+/// - F9: `None` when none counts (@0x287d).
+///
+/// A NaN distance, which would stick as the best (@0x285a-0x2868), can't
+/// arise: positions are never NaN.
 #[must_use]
-pub fn nearest_stellar(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
-    nearest_stellar_site(position, sites).map(|site| site.id)
+pub fn nearest_stellar(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<StellarId> {
+    nearest_stellar_site(position, sites, gates).map(|site| site.id)
 }
 
 /// The stellar [`nearest_stellar`] (`_FindNearestStellar`) names, and whether it is a station
 /// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
 /// (`_HandlePlayer` @0x709e8-0x70a31; see `nova_sim::tutorial`).
 #[must_use]
-pub fn nearest_stellar_station(position: Vec2, sites: &[LandingSite]) -> Option<(StellarId, bool)> {
-    nearest_stellar_site(position, sites).map(|site| (site.id, is_station(site)))
+pub fn nearest_stellar_station(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<(StellarId, bool)> {
+    nearest_stellar_site(position, sites, gates).map(|site| (site.id, is_station(site)))
 }
 
 /// The site [`nearest_stellar`] names: the one the land key selects when
 /// there is no target.
-fn nearest_stellar_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
+fn nearest_stellar_site(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<&LandingSite> {
+    let squared = |site: &LandingSite| (site.position - position).length_squared();
+    let in_range = |site: &&LandingSite| {
+        gates != RuleSource::Engine
+            || GateKind::of(site.flags2).is_none()
+            || squared(site) < GATE_PICK_RANGE_SQUARED
+    };
     nearest(
         position,
         sites
             .iter()
-            .filter(|site| has(site, StellarFlags::CAN_LAND)),
+            .filter(|site| has(site, StellarFlags::CAN_LAND))
+            .filter(in_range),
     )
 }
 
-/// The one of `sites` whose centre is nearest `position`, the first of
-/// any equally near.
+/// The one of `sites` whose centre is nearest `position` by squared
+/// distance, the first of any equally near.
 fn nearest<'a>(
     position: Vec2,
     sites: impl Iterator<Item = &'a LandingSite>,
 ) -> Option<&'a LandingSite> {
-    let distance = |site: &LandingSite| (site.position - position).length();
-    sites.min_by(|a, b| distance(a).total_cmp(&distance(b)))
+    let squared = |site: &LandingSite| (site.position - position).length_squared();
+    sites.min_by(|a, b| squared(a).total_cmp(&squared(b)))
 }
 
 fn not_landable(site: &LandingSite) -> LandingRefusal {
@@ -1040,6 +1093,7 @@ mod tests {
             |_| panic!("traffic control is asked"),
             engine_reach,
             reading,
+            RuleSource::Engine,
         );
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) => stellar,
@@ -1065,6 +1119,7 @@ mod tests {
             |_| true,
             |site| landing_record(site, system_govt, &record) >= site.min_status,
             engine_reach,
+            RuleSource::Engine,
             RuleSource::Engine,
         );
         press.outcome.map(|outcome| match outcome {
@@ -1092,6 +1147,7 @@ mod tests {
                 |_| panic!("traffic control is asked"),
                 |_| panic!("the reach is read"),
                 RuleSource::Engine,
+                RuleSource::Engine,
             );
             assert_eq!(
                 press,
@@ -1114,6 +1170,7 @@ mod tests {
             |site| site.id != StellarId(128),
             |_| true,
             engine_reach,
+            RuleSource::Engine,
             RuleSource::Engine,
         );
         assert_eq!(
@@ -1277,9 +1334,12 @@ mod tests {
                 ..site(130, 0.0, 500.0)
             },
         ];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
         assert_eq!(
-            nearest_stellar(Vec2::new(0.0, 450.0), &sites),
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(Vec2::new(0.0, 450.0), &sites, RuleSource::Engine),
             Some(StellarId(130))
         );
     }
@@ -1354,32 +1414,42 @@ mod tests {
             },
         ];
         assert_eq!(
-            nearest_stellar(Vec2::ZERO, &sites),
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
             Some(StellarId(130)),
             "landable only once destroyed, and intact"
         );
         assert_eq!(
-            nearest_stellar(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar(Vec2::new(450.0, 0.0), &sites, RuleSource::Engine),
             Some(StellarId(128))
         );
         assert_eq!(
-            nearest_stellar_station(Vec2::new(-250.0, 0.0), &sites),
+            nearest_stellar_station(Vec2::new(-250.0, 0.0), &sites, RuleSource::Engine),
             Some((StellarId(131), true)),
             "a station counts, and is said to be one"
         );
         assert_eq!(
-            nearest_stellar_station(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar_station(Vec2::new(450.0, 0.0), &sites, RuleSource::Engine),
             Some((StellarId(128), false))
         );
-        assert_eq!(nearest_stellar_station(Vec2::ZERO, &[]), None);
+        assert_eq!(
+            nearest_stellar_station(Vec2::ZERO, &[], RuleSource::Engine),
+            None
+        );
     }
 
     #[test]
     fn with_no_can_land_flag_there_is_no_nearest_stellar() {
-        assert_eq!(nearest_stellar(Vec2::ZERO, &[]), None);
-        assert_eq!(nearest_stellar(Vec2::ZERO, &[with_flags(0)]), None);
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[], RuleSource::Engine), None);
         assert_eq!(
-            nearest_stellar(Vec2::ZERO, &[with_flags(StellarFlags::ONLY_WHEN_DESTROYED)]),
+            nearest_stellar(Vec2::ZERO, &[with_flags(0)], RuleSource::Engine),
+            None
+        );
+        assert_eq!(
+            nearest_stellar(
+                Vec2::ZERO,
+                &[with_flags(StellarFlags::ONLY_WHEN_DESTROYED)],
+                RuleSource::Engine
+            ),
             None
         );
     }
@@ -1388,9 +1458,200 @@ mod tests {
     #[test]
     fn equally_near_stellars_go_to_the_earlier_in_nav_order() {
         let sites = [site(131, 0.0, 100.0), site(128, 0.0, -100.0)];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(131)));
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(131))
+        );
         let sites = [site(128, 0.0, -100.0), site(131, 0.0, 100.0)];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+    }
+
+    /// A wormhole at (`x`, `y`) as the stock ones are flagged: can-land
+    /// and uninhabited (`Flags` 0x21), `Flags2` 0x2000.
+    fn wormhole(id: i16, x: f32, y: f32) -> LandingSite {
+        LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            flags2: WORMHOLE,
+            ..site(id, x, y)
+        }
+    }
+
+    /// A hypergate at (`x`, `y`): can-land (`Flags` 0x01), `Flags2` 0x1000.
+    fn hypergate(id: i16, x: f32, y: f32) -> LandingSite {
+        LandingSite {
+            flags2: HYPERGATE,
+            ..site(id, x, y)
+        }
+    }
+
+    /// The gates of the gate-limit tests, each built at (`x`, `y`).
+    const GATES: [fn(i16, f32, f32) -> LandingSite; 2] = [wormhole, hypergate];
+
+    /// `_FindNearestStellar` counts a gate (`Flags2` & 0x3000) only when
+    /// its squared distance is strictly below 250000.0 (`ucomiss` against
+    /// 0xdd050, `jae` @0x284a-0x2853): exactly 500 px away it does not
+    /// count, and the planet 900 px away is picked.
+    #[test]
+    fn by_the_engine_a_gate_exactly_500_away_is_not_picked() {
+        for gate in GATES {
+            let sites = [gate(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some(StellarId(128)),
+                "{:?}",
+                sites[0].flags2
+            );
+        }
+    }
+
+    /// d² = 300² + 399² = 249201, below 250000.0: the gate counts.
+    #[test]
+    fn by_the_engine_a_gate_just_inside_500_is_picked() {
+        for gate in GATES {
+            let sites = [site(128, 900.0, 0.0), gate(130, 300.0, 399.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some(StellarId(130)),
+                "{:?}",
+                sites[1].flags2
+            );
+            assert_eq!(
+                nearest_stellar_station(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some((StellarId(130), false))
+            );
+        }
+    }
+
+    /// With only gates 500 px or more away there is no pick, and an
+    /// untargeted L selects nothing and refuses in silence.
+    #[test]
+    fn by_the_engine_only_far_gates_give_no_pick_and_l_refuses_nothing_landable() {
+        let sites = [wormhole(130, 300.0, 400.0), hypergate(131, -600.0, 0.0)];
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            None
+        );
+        assert_eq!(
+            nearest_stellar_station(Vec2::ZERO, &sites, RuleSource::Engine),
+            None
+        );
+        let press = land_or_select(
+            None,
+            None,
+            &parked(),
+            &sites,
+            |_| true,
+            |_| panic!("traffic control is asked"),
+            |_| panic!("the reach is read"),
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            press,
+            DockPress {
+                selected: None,
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::NothingLandable),
+            }
+        );
+        assert!(!LandingRefusal::NothingLandable.beeps(), "silent");
+    }
+
+    /// The other reading counts a gate at any distance, the port's
+    /// earlier pick.
+    #[test]
+    fn by_the_other_reading_a_gate_counts_at_any_distance() {
+        for gate in GATES {
+            let sites = [gate(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Bible),
+                Some(StellarId(130))
+            );
+            let far = [site(128, 9000.0, 0.0), gate(130, 5000.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &far, RuleSource::Bible),
+                Some(StellarId(130))
+            );
+            assert_eq!(
+                nearest_stellar_station(Vec2::ZERO, &far, RuleSource::Bible),
+                Some((StellarId(130), false))
+            );
+        }
+    }
+
+    /// The limit is the gates' alone (`je 0x2855` @0x2848): an ordinary
+    /// stellar counts at any distance by either reading.
+    #[test]
+    fn a_planet_far_away_counts_by_either_reading() {
+        let sites = [site(128, 5000.0, 0.0), wormhole(130, 4000.0, 0.0)];
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(
+                Vec2::new(-3000.0, 0.0),
+                &[site(128, 3000.0, 4000.0)],
+                RuleSource::Engine
+            ),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Bible),
+            Some(StellarId(130))
+        );
+    }
+
+    /// The choice is on d² (F6, F8), the earlier winning only an equal
+    /// d²: (300, 400) and (500, 0) are both 250000 from the origin, and
+    /// (0, 499) is nearer than both. Nothing orders two stellars
+    /// differently by d² than by its root (the root is monotonic), so
+    /// only the ties are shown.
+    #[test]
+    fn of_two_stellars_the_earlier_wins_only_an_equal_squared_distance() {
+        for gates in [RuleSource::Engine, RuleSource::Bible] {
+            let tied = [site(128, 300.0, 400.0), site(129, 500.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &tied, gates),
+                Some(StellarId(128))
+            );
+            let tied = [site(129, 500.0, 0.0), site(128, 300.0, 400.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &tied, gates),
+                Some(StellarId(129))
+            );
+            let nearer = [site(128, 300.0, 400.0), site(129, 0.0, 499.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &nearer, gates),
+                Some(StellarId(129))
+            );
+        }
+    }
+
+    /// An untargeted L selects as the pick does, by each reading.
+    #[test]
+    fn untargeted_l_selects_by_the_gate_reading() {
+        let sites = [wormhole(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+        let pressed = |gates| {
+            land_or_select(
+                None,
+                None,
+                &parked(),
+                &sites,
+                |_| true,
+                |_| true,
+                engine_reach,
+                RuleSource::Engine,
+                gates,
+            )
+            .selected
+        };
+        assert_eq!(pressed(RuleSource::Engine), Some(StellarId(128)));
+        assert_eq!(pressed(RuleSource::Bible), Some(StellarId(130)));
     }
 
     #[test]
@@ -2063,6 +2324,7 @@ mod tests {
             |_| true,
             |_| clear,
             engine_reach,
+            RuleSource::Engine,
             RuleSource::Engine,
         )
     }

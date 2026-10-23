@@ -438,7 +438,11 @@ impl Session {
         }
         let picked = match pick {
             StellarPick::Slot(slot) => self.chart.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_stellar(self.ship.player.position, &self.chart.sites),
+            StellarPick::Nearest => nearest_stellar(
+                self.ship.player.position,
+                &self.chart.sites,
+                self.setup.rules.source_for(RuleKey::GatePickRange),
+            ),
         }?;
         let selected = self.chart.nav == NavMode::Stellar(Some(picked));
         self.out.sounds.push(SimSound::NavSelected);

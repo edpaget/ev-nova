@@ -546,6 +546,7 @@ mod steering;
 #[cfg(test)]
 mod stellar_attackers;
 mod stellar_guns;
+mod stellar_picks;
 mod stellars;
 mod story;
 mod stray_words;
@@ -3402,6 +3403,7 @@ impl Session {
                 self.space.landing_reach(&self.setup, site, held)
             },
             self.setup.rules.source_for(RuleKey::LandingSpeed),
+            self.setup.rules.source_for(RuleKey::GatePickRange),
         );
         if disabled {
             self.chart.select_pressed(press.selected);
