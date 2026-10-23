@@ -1646,7 +1646,9 @@
 //!
 //! - **The rule** is `navigation::stellar_under`, which now takes the
 //!   frame size drawn for each site from its caller; `None` still gives
-//!   the 64-pixel placeholder.
+//!   the 64-pixel placeholder. Since stellar-fidelity phase 9 the caller
+//!   gives the slot's rect (`navigation::SpriteRect`, `Space::click_rect`)
+//!   and `None` is no rect.
 //! - **The sheet drawn** is decided once, by `Session::drawn_sheet` (the
 //!   session's `stellars` module; one owner since stellar-fidelity
 //!   phase 1): the
@@ -1665,8 +1667,9 @@
 //!   `dead_type_fallback` decides it under both readings. By the Bible's
 //!   no graphic type 0 is drawn, so none is clicked.
 //! - **Not switched**: the margin's width test, the half-open edges and
-//!   the order among overlapping stellars (below) are story-runtime phase
-//!   20 (click-target-shape), as is the stellar's +0x44 skip flag.
+//!   the order among overlapping stellars (below) are stellar-fidelity
+//!   phase 9, as is the stellar's +0x44 skip flag. Built there: the margin
+//!   reads the width.
 //!
 //! ## Checked for phase 11
 //!
@@ -1691,13 +1694,13 @@
 //! - **The margin's test reads the width**: `movswl -0x36(%ebp)` (left)
 //!   and `movswl -0x32(%ebp)` (right), `subl`, then `cmpl $0x2f` and
 //!   `jg` past the `_InsetRect(r, -16, -16)` (@0x6a649-0x6a671). The
-//!   engine's `SMALL_SPRITE_HEIGHT` compares the height: story-runtime
-//!   phase 20.
+//!   engine compared the height until stellar-fidelity phase 9 built the
+//!   width test (`SMALL_SPRITE_WIDTH`).
 //! - **A rectangle, not a mask**: `_PtInRect` (@0x6a686), half-open on
 //!   the right and bottom, where the engine includes every edge; and the
 //!   first slot holding the point wins, the slots filled by ascending
-//!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are phase
-//!   20.
+//!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are built
+//!   by stellar-fidelity phase 9.
 //!
 //! ## Built by stellar-fidelity phase 1
 //!
@@ -2784,13 +2787,118 @@
 //! - **Left out, depending on unlanded work.**
 //!   - Clicking a frozen or frameless slot (`_HandlePlayer`
 //!     @0x6a5f9-0x6a686 reads the slot's rect +0x1a): a frozen slot's rect
-//!     is the stale frame's, its top left at the centre less 16. The
-//!     engine clicks a frozen stellar by its stale sheet's box, centred,
-//!     and a frameless one by the 64-pixel placeholder. In
-//!     rdm:phase/stellar-fidelity/phase-9-click-target-shape.
+//!     is the stale frame's, its top left at the centre less 16, and a
+//!     frameless one has none. Built by stellar-fidelity phase 9 (below).
 //!   - The status radar's blip for a `Type` master that counts none (32,
 //!     the smallest): it depends on rdm:task/radar-blips-every-listed-stellar;
 //!     rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type.
+//!
+//! ## Built by stellar-fidelity phase 9
+//!
+//! A click in space and the hover pick a stellar by its sprite slot's
+//! rect, as `_HandlePlayer` (@0x6a5e9-0x6a717) and `_HandleMouse`
+//! (@0x3823f-0x38276) test it.
+//!
+//! - **The rule** is one type, `navigation::SpriteRect` (the slot's +0x1a,
+//!   in system coordinates): `SpriteRect::holds` grows the rect by 16 on
+//!   every side when its width is 47 or less (`SMALL_SPRITE_WIDTH`,
+//!   whatever its height), then tests it half-open, left and top in,
+//!   right and bottom out. `SpriteRect::centred` places a frame around a
+//!   centre with its top left at half the size, halved as integers, so an
+//!   odd size's extra pixel is on the right or the bottom. The ship click
+//!   and hover box (`hover::in_box`) is the same rule around the view's
+//!   drawn centre.
+//! - **The order**: `navigation::stellar_under` and `stellar_under_past`
+//!   give the lowest `StellarId` among the stellars whose rect holds the
+//!   click, the one selected in mode 2 passed over.
+//! - **The slot's rect** is `Space::click_rect` (the session's `stellars`
+//!   module): none for a slot showing no frame (`DrawnSheet::NoFrame`);
+//!   else the frame drawn (the 64-pixel placeholder when no sheet is),
+//!   its top left at `sprite_pool::offset(position, player, slot size)`
+//!   from the player, the slot size `Space::slot_sprite_size` gives: 32
+//!   square for a frame frozen, so a frozen slot's stale frame sits with
+//!   its top left at the centre less 16, and the frame's own size
+//!   otherwise. `nova_sim::Session::click_in_space` and
+//!   `nova_sim::Session::hover` read it.
+//! - **Readings.** No key: the Nova Bible says nothing of a click's box,
+//!   margin, edges or order (as story-runtime phase 11 found).
+//! - **Left out**: whole-pixel placement of the drawn sprites and of the
+//!   ship box (`_HandleStellarSprites` @0x2eeab-0x2ef1a,
+//!   `_HandleShipDisplay` @0x2cd1c-0x2ce31): the view draws at float
+//!   positions, centred, at most a pixel off:
+//!   rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement.
+//!   One `PtInRect` rule shared with the view
+//!   (`Bounds::contains_half_open`, roadmap play-feel, not yet on main)
+//!   cannot be: the sim crates sit below the view.
+//!
+//! ## Checked for stellar-fidelity phase 9
+//!
+//! Read with `otool -tV -arch i386` on `EV Nova.app/Contents/MacOS/EV Nova`.
+//!
+//! - **The jump gate** (@0x6a5e9-0x6a5f3): the click goes no further
+//!   while the player's +0x50 > 0; built (`click_in_space` returns during
+//!   a jump).
+//! - **The walk** (@0x6a5f9-0x6a611, @0x6a70c-0x6a711) over the 16 slot
+//!   pointers at `*0x3b53d0`, in slot order, skipping a null slot
+//!   (@0x6a603) and one whose visible byte +0x14 is clear (@0x6a60b).
+//!   The visible byte is set for each owned slot at a rebuild point
+//!   (`_SWSetSpriteVisible(1)` @0x3306b); `_HandleStellarSprites` re-shows
+//!   only visible slots (@0x2e720-0x2e74f); `_SWHideAllSprites` runs at
+//!   @0x6c592, followed at once by HSSV (@0x6c597), and at @0x68e04 in
+//!   the pod's fade-out. So no click falls where an owned slot is hidden.
+//! - **The owner and +0x44** (@0x6a615-0x6a637): the owner is the slot's
+//!   +0xd0, and a stellar whose record byte +0x44 is clear is skipped.
+//!   +0x44 is "active this visit": `_HandleStellarSystemVisibility`
+//!   clears it for every spöb (@0x32c42) and sets it (@0x32cdf) for one
+//!   with +0x45 set in a system whose sÿst +0x1eb is set, and hands slots
+//!   out only to active stellars (@0x32ee4). The other writes are
+//!   load-time (`_InitObjects` @0x1c880, `_LoadObjectData` @0x77244,
+//!   @0x77584, @0x779bf, @0x789c0) or to shot records
+//!   (`_HandleStellarWeapons` @0x2f1f1, `_SpawnShot`). So every owned
+//!   slot's stellar is active, which the engine's `sites` (the stellars
+//!   shown) already match: no code.
+//! - **The rect** (@0x6a63d-0x6a646): +0x1a, a QuickDraw `Rect` (`top,
+//!   left, bottom, right`), copied to -0x38(%ebp); -0x36 is left, -0x32
+//!   right.
+//! - **The margin reads the width** (@0x6a649-0x6a671): right less left,
+//!   `cmpl $0x2f` / `jg` past `_InsetRect(r, -16, -16)`. The same test
+//!   guards the player's own sprite (@0x6a3b3-0x6a3db), each NPC
+//!   (@0x6a4b7-0x6a4df) and the hover (`_HandleMouse` ships
+//!   @0x38183-0x381a8, stellars @0x3823f-0x38264).
+//! - **`_PtInRect`** (@0x6a676-0x6a68d, and @0x6a3f0, @0x6a4f4, @0x381ba,
+//!   @0x38276): left ≤ h < right and top ≤ v < bottom.
+//! - **The selected stellar is passed over** (@0x6a68f-0x6a69d) when the
+//!   owner is +0x6c and +0x6a is 2; built (`stellar_under_past`).
+//! - **A pick** (@0x6a69f-0x6a701): `PlaySound(_beepSnd[0], 1,
+//!   _gSoundVolume, _gSoundVolume)` @0x6a6c1 (`snd ` 150,
+//!   `SimSound::NavSelected`); +0x6c := owner (@0x6a6d5), +0x6a := 2
+//!   (@0x6a6ec); `_navTargetExpand` := 256.0 (@0x6a6d9, the brackets'
+//!   fly-in); `_statusRedraw` := 1 (@0x6a6e4, no model: the status panel
+//!   is drawn every frame); `_dockTarget` and `_dockPermission` := −1
+//!   (@0x6a6f2, @0x6a6fc, `port.dock = None`). All built before this
+//!   phase. A miss walks on (@0x6a703-0x6a717); the walk's end is silent.
+//! - **The order is lowest spöb ID first**: HSSV walks the spöbs in index
+//!   order (@0x33216-0x3321d), and each active one the player's system
+//!   owns (@0x32ee4-0x32f06) takes the next slot (@0x32f4b-0x32f6b), up
+//!   to 16 (@0x33205-0x33214), its owner set (@0x32fda). The 16 cap never
+//!   bites: a system's 16 `NavDefs` bound what it shows.
+//! - **Where the rect sits** (`_HandleStellarSprites` @0x2ee3d-0x2ef1a,
+//!   `_SWSetSpriteLocation` @0xab640-0xab6a0): the top left is
+//!   `trunc(spöb − player) + centre − (size / 2)` on each axis
+//!   (`cvttss2si` @0x2eed3, @0x2ef01; the halving `shrw`/`sarw` pair
+//!   @0x2eec3-0x2eecb, @0x2eef0-0x2ef08), the size from
+//!   `_GetSpriteXSize`/`_GetSpriteYSize` (@0x2ee3d, @0x2ee4e), less the
+//!   frame's hot spot (+0x2a/+0x2c, @0xab665-0xab669), which is always 0
+//!   (`_SWCreateFrame` allocates with `_NewPtrClear` @0xad5d9 and
+//!   `_SWSetFrameHotSpot` @0xadf1a has no caller); the rect is moved, not
+//!   resized (@0xab66d-0xab693). A frozen slot is sized 32 by
+//!   `_GetSpriteXSize`/`_GetSpriteYSize` (@0x26e5-0x26ef, @0x2714-0x271e),
+//!   so its stale frame's rect sits at the centre less 16. A frameless
+//!   slot's rebuild faults first (`_SWSetSpriteLocation` @0xab665 from
+//!   @0x331aa), so it has no rect. Ships are placed the same way
+//!   (`_HandleShipDisplay` @0x2cd1c-0x2cd9d, @0x2cdb5-0x2ce31).
+//! - **Integer widths**: the rect is shorts; the engine keeps `f32` and
+//!   `u32`.
 
 //! # Mission lifecycle
 //!
