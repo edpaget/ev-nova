@@ -3,6 +3,12 @@
 //! and stepped tick by tick ([`SystemScene::step`]); and
 //! [`draw_stellars`], which draws them through a camera for every screen
 //! that shows a system.
+//!
+//! A scene laid out starts each stellar's animation at frame 0. The flight
+//! then resumes each stellar it has shown before where it was left
+//! ([`SystemScene::resume`] from its [`KeptFrames`], stellar-fidelity
+//! phase 12), as the original keeps the state on the `spöb` record; the
+//! galaxy viewer, which has no counterpart in the original, does not.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
@@ -72,6 +78,9 @@ pub struct SceneStellar {
     pub type_zero_sprite: Result<StellarSheet, String>,
     /// Its animation state: the frame of the sheet drawn that shows, and
     /// when the next shows. A sheet that cannot be read counts 1 frame.
+    /// Fresh as the scene is laid out, and then, in a flight, as the
+    /// stellar was left the last time it was shown
+    /// ([`SystemScene::resume`]).
     pub frames: Frames,
     /// The frame a hypergate draws, as its session steps it
     /// (`Session::gate_frame`), in place of [`frames`](Self::frames)';

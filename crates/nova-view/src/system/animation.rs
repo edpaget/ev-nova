@@ -83,8 +83,12 @@ impl Default for Frames {
 }
 
 impl Frames {
-    /// A stellar's state as it is laid out: frame 0 current and shown,
-    /// frame 1 next, the timer at 0 (`_InitObjects` @0x1c8b9-0x1c8d1).
+    /// A stellar's state the first time a flight shows it: frame 0
+    /// current and shown, frame 1 next, the timer at 0, as a newly made
+    /// sprite slot sets it (`_HandleStellarSystemVisibility`
+    /// @0x331e2-0x331fb; `_InitObjects` @0x1c8c5-0x1c8d1 sets the frame
+    /// and timer at launch). A stellar shown again resumes the state it
+    /// was left in (`KeptFrames`, stellar-fidelity phase 12).
     #[must_use]
     pub const fn new() -> Self {
         Self {

@@ -1742,14 +1742,14 @@
 //!   look changed at its current frame, or frame 0 on graphic type 0's
 //!   sheet. A rebuild point that changes nothing tells nothing, so its
 //!   reshow is skipped: at most one `AnimDelay` of difference.
-//! - **Laid out afresh.** The original keeps each `spöb`'s animation state
-//!   across systems; the view starts it afresh whenever it lays a system
-//!   out. Only the phase of a cycle on arrival differs. The original's
-//!   stale slot count after a jump (another stellar's) and the 0 count of
-//!   a fresh slot are memory-layout accidents the engine does not copy: a
+//! - **Kept across systems** (since stellar-fidelity phase 12): the
+//!   original keeps each `spöb`'s animation state across systems, and so
+//!   does the flight, which resumes a stellar shown again where it was
+//!   left; see "Built by stellar-fidelity phase 12". The original's stale
+//!   slot count after a jump (another stellar's) and the 0 count of a
+//!   fresh slot are memory-layout accidents the engine does not copy: a
 //!   stellar newly shown counts its `Type` until a rebuild point says
-//!   otherwise. Carrying the state across systems is stellar-fidelity
-//!   phase 12 (stellar-animation-across-systems).
+//!   otherwise.
 //! - **Since built**: `Flags2` 0x0001 and 0x0002 and an `AnimDelay` of 0
 //!   or less, which the original advances every frame: see "Built by
 //!   stellar-fidelity phase 10". A hypergate draws the frame its session
@@ -3013,6 +3013,114 @@
 //!   and its timer to −`AnimDelay`; then `_HandleStellarSystemVisibility`
 //!   rebuilds (@0x67653). Filed as
 //!   rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!
+//! ## Built by stellar-fidelity phase 12
+//!
+//! A stellar's animation state (its current frame, next frame and timer)
+//! outlives the system it is shown in, as the original keeps it on the
+//! `spöb` record (+0x476, +0x478, +0x490), not on the sprite slot.
+//!
+//! - **Ordinary stellars, in the view.** The flight keeps each stellar's
+//!   frames as its scene is let go, on a jump, a move or a rebuild that
+//!   changes the stellars shown (`nova_view::system::KeptFrames`), and the
+//!   next scene to show it resumes them on the sheet it now draws: the
+//!   current frame modulo that sheet's count, or frame 0 on graphic type
+//!   0's (`SystemScene::resume`, as the rebuild sets the slot @0x33096,
+//!   @0x332d0). A stellar not shown stands still. One the flight has never
+//!   shown starts at current 0, next 1, timer 0. The frame a non-gate
+//!   stellar shows is drawn state the session never reads, and the state
+//!   is not saved, so the view owns it: it settles as the scene is laid
+//!   out, before the first frame drawn there.
+//! - **Hypergates, in the session.** A gate keeps its sprite (the same
+//!   three fields) in `Space`'s gate sprites while it is not shown, and
+//!   stands still there; it starts closed only the first time a flight
+//!   shows it (see the `nova_sim` `gate_sprites` module).
+//! - **Load and new pilot.** Each is a new flight with a new `Space`, so
+//!   every stellar and gate starts afresh, as the original does for a load
+//!   right after launch.
+//! - **Readings.** No key. The Bible says nothing of the animation's
+//!   lifetime, and no other reading exists.
+//! - **Left out**:
+//!   - the new-slot reset (`_HandleStellarSystemVisibility`
+//!     @0x331da-0x331fb, gated by ebp−0x121 from `_SWCreateEmptySprite`
+//!     @0x32f80): whether it fires depends on how many sprite slots
+//!     earlier systems in the process made, a memory-layout accident. The
+//!     visible case, a stellar first shown in a flight, starts at
+//!     current 0, next 1, timer 0, as the new slot gives the run's first
+//!     system;
+//!   - carrying the state over a load or a new pilot in the same run
+//!     (`_DoNewPilot` @0x18de5, @0x190f0, @0x1937f; `_LoadPilotData`
+//!     @0x751cf, @0x75324): process state leaking from another pilot's
+//!     game through the static `spöb` array, not saved and not
+//!     reproducible from the save;
+//!   - the next frame's first value at launch, a read of uninitialised
+//!     memory (+0x478 is never set by `_InitObjects` @0x1c8b9-0x1c902, and
+//!     the array comes from an uncleared `_NewPtr` @0x1b7d4): the engine
+//!     uses 1, as the new-slot reset gives;
+//!   - the dock request's take-off reset (`_HandlePlayerDockRequest`
+//!     @0x675ce-0x67646), already
+//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset;
+//!   - the integer widths: +0x476/+0x478 are 16-bit and the timer a 32-bit
+//!     float;
+//!   - the galaxy viewer (`nova_view::system::SystemView`), which still
+//!     lays each system out afresh: it has no counterpart in the original.
+//!
+//! ## Checked for stellar-fidelity phase 12
+//!
+//! Read with `objdump --x86-asm-syntax=att -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`. Every instruction writing +0x476
+//! (current frame), +0x478 (next frame) or +0x490 (float timer):
+//!
+//! - **`_InitObjects`** (@0x1c2e5): +0x476 = 0 (@0x1c8c5) and +0x490 = 0
+//!   (@0x1c8d1), beside +0x474 = 1 (@0x1c8b9) and +0x472 = 1 (@0x1c8f6);
+//!   +0x478 is not written. Its only caller is `_InitEVNova` (@0x47252),
+//!   once per launch, before `_LoadObjectData` (@0x47280). The `spöb`
+//!   array comes from `_NewPtr(0x24c000)` in `_InitArrays`
+//!   (@0x1b7cd-0x1b7e1), which does not clear it.
+//! - **`_HandleStellarSprites`** (@0x2e6f1): the timer gains
+//!   `_gSpeedMult` (@0x2e825); the hypergate branch writes all three
+//!   (@0x2ea3d-0x2ec3f); the sequential branch too (@0x2ec89-0x2edf4).
+//! - **`_HandleStellarSystemVisibility`** (@0x32aa5), the new-slot reset:
+//!   +0x490 = 0, +0x476 = 0, +0x478 = 1 (@0x331e2, @0x331ef, @0x331fb),
+//!   only when the byte at ebp−0x121 is set, which happens only when slot
+//!   k's pointer in the array behind 0x3b53d0 was null and
+//!   `_SWCreateEmptySprite` ran (@0x32f6b-0x32f85, and @0x32faa when the
+//!   create failed). Slot pointers are written only by `_InitSprites`
+//!   (once, from `_InitEVNova` @0x47382), by this create, and at quit
+//!   (`_DestroySpriteWorld`, `_Bye`). The rebuild's clear keeps the slot
+//!   (it nulls +0x4c/+0x50/+0xd4 and sets +0xd0 to −1, @0x32e68-0x32e8f),
+//!   so each slot index is made once per run: the reset hits every
+//!   stellar of the first system after launch, and later only the
+//!   stellars past the largest count seen so far, in `spöb` index order.
+//! - **`_HandlePlayerDockRequest`** (@0x66691): the take-off reset, every
+//!   record's +0x476/+0x478 = 0 (@0x675d8, @0x675e4, looping to 0x24c000
+//!   @0x675f4), and the exit gate's three fields (@0x6761e, @0x67630,
+//!   @0x67646).
+//! - **Nothing else** writes them. The one other match, `-0x490(%ebp)`
+//!   @0x9c324, is a local in `_MungeBriefing`. Reads come only from the
+//!   four functions above (54 in `_HandleStellarSprites`, 6 in the dock
+//!   request, 4 in the rebuild, 2 in `_InitObjects`).
+//! - **New pilot: no reset.** `_DoNewPilot` (@0x18b0a) calls
+//!   `_ResetGameData` (@0x18de5; its `spöb` loop @0x1de4e-0x1dea8 writes
+//!   only +0x46, +0x3c and +0x47c), `_LoadObjectData` (@0x190f0; none of
+//!   the three, and no memset or block copy) and the rebuild (@0x1937f).
+//! - **Load: no reset.** `_LoadPilotData` (@0x750b5) rebuilds (@0x751cf,
+//!   @0x75324). Its one `memcpy` (@0x757c8, 0x8ec bytes) fills the array
+//!   behind 0x3b50f4, not `spöb`.
+//! - **Not saved.** No save or load routine reads or writes the three
+//!   fields (the reader list above is complete): the state lives for the
+//!   process, not the pilot.
+//! - **Still while elsewhere.** `_HandleStellarSprites` walks only the 16
+//!   sprite slots (@0x2e713-0x2e73e), skipping a null slot, one not in
+//!   use (+0x14) and one whose stellar index +0xd0 is outside 0-0x7ff. The
+//!   rebuild sets every cleared slot's +0xd0 to −1 (@0x32e8f) and refills
+//!   only the stellars shown (+0xd0 = index @0x32fda).
+//!   `_DoStellarTimePassage` (@0x40867, the daily walk) touches none of
+//!   the three. Shown again, the rebuild sets its slot to +0x476 modulo
+//!   the slot's count (@0x33096), and its timer carries on.
+//! - **Hypergates**: the gate branch's state is these same three fields,
+//!   so a gate keeps its sprite across systems and does not step while
+//!   not shown.
 
 //! # Mission lifecycle
 //!
