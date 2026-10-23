@@ -62,6 +62,10 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`christening`]: christening a new pilot's ship, as `_DoNewPilot`
+//!   asks: the prompt and its default
+//!   ([`Christening`](christening::Christening)) and the name kept
+//!   ([`christen`](christening::christen)).
 //! - [`clearance`]: the dock request the land key makes
 //!   ([`DockRequest`]), its counter, and the dock approach that counts it
 //!   on every frame and greets the pilot ([`approach`]).
@@ -378,6 +382,7 @@ pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
 pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::board;
+pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;
 pub use nova_sim_ai::escort;

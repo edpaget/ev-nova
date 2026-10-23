@@ -4,8 +4,8 @@
 //! A new pilot starts as the first `chär` by ascending ID says: its ship,
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
-//! records, its ship named after its class (the `chär`'s own christening
-//! prompt is not shown yet), owning its ship's stock weapons and their `AmmoLoad` as
+//! records, its ship named after its class until the New Pilot flow
+//! christens it, owning its ship's stock weapons and their `AmmoLoad` as
 //! outfits ([`Arsenal::stock_outfits`]) and then its default items
 //! (repeated slots adding up), as `_DoNewPilot` fits them (@0x18f48,
 //! @0x18f4d), and with the ship's shield, armour and fuel full at what it
@@ -45,13 +45,15 @@
 //! (`_WritePilotData` @0x727f2); drawing it is not done yet.
 //!
 //! It keeps its ship's name, the original's `_shipName`: a new pilot's
-//! ship is named after its class (the `shïp`'s name; the original's
-//! new-pilot dialog asks for one, `_CullNameString` @0x19195, which is
-//! not shown yet), and a pilot from a save made before ships had names
-//! is named after its class when flown. The `T` set operator renames it
-//! (see the session's `ship_change` module); buying or capturing a ship
-//! leaves the name as it is for now (the shipyard's name dialog is not
-//! shown yet), and nothing displays it yet.
+//! ship is named after its class (the `shïp`'s name) until the New Pilot
+//! flow christens it ([`Pilot::with_ship_name`], `nova_sim::christening`,
+//! `_DoNewPilot` @0x18cca-0x18d76, @0x19189-0x191ae), so a pilot built
+//! without the prompt, in a headless run or a test, keeps its class's
+//! name. A pilot from a save made before ships had names is named after
+//! its class when flown. The `T` set operator renames it (see the
+//! session's `ship_change` module), and buying a ship names it from the
+//! shipyard's name prompt (`nova_sim::Session::buy_ship`); capturing a
+//! ship leaves the name as it is.
 //!
 //! It keeps what play has changed of the galaxy, the
 //! [`GalaxyOverlay`]: none on a new pilot, so its galaxy is the
@@ -294,6 +296,16 @@ impl Pilot {
     #[must_use]
     pub fn with_gender(self, gender: Gender) -> Self {
         Self { gender, ..self }
+    }
+
+    /// The pilot with its ship named `name`, everything else unchanged:
+    /// the name the New Pilot flow christens it with.
+    #[must_use]
+    pub fn with_ship_name(self, name: String) -> Self {
+        Self {
+            ship_name: Some(name),
+            ..self
+        }
     }
 
     /// The player's gender.
@@ -788,6 +800,20 @@ mod tests {
         assert_eq!(pilot.ship_name(), Some("Ship 128"));
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert_eq!(pilot.ship_name(), Some(""), "no record of its class");
+    }
+
+    #[test]
+    fn a_pilot_with_a_ship_name_changes_only_its_ship_name() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let named = pilot.clone().with_ship_name("Raven".to_owned());
+        assert_eq!(named.ship_name(), Some("Raven"));
+        assert_eq!(
+            Pilot {
+                ship_name: pilot.ship_name.clone(),
+                ..named
+            },
+            pilot
+        );
     }
 
     #[test]
