@@ -49,6 +49,11 @@
 //!   A shot turned on its firer is aimed at it and launched by no ship
 //!   ([`Source::Other`]). On the tick of a retarget or a lost lock it
 //!   still turns at the bearing it read before the tests.
+//! - A homing shot of `Seeker` 0x0002 that began its tick not jammed then
+//!   looks for an asteroid at one in 10, from its first tick: one near and
+//!   ahead locks it ([`Jam::Asteroid`]), and from the next tick it steers
+//!   at that asteroid's slot, hitting no ship and aimed at none (see
+//!   [`asteroid_seek`](super::asteroid_seek)).
 //! - A homing shot of `Seeker` 0x0008 is confused by sensor interference
 //!   ([`Jam::Interfered`]) when, as it is launched, `below(100) + 1` is at
 //!   most the player's system's `Interference` (`_SpawnShot`
@@ -297,6 +302,10 @@ pub enum Jam {
     /// Confused by sensor interference (999, `_SpawnShot` @0x3eb43): it
     /// circles (`_HandleShotGuidance` @0x32613-0x32769).
     Interfered,
+    /// Locked onto an asteroid (1, `_HandleShotGuidance` @0x32919): the
+    /// slot it steers at (+0x2a), none once it found the slot empty
+    /// (@0x327b5). See [`asteroid_seek`](super::asteroid_seek).
+    Asteroid(Option<usize>),
 }
 
 /// What homing guidance reads of a ship besides its [`Target`], as the
@@ -343,7 +352,8 @@ impl Sight {
 }
 
 /// How a `Seeker` 0x4000 shot measures how far its target is off its
-/// heading, as the rulebook's
+/// heading, and a `Seeker` 0x0002 shot how far an asteroid is
+/// ([`asteroid_seek`](super::asteroid_seek)), as the rulebook's
 /// [`RuleKey::SeekerLockAngle`](crate::RuleKey::SeekerLockAngle) says.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LockAngle {
@@ -352,7 +362,8 @@ pub enum LockAngle {
     #[default]
     Shortest,
     /// The truncated difference, absolute and mod 360 with no fold
-    /// (@0x323bb-0x323e7): the engine's reading.
+    /// (@0x323bb-0x323e7, and @0x325c8-0x325f3 for an asteroid): the
+    /// engine's reading.
     Plain,
 }
 
@@ -379,13 +390,17 @@ impl LockAngle {
 }
 
 /// What a shot's guidance reads in a tick: every ship in the fight, what
-/// it reads of each beyond that ([`Sight`]), the frame counter
-/// (`_frameCounter` as `_DoPlayGameWork` sees it), and how a lock is
-/// measured.
+/// it reads of each beyond that ([`Sight`]), the asteroids, the frame
+/// counter (`_frameCounter` as `_DoPlayGameWork` sees it), and how a lock
+/// is measured.
 #[derive(Clone, Copy, Debug)]
 pub struct Guide<'a> {
     /// Every ship in the fight.
     pub targets: &'a [Target],
+    /// Where each asteroid slot's asteroid is, by slot, none for a free
+    /// slot: what a `Seeker` 0x0002 shot locks onto and a locked one
+    /// steers at ([`asteroid_seek`](super::asteroid_seek)).
+    pub asteroids: &'a [Option<Vec2>],
     /// What guidance reads of each beyond its [`Target`].
     pub sights: &'a [Sight],
     /// The frame counter.
@@ -399,12 +414,13 @@ pub struct Guide<'a> {
 }
 
 impl<'a> Guide<'a> {
-    /// `targets`, with no sights, at frame 0, by the default lock angle and
-    /// the engine's unwrapped bomb heading.
+    /// `targets`, with no sights and no asteroids, at frame 0, by the
+    /// default lock angle and the engine's unwrapped bomb heading.
     #[must_use]
     pub fn among(targets: &'a [Target]) -> Self {
         Self {
             targets,
+            asteroids: &[],
             sights: &[],
             frame: 0,
             lock_angle: LockAngle::default(),
@@ -829,18 +845,28 @@ impl Shot {
 
     /// Steers a homing shot a tick, as `_HandleShotGuidance` does
     /// (@0x320dc-0x32aa4; see the module docs): an interfered one circles
-    /// ([`Shot::circle`]); any other, past [`HOMING_DELAY`] ticks with its
+    /// ([`Shot::circle`]); one locked onto an asteroid steers at it
+    /// ([`Shot::steer_at_asteroid`]); any other, past [`HOMING_DELAY`] ticks with its
     /// target active among `guide`'s ships, breaking up included, is
     /// tested in order for its target's jamming ([`Shot::jammed`]), its
     /// firer's sight of the target ([`Shot::blinded`]) and a `Seeker`
     /// 0x4000 lock ([`Shot::lock_holds`]), then turns at the bearing it
-    /// read before them; then its velocity is its speed along its heading.
-    /// Draws are made on `chance`.
+    /// read before them; then its velocity is its speed along its heading,
+    /// and one that began the tick not jammed may lock onto an asteroid
+    /// ([`Shot::seek_asteroid`]). Draws are made on `chance`.
     fn home(&mut self, guide: &Guide, chance: &mut dyn Chance) {
-        if self.jam == Jam::Interfered {
-            self.circle(guide.frame, chance);
-            return;
+        match self.jam {
+            Jam::Interfered => {
+                self.circle(guide.frame, chance);
+                return;
+            }
+            Jam::Asteroid(slot) => {
+                self.steer_at_asteroid(slot, guide);
+                return;
+            }
+            Jam::Clear | Jam::Lost => {}
         }
+        let seeks = self.jam == Jam::Clear;
         let targets = guide.targets;
         let target = self.target.and_then(|ship| {
             targets
@@ -860,6 +886,9 @@ impl Shot {
         }
         self.heading = wrap_turned(self.heading);
         self.velocity = trig::accel(trig::whole(self.heading), self.weapon.speed);
+        if seeks {
+            self.seek_asteroid(guide, chance);
+        }
     }
 
     /// The jam test (@0x321b7-0x32275): when `target`'s jamming jams the
@@ -1104,8 +1133,6 @@ impl Shot {
     /// passes do, in their layers' order, a hidden ship not among them,
     /// each ship asking [`Shot::touches`]: of two ships a move touches,
     /// the one walked first takes the shot, wherever it is along the move.
-    /// Point defence's precheck (`touches_a_ship`) asks the same of the
-    /// ships walked.
     ///
     /// The engine tests a swept hit radius in place of the original's
     /// sprite rects and RLE masks (`_SWRadiusCollision`,

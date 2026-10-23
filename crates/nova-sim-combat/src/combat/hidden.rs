@@ -24,66 +24,29 @@
 //! point-defence shot's meeting, whose layer the original collides right
 //! before `_CheckShotProximities` (@0x43fff-0x44015), and the next tick's
 //! for a beam's kill, as `_HandleBeams` is the frame's last step
-//! (@0x4453d). `_HandleShot` then frees each at its visit with no end of
-//! life: a hidden sprite skips straight to the free (@0x36195 → @0x35f0a →
-//! @0x3617c). Kept out of the shots in flight, a hidden shot is neither
-//! drawn, nor moved, nor counted in [`Combat::targeted_damage`], nor
-//! chosen by point defence; its slot stays held through
+//! (@0x4453d). Each keeps its slot ([`Shot::slot`]), held
+//! ([`shot_slots`](super::shot_slots)), and takes its turn in that slot
+//! among the live shots, one loop over the slots (@0x371e0-0x37765, the
+//! `proximity` module): so of a hidden and a live shot that both reach a
+//! stellar or set off on an asteroid with one hit left, the one in the
+//! lower slot downs it. `_HandleShot` then frees each at its visit with no
+//! end of life: a hidden sprite skips straight to the free (@0x36195 →
+//! @0x35f0a → @0x3617c). Kept out of the shots in flight, a hidden shot is
+//! neither drawn, nor moved, nor counted in [`Combat::targeted_damage`],
+//! nor chosen by point defence; its slot stays held through
 //! `Combat::shot_room`'s count of the shots ended.
 
-use super::{Combat, Fighter, Landed, asteroid_hit, stellar};
-use crate::combat::asteroid_hit::AsteroidTarget;
+use super::Combat;
 use crate::combat::projectile::Shot;
-use crate::combat::stellar::StellarTarget;
 
 impl Combat {
     /// Keeps `shot`, which point defence ended, hidden at life 0 for the
-    /// next proximity pass ([`Combat::test_hidden`]). Life 0 is the
+    /// next proximity pass (`Combat::proximity_pass`). Life 0 is the
     /// original's (age = `Count` − life): a missile whose move had spent it
     /// (life -1) is put back to 0 too, as `_PointDefenseCollisionHandler`
     /// tests no life before it writes 0 (@0x377fa).
     pub(super) fn hide(&mut self, mut shot: Shot) {
         shot.age = shot.weapon.lifetime;
         self.hidden.push(shot);
-    }
-
-    /// The proximity pass over the hidden shots (`_CheckShotProximities`
-    /// @0x371bc-0x37775, see the [module docs](self)), each tested once, in
-    /// the order they are kept, among `stellars` and `asteroids`, the
-    /// player's blasts reaching `fighters`: gives the blasts' hits to land.
-    /// Every hidden shot is then let go, as `_HandleShot` frees it before
-    /// any later pass.
-    ///
-    /// The original interleaves them with the live shots by slot, each
-    /// shot meeting the stellars and then the asteroids (one loop over the
-    /// slots, @0x371e0-0x37765). Here they meet the asteroids after the
-    /// live shots of the same pass, and their blasts' hits land after the
-    /// live proximities. But they meet the stellars before the live
-    /// shots, as `Combat::strike_stellars` runs after this pass. Where a
-    /// hidden and a live shot reach the same stellar or asteroid with one
-    /// hit left, this can pick a different shot to down it than the
-    /// original's slot order, and so a different shot is spent and another
-    /// flies on (rdm asteroids phase 9). Each shot holds its slot
-    /// ([`Shot::slot`]), so the slot order that pass needs is there to
-    /// read ([`shot_slots`](super::shot_slots)).
-    pub(super) fn test_hidden(
-        &mut self,
-        fighters: &[Fighter],
-        stellars: &mut [StellarTarget],
-        asteroids: &mut [AsteroidTarget],
-    ) -> Vec<Landed> {
-        let mut hits = Vec::new();
-        for shot in std::mem::take(&mut self.hidden) {
-            let was = shot.moved_from.unwrap_or(shot.position);
-            if let Some((index, at)) = stellar::met(&shot, was, stellars) {
-                self.strike_stellar(&shot, &mut stellars[index], at);
-                continue;
-            }
-            if let Some(index) = asteroid_hit::fused(&shot, asteroids, self.asteroid_fuse) {
-                let at = shot.position;
-                self.hit_asteroid(&shot, &mut asteroids[index], at, fighters, &mut hits);
-            }
-        }
-        hits
     }
 }

@@ -57,6 +57,7 @@ use super::{
     ship_display, tractor_hold, warp_out,
 };
 use crate::ai::Goal;
+use crate::ai::mine_orders;
 use crate::ai::swarm::{self, SwarmLead};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
@@ -366,6 +367,7 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
         swarm: pass.leads.get(&npc.id).copied(),
         guard: guard.and_then(|guard| state_of(pass, guard)),
         leader_seen,
+        ..Beside::default()
     }
 }
 
@@ -419,7 +421,11 @@ fn fly_flown(
     tractor_hold::hold(npc, &pass.holders, world.tractor_step, pass.think);
     ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
     let held = ship_display::held(npc);
-    let beside = beside_of(pass, npc);
+    let beside = Beside {
+        rock: world.mining_rock,
+        scoop_box: mine_orders::nearest_box(npc.state.position, world.boxes),
+        ..beside_of(pass, npc)
+    };
     // What its flight flies by, and what it owed of a gate burst before it.
     let inertia = Inertia::of(npc, other.as_ref(), beside.leader_seen, world.flight);
     // The sub-goal this flight picks, stored for the next frame's sight and

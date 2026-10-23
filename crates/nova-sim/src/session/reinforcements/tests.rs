@@ -706,6 +706,32 @@ fn double_times_second_pass_counts_the_clock_down_again() {
 }
 
 #[test]
+fn a_fleet_arriving_on_the_second_pass_is_noted_drawn_with_that_passs_ships() {
+    // `_HandleReinforcements` (@0x44504) runs before the hazards and
+    // `_HandleBeams` (@0x44509-0x4453d), so the pass's late work, its
+    // layout and the headings drawn, takes the fleet in.
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false, None);
+    heard(&mut session, &catalog, TIME - 1);
+    let before = session.npcs().len();
+    session.tick_again(
+        Controls::default(),
+        &crate::ai::NovaAi::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert_eq!(timer(&session), reinforcements::ARRIVED);
+    let fleet = &session.npcs()[before..];
+    assert!(!fleet.is_empty(), "arrived");
+    for npc in fleet {
+        let ship = ShipRef::Npc(npc.id);
+        assert!(session.space.drawn.contains_key(&ship), "{ship:?}");
+    }
+}
+
+#[test]
 fn an_advance_pass_counts_the_clock_down_once() {
     // `_HandleReinforcements` (@0x44504) runs once in each pass of
     // `_DoPlayGameWork`: on the advance pass in the traffic's motion, and

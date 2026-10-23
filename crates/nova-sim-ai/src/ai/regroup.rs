@@ -93,7 +93,10 @@ impl Kept {
             | Goal::Flee(_)
             | Goal::Inspect(_)
             | Goal::Dock(_)
+            // No miner pauses: only a led ship regroups, and a led ship
+            // never thinks as a miner.
             | Goal::Mine
+            | Goal::Scoop
             | Goal::Plunder { .. }
             | Goal::CountWait => Self::Stop,
         }
@@ -184,6 +187,7 @@ mod tests {
             (Goal::Inspect(T), Kept::Stop),
             (Goal::Dock(T), Kept::Stop),
             (Goal::Mine, Kept::Stop),
+            (Goal::Scoop, Kept::Stop),
             (plunder, Kept::Stop),
             (Goal::CountWait, Kept::Stop),
             (

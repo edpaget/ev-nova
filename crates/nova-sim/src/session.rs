@@ -420,6 +420,10 @@ mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
 mod arrival_system;
+mod asteroid_beams;
+mod asteroid_hits;
+#[cfg(test)]
+mod asteroid_seekers;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -496,6 +500,7 @@ mod map_click;
 mod map_panel;
 mod map_search;
 mod map_walk;
+mod mining;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_map;
@@ -807,6 +812,7 @@ impl FightTerms {
             threatens_player: self.threatens_player,
             plundering,
             docked,
+            mining: npc.goal == Goal::Mine,
             emerging,
             cloak_scanner,
             has_cloak: self.has_cloak,
@@ -2094,6 +2100,7 @@ impl Session {
             area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
+            boxes: self.space.boxes.boxes(),
             reinforcements: self.reinforcements_coming(),
             iff_marked: &self.space.iff_marked,
             stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
@@ -2185,6 +2192,7 @@ impl Session {
             area_cloak_hold: self.setup.rules.source_for(RuleKey::AreaCloakHold),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.space.asteroids.get(0).copied(),
+            boxes: self.space.boxes.boxes(),
             reinforcements: self.reinforcements_coming_to(system),
             iff_marked: &self.space.iff_marked,
             stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
@@ -2410,8 +2418,9 @@ impl Session {
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_npcs(fighters, arena, None, false, chance);
         });
+        let spots = self.space.asteroid_spots();
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots(fighters, arena, chance);
+            combat.fly_shots_in(fighters, arena, &spots, chance);
         });
         // `_HandleShip`'s escape check reads each NPC as its step finds
         // it (see the `npc_escape` module).

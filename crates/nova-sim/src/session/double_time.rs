@@ -80,10 +80,11 @@
 //!   answered; the ship loop, each NPC's flight (the second pass's fly
 //!   half, as [`Traffic::move_in`](crate::traffic::Traffic::move_in) flies
 //!   it) then its fire, by slot, with the departures and fighters docking
-//!   after it ([`Session::ship_loop`]); the beams and all
-//!   that follows from the pass's hits; then the reinforcement clock
-//!   (`_HandleReinforcements` @0x44504; see the `reinforcements`
-//!   module). A due frame therefore steps the junk and
+//!   after it ([`Session::ship_loop`]); the asteroids' step and the
+//!   reinforcement clock (`_HandleAsteroids` @0x444f5,
+//!   `_HandleReinforcements` @0x44504; see the `asteroids` and
+//!   `reinforcements` modules); then the beams and all that follows from
+//!   the pass's hits. A due frame therefore steps the junk and
 //!   the hints twice, as the original does, and the sabotage clock, the
 //!   escape pod's countdown, the breakup's countdown and its klaxon run
 //!   on both passes too, and a called fleet comes twice as fast.
@@ -174,9 +175,10 @@ impl Session {
     /// order: `_HandlePlayer`'s fight before its move
     /// ([`Session::player_fires`]), then its move; the collision passes,
     /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
-    /// its hits answered; the ship loop's flights and fire;
-    /// `_HandleBeams` and what the pass leaves; then the asteroids and the
-    /// reinforcement clock; from the eject check on, the advance pass's own
+    /// its hits answered; the ship loop's flights and fire; the
+    /// asteroids, with no spawn (see the `asteroids` module), and the
+    /// reinforcement clock; then `_HandleBeams` and what the pass leaves;
+    /// from the eject check on, the advance pass's own
     /// routine without its AI ([`Session::pass_after_move`]). Its caller
     /// runs it after the advance pass
     /// ([`Session::game_work`]) while [`Session::double_time`] is on.

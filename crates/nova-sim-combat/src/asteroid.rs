@@ -33,6 +33,11 @@
 //!   @0x3fbb7); otherwise it spawns in place `Asteroids` times
 //!   (@0x3fa45-0x3fa75), then places every active slot afresh
 //!   (@0x3fa77-0x3fbaf).
+//! - **The slot-0 refill** ([`Asteroids::refill_slot_0`],
+//!   `_HandleAsteroids` @0x361b5-0x3624b, before its step): while
+//!   `_miningShipsActive` is set and slot 0 is empty, the first active
+//!   asteroid of slots 1-15 moves into slot 0, the one every miner works.
+//!   The session derives the flag (see its `mining` module).
 //! - **The step** ([`Asteroids::step`], `_HandleAsteroids` @0x361ac):
 //!   each active asteroid moves by its velocity and turns by its spin
 //!   (@0x36300-0x3636f), its frame wrapped once, up by the frame count
@@ -43,9 +48,10 @@
 //!   never wrap round.
 //!
 //! - **The destruction** ([`Asteroids::destroy`], `_DestroyAsteroid`
-//!   @0xadc9-0xb028): a shot that leaves an asteroid's strength below 0
-//!   destroys it at once (`_HandleAsteroidHit` @0x3691a, see
-//!   [`asteroid_hit`](crate::combat::asteroid_hit)). It drops scoopable
+//!   @0xadc9-0xb028): a shot or a beam that leaves an asteroid's strength
+//!   below 0 destroys it at once (`_HandleAsteroidHit` @0x3691a, see
+//!   [`asteroid_hit`](crate::combat::asteroid_hit); `_HandleBeams`
+//!   @0x31a69, see [`asteroid_beam`](crate::combat::asteroid_beam)). It drops scoopable
 //!   boxes, throws off its particles, explodes and breaks into fragments
 //!   ([`Asteroids::spawn_fragment`], `_SpawnSubAsteroid`
 //!   @0x3fbc7-0x3fd21), and its slot is freed ([`Remains`]).
@@ -59,9 +65,6 @@
 //!
 //! Left out:
 //!
-//! - The slot-0 refill while `_miningShipsActive` is set
-//!   (@0x361b5-0x3624b), which moves the first active asteroid into slot
-//!   0: rdm:phase/asteroids/phase-5-ai-mining.
 //! - The cull of an asteroid whose strength is −32000 or less
 //!   (@0x362c4): nothing in the original writes that marker to an
 //!   asteroid's strength. The compare in `_HandleAsteroids` (@0x362ca) is
@@ -256,6 +259,20 @@ impl AsteroidType {
         }
     }
 
+    /// Its sprite's frame height, in pixels, which a beam's cone takes for
+    /// r (`_GetSpriteYSize`, `_HandleBeams` @0x3176b-0x317f0, see
+    /// [`asteroid_beam`](crate::combat::asteroid_beam)): [`NO_SPRITE_SIZE`]
+    /// with no sprite, as `_DestroyAsteroid` reads a missing sheet.
+    #[must_use]
+    pub fn height(&self) -> f32 {
+        let (width, height) = self.size;
+        if width <= 0.0 && height <= 0.0 {
+            NO_SPRITE_SIZE
+        } else {
+            height
+        }
+    }
+
     /// Every type, by kind, from `records`: [`AsteroidType::MISSING`] for
     /// a kind with no record, and a record of a kind past the last left
     /// out.
@@ -280,9 +297,43 @@ pub struct FieldSpec {
     pub types: u16,
 }
 
+/// The window width a system's `Asteroids` is stored for unscaled: the
+/// double at 0xdda08 that `_LoadObjectData` divides the window's width by
+/// (@0x77cbe).
+pub const ASTEROID_WIDTH_BASE: f64 = 640.0;
+
+/// The game window's width the session assumes when no view has said
+/// how wide it is: the original's smallest screen, 800 wide, as
+/// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) is its play
+/// area.
+pub const DEFAULT_WINDOW_WIDTH: u32 = 800;
+
+/// The most asteroids a stored count holds (`_LoadObjectData`
+/// @0x77cdd-0x77ce7): one for each of the field's [`SLOTS`].
+pub const STORED_COUNT_CAP: i16 = 16;
+
 impl FieldSpec {
     /// No field: what a system the catalog doesn't list holds.
     pub const NONE: Self = Self { count: 0, types: 0 };
+
+    /// The field as `_LoadObjectData` stores it at runtime +0x94 for a
+    /// game window `window_width` wide (@0x77c72-0x77ce7): its count
+    /// times `window_width` / [`ASTEROID_WIDTH_BASE`], truncated toward
+    /// zero (`cvttsd2si` @0x77cca), at most [`STORED_COUNT_CAP`]; a count
+    /// of 0 or less is stored as 0 (@0x77c79-0x77c83, @0x77d03). Its
+    /// types are kept. The original stores the result in 16 bits
+    /// (@0x77cce), which the cap keeps from wrapping.
+    #[must_use]
+    pub fn stored(self, window_width: u32) -> Self {
+        if self.count <= 0 {
+            return Self { count: 0, ..self };
+        }
+        let scaled = f64::from(self.count) * (f64::from(window_width) / ASTEROID_WIDTH_BASE);
+        // Capped, then truncated toward zero, so it fits.
+        #[allow(clippy::cast_possible_truncation)]
+        let count = scaled.min(f64::from(STORED_COUNT_CAP)).trunc() as i16;
+        Self { count, ..self }
+    }
 }
 
 /// Where an edge spawn starts, as
@@ -524,6 +575,52 @@ impl Asteroids {
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<Remains> {
         let asteroid = (*self.slots.get(slot)?)?;
+        let remains = self.break_up(asteroid, types, chance);
+        self.slots[slot] = None;
+        Some(remains)
+    }
+
+    /// Destroys `ghost` again, the struct of the asteroid destroyed
+    /// earlier in a collision walk from `slot`, now free, with the types
+    /// `types`, drawing on `chance`: `_DestroyAsteroid` run a second time
+    /// on an inactive slot (`_HandleAsteroidHit` @0x3691a, see
+    /// `combat::asteroid_walk`). It leaves what [`Asteroids::destroy`]
+    /// leaves, read from `ghost`. Its fragments take the first free slots,
+    /// so the first may take `slot` itself (@0x3fbf7), overwriting the
+    /// struct: `ghost` then becomes that fragment, its position its own.
+    /// The trailing clear (@0xb008-0xb01c) frees `slot` again, so that
+    /// fragment is lost.
+    pub fn destroy_ghost(
+        &mut self,
+        slot: usize,
+        ghost: &mut Asteroid,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Remains {
+        let remains = self.break_up(*ghost, types, chance);
+        if let Some(lost) = self.slots.get_mut(slot).and_then(Option::take) {
+            *ghost = lost;
+        }
+        remains
+    }
+
+    /// Seats `asteroid` in `slot`, whatever it held: a test's field.
+    #[cfg(test)]
+    pub(crate) fn seat(&mut self, slot: usize, asteroid: Asteroid) {
+        self.slots[slot] = Some(asteroid);
+    }
+
+    /// What destroying `asteroid` leaves, its fragments spawned into the
+    /// field ([`Asteroids::destroy`]), with the types `types`, drawing on
+    /// `chance`. Every type field is read from `asteroid` before the first
+    /// fragment spawns, as `_DestroyAsteroid` reads them into locals or
+    /// before its fragment loop (@0xadd2-0xaf7f).
+    fn break_up(
+        &mut self,
+        asteroid: Asteroid,
+        types: &[AsteroidType; KINDS],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Remains {
         let kind_type = type_of(types, asteroid.kind);
         let at = asteroid.position;
         // None with no `YieldQty`, which the original's guard skips.
@@ -569,15 +666,14 @@ impl Asteroids {
             };
             self.spawn_fragment(at, kind, types, chance);
         }
-        self.slots[slot] = None;
-        Some(Remains {
+        Remains {
             at,
             boxes,
             contents: kind_type.yield_type,
             graphic: u16::from(asteroid.kind >> 2) + 1,
             particles,
             explosion: kind_type.explosion,
-        })
+        }
     }
 
     /// Places `spec`'s field about `player` in `area`, with the types
@@ -605,6 +701,23 @@ impl Asteroids {
             let (offset, velocity) = placed(area, chance);
             asteroid.position = player + offset;
             asteroid.velocity = velocity;
+        }
+    }
+
+    /// Refills an empty slot 0 from the first active slot of 1-15, as
+    /// `_HandleAsteroids` does first while `_miningShipsActive` is set
+    /// (@0x361b5-0x3624b): it copies the asteroid's position, velocity,
+    /// type, frame, spin and strength into slot 0, marks slot 0 active and
+    /// frees the slot it came from, so the asteroid moves rather than
+    /// doubles. Nothing while slot 0 is live or the field is empty. The
+    /// caller runs it only while miners are active, before
+    /// [`Asteroids::step`].
+    pub fn refill_slot_0(&mut self) {
+        if self.slots[0].is_some() {
+            return;
+        }
+        if let Some(first) = self.slots[1..].iter_mut().find(|slot| slot.is_some()) {
+            self.slots[0] = first.take();
         }
     }
 
@@ -811,6 +924,46 @@ mod tests {
         FieldSpec { count, types }
     }
 
+    /// The count `_LoadObjectData` stores of `count` in a window `width`
+    /// wide.
+    fn stored(count: i16, width: u32) -> i16 {
+        spec(count, 0x0001).stored(width).count
+    }
+
+    #[test]
+    fn a_count_is_stored_times_the_window_width_over_640_truncated() {
+        assert_eq!(stored(4, 640), 4, "the original's base width");
+        assert_eq!(stored(4, 800), 5);
+        assert_eq!(stored(3, 800), 3, "3.75 truncated");
+        assert_eq!(stored(2, 1024), 3, "3.2 truncated");
+        assert_eq!(stored(4, 1024), 6, "6.4 truncated");
+        assert_eq!(stored(5, 320), 2, "2.5 truncated");
+        assert_eq!(stored(1, 639), 0, "0.998 truncated");
+    }
+
+    #[test]
+    fn a_stored_count_is_at_most_16() {
+        assert_eq!(stored(12, 1024), 16, "19.2 capped");
+        assert_eq!(stored(16, 2560), 16);
+        assert_eq!(stored(10, 1024), 16, "16 exactly");
+        assert_eq!(stored(9, 1024), 14);
+    }
+
+    #[test]
+    fn a_count_of_0_or_less_is_stored_as_0() {
+        for width in [320, 640, 1024] {
+            assert_eq!(stored(0, width), 0, "{width}");
+            assert_eq!(stored(-1, width), 0, "{width}");
+            assert_eq!(stored(-20, width), 0, "{width}");
+        }
+    }
+
+    #[test]
+    fn storing_keeps_the_types() {
+        assert_eq!(spec(4, 0x0005).stored(1024), spec(6, 0x0005));
+        assert_eq!(spec(-1, 0x0005).stored(1024), spec(0, 0x0005));
+    }
+
     fn spawned(origin: Origin, spec: FieldSpec, chance: &mut impl Chance) -> Asteroid {
         let mut field = Asteroids::default();
         field.spawn(origin, spec, &types(), PLAYER, AREA, chance);
@@ -973,6 +1126,18 @@ mod tests {
         assert_eq!(sized((0.0, 30.0)).radius(), 15.0);
         assert_eq!(AsteroidType::MISSING.radius(), NO_SPRITE_RADIUS);
         assert_eq!(NO_SPRITE_RADIUS, 16.0);
+    }
+
+    #[test]
+    fn a_types_height_is_its_frames_or_32_without_a_sprite() {
+        let sized = |size| AsteroidType {
+            size,
+            ..AsteroidType::MISSING
+        };
+        assert_eq!(sized((40.0, 30.0)).height(), 30.0);
+        assert_eq!(sized((40.0, 0.0)).height(), 0.0, "a side is a sprite");
+        assert_eq!(sized((0.0, 0.0)).height(), NO_SPRITE_SIZE);
+        assert_eq!(AsteroidType::MISSING.height(), 32.0);
     }
 
     #[test]
@@ -1675,5 +1840,86 @@ mod tests {
         assert_eq!(field.active(), SLOTS - 1);
         assert_eq!(field.first_free(), Some(0));
         assert!(field.iter().all(|made| made.kind == 0));
+    }
+
+    #[test]
+    fn a_ghost_leaves_what_its_own_kind_and_place_say() {
+        // A second `_DestroyAsteroid` on a slot already cleared
+        // (`_HandleAsteroidHit` @0x3691a): its boxes, particles and
+        // explosion read the struct, here the ghost.
+        let mut field = holding(3, rock(1, PLAYER));
+        let mut ghost = rock(4, Vec2::new(-5.0, 7.0));
+        let remains = field.destroy_ghost(9, &mut ghost, &breakable(), &mut NeverFires);
+        assert_eq!(remains.at, Vec2::new(-5.0, 7.0));
+        assert_eq!((remains.boxes, remains.contents), (2, Some(1003)));
+        assert_eq!(remains.graphic, 2);
+        assert_eq!(remains.explosion, Explosion::decode(3));
+        assert_eq!(remains.particles.map(|p| p.count), Some(12));
+    }
+
+    #[test]
+    fn a_ghosts_first_fragment_takes_its_own_free_slot_and_is_cleared_with_it() {
+        // `_SpawnSubAsteroid`'s first-free scan (@0x3fbf7) finds the
+        // destroyed slot clear; the trailing clear (@0xb00b) undoes the
+        // fragment there, which the struct, the ghost, has become.
+        let mut field = holding(0, rock(0, PLAYER));
+        let at = Vec2::new(-5.0, 7.0);
+        let mut ghost = rock(4, at);
+        field.destroy_ghost(1, &mut ghost, &breakable(), &mut NeverFires);
+        assert_eq!(field.get(1), None, "the slot ends empty");
+        // Two fragments of kind 1: one lost in slot 1, one in slot 2.
+        let made: Vec<(usize, u8)> = field.indexed().map(|(slot, r)| (slot, r.kind)).collect();
+        assert_eq!(made, [(0, 0), (2, 1)]);
+        assert_eq!(field.get(2).map(|r| r.position), Some(at));
+        assert_eq!(ghost.kind, 1, "the ghost is now the lost fragment");
+        assert_eq!(ghost.strength, types()[1].strength);
+        assert_eq!(ghost.position, at, "copied from itself");
+        assert_eq!(ghost.velocity, Vec2::new(-1.0, -1.0));
+    }
+
+    #[test]
+    fn a_ghosts_fragments_all_take_later_slots_when_a_lower_one_is_free() {
+        let mut field = Asteroids::default();
+        let mut ghost = rock(4, PLAYER);
+        let before = ghost;
+        field.destroy_ghost(5, &mut ghost, &breakable(), &mut NeverFires);
+        let slots: Vec<usize> = field.indexed().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, [0, 1], "the first free slots, below its own");
+        assert_eq!(ghost, before, "none took its slot");
+    }
+
+    #[test]
+    fn the_first_destruction_holds_its_slot_while_its_fragments_spawn() {
+        let mut field = holding(0, rock(4, PLAYER));
+        field.destroy(0, &breakable(), &mut NeverFires);
+        let slots: Vec<usize> = field.indexed().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, [1, 2]);
+    }
+
+    #[test]
+    fn the_refill_moves_the_first_live_asteroid_of_1_to_15_into_slot_0() {
+        let first = Asteroid {
+            strength: 7,
+            ..rock(3, Vec2::new(10.0, 20.0))
+        };
+        let mut field = holding(4, first);
+        field.slots[9] = Some(rock(5, PLAYER));
+        field.refill_slot_0();
+        assert_eq!(field.get(0), Some(&first), "every field moved");
+        assert_eq!(field.get(4), None, "its old slot freed");
+        assert_eq!(field.get(9), Some(&rock(5, PLAYER)), "the rest left");
+        assert_eq!(field.active(), 2);
+    }
+
+    #[test]
+    fn the_refill_leaves_a_live_slot_0_and_an_empty_field() {
+        let mut field = holding(0, rock(1, PLAYER));
+        field.slots[2] = Some(rock(2, PLAYER));
+        let before = field.clone();
+        field.refill_slot_0();
+        assert_eq!(field, before);
+        let mut empty = Asteroids::default();
+        empty.refill_slot_0();
+        assert_eq!(empty, Asteroids::default());
     }
 }

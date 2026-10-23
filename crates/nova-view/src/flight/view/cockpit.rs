@@ -50,7 +50,7 @@ use super::{
     LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
     OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
     ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading,
-    shown_position,
+    shown_position, window_width,
 };
 
 impl<C> FlightView<C> {
@@ -353,9 +353,14 @@ impl<C> FlightView<C> {
     /// The camera, the HUD's places, the play area the session is told
     /// at the next steps, the starfield and the fades all take it from
     /// the next frame on (see the module docs). Nova's own 1024 x 768
-    /// draws as flight always has.
+    /// draws as flight always has. The session's game window takes its
+    /// width at once ([`Session::set_window_width`]), so a course map
+    /// opened before the next step reads its asteroids stored by it.
     pub fn set_view_size(&mut self, view: (f32, f32)) {
         self.view = view;
+        if let Ok(session) = &mut self.session {
+            session.set_window_width(window_width(view));
+        }
     }
 
     /// How far right the course map's 1024 x 768 frame is drawn, and its

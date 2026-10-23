@@ -657,6 +657,7 @@ mod tests {
                 leader: Some(ShipRef::Player),
                 govt: None,
                 booty: Some(0x0100),
+                mining: true,
             }),
         ] {
             let parent = Shot {
