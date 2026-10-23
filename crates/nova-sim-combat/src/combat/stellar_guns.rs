@@ -9,7 +9,9 @@ use crate::catalog::{GovtId, StellarId, WeaponId};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 
-use super::ShipRef;
+use super::weapon::WeaponSpec;
+use super::{Fighter, ShipRef};
+use crate::ship_layer::Slot;
 
 /// The `spöb` `Flags2` bit that holds a stellar's fire until a defence
 /// ship of it is in the system, and then turns it on the player and the
@@ -147,13 +149,100 @@ fn player_side_threatens(gun: &StellarGun, govts: &Governments) -> bool {
     candidate && !standing.blessed && !standing.iff_marked && !standing.docking
 }
 
+/// What a stellar's gun reads of a ship as it picks its target
+/// (@0x2f003-0x2f11a) and leads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mark {
+    /// What the threat test reads of it.
+    pub suspect: Suspect,
+    /// Its ship slot: the walk goes by it, the player first.
+    pub slot: Slot,
+    /// Where it is.
+    pub position: Vec2,
+    /// How it moves, which the gun leads.
+    pub velocity: Vec2,
+    /// Whether it is in the ship table (+0xb8): not destroyed.
+    pub active: bool,
+    /// Whether it is cloaked (`_ShipIsCloaked` @0x2f074).
+    pub cloaked: bool,
+    /// Whether `_IsDisabled` holds for it (@0x2f0d6): not intact, or held
+    /// disabled.
+    pub disabled: bool,
+}
+
+impl Mark {
+    /// `fighter` as the gun reads it.
+    #[must_use]
+    pub fn of(fighter: &Fighter) -> Self {
+        Self {
+            suspect: Suspect {
+                ship: fighter.ship,
+                govt: fighter.govt,
+                leader: fighter.leader,
+                jumping_in: fighter.jumping_in,
+            },
+            slot: fighter.slot,
+            position: fighter.state.position,
+            velocity: fighter.state.velocity,
+            active: fighter.condition.active(),
+            cloaked: fighter.cloaked,
+            disabled: fighter.disabled_as_tick_began(),
+        }
+    }
+}
+
+/// The ship `gun`, firing `spec`, picks among `marks`, as
+/// `_HandleStellarWeapons` does (@0x2f003-0x2f11a): walking them by slot,
+/// the player first, it takes the nearest that is active, not cloaked, a
+/// threat ([`threatens`]) and within the weapon's range ([`WeaponSpec::range`]),
+/// its squared distance at most the range squared, in `f32`. A
+/// disable-only or massless weapon (`MassDmg` 0) passes over a disabled
+/// ship (@0x2f01e-0x2f033, @0x2f0d6). A new best needs a strictly smaller
+/// distance, so a tie keeps the lower slot. Its index among `marks`.
+#[must_use]
+pub fn pick(
+    gun: &StellarGun,
+    spec: &WeaponSpec,
+    marks: &[Mark],
+    govts: &Governments,
+) -> Option<usize> {
+    let reach = spec.range() * spec.range();
+    let spares_disabled = spec.disable_only() || spec.mass_damage == 0.0;
+    let mut order: Vec<usize> = (0..marks.len()).collect();
+    order.sort_by_key(|&index| marks[index].slot);
+    let mut best: Option<(usize, f32)> = None;
+    for index in order {
+        let mark = &marks[index];
+        if !mark.active
+            || mark.cloaked
+            || !threatens(gun, &mark.suspect, govts)
+            || (spares_disabled && mark.disabled)
+        {
+            continue;
+        }
+        let (dx, dy) = (
+            mark.position.x - gun.position.x,
+            mark.position.y - gun.position.y,
+        );
+        let distance = dx * dx + dy * dy;
+        // NaN fails both tests.
+        let nearer = best.is_none_or(|(_, nearest)| distance < nearest);
+        if distance <= reach && nearer {
+            best = Some((index, distance));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
+    use crate::catalog::WeaponRecord;
     use crate::combat::NpcId;
+    use crate::combat::weapon::DISABLE_ONLY;
     use crate::govt::XENOPHOBIC;
-    use nova_sim_catalog::fixture::govt;
+    use nova_sim_catalog::fixture::{govt, weapon};
 
     const FEDERATION: GovtId = GovtId(128);
     const PIRATES: GovtId = GovtId(129);
@@ -503,5 +592,114 @@ mod tests {
         assert!(!threat(&docking, &player()));
         assert!(!threat(&docking, &escort(None)));
         assert!(threat(&docking, &npc(Some(PIRATES))));
+    }
+
+    /// The stellar's weapon: reaching 600 pixels, of `MassDmg` 10.
+    fn blaster() -> WeaponSpec {
+        let record = WeaponRecord {
+            mass_dmg: 10,
+            ..weapon(196)
+        };
+        WeaponSpec {
+            chain_range: 600.0,
+            ..WeaponSpec::new(&record)
+        }
+    }
+
+    /// `suspect` at slot `slot`, at (`x`, `y`), at rest, active, intact
+    /// and seen.
+    fn mark(suspect: Suspect, slot: Slot, x: f32, y: f32) -> Mark {
+        Mark {
+            suspect,
+            slot,
+            position: Vec2::new(x, y),
+            velocity: Vec2::ZERO,
+            active: true,
+            cloaked: false,
+            disabled: false,
+        }
+    }
+
+    /// An enemy NPC at berth `berth`, at (`x`, `y`).
+    fn pirate(berth: u32, x: f32, y: f32) -> Mark {
+        mark(npc(Some(PIRATES)), Slot::Berth(berth), x, y)
+    }
+
+    fn picked(gun: &StellarGun, spec: &WeaponSpec, marks: &[Mark]) -> Option<usize> {
+        pick(gun, spec, marks, &govts())
+    }
+
+    #[test]
+    fn the_gun_picks_the_nearest_threat() {
+        let criminal = at_record(gun(), -1000);
+        let marks = [
+            mark(player(), Slot::Player, 300.0, 0.0),
+            pirate(1, 0.0, 200.0),
+            pirate(2, 0.0, -250.0),
+        ];
+        assert_eq!(picked(&criminal, &blaster(), &marks), Some(1));
+    }
+
+    #[test]
+    fn on_a_tie_the_gun_picks_the_lower_slot_the_player_first() {
+        let criminal = at_record(gun(), -1000);
+        let marks = [
+            pirate(3, 0.0, 300.0),
+            pirate(2, 0.0, -300.0),
+            mark(player(), Slot::Player, 300.0, 0.0),
+        ];
+        assert_eq!(picked(&criminal, &blaster(), &marks), Some(2));
+        assert_eq!(picked(&criminal, &blaster(), &marks[..2]), Some(1));
+    }
+
+    #[test]
+    fn the_gun_passes_over_a_destroyed_a_cloaked_or_a_harmless_ship() {
+        let destroyed = Mark {
+            active: false,
+            ..pirate(1, 10.0, 0.0)
+        };
+        let cloaked = Mark {
+            cloaked: true,
+            ..pirate(2, 20.0, 0.0)
+        };
+        let friend = mark(npc(Some(FEDERATION)), Slot::Berth(3), 30.0, 0.0);
+        let marks = [destroyed, cloaked, friend, pirate(4, 40.0, 0.0)];
+        assert_eq!(picked(&gun(), &blaster(), &marks), Some(3));
+        assert_eq!(picked(&gun(), &blaster(), &marks[..3]), None);
+    }
+
+    #[test]
+    fn the_gun_reaches_exactly_its_range_and_no_further() {
+        let edge = [pirate(1, 600.0, 0.0)];
+        assert_eq!(picked(&gun(), &blaster(), &edge), Some(0), "r² is in");
+        let beyond = [pirate(1, 600.0_f32.next_up(), 0.0)];
+        assert_eq!(picked(&gun(), &blaster(), &beyond), None);
+        let nan = [pirate(1, f32::NAN, 0.0)];
+        assert_eq!(picked(&gun(), &blaster(), &nan), None, "NaN fails");
+    }
+
+    #[test]
+    fn a_disable_only_or_massless_gun_passes_over_a_disabled_ship_and_an_ordinary_one_does_not() {
+        let disabled = Mark {
+            disabled: true,
+            ..pirate(1, 10.0, 0.0)
+        };
+        let marks = [disabled, pirate(2, 50.0, 0.0)];
+        assert_eq!(picked(&gun(), &blaster(), &marks), Some(0), "ordinary");
+        let only_disables = WeaponSpec {
+            flags2: DISABLE_ONLY,
+            ..blaster()
+        };
+        assert_eq!(
+            picked(&gun(), &only_disables, &marks),
+            Some(1),
+            "disable-only"
+        );
+        let ion = WeaponSpec {
+            mass_damage: 0.0,
+            ..blaster()
+        };
+        assert_eq!(picked(&gun(), &ion, &marks), Some(1), "massless");
+        assert_eq!(picked(&gun(), &ion, &marks[..1]), None);
     }
 }
