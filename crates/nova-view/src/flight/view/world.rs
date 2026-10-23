@@ -16,9 +16,10 @@
 //!
 //! Left out:
 //!
-//! - the order within the explosions', smoke's, pods' and boxes' layers,
-//!   their slot order in the original
-//!   (rdm:phase/play-feel/phase-14-slot-order-within-layers);
+//! - the order within the boxes' layer: the engine draws the cargo boxes
+//!   in their table's order (`Session::cargo_boxes`), the original in
+//!   slot order (rdm:task/cargo-box-slot-order); the explosions, smoke
+//!   puffs and escape pods draw in slot order;
 //! - `_FloaterDrawCallback`'s guards (@0x38b34-0x38b4c): it draws nothing
 //!   while switched out (`0x3b50e0`), which the engine's flight has no
 //!   state for, or while the world's byte +0xe8 is 0, `SpriteWorld`

@@ -68,11 +68,17 @@ pub enum SpriteLayer {
     Disabled,
     /// 0x3b53ec (`_boxLayer`): the 64 cargo boxes of `_boxData` (the loop
     /// @0x1fb89-0x1fc6b), then the 32 escape pods of `_podData`
-    /// (@0x1fc71-0x1fd57), so the pods draw over the boxes.
+    /// (@0x1fc71-0x1fd57), so the pods draw over the boxes. Nothing moves
+    /// them, so each draws in slot order, a new one taking the first free
+    /// slot (`_SpawnEscapePod` @0x45564); uncapped, the view's pods are
+    /// still first-free (`nova_view::flight::pods`). The view draws the
+    /// boxes in their table's order (rdm:task/cargo-box-slot-order).
     Boxes,
     /// 0x3b52d0 (`_smokeLayer`): the 64 smoke puffs of `_smokeData`
     /// (@0x1fe6f-0x1ff63), cloned from `_masterSmokeSprite`; `_SpawnSmoke`
-    /// (@0x3f957-0x3f9d4) takes a slot of them.
+    /// (@0x3f957-0x3f9d4) takes the first free slot of them, and they draw
+    /// in slot order; uncapped, the view's puffs are still first-free
+    /// (`nova_view::flight::smoke`).
     Smoke,
     /// 0x3b53bc (`_pointDefenseLayer`): point-defence shots
     /// ([`ShotLayer::PointDefence`]).
@@ -92,7 +98,9 @@ pub enum SpriteLayer {
     /// ([`ShotLayer::OverShips`]).
     OverShips,
     /// 0x3b52b8 (`_explodLayer`): the 32 explosion sprites of `_explodData`
-    /// (@0x1f962-0x1fa8a); `_SpawnExplod` (@0x3f5ef) takes a slot of them.
+    /// (@0x1f962-0x1fa8a); `_SpawnExplod` (@0x3f5ef) takes the first free
+    /// slot of them, and they draw in slot order; uncapped, the view's
+    /// explosions are still first-free (`nova_view::flight::effects`).
     Explosions,
     /// 0x3b5318 (`_targetLayer`): the nav and target brackets
     /// (@0x20093-0x20277), the cursor (@0x2027d-0x202f9), the red-alert icon

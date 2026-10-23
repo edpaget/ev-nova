@@ -628,6 +628,10 @@
 //! explosions and sparks the player would otherwise see; no stock
 //! mission, crön or storyline relies on a shot failing. The Bible says
 //! nothing of them; the engine's reading restores the original's tables.
+//! Uncapped, the explosions, smoke puffs and escape pods still take the
+//! first free slot and draw in slot order, the pool growing past the
+//! table's end as the original's would if it were larger (the view's
+//! `slot_pool`).
 //!
 //! †††††††††††††††† `sound_voices` follows the other reading by default too,
 //! uncapped like `combat_caps`: the user's decision is that the original's
