@@ -16,6 +16,7 @@
 //! a new app, Open Pilot restores its ship, cash, cargo, outfits, location
 //! and date.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -388,7 +389,7 @@ fn user_items(items: &[(Place, bool)]) -> Vec<Vec<u8>> {
 /// Stock "Shipyard" (`DLOG` 1004, 765 x 323, centred) and its thirteen
 /// user items, where 2, 3, 4 and 11 are parked outside it, and stock
 /// "Shipyard Info" (`DLOG` 1005, 250 x 285, centred) with its Done (1),
-/// title (3) and text (5).
+/// title (3) and text (5), and stock "Text Input" (`DLOG` 3001).
 fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
     let shipyard = user_items(&[
         ((365, 289, 109, 25), true),
@@ -417,12 +418,15 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         (Ditl::TYPE, 1004, ditl(&shipyard)),
         (Dlog::TYPE, 1005, dlog((100, 100, 385, 350), 1005)),
         (Ditl::TYPE, 1005, ditl(&info)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
     ]
 }
 
 /// Stock "Create a new pilot:" (`DLOG` 3102), "Spaceport" (`DLOG` 1000),
 /// "Trade" (`DLOG` 1001), "Outfit" (`DLOG` 1002) and the shipyard's
-/// dialogs.
+/// dialogs, with stock "Text Input" (`DLOG` 3001), the ship's christening
+/// and the shipyard's name prompt.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -875,6 +879,8 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);

@@ -461,6 +461,8 @@ impl Harness {
             self.send(WindowEvent::Text(c));
         }
         self.press(Key::Enter);
+        // The ship's christening, confirmed with its default.
+        self.press(Key::Enter);
         self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
     }

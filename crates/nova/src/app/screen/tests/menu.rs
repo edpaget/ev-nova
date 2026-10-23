@@ -817,6 +817,7 @@ fn a_new_pilot_flies_and_is_saved_with_the_gender_chosen() {
     }
     type_text(&mut screen, "Ada");
     screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
     enter_ship(&mut screen);
     assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Female);
     assert_eq!(saved(&store, "Ada").gender(), nova_sim::Gender::Female);

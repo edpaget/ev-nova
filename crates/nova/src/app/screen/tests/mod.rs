@@ -89,6 +89,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod appear;
+mod christening;
 mod death;
 mod dialog_maps;
 mod encounters;
@@ -1018,7 +1019,8 @@ const MAP: Key = Key::Char('m');
 /// Dialog templates by ID: "Desc Dialog" (3003), 200 x 100 at (0, 0),
 /// with Done (1) and a 100 x 36 text box (3): three lines of the About
 /// text show; the note alert (3000), 200 x 100, with OK (1) and a
-/// text box (3); and "Spaceport" (1000), [`spaceport_template`].
+/// text box (3); "Spaceport" (1000), [`spaceport_template`]; and "Text
+/// Input" (3001), [`text_input_template`].
 struct Dialogs;
 
 impl DialogResources for Dialogs {
@@ -1036,6 +1038,9 @@ impl DialogResources for Dialogs {
         }
         if id == NEW_PILOT_DIALOG {
             return Ok(new_pilot_template());
+        }
+        if id == TEXT_INPUT_DIALOG {
+            return Ok(text_input_template());
         }
         if id == PLAYER_INFO_DIALOG {
             return Ok(player_info_template());
@@ -1446,6 +1451,15 @@ pub(crate) fn create_held(screen: &mut AppScreen, name: &str) {
     assert_eq!(screen.showing(), Showing::NewPilot);
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
+}
+
+/// Confirms the new pilot's ship christening with its default, Return,
+/// when it is open.
+pub(crate) fn christen(screen: &mut AppScreen) {
+    if screen.showing() == Showing::Christening {
+        screen.input(&key(Key::Enter, true));
+    }
 }
 
 /// Opens the first saved pilot from the main menu's list, which then
@@ -1531,6 +1545,7 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
     }
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
     if screen.showing() == Showing::MainMenu {
         enter_ship(screen);
     }

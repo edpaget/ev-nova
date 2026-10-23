@@ -346,6 +346,7 @@ use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
+mod christening;
 mod entry;
 mod flight;
 mod game;
@@ -560,6 +561,9 @@ pub struct AppScreen {
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
     new_pilot: Option<NewPilotDialog>,
+    /// The new pilot's ship christening, while it is open over the main
+    /// menu.
+    christening: Option<christening::Christening>,
     /// The saved pilots' list, while it is open over the main menu.
     open_pilot: Option<PilotList>,
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),

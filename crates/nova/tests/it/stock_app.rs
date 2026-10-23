@@ -897,6 +897,8 @@ fn a_new_stock_pilot_sees_the_three_intro_pictures_for_45_seconds_each() {
         driver.send(WindowEvent::Text(c));
     }
     driver.press(Key::Enter);
+    // The ship's christening, confirmed with its default.
+    driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::MainMenu);
     let enter = crate::common::enter_ship_at(driver.app.screen());
     driver.click(enter);

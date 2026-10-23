@@ -13,6 +13,7 @@
 //! a new app lists it and resumes it docked where it landed, on the same
 //! date, in the same ship and with the same cash; Quit exits.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -276,6 +277,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 /// Stock "Create a new pilot:" (`DLOG` 3102, 326 x 213, centred) and its
 /// fourteen items, and stock "Spaceport" (`DLOG` 1000) and its fifteen
 /// user items.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -321,6 +324,8 @@ fn interface() -> InterfaceData {
     let file = fork(&[
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -633,6 +638,8 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     );
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     let pilot = game.pilot();
@@ -744,6 +751,8 @@ fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(store.keys(), ["Ada"]);
 
@@ -821,6 +830,8 @@ fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
@@ -861,6 +872,8 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     assert_eq!(game.music(), [], "the dialog keeps it");
 
     game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);

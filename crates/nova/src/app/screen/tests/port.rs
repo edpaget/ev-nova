@@ -1516,7 +1516,7 @@ fn buying_a_ship_asks_its_name_and_keeps_the_name_confirmed() {
     let mut screen = landed_shipyard(&store);
     click_port_item(&mut screen, 9);
     select_first_ship(&mut screen);
-    assert_eq!(pilot(&screen).ship_name(), Some("First"));
+    assert_eq!(pilot(&screen).ship_name(), Some(""), "no STR# 128 default");
     let writes = store.writes();
     press_b(&mut screen);
     let prompt = name_prompt(&screen).expect("the name prompt");

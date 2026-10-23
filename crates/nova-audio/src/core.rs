@@ -681,7 +681,7 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
-/// entry, the saved pilots' list, a note and a question over the main
+/// entry and its ship's christening, the saved pilots' list, a note and a question over the main
 /// menu, and the plunder,
 /// assignment, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
@@ -691,6 +691,7 @@ fn is_overlay(showing: Showing) -> bool {
         Showing::About
             | Showing::Preferences
             | Showing::NewPilot
+            | Showing::Christening
             | Showing::OpenPilot
             | Showing::Note
             | Showing::Question
@@ -744,6 +745,7 @@ fn has_music(scene: Showing) -> bool {
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
+        | Showing::Christening
         | Showing::OpenPilot
         | Showing::Note
         | Showing::Question
@@ -2525,6 +2527,7 @@ mod tests {
         for overlay in [
             Showing::About,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,
@@ -2633,6 +2636,7 @@ mod tests {
         for overlay in [
             Showing::Preferences,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,

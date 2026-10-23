@@ -29,6 +29,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
+use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
     HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
@@ -71,6 +72,7 @@ impl AppScreen {
             scaling: nova_view::Scaling::list(&[nova_view::Upscaler::Native]),
             menu: None,
             new_pilot: None,
+            christening: None,
             open_pilot: None,
             load_note: None,
             note_hides_game: false,
@@ -118,7 +120,7 @@ impl AppScreen {
     }
 
     /// The router with each flight rolling each day's events and its
-    /// traffic on `chance`.
+    /// traffic on `chance`, and a new pilot's christening its default.
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
@@ -437,6 +439,12 @@ impl AppScreen {
         self.new_pilot.as_ref()
     }
 
+    /// The new pilot's ship christening, while it is open.
+    #[must_use]
+    pub fn christening(&self) -> Option<&TextInputDialog> {
+        self.christening.as_ref().map(|open| &open.dialog)
+    }
+
     /// The saved pilots' list, while it is open.
     #[must_use]
     pub fn pilot_list(&self) -> Option<&PilotList> {
@@ -647,6 +655,9 @@ impl AppScreen {
         }
         if self.new_pilot.is_some() {
             return Showing::NewPilot;
+        }
+        if self.christening.is_some() {
+            return Showing::Christening;
         }
         if self.open_pilot.is_some() {
             return Showing::OpenPilot;

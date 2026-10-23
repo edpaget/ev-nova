@@ -253,12 +253,15 @@ impl AppScreen {
     }
 
     /// The New Pilot dialog's input. A name already saved, or one no file
-    /// can be saved under, is refused; any other creates the pilot with the
-    /// gender and Strict Play chosen, begins its game (the `chär`'s
-    /// `OnStart`, [`FlightView::begin`]), saves it at once, with what that
-    /// did (so Open Pilot lists it), as `_DoNewPilot` runs `OnStart`
-    /// before the first save, and holds it on the main menu, not flying,
-    /// in place of any game held ([`AppScreen::hold_new_pilot`]).
+    /// can be saved under, is refused, as `_DoNewPilot` checks the name
+    /// (@0x18c0b) before it christens the ship; any other creates the
+    /// pilot with the gender and Strict Play chosen and asks to christen
+    /// its ship ([`AppScreen::open_christening`]). Once christened, its
+    /// game begins (the `chär`'s `OnStart`, [`FlightView::begin`]), it is
+    /// saved at once, with what that did (so Open Pilot lists it), as
+    /// `_DoNewPilot` runs `OnStart` before the first save, and it is held
+    /// on the main menu, not flying, in place of any game held
+    /// ([`AppScreen::hold_new_pilot`]).
     pub(super) fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
         dialog.input(input);
@@ -285,9 +288,10 @@ impl AppScreen {
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
                         self.close_new_pilot();
-                        let pilot = pilot.with_gender(gender).with_strict_play(strict_play);
-                        let flight = self.pilot_flight(pilot, false);
-                        self.hold_new_pilot(flight);
+                        self.open_christening(
+                            pilot.with_gender(gender).with_strict_play(strict_play),
+                            matches!(input, Input::Key { .. }),
+                        );
                     }
                     Err(error) => {
                         let why = error.to_string();

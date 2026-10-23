@@ -23,6 +23,8 @@ fn quit_from_the_menu_bar_in_flight_exits_and_saves_the_pilot() {
     game.click(game.menu_button(nova_view::menu::MenuChoice::NewPilot));
     game.type_name("Ada");
     game.press(winit::keyboard::KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(winit::keyboard::KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     for _ in 0..10 {

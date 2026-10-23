@@ -279,13 +279,16 @@ fn placing_the_trader() -> SharedChance {
     SharedChance::new(script)
 }
 
-/// [`placing_the_trader`] for a new pilot: the offers' roll table its
-/// beginning draws, each the last outcome, then the setup.
+/// [`placing_the_trader`] for a new pilot: its christening's default,
+/// the first, then the offers' roll table its beginning draws, each the
+/// last outcome, then the setup.
 fn begun_placing_the_trader() -> SharedChance {
+    let christening = std::iter::once(0);
     let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
     let setup = [6, 6, 0, 0, 850, 650, 0];
-    let script: Rc<RefCell<dyn Chance>> =
-        Rc::new(RefCell::new(Script(table.chain(setup).collect())));
+    let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
+        christening.chain(table).chain(setup).collect(),
+    )));
     SharedChance::new(script)
 }
 
@@ -425,6 +428,8 @@ impl Harness {
         for c in "Trader".chars() {
             harness.send(WindowEvent::Text(c));
         }
+        harness.press(Key::Enter);
+        // The ship's christening, confirmed with its default.
         harness.press(Key::Enter);
         harness.enter_ship();
         assert_eq!(harness.showing(), Showing::Flight);

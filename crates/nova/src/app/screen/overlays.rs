@@ -253,6 +253,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.new_pilot {
             return Some(dialog);
         }
+        if let Some(open) = &mut self.christening {
+            return Some(&mut open.dialog);
+        }
         if let Some(list) = &mut self.open_pilot {
             return Some(list);
         }
