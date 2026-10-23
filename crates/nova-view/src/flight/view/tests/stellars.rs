@@ -1026,3 +1026,80 @@ fn the_string_lists_reach_the_session() {
         ["Kestrel"]
     );
 }
+
+/// A flight in Sol with an arrival coming out of hypergate 141 at
+/// (200, 100), which can be destroyed, opens only while destroyed
+/// (`Flags2` 0x0080) and steps every tick; its `Type` sheet (1141) is
+/// 20 square and its `spïn` counts no frames, while its `DeadType` sheet
+/// (2141), 100 square, counts 6.
+fn uncounted_gate() -> View {
+    let mut catalog = trafficked(&[130], 1, 129, 3);
+    catalog.sites.push(LandingSite {
+        flags2: nova_sim::gate::HYPERGATE | 0x0080,
+        exit_angle: 90,
+        type_counts_frames: false,
+        dead_graphic: Some(9),
+        dead_frame_size: Some((100, 100)),
+        animation: nova_sim::catalog::SiteAnimation {
+            type_frames: 6,
+            dead_frames: 6,
+            ..nova_sim::catalog::SiteAnimation::default()
+        },
+        ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
+    });
+    catalog.sol_more.push(StellarContents {
+        dead_sprite: Some(Ok(StellarSheet {
+            image: crate::SheetImage::Rled(2141),
+            frames: NonZeroU16::new(6).expect("non-zero"),
+            frame_width: 100,
+            frame_height: 100,
+        })),
+        ..stellar(141, "Gate", (200, 100), 6)
+    });
+    catalog.lives = vec![life(141, 0x0080)];
+    // Setup brings nobody; then an arrival comes out of the gate, the
+    // third of the stellars.
+    let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+    FlightView::new(catalog)
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still))
+}
+
+/// The frames of hypergate 141's sheets drawn.
+fn gate_drawn(view: &View) -> Vec<ImageKey> {
+    sprites(&drawn(view))
+        .into_iter()
+        .map(|(image, _)| image)
+        .filter(|image| [1141, 2141].contains(&image.id))
+        .collect()
+}
+
+#[test]
+fn a_gate_frozen_by_u_keeps_the_frame_it_showed_before_its_session_steps_it() {
+    // The view reads the freeze before the gate frames: on the tick the
+    // `U` clone freezes the slot, it holds the frame drawn on the tick
+    // before, not the one the session steps the gate to on this one.
+    let mut view = uncounted_gate();
+    ticks(&mut view, 2);
+    assert_eq!(gate_drawn(&view), [], "flown: its slot shows no frame");
+    run_set(&mut view, "Y141");
+    ticks(&mut view, 3);
+    let shown = gate_drawn(&view);
+    assert_eq!(
+        shown,
+        [ImageKey::sprite(2141, 3)],
+        "opening while destroyed"
+    );
+    run_set(&mut view, "U141");
+    for _ in 0..4 {
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(session.frame_frozen(StellarId(141)));
+        assert_eq!(
+            session.gate_frame(StellarId(141)),
+            Some(0),
+            "whole, the session steps it back to 0"
+        );
+        assert_eq!(gate_drawn(&view), shown, "the frame shown before, kept");
+    }
+}
