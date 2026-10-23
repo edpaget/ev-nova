@@ -30,8 +30,8 @@
 //! @0xb99f8-0xb9a05). `_SetupSpriteWorld` gives the stellar layer
 //! `_BeamDrawOffscreenCallback` (the beams under the ships), the target
 //! layer `_BeamDrawCallback` (the other beams), and the world
-//! `_PostDrawCallback` (the particles). [`WORLD_PASSES`] is the whole
-//! order, layers and callbacks.
+//! `_PostDrawCallback` (the floaters, then the particles). [`WORLD_PASSES`]
+//! is the whole order, layers and callbacks.
 //!
 //! A layer draws its sprites in the order they entered it
 //! (`_SWAddSprite` @0xac620): [`stack`] keeps each layer in the order it
@@ -141,18 +141,25 @@ pub enum WorldPass {
     /// `Flags2` 0x2000 (@0x37af9-0x37afd, then @0x37c25-0x37e72). So they
     /// go over every layer, the explosions and the target layer too.
     BeamsOverShips,
+    /// The floaters, which are no layer's: the world's post-draw callback
+    /// `_PostDrawCallback` (0x38c80, set @0x22057-0x22065) first calls
+    /// `_FloaterDrawCallback` (0x38b2d, called @0x38c8d). It ORs the
+    /// message line's rect of the background frame over the sprites
+    /// (@0x38b52-0x38b90), then blits the floating map (@0x38b95-0x38c0a),
+    /// then the escort menu (@0x38c0f-0x38c5b). So they go over every
+    /// layer and the beams, and under the particles.
+    Floaters,
     /// The particles (hit bursts, shot trails, debris; `_SpawnParticles`
-    /// @0x44b70), which are no layer's: the world's post-draw callback
-    /// `_PostDrawCallback` (0x38c80, set @0x22057-0x22065) draws them last,
-    /// `jmp _DrawParticlesOffscreen` @0x38c9a, after `_FloaterDrawCallback`
-    /// (@0x38c8d).
+    /// @0x44b70), which are no layer's: `_PostDrawCallback` draws them
+    /// last, `jmp _DrawParticlesOffscreen` @0x38c9a, after the floaters
+    /// ([`WorldPass::Floaters`]).
     Particles,
 }
 
 /// The flight world's draw passes, bottom first: each layer, with the
 /// stellar layer's and the target layer's beam callbacks after their
-/// layers, then the particles (see the module docs).
-pub const WORLD_PASSES: [WorldPass; 17] = [
+/// layers, then the floaters and the particles (see the module docs).
+pub const WORLD_PASSES: [WorldPass; 18] = [
     WorldPass::Layer(SpriteLayer::Stars),
     WorldPass::Layer(SpriteLayer::Stellars),
     WorldPass::BeamsUnderShips,
@@ -169,6 +176,7 @@ pub const WORLD_PASSES: [WorldPass; 17] = [
     WorldPass::Layer(SpriteLayer::Explosions),
     WorldPass::Layer(SpriteLayer::Targets),
     WorldPass::BeamsOverShips,
+    WorldPass::Floaters,
     WorldPass::Particles,
 ];
 
@@ -238,10 +246,10 @@ mod tests {
     }
 
     #[test]
-    fn the_world_draws_its_layers_with_the_beams_after_the_stellars_and_the_targets_then_the_particles()
+    fn the_world_draws_its_layers_with_the_beams_after_the_stellars_and_the_targets_then_the_floaters_and_the_particles()
      {
         use SpriteLayer as L;
-        use WorldPass::{BeamsOverShips, BeamsUnderShips, Layer, Particles};
+        use WorldPass::{BeamsOverShips, BeamsUnderShips, Floaters, Layer, Particles};
         assert_eq!(
             WORLD_PASSES,
             [
@@ -261,6 +269,7 @@ mod tests {
                 Layer(L::Explosions),
                 Layer(L::Targets),
                 BeamsOverShips,
+                Floaters,
                 Particles,
             ]
         );

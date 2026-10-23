@@ -68,9 +68,10 @@ impl<C> FlightView<C> {
                 WorldPass::Layer(SpriteLayer::Explosions) => {
                     self.effects.draw_explosions(list, camera, &self.looks);
                 }
-                // The brackets, the cursor and the icons are drawn in the
-                // overlay, after the world (see the module docs).
-                WorldPass::Layer(SpriteLayer::Targets) => {}
+                // The brackets, the cursor, the icons, the floating map
+                // and the escort menu are drawn in the overlay, after the
+                // world (see the module docs).
+                WorldPass::Layer(SpriteLayer::Targets) | WorldPass::Floaters => {}
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
