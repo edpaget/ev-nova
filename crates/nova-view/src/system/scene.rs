@@ -359,10 +359,22 @@ impl SystemScene {
     /// Marks each stellar's frame frozen or not as `frozen` gives it
     /// (`Session::frame_frozen`): a flight frame's clone freezes or thaws
     /// a slot with no event to tell it, so the view reads it after each
-    /// step, before the frame is drawn.
+    /// step, before the frame is drawn, and before the gate frames
+    /// ([`SystemScene::set_gate_frames`]). A hypergate frozen keeps the
+    /// frame its session gave it last, as the sprite tick sets a gate's
+    /// frame through the `_SWSetCurrentFrameIndex` a slot whose frames
+    /// count none refuses (@0x2ee20-0x2ee30).
     pub fn set_frozen(&mut self, frozen: impl Fn(StellarId) -> bool) {
         for stellar in &mut self.stellars {
-            stellar.frozen = frozen(stellar.id);
+            let now = frozen(stellar.id);
+            if now
+                && !stellar.frozen
+                && let Some(frame) = stellar.gate_frame
+            {
+                let drawn = stellar.frame_count(stellar.drawn);
+                stellar.frames.hold(frame % drawn.get());
+            }
+            stellar.frozen = now;
         }
     }
 
@@ -398,10 +410,10 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
         let (at, (width, height)) = match stellar.drawn() {
             None => (centre, (0.0, 0.0)),
             Some(Ok(sheet)) => {
-                let frame = stellar.gate_frame.map_or_else(
-                    || stellar.frames.shown(),
-                    |frame| frame % sheet.frames.get(),
-                );
+                let frame = match stellar.gate_frame {
+                    Some(frame) if !stellar.frozen => frame % sheet.frames.get(),
+                    _ => stellar.frames.shown(),
+                };
                 let size = (sheet.frame_width as f32, sheet.frame_height as f32);
                 let at = stellar.sprite_centre(centre, size);
                 list.sprite(sheet.image.frame(frame), at, Color::WHITE);
@@ -1222,6 +1234,20 @@ mod tests {
             at,
             "centred again"
         );
+    }
+
+    #[test]
+    fn a_frozen_hypergate_keeps_the_frame_it_showed_whatever_its_session_steps_it_to() {
+        let mut scene = SystemScene::load(&catalog(), SystemId(130));
+        let gate = |frame| move |id: StellarId| (id == StellarId(129)).then_some(frame);
+        let only_129 = |id: StellarId| id == StellarId(129);
+        scene.set_gate_frames(gate(3));
+        scene.set_frozen(only_129);
+        scene.set_gate_frames(gate(1));
+        scene.step(4);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 3), "kept");
+        scene.set_frozen(|_| false);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 1), "thawed");
     }
 
     #[test]

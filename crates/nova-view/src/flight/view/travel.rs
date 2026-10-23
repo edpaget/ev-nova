@@ -650,8 +650,8 @@ impl<
                 }
             }
             if let Some(scene) = &mut self.scene {
-                show_gate_frames(scene, session);
                 show_frozen_frames(scene, session);
+                show_gate_frames(scene, session);
             }
         }
         // The session set its line as it raised each of these, and the

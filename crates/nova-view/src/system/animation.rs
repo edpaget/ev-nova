@@ -78,6 +78,12 @@ impl Frames {
         self.shown
     }
 
+    /// Shows `frame` of the sheet drawn: the frame a hypergate's session
+    /// gave it, kept as its slot freezes (`SystemScene::set_frozen`).
+    pub fn hold(&mut self, frame: u16) {
+        self.shown = frame;
+    }
+
     /// A swap to another sheet drawn, of `drawn` frames: the frame shown
     /// is kept while it is in range, and is frame 0 otherwise.
     pub fn swap(&mut self, drawn: NonZeroU16) {
