@@ -336,4 +336,36 @@ pub(super) mod tests {
         assert_eq!(session.nav_target(), Some(StellarId(UNOWNED)));
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
     }
+
+    // Readers of a selection outside the stellars shown.
+
+    #[test]
+    fn a_wormhole_another_system_owns_is_known_as_one() {
+        let catalog = twice_listed(wormhole);
+        let session = in_131(&catalog, engine(), NEAR_200);
+        assert_eq!(
+            session.gate_kind(StellarId(UNOWNED)),
+            Some(crate::landing::GateKind::Wormhole)
+        );
+        assert_eq!(session.gate_kind(StellarId(140)), None);
+    }
+
+    /// `_HandleNavTargetSprites` brackets the selection at the spöb's
+    /// own position (+0x4/+0x6, @0x2fd9f-0x2fdda), shown or not.
+    #[test]
+    fn the_brackets_of_a_selection_not_shown_are_at_its_spot() {
+        let catalog = twice_listed(wormhole);
+        let mut session = in_131(&catalog, engine(), NEAR_200);
+        let _ = session.land();
+        let brackets = session.nav_brackets().expect("bracketed");
+        assert_eq!(brackets.stellar, StellarId(UNOWNED));
+        assert_eq!(brackets.position, Vec2::new(500.0, 500.0));
+        assert!(!brackets.dominated);
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(
+            session.nav_brackets().expect("bracketed").position,
+            Vec2::new(0.0, 0.0),
+            "140, shown, at the centre"
+        );
+    }
 }

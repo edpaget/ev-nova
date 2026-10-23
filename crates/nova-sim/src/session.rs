@@ -3428,8 +3428,8 @@ impl Session {
         Ok(outcome.into())
     }
 
-    /// What `stellar`, one of the system's, leads through, if it is a
-    /// hypergate or wormhole.
+    /// What `stellar`, one the system lists, shown or not, leads through,
+    /// if it is a hypergate or wormhole.
     #[must_use]
     pub fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
         self.chart.gate_kind(stellar)
@@ -6522,11 +6522,13 @@ impl Chart {
         overlaid_sites(&self.galaxy, catalog, system)
     }
 
-    /// What `stellar`, one of the system's, leads through, if it is a
-    /// hypergate or wormhole.
+    /// What `stellar`, one the system lists, leads through, if it is a
+    /// hypergate or wormhole: read from `listed`, so a gate another
+    /// visible system owns, which the land key can select, is worded as
+    /// one (`STR#` 2002 #84 then #85/#86, @0x67cda-0x67dc4).
     #[must_use]
     fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
-        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        let site = self.listed.iter().find(|site| site.id == stellar)?;
         GateKind::of(site.flags2)
     }
 
