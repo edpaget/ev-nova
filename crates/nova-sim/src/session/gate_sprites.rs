@@ -8,9 +8,18 @@
 //! the frame is drawn. It steps whenever the ship is not docked, while a
 //! jump plays too, as the original's stellars animate then.
 //!
-//! The gates are those of the stellars shown, kept whenever they change:
-//! a gate still shown keeps its sprite, a gate newly shown starts closed,
-//! and one no longer shown is let go.
+//! The gates are those of the stellars shown. A gate keeps its sprite
+//! across systems, as the original keeps a gate's frame, next frame and
+//! timer on its `spöb` record (+0x476, +0x478, +0x490), written only by
+//! the sprite tick's gate branch (@0x2ea3d-0x2ec3f), the launch
+//! (`_InitObjects` @0x1c8c5-0x1c8d1), a newly made sprite slot
+//! (`_HandleStellarSystemVisibility` @0x331e2-0x331fb) and the take-off
+//! (`_HandlePlayerDockRequest` @0x6761e-0x67646, not built:
+//! stellar-fidelity-followups phase 10). While not shown it stands still,
+//! as the sprite tick walks only the slots shown (@0x2e713-0x2e73e). It
+//! starts closed only the first time a flight shows it: `Space` is not
+//! saved, so a load, a resumed pilot and a new pilot start every gate
+//! closed (stellar-fidelity phase 12).
 
 use super::stellars::NO_SPRITE_SIDE;
 use super::{Chart, Session, Setup, Space, Statics};
@@ -46,19 +55,15 @@ impl Session {
         })
     }
 
-    /// Keeps a sprite for each hypergate shown, and only for those.
+    /// Keeps a sprite for each hypergate shown ([`Space::keep_gate_sprites`]).
     pub(super) fn keep_gate_sprites(&mut self) {
-        let gates: Vec<StellarId> = self
+        let gates = self
             .chart
             .sites
             .iter()
             .filter(|site| is_hypergate(site))
-            .map(|site| site.id)
-            .collect();
-        self.space.gate_sprites.retain(|id, _| gates.contains(id));
-        for gate in gates {
-            self.space.gate_sprites.entry(gate).or_default();
-        }
+            .map(|site| site.id);
+        self.space.keep_gate_sprites(gates);
     }
 
     /// One tick of every hypergate shown, held open by the NPCs as they
@@ -87,6 +92,16 @@ impl Session {
 }
 
 impl Space {
+    /// Gives each of `gates`, the hypergates shown, a closed sprite when
+    /// the flight has none for it yet. A gate's sprite is kept while it is
+    /// not shown, as the original keeps it on the `spöb` record (see the
+    /// module docs).
+    pub(super) fn keep_gate_sprites(&mut self, gates: impl IntoIterator<Item = StellarId>) {
+        for gate in gates {
+            self.gate_sprites.entry(gate).or_default();
+        }
+    }
+
     /// The width `_GetSpriteXSize` gives `site`'s sprite slot
     /// ([`Space::slot_sprite_size`]), or [`NO_SPRITE_SIDE`] when the slot
     /// shows no frame (@0x26d4-0x2701).
@@ -473,25 +488,58 @@ mod tests {
         assert!(!session.gate_open(StellarId(128)), "a planet");
     }
 
+    /// Hypergate 300's sprite, as `session` keeps it.
+    fn gate_300(session: &Session) -> Option<crate::gate_sprite::GateSprite> {
+        session.space.gate_sprites.get(&StellarId(300)).copied()
+    }
+
     #[test]
-    fn a_gate_still_shown_keeps_its_sprite_and_one_no_longer_shown_is_let_go() {
+    fn a_gate_no_longer_shown_keeps_its_sprite_until_shown_again() {
         let catalog = gated();
         let mut session = flying(&catalog);
         emerging(&mut session, 1000);
         tick(&mut session, &catalog);
         session.keep_gate_sprites();
         assert_eq!(session.gate_frame(StellarId(300)), Some(1), "kept");
+        let left = gate_300(&session);
         let shown = session.chart.sites.clone();
         session.chart.sites.retain(|site| site.id != StellarId(300));
         session.keep_gate_sprites();
-        assert!(session.space.gate_sprites.is_empty(), "let go");
+        assert_eq!(gate_300(&session), left, "kept while not shown");
         session.chart.sites = shown;
         session.keep_gate_sprites();
-        assert_eq!(
-            session.space.gate_sprites.get(&StellarId(300)),
-            Some(&crate::gate_sprite::GateSprite::new()),
-            "shown again, closed"
-        );
+        assert_eq!(gate_300(&session), left, "shown again");
+        assert_eq!(session.gate_frame(StellarId(300)), Some(1), "where it was");
+    }
+
+    #[test]
+    fn a_gate_not_shown_does_not_step() {
+        let catalog = gated();
+        let mut session = flying(&catalog);
+        emerging(&mut session, 1000);
+        tick(&mut session, &catalog);
+        let left = gate_300(&session);
+        session.chart.sites.retain(|site| site.id != StellarId(300));
+        for _ in 0..5 {
+            session.step_gate_sprites(&mut NeverFires);
+        }
+        assert_eq!(gate_300(&session), left);
+    }
+
+    #[test]
+    fn a_load_starts_every_gate_closed() {
+        let catalog = gated();
+        let mut session = flying(&catalog);
+        emerging(&mut session, 1000);
+        tick(&mut session, &catalog);
+        assert_eq!(session.gate_frame(StellarId(300)), Some(1));
+        let pilot = session.pilot().clone();
+        let closed = Some(crate::gate_sprite::GateSprite::new());
+        let rules = crate::rulebook::Rulebook::default();
+        let loaded = Session::load(&catalog, pilot.clone(), &rules).expect("loads");
+        assert_eq!(gate_300(&loaded), closed, "loaded");
+        let flown = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(gate_300(&flown), closed, "resumed");
     }
 
     #[test]

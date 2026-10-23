@@ -24,8 +24,9 @@ use super::{Aboard, hail, persons, reinforcements};
 /// order, then its part.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Space {
-    /// The sprite of each hypergate shown, as it opens and closes (see
-    /// the `gate_sprites` module).
+    /// The sprite of each hypergate the flight has shown, as it opens and
+    /// closes, kept while it is not shown (see the `gate_sprites`
+    /// module).
     pub(super) gate_sprites: BTreeMap<StellarId, GateSprite>,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
