@@ -14,6 +14,7 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, SystemId};
+use nova_sim::gate::HYPERGATE;
 use nova_view::system::{SystemScene, is_animated};
 use nova_view::{
     DrawCommand, DrawList, ImageKey, Input, Key, MouseButton, Navigator, Point, Screen,
@@ -42,7 +43,10 @@ fn stellar(data: &GameData, id: i16) -> Stellar {
 
 /// Every system's scene has its stellars, in navigation order, at the
 /// positions their raw `spöb`s give, with the sheets their raw `spïn`s
-/// name. Only the Wormholes whose `AnimDelay` is 2 animate.
+/// name. Only stellars drawing the Wormhole graphic (59) animate: the 23
+/// whose `AnimDelay` is 2, and spöb 514 "Link", whose `AnimDelay` of 0
+/// advances every tick as the original's does (stellar-fidelity
+/// phase 10). No hypergate takes the sequential branch.
 #[test]
 fn every_stock_systems_scene_matches_its_records() {
     let Some(data) = open() else {
@@ -92,17 +96,26 @@ fn every_stock_systems_scene_matches_its_records() {
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
-    let moving: Vec<&Stellar> = animated
-        .values()
-        .filter(|(is, _)| *is)
-        .map(|(_, record)| record)
+    let moving: BTreeMap<i16, &Stellar> = animated
+        .iter()
+        .filter(|(_, (is, _))| *is)
+        .map(|(&id, (_, record))| (id, record))
         .collect();
-    assert_eq!(moving.len(), 23);
+    assert_eq!(moving.len(), 24);
     assert!(
         moving
-            .iter()
-            .all(|r| r.anim_delay == 2 && r.graphic_type == 59),
-        "only Wormholes with a delay of 2 animate"
+            .values()
+            .all(|r| r.graphic_type == 59 && r.flags2.bits() & HYPERGATE == 0),
+        "only Wormhole graphics animate, and no hypergate"
+    );
+    assert_eq!(
+        moving.get(&514).map(|r| r.anim_delay),
+        Some(0),
+        "Link animates every tick"
+    );
+    assert!(
+        moving.iter().all(|(&id, r)| id == 514 || r.anim_delay == 2),
+        "every other at a delay of 2"
     );
 }
 

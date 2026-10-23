@@ -30,15 +30,19 @@
 
 use std::num::NonZeroU16;
 
+use nova_sim::gate::HYPERGATE;
 use nova_sim::gate_sprite::ONLY_WHEN_DESTROYED;
 
 use super::catalog::AnimationData;
 
 /// Whether a stellar with these fields, `destroyed` or not, animates over
-/// `counted` frames.
+/// `counted` frames by the sequential branch: never a hypergate, whose
+/// frames its session steps.
 #[must_use]
 pub fn is_animated(data: AnimationData, destroyed: bool, counted: NonZeroU16) -> bool {
-    counted.get() > 1 && data.delay > 0 && (data.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
+    counted.get() > 1
+        && data.flags2 & HYPERGATE == 0
+        && (data.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
 }
 
 /// A stellar's animation state: its current and next frame, its timer,
@@ -133,13 +137,15 @@ impl Frames {
             return None;
         }
         self.timer += 1;
-        let delay = u64::from(data.delay.unsigned_abs());
+        // Wide, where the original's 16-bit `imul ax` wraps (@0x2ec62);
+        // a threshold of 0 or less is met at once.
+        let delay = i64::from(data.delay);
         let threshold = if self.current == 0 && data.frame0_bias > 1 {
-            delay * u64::from(data.frame0_bias.unsigned_abs())
+            delay * i64::from(data.frame0_bias)
         } else {
             delay
         };
-        if self.timer < threshold {
+        if i128::from(self.timer) < i128::from(threshold) {
             return Some(false);
         }
         self.timer = 0;
@@ -250,12 +256,45 @@ mod tests {
     }
 
     #[test]
-    fn one_frame_no_delay_or_only_when_destroyed_stays_on_frame_0() {
+    fn one_frame_a_hypergate_or_only_when_destroyed_stays_on_frame_0() {
         stays_on_frame_0(data(2, 0), false, 1);
-        // A Hypergate: 42 frames, but no delay.
-        stays_on_frame_0(data(0, 0), false, 42);
-        stays_on_frame_0(data(-1, 0), false, 42);
+        stays_on_frame_0(gate(0), false, 42);
         stays_on_frame_0(live(true), false, 32);
+    }
+
+    /// A hypergate (`Flags2` 0x1000 with 0x0200, as every stock gate's)
+    /// with an `AnimDelay` of `delay`.
+    fn gate(delay: i16) -> AnimationData {
+        AnimationData {
+            flags2: HYPERGATE | 0x0200,
+            ..data(delay, 0)
+        }
+    }
+
+    #[test]
+    fn a_delay_of_0_or_less_advances_every_tick_as_the_original_does() {
+        assert_eq!(plain(data(0, 0), 3, 7), [0, 1, 2, 0, 1, 2, 0]);
+        assert_eq!(plain(data(-1, 0), 3, 7), [0, 1, 2, 0, 1, 2, 0]);
+        // A bias times a delay of 0 is still 0.
+        assert_eq!(plain(data(0, 3), 3, 7), [0, 1, 2, 0, 1, 2, 0]);
+        assert_eq!(plain(data(-2, 3), 3, 4), [0, 1, 2, 0]);
+        assert!(is_animated(data(0, 0), false, count(42)));
+        assert!(is_animated(data(i16::MIN, 0), false, count(2)));
+    }
+
+    #[test]
+    fn a_hypergate_never_takes_the_sequential_branch() {
+        for delay in [0, 2, -1] {
+            stays_on_frame_0(gate(delay), false, 42);
+            stays_on_frame_0(
+                AnimationData {
+                    flags2: HYPERGATE,
+                    ..data(delay, 0)
+                },
+                false,
+                42,
+            );
+        }
     }
 
     #[test]
@@ -271,13 +310,21 @@ mod tests {
             dead.step(live(true), true, count(32), count(32));
         }
         assert_eq!(shown, [0, 0, 1, 1, 2]);
-        // No delay or one frame stays on frame 0 whatever the state.
+        // One frame stays on frame 0 whatever the state; no delay
+        // animates every tick.
         stays_on_frame_0(live(true), true, 1);
         let no_delay = AnimationData {
             delay: 0,
             ..live(true)
         };
-        stays_on_frame_0(no_delay, true, 4);
+        let mut dead = Frames::new();
+        let mut shown = Vec::new();
+        for _ in 0..5 {
+            shown.push(dead.shown());
+            dead.step(no_delay, true, count(4), count(4));
+        }
+        assert_eq!(shown, [0, 1, 2, 3, 0], "animates every tick");
+        stays_on_frame_0(no_delay, false, 4);
     }
 
     #[test]
