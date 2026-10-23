@@ -2629,8 +2629,9 @@
 //! `_GetSpriteXSize`/`_GetSpriteYSize` read it
 //! (`nova_sim`'s `Space::slot_sprite_size`) places the slot and sizes a
 //! hypergate's approach. The view draws a frozen frame shifted and keeps
-//! its frame shown while its count steps on, reading the frozen state
-//! after each tick's steps, since a flight frame changes it with no event.
+//! its frame shown while its count steps on, a hypergate's included
+//! whatever its session steps it to, reading the frozen state after each
+//! tick's steps, since a flight frame changes it with no event.
 //!
 //! **Readings.** The Rulebook key
 //! [`uncounted_sheet`](crate::RuleKey::UncountedSheet) defaults to the

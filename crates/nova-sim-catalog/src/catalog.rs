@@ -2557,6 +2557,11 @@ mod tests {
     }
 
     /// Ship 128 is average; system 130 alone exists.
+    #[test]
+    fn a_catalog_that_does_not_say_counts_graphic_type_0s_frames() {
+        assert!(One.fallback_counts_frames(), "every stock spïn counts");
+    }
+
     struct One;
 
     impl PilotCatalog for One {

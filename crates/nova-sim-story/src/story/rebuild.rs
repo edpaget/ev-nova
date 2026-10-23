@@ -1082,6 +1082,20 @@ mod tests {
     }
 
     #[test]
+    fn a_rebuild_point_reports_a_count_a_rules_change_alone_changed() {
+        // A `DeadType` that counts no frames, by the engine's reading.
+        let sites = [counting(128, true, false)];
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        assert!(rebuilt.still(StellarId(128)));
+        // The other reading from here: a frame fills the slot, then a
+        // rebuild point copies a count again, and only that changed.
+        rebuilt.frame(&sites, destroyed(&[128]), Bible);
+        assert!(rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Bible));
+        assert!(!rebuilt.still(StellarId(128)));
+    }
+
+    #[test]
     fn by_the_other_reading_an_uncounted_sheet_counts() {
         let me = StellarId(128);
         for fallback in [Counts, CountsNone, Unreadable] {

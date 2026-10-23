@@ -16,6 +16,14 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `Rebuilt::rebuild`'s change test compares the stellars whose frames
+    # count none (`marked`), but at a rebuild point that set never changes
+    # unless the counts copied (`still`), the counted or held sheets, the
+    # dead set or the empty slots change too: every path sets it from the
+    # same clone or from what the slot held before, which `still` copies
+    # (checked over every walk of up to five steps, every site and
+    # fallback, and readings changed between steps).
+    "nova-sim-story/src/story/rebuild\\.rs:[0-9]+:[0-9]+: replace marked -> BTreeSet<StellarId> with BTreeSet::new\\(\\)$",
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.
