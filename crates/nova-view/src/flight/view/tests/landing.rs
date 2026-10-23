@@ -98,6 +98,8 @@ fn the_picks_roll_their_ranges_and_decide_only_their_words() {
                 opening: 2,
                 welcome,
             },
+            None,
+            nova_sim::RuleSource::Engine,
         )
     };
     assert!(greeting(0).ends_with(COMMENCE_FINAL_APPROACH));
@@ -143,6 +145,55 @@ fn the_selecting_l_shows_the_requests_line_then_a_tick_near_shows_the_greeting()
     assert!(!far, "never greeted");
     view.input(&key(Key::Up, false));
     assert_lasts(&mut view, &greeting, 250);
+}
+
+/// Over a stellar charging 1,000 credits with `flags2`, the pilot holding
+/// as much: L, a tick, and the greeting shown.
+fn greeted_at_a_fee(flags2: u16) -> (View, String) {
+    let site = LandingSite {
+        fee: 1000,
+        flags2,
+        ..site(129, (6.0, -8.0), StellarFlags::CAN_LAND)
+    };
+    let mut view = FlightView::new(FakeCatalog {
+        sites: vec![site],
+        character: Ok(CharacterStart {
+            cash: 1000,
+            ..catalog().character.expect("a chär")
+        }),
+        ..catalog()
+    });
+    tap(&mut view, LAND);
+    ticks(&mut view, 1);
+    let greeting = view.message().expect("greeted").to_owned();
+    (view, greeting)
+}
+
+#[test]
+fn the_greeting_at_a_stellar_with_a_fee_states_it() {
+    let (mut view, greeting) = greeted_at_a_fee(0);
+    let ship = ship_name(&view);
+    assert_eq!(
+        greeting,
+        format!(
+            "Cleared to land, {ship}. Commence final approach.  [Landing fee is 1,000 credits.]"
+        )
+    );
+    assert_lasts(&mut view, &greeting, 250);
+}
+
+#[test]
+fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
+    // Domination waives it (@0x64d92-0x64d96).
+    let (view, greeting) = greeted_at_a_fee(nova_sim::market::DOMINATED);
+    let ship = ship_name(&view);
+    assert_eq!(
+        greeting,
+        format!("Cleared to land, {ship}. Commence final approach.")
+    );
+    let (_, gate) = greeted_at_a_fee(nova_sim::gate::HYPERGATE);
+    assert!(gate.starts_with("Cleared for hypergate entry"), "{gate}");
+    assert!(!gate.contains('['), "{gate}");
 }
 
 #[test]

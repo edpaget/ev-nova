@@ -686,11 +686,13 @@ pub(super) fn message_text(
             ship(),
             RequestPicks::roll(*kind, chance),
         )),
-        SimMessage::DockCleared { stellar, kind } => Some(approach_greeting(
+        SimMessage::DockCleared { stellar, kind, fee } => Some(approach_greeting(
             *kind,
             &named(*stellar),
             ship(),
             GreetingPicks::roll(*kind, chance),
+            *fee,
+            session.rules().source_for(nova_sim::RuleKey::PayMillions),
         )),
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
@@ -898,6 +900,12 @@ pub const YOU_ARE_CLEARED_TO_LAND: &str = "You are cleared to land.";
 pub const COMMENCE_FINAL_APPROACH: &str = "Commence final approach.";
 /// `STR#` 2002 #101.
 pub const WELCOME_TO: &str = "Welcome to";
+/// `STR#` 2002 #103: the greeting's fee line at a station (@0x64dca).
+pub const FEE_IS_DOCKING: &str = "[Docking fee is";
+/// `STR#` 2002 #104: the greeting's fee line elsewhere (@0x64dda).
+pub const FEE_IS_LANDING: &str = "[Landing fee is";
+/// `STR#` 2002 #105: the greeting's fee line's end (@0x64e45-0x64e58).
+pub const FEE_END: &str = ".]";
 
 /// The picks that word the dock request's line ([`request_line`]): the
 /// rolls the original makes for it (`_HandlePlayerDockRequest`
@@ -985,14 +993,27 @@ pub fn request_line(kind: DockKind, stellar: &str, ship: &str, picks: RequestPic
 /// its greeting ends there (@0x64a59, @0x64e4d). Otherwise `picks.welcome` 0 adds
 /// [`COMMENCE_FINAL_APPROACH`], and any other [`WELCOME_TO`], " ", the
 /// stellar's name and ". ". For example "Kestrel, you're cleared to land.
-/// Welcome to Earth. ". The fee line that may follow is
-/// rdm:task/landing-fee's.
+/// Welcome to Earth. ".
+///
+/// Then, when `fee` is due there (`Fee` above 0 and not dominated,
+/// @0x64d87-0x64d96), the fee line (@0x64da6-0x64e58): "  ",
+/// [`FEE_IS_DOCKING`] at a station or [`FEE_IS_LANDING`] elsewhere, " ",
+/// the fee with its commas (`_StrcatCommaNumber` @0x64e21, its millions
+/// by `millions`,
+/// [`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)), " ",
+/// [`CREDITS`] and [`FEE_END`]: "… Welcome to Earth.   [Landing fee is
+/// 1,000 credits.]". A hypergate's greeting has none: it ends before the
+/// fee block (@0x64a59 → 0x64e5d), so `STR#` 2002 #102 "[Hypergate fee
+/// is" is never shown and is left out. A wormhole is no hypergate here,
+/// and gets the station's or the planet's.
 #[must_use]
 pub fn approach_greeting(
     kind: DockKind,
     stellar: &str,
     ship: &str,
     picks: GreetingPicks,
+    fee: Option<i64>,
+    millions: RuleSource,
 ) -> String {
     let (lead, cleared, you_are, space) = match kind {
         DockKind::Hypergate => (
@@ -1020,11 +1041,24 @@ pub fn approach_greeting(
         _ => format!("{you_are}{space}"),
     };
     if kind == DockKind::Hypergate {
-        opening
-    } else if picks.welcome == 0 {
+        return opening;
+    }
+    let greeting = if picks.welcome == 0 {
         format!("{opening}{COMMENCE_FINAL_APPROACH}")
     } else {
         format!("{opening}{WELCOME_TO} {stellar}. ")
+    };
+    match fee {
+        Some(fee) => {
+            let lead = if kind == DockKind::Station {
+                FEE_IS_DOCKING
+            } else {
+                FEE_IS_LANDING
+            };
+            let fee = comma_number(fee, millions);
+            format!("{greeting}  {lead} {fee} {CREDITS}{FEE_END}")
+        }
+        None => greeting,
     }
 }
 
@@ -1416,10 +1450,83 @@ mod tests {
         }
     }
 
+    /// The greeting at Earth, of `kind`, for the Kestrel, picking
+    /// opening 1 and `welcome`, with `fee` due, its millions by
+    /// `millions`.
+    fn charged(kind: DockKind, welcome: u16, fee: Option<i64>, millions: RuleSource) -> String {
+        approach_greeting(
+            kind,
+            "Earth",
+            "Kestrel",
+            GreetingPicks {
+                opening: 1,
+                welcome,
+            },
+            fee,
+            millions,
+        )
+    }
+
+    #[test]
+    fn a_greeting_with_a_fee_due_ends_with_the_fee_line() {
+        // "  " (@0x64da6), #103/#104, " ", `_StrcatCommaNumber(Fee)`
+        // (@0x64e21), " ", `_creditsCString`, #105 (@0x64e45-0x64e58).
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            charged(DockKind::Planet, 1, Some(1000), engine),
+            "Kestrel, you're cleared to land. Welcome to Earth.   [Landing fee is 1,000 credits.]"
+        );
+        assert_eq!(
+            charged(DockKind::Planet, 0, Some(1000), engine),
+            "Kestrel, you're cleared to land. Commence final approach.  [Landing fee is 1,000 credits.]"
+        );
+        assert_eq!(
+            charged(DockKind::Station, 0, Some(1000), engine),
+            "Kestrel, you're cleared to dock. Commence final approach.  [Docking fee is 1,000 credits.]"
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(1), engine).ends_with(" 1 credits.]"),
+            "always plural"
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(2_500_000), engine).ends_with(" 2.50M credits.]")
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(2_500_000), RuleSource::Bible)
+                .ends_with(" 2,500,000 credits.]")
+        );
+        assert_eq!(
+            [FEE_IS_DOCKING, FEE_IS_LANDING, FEE_END],
+            ["[Docking fee is", "[Landing fee is", ".]"]
+        );
+    }
+
+    #[test]
+    fn a_hypergates_greeting_and_one_with_no_fee_have_no_fee_line() {
+        // A hypergate's greeting ends before the fee block (@0x64a59).
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            charged(DockKind::Hypergate, 0, Some(1000), engine),
+            charged(DockKind::Hypergate, 0, None, engine)
+        );
+        assert!(!charged(DockKind::Hypergate, 0, Some(1000), engine).contains('['));
+        assert_eq!(
+            charged(DockKind::Planet, 1, None, engine),
+            "Kestrel, you're cleared to land. Welcome to Earth. "
+        );
+    }
+
     #[test]
     fn every_pick_of_the_greeting_reads_as_the_original() {
         let greeting = |kind, opening, welcome| {
-            approach_greeting(kind, "Earth", "Kestrel", GreetingPicks { opening, welcome })
+            approach_greeting(
+                kind,
+                "Earth",
+                "Kestrel",
+                GreetingPicks { opening, welcome },
+                None,
+                RuleSource::Engine,
+            )
         };
         for (kind, opening, welcome, text) in [
             (
