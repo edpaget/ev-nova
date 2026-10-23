@@ -31,7 +31,7 @@
 use std::num::NonZeroU16;
 
 use nova_sim::gate::HYPERGATE;
-use nova_sim::gate_sprite::ONLY_WHEN_DESTROYED;
+use nova_sim::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED};
 
 use super::catalog::AnimationData;
 
@@ -149,9 +149,17 @@ impl Frames {
             return Some(false);
         }
         self.timer = 0;
+        let alternate = data.flags2 & ALTERNATE != 0;
+        if alternate && self.current != 0 {
+            // Back to frame 0, the next frame kept (@0x2eca5-0x2ecad).
+            self.current = 0;
+            return Some(true);
+        }
         self.current = self.next;
         // Below `counted`, which is a u16.
-        self.next = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
+        let after = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
+        // Alternating, the wrap skips frame 0 (@0x2ed2e-0x2ed63).
+        self.next = if alternate && after == 0 { 1 } else { after };
         Some(true)
     }
 
@@ -229,6 +237,39 @@ mod tests {
     fn a_delay_of_1_steps_every_tick() {
         assert_eq!(plain(data(1, 0), 3, 7), [0, 1, 2, 0, 1, 2, 0]);
         assert_eq!(plain(data(1, 2), 2, 7), [0, 0, 1, 0, 0, 1, 0]);
+    }
+
+    /// `data`, alternating with frame 0 (`Flags2` 0x0001).
+    fn alt(delay: i16, frame0_bias: i16) -> AnimationData {
+        AnimationData {
+            flags2: ALTERNATE,
+            ..data(delay, frame0_bias)
+        }
+    }
+
+    #[test]
+    fn alternate_shows_frame_0_between_every_other_frame() {
+        assert_eq!(plain(alt(1, 0), 4, 9), [0, 1, 0, 2, 0, 3, 0, 1, 0]);
+        assert_eq!(plain(alt(1, 0), 2, 5), [0, 1, 0, 1, 0]);
+        assert_eq!(
+            plain(alt(1, 2), 4, 12),
+            [0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 1]
+        );
+        assert_eq!(plain(alt(2, 0), 3, 9), [0, 0, 1, 1, 0, 0, 2, 2, 0]);
+    }
+
+    #[test]
+    fn alternate_leaves_next_alone_on_its_way_to_0() {
+        let mut frames = Frames::new();
+        let mut states = Vec::new();
+        for _ in 0..7 {
+            frames.step(alt(1, 0), false, count(4), count(4));
+            states.push((frames.current, frames.next));
+        }
+        assert_eq!(
+            states,
+            [(1, 2), (0, 2), (2, 3), (0, 3), (3, 1), (0, 1), (1, 2)]
+        );
     }
 
     /// Whether a stellar with `data`, `destroyed` or not, over `frames`
