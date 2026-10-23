@@ -986,6 +986,28 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_type_clone_keeps_the_graphic_type_0_frame_an_uncounted_dead_type_kept() {
+        let sites = [LandingSite {
+            dead_counts_frames: false,
+            ..unreadable(128, 4, Some(9))
+        }];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        assert_eq!(rebuilt.showing(me), Some(TypeZero));
+        // `Y`, then a frame: the `DeadType` clone keeps graphic type 0's.
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        assert_eq!(held(&rebuilt, &[128]), [Dead]);
+        assert_eq!(rebuilt.showing(me), Some(TypeZero));
+        assert!(rebuilt.frozen(me));
+        // `U`, then a frame: the `Type` clone fails and the kept frame stays.
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(held(&rebuilt, &[128]), [Dead]);
+        assert_eq!(rebuilt.showing(me), Some(TypeZero));
+        assert!(rebuilt.frozen(me));
+    }
+
+    #[test]
     fn a_dead_type_that_counts_no_frames_leaves_a_destroyed_stellars_slot_frameless_at_a_rebuild_point()
      {
         let sites = [counting(128, true, false)];

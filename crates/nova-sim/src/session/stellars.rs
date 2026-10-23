@@ -3108,6 +3108,31 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_stellar_with_no_type_sheet_keeps_graphic_type_0s_frame_through_an_uncounted_dead_type()
+     {
+        let mut catalog = no_type_sheet(Some((300, 300)), Some((200, 200)));
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), TypeZero, "flown: a rebuild point");
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            TypeZero,
+            "its `DeadType` clone kept it"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+        run(&mut session, "U128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            TypeZero,
+            "its `Type` clone fails, and the kept frame stays"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+    }
+
+    #[test]
     fn graphic_type_0_that_counts_no_frames_leaves_a_slot_it_fills_with_no_frame() {
         let mut catalog = clicking(None, Some((100, 100)));
         catalog.fallback_counts = false;
