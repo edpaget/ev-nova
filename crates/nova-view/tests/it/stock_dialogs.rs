@@ -441,6 +441,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         assert!(prefs.smoke_trails().enabled(), "{}", path.display());
         assert_eq!(prefs.weapon_effects().label(), "Weapon Effects");
         assert!(prefs.weapon_effects().enabled(), "{}", path.display());
+        assert_eq!(prefs.parallax_starfield().label(), "Parallax Starfield");
+        assert!(prefs.parallax_starfield().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -456,6 +458,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             prefs.quicktime_movies(),
             prefs.smoke_trails(),
             prefs.weapon_effects(),
+            prefs.parallax_starfield(),
         ]) {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
@@ -466,8 +469,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            5,
-            "{name}: QuickTime Movies, Smoke Trails and Weapon Effects work, Run in a \
+            4,
+            "{name}: QuickTime Movies, Smoke Trails, Weapon Effects and Parallax Starfield \
+             work, Run in a \
              window is the display picker and Share Processor Time the Scaling list"
         );
         assert!(
@@ -496,6 +500,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
@@ -557,6 +562,7 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -612,6 +618,7 @@ fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([

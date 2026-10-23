@@ -153,7 +153,7 @@ fn scattered(session: &Session, looks: &Looks) -> (Starfield, Counting) {
     let mut chance = Counting::default();
     let mut field = Starfield::new();
     let at = super::super::stars::surroundings(session, VIEW_SIZE, Anchor::PlayAreaCentre, looks);
-    super::super::stars::reset(&mut field, &at, &mut chance);
+    super::super::stars::reset(&mut field, &at, true, &mut chance);
     (field, chance)
 }
 
@@ -321,4 +321,62 @@ fn entering_play_and_beginning_a_game_scatter_the_stars_afresh() {
             assert_eq!((star.x, star.y), (ship.x, ship.y), "{enter}: on the ship");
         }
     }
+}
+
+/// Whether every star's factor is a `Rand(35)` roll × 0.01, some above 0.
+fn rolled_factors(view: &View) -> bool {
+    let stars = stars_of(view);
+    stars.iter().all(|star| {
+        let hundredths = (star.factor * 100.0).round();
+        (0.0..35.0).contains(&hundredths) && near(star.factor, hundredths * 0.01)
+    }) && stars.iter().any(|star| star.factor > 0.0)
+}
+
+fn all_fixed(view: &View) -> bool {
+    stars_of(view).iter().all(|star| star.factor == 0.0)
+}
+
+#[test]
+fn the_parallax_starfield_is_on_by_default_and_rolls_each_stars_factor() {
+    let mut view = counted(starry());
+    assert!(view.parallax_starfield(), "on by default");
+    assert!(rolled_factors(&view));
+    jump_to_alpha(&mut view);
+    assert!(rolled_factors(&view));
+}
+
+#[test]
+fn with_the_parallax_starfield_off_every_factor_is_0() {
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
+    let mut view = FlightView::new(starry())
+        .with_effects_chance(SharedChance::new(chance))
+        .with_parallax_starfield(false);
+    assert!(!view.parallax_starfield());
+    view.tick(Duration::ZERO);
+    assert!(stars_of(&view).iter().all(|star| star.shown));
+    assert!(all_fixed(&view));
+    jump_to_alpha(&mut view);
+    assert!(all_fixed(&view));
+}
+
+#[test]
+fn a_parallax_starfield_change_waits_for_the_next_scattering() {
+    let mut view = counted(starry());
+    let before = stars_of(&view);
+    view.set_parallax_starfield(false);
+    assert!(!view.parallax_starfield());
+    assert_eq!(stars_of(&view), before, "the stars scattered keep theirs");
+    jump_to_alpha(&mut view);
+    assert!(all_fixed(&view));
+    view.set_parallax_starfield(true);
+    assert!(all_fixed(&view), "until the next scattering");
+    let mut back_on = counted(starry());
+    back_on.set_parallax_starfield(false);
+    back_on.set_parallax_starfield(true);
+    jump_to_alpha(&mut back_on);
+    assert!(back_on.parallax_starfield());
+    assert!(
+        rolled_factors(&back_on),
+        "back on, the next scattering rolls"
+    );
 }

@@ -353,6 +353,7 @@ impl AppScreen {
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_smoke_trails(self.prefs.smoke_trails)
+            .with_parallax_starfield(self.prefs.parallax_starfield)
             .with_weapon_effects(self.flight_weapon_effects())
             .with_sound_prefs(self.prefs.sound)
             .with_double_time(self.double_time)

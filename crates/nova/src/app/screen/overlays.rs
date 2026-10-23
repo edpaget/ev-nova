@@ -212,6 +212,7 @@ impl AppScreen {
             for flight in self.flights_mut() {
                 flight.set_hyperspace_effects(prefs.hyperspace_effects);
                 flight.set_smoke_trails(prefs.smoke_trails);
+                flight.set_parallax_starfield(prefs.parallax_starfield);
                 flight.set_weapon_effects(weapon_effects);
                 flight.set_sound_prefs(prefs.sound);
             }

@@ -985,7 +985,12 @@ impl<
         };
         if stars::original(session, &self.looks) {
             let at = stars::surroundings(session, self.view, self.anchor(), &self.looks);
-            stars::reset(&mut self.stars, &at, &mut self.effects_chance);
+            stars::reset(
+                &mut self.stars,
+                &at,
+                self.parallax_starfield,
+                &mut self.effects_chance,
+            );
         }
     }
 

@@ -1151,6 +1151,9 @@ pub struct FlightView<C> {
     /// Whether shots leave their particle trails and smoke, as the Smoke
     /// Trails preference says.
     smoke_trails: bool,
+    /// Whether each scattering gives the stars their own parallax
+    /// factors, as the Parallax Starfield preference says.
+    parallax_starfield: bool,
     /// Whether ships show their weapon glow, as the Weapon Effects
     /// preference says.
     weapon_effects: bool,

@@ -552,6 +552,7 @@ mod tests {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             frame_upscaler: crate::settings::ScalingSetting::default(),
             nova_files: None,
         };

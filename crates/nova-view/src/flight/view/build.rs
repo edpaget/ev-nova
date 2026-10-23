@@ -216,6 +216,7 @@ impl<
             death_fade: None,
             hyperspace_effects: true,
             smoke_trails: true,
+            parallax_starfield: true,
             weapon_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
@@ -798,6 +799,30 @@ impl<
     #[must_use]
     pub fn hyperspace_effects(&self) -> bool {
         self.hyperspace_effects
+    }
+
+    /// The flight with each scattering of the stars giving them their own
+    /// parallax factors or not, as the Parallax Starfield preference is on
+    /// (the default) or off.
+    #[must_use]
+    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
+        Self {
+            parallax_starfield,
+            ..self
+        }
+    }
+
+    /// Sets whether the stars get their own parallax factors. It takes
+    /// effect at the next scattering; the stars already scattered keep
+    /// their factors.
+    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
+        self.parallax_starfield = parallax_starfield;
+    }
+
+    /// Whether the stars' scatterings give them their own parallax factors.
+    #[must_use]
+    pub fn parallax_starfield(&self) -> bool {
+        self.parallax_starfield
     }
 
     /// The flight with shots leaving their particle trails and smoke or

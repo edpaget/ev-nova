@@ -26,9 +26,10 @@
 //! - **Drawing.** First in the world, under the message line and the
 //!   stellars; without the stars' sheet, none.
 //!
-//! The Parallax Starfield preference reads as on, the original's default
-//! (`_LoadPrefs` @0xcecee-0xced11): the Preferences dialog shows it greyed
-//! out. Honouring it is rdm:phase/play-feel/phase-12-parallax-starfield-preference.
+//! The Parallax Starfield preference (`_settings` +0xb, on by default:
+//! `_LoadPrefs` @0xcecda-0xced11) decides each scattering's factors, as
+//! `_RandomizeStars` reads it (@0x0b2be-0x0b2fa): the view hands its own
+//! flag to each scattering, so a change waits for the next one.
 //!
 //! [`SessionEvent::StarfieldReset`]: nova_sim::SessionEvent::StarfieldReset
 
@@ -39,10 +40,6 @@ use crate::flight::catalog::Looks;
 use crate::flight::stars::{StarLook, Starfield, Surroundings};
 use crate::system::camera::{Anchor, Camera, STATUS_BAR_WIDTH};
 use crate::system::starfield;
-
-/// The Parallax Starfield preference as the engine reads it: on, the
-/// original's default (see the module docs).
-pub(super) const PARALLAX_STARFIELD: bool = true;
 
 /// Whether `session` draws the original's starfield, by its rules'
 /// reading of [`RuleKey::FlightStarfield`], with the stars' sheet read
@@ -77,9 +74,15 @@ pub(super) fn surroundings(
 }
 
 /// Scatters `stars` about the ship and places them once, for the frame to
-/// draw (see the module docs), drawing on `chance`.
-pub(super) fn reset(stars: &mut Starfield, at: &Surroundings, chance: &mut dyn Chance) {
-    stars.randomize(at, PARALLAX_STARFIELD, chance);
+/// draw (see the module docs), drawing on `chance`, each star given its
+/// own parallax factor when `parallax` is on and 0 when it is off.
+pub(super) fn reset(
+    stars: &mut Starfield,
+    at: &Surroundings,
+    parallax: bool,
+    chance: &mut dyn Chance,
+) {
+    stars.randomize(at, parallax, chance);
     stars.handle(at, chance);
     stars.snapshot();
 }
