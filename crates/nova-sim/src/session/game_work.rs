@@ -450,6 +450,7 @@ impl Session {
             threatens_player: false,
             plundering: false,
             emerging: false,
+            jumping_in: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,
             jamming: player_terms.jamming,

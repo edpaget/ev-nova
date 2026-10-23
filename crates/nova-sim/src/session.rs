@@ -734,6 +734,7 @@ impl FightTerms {
                 .docking
                 .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
+        let jumping_in = npc.jumping_in();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
         // A waiting ship's fire block is skipped (`_HandleShip`
@@ -781,6 +782,7 @@ impl FightTerms {
             plundering,
             docked,
             emerging,
+            jumping_in,
             cloak_scanner,
             has_cloak: cloak_device,
             jamming: self.jamming,

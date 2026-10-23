@@ -416,6 +416,7 @@ pub mod sides;
 mod source_slot;
 pub mod spin_timer;
 pub mod stellar;
+pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
@@ -941,6 +942,11 @@ pub struct Fighter<'a> {
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
+    /// Whether it is jumping in, goal 8 (`_AIIsShipJumpingIn` @0x82f12):
+    /// gliding in, or bursting out of its gate from its first moving tick.
+    /// A stellar's gun holds fire at it (`_IsThreatToStellar`
+    /// @0x9f16-0x9f2a, [`stellar_guns`]). Never the player.
+    pub jumping_in: bool,
     /// Whether it has a cloak scanner on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)): its
     /// point defence sees a cloaked ship within 200 pixels on each axis
@@ -3940,6 +3946,7 @@ mod tests {
         plundering: bool,
         docked: bool,
         emerging: bool,
+        jumping_in: bool,
         cloak_scanner: bool,
         has_cloak: bool,
         jamming: Jamming,
@@ -4006,6 +4013,7 @@ mod tests {
                 plundering: false,
                 docked: false,
                 emerging: false,
+                jumping_in: false,
                 cloak_scanner: false,
                 has_cloak: false,
                 jamming: Jamming::NONE,
@@ -4070,6 +4078,7 @@ mod tests {
                 threatens_player: self.threatens_player,
                 plundering: self.plundering,
                 emerging: self.emerging,
+                jumping_in: self.jumping_in,
                 cloak_scanner: self.cloak_scanner,
                 has_cloak: self.has_cloak,
                 jamming: self.jamming,
