@@ -27,7 +27,7 @@
 
 use std::rc::Rc;
 
-use super::grid_arrows::{ArrowMoves, arrow_move};
+use super::grid_arrows::{ArrowMoves, Placed, arrow_move};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::font::Font;
@@ -382,21 +382,33 @@ impl CellGrid {
 
     /// The grid's last first row, for `count` cells: never scrolled past
     /// its end.
-    pub(super) fn last_top_row(count: usize) -> usize {
+    fn last_top_row(count: usize) -> usize {
         count.div_ceil(COLUMNS).saturating_sub(GRID_ROWS)
     }
 
     /// Selects cell `index` of `count`, or the last when there is no such
     /// cell, and scrolls the grid to show it.
     pub fn select(&mut self, index: usize, count: usize) {
+        let placed = Self::place(index, self.top_row, count);
         self.highlighted = true;
-        self.selected = index.min(count.saturating_sub(1));
-        let row = self.selected / COLUMNS;
-        self.top_row = self
-            .top_row
+        self.selected = placed.selected;
+        self.top_row = placed.top_row;
+    }
+
+    /// Where selecting cell `index` of `count`, or the last when there is
+    /// no such cell, leaves a grid whose first row shown is `top_row`: that
+    /// cell, with the grid scrolled the least that shows it and never past
+    /// its end. The one placement [`CellGrid::select`] and the arrows'
+    /// moves ([`arrow_move`]) share.
+    #[must_use]
+    pub(super) fn place(index: usize, top_row: usize, count: usize) -> Placed {
+        let selected = index.min(count.saturating_sub(1));
+        let row = selected / COLUMNS;
+        let top_row = top_row
             .min(Self::last_top_row(count))
             .min(row)
             .max((row + 1).saturating_sub(GRID_ROWS));
+        Placed { selected, top_row }
     }
 
     /// Moves the selection for an arrow `key` going down, among `count`

@@ -102,7 +102,7 @@ pub fn arrow_move(
             Arrow::Right | Arrow::Down => first,
             Arrow::Left | Arrow::Up => first + SHOWN - 1,
         };
-        return Some(shown(index, top_row, count));
+        return Some(CellGrid::place(index, top_row, count));
     }
     Some(match moves {
         ArrowMoves::Filter => filter(arrow, selected, top_row, count),
@@ -113,22 +113,9 @@ pub fn arrow_move(
                 Arrow::Up => selected.saturating_sub(COLUMNS),
                 Arrow::Down => selected + COLUMNS,
             };
-            shown(index, top_row, count)
+            CellGrid::place(index, top_row, count)
         }
     })
-}
-
-/// Cell `index` of `count`, or the last when there is no such cell, with
-/// the grid from `top_row` scrolled the least that shows it, as
-/// [`CellGrid::select`] places it.
-fn shown(index: usize, top_row: usize, count: usize) -> Placed {
-    let selected = index.min(count.saturating_sub(1));
-    let row = selected / COLUMNS;
-    let top_row = top_row
-        .min(CellGrid::last_top_row(count))
-        .min(row)
-        .max((row + 1).saturating_sub(GRID_ROWS));
-    Placed { selected, top_row }
 }
 
 /// The filters' move of a highlighted cell (`_OutfitFilter`
@@ -157,7 +144,7 @@ fn shown(index: usize, top_row: usize, count: usize) -> Placed {
 /// reading), so the grid is first scrolled the least that shows it, as
 /// [`CellGrid::select`] does; the original cannot reach that state.
 fn filter(arrow: Arrow, selected: usize, top_row: usize, count: usize) -> Placed {
-    let start = shown(selected, top_row, count);
+    let start = CellGrid::place(selected, top_row, count);
     let mut scroll = start.top_row * COLUMNS;
     let mut cell = start.selected - scroll;
     let can_scroll_down = scroll + SHOWN < count;
@@ -228,7 +215,10 @@ mod tests {
     /// Every highlighted index shown at every first row the grid can take
     /// with `count` cells.
     fn on_screen(count: usize) -> Vec<(usize, usize)> {
-        (0..=CellGrid::last_top_row(count))
+        // The last cell placed from the farthest scroll sits on the
+        // grid's last first row.
+        let last_top_row = CellGrid::place(count - 1, usize::MAX, count).top_row;
+        (0..=last_top_row)
             .flat_map(|top| {
                 (top * COLUMNS..count.min(top * COLUMNS + SHOWN)).map(move |index| (index, top))
             })
