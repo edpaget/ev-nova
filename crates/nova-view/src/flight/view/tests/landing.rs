@@ -355,9 +355,11 @@ fn starting_a_jump_clears_only_too_close() {
 #[test]
 fn too_far_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
     for (flags2, text) in [(0x1000, TOO_FAR_HYPERGATE), (0x2000, TOO_FAR_WORMHOLE)] {
+        // Within 500 px, which L's pick needs of a gate
+        // (`_FindNearestStellar` @0x2838-0x2853), and out of its reach.
         let mut view = flight_among(vec![LandingSite {
             flags2,
-            ..site(128, (0.0, -600.0), StellarFlags::CAN_LAND)
+            ..site(128, (0.0, -400.0), StellarFlags::CAN_LAND)
         }]);
         tap(&mut view, LAND);
         tap(&mut view, LAND);
