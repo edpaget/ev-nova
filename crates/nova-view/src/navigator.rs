@@ -9,6 +9,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::flight::SharedChance;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::{SystemCatalog, SystemView};
 use crate::text::TextMetrics;
@@ -22,6 +23,9 @@ pub struct Navigator<C> {
     catalog: C,
     map: GalaxyMap,
     system: Option<SystemView>,
+    /// What each system view opened draws its stellars' random frames on
+    /// ([`SystemView::with_chance`]).
+    chance: SharedChance,
 }
 
 impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
@@ -32,6 +36,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
             catalog,
             map,
             system: None,
+            chance: SharedChance::default(),
         }
     }
 
@@ -55,6 +60,13 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
 }
 
 impl<C> Navigator<C> {
+    /// The navigator with each system view it opens drawing its stellars'
+    /// random frames on `chance` ([`SystemView::with_chance`]).
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
+    }
+
     /// The navigator with the map's text measured by `metrics`, which its
     /// Find needs ([`GalaxyMap::with_metrics`]).
     #[must_use]
@@ -130,7 +142,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
         let action = self.map.input(input);
         if let Some(id) = self.map.take_entry() {
             self.map.cancel_pointer();
-            self.system = Some(SystemView::new(&self.catalog, id));
+            self.system = Some(SystemView::new(&self.catalog, id).with_chance(self.chance.clone()));
         }
         action
     }
@@ -170,7 +182,8 @@ mod tests {
     use crate::{MouseButton, Point};
 
     /// Alpha (128) at (0, 0) and Beta (129) at (600, 0) on the map; inside,
-    /// Alpha holds Alpha Prime at (0, 0) and Beta nothing.
+    /// Alpha holds Alpha Prime at (0, 0) and Beta Beta Flicker, of 4
+    /// frames, each next one random (`Flags2` 0x0002) every tick.
     struct FakeCatalog;
 
     fn entry(id: i16, name: &str, x: i16) -> SystemEntry {
@@ -213,7 +226,25 @@ mod tests {
                     radar_square: false,
                 }]
             } else {
-                Vec::new()
+                vec![StellarContents {
+                    id: StellarId(130),
+                    name: "Beta Flicker".to_owned(),
+                    x: 0,
+                    y: 0,
+                    sprite: Ok(StellarSheet {
+                        image: crate::SheetImage::Rled(1001),
+                        frames: NonZeroU16::new(4).expect("non-zero"),
+                        frame_width: 8,
+                        frame_height: 8,
+                    }),
+                    dead_sprite: None,
+                    animation: AnimationData {
+                        delay: 1,
+                        frame0_bias: 0,
+                        flags2: nova_sim::gate_sprite::RANDOM,
+                    },
+                    radar_square: false,
+                }]
             };
             SystemContents {
                 id,
@@ -474,6 +505,46 @@ mod tests {
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(0.0, -240.0));
+    }
+
+    /// Draws 0 every time, and records each `below(n)`.
+    #[derive(Default)]
+    struct Zeros(Vec<u32>);
+
+    impl nova_sim::Chance for Zeros {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.0.push(n);
+            0
+        }
+    }
+
+    /// The frames Beta Flicker shows over 3 ticks in a navigator drawing
+    /// on `chance`.
+    fn flicker(navigator: Navigator<FakeCatalog>) -> Vec<Option<u16>> {
+        let mut navigator = navigator;
+        select(&mut navigator, 129);
+        navigator.input(&press(Key::Enter));
+        (0..3)
+            .map(|_| {
+                navigator.tick(Duration::from_secs(1) / 30);
+                navigator.system().expect("open").frame(0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_opened_systems_random_stellar_steps_by_the_navigators_chance() {
+        let zeros = std::rc::Rc::new(std::cell::RefCell::new(Zeros::default()));
+        let shown = flicker(navigator().with_chance(SharedChance::new(zeros.clone())));
+        // From 1, a draw of 0 is frame 0; from 0, frame 1.
+        assert_eq!(shown, [Some(1), Some(0), Some(1)]);
+        assert_eq!(zeros.borrow().0, [3, 3, 3]);
+        // The default takes the last frame allowed.
+        assert_eq!(flicker(navigator()), [Some(1), Some(3), Some(2)]);
     }
 
     #[test]

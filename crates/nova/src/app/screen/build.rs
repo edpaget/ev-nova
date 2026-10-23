@@ -124,14 +124,17 @@ impl AppScreen {
     }
 
     /// The router with each flight's explosions and debris rolled on
-    /// `chance`, apart from the simulation's, and the main menu's logo
-    /// picked on it, whether the menu was given before or after.
+    /// `chance`, apart from the simulation's, the main menu's logo picked
+    /// on it, whether the menu was given before or after, and the galaxy
+    /// viewer's stellars' random frames drawn on it.
     #[must_use]
     pub fn with_effects_chance(mut self, effects_chance: SharedChance) -> Self {
         if let Some(menu) = &mut self.menu {
             menu.screen.set_chance(effects_chance.clone());
         }
+        let galaxy = self.galaxy.with_chance(effects_chance.clone());
         Self {
+            galaxy,
             effects_chance,
             ..self
         }

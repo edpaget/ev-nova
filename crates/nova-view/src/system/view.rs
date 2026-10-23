@@ -19,6 +19,7 @@ use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
 use super::scene::{self, SystemScene};
 use super::starfield;
+use crate::flight::SharedChance;
 use crate::time::ticks;
 use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
@@ -46,11 +47,15 @@ pub struct SystemView {
     elapsed: Duration,
     /// The movement keys held down.
     held: HashSet<Key>,
+    /// What a stellar's random next frame (`Flags2` 0x0002) is drawn on.
+    chance: SharedChance,
 }
 
 impl SystemView {
     /// The view of system `id`, read from `catalog`, with the camera on the
-    /// system's centre.
+    /// system's centre. Its random frames draw on the default chance,
+    /// which takes the last frame allowed, until
+    /// [`SystemView::with_chance`] gives it one.
     pub fn new(catalog: &impl SystemCatalog, id: SystemId) -> Self {
         let scene = SystemScene::load(catalog, id);
         let camera = Camera::new(scene.bounds());
@@ -59,7 +64,14 @@ impl SystemView {
             camera,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
+            chance: SharedChance::default(),
         }
+    }
+
+    /// The view with its stellars' random next frames drawn on `chance`.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
     }
 
     /// The system, as laid out.
@@ -162,7 +174,8 @@ impl Screen for SystemView {
     fn tick(&mut self, dt: Duration) {
         let before = ticks(self.elapsed);
         self.elapsed += dt;
-        self.scene.step(ticks(self.elapsed) - before);
+        self.scene
+            .step(ticks(self.elapsed) - before, &mut self.chance);
         let seconds = dt.as_secs_f32();
         let (vx, vy) = (self.velocity(LEFT, RIGHT), self.velocity(UP, DOWN));
         self.camera.move_by(vx * seconds, vy * seconds);

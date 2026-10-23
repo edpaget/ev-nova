@@ -949,12 +949,17 @@ impl<
 
     /// Moves the clock on by `dt` and steps the stellars' animations by
     /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
-    /// runs every play frame, the jump's included.
+    /// runs every play frame, the jump's included. A random next frame
+    /// (`Flags2` 0x0002) is drawn on the effects' chance, never the
+    /// session's: the frame a stellar shows is drawn state only.
     pub(super) fn step_stellars(&mut self, dt: Duration) {
         let before = crate::time::ticks(self.elapsed);
         self.elapsed += dt;
         if let Some(scene) = &mut self.scene {
-            scene.step(crate::time::ticks(self.elapsed) - before);
+            scene.step(
+                crate::time::ticks(self.elapsed) - before,
+                &mut self.effects_chance,
+            );
         }
     }
 

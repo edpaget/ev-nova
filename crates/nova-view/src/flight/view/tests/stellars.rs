@@ -1103,3 +1103,48 @@ fn a_gate_frozen_by_u_keeps_the_frame_it_showed_before_its_session_steps_it() {
         assert_eq!(gate_drawn(&view), shown, "the frame shown before, kept");
     }
 }
+
+// Random next frames (stellar-fidelity phase 10).
+
+/// The Moon's frames over 3 ticks of a flight in Sol whose Moon (129), of
+/// 4 frames a tick, has `flags2`, its effects drawn on `draws` and its
+/// session on a script of its own: those frames, and what each was asked.
+fn moon_frames_drawn(flags2: u16, draws: &[u32]) -> (Vec<u16>, Vec<u32>, Vec<u32>) {
+    let (effects, effects_chance) = scripted(draws);
+    let (session, chance) = scripted(&[]);
+    let mut view = FlightView::new(FakeCatalog {
+        moon: Some(MoonSheets {
+            width: 50,
+            dead_width: None,
+            zero_width: 90,
+            frames: 4,
+            dead_frames: 1,
+            flags2,
+        }),
+        ..catalog()
+    })
+    .with_effects_chance(effects_chance)
+    .with_chance(chance);
+    let frames = (0..3)
+        .map(|_| {
+            view.tick(TICK);
+            moon_frame(&view)
+        })
+        .collect();
+    let effects = effects.borrow().asked.clone();
+    let session = session.borrow().asked.clone();
+    (frames, effects, session)
+}
+
+#[test]
+fn a_random_stellars_frames_roll_on_the_effects_chance() {
+    let random = nova_sim::gate_sprite::RANDOM;
+    let (frames, effects, session) = moon_frames_drawn(random, &[0, 0, 0]);
+    // From 1, a draw of 0 is frame 0; from 0, frame 1.
+    assert_eq!(frames, [1, 0, 1]);
+    assert_eq!(effects, [3, 3, 3]);
+    let (plain, unasked, plain_session) = moon_frames_drawn(0, &[]);
+    assert_eq!(plain, [1, 2, 3]);
+    assert!(unasked.is_empty(), "{unasked:?}");
+    assert_eq!(session, plain_session, "the session's script untouched");
+}

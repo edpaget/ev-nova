@@ -9,7 +9,7 @@ use std::num::NonZeroU16;
 
 use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
-use nova_sim::DrawnSheet;
+use nova_sim::{Chance, DrawnSheet};
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
@@ -157,8 +157,8 @@ impl SceneStellar {
 
     /// One tick of its animation, over the counted sheet's frames (one
     /// when it counts none), shown on the sheet drawn; a frozen frame
-    /// stays shown.
-    fn step(&mut self) {
+    /// stays shown. A random next frame is drawn on `chance`.
+    fn step(&mut self, chance: &mut dyn Chance) {
         let counted = if self.counts_none {
             NonZeroU16::MIN
         } else {
@@ -166,11 +166,11 @@ impl SceneStellar {
         };
         if self.frozen {
             self.frames
-                .step_frozen(self.animation_data, self.destroyed, counted);
+                .step_frozen(self.animation_data, self.destroyed, counted, chance);
         } else {
             let drawn = self.frame_count(self.drawn);
             self.frames
-                .step(self.animation_data, self.destroyed, counted, drawn);
+                .step(self.animation_data, self.destroyed, counted, drawn, chance);
         }
     }
 
@@ -347,11 +347,14 @@ impl SystemScene {
         }
     }
 
-    /// Steps every stellar's animation `ticks` ticks of 1/30 s.
-    pub fn step(&mut self, ticks: u128) {
+    /// Steps every stellar's animation `ticks` ticks of 1/30 s, each
+    /// random next frame (`Flags2` 0x0002) drawn on `chance`: a visual-only
+    /// source, never the session's, as nothing the session decides reads
+    /// the frame a stellar shows.
+    pub fn step(&mut self, ticks: u128, chance: &mut dyn Chance) {
         for _ in 0..ticks {
             for stellar in &mut self.stellars {
-                stellar.step();
+                stellar.step(chance);
             }
         }
     }
@@ -447,6 +450,8 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+
+    use nova_sim::NeverFires;
 
     use super::*;
     use crate::ImageKey;
@@ -603,9 +608,67 @@ mod tests {
         );
         assert_eq!(scene.problems(), ["spöb 140 Type: no spïn 1002"]);
         let mut scene = scene;
-        scene.step(2);
+        scene.step(2, &mut NeverFires);
         let shown: Vec<u16> = scene.stellars().iter().map(|s| s.frames.shown()).collect();
         assert_eq!(shown, [1, 0, 0], "129 animates; one frame or no sheet stay");
+    }
+
+    /// Scripted draws, each `below(n)` recorded; panics once they run out.
+    #[derive(Default)]
+    struct Draws {
+        draws: Vec<u32>,
+        asked: Vec<u32>,
+    }
+
+    impl Chance for Draws {
+        fn fires(&mut self, percent: u8) -> bool {
+            panic!("asked whether {percent}% fires");
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.asked.push(n);
+            assert!(!self.draws.is_empty(), "an unscripted below({n})");
+            self.draws.remove(0)
+        }
+    }
+
+    #[test]
+    fn a_random_stellar_steps_by_the_scenes_draws() {
+        let random = StellarContents {
+            animation: AnimationData {
+                delay: 1,
+                frame0_bias: 0,
+                flags2: nova_sim::gate_sprite::RANDOM,
+            },
+            ..stellar(150, 0, 0, Ok(sheet(1150, 4)))
+        };
+        let plain = StellarContents {
+            animation: AnimationData {
+                delay: 1,
+                ..WORMHOLE
+            },
+            ..stellar(151, 100, 0, Ok(sheet(1151, 4)))
+        };
+        let catalog = FakeCatalog::new(vec![system(134, vec![random, plain])]);
+        let mut scene = SystemScene::load(&catalog, SystemId(134));
+        // From frame 1, 0, 2 and 3 are allowed; from 3, 0 to 2.
+        let mut chance = Draws {
+            draws: vec![2, 1],
+            ..Draws::default()
+        };
+        let mut shown = Vec::new();
+        for _ in 0..2 {
+            scene.step(1, &mut chance);
+            shown.push(
+                scene
+                    .stellars()
+                    .iter()
+                    .map(|s| s.frames.shown())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(shown, [[1, 1], [3, 2]]);
+        assert_eq!(chance.asked, [3, 3], "only the random stellar draws");
     }
 
     #[test]
@@ -751,7 +814,7 @@ mod tests {
     #[test]
     fn a_hypergate_draws_the_frame_its_session_gives_modulo_its_sheet() {
         let mut scene = SystemScene::load(&catalog(), SystemId(130));
-        scene.step(3);
+        scene.step(3, &mut NeverFires);
         let before = drawn(&scene);
         assert_eq!(before[0], ImageKey::sprite(1001, 1), "its own animation");
         let gate = |frame| move |id: StellarId| (id == StellarId(129)).then_some(frame);
@@ -836,7 +899,7 @@ mod tests {
     #[test]
     fn the_animation_follows_the_destroyed_state_tick_by_tick() {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.step(3);
+        scene.step(3, &mut NeverFires);
         assert_eq!(
             drawn(&scene)[0],
             ImageKey::sprite(1000, 0),
@@ -846,7 +909,7 @@ mod tests {
         let before = scene.stellars().to_vec();
         scene.set_destroyed(only_150_dead);
         assert_eq!(scene.stellars()[1..], before[1..], "the others untouched");
-        scene.step(3);
+        scene.step(3, &mut NeverFires);
         assert_eq!(
             drawn(&scene)[0],
             ImageKey::sprite(2150, 1),
@@ -858,7 +921,7 @@ mod tests {
             153 => dead(DrawnSheet::Type),
             _ => WHOLE,
         });
-        scene.step(1);
+        scene.step(1, &mut NeverFires);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 2));
         assert_eq!(
             drawn(&scene)[3],
@@ -877,11 +940,11 @@ mod tests {
             }
         };
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.step(2);
+        scene.step(2, &mut NeverFires);
         scene.set_destroyed(drawing(DrawnSheet::TypeZero));
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 1), "kept");
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 3));
         scene.set_destroyed(drawing(DrawnSheet::TypeZero));
         assert_eq!(
@@ -890,7 +953,7 @@ mod tests {
             "frame 3 of 2"
         );
         scene.set_destroyed(drawing(DrawnSheet::TypeZero));
-        scene.step(1);
+        scene.step(1, &mut NeverFires);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 0), "no swap");
     }
 
@@ -919,12 +982,12 @@ mod tests {
             }
         };
         scene.set_destroyed(dead(DrawnSheet::Type));
-        scene.step(8);
+        scene.step(8, &mut NeverFires);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 0), "one counted");
         scene.set_destroyed(dead(DrawnSheet::Dead));
-        scene.step(2);
+        scene.step(2, &mut NeverFires);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 1), "three");
-        scene.step(4);
+        scene.step(4, &mut NeverFires);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 0), "wrapped");
     }
 
@@ -943,7 +1006,7 @@ mod tests {
     #[test]
     fn a_rebuild_shows_the_current_frame_of_each_stellar_whose_look_changed() {
         let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         assert_eq!(drawn(&scene), [ImageKey::sprite(1160, 3)]);
         let counting = |counted| move |_| look(false, DrawnSheet::Dead, counted);
         scene.set_destroyed(counting(DrawnSheet::Type));
@@ -969,7 +1032,7 @@ mod tests {
     #[test]
     fn a_rebuild_swapping_the_sheet_shows_the_current_frame_not_the_one_kept() {
         let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         scene.rebuild(|_| look(false, DrawnSheet::Dead, DrawnSheet::Type));
         assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 1)]);
     }
@@ -1098,13 +1161,13 @@ mod tests {
             counted: DrawnSheet::TypeZero,
             ..WHOLE
         });
-        scene.step(4);
+        scene.step(4, &mut NeverFires);
         assert_eq!(
             drawn(&scene)[3],
             ImageKey::sprite(TYPE_ZERO, 0),
             "over type 0's 2 frames, not Type's 4"
         );
-        scene.step(2);
+        scene.step(2, &mut NeverFires);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 1));
     }
 
@@ -1169,14 +1232,14 @@ mod tests {
     #[test]
     fn a_stellar_drawing_no_frame_counts_one_and_a_rebuild_to_it_shows_frame_0() {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         scene.rebuild(|_| StellarLook {
             drawn: DrawnSheet::NoFrame,
             counted: DrawnSheet::NoFrame,
             ..WHOLE
         });
         assert_eq!(scene.stellars()[3].frames.shown(), 0);
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         assert_eq!(scene.stellars()[3].frames.shown(), 0, "one frame counted");
     }
 
@@ -1199,7 +1262,7 @@ mod tests {
     #[test]
     fn a_frozen_stellar_draws_its_frame_kept_where_a_32_pixel_slot_puts_it() {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.step(3);
+        scene.step(3, &mut NeverFires);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 1));
         let frozen_153 = |id: StellarId| StellarLook {
             frozen: id == StellarId(153),
@@ -1207,7 +1270,7 @@ mod tests {
         };
         scene.set_destroyed(frozen_153);
         assert!(scene.stellars()[3].frozen);
-        scene.step(6);
+        scene.step(6, &mut NeverFires);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 1), "kept");
         // An 8-pixel frame whose top left is the centre less 16: its
         // centre is 12 up and left of the stellar's.
@@ -1223,7 +1286,7 @@ mod tests {
         );
         // Thawed, it steps on from the frame its count reached.
         scene.set_destroyed(|_| WHOLE);
-        scene.step(2);
+        scene.step(2, &mut NeverFires);
         assert_eq!(
             drawn(&scene)[3],
             ImageKey::sprite(1003, 1),
@@ -1244,7 +1307,7 @@ mod tests {
         scene.set_gate_frames(gate(3));
         scene.set_frozen(only_129);
         scene.set_gate_frames(gate(1));
-        scene.step(4);
+        scene.step(4, &mut NeverFires);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 3), "kept");
         scene.set_frozen(|_| false);
         assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 1), "thawed");
@@ -1259,11 +1322,11 @@ mod tests {
         });
         assert!(scene.stellars()[3].counts_none);
         for _ in 0..8 {
-            scene.step(1);
+            scene.step(1, &mut NeverFires);
             assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 0));
         }
         scene.set_destroyed(|_| WHOLE);
-        scene.step(3);
+        scene.step(3, &mut NeverFires);
         assert_eq!(
             drawn(&scene)[3],
             ImageKey::sprite(1003, 1),

@@ -30,8 +30,9 @@
 
 use std::num::NonZeroU16;
 
+use nova_sim::Chance;
 use nova_sim::gate::HYPERGATE;
-use nova_sim::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED};
+use nova_sim::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED, RANDOM};
 
 use super::catalog::AnimationData;
 
@@ -99,15 +100,17 @@ impl Frames {
     }
 
     /// One tick for a stellar with these fields, `destroyed` or not,
-    /// animating over `counted` frames and drawing a sheet of `drawn`.
+    /// animating over `counted` frames and drawing a sheet of `drawn`, a
+    /// random next frame (`Flags2` 0x0002) drawn on `chance`.
     pub fn step(
         &mut self,
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
         drawn: NonZeroU16,
+        chance: &mut dyn Chance,
     ) {
-        match self.advance(data, destroyed, counted) {
+        match self.advance(data, destroyed, counted, chance) {
             None => self.shown = 0,
             Some(true) => self.shown = self.current % drawn.get(),
             Some(false) => {}
@@ -117,11 +120,18 @@ impl Frames {
     /// One tick for a stellar whose sprite slot shows a frame frozen
     /// (`Session::frame_frozen`, stellar-fidelity phase 8): its current
     /// and next frames and its timer step as [`Frames::step`] steps them,
-    /// but the frame shown stays, whether it animates or not, as every
-    /// `_SWSetCurrentFrameIndex` the sprite tick calls refuses a slot
-    /// whose frames count none (@0x2ee20-0x2ee30, @0xa90e7-0xa90ee).
-    pub fn step_frozen(&mut self, data: AnimationData, destroyed: bool, counted: NonZeroU16) {
-        let _ = self.advance(data, destroyed, counted);
+    /// random draws included, but the frame shown stays, whether it
+    /// animates or not, as every `_SWSetCurrentFrameIndex` the sprite tick
+    /// calls refuses a slot whose frames count none (@0x2ee20-0x2ee30,
+    /// @0xa90e7-0xa90ee).
+    pub fn step_frozen(
+        &mut self,
+        data: AnimationData,
+        destroyed: bool,
+        counted: NonZeroU16,
+        chance: &mut dyn Chance,
+    ) {
+        let _ = self.advance(data, destroyed, counted, chance);
     }
 
     /// One tick of the timer and the current and next frames over
@@ -132,6 +142,7 @@ impl Frames {
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
+        chance: &mut dyn Chance,
     ) -> Option<bool> {
         if !is_animated(data, destroyed, counted) {
             return None;
@@ -156,11 +167,41 @@ impl Frames {
             return Some(true);
         }
         self.current = self.next;
-        // Below `counted`, which is a u16.
-        let after = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
-        // Alternating, the wrap skips frame 0 (@0x2ed2e-0x2ed63).
-        self.next = if alternate && after == 0 { 1 } else { after };
+        self.next = if data.flags2 & RANDOM != 0 {
+            self.pick(counted, alternate, chance)
+        } else {
+            // Below `counted`, which is a u16.
+            let after = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
+            // Alternating, the wrap skips frame 0 (@0x2ed2e-0x2ed63).
+            if alternate && after == 0 { 1 } else { after }
+        };
         Some(true)
+    }
+
+    /// A random next frame drawn on `chance`: uniform over the `counted`
+    /// frames but the current one, and but frame 0 when `alternate`, as
+    /// the original's `_Rand(count)` drawn again while refused gives it
+    /// (@0x2ece5-0x2ed1e, @0x2ed95-0x2edda). One draw over the frames
+    /// allowed picks from the same set with the same odds, and always
+    /// ends. When none is allowed (two frames, alternating), where the
+    /// original draws forever, the next frame stays as it was.
+    fn pick(&self, counted: NonZeroU16, alternate: bool, chance: &mut dyn Chance) -> u16 {
+        let floor = u16::from(alternate);
+        let count = counted.get();
+        let skips_current = (floor..count).contains(&self.current);
+        let allowed = count - floor - u16::from(skips_current);
+        if allowed == 0 {
+            return self.next;
+        }
+        // Below `allowed`, a u16; a source drawing out of range takes the
+        // last frame allowed.
+        let index = chance.below(u32::from(allowed)).min(u32::from(allowed) - 1) as u16;
+        let frame = floor + index;
+        if skips_current && frame >= self.current {
+            frame + 1
+        } else {
+            frame
+        }
     }
 
     /// A rebuild point: the sheet drawn, of `drawn` frames, shows the
@@ -177,7 +218,12 @@ impl Frames {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
+    use nova_sim::NeverFires;
+
     use super::*;
+    use crate::flight::SharedChance;
 
     fn count(n: u16) -> NonZeroU16 {
         NonZeroU16::new(n).expect("non-zero")
@@ -198,7 +244,7 @@ mod tests {
         let mut shown = Vec::new();
         for _ in 0..len {
             shown.push(frames.shown());
-            frames.step(data, false, count(counted), count(drawn));
+            frames.step(data, false, count(counted), count(drawn), &mut NeverFires);
         }
         shown
     }
@@ -263,7 +309,7 @@ mod tests {
         let mut frames = Frames::new();
         let mut states = Vec::new();
         for _ in 0..7 {
-            frames.step(alt(1, 0), false, count(4), count(4));
+            frames.step(alt(1, 0), false, count(4), count(4), &mut NeverFires);
             states.push((frames.current, frames.next));
         }
         assert_eq!(
@@ -278,8 +324,197 @@ mod tests {
         assert!(!is_animated(data, destroyed, count(frames)), "{data:?}");
         let mut state = Frames::new();
         for _ in 0..100 {
-            state.step(data, destroyed, count(frames), count(frames));
+            state.step(
+                data,
+                destroyed,
+                count(frames),
+                count(frames),
+                &mut Draws::none(),
+            );
             assert_eq!(state.shown(), 0, "{data:?}");
+        }
+    }
+
+    /// Scripted draws: each `below(n)` records `n` and takes the next
+    /// scripted value, and panics once the script runs out, so a test
+    /// with no script shows that nothing was drawn.
+    #[derive(Debug, Default)]
+    struct Draws {
+        draws: VecDeque<u32>,
+        asked: Vec<u32>,
+    }
+
+    impl Draws {
+        fn new(draws: &[u32]) -> Self {
+            Self {
+                draws: draws.iter().copied().collect(),
+                asked: Vec::new(),
+            }
+        }
+
+        fn none() -> Self {
+            Self::default()
+        }
+    }
+
+    impl Chance for Draws {
+        fn fires(&mut self, percent: u8) -> bool {
+            panic!("asked whether {percent}% fires");
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.asked.push(n);
+            self.draws
+                .pop_front()
+                .unwrap_or_else(|| panic!("an unscripted below({n})"))
+        }
+    }
+
+    /// The frame shown after 0, 1, ... `len - 1` ticks of a whole stellar
+    /// with `data`, counting `counted` frames and drawing `drawn`, drawing
+    /// on `chance`: `len - 1` steps, so a script holds only the draws the
+    /// frames shown need.
+    fn drawn_over(
+        data: AnimationData,
+        counted: u16,
+        drawn: u16,
+        len: usize,
+        chance: &mut dyn Chance,
+    ) -> Vec<u16> {
+        let mut frames = Frames::new();
+        let mut shown = vec![frames.shown()];
+        for _ in 1..len {
+            frames.step(data, false, count(counted), count(drawn), chance);
+            shown.push(frames.shown());
+        }
+        shown
+    }
+
+    /// `data` with `flags2`.
+    fn flagged(flags2: u16, delay: i16, frame0_bias: i16) -> AnimationData {
+        AnimationData {
+            flags2,
+            ..data(delay, frame0_bias)
+        }
+    }
+
+    #[test]
+    fn random_picks_each_next_frame_among_the_counted_frames_but_the_current() {
+        // From frame 1 the frames allowed are 0, 2 and 3; from 3, 0 to 2;
+        // from 0, 1 to 3.
+        let mut chance = Draws::new(&[2, 0, 1]);
+        let random = flagged(RANDOM, 1, 0);
+        assert_eq!(drawn_over(random, 4, 4, 4, &mut chance), [0, 1, 3, 0]);
+        assert_eq!(chance.asked, [3, 3, 3]);
+        // The range is the counted frames', whatever the sheet drawn.
+        let mut chance = Draws::new(&[3, 0]);
+        assert_eq!(drawn_over(random, 5, 3, 3, &mut chance), [0, 1, 1]);
+        assert_eq!(chance.asked, [4, 4], "frame 4 of 3, then 0");
+        // Every frame but the current can be picked.
+        for (draw, next) in [(0, 0), (1, 2), (2, 3), (3, 4)] {
+            let mut frames = Frames::new();
+            let mut chance = Draws::new(&[draw]);
+            frames.step(random, false, count(5), count(5), &mut chance);
+            assert_eq!((frames.current, frames.next), (1, next), "{draw}");
+        }
+    }
+
+    #[test]
+    fn random_with_alternate_picks_among_1_to_count_less_1_but_the_current() {
+        // From frame 1 the frames allowed are 2 and 3; from 2, 1 and 3.
+        let mut chance = Draws::new(&[0, 1]);
+        let both = flagged(ALTERNATE | RANDOM, 1, 0);
+        assert_eq!(drawn_over(both, 4, 4, 5, &mut chance), [0, 1, 0, 2, 0]);
+        assert_eq!(chance.asked, [2, 2], "no draw on the way back to 0");
+        // From 3, 1 and 2.
+        let mut chance = Draws::new(&[1, 0, 1]);
+        assert_eq!(drawn_over(both, 4, 4, 6, &mut chance), [0, 1, 0, 3, 0, 1]);
+        assert_eq!(chance.asked, [2, 2, 2]);
+        // From frame 0 itself, every frame but 0 can be picked.
+        for (draw, next) in [(0, 1), (1, 2), (2, 3)] {
+            let mut frames = Frames {
+                next: 0,
+                ..Frames::new()
+            };
+            let mut chance = Draws::new(&[draw]);
+            frames.step(both, false, count(4), count(4), &mut chance);
+            assert_eq!((frames.current, frames.next), (0, next), "{draw}");
+        }
+    }
+
+    #[test]
+    fn random_with_alternate_over_2_frames_keeps_its_next_where_the_original_hangs() {
+        let both = flagged(ALTERNATE | RANDOM, 1, 0);
+        let mut chance = Draws::none();
+        assert_eq!(drawn_over(both, 2, 2, 5, &mut chance), [0, 1, 0, 1, 0]);
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn random_with_bias_holds_a_picked_frame_0() {
+        // Frame 0 shows 3 ticks, 1 one, then the picked 0 three again.
+        let mut chance = Draws::new(&[0, 1, 0]);
+        let random = flagged(RANDOM, 1, 3);
+        assert_eq!(
+            drawn_over(random, 3, 3, 8, &mut chance),
+            [0, 0, 0, 1, 0, 0, 0, 2]
+        );
+        assert_eq!(chance.asked, [2, 2, 2]);
+    }
+
+    #[test]
+    fn a_random_stellar_steps_on_the_default_chance() {
+        // The default draws the last outcome: the last frame allowed.
+        let mut chance = SharedChance::default();
+        let random = flagged(RANDOM, 1, 0);
+        assert_eq!(drawn_over(random, 4, 4, 6, &mut chance), [0, 1, 3, 2, 3, 2]);
+        let both = flagged(ALTERNATE | RANDOM, 1, 0);
+        assert_eq!(
+            drawn_over(both, 4, 4, 8, &mut chance),
+            [0, 1, 0, 3, 0, 2, 0, 3]
+        );
+    }
+
+    /// Draws `n` for every `below(n)`, one past the last outcome.
+    struct OutOfRange;
+
+    impl Chance for OutOfRange {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            n
+        }
+    }
+
+    #[test]
+    fn a_draw_out_of_range_takes_the_last_frame_allowed() {
+        let random = flagged(RANDOM, 1, 0);
+        assert_eq!(drawn_over(random, 4, 4, 4, &mut OutOfRange), [0, 1, 3, 2]);
+    }
+
+    #[test]
+    fn a_frozen_random_stellar_draws_while_its_frame_shown_stays() {
+        let random = flagged(RANDOM, 1, 0);
+        let mut frames = Frames::new();
+        let mut chance = Draws::new(&[1, 0]);
+        frames.step_frozen(random, false, count(4), &mut chance);
+        assert_eq!((frames.current, frames.next, frames.shown()), (1, 2, 0));
+        frames.step_frozen(random, false, count(4), &mut chance);
+        assert_eq!((frames.current, frames.next, frames.shown()), (2, 0, 0));
+        assert_eq!(chance.asked, [3, 3]);
+    }
+
+    #[test]
+    fn an_uncounted_or_still_stellar_draws_nothing() {
+        for flags2 in [RANDOM, ALTERNATE | RANDOM] {
+            stays_on_frame_0(flagged(flags2, 1, 0), false, 1);
+            stays_on_frame_0(flagged(flags2 | ONLY_WHEN_DESTROYED, 1, 0), false, 4);
+            stays_on_frame_0(flagged(flags2 | HYPERGATE, 1, 0), false, 4);
+            let mut frames = Frames::new();
+            frames.step_frozen(flagged(flags2, 1, 0), false, count(1), &mut Draws::none());
+            assert_eq!(frames, Frames::new());
         }
     }
 
@@ -348,7 +583,7 @@ mod tests {
         let mut shown = Vec::new();
         for _ in 0..5 {
             shown.push(dead.shown());
-            dead.step(live(true), true, count(32), count(32));
+            dead.step(live(true), true, count(32), count(32), &mut NeverFires);
         }
         assert_eq!(shown, [0, 0, 1, 1, 2]);
         // One frame stays on frame 0 whatever the state; no delay
@@ -362,7 +597,7 @@ mod tests {
         let mut shown = Vec::new();
         for _ in 0..5 {
             shown.push(dead.shown());
-            dead.step(no_delay, true, count(4), count(4));
+            dead.step(no_delay, true, count(4), count(4), &mut NeverFires);
         }
         assert_eq!(shown, [0, 1, 2, 3, 0], "animates every tick");
         stays_on_frame_0(no_delay, false, 4);
@@ -378,16 +613,16 @@ mod tests {
             timer: first - 2,
             ..Frames::new()
         };
-        frames.step(slow, false, most, most);
+        frames.step(slow, false, most, most, &mut NeverFires);
         assert_eq!(frames.shown(), 0, "a tick short");
-        frames.step(slow, false, most, most);
+        frames.step(slow, false, most, most, &mut NeverFires);
         assert_eq!(frames.shown(), 1);
         let mut last = Frames {
             next: u16::MAX - 1,
             timer: u64::from(i16::MAX.unsigned_abs()) - 1,
             ..frames
         };
-        last.step(slow, false, most, most);
+        last.step(slow, false, most, most, &mut NeverFires);
         assert_eq!((last.current, last.next), (u16::MAX - 1, 0), "wraps");
     }
 
@@ -396,18 +631,18 @@ mod tests {
         let (whole, four) = (data(2, 0), count(4));
         let mut frames = Frames::new();
         for _ in 0..5 {
-            frames.step(whole, false, four, four);
+            frames.step(whole, false, four, four, &mut NeverFires);
         }
         assert_eq!(frames.shown(), 2, "two advances and a tick");
         for _ in 0..7 {
-            frames.step(whole, true, four, four);
+            frames.step(whole, true, four, four, &mut NeverFires);
             assert_eq!(frames.shown(), 0, "still while destroyed");
         }
-        frames.step(whole, false, four, four);
+        frames.step(whole, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 3, "the timer kept its tick");
-        frames.step(whole, false, four, four);
+        frames.step(whole, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 3);
-        frames.step(whole, false, four, four);
+        frames.step(whole, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 0);
     }
 
@@ -415,14 +650,14 @@ mod tests {
     fn a_swap_keeps_the_frame_shown_in_range_and_shows_frame_0_otherwise() {
         let (every_tick, four) = (data(1, 0), count(4));
         let mut frames = Frames::new();
-        frames.step(every_tick, false, four, four);
-        frames.step(every_tick, false, four, four);
+        frames.step(every_tick, false, four, four, &mut NeverFires);
+        frames.step(every_tick, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 2);
         frames.swap(count(3));
         assert_eq!(frames.shown(), 2, "in range");
         frames.swap(count(2));
         assert_eq!(frames.shown(), 0, "out of range");
-        frames.step(every_tick, false, four, count(2));
+        frames.step(every_tick, false, four, count(2), &mut NeverFires);
         assert_eq!(frames.shown(), 1, "frame 3 of 2 at the next advance");
     }
 
@@ -448,7 +683,7 @@ mod tests {
         let (every_tick, eight) = (data(1, 0), count(8));
         let mut frames = Frames::new();
         for _ in 0..5 {
-            frames.step(every_tick, false, eight, eight);
+            frames.step(every_tick, false, eight, eight, &mut NeverFires);
         }
         frames.swap(count(3));
         assert_eq!(frames.shown(), 0, "frame 5 is out of range");
@@ -462,23 +697,23 @@ mod tests {
     fn a_frozen_stellar_keeps_the_frame_shown_while_its_current_and_next_advance() {
         let (every_tick, four) = (data(1, 0), count(4));
         let mut frames = Frames::new();
-        frames.step(every_tick, false, four, four);
-        frames.step(every_tick, false, four, four);
+        frames.step(every_tick, false, four, four, &mut NeverFires);
+        frames.step(every_tick, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 2);
-        frames.step_frozen(every_tick, false, four);
+        frames.step_frozen(every_tick, false, four, &mut NeverFires);
         assert_eq!((frames.current, frames.next, frames.shown()), (3, 0, 2));
-        frames.step_frozen(every_tick, false, four);
+        frames.step_frozen(every_tick, false, four, &mut NeverFires);
         assert_eq!((frames.current, frames.next, frames.shown()), (0, 1, 2));
         // Not animating, it still keeps the frame shown, not frame 0.
         for _ in 0..3 {
-            frames.step_frozen(every_tick, true, four);
+            frames.step_frozen(every_tick, true, four, &mut NeverFires);
         }
         assert_eq!((frames.current, frames.shown()), (0, 2));
         // A swap after the freeze keeps an in-range frame; the next
         // advance shows the current one.
         frames.swap(count(3));
         assert_eq!(frames.shown(), 2);
-        frames.step(every_tick, false, four, count(3));
+        frames.step(every_tick, false, four, count(3), &mut NeverFires);
         assert_eq!(frames.shown(), 1);
     }
 }
