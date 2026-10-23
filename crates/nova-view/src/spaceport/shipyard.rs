@@ -2931,6 +2931,10 @@ mod tests {
         click_cell(&mut screen, 5);
         assert_eq!(screen.selected(), None, "the empty position past the last");
         assert!(shows_no_ship(&screen));
+        let mut first_empty = opened_with(shipyard(), &art());
+        click_cell(&mut first_empty, 1);
+        click_cell(&mut first_empty, 4);
+        assert_eq!(first_empty.selected(), None, "the first empty position");
         assert_eq!(screen.take_request(), None, "it reaches no button");
         assert!(!screen.closed());
         assert_eq!(screen.take_sounds(), [], "silent");
