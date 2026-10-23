@@ -187,6 +187,7 @@ mod tests {
     use crate::deadly_stellar::DEADLY_STELLAR;
     use crate::rulebook::Rulebook;
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::story::rebuild::Fallback;
     use crate::testkit::{FakePilotCatalog, planet};
 
     /// A deadly stellar `id` at (`x`, `y`), 100 x 100.
@@ -356,14 +357,20 @@ mod tests {
         };
         let mut session = among(&catalog, &[dead], Rulebook::default());
         session.chart.sites = vec![dead];
-        session.space.rebuilt.rebuild(&[dead], |_| true, true);
+        session
+            .space
+            .rebuilt
+            .rebuild(&[dead], |_| true, Fallback::Counts, RuleSource::Engine);
         assert!(session.dead_since_rebuild(dead.id));
         fight(&mut session);
         assert_eq!(session.npcs(), [], "graphic type 0's frame reaches");
         // Not dead since the rebuild: its slot keeps its `Type` frames.
         let mut whole_then = among(&catalog, &[dead], Rulebook::default());
         whole_then.chart.sites = vec![dead];
-        whole_then.space.rebuilt.rebuild(&[dead], |_| false, true);
+        whole_then
+            .space
+            .rebuilt
+            .rebuild(&[dead], |_| false, Fallback::Counts, RuleSource::Engine);
         fight(&mut whole_then);
         assert_eq!(whole_then.npcs().len(), 1, "its Type frame");
     }

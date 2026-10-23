@@ -56,6 +56,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{LandingSite, StellarId};
 use crate::landing::TypeWidth;
+use crate::rulebook::RuleSource;
 
 /// Which of its sheets a stellar shown draws (see the `story` module's
 /// "Built by phase 11" and "Built by stellar-fidelity phase 1"): decided
@@ -73,14 +74,44 @@ pub enum DrawnSheet {
     TypeZero,
 }
 
+/// What graphic type 0's sheet (`spïn` 1000) gives the original's rebuild
+/// when it fills a sprite slot the clone left empty (@0x332a1-0x332d0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fallback {
+    /// It cannot be read: the fill clones nothing, and the slot shows no
+    /// frame.
+    Unreadable,
+    /// It reads, but its `spïn`'s `xTiles` × `yTiles` is 0 or less: the
+    /// fill clones it, and the slot holds its frames and shows none
+    /// (`_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, called @0x332d0).
+    CountsNone,
+    /// It reads and counts frames: the slot shows one.
+    Counts,
+}
+
+impl Fallback {
+    /// The fallback whose sheet `reads` and whose `spïn` `counts` frames.
+    #[must_use]
+    pub fn new(reads: bool, counts: bool) -> Self {
+        match (reads, counts) {
+            (false, _) => Self::Unreadable,
+            (true, false) => Self::CountsNone,
+            (true, true) => Self::Counts,
+        }
+    }
+}
+
 /// The stellar sprites as the original's last rebuild point and the
 /// flight frames since left them (see the module docs): the stellars shown
 /// that were destroyed at the last rebuild point and have not been seen
 /// whole at a flight frame since, the graphics whose master is loaded, the
 /// stellars whose slot shows no frame, the sheet whose frame count
 /// each stellar shown animates over, and the sheet whose frames each
-/// stellar shown's slot holds, each where that is not its `Type`. Never
-/// saved: a load is itself a rebuild point.
+/// stellar shown's slot holds, each where that is not its `Type`; and,
+/// for a `spïn` that counts no frames (stellar-fidelity phase 8), whether
+/// the frames each slot holds count none, the sheet whose frame a slot
+/// kept through such a clone, and the stellars whose last rebuild point
+/// copied a count of none. Never saved: a load is itself a rebuild point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rebuilt {
     dead: BTreeSet<StellarId>,
@@ -88,115 +119,184 @@ pub struct Rebuilt {
     empty: BTreeSet<StellarId>,
     counted: BTreeMap<StellarId, DrawnSheet>,
     held: BTreeMap<StellarId, DrawnSheet>,
+    /// Whether the frames each slot holds count none (+0x54 ≤ 0), for the
+    /// stellars shown at the last rebuild point or cloned since; one with
+    /// none is read as never cloned.
+    uncounted: BTreeMap<StellarId, bool>,
+    /// The sheet whose frame a slot shows (+0x50), where a clone that
+    /// counts none kept an earlier sheet's frame.
+    stale: BTreeMap<StellarId, DrawnSheet>,
+    /// The stellars whose count the last rebuild point copied
+    /// (@0x331c6-0x331c9) was none.
+    still: BTreeSet<StellarId>,
 }
 
 /// The graphic `site` shows, when `destroyed` says whether it is: its
 /// `Type` while whole, its `DeadType` while destroyed, each only when its
-/// sheet can be read, so that the original can clone its master.
-fn shown_graphic(site: &LandingSite, destroyed: bool) -> Option<i16> {
+/// sheet can be read, so that the original can clone its master; with
+/// whether its `spïn` counts frames, which every sheet does unless
+/// `honours_counts`, [`RuleKey::UncountedSheet`](crate::RuleKey::UncountedSheet)'s
+/// engine reading.
+fn shown_graphic(site: &LandingSite, destroyed: bool, honours_counts: bool) -> Option<(i16, bool)> {
     if destroyed {
         site.dead_graphic
+            .map(|graphic| (graphic, !honours_counts || site.dead_counts_frames))
     } else {
-        site.frame_size.map(|_| site.graphic)
+        site.frame_size
+            .map(|_| (site.graphic, !honours_counts || site.type_counts_frames))
     }
+}
+
+/// The stellars `map` marks true.
+fn marked(map: &BTreeMap<StellarId, bool>) -> BTreeSet<StellarId> {
+    map.iter()
+        .filter(|&(_, &marked)| marked)
+        .map(|(&id, _)| id)
+        .collect()
 }
 
 impl Rebuilt {
     /// A rebuild point for the stellars `shown`: those that `destroyed`
-    /// holds destroyed become the dead set, and every other leaves it; the
-    /// masters loaded become the graphics they show, plus graphic type 0
-    /// when some slot is left empty and `fallback_reads`, the original
-    /// filling it with graphic type 0; and a slot is left with no frame
-    /// when its stellar shows nothing that can be read and the fallback
-    /// cannot be read either. Each stellar's slot then holds the sheet of
-    /// the graphic it shows, graphic type 0's when it shows none that can
-    /// be read and the fallback reads, and what it held before when the
-    /// fallback cannot be read either ([`Rebuilt::held`]). Each stellar
+    /// holds destroyed become the dead set, and every other leaves it.
+    /// Every slot is emptied, then each clones the master of the graphic
+    /// its stellar shows, which is loaded: it shows a frame when that
+    /// graphic counts frames and none when it counts none, keeping its
+    /// count. A slot whose stellar shows nothing that can be read keeps
+    /// the frames it held, and the `fallback`, graphic type 0, fills it
+    /// when it reads, its master loaded: the slot then holds graphic type
+    /// 0's frames and shows one exactly when they count. Each stellar
     /// shown counts the frames of the sheet its slot held as its clone
-    /// failed or succeeded (@0x331c9): the clone's sheet when it shows a
-    /// graphic that can be read, and otherwise what its slot held before
-    /// this point, its `Type` before any. So a stellar showing nothing that
-    /// can be read counts graphic type 0's from its second rebuild point.
-    /// Whether the dead set, any counted sheet or any held sheet changed.
+    /// failed or succeeded (@0x331c9), before the fill: the clone's sheet
+    /// when it shows a graphic that can be read, and otherwise what its
+    /// slot held before this point, its `Type` before any, counting none
+    /// when its `Type` counts none. So a stellar showing nothing that can
+    /// be read counts graphic type 0's from its second rebuild point.
+    /// `reading` is [`RuleKey::UncountedSheet`](crate::RuleKey::UncountedSheet)'s:
+    /// by its other reading every sheet that reads counts frames. Whether
+    /// the dead set, any counted or held sheet, a slot's frame or a count
+    /// changed.
     pub fn rebuild(
         &mut self,
         shown: &[LandingSite],
         destroyed: impl Fn(StellarId) -> bool,
-        fallback_reads: bool,
+        fallback: Fallback,
+        reading: RuleSource,
     ) -> bool {
+        let honours_counts = reading == RuleSource::Engine;
+        let fallback = match fallback {
+            Fallback::CountsNone if !honours_counts => Fallback::Counts,
+            fallback => fallback,
+        };
         let dead: BTreeSet<StellarId> = shown
             .iter()
             .map(|site| site.id)
             .filter(|&id| destroyed(id))
             .collect();
-        let graphics: Vec<(StellarId, Option<i16>)> = shown
-            .iter()
-            .map(|site| (site.id, shown_graphic(site, destroyed(site.id))))
-            .collect();
+        let mut masters = BTreeSet::new();
         let mut counted = BTreeMap::new();
         let mut held = BTreeMap::new();
-        for &(id, graphic) in &graphics {
-            let before = self.held(id);
-            let (counts, holds) = match graphic {
-                Some(_) => {
-                    let clone = if dead.contains(&id) {
-                        DrawnSheet::Dead
-                    } else {
-                        DrawnSheet::Type
-                    };
-                    (clone, clone)
-                }
-                None if fallback_reads => (before, DrawnSheet::TypeZero),
-                None => (before, before),
+        let mut uncounted = BTreeMap::new();
+        let mut still = BTreeSet::new();
+        let mut empty = BTreeSet::new();
+        for site in shown {
+            let id = site.id;
+            let before = (
+                self.held(id),
+                self.uncounted
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(honours_counts && !site.type_counts_frames),
+            );
+            let clone = if dead.contains(&id) {
+                DrawnSheet::Dead
+            } else {
+                DrawnSheet::Type
             };
-            if counts != DrawnSheet::Type {
-                counted.insert(id, counts);
+            // What the slot counts as the count is copied, what it holds
+            // after the fill, and whether it shows a frame.
+            let (counts, holds, framed) =
+                match shown_graphic(site, dead.contains(&id), honours_counts) {
+                    Some((graphic, counts_frames)) => {
+                        masters.insert(graphic);
+                        let clone = (clone, !counts_frames);
+                        (clone, clone, counts_frames)
+                    }
+                    None => match fallback {
+                        Fallback::Unreadable => (before, before, false),
+                        Fallback::CountsNone | Fallback::Counts => {
+                            masters.insert(0);
+                            let fills = fallback == Fallback::Counts;
+                            (before, (DrawnSheet::TypeZero, !fills), fills)
+                        }
+                    },
+                };
+            if counts.0 != DrawnSheet::Type {
+                counted.insert(id, counts.0);
             }
-            if holds != DrawnSheet::Type {
-                held.insert(id, holds);
+            if counts.1 {
+                still.insert(id);
+            }
+            if holds.0 != DrawnSheet::Type {
+                held.insert(id, holds.0);
+            }
+            uncounted.insert(id, holds.1);
+            if !framed {
+                empty.insert(id);
             }
         }
-        let changed = dead != self.dead || counted != self.counted || held != self.held;
+        let changed = dead != self.dead
+            || counted != self.counted
+            || held != self.held
+            || empty != self.empty
+            || marked(&uncounted) != marked(&self.uncounted)
+            || !self.stale.is_empty()
+            || still != self.still;
         self.dead = dead;
+        self.masters = masters;
+        self.empty = empty;
         self.counted = counted;
         self.held = held;
-        self.masters = graphics
-            .iter()
-            .filter_map(|&(_, graphic)| graphic)
-            .collect();
-        let unfilled = graphics
-            .iter()
-            .filter(|(_, graphic)| graphic.is_none())
-            .map(|&(id, _)| id);
-        if fallback_reads {
-            if unfilled.clone().next().is_some() {
-                self.masters.insert(0);
-            }
-            self.empty.clear();
-        } else {
-            self.empty = unfilled.collect();
-        }
+        self.uncounted = uncounted;
+        self.stale.clear();
+        self.still = still;
         changed
     }
 
     /// A flight frame's sprite tick over the stellars `shown`: every
     /// stellar that `destroyed` holds whole leaves the dead set, and each
     /// stellar showing a graphic that can be read has its master loaded
-    /// and its frames cloned into its slot. A stellar showing none keeps
-    /// what its slot holds, the clone of a null master failing
-    /// (@0xac448-0xac462).
-    pub fn frame(&mut self, shown: &[LandingSite], destroyed: impl Fn(StellarId) -> bool) {
+    /// and its frames cloned into its slot. A clone that counts frames
+    /// shows one; one that counts none keeps the frame the slot showed,
+    /// none if it showed none (`_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee),
+    /// by [`RuleKey::UncountedSheet`](crate::RuleKey::UncountedSheet)'s
+    /// engine reading, `reading`. A stellar showing none keeps what its
+    /// slot holds, the clone of a null master failing (@0xac448-0xac462).
+    pub fn frame(
+        &mut self,
+        shown: &[LandingSite],
+        destroyed: impl Fn(StellarId) -> bool,
+        reading: RuleSource,
+    ) {
+        let honours_counts = reading == RuleSource::Engine;
         self.dead.retain(|&id| destroyed(id));
         for site in shown {
             let dead = destroyed(site.id);
-            if let Some(graphic) = shown_graphic(site, dead) {
-                self.masters.insert(graphic);
+            let Some((graphic, counts)) = shown_graphic(site, dead, honours_counts) else {
+                continue;
+            };
+            let showing = self.showing(site.id);
+            self.masters.insert(graphic);
+            if dead {
+                self.held.insert(site.id, DrawnSheet::Dead);
+            } else {
+                self.held.remove(&site.id);
+            }
+            self.uncounted.insert(site.id, !counts);
+            if counts {
                 self.empty.remove(&site.id);
-                if dead {
-                    self.held.insert(site.id, DrawnSheet::Dead);
-                } else {
-                    self.held.remove(&site.id);
-                }
+                self.stale.remove(&site.id);
+            } else if let Some(showing) = showing {
+                self.stale.insert(site.id, showing);
             }
         }
     }
@@ -234,6 +334,41 @@ impl Rebuilt {
         !self.empty.contains(&stellar)
     }
 
+    /// The sheet whose frame `stellar`'s sprite slot shows, or `None` when
+    /// it shows none: the frame a clone that counts none kept, else that
+    /// of the sheet it holds ([`Rebuilt::held`]).
+    #[must_use]
+    pub fn showing(&self, stellar: StellarId) -> Option<DrawnSheet> {
+        self.shows_frame(stellar).then(|| {
+            self.stale
+                .get(&stellar)
+                .copied()
+                .unwrap_or_else(|| self.held(stellar))
+        })
+    }
+
+    /// Whether the frames `stellar`'s sprite slot holds count none.
+    fn uncounted(&self, stellar: StellarId) -> bool {
+        self.uncounted.get(&stellar) == Some(&true)
+    }
+
+    /// Whether `stellar`'s sprite slot shows a frame frozen: the frames it
+    /// holds count none, so every `_SWSetCurrentFrameIndex` refuses and
+    /// the frame it showed stays, placed as a 32-pixel sprite
+    /// (`_GetSpriteXSize`/`_GetSpriteYSize` @0x26d4-0x2731).
+    #[must_use]
+    pub fn frozen(&self, stellar: StellarId) -> bool {
+        self.uncounted(stellar) && self.shows_frame(stellar)
+    }
+
+    /// Whether the count the last rebuild point copied into `stellar`
+    /// (@0x331c6-0x331c9) was none, so it does not animate until the next
+    /// (`_HandleStellarSprites` @0x2e802).
+    #[must_use]
+    pub fn still(&self, stellar: StellarId) -> bool {
+        self.still.contains(&stellar)
+    }
+
     /// Which width the original's `_GetStellarSpriteXSize` reads of
     /// `site`'s `Type` master: unloaded unless its sheet can be read and
     /// its master is loaded; out of range when its `spïn` gives no frame
@@ -255,6 +390,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::landing::{LandingReach, StellarShown, landing_reach};
+    use Fallback::{Counts, CountsNone, Unreadable};
+    use RuleSource::{Bible, Engine};
     use nova_sim_catalog::fixture::planet;
 
     /// Planets `ids`, each of its own graphic type, its ID less 100, with
@@ -282,7 +420,12 @@ mod tests {
     fn a_rebuild_records_exactly_the_shown_stellars_destroyed() {
         let mut rebuilt = Rebuilt::default();
         assert_eq!(dead(&rebuilt, &[128, 129]), [false, false], "none at first");
-        assert!(rebuilt.rebuild(&ids(&[128, 129, 130]), destroyed(&[129, 130, 140]), true));
+        assert!(rebuilt.rebuild(
+            &ids(&[128, 129, 130]),
+            destroyed(&[129, 130, 140]),
+            Counts,
+            Engine
+        ));
         assert_eq!(
             dead(&rebuilt, &[128, 129, 130, 140]),
             [false, true, true, false],
@@ -294,26 +437,26 @@ mod tests {
     fn a_rebuild_reports_a_change_only_when_the_set_or_a_counted_sheet_changed() {
         let mut rebuilt = Rebuilt::default();
         assert!(
-            !rebuilt.rebuild(&ids(&[128]), destroyed(&[]), true),
+            !rebuilt.rebuild(&ids(&[128]), destroyed(&[]), Counts, Engine),
             "none still"
         );
-        assert!(rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true));
+        assert!(rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), Counts, Engine));
         assert!(
-            rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true),
+            rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), Counts, Engine),
             "the same set, but 128 now counts graphic type 0's frames"
         );
         assert!(
-            !rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true),
+            !rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), Counts, Engine),
             "the same"
         );
-        assert!(rebuilt.rebuild(&ids(&[128, 129]), destroyed(&[128, 129]), true));
+        assert!(rebuilt.rebuild(&ids(&[128, 129]), destroyed(&[128, 129]), Counts, Engine));
         assert!(
-            rebuilt.rebuild(&ids(&[129]), destroyed(&[128, 129]), true),
+            rebuilt.rebuild(&ids(&[129]), destroyed(&[128, 129]), Counts, Engine),
             "one less"
         );
         assert_eq!(dead(&rebuilt, &[128, 129]), [false, true]);
         assert!(
-            rebuilt.rebuild(&ids(&[]), destroyed(&[129]), true),
+            rebuilt.rebuild(&ids(&[]), destroyed(&[129]), Counts, Engine),
             "emptied"
         );
         assert_eq!(dead(&rebuilt, &[129]), [false]);
@@ -322,24 +465,24 @@ mod tests {
     #[test]
     fn a_frame_drops_a_stellar_seen_whole_and_keeps_one_still_destroyed() {
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&ids(&[128, 129]), destroyed(&[128, 129]), true);
-        rebuilt.frame(&ids(&[128, 129]), destroyed(&[129]));
+        rebuilt.rebuild(&ids(&[128, 129]), destroyed(&[128, 129]), Counts, Engine);
+        rebuilt.frame(&ids(&[128, 129]), destroyed(&[129]), Engine);
         assert_eq!(dead(&rebuilt, &[128, 129]), [false, true]);
-        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128, 129]));
+        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128, 129]), Engine);
         assert_eq!(dead(&rebuilt, &[128, 129]), [false, true], "not back");
     }
 
     #[test]
     fn y_u_y_with_no_frame_between_keeps_it_and_a_frame_while_whole_drops_it() {
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true);
+        rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), Counts, Engine);
         // `U` then `Y`: nothing is told until a frame, which finds it
         // destroyed again.
-        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128]));
+        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128]), Engine);
         assert!(rebuilt.dead(StellarId(128)));
         // `U`, a frame while whole, then `Y`.
-        rebuilt.frame(&ids(&[128, 129]), destroyed(&[]));
-        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128]));
+        rebuilt.frame(&ids(&[128, 129]), destroyed(&[]), Engine);
+        rebuilt.frame(&ids(&[128, 129]), destroyed(&[128]), Engine);
         assert!(!rebuilt.dead(StellarId(128)));
     }
 
@@ -380,7 +523,7 @@ mod tests {
             shows(130, 6, None),
         ];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[129]), true);
+        rebuilt.rebuild(&sites, destroyed(&[129]), Counts, Engine);
         assert_eq!(rebuilt.masters, BTreeSet::from([4, 6]), "129 shows 4");
         assert_eq!(widths(&rebuilt, &sites), [Frame, Unloaded, Frame]);
         assert_eq!(frames(&rebuilt, &[128, 129, 130]), [true; 3]);
@@ -390,9 +533,9 @@ mod tests {
     fn a_destroyed_stellar_whose_dead_type_reads_frees_its_type() {
         let sites = [shows(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Frame]);
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Unloaded]);
         assert_eq!(rebuilt.masters, BTreeSet::from([9]));
     }
@@ -401,11 +544,11 @@ mod tests {
     fn another_stellar_showing_the_same_graphic_keeps_it() {
         let sites = [shows(128, 4, Some(9)), shows(129, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Frame, Frame]);
         // Shown as another's `DeadType` keeps it too.
         let sites = [shows(128, 4, Some(9)), shows(129, 7, Some(4))];
-        rebuilt.rebuild(&sites, destroyed(&[128, 129]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128, 129]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Frame, Unloaded]);
     }
 
@@ -417,7 +560,7 @@ mod tests {
         };
         let sites = [unreadable, shows(129, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Unloaded, Frame]);
     }
 
@@ -428,9 +571,9 @@ mod tests {
             ..shows(128, 4, Some(9))
         }];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [OutOfRange]);
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(widths(&rebuilt, &sites), [Unloaded], "freed");
     }
 
@@ -438,16 +581,16 @@ mod tests {
     fn a_frame_that_finds_it_whole_loads_its_type_again() {
         let sites = [shows(128, 4, Some(9)), shows(129, 5, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(
             widths(&rebuilt, &sites),
             [Unloaded, Frame],
             "still destroyed"
         );
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert_eq!(widths(&rebuilt, &sites), [Frame, Frame]);
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(
             widths(&rebuilt, &sites),
             [Frame, Frame],
@@ -459,9 +602,9 @@ mod tests {
     fn y_u_y_with_no_frame_between_keeps_the_master_unloaded() {
         let sites = [shows(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         // `U` then `Y`: the next frame finds it destroyed again.
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(widths(&rebuilt, &sites), [Unloaded]);
     }
 
@@ -469,10 +612,10 @@ mod tests {
     fn a_slot_left_empty_loads_graphic_type_0_when_the_fallback_reads() {
         let sites = [shows(128, 4, None), shows(129, 5, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(rebuilt.masters, BTreeSet::from([0, 5]));
         assert_eq!(frames(&rebuilt, &[128, 129]), [true, true]);
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(rebuilt.masters, BTreeSet::from([4, 5]), "none left empty");
     }
 
@@ -480,13 +623,13 @@ mod tests {
     fn a_slot_left_empty_shows_no_frame_when_the_fallback_does_not_read() {
         let sites = [shows(128, 4, None), shows(129, 5, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), false);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
         assert_eq!(rebuilt.masters, BTreeSet::from([5]));
         assert_eq!(frames(&rebuilt, &[128, 129]), [false, true]);
-        rebuilt.rebuild(&sites, destroyed(&[]), false);
+        rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine);
         assert_eq!(frames(&rebuilt, &[128, 129]), [true, true], "whole again");
-        rebuilt.rebuild(&sites, destroyed(&[128]), false);
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(frames(&rebuilt, &[128, 129]), [true, true], "filled");
     }
 
@@ -494,12 +637,12 @@ mod tests {
     fn a_frame_with_a_readable_graphic_fills_an_empty_slot() {
         let sites = [shows(128, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), false);
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(frames(&rebuilt, &[128]), [false], "nothing to clone");
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert_eq!(frames(&rebuilt, &[128]), [true]);
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(frames(&rebuilt, &[128]), [true], "keeps its frames");
     }
 
@@ -522,9 +665,9 @@ mod tests {
     fn a_rebuild_counts_a_whole_stellars_type_and_a_destroyed_ones_dead_type() {
         let sites = [shows(128, 4, Some(9)), shows(129, 5, Some(8))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[129]), true);
+        rebuilt.rebuild(&sites, destroyed(&[129]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128, 129]), [Type, Dead]);
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128, 129]), [Dead, Type]);
     }
 
@@ -532,11 +675,11 @@ mod tests {
     fn a_destroyed_stellar_with_no_dead_type_counts_graphic_type_0_from_its_second_rebuild() {
         let sites = [shows(128, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type], "its slot held Type");
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [TypeZero], "graphic type 0's");
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type], "whole again");
     }
 
@@ -544,8 +687,8 @@ mod tests {
     fn with_graphic_type_0_unreadable_it_counts_its_type() {
         let sites = [shows(128, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), false);
-        rebuilt.rebuild(&sites, destroyed(&[128]), false);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type]);
     }
 
@@ -553,20 +696,20 @@ mod tests {
     fn a_stellar_seen_whole_since_counts_its_type_again() {
         let sites = [shows(128, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         // `U`, a frame while whole, then `Y`: the frame cloned `Type` back.
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert_eq!(counted(&rebuilt, &[128]), [TypeZero], "until a rebuild");
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type]);
     }
 
     #[test]
     fn a_stellar_no_longer_shown_counts_its_type() {
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&[shows(128, 4, Some(9))], destroyed(&[128]), true);
-        rebuilt.rebuild(&[shows(129, 5, None)], destroyed(&[128]), true);
+        rebuilt.rebuild(&[shows(128, 4, Some(9))], destroyed(&[128]), Counts, Engine);
+        rebuilt.rebuild(&[shows(129, 5, None)], destroyed(&[128]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type]);
     }
 
@@ -590,7 +733,7 @@ mod tests {
         let sites = [unreadable(128, 4, None), shows(129, 5, None)];
         let mut rebuilt = Rebuilt::default();
         assert_eq!(held(&rebuilt, &[128, 129]), [Type, Type], "before any");
-        assert!(rebuilt.rebuild(&sites, destroyed(&[]), true));
+        assert!(rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine));
         assert_eq!(held(&rebuilt, &[128, 129]), [TypeZero, Type]);
         assert_eq!(rebuilt.masters, BTreeSet::from([0, 5]));
         assert_eq!(frames(&rebuilt, &[128, 129]), [true, true]);
@@ -600,9 +743,9 @@ mod tests {
     fn frames_while_it_is_whole_keep_graphic_type_0() {
         let sites = [unreadable(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
-        rebuilt.frame(&sites, destroyed(&[]));
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert_eq!(held(&rebuilt, &[128]), [TypeZero], "the clone fails");
         assert_eq!(rebuilt.masters, BTreeSet::from([0]));
     }
@@ -611,13 +754,13 @@ mod tests {
     fn a_frame_that_finds_it_destroyed_with_a_dead_type_holds_that_and_keeps_it_after_u() {
         let sites = [unreadable(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         // `Y`, then a frame.
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(held(&rebuilt, &[128]), [Dead]);
         // `U`, then frames while whole.
-        rebuilt.frame(&sites, destroyed(&[]));
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert_eq!(held(&rebuilt, &[128]), [Dead], "the `Type` clone fails");
     }
 
@@ -625,11 +768,11 @@ mod tests {
     fn a_rebuild_puts_graphic_type_0_back() {
         let sites = [unreadable(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
-        rebuilt.frame(&sites, destroyed(&[128]));
-        rebuilt.frame(&sites, destroyed(&[]));
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
         assert!(
-            rebuilt.rebuild(&sites, destroyed(&[]), true),
+            rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine),
             "what its slot holds changed"
         );
         assert_eq!(held(&rebuilt, &[128]), [TypeZero]);
@@ -639,12 +782,12 @@ mod tests {
     fn a_rebuild_finding_it_destroyed_holds_its_dead_type_and_drops_one_no_longer_shown() {
         let sites = [unreadable(128, 4, Some(9)), unreadable(129, 5, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
         assert_eq!(held(&rebuilt, &[128, 129]), [Dead, TypeZero]);
-        rebuilt.rebuild(&sites[..1], destroyed(&[128]), true);
+        rebuilt.rebuild(&sites[..1], destroyed(&[128]), Counts, Engine);
         assert_eq!(held(&rebuilt, &[128, 129]), [Dead, Type], "129 not shown");
         let readable = [shows(128, 4, Some(9))];
-        rebuilt.rebuild(&readable, destroyed(&[]), true);
+        rebuilt.rebuild(&readable, destroyed(&[]), Counts, Engine);
         assert_eq!(held(&rebuilt, &[128]), [Type], "its `Type` cloned in");
     }
 
@@ -652,13 +795,13 @@ mod tests {
     fn with_graphic_type_0_unreadable_its_slot_shows_no_frame_and_keeps_what_it_held() {
         let sites = [unreadable(128, 4, Some(9))];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), false);
+        rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine);
         assert_eq!(frames(&rebuilt, &[128]), [false]);
         assert_eq!(held(&rebuilt, &[128]), [Type]);
-        rebuilt.frame(&sites, destroyed(&[128]));
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
         assert_eq!(frames(&rebuilt, &[128]), [true]);
         assert_eq!(held(&rebuilt, &[128]), [Dead]);
-        rebuilt.rebuild(&sites, destroyed(&[]), false);
+        rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine);
         assert_eq!(frames(&rebuilt, &[128]), [false]);
         assert_eq!(held(&rebuilt, &[128]), [Dead], "the original keeps +0x54");
         assert_eq!(counted(&rebuilt, &[128]), [Dead]);
@@ -668,14 +811,17 @@ mod tests {
     fn a_whole_stellar_with_no_type_sheet_counts_graphic_type_0_from_its_second_rebuild() {
         let sites = [unreadable(128, 4, None)];
         let mut rebuilt = Rebuilt::default();
-        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
         assert_eq!(counted(&rebuilt, &[128]), [Type], "its slot held Type");
         assert!(
-            rebuilt.rebuild(&sites, destroyed(&[]), true),
+            rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine),
             "now counts graphic type 0's"
         );
         assert_eq!(counted(&rebuilt, &[128]), [TypeZero]);
-        assert!(!rebuilt.rebuild(&sites, destroyed(&[]), true), "the same");
+        assert!(
+            !rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine),
+            "the same"
+        );
     }
 
     /// Every sequence of up to `steps` steps, each a flight frame or a
@@ -697,21 +843,304 @@ mod tests {
     fn a_destroyed_stellar_with_no_dead_type_holds_graphic_type_0_exactly_while_dead() {
         let sites = [shows(128, 4, None)];
         let me = StellarId(128);
-        for fallback_reads in [true, false] {
+        for fallback in [Counts, Unreadable] {
+            let fallback_reads = fallback == Counts;
             for walk in walks(5) {
                 let mut rebuilt = Rebuilt::default();
                 for &(is_rebuild, is_destroyed) in &walk {
                     let state = destroyed(if is_destroyed { &[128] } else { &[] });
                     if is_rebuild {
-                        rebuilt.rebuild(&sites, state, fallback_reads);
+                        rebuilt.rebuild(&sites, state, fallback, Engine);
                     } else {
-                        rebuilt.frame(&sites, state);
+                        rebuilt.frame(&sites, state, Engine);
                     }
                     if fallback_reads {
                         assert_eq!(rebuilt.held(me) == TypeZero, rebuilt.dead(me), "{walk:?}");
                     } else {
                         assert_eq!(!rebuilt.shows_frame(me), rebuilt.dead(me), "{walk:?}");
                         assert_eq!(rebuilt.held(me), Type, "{walk:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    // A `spïn` that counts no frames (stellar-fidelity phase 8).
+
+    /// Planet `id` of graphic type 4, showing graphic type 9 while
+    /// destroyed, whose `Type` counts frames when `type_counts` and whose
+    /// `DeadType` does when `dead_counts`.
+    fn counting(id: i16, type_counts: bool, dead_counts: bool) -> LandingSite {
+        LandingSite {
+            type_counts_frames: type_counts,
+            dead_counts_frames: dead_counts,
+            ..shows(id, 4, Some(9))
+        }
+    }
+
+    /// The landing reach the original's dock request gives `site` by what
+    /// `rebuilt` left of its slot and its `Type` master.
+    fn reach(rebuilt: &Rebuilt, site: &LandingSite) -> LandingReach {
+        let shown = StellarShown {
+            frame: rebuilt.shows_frame(site.id),
+            type_width: rebuilt.type_width(site),
+        };
+        landing_reach(site, shown, Engine)
+    }
+
+    #[test]
+    fn a_rebuild_point_showing_a_type_that_counts_no_frames_leaves_its_slot_frameless_then_a_frame_leaves_it_so()
+     {
+        let site = counting(128, false, true);
+        let sites = [site];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        assert_eq!(frames(&rebuilt, &[128]), [false]);
+        assert_eq!(widths(&rebuilt, &sites), [OutOfRange]);
+        assert_eq!(reach(&rebuilt, &site), LandingReach::Box(75.0));
+        assert_eq!(held(&rebuilt, &[128]), [Type]);
+        assert_eq!(rebuilt.showing(me), None);
+        assert!(rebuilt.still(me));
+        assert!(!rebuilt.frozen(me), "it shows no frame to freeze");
+        assert_eq!(rebuilt.masters, BTreeSet::from([4]), "no fill");
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(frames(&rebuilt, &[128]), [false], "still frameless");
+        assert_eq!(reach(&rebuilt, &site), LandingReach::Box(75.0));
+        assert!(rebuilt.still(me));
+    }
+
+    #[test]
+    fn a_frame_cloning_an_uncounted_type_keeps_the_frame_the_slot_shows() {
+        let site = counting(128, false, true);
+        let sites = [site];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        // `Y`, then a frame: its `DeadType` counts, so the slot shows it.
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        assert_eq!(rebuilt.showing(me), Some(Dead));
+        assert!(!rebuilt.frozen(me));
+        // `U`, then a frame: the `Type` clone keeps the `DeadType` frame.
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(rebuilt.showing(me), Some(Dead));
+        assert!(rebuilt.frozen(me));
+        assert_eq!(held(&rebuilt, &[128]), [Type]);
+        assert_eq!(widths(&rebuilt, &sites), [OutOfRange]);
+        assert_eq!(reach(&rebuilt, &site), LandingReach::Box(56.0));
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(rebuilt.showing(me), Some(Dead), "kept, not replaced");
+        // `Y`, then a frame: it counts again.
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        assert!(!rebuilt.frozen(me));
+        assert_eq!(rebuilt.showing(me), Some(Dead));
+        assert!(rebuilt.stale.is_empty());
+        // `U`, a frame, then a rebuild point while destroyed.
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert!(rebuilt.frozen(me));
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        assert!(rebuilt.stale.is_empty(), "a rebuild point clears it");
+        assert_eq!(rebuilt.showing(me), Some(Dead));
+        assert!(!rebuilt.frozen(me));
+    }
+
+    #[test]
+    fn a_frame_cloning_an_uncounted_graphic_into_an_empty_slot_leaves_it_empty() {
+        let sites = [counting(128, false, true)];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(rebuilt.showing(me), None);
+        assert!(!rebuilt.frozen(me));
+        assert!(rebuilt.stale.is_empty());
+    }
+
+    #[test]
+    fn a_frame_cloning_an_uncounted_graphic_keeps_its_types_frame_before_any_rebuild() {
+        let sites = [counting(128, true, false)];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.frame(&sites, destroyed(&[128]), Engine);
+        assert_eq!(rebuilt.showing(me), Some(Type));
+        assert!(rebuilt.frozen(me));
+        assert_eq!(held(&rebuilt, &[128]), [Dead]);
+        assert_eq!(rebuilt.masters, BTreeSet::from([9]));
+    }
+
+    #[test]
+    fn a_dead_type_that_counts_no_frames_leaves_a_destroyed_stellars_slot_frameless_at_a_rebuild_point()
+     {
+        let sites = [counting(128, true, false)];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        assert_eq!(frames(&rebuilt, &[128]), [false]);
+        assert_eq!(held(&rebuilt, &[128]), [Dead]);
+        assert_eq!(counted(&rebuilt, &[128]), [Dead]);
+        assert!(rebuilt.still(me));
+        assert_eq!(rebuilt.masters, BTreeSet::from([9]), "no fill");
+        // `U`, then a frame: its `Type` counts and fills the slot.
+        rebuilt.frame(&sites, destroyed(&[]), Engine);
+        assert_eq!(rebuilt.showing(me), Some(Type));
+        assert!(rebuilt.still(me), "until the next rebuild point");
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        assert!(!rebuilt.still(me));
+    }
+
+    #[test]
+    fn graphic_type_0_that_counts_no_frames_fills_the_slot_but_shows_no_frame() {
+        let me = StellarId(128);
+        for (sites, ruined) in [
+            ([unreadable(128, 4, None)], &[][..]),
+            ([shows(128, 4, None)], &[128][..]),
+        ] {
+            let mut rebuilt = Rebuilt::default();
+            rebuilt.rebuild(&sites, destroyed(ruined), CountsNone, Engine);
+            assert!(rebuilt.masters.contains(&0), "loaded by the fill");
+            assert_eq!(held(&rebuilt, &[128]), [TypeZero]);
+            assert!(rebuilt.uncounted(me));
+            assert_eq!(frames(&rebuilt, &[128]), [false]);
+            assert!(!rebuilt.still(me), "the fill comes after the count");
+            rebuilt.rebuild(&sites, destroyed(ruined), CountsNone, Engine);
+            assert!(rebuilt.still(me), "graphic type 0's count from the second");
+        }
+    }
+
+    #[test]
+    fn a_failed_clone_at_a_rebuild_point_counts_what_the_slot_held() {
+        // `Type` counts none; no `DeadType` sheet.
+        let sites = [LandingSite {
+            type_counts_frames: false,
+            ..shows(128, 4, None)
+        }];
+        let me = StellarId(128);
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[]), Counts, Engine);
+        assert!(rebuilt.still(me));
+        rebuilt.rebuild(&sites, destroyed(&[128]), Unreadable, Engine);
+        assert!(rebuilt.still(me), "it held the uncounted `Type`");
+        assert_eq!(held(&rebuilt, &[128]), [Type]);
+        assert_eq!(frames(&rebuilt, &[128]), [false]);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        assert!(rebuilt.still(me), "the fill comes after the count");
+        assert_eq!(held(&rebuilt, &[128]), [TypeZero]);
+        assert_eq!(frames(&rebuilt, &[128]), [true]);
+        rebuilt.rebuild(&sites, destroyed(&[128]), Counts, Engine);
+        assert!(!rebuilt.still(me), "graphic type 0 counts");
+    }
+
+    #[test]
+    fn a_stellar_never_cloned_counts_none_when_its_type_counts_none() {
+        let me = StellarId(128);
+        for (type_counts, still) in [(false, true), (true, false)] {
+            let sites = [LandingSite {
+                type_counts_frames: type_counts,
+                ..unreadable(128, 4, None)
+            }];
+            let mut rebuilt = Rebuilt::default();
+            rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine);
+            assert_eq!(rebuilt.still(me), still, "{type_counts}");
+            let mut rebuilt = Rebuilt::default();
+            rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Bible);
+            assert!(!rebuilt.still(me), "by the other reading");
+        }
+    }
+
+    #[test]
+    fn a_rebuild_point_reports_a_change_in_the_slots_frame_or_count() {
+        let mut rebuilt = Rebuilt::default();
+        let uncounted = [counting(128, false, true)];
+        assert!(
+            rebuilt.rebuild(&uncounted, destroyed(&[]), Counts, Engine),
+            "its slot shows no frame and counts none"
+        );
+        assert!(!rebuilt.rebuild(&uncounted, destroyed(&[]), Counts, Engine));
+        let counted = [counting(128, true, true)];
+        assert!(rebuilt.rebuild(&counted, destroyed(&[]), Counts, Engine));
+        assert!(!rebuilt.rebuild(&counted, destroyed(&[]), Counts, Engine));
+        // Only the frame: graphic type 0 cannot fill a `Type` that cannot
+        // be read.
+        let mut rebuilt = Rebuilt::default();
+        let sites = [unreadable(128, 4, None)];
+        assert!(rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine));
+        assert!(!rebuilt.rebuild(&sites, destroyed(&[]), Unreadable, Engine));
+    }
+
+    #[test]
+    fn by_the_other_reading_an_uncounted_sheet_counts() {
+        let me = StellarId(128);
+        for fallback in [Counts, CountsNone, Unreadable] {
+            let counts = if fallback == CountsNone {
+                Counts
+            } else {
+                fallback
+            };
+            for (type_counts, dead_counts, dead) in [
+                (false, false, Some(9)),
+                (false, true, Some(9)),
+                (true, false, Some(9)),
+                (false, true, None),
+            ] {
+                let uncounted = [LandingSite {
+                    type_counts_frames: type_counts,
+                    dead_counts_frames: dead_counts,
+                    ..shows(128, 4, dead)
+                }];
+                let counting = [LandingSite {
+                    type_counts_frames: true,
+                    dead_counts_frames: true,
+                    ..shows(128, 4, dead)
+                }];
+                for walk in walks(4) {
+                    let mut bible = Rebuilt::default();
+                    let mut today = Rebuilt::default();
+                    for &(is_rebuild, is_destroyed) in &walk {
+                        let ruined: &[i16] = if is_destroyed { &[128] } else { &[] };
+                        if is_rebuild {
+                            bible.rebuild(&uncounted, destroyed(ruined), fallback, Bible);
+                            today.rebuild(&counting, destroyed(ruined), counts, Engine);
+                        } else {
+                            bible.frame(&uncounted, destroyed(ruined), Bible);
+                            today.frame(&counting, destroyed(ruined), Engine);
+                        }
+                        assert_eq!(bible, today, "{walk:?}");
+                        assert!(!bible.frozen(me) && !bible.still(me), "{walk:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_uncounted_type_freezes_a_frame_exactly_while_found_whole_and_empties_from_a_rebuild() {
+        let sites = [counting(128, false, true)];
+        let me = StellarId(128);
+        for reading in [Engine, Bible] {
+            for walk in walks(5) {
+                let mut rebuilt = Rebuilt::default();
+                // Whether the last rebuild point found it whole and no
+                // frame has found it destroyed since.
+                let mut emptied = false;
+                for &(is_rebuild, is_destroyed) in &walk {
+                    let state = destroyed(if is_destroyed { &[128] } else { &[] });
+                    if is_rebuild {
+                        rebuilt.rebuild(&sites, state, Counts, reading);
+                        emptied = !is_destroyed;
+                    } else {
+                        rebuilt.frame(&sites, state, reading);
+                        emptied &= !is_destroyed;
+                    }
+                    if reading == Engine {
+                        assert_eq!(
+                            rebuilt.frozen(me),
+                            !is_destroyed && rebuilt.shows_frame(me),
+                            "{walk:?}"
+                        );
+                        assert_eq!(!rebuilt.shows_frame(me), emptied, "{walk:?}");
+                    } else {
+                        assert!(rebuilt.shows_frame(me), "{walk:?}");
+                        assert!(!rebuilt.frozen(me), "{walk:?}");
                     }
                 }
             }

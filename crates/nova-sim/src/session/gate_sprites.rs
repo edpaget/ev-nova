@@ -121,6 +121,8 @@ mod tests {
     use crate::flight::ShipState;
     use crate::gate::WORMHOLE;
     use crate::geometry::Vec2;
+    use crate::rulebook::RuleSource;
+    use crate::story::rebuild::Fallback;
     use crate::testkit::{FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, planet};
     use crate::traffic::npc::{Mode, Npc};
 
@@ -316,7 +318,12 @@ mod tests {
                 for site in &mut unreadable {
                     site.frame_size = None;
                 }
-                session.space.rebuilt.rebuild(&unreadable, |_| false, false);
+                session.space.rebuilt.rebuild(
+                    &unreadable,
+                    |_| false,
+                    Fallback::Unreadable,
+                    RuleSource::Engine,
+                );
             }
             heading_in(&mut session, still, GATE_AT.x + out);
             tick(&mut session, &catalog);

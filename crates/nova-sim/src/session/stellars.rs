@@ -126,6 +126,7 @@ use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landin
 use crate::legal::{Crime, LegalCode};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::story::rebuild::Fallback;
 use crate::story::wreck::{self, Tick};
 use crate::story::{Countdown, DrawnSheet};
 use std::collections::BTreeMap;
@@ -177,7 +178,11 @@ impl Session {
         let rebuilt = self.space.rebuilt.rebuild(
             &self.chart.sites,
             |id| galaxy.destroyed(id),
-            self.statics.fallback_frame.is_some(),
+            Fallback::new(
+                self.statics.fallback_frame.is_some(),
+                self.statics.fallback_counts,
+            ),
+            self.setup.rules.source_for(RuleKey::UncountedSheet),
         );
         self.rebuild_sprite_pool();
         reshown | rebuilt
@@ -236,9 +241,11 @@ impl Session {
     /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.chart.galaxy;
-        self.space
-            .rebuilt
-            .frame(&self.chart.sites, |id| galaxy.destroyed(id));
+        self.space.rebuilt.frame(
+            &self.chart.sites,
+            |id| galaxy.destroyed(id),
+            self.setup.rules.source_for(RuleKey::UncountedSheet),
+        );
         self.place_stellar_sprites();
     }
 
@@ -2641,14 +2648,54 @@ mod tests {
         assert!(reaches(&filled, &engine(), &rebuilt, 261.0, 262.0));
     }
 
-    #[test]
-    fn a_loaded_type_whose_spin_counts_no_frames_reaches_56() {
+    /// Stellar 128, whole and landable, 100 square, whose `Type`'s `spïn`
+    /// counts no frames, with a `DeadType` that counts.
+    fn uncounted_type() -> FakePilotCatalog {
         let mut catalog = ruin(100, false);
         catalog.sites[0].1[0].flags = StellarFlags::CAN_LAND;
         catalog.sites[0].1[0].type_counts_frames = false;
-        let whole = |_: &mut Session| {};
-        assert!(reaches(&catalog, &engine(), &whole, 55.0, 56.0));
-        assert!(reaches(&catalog, &other_reading(), &whole, 50.0, 50.5));
+        catalog
+    }
+
+    /// `Y128`, a frame, `U128` and a frame: the slot keeps the `DeadType`
+    /// frame through the `Type` clone that counts none.
+    fn keeps_a_dead_frame(session: &mut Session) {
+        run(session, "Y128");
+        frame(session);
+        run(session, "U128");
+        frame(session);
+    }
+
+    fn uncounted_sheet(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::UncountedSheet, reading)
+    }
+
+    #[test]
+    fn a_whole_stellar_whose_type_counts_no_frames_reaches_75_after_a_rebuild_point_and_56_keeping_an_earlier_frame()
+     {
+        let catalog = uncounted_type();
+        let flown = |_: &mut Session| {};
+        assert!(
+            reaches(&catalog, &engine(), &flown, 74.0, 75.0),
+            "a session flown is a rebuild point: no frame"
+        );
+        assert!(
+            reaches(&catalog, &engine(), &keeps_a_dead_frame, 55.0, 56.0),
+            "a frame kept, and the loaded `Type` reads 32"
+        );
+        let rebuilt = |session: &mut Session| rebuild(session, &catalog);
+        assert!(reaches(&catalog, &engine(), &rebuilt, 74.0, 75.0));
+        // The rules apply from the next rebuild point: the session was
+        // flown under the default ones.
+        let counted = uncounted_sheet(RuleSource::Bible);
+        let kept_then_rebuilt = |session: &mut Session| {
+            rebuild(session, &catalog);
+            keeps_a_dead_frame(session);
+        };
+        for setup in [&rebuilt as &dyn Fn(&mut Session), &kept_then_rebuilt] {
+            assert!(reaches(&catalog, &counted, setup, 55.0, 56.0));
+        }
+        assert!(reaches(&catalog, &other_reading(), &flown, 50.0, 50.5));
     }
 
     #[test]

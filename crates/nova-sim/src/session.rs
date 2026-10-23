@@ -1148,6 +1148,7 @@ impl Session {
                 .collect(),
             lives,
             fallback_frame: catalog.fallback_frame_size(),
+            fallback_counts: catalog.fallback_counts_frames(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,
             crons,

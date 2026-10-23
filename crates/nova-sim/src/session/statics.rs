@@ -76,6 +76,10 @@ pub(super) struct Statics {
     /// point fills an empty sprite slot with, and the box a click on that
     /// slot reads (see the `stellars` module).
     pub(super) fallback_frame: Option<(u32, u32)>,
+    /// Whether graphic type 0's `spïn` counts frames, read from the
+    /// catalog as the session starts: a slot the rebuild fills with it
+    /// shows no frame when it does not (see the `stellars` module).
+    pub(super) fallback_counts: bool,
     /// Every `mïsn`, read when the session starts.
     pub(super) missions: Vec<MissionRecord>,
     /// The `düde`s of every `mïsn` of `Flags` 0x0800 with a `ShipDude`
