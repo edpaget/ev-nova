@@ -852,6 +852,18 @@ mod tests {
     }
 
     #[test]
+    fn the_range_is_measured_from_the_stellar_wherever_it_is() {
+        let away = StellarGun {
+            position: Vec2::new(1000.0, -1000.0),
+            ..gun()
+        };
+        let near = [pirate(1, 1100.0, -1050.0)];
+        assert_eq!(picked(&away, &blaster(), &near), Some(0));
+        let at_origin = [pirate(1, 0.0, 0.0)];
+        assert_eq!(picked(&away, &blaster(), &at_origin), None);
+    }
+
+    #[test]
     fn a_disable_only_or_massless_gun_passes_over_a_disabled_ship_and_an_ordinary_one_does_not() {
         let disabled = Mark {
             disabled: true,
