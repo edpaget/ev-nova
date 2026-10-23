@@ -272,6 +272,7 @@ impl PilotCatalog for GameData {
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
                     gravity: stellar.gravity,
+                    fee: stellar.fee,
                     animation: SiteAnimation {
                         delay: stellar.anim_delay,
                         frame0_bias: stellar.frame0_bias,
@@ -2646,6 +2647,7 @@ mod tests {
                     exit_angle: 0,
                     tribute: 0,
                     gravity: 0,
+                    fee: 0,
                     animation: SiteAnimation {
                         type_frames: 1,
                         dead_frames: 1,
@@ -2671,6 +2673,7 @@ mod tests {
                     exit_angle: 0,
                     tribute: 250,
                     gravity: 0,
+                    fee: 0,
                     animation: SiteAnimation {
                         dead_frames: 1,
                         ..SiteAnimation::default()
@@ -3227,6 +3230,26 @@ mod tests {
             .map(|site| site.gravity)
             .collect();
         assert_eq!(found, gravities);
+    }
+
+    #[test]
+    fn a_landing_sites_fee_is_its_spöbs_raw() {
+        // `Fee` (`spöb` +0x234, i32) goes through raw, whatever it is:
+        // `nova_sim::landing::fee_due` decides what a value means.
+        let fees: [i32; 3] = [0, 1000, -5];
+        let mut resources = vec![(System::TYPE, 130, system_with(&[128, 129, 130]))];
+        for (id, fee) in (128..).zip(fees) {
+            let mut bytes = stellar(0, 0, 0, 1, 0);
+            bytes[0x234..0x238].copy_from_slice(&fee.to_be_bytes());
+            resources.push((Stellar::TYPE, id, bytes));
+        }
+        let data = store(&resources);
+        let found: Vec<i32> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.fee)
+            .collect();
+        assert_eq!(found, fees);
     }
 
     #[test]

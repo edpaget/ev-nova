@@ -457,6 +457,7 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
         exit_angle: -1,
         tribute: 0,
         gravity: 0,
+        fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }

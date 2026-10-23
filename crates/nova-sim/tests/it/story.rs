@@ -182,6 +182,7 @@ impl PilotCatalog for Home {
             exit_angle: -1,
             tribute: 0,
             gravity: 0,
+            fee: 0,
             animation: nova_sim::catalog::SiteAnimation::default(),
         }]
     }

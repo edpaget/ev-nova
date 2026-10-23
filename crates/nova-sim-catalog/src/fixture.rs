@@ -155,6 +155,7 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         exit_angle: -1,
         tribute: 0,
         gravity: 0,
+        fee: 0,
         animation: crate::catalog::SiteAnimation::default(),
     }
 }

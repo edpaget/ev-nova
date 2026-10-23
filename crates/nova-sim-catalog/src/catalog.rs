@@ -170,6 +170,11 @@ pub struct LandingSite {
     /// when not 0 (`nova_sim::map_panel`; `_MapDialogUpdate`
     /// @0x1061f-0x106a9 reads it at runtime +0x46c).
     pub gravity: i16,
+    /// Its `Fee`, raw: the Bible's "fee that is deducted from the player's
+    /// credits when landing on this stellar". `_HandlePlayerDockRequest`
+    /// and `_HandlePlayerDockApproach` read it at runtime +0x38;
+    /// `nova_sim::landing::fee_due` decides when it is due.
+    pub fee: i32,
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
@@ -2675,6 +2680,7 @@ mod tests {
                 exit_angle: -1,
                 tribute: 0,
                 gravity: 0,
+                fee: 0,
                 animation: crate::catalog::SiteAnimation::default(),
             }]
         }
