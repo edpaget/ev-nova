@@ -24,7 +24,11 @@
 //! framed again, last, in `GridBright`, not filled
 //! ([`GridColors`](super::grid::GridColors)); the grid scrolls a row at a
 //! time with the arrows below it,
-//! or with the selection. With nothing listed, the grid says so (`STR#`
+//! or with the selection. The arrow keys, and Page Up and Page Down as Up
+//! and Down, move the selection by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows), as the
+//! shipyard's do: by the engine, Up on the first row and Down onto an
+//! empty cell stay (`_OutfitFilter` @0x58203-0x583b8). With nothing listed, the grid says so (`STR#`
 //! 2002 #206).
 //!
 //! The selected outfit's picture is `PICT` 6000 plus its ID less 128, or
@@ -154,6 +158,7 @@ use nova_sim::{
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
 use super::grid::{self, CellGrid, GridColors, GridLooks, Shown, text};
+use super::grid_arrows::{ArrowMoves, arrow_move};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -1031,25 +1036,32 @@ impl OutfitterScreen {
     }
 
     /// Moves the selection for an arrow `key` going down, and says
-    /// whether it was an arrow. With no cell highlighted, after a reset or
-    /// an empty cell clicked, an arrow highlights one: Right and Down pick
-    /// the first cell shown, and Left and Up the last cell shown, slot 19
-    /// of the 20 (`andl $0x13` @0x583e5), or the last listed when fewer
-    /// are (`_OutfitFilter` @0x583bd-0x58440);
-    /// otherwise the grid moves the selection.
+    /// whether it was an arrow, as [`arrow_move`] moves it by the reading
+    /// of [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the
+    /// engine, Up on the first row and Down onto an empty cell stay, and
+    /// Page Up and Page Down move as Up and Down. With no cell highlighted,
+    /// after a reset or an empty cell clicked, an arrow highlights one:
+    /// Right and Down pick the first cell shown, and Left and Up the last
+    /// cell shown, slot 19 of the 20 (`andl $0x13` @0x583e5), or the last
+    /// listed when fewer are (`_OutfitFilter` @0x583bd-0x58440).
     fn arrow(&mut self, key: Key) -> bool {
         let count = self.outfitter.rows.len();
+        let moves = ArrowMoves::from_rules(&self.outfitter.rules);
         if self.highlight == Highlight::Cell {
-            return self.grid.arrow(key, count);
+            return self.grid.arrow(key, count, moves);
         }
-        let first = self.grid.top_row() * COLUMNS;
-        let index = match key {
-            Key::Right | Key::Down => first,
-            Key::Left | Key::Up => first + COLUMNS * GRID_ROWS - 1,
-            _ => return false,
+        let Some(placed) = arrow_move(
+            key,
+            false,
+            self.grid.selected_raw(),
+            self.grid.top_row(),
+            count,
+            moves,
+        ) else {
+            return false;
         };
         self.highlight = Highlight::Cell;
-        self.grid.select(index, count);
+        self.grid.select(placed.selected, count);
         true
     }
 
@@ -2075,6 +2087,33 @@ mod tests {
         press(&mut screen, Key::Left);
         assert_eq!(screen.selected(), Some(4));
         assert_eq!(screen.take_sounds(), [], "keys are silent");
+    }
+
+    #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        let at = |outfitter: Outfitter, from: usize, k: Key| {
+            let mut screen = screen_of(outfitter);
+            click_cell(&mut screen, from);
+            press(&mut screen, k);
+            (screen.selected(), screen.selected_outfit())
+        };
+        let outfit = |index: usize| Some(OutfitId(200 + i16::try_from(index).expect("few")));
+        assert_eq!(at(long(10), 6, Key::Down), (Some(6), outfit(6)));
+        assert_eq!(at(long(10), 2, Key::Up), (Some(2), outfit(2)));
+        assert_eq!(at(long(10), 1, Key::PageDown), (Some(5), outfit(5)));
+        assert_eq!(at(long(10), 5, Key::PageUp), (Some(1), outfit(1)));
+        let clamped = |outfitter: Outfitter| Outfitter {
+            rules: outfitter
+                .rules
+                .with_override(RuleKey::GridArrows, RuleSource::Bible),
+            ..outfitter
+        };
+        assert_eq!(at(clamped(long(10)), 6, Key::Down), (Some(9), outfit(9)));
+        assert_eq!(at(clamped(long(10)), 2, Key::Up), (Some(0), outfit(0)));
+        assert_eq!(
+            at(clamped(long(10)), 6, Key::PageDown),
+            (Some(9), outfit(9))
+        );
     }
 
     #[test]
@@ -3153,8 +3192,10 @@ mod tests {
         for (k, first_or_last) in [
             (Key::Right, 0),
             (Key::Down, 0),
+            (Key::PageDown, 0),
             (Key::Left, 19),
             (Key::Up, 19),
+            (Key::PageUp, 19),
         ] {
             assert_eq!(arrowed(long(30), 0, k), at(first_or_last, 0), "{k:?}");
             assert_eq!(

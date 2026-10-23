@@ -25,7 +25,10 @@
 //! [`shipyard`](super::shipyard)): by the engine it opens with nothing
 //! selected, and an empty cell pressed or a scroll that moves selects
 //! nothing; by the other reading it opens on the first cell and keeps
-//! it. By both, a second press on a cell within 15 Mac ticks opens Info,
+//! it. Its arrow keys move the selection by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows) as the
+//! shipyard's do: by the engine, Up on the first row and Down onto an
+//! empty cell stay, and Page Up and Page Down move as Up and Down. By both, a second press on a cell within 15 Mac ticks opens Info,
 //! as `_ShipyardFilter` does in hire mode too (@0x60cd7-0x60d12).
 //!
 //! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
@@ -1731,5 +1734,40 @@ mod tests {
 
     fn press_key(screen: &mut HireScreen, k: Key) {
         screen.input(&key(k, false));
+    }
+
+    #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        // Six escorts, the second too dear: Down from 3 finds index 7
+        // empty, and Up from 5 reaches 1, on the first row.
+        let six = |rules: nova_sim::Rulebook| {
+            let mut list = long(6);
+            list.rows[1].hire = Err(HireRefusal::CannotAfford);
+            HireList { rules, ..list }
+        };
+        let arrowed = |rules: nova_sim::Rulebook, from: usize, keys: &[Key]| {
+            let mut screen = opened_of(&art(), six(rules));
+            click_cell(&mut screen, from);
+            for &k in keys {
+                press_key(&mut screen, k);
+            }
+            (screen.selected(), enabled(&screen, HIRE_ESCORT))
+        };
+        let engine = nova_sim::Rulebook::default;
+        assert_eq!(arrowed(engine(), 3, &[Key::Down]), (Some(3), true));
+        assert_eq!(arrowed(engine(), 3, &[Key::PageDown]), (Some(3), true));
+        assert_eq!(arrowed(engine(), 5, &[Key::Up]), (Some(1), false));
+        assert_eq!(arrowed(engine(), 5, &[Key::Up, Key::Up]), (Some(1), false));
+        assert_eq!(
+            arrowed(engine(), 5, &[Key::PageUp, Key::PageUp]),
+            (Some(1), false)
+        );
+        assert_eq!(arrowed(engine(), 1, &[Key::PageDown]), (Some(5), true));
+        let clamped = || {
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::GridArrows, nova_sim::RuleSource::Bible)
+        };
+        assert_eq!(arrowed(clamped(), 3, &[Key::Down]), (Some(5), true));
+        assert_eq!(arrowed(clamped(), 5, &[Key::Up, Key::Up]), (Some(0), true));
     }
 }

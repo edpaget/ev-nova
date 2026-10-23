@@ -30,8 +30,12 @@
 //! @0x5f60b-0x5f670). With nothing selected, Buy Ship and Info are greyed
 //! and no picture, info box or description is drawn. An arrow key then
 //! highlights the first cell shown (Right, Down) or the last (Left, Up),
-//! as `_ShipyardFilter` does from no cell (@0x60734-0x607b7); Page Up and
-//! Page Down are not read here. By the other reading, the first cell is
+//! as `_ShipyardFilter` does from no cell (@0x60734-0x607b7). With a cell
+//! highlighted, an arrow key moves it by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the engine,
+//! Up on the first row and Down onto an empty cell stay
+//! (@0x6057a-0x6072f). Page Up and Page Down move as Up and Down. By the
+//! other reading of the selection, the first cell is
 //! selected as it opens, a press on an empty cell is ignored, and a scroll
 //! keeps the selection. By both, a second press on the same cell position
 //! within 15 Mac ticks of the first opens Info ([`grid_clicks`](super::grid_clicks),
@@ -2850,6 +2854,42 @@ mod tests {
         assert_eq!(screen.take_request(), None);
         assert!(screen.info_panel().is_none());
         assert_eq!(*art.asked.borrow(), ["bases"], "nothing else to read");
+    }
+
+    #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        // Four listed: Down from the Heavy Shuttle finds index 5 empty, and
+        // Up from the Courier is on the first row.
+        let arrowed = |rules: Rulebook, from: usize, k: Key| {
+            let mut screen = opened_with(
+                Shipyard {
+                    rules,
+                    ..shipyard()
+                },
+                &art(),
+            );
+            click_cell(&mut screen, from);
+            press(&mut screen, k);
+            (screen.selected(), enabled(&screen, BUY_SHIP_LABEL))
+        };
+        let engine = Rulebook::default;
+        assert_eq!(arrowed(engine(), 1, Key::Down), (Some(1), true));
+        assert_eq!(arrowed(engine(), 1, Key::PageDown), (Some(1), true));
+        assert_eq!(arrowed(engine(), 2, Key::Up), (Some(2), false));
+        assert_eq!(arrowed(engine(), 2, Key::PageUp), (Some(2), false));
+        assert_eq!(arrowed(engine(), 0, Key::PageDown), (Some(0), false));
+        let clamped =
+            || Rulebook::default().with_override(nova_sim::RuleKey::GridArrows, RuleSource::Bible);
+        assert_eq!(
+            arrowed(clamped(), 1, Key::Down),
+            (Some(3), false),
+            "the Viper, not for sale"
+        );
+        assert_eq!(
+            arrowed(clamped(), 2, Key::Up),
+            (Some(0), false),
+            "the class flown"
+        );
     }
 
     // The selection as `_ShipyardFilter` keeps it (`RuleKey::GridSelection`).

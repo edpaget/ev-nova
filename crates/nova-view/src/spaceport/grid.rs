@@ -12,7 +12,10 @@
 //! press is hit-tested on the frame's size, not the pitch. One cell is
 //! selected, or none once cleared (the shipyard's and the hire screen's,
 //! by the engine); the grid scrolls a row at a time, never past either
-//! end, and always shows the selected cell when the selection moves.
+//! end, and always shows the selected cell when the selection moves. The
+//! arrow keys move the selection as
+//! [`grid_arrows`](super::grid_arrows) decides, by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows).
 //!
 //! A cell shows its item's picture, stretched to [`ICON_SIZE`] square,
 //! centred across the cell near its top; its `ShortName` centred across
@@ -24,6 +27,7 @@
 
 use std::rc::Rc;
 
+use super::grid_arrows::{ArrowMoves, arrow_move};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::font::Font;
@@ -378,7 +382,7 @@ impl CellGrid {
 
     /// The grid's last first row, for `count` cells: never scrolled past
     /// its end.
-    fn last_top_row(count: usize) -> usize {
+    pub(super) fn last_top_row(count: usize) -> usize {
         count.div_ceil(COLUMNS).saturating_sub(GRID_ROWS)
     }
 
@@ -396,25 +400,27 @@ impl CellGrid {
     }
 
     /// Moves the selection for an arrow `key` going down, among `count`
-    /// cells, and says whether it was an arrow. With no cell highlighted
-    /// ([`CellGrid::clear`]), an arrow highlights one without scrolling:
-    /// Right and Down the first cell shown, and Left and Up the last cell
-    /// shown, position 19 (`andl $0x13`), or the last listed when fewer
-    /// are, as `_ShipyardFilter` does (@0x60734-0x607b7) and
-    /// `_OutfitFilter` after a reset (@0x583bd-0x58440). Page Up and Page
-    /// Down are not arrows here.
-    pub fn arrow(&mut self, key: Key, count: usize) -> bool {
-        let first = self.top_row * COLUMNS;
-        let index = match (key, self.highlighted) {
-            (Key::Left, true) => self.selected.saturating_sub(1),
-            (Key::Right, true) => self.selected + 1,
-            (Key::Up, true) => self.selected.saturating_sub(COLUMNS),
-            (Key::Down, true) => self.selected + COLUMNS,
-            (Key::Right | Key::Down, false) => first,
-            (Key::Left | Key::Up, false) => first + COLUMNS * GRID_ROWS - 1,
-            _ => return false,
+    /// cells, by `moves`, the reading of
+    /// [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows), and says
+    /// whether it was an arrow. Page Up and Page Down move as Up and Down.
+    /// With no cell highlighted ([`CellGrid::clear`]), an arrow highlights
+    /// one without scrolling: Right and Down the first cell shown, and Left
+    /// and Up the last cell shown, or the last listed when fewer are. See
+    /// [`arrow_move`] for the moves.
+    pub fn arrow(&mut self, key: Key, count: usize, moves: ArrowMoves) -> bool {
+        let Some(placed) = arrow_move(
+            key,
+            self.highlighted,
+            self.selected,
+            self.top_row,
+            count,
+            moves,
+        ) else {
+            return false;
         };
-        self.select(index, count);
+        self.highlighted = true;
+        self.selected = placed.selected;
+        self.top_row = placed.top_row;
         true
     }
 
@@ -964,12 +970,12 @@ mod tests {
         assert_eq!(grid.can_scroll(22), (false, true));
         grid.select(19, 22);
         assert_eq!(grid.top_row(), 0, "the fifth row shows without scrolling");
-        assert!(grid.arrow(Key::Down, 22));
+        assert!(grid.arrow(Key::Down, 22, ArrowMoves::Filter));
         assert_eq!((grid.selected(22), grid.top_row()), (Some(21), 1));
         grid.select(0, 22);
-        assert!(grid.arrow(Key::Down, 22));
+        assert!(grid.arrow(Key::Down, 22, ArrowMoves::Filter));
         assert_eq!(grid.selected(22), Some(4));
-        assert!(!grid.arrow(Key::Enter, 22));
+        assert!(!grid.arrow(Key::Enter, 22, ArrowMoves::Filter));
         assert_eq!(grid.selected(22), Some(4));
         grid.scroll(true, 22);
         grid.scroll(true, 22);
@@ -1200,9 +1206,12 @@ mod tests {
             (Key::Up, 0, 7, 6),
             (Key::Left, 1, 22, 21),
             (Key::Right, 0, 7, 0),
+            (Key::PageDown, 1, 30, 4),
+            (Key::PageUp, 1, 30, 23),
         ] {
             let mut grid = cleared(top_rows, count);
-            assert!(grid.arrow(key, count), "{key:?}");
+            assert!(grid.arrow(key, count, ArrowMoves::Filter), "{key:?}");
+            assert!(grid.highlighted(), "{key:?} highlights a cell");
             assert_eq!(
                 grid.selected(count),
                 Some(expected),
@@ -1211,8 +1220,32 @@ mod tests {
             assert_eq!(grid.top_row(), top_rows, "{key:?} does not scroll");
         }
         let mut grid = cleared(0, 30);
-        assert!(!grid.arrow(Key::Enter, 30));
+        assert!(!grid.arrow(Key::Enter, 30, ArrowMoves::Filter));
         assert_eq!(grid.selected(30), None, "not an arrow");
+    }
+
+    #[test]
+    fn an_arrow_moves_the_selection_by_the_reading_given() {
+        // Ten listed: Down from 6 stays and Up from 2 stays by the filter,
+        // and go to the ends by the clamped reading.
+        for (moves, down, up) in [(ArrowMoves::Filter, 6, 2), (ArrowMoves::Clamped, 9, 0)] {
+            let mut grid = CellGrid::default();
+            grid.select(6, 10);
+            assert!(grid.arrow(Key::Down, 10, moves));
+            assert_eq!(grid.selected(10), Some(down), "{moves:?} Down");
+            grid.select(2, 10);
+            assert!(grid.arrow(Key::Up, 10, moves));
+            assert_eq!(grid.selected(10), Some(up), "{moves:?} Up");
+        }
+        let mut grid = CellGrid::default();
+        assert!(grid.arrow(Key::Right, 30, ArrowMoves::Filter));
+        assert_eq!(grid.selected(30), Some(1));
+        assert!(grid.arrow(Key::PageDown, 30, ArrowMoves::Filter));
+        assert_eq!(grid.selected(30), Some(5));
+        // Index 19 to the next row scrolls the grid with it.
+        grid.select(19, 30);
+        assert!(grid.arrow(Key::Right, 30, ArrowMoves::Filter));
+        assert_eq!((grid.selected(30), grid.top_row()), (Some(20), 1));
     }
 
     #[test]

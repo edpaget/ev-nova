@@ -49,6 +49,7 @@ pub mod catalog;
 pub mod credits;
 pub mod data;
 pub mod grid;
+pub mod grid_arrows;
 mod grid_clicks;
 pub mod hire;
 pub mod layout;
