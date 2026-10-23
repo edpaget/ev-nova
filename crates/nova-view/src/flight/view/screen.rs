@@ -240,9 +240,9 @@ impl<
         self.advance_hud();
     }
 
-    /// The scene, its HUD and the cursor, then the fades. With the course
-    /// map open, the map's dialog over the paused scene as it would be
-    /// drawn shut, less the cursor, which the map hides, its 1024 x 768
+    /// The scene and its HUD, then the fades. With the course map open,
+    /// the map's dialog over the paused scene as it would be drawn shut,
+    /// less the cursor, which the map hides, its 1024 x 768
     /// frame centred in a widened view ([`FlightView::map_offset`]); in
     /// port, where the bar opens it, the dialog alone, where the classic
     /// spaceport has it, for the app to draw over the spaceport.
@@ -345,12 +345,12 @@ impl<
         + EscortMenuLooks,
 > FlightView<C>
 {
-    /// Draws the scene and its HUD, the cursor and the fades left out:
-    /// whether there was a scene to draw, or only why flight could not
-    /// start. The sprite world goes first, in `_SetupSpriteWorld`'s order
-    /// ([`FlightView::draw_world`]), then the overlay over it: the
-    /// brackets, the red-alert and double-time icons, the floating map, the
-    /// escort menu, the title, the help and the status bar.
+    /// Draws the scene and its HUD, the fades left out: whether there was
+    /// a scene to draw, or only why flight could not start. The sprite
+    /// world goes first, in `_SetupSpriteWorld`'s order
+    /// ([`FlightView::draw_world`]), the brackets, the cursor, the icons,
+    /// the floating map and the escort menu among it, then the overlay
+    /// over it: the title, the help and the status bar.
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         let Some(scene) = &self.scene else {
             let reason = self.session().err().unwrap_or_default();

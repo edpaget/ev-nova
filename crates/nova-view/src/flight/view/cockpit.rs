@@ -1181,7 +1181,8 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the Red Alert icon the session shows, if any, over the
-    /// brackets on the interface layer (see the `alert` module).
+    /// brackets and the cursor in the target layer, in the world (see the
+    /// `alert` module).
     pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
         let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
         if let (Some(icon), Some(width)) = (icon, self.alert_width) {

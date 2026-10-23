@@ -7,18 +7,36 @@
 //! cargo boxes and then the escape pods, the smoke, the point-defence,
 //! homing and other shots, the ships the player leads, the other ships and
 //! the player, the turret shots over the ships, the explosions, the target
-//! layer, the other beams (the target layer's `_BeamDrawCallback`), and
-//! last the particles (`_PostDrawCallback`'s `_DrawParticlesOffscreen`).
-//! See [`nova_sim::sprite_layer`] for the addresses.
+//! layer (the brackets, the cursor, the red-alert and double-time icons),
+//! the other beams (the target layer's `_BeamDrawCallback`), the floaters
+//! (`_PostDrawCallback`'s `_FloaterDrawCallback`: the message line's text,
+//! the floating map and the escort menu), and last the particles
+//! (`_PostDrawCallback`'s `_DrawParticlesOffscreen`). See
+//! [`nova_sim::sprite_layer`] for the addresses.
 //!
-//! Left out: the target layer's brackets, cursor, red-alert and
-//! double-time icons, which the view draws in the overlay after the
-//! world, over the beams and the particles, and the floating map and the
-//! escort menu, which `_PostDrawCallback` draws before the particles
-//! (rdm:phase/play-feel/phase-13-target-layer-and-floaters-in-the-world-order);
-//! and the order within the explosions', smoke's, pods' and boxes' layers,
-//! their slot order in the original
-//! (rdm:phase/play-feel/phase-14-slot-order-within-layers).
+//! Left out:
+//!
+//! - the order within the explosions', smoke's, pods' and boxes' layers,
+//!   their slot order in the original
+//!   (rdm:phase/play-feel/phase-14-slot-order-within-layers);
+//! - `_FloaterDrawCallback`'s guards (@0x38b34-0x38b4c): it draws nothing
+//!   while switched out (`0x3b50e0`), which the engine's flight has no
+//!   state for, or while the world's byte +0xe8 is 0, `SpriteWorld`
+//!   bookkeeping the engine has no need of, drawing every frame whole;
+//! - the message rect's OR (@0x38b52-0x38b90) is drawn as the message's
+//!   text over the sprites, its box staying under them: a system
+//!   `BkgndColor` other than black, which the OR lays over the sprites in
+//!   the rect, is left out
+//!   (rdm:phase/play-feel-followups/phase-3-message-rect-background-ored-over-sprites);
+//! - the escort menu's fade on closing (level 32 − `0x3b51a0`,
+//!   @0x38c0f-0x38c5b), filed in rdm:task/escorts-follow-up;
+//! - the escort menu showing a change a frame late, as the callback blits
+//!   the menu's frame before redrawing it (@0x38c60-0x38c77)
+//!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late);
+//! - every world sprite but the cursor drawing past the play area into
+//!   the status bar's column, where the sprite world ends 194 short of
+//!   the window (@0x21b54-0x21ba4)
+//!   (rdm:phase/play-feel-followups/phase-2-flight-world-clipped-to-play-area).
 
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 use nova_sim::{RuleKey, RuleSource, Session};

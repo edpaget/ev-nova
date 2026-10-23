@@ -329,10 +329,12 @@ impl DrawCommand {
 /// Which layer of the frame a command is drawn in.
 ///
 /// Only flight draws a world layer ([`DrawList::world`]): space, the
-/// stellars, asteroids, boxes, beams, ships, shots, effects and smoke,
-/// everything the original draws into its sprite world. Everything else
-/// (the HUD, every text, the maps, the dialogs, the cursor and the fades)
-/// is overlay, and so is all of every other screen's drawing.
+/// stellars, asteroids, boxes, beams, ships, shots, effects and smoke, the
+/// brackets, the cursor and the red-alert and double-time icons, the
+/// message line's box, the floating map and the escort menu (but for
+/// their text), everything the original draws into its sprite world.
+/// Everything else (the HUD, every text, the course map, the dialogs and
+/// the fades) is overlay, and so is all of every other screen's drawing.
 ///
 /// A renderer may draw the world at the logical resolution and enlarge it
 /// (a frame upscaler), drawing the overlay over it at the window's own.

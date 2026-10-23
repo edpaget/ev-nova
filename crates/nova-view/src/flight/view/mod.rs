@@ -111,8 +111,10 @@
 //! disabled ships, the cargo boxes a jettison left ([`boxes`](super::boxes),
 //! smoothed as the shots are) and the escape pods, the smoke, the shots and
 //! the ships in their layers (each smoothed as the ships are), the
-//! explosions, the other beams and last the particles; then, in the
-//! overlay, the brackets round the target ([`weapons`](super::weapons),
+//! explosions, the target layer (the brackets round the target, the cursor
+//! and the red-alert and double-time icons), the other beams, the
+//! floaters (the message line's text, the floating map and the escort
+//! menu) and last the particles ([`weapons`](super::weapons),
 //! [`effects`](super::effects), [`target`](super::target)). The HUD shows
 //! the target panel and the secondary weapon's line, its text laid out
 //! by the screen's [`TextMetrics`] ([`FlightView::with_metrics`]).
