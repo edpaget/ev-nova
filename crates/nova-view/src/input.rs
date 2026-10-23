@@ -13,6 +13,11 @@ pub enum Key {
     Up,
     /// Down arrow.
     Down,
+    /// Page Up (fn+Up on a Mac laptop), which the shop grids take as Up.
+    PageUp,
+    /// Page Down (fn+Down on a Mac laptop), which the shop grids take as
+    /// Down.
+    PageDown,
     /// Return or Enter.
     Enter,
     /// Escape.

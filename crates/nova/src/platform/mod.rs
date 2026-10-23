@@ -125,6 +125,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::ArrowRight) => Key::Right,
         PhysicalKey::Code(KeyCode::ArrowUp) => Key::Up,
         PhysicalKey::Code(KeyCode::ArrowDown) => Key::Down,
+        // The shop grids' Page Up and Page Down, Mac key codes 0x74 and
+        // 0x79, fn+Up and fn+Down on a Mac laptop.
+        PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
+        PhysicalKey::Code(KeyCode::PageDown) => Key::PageDown,
         PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => Key::Enter,
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
@@ -280,6 +284,8 @@ mod tests {
             (KeyCode::ArrowRight, Key::Right),
             (KeyCode::ArrowUp, Key::Up),
             (KeyCode::ArrowDown, Key::Down),
+            (KeyCode::PageUp, Key::PageUp),
+            (KeyCode::PageDown, Key::PageDown),
             (KeyCode::Enter, Key::Enter),
             (KeyCode::NumpadEnter, Key::Enter),
             (KeyCode::Escape, Key::Escape),
