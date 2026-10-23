@@ -2519,7 +2519,7 @@
 //! counter is above 0x2ed (@0x677b2-0x677c0), else "too far" (#65-#68),
 //! for 360 ticks (@0x6787f). The engine's refusal order already matched;
 //! only the speed compare changed. The fee's branches (@0x669b4-0x66a80,
-//! @0x66db9-0x66df5) are stellar-fidelity phase 15's; the cloak refusal
+//! @0x66db9-0x66df5) are built by stellar-fidelity phase 15; the cloak refusal
 //! is cloaking-fidelity phase 8's; every other branch was already built.
 //!
 //! ## Built by stellar-fidelity phase 7
@@ -3365,6 +3365,90 @@
 //!   hints' candidates (@0x709e8, @0x70bdc) and `_DoNewPilot`'s
 //!   (@0x1926e), which get the gate limit but still read the stellars
 //!   shown; hailing an unowned selection.
+//!
+//! ## Built by stellar-fidelity phase 15
+//!
+//! A stellar's landing `Fee` (`nova_sim::LandingSite::fee`, raw from its
+//! `spöb`):
+//!
+//! - **When it is due.** `nova_sim_state::landing::fee_due`: a `Fee`
+//!   above 0 at a stellar not dominated. A `Fee` of 0 or below is no fee.
+//! - **The refusal.** The land key refuses a pilot whose cash is below
+//!   the fee due with `nova_sim::LandingRefusal::CannotPayFee`, right
+//!   after the not-landable check and before the disabled ship's press,
+//!   the uninhabited stellar's "No response." and the clearance, so on
+//!   the first press too. It is silent and drops the dock request. The
+//!   view says "You don't have enough credits to pay the landing fee."
+//!   (or the docking or hypergate fee) for 250 ticks.
+//! - **The charge.** A press that lands, or enters a hypergate or
+//!   wormhole, pays the fee (`nova_sim_state::landing::pay_fee`, never
+//!   below 0) before the gate branch; a cancelled hypergate map does not
+//!   refund it (the session's `landing_fee` module).
+//! - **The greeting.** `nova_sim::SimMessage::DockCleared` carries the fee
+//!   due, and the dock approach's greeting ends with "  [Landing fee is
+//!   1,000 credits.]" (or "[Docking fee is"), its millions by
+//!   [`pay_millions`](crate::RuleKey::PayMillions); a hypergate's greeting
+//!   has none.
+//!
+//! No new Rulebook key: the Bible's `Fee` ("The fee that is deducted
+//! from the player's credits when landing on this stellar") says nothing
+//! of a refusal, of domination or of gates, so it gives no other reading.
+//!
+//! ## Checked for stellar-fidelity phase 15
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386),
+//! `_HandlePlayerDockRequest` (@0x66691-0x67ef9) and
+//! `_HandlePlayerDockApproach`. The runtime `spöb` record: `Flags` +0x30,
+//! `Flags2` +0x34 (hypergate 0x1000), `Fee` +0x38 (i32), the domination
+//! byte +0x46; the pilot's cash +0xa0 of `*0x3b5138`; `_creditsCString`
+//! at 0x184560 ("credits").
+//!
+//! - **The refusal** (@0x669b4-0x66a80), after the landability tests
+//!   (@0x66977-0x669aa) and before the cloak (`_ShipIsCloaked` @0x66a8e),
+//!   the disabled epilogue (@0x66aee-0x66b14), the uninhabited reply
+//!   (@0x66b51), the request match (@0x66bd2), the speed and reach gates
+//!   and the clearance (@0x67903). `Fee > 0` (@0x669b7-0x669b9), not
+//!   dominated (@0x669bf-0x669c3) and `Fee > cash`, signed
+//!   (@0x669d0-0x669d6): cash equal to the fee pays. Text: #61, " ",
+//!   `_creditsCString` (always plural, @0x66a0f-0x66a1b), " ", then #62
+//!   at a hypergate (@0x66a40-0x66a46), else #63 at a station
+//!   (@0x66a50-0x66a56), else #64 (@0x66a60). `_DisplayComm(text, 0xfa,
+//!   …)` @0x67c88-0x67cbc, 250 ticks, no sound. `_dockTarget` and
+//!   `_dockPermission` := -1 (@0x67cc1-0x67cd0), then the epilogue
+//!   (0x67eef); the selection is untouched.
+//! - **The charge** (@0x66db9-0x66df5), on the success path only, after
+//!   the speed and reach gates and before the branch to
+//!   `_PlayerEnterHypergate` (@0x66ed6-0x66edb), `_PlayerEnterWormhole`
+//!   (@0x66f0d-0x66f12) or the landing: one charge serves all three
+//!   (@0x66dce is its `Fee` read). `Fee > 0` (@0x66dd1), not dominated
+//!   (@0x66dd5), cash − `Fee` (@0x66de3), a negative result set to 0
+//!   (@0x66deb-0x66df5), unreachable from the press but ported. A
+//!   hypergate map cancelled after (@0x66ee0-0x66f08) refunds nothing.
+//! - **The greeting** (@0x64d70-0x64e58): after the second sentence,
+//!   when `Fee > 0` (@0x64d87-0x64d8c) and not dominated
+//!   (@0x64d92-0x64d96): "  " (@0x64da6), #103 at a station
+//!   (@0x64dca-0x64dd0) or #104 (@0x64dda), " " (@0x64e00),
+//!   `_StrcatCommaNumber(Fee)` (@0x64e21), " " (@0x64e2e),
+//!   `_creditsCString` (@0x64e34-0x64e40), #105 (@0x64e45-0x64e58), still
+//!   shown 250 ticks (@0x64e8e). A hypergate's greeting jumps past it
+//!   (@0x64a59 → 0x64e5d), so #102 "[Hypergate fee is" (@0x64dba-0x64dc0)
+//!   is unreachable and not built; a wormhole gets #103/#104.
+//! - **Left out**: domination by Demand Tribute (+0x46 written by
+//!   `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), which waives the
+//!   refusal, the charge and the greeting line, is
+//!   rdm:task/planet-domination's (`fee_due` is the one reader to switch);
+//!   the 32-bit cash width and signed compare are not replicated; the
+//!   `crashlog_print` calls after the charge (@0x66dff-0x66e56) are debug
+//!   logging.
+//! - **Merge note** (cloaking-fidelity phase 8, on `main` but not on this
+//!   branch's base): `main`'s `land_press` returns
+//!   `LandingRefusal::Cloaked` for any outcome but `NotLandable`,
+//!   `NoStellars` and `NothingLandable` while cloaked. The fee refusal
+//!   (@0x669b4) comes before the cloak (@0x66a8e), so when `main` is
+//!   merged in, `CannotPayFee` must join that pass-through arm, with the
+//!   dock request dropped for it, and a test that a cloaked ship which
+//!   can't pay hears the fee refusal, silently
+//!   (rdm:phase/stellar-fidelity-followups/phase-12-cannot-pay-fee-before-cloak).
 
 //! # Mission lifecycle
 //!
