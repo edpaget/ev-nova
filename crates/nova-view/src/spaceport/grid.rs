@@ -955,6 +955,24 @@ mod tests {
     }
 
     #[test]
+    fn a_press_past_the_four_by_five_cells_of_a_bigger_item_is_under_none() {
+        // A plug-in grid item bigger than 4 x 84 by 5 x 55: the press is in
+        // the item, but past the cells the filters divide it into.
+        let area = rect(10.0, 20.0, 400.0, 330.0);
+        let grid = CellGrid::default();
+        let across = Point::new(10.0 + 335.0, 21.0);
+        assert_eq!(grid.cell_under(area, across), Some(3), "the last column");
+        let past_across = Point::new(10.0 + 336.0, 21.0);
+        assert_eq!(grid.cell_under(area, past_across), None, "column 4");
+        assert_eq!(grid.cell_at(area, past_across, 40), None);
+        let down = Point::new(11.0, 20.0 + 274.0);
+        assert_eq!(grid.cell_under(area, down), Some(16), "the last row");
+        let past_down = Point::new(11.0, 20.0 + 275.0);
+        assert_eq!(grid.cell_under(area, past_down), None, "row 5");
+        assert_eq!(grid.cell_at(area, past_down, 40), None);
+    }
+
+    #[test]
     fn a_point_on_an_unlisted_cell_is_under_a_cell_but_at_none() {
         let area = rect(10.0, 20.0, 333.0, 271.0);
         let grid = CellGrid::default();
