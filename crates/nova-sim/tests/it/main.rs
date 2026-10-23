@@ -30,6 +30,7 @@ mod stock_crons;
 mod stock_escape_pod;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
+mod stock_gate_pick;
 mod stock_inertialess;
 mod stock_ionization;
 mod stock_jump_arrival;

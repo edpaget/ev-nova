@@ -2595,8 +2595,11 @@
 //!   no sound: slot N is `NavDefs` index N, gaps included. The status
 //!   radar (`_DrawStatusRadar` @0x498ad-0x49a8a) draws every non-empty
 //!   `NavDefs` entry, with no active or owner test, sizing the blip by
-//!   whether the `Type` master is loaded (@0x499ef-0x49a27). The engine's
-//!   picks, NPC destinations and radar read only the stellars shown:
+//!   whether the `Type` master is loaded (@0x499ef-0x49a27). The land
+//!   key's and F5's nearest pick, with the gate limit and the owner drop,
+//!   are built by stellar-fidelity phase 14 (below). The slot keys, the
+//!   tutorial hints' and `_DoNewPilot`'s candidates, NPC destinations and
+//!   the radar still read only the stellars shown:
 //!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
 //!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
 //!   and rdm:task/radar-blips-every-listed-stellar.
@@ -3255,6 +3258,113 @@
 //!   - shot fields with no engine state: the decay seed +0x18, the system
 //!     +0x2e, the zeroed +0x24/+0x32/+0x36, the collide proc and frame
 //!     clone (@0x2f487, @0x2f4b9); the spin start +0x34 is the view's.
+//!
+//! ## Built by stellar-fidelity phase 14
+//!
+//! The nearest-stellar pick is `_FindNearestStellar` whole
+//! (`nova_sim_state::landing::nearest_stellar`; the session's
+//! `stellar_picks` module).
+//!
+//! - **The gate limit.** By the engine's reading of
+//!   [`gate_pick_range`](crate::RuleKey::GatePickRange), a hypergate or
+//!   wormhole counts only when its squared distance from the ship is
+//!   strictly below 250000.0, 500 pixels; by the other reading, the
+//!   port's earlier pick, at any distance. Ordinary stellars count at any
+//!   distance. Distances are compared squared. Every caller reads the key:
+//!   the land key, F5, the tutorial's land hint and a new pilot's saved
+//!   stellar.
+//! - **The candidates.** The land key and F5 pick among every stellar
+//!   the system lists that is active (`nova_sim::Session`'s
+//!   `Chart::pick_candidates`), shown there or not: a stellar another
+//!   visible system owns is one. The land key selects it, starting its
+//!   fly-in, and its dock request refuses it as not landable with its
+//!   line and `snd ` 153; held, a second L is refused again. F5 drops it:
+//!   nothing written, no sound, no fall back to the next nearest.
+//! - **The selection.** A stellar selected is one of those candidates,
+//!   not only one the system shows. The gate kind
+//!   (`nova_sim::Session::gate_kind`) and the nav brackets read it from
+//!   the stellars listed; the brackets carry its spöb position.
+//! - **The view.** The brackets of a selection the scene doesn't hold are
+//!   drawn at its spöb position at half 64, and the not-landable line
+//!   names it by its spöb name, as the nav area already does.
+//!
+//! ## Checked for stellar-fidelity phase 14
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386). Floats in
+//! `__TEXT,__const`: 0xdd04c = -1.0, 0xdd050 = 250000.0, 0xdd054 = 0.0.
+//!
+//! - **`_FindNearestStellar(ship)`** (@0x276c-0x2888), whole. It plays no
+//!   sound and writes only its locals.
+//!   - F1: the best distance starts at -1.0 and the best ID at -1
+//!     (@0x2777-0x2785).
+//!   - F2: it walks i = 0..15 over the ship's system's `NavDefs`
+//!     (`sÿst` +0x2a + 2i, @0x278a-0x27a2, loop @0x2873-0x2877), passing
+//!     over an empty slot (@0x27a6-0x27aa).
+//!   - F3: a stellar whose +0x44 is clear is passed over
+//!     (@0x27c3-0x27c7).
+//!   - F4: so is one without `Flags` 0x01 (@0x27cd-0x27d1). Destroyed and
+//!     `Flags` 0x80 are not read.
+//!   - F5: nothing reads the owner +0x14.
+//!   - F6: dx and dy are `_FloatAbs` of the ship's float position less
+//!     the spöb's 16-bit one (@0x27d7-0x281a), and d² = dx·dx + dy·dy in
+//!     single precision (@0x2825-0x2844).
+//!   - F7: `Flags2` & 0x3000 (`movzwl 0x34`, `testb $0x30,%ah`,
+//!     @0x2838-0x2841) counts only when `ucomiss 0xdd050` finds d²
+//!     strictly below 250000.0 (`jae` and `jp` pass it over,
+//!     @0x284a-0x2853); any other stellar counts (`je 0x2855` @0x2848).
+//!   - F8: it becomes the best when the best is strictly above d² (`ja`
+//!     @0x285a-0x285d), or still below 0.0 (@0x285f-0x2868): equally
+//!     near ones go to the earlier slot.
+//!   - F9: it returns the best ID, or -1 (@0x287d).
+//!   - A first counted stellar at a NaN distance would stick as the best
+//!     (@0x285a-0x2868); positions are never NaN, so it is not modelled.
+//!   - The spöb coordinates are 16-bit and the ID is returned as a short;
+//!     the engine keeps `f32` positions and `i16` IDs.
+//! - **Its callers**: `_DoNewPilot` @0x1926e, F5 @0x69e59, the land key
+//!   @0x6a901, the tutorial hints @0x709e8 and @0x70bdc.
+//! - **The land key** (@0x6a8ed-0x6a932): with mode +0x6a ≠ 2 or no
+//!   selection it picks for the player; a pick writes mode 2, +0x6c,
+//!   `_statusRedraw` and `_navTargetExpand` := 256.0, with no sound and no
+//!   owner test. Then `_HandlePlayerDockRequest` (@0x6a938-0x6a956)
+//!   refuses an unowned pick (@0x6699a-0x669a4) with the not-landable
+//!   line (0x67cda) and `snd ` 153 (@0x67e8f).
+//! - **F5 and the slot keys' shared tail** (@0x69e1f-0x69f12): F5 is key
+//!   index 0x10 and picks for the player (@0x69e4f-0x69e5e); -1 does
+//!   nothing (@0x69e65-0x69e6d); a pick whose +0x14 isn't the player's
+//!   +0x74 leaves with nothing written and no sound (`jne 0x69dea`,
+//!   @0x69e73-0x69e94); otherwise `snd ` 150, then, unless already
+//!   selected in mode 2, the fly-in, +0x6c, `_statusRedraw`, mode 2 and
+//!   the dock request dropped (@0x69e9a-0x69f12).
+//! - **What a selection outside the stellars shown meets.**
+//!   `_HandleNavTargetSprites` (@0x2fcaf-0x2fe41) brackets it at the spöb
+//!   position (@0x2fd9f-0x2fdda) at half 64 when no visible slot holds it
+//!   (@0x2fde7-0x2fe41). `_DrawStatusNav` names any selected stellar by
+//!   its spöb name (@0x4a0fd-0x4a149). The not-landable line is `STR#`
+//!   2002 #84 then #86 (wormhole) or #85 (hypergate) with no name, else
+//!   #87/#88 and the name (@0x67cda-0x67dc4). Hailing
+//!   (`_HandlePlayerCommunication` @0x61fac-0x62009) has no owner test;
+//!   ours gives "No response.", unreachable in stock (wormhole 466 never
+//!   answers): rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs.
+//! - **The other readers of the selection**, audited: the hail looks it
+//!   up among the stellars shown (the divergence above); the person
+//!   offers and the map cycle read its ID only; the face key falls back
+//!   to the stellar's spöb place (`StellarMarks`); the dock request's
+//!   wording and the landing read it only once it is owned, which the
+//!   refusal stops first; the nav area names it by its spöb name. None
+//!   panics or misbehaves.
+//! - **Wormholes stay shown**: `_DrawStatusRadar` @0x498a0-0x49a8e,
+//!   `_HandleStellarSprites` @0x2e713-0x2e74f and `_DrawStatusNav`
+//!   @0x4a09c-0x4a18c have no gate test.
+//! - **Stock**: only wormhole 466 (`Flags` 0x21, `Flags2` 0x2200) is
+//!   listed by a system that doesn't own it: Spica (144) owns it, and
+//!   K-005 (436, visible while `!b330`) lists it at (9500, 2600), its only
+//!   stellar.
+//! - **Left out**, in
+//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
+//!   the slot keys by `NavDefs` index (@0x69e28-0x69e46); the tutorial
+//!   hints' candidates (@0x709e8, @0x70bdc) and `_DoNewPilot`'s
+//!   (@0x1926e), which get the gate limit but still read the stellars
+//!   shown; hailing an unowned selection.
 
 //! # Mission lifecycle
 //!
