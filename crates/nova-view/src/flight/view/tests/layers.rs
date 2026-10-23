@@ -93,7 +93,7 @@ fn layered_sheet() -> ShipSheet {
 }
 
 #[test]
-fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
+fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
     let view = mid_fight();
     let list = drawn(&view);
     assert_world_then_overlay(&list);
@@ -121,10 +121,12 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
         world,
         |command| matches!(command, DrawCommand::Dot { color, .. } if *color == DEBRIS_COLOR),
     );
-    // The brackets, the status bar, the title and help, every text, and
-    // the cursor.
+    // The target layer: the brackets and the cursor (clipped to the play
+    // area).
+    assert_all_in(&list, world, icon_in(10000..=10023));
+    assert_all_in(&list, world, sprite_of(651));
+    // The status bar, the title and help, and every text.
     let overlay = DrawLayer::Overlay;
-    assert_all_in(&list, overlay, icon_in(10000..=10023));
     assert_all_in(
         &list,
         overlay,
@@ -132,7 +134,6 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
     );
     assert_all_in(&list, overlay, is_text);
     assert!(texts(&list).contains(&HELP.to_owned()));
-    assert_all_in(&list, overlay, sprite_of(651));
     assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
 }
 

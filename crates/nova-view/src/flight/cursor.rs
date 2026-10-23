@@ -39,7 +39,8 @@ use std::num::NonZeroU16;
 
 use super::boxes::{FADE_LEVELS, fade_tint};
 use super::catalog::Looks;
-use crate::{DrawList, ImageKey, Point};
+use crate::geometry::Bounds;
+use crate::{Blend, DrawCommand, DrawList, ImageKey, Point};
 
 /// `_TickCount`s, sixtieths of a second, in one flight step.
 pub const SIXTIETHS_PER_STEP: u64 = 2;
@@ -136,16 +137,25 @@ impl HoverCursor {
     }
 
     /// Draws the cursor on the pointer, at its fade, when it shows and its
-    /// sheet was read.
-    pub fn draw(&self, list: &mut DrawList, looks: &Looks) {
+    /// sheet was read, clipped to `play_area`. The cursor is a sprite of
+    /// the target layer, and the sprite world ends 194 short of the
+    /// window's right edge (`_SetupSpriteWorld`'s `subw $0xc2` @0x21b66),
+    /// while `_HandleMouse` places it on the pointer wherever it is
+    /// (`_SWSetSpriteLocation` @0x38323): over the status bar only the part
+    /// still over the play area shows.
+    pub fn draw(&self, list: &mut DrawList, looks: &Looks, play_area: Bounds) {
         let (Some(at), Some(sheet)) = (self.shown_at(), looks.cursor_sheet()) else {
             return;
         };
         let frame = self.frame % sheet.frames.get();
-        list.sprite(
-            ImageKey::sprite(sheet.image_id, frame),
-            at,
-            fade_tint(FADE_LEVELS - self.fade.min(FADE_LEVELS)),
+        list.clipped(
+            play_area,
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(sheet.image_id, frame),
+                center: at,
+                tint: fade_tint(FADE_LEVELS - self.fade.min(FADE_LEVELS)),
+                blend: Blend::Normal,
+            },
         );
     }
 }
@@ -153,8 +163,8 @@ impl HoverCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Color;
     use crate::flight::catalog::EffectSheet;
-    use crate::{Color, DrawCommand};
 
     const FOUR: Option<NonZeroU16> = NonZeroU16::new(4);
 
@@ -194,10 +204,26 @@ mod tests {
         }
     }
 
+    /// A play area 800 wide, short of a status bar.
+    const PLAY_AREA: Bounds = Bounds {
+        min: Point::new(0.0, 0.0),
+        max: Point::new(800.0, 600.0),
+    };
+
+    /// What the cursor draws, each command seen through the play area's
+    /// clip, which every one must have.
     fn drawn(cursor: &HoverCursor, looks: &Looks) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        cursor.draw(&mut list, looks);
-        list.iter().cloned().collect()
+        cursor.draw(&mut list, looks, PLAY_AREA);
+        list.iter()
+            .map(|command| match command {
+                DrawCommand::Clipped { clip, command } => {
+                    assert_eq!(*clip, PLAY_AREA, "clipped to the play area");
+                    (**command).clone()
+                }
+                other => panic!("{other:?} not clipped"),
+            })
+            .collect()
     }
 
     #[test]
@@ -324,6 +350,27 @@ mod tests {
             panic!("one sprite");
         };
         assert_eq!(image, ImageKey::sprite(651, 1));
+    }
+
+    #[test]
+    fn over_the_status_bar_it_is_still_drawn_cut_off_at_the_play_areas_edge() {
+        let mut cursor = HoverCursor::default();
+        let over_bar = Point::new(810.0, 200.0);
+        cursor.pointer(over_bar);
+        let mut list = DrawList::new();
+        cursor.draw(&mut list, &looks(Some(Ok(sheet()))), PLAY_AREA);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Clipped {
+                clip: PLAY_AREA,
+                command: Box::new(DrawCommand::Sprite {
+                    image: ImageKey::sprite(651, 0),
+                    center: over_bar,
+                    tint: Color::WHITE,
+                    blend: crate::Blend::Normal,
+                }),
+            }]
+        );
     }
 
     #[test]

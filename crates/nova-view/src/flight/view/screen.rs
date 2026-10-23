@@ -8,7 +8,6 @@ use nova_sim::{
     TrafficCatalog,
 };
 
-use crate::flight::alert;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::hud::{self};
@@ -263,7 +262,6 @@ impl<
             return;
         }
         if self.draw_scene(list) {
-            self.cursor.draw(list, &self.looks);
             self.draw_fades(list);
         }
     }
@@ -369,11 +367,6 @@ impl<
         let camera = self.camera();
         list.world(|list| self.draw_world(list, scene, &camera));
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        self.draw_brackets(list, scene, &camera);
-        self.draw_red_alert(list);
-        if self.session.as_ref().is_ok_and(Session::double_time) {
-            alert::draw_double_time(list);
-        }
         // `_PostDrawCallback`'s order: the floating map over the sprites
         // and icons, under the escort menu (@0x38b95-0x38c72).
         self.draw_floating_map(list);

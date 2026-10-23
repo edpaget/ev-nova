@@ -7,6 +7,7 @@ use super::combat::{eject_a_pod, firing_at_an_npc_in, line_in, podding};
 use super::missions::{carrying, other_reading, rocky};
 use super::shots::smoking_trailing_blaster;
 use super::*;
+use crate::flight::alert::DOUBLE_TIME_CICN;
 use crate::flight::effects::{LoopedSounds, Scene};
 
 /// The orange of [`firing_with_sprays`]'s hit particles, at any alpha.
@@ -47,8 +48,26 @@ fn a_beam_and_each_effect_is_drawn_in_its_layer() {
     // beams, the asteroids, the shots, the ships, the explosions, the
     // target layer and its beams, then `_PostDrawCallback`'s particles.
     let order = [
-        stellar, under, asteroid, shot, npc, ship, explosion, over, particle, brackets,
+        stellar, under, asteroid, shot, npc, ship, explosion, brackets, over, particle,
     ];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+}
+
+#[test]
+fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_the_over_beams() {
+    let mut view = firing_with_sprays().with_double_time(true);
+    view.input(&Input::PointerMoved(Point::new(40.0, 400.0)));
+    ticks(&mut view, 2);
+    let list = drawn(&view);
+    let brackets = first(&list, icon_in(10008..=10023));
+    let cursor = first(&list, sprite_of(651));
+    let double_time = first(&list, icon_in(DOUBLE_TIME_CICN..=DOUBLE_TIME_CICN));
+    let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
+    let particle = first(&list, orange_dot);
+    // `_InitSprites`' target layer: the brackets (@0x20093-0x20277), the
+    // cursor (@0x2027d-0x202f9), the red alert, then double time
+    // (@0x20390-0x203fd); then the layer's `_BeamDrawCallback`.
+    let order = [brackets, cursor, double_time, over, particle];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 

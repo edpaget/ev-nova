@@ -1199,7 +1199,7 @@ fn is_star(command: &DrawCommand) -> bool {
 fn sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
     list.iter()
         .filter(|command| !is_star(command))
-        .filter_map(|command| match command {
+        .filter_map(|command| match unclipped(command) {
             DrawCommand::Sprite { image, center, .. } => Some((*image, *center)),
             _ => None,
         })
@@ -2549,7 +2549,16 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+}
+
+/// `command`, or what it draws when it is [`DrawCommand::Clipped`]: the
+/// cursor is clipped to the play area.
+fn unclipped(command: &DrawCommand) -> &DrawCommand {
+    match command {
+        DrawCommand::Clipped { command, .. } => unclipped(command),
+        command => command,
+    }
 }
 
 /// Whether a command draws a `cïcn` in `ids`.

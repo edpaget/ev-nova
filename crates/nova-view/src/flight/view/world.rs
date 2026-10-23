@@ -23,13 +23,15 @@
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 use nova_sim::{RuleKey, RuleSource, Session};
 
+use crate::flight::alert;
 use crate::flight::asteroids;
 use crate::flight::boxes;
-use crate::flight::hud;
+use crate::flight::hud::{self, STATUS_BAR_WIDTH};
 use crate::flight::weapons;
+use crate::geometry::Bounds;
 use crate::system::camera::Camera;
 use crate::system::scene::{self, SystemScene};
-use crate::{Color, DrawList};
+use crate::{Color, DrawList, Point};
 
 use super::FlightView;
 use super::stars;
@@ -68,10 +70,10 @@ impl<C> FlightView<C> {
                 WorldPass::Layer(SpriteLayer::Explosions) => {
                     self.effects.draw_explosions(list, camera, &self.looks);
                 }
-                // The brackets, the cursor, the icons, the floating map
-                // and the escort menu are drawn in the overlay, after the
-                // world (see the module docs).
-                WorldPass::Layer(SpriteLayer::Targets) | WorldPass::Floaters => {}
+                WorldPass::Layer(SpriteLayer::Targets) => self.draw_targets(list, scene, camera),
+                // The floating map and the escort menu are drawn in the
+                // overlay, after the world (see the module docs).
+                WorldPass::Floaters => {}
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
@@ -86,6 +88,34 @@ impl<C> FlightView<C> {
                     | SpriteLayer::OverShips),
                 ) => self.draw_sprite_layer(list, camera, &stacked, &npcs, layer),
             }
+        }
+    }
+
+    /// Draws the target layer's sprites in `_InitSprites`' slot order: the
+    /// nav brackets and then the target brackets (@0x20093-0x20277), the
+    /// cursor (@0x2027d-0x202f9) unless the course map is open, which
+    /// hides it, clipped to the play area ([`FlightView::play_rect`]),
+    /// the red-alert icon (@0x202fe-0x2038b) and the double-time icon
+    /// (@0x20390-0x203fd).
+    fn draw_targets(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+        self.draw_brackets(list, scene, camera);
+        if !self.map_open {
+            self.cursor.draw(list, &self.looks, self.play_rect());
+        }
+        self.draw_red_alert(list);
+        if self.session.as_ref().is_ok_and(Session::double_time) {
+            alert::draw_double_time(list);
+        }
+    }
+
+    /// The play area on screen: the view less the status bar's
+    /// [`STATUS_BAR_WIDTH`] at the right, where `_SetupSpriteWorld`'s
+    /// sprite world ends (`subw $0xc2` @0x21b66, passed as the world's and
+    /// the offscreen rect @0x21b7c-0x21ba4).
+    pub(super) fn play_rect(&self) -> Bounds {
+        Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(self.view.0 - STATUS_BAR_WIDTH, self.view.1),
         }
     }
 

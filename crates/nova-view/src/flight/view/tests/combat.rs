@@ -1300,9 +1300,10 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
     let hud = hud_at(&list);
     // An unguided shot is in the shot layer 0x3b52f0, under the intact
     // ships, and the explosion in `_explodLayer` 0x3b52b8, under the target
-    // layer's beams (`_SetupSpriteWorld` @0x21d0c-0x21e24).
+    // layer's brackets and then its beams (`_SetupSpriteWorld`
+    // @0x21d0c-0x21e24).
     let order = [
-        stellar, under, shot, npc, ship, explosion, over, brackets, title, hud,
+        stellar, under, shot, npc, ship, explosion, brackets, over, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")

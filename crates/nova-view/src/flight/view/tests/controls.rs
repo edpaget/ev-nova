@@ -301,11 +301,11 @@ fn a_button_press_shows_the_cursor_where_it_is() {
 }
 
 #[test]
-fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+fn the_cursor_draws_in_the_world_under_the_hud_and_the_jump_fade() {
     let cursor_at = |list: &DrawList| {
         list.iter()
             .position(
-                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+                |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == 651),
             )
             .expect("drawn")
     };
@@ -313,8 +313,9 @@ fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
     view.input(&Input::PointerMoved(NOWHERE));
     let list = drawn(&view);
     let cursor = cursor_at(&list);
-    assert!(cursor > hud_at(&list), "over the HUD");
-    assert_eq!(cursor, list.len() - 1, "last, with no fade");
+    // A sprite of the target layer, clipped to the play area, so the
+    // status bar is never under it.
+    assert!(cursor < hud_at(&list), "under the HUD");
 
     let mut view = fading_in_on_course_to_barnard();
     view.input(&Input::PointerMoved(NOWHERE));
@@ -382,7 +383,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
     let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let over = npc_on_screen(&view, id);
     let near = |list: &DrawList| {
-        list.iter().any(|command| match *command {
+        list.iter().any(|command| match *unclipped(command) {
             DrawCommand::Sprite { center, image, .. } => {
                 image.id != 651
                     && (center.x - over.x).abs() < 0.01
@@ -700,10 +701,12 @@ fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
     view.input(&key(Key::Char('q'), true));
     ticks(&mut view, 1);
     let tint = |view: &View| {
-        drawn(view).iter().find_map(|command| match *command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-            _ => None,
-        })
+        drawn(view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
     };
     assert_eq!(tint(&view), Some(247), "31 of 32");
     view.input(&key(Key::Up, true));
@@ -718,10 +721,12 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
         view.input(&Input::PointerMoved(NOWHERE));
         view.input(&key(k, true));
         ticks(&mut view, 2);
-        drawn(&view).iter().find_map(|command| match *command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-            _ => None,
-        })
+        drawn(&view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
     };
     assert_eq!(tint_after_two(AFTERBURNER_KEY), Some(239), "held: 30 of 32");
     assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
