@@ -743,6 +743,29 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
 }
 
 #[test]
+fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
+    let mut view = flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    let list = drawn(&view);
+    let clips: Vec<Bounds> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { clip, command } if sprite_of(651)(command) => Some(*clip),
+            _ => None,
+        })
+        .collect();
+    // `_SetupSpriteWorld`'s sprite world: the window less 194 at the
+    // right (`subw $0xc2` @0x21b66).
+    assert_eq!(
+        clips,
+        [Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, VIEW_SIZE.1),
+        }]
+    );
+}
+
+#[test]
 fn the_cursor_is_not_drawn_while_the_map_is_open() {
     let mut view = flight();
     view.input(&Input::PointerMoved(NOWHERE));
