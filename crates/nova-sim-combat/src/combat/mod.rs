@@ -3936,6 +3936,7 @@ mod tests {
     mod plunder_fire;
     mod shot_slots;
     mod shot_visits;
+    mod stellar_guns;
     mod stellar_hazards;
     mod strike_terms;
     mod tick_phases;
