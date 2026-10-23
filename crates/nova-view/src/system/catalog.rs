@@ -31,8 +31,10 @@ pub struct AnimationData {
     pub delay: i16,
     /// `Frame0Bias`: how many times longer frame 0 shows for.
     pub frame0_bias: i16,
-    /// `Flags2` 0x0080: animate only when destroyed.
-    pub only_when_destroyed: bool,
+    /// `Flags2`, raw: the view reads its animation bits (0x0001 alternate
+    /// with frame 0, 0x0002 random next frame, 0x0080 animate only when
+    /// destroyed) and its hypergate bit (0x1000).
+    pub flags2: u16,
 }
 
 /// One stellar object, placed in its system.

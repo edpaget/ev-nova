@@ -628,7 +628,7 @@ fn agreeing(dead: bool, reading: RuleSource) -> View {
             zero_width: 90,
             frames: 4,
             dead_frames: 1,
-            only_when_destroyed: false,
+            flags2: 0,
         }),
         ..catalog()
     })
@@ -716,7 +716,7 @@ fn flickering(frames: u16, rules: Rulebook) -> View {
             zero_width: 90,
             frames,
             dead_frames: 3,
-            only_when_destroyed: true,
+            flags2: 0x0080,
         }),
         ..catalog()
     })
@@ -800,7 +800,7 @@ fn uncounted_moon(rules: Rulebook) -> View {
             zero_width: 90,
             frames: 4,
             dead_frames: 2,
-            only_when_destroyed: false,
+            flags2: 0,
         }),
         ..catalog()
     };
@@ -887,7 +887,7 @@ fn a_take_off_shows_a_stellars_current_frame_on_the_sheet_it_now_draws() {
             zero_width: 90,
             frames: 4,
             dead_frames: 2,
-            only_when_destroyed: false,
+            flags2: 0,
         }),
         ..catalog()
     });

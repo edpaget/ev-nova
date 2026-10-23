@@ -20,9 +20,6 @@ use super::catalog::{
 use crate::galaxy::data::display_name;
 use crate::sheet_image::SheetImage;
 
-/// `Flags2`'s "animate only when destroyed" bit.
-const ONLY_WHEN_DESTROYED: u16 = 0x0080;
-
 /// Reads the system afresh on every call; a view asks once, when it opens.
 impl SystemCatalog for GameData {
     fn system(&self, id: SystemId) -> SystemContents {
@@ -104,7 +101,7 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
         animation: AnimationData {
             delay: record.anim_delay,
             frame0_bias: record.frame0_bias,
-            only_when_destroyed: record.flags2.bits() & ONLY_WHEN_DESTROYED != 0,
+            flags2: record.flags2.bits(),
         },
         radar_square: record.flags.bits() & StellarFlags::STATION != 0
             || record.flags2.bits() & (HYPERGATE | WORMHOLE) != 0,
@@ -307,7 +304,7 @@ mod tests {
                         animation: AnimationData {
                             delay: 2,
                             frame0_bias: -1,
-                            only_when_destroyed: false,
+                            flags2: 0x2000,
                         },
                         radar_square: true,
                     },
@@ -403,20 +400,29 @@ mod tests {
     }
 
     #[test]
-    fn flags2_0x0080_means_animate_only_when_destroyed() {
+    fn the_animation_carries_flags2_raw() {
         let mut resources = sol();
-        resources.push((System::TYPE, 131, None, system(&[140, 141, 142])));
-        for (id, flags2) in [(140, 0x0080), (141, 0x0040 | 0x0200), (142, 0xFF7F)] {
+        resources.push((System::TYPE, 131, None, system(&[140, 141, 142, 143])));
+        let all = [
+            (140, 0x0080),
+            (141, 0x0040 | 0x0200),
+            (142, 0xFF7F),
+            (143, 0x1203),
+        ];
+        for (id, flags2) in all {
             resources.push((Stellar::TYPE, id, None, animated(0, 0, 0, flags2, 3, 2)));
         }
         let contents = store(&resources).system(SystemId(131));
         let flags: Vec<AnimationData> = contents.stellars.iter().map(|s| s.animation).collect();
-        let data = |only_when_destroyed| AnimationData {
+        let data = |flags2| AnimationData {
             delay: 3,
             frame0_bias: 2,
-            only_when_destroyed,
+            flags2,
         };
-        assert_eq!(flags, [data(true), data(false), data(false)]);
+        assert_eq!(
+            flags,
+            [data(0x0080), data(0x0240), data(0xFF7F), data(0x1203)]
+        );
     }
 
     /// `stellar` at (0, 0), type 0, with its `Flags` and `Flags2` set.

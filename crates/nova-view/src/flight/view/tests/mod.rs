@@ -234,7 +234,7 @@ struct FakeCatalog {
 /// The sizes of the Moon's (129) `Type` sheet (1129) and `DeadType`
 /// sheet (2129, when there is one), and of graphic type 0's sheet,
 /// each square; the frames of its `Type` and `DeadType` sheets; and
-/// whether it animates only when destroyed (`Flags2` 0x0080).
+/// its `Flags2` (0x0080 to animate only when destroyed).
 #[derive(Clone, Copy, Debug)]
 struct MoonSheets {
     width: u32,
@@ -242,7 +242,7 @@ struct MoonSheets {
     zero_width: u32,
     frames: u16,
     dead_frames: u16,
-    only_when_destroyed: bool,
+    flags2: u16,
 }
 
 /// No strings unless a test sets them.
@@ -763,7 +763,7 @@ fn stellar(id: i16, name: &str, (x, y): (i16, i16), frames: u16) -> StellarConte
         animation: AnimationData {
             delay: 1,
             frame0_bias: 0,
-            only_when_destroyed: false,
+            flags2: 0,
         },
         radar_square: false,
     }
@@ -826,7 +826,7 @@ impl SystemCatalog for FakeCatalog {
                 stellar.dead_sprite = moon
                     .dead_width
                     .map(|w| Ok(square(2129, w, moon.dead_frames)));
-                stellar.animation.only_when_destroyed = moon.only_when_destroyed;
+                stellar.animation.flags2 = moon.flags2;
             }
         }
         if let Some(reason) = self.moon_unreadable {

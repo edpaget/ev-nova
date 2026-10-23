@@ -490,7 +490,7 @@ mod tests {
     const WORMHOLE: AnimationData = AnimationData {
         delay: 2,
         frame0_bias: -1,
-        only_when_destroyed: false,
+        flags2: 0x2000,
     };
 
     fn stellar(id: i16, x: i16, y: i16, sprite: Result<StellarSheet, String>) -> StellarContents {
@@ -663,7 +663,7 @@ mod tests {
     const DEAD_ANIMATED: AnimationData = AnimationData {
         delay: 2,
         frame0_bias: -1,
-        only_when_destroyed: true,
+        flags2: 0x0080,
     };
 
     /// System 134: stellar 150 at (0, 0), whose `DeadType` sheet 2150 has

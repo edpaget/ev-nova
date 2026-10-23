@@ -30,13 +30,15 @@
 
 use std::num::NonZeroU16;
 
+use nova_sim::gate_sprite::ONLY_WHEN_DESTROYED;
+
 use super::catalog::AnimationData;
 
 /// Whether a stellar with these fields, `destroyed` or not, animates over
 /// `counted` frames.
 #[must_use]
 pub fn is_animated(data: AnimationData, destroyed: bool, counted: NonZeroU16) -> bool {
-    counted.get() > 1 && data.delay > 0 && data.only_when_destroyed == destroyed
+    counted.get() > 1 && data.delay > 0 && (data.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
 }
 
 /// A stellar's animation state: its current and next frame, its timer,
@@ -171,7 +173,7 @@ mod tests {
         AnimationData {
             delay,
             frame0_bias,
-            only_when_destroyed: false,
+            flags2: 0,
         }
     }
 
@@ -238,7 +240,11 @@ mod tests {
     /// `only_when_destroyed` says.
     fn live(only_when_destroyed: bool) -> AnimationData {
         AnimationData {
-            only_when_destroyed,
+            flags2: if only_when_destroyed {
+                ONLY_WHEN_DESTROYED
+            } else {
+                0
+            },
             ..data(2, -1)
         }
     }

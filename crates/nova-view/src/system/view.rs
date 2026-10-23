@@ -234,7 +234,7 @@ mod tests {
             animation: AnimationData {
                 delay,
                 frame0_bias: 0,
-                only_when_destroyed: false,
+                flags2: 0,
             },
             radar_square: false,
         }
