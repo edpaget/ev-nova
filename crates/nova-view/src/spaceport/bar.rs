@@ -1316,6 +1316,24 @@ mod tests {
     }
 
     #[test]
+    fn the_hire_screens_refused_beep_gets_out_through_the_bar() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.take_sounds();
+        screen.input(&key(super::super::hire::HIRE_KEY, false));
+        assert_eq!(screen.take_hire(), None, "nothing selected");
+        let sounds = screen.take_sounds();
+        assert_eq!(
+            sounds
+                .iter()
+                .filter(|s| **s == Sound::Ui(crate::sound::UiSound::BuyRefused))
+                .count(),
+            1,
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
     fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
