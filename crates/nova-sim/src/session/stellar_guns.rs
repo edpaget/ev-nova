@@ -316,6 +316,46 @@ mod tests {
         );
     }
 
+    /// A tick of the fight in its separate parts ([`Session::tick_combat`]).
+    fn fight(session: &mut Session) {
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    #[test]
+    fn the_separate_parts_fight_fires_at_a_criminal_after_the_shots_have_flown() {
+        let catalog = armed_128();
+        let mut session = beside_128(&catalog, -7);
+        fight(&mut session);
+        assert_eq!(fired(&mut session), [StellarId(128)]);
+        let shots = gun_shots(&session);
+        assert_eq!(shots.len(), 1);
+        assert_eq!(shots[0].position, Vec2::new(30.0, -40.0), "not yet moved");
+        assert_eq!(shots[0].aimed_at, Some(crate::combat::ShipRef::Player));
+    }
+
+    #[test]
+    fn in_the_separate_parts_the_gun_fires_before_a_deadly_stellar_kills_its_mark() {
+        let catalog = gunned(armed(), &[128], 1);
+        let mut session = facing_an_npc(&catalog, 180);
+        place_player(&mut session, 0);
+        let deadly = LandingSite {
+            flags2: crate::deadly_stellar::DEADLY_STELLAR,
+            ..planet(140, 0.0, -150.0)
+        };
+        session.chart.listed.push(deadly);
+        session.chart.sites.push(deadly);
+        fight(&mut session);
+        let events = session.take_combat_events();
+        let at = |found: fn(&CombatEvent) -> bool| events.iter().position(found);
+        let gun = at(|event| matches!(event, CombatEvent::StellarFired { .. }));
+        let kill = at(|event| matches!(event, CombatEvent::Exploded { .. }));
+        assert!(gun.is_some() && kill.is_some(), "{events:?}");
+        assert!(
+            gun < kill,
+            "the gun before the hazards and beams: {events:?}"
+        );
+    }
+
     #[test]
     fn a_player_in_good_standing_draws_no_fire() {
         let catalog = armed_128();
