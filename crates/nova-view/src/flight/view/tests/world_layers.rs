@@ -198,11 +198,31 @@ fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 
-#[test]
-fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
-    let mut view = fighters_out();
+/// [`fighters_out`] where the player's blaster's hits spray 5 orange
+/// particles, firing at the traffic ship with the escort menu open.
+fn fighters_out_firing_sprays() -> View {
+    let armed = armed(1, &[BLASTER]);
+    let mut catalog = boardable();
+    catalog.weapons = armed.weapons;
+    catalog.outfits = armed.outfits;
+    catalog.looks = armed.looks;
+    catalog.hulls[0] = hull_of(128, &[BLASTER]);
+    catalog.weapons[0].hit_particles = 5;
+    catalog.weapons[0].hit_part_vel = 100;
+    catalog.weapons[0].hit_part_life = 30;
+    catalog.weapons[0].hit_part_color = 0x00FF_8000;
+    let mut view = fighters_out_of(catalog);
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
+    tap(&mut view, Key::Tab);
+    view.input(&key(FIRE_KEY, true));
+    ticks(&mut view, 5);
+    view
+}
+
+#[test]
+fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
+    let mut view = fighters_out_firing_sprays();
     view.input(&key(HYPERSPACE_MODE_KEY, true));
     ticks(&mut view, 1);
     let list = drawn(&view);
@@ -210,10 +230,13 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     let menu = first(&list, |command| {
         *command == fill_command(escort_menu_frame(), Color::BLACK)
     });
+    let particle = first(&list, orange_dot);
     let hud = hud_at(&list);
-    // `_FloaterDrawCallback`: the floating map (@0x38b95-0x38c0a), then
-    // the escort menu (@0x38c0f-0x38c5b), both in the world.
-    assert!(floating < menu && menu < hud, "{floating} {menu} {hud}");
+    // `_PostDrawCallback`: `_FloaterDrawCallback` draws the floating map
+    // (@0x38b95-0x38c0a), then the escort menu (@0x38c0f-0x38c5b), both
+    // in the world; then `jmp _DrawParticlesOffscreen` (@0x38c9a).
+    let order = [floating, menu, particle, hud];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     assert_eq!(
         list.layered().nth(menu).map(|(layer, _)| layer),
         Some(crate::DrawLayer::World)
