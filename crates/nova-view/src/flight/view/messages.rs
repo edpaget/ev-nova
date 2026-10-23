@@ -644,11 +644,22 @@ pub fn hyperspace_hint(map: &str, jump: &str) -> String {
 /// Texts to say, each with its ticks.
 pub(super) type Said = Vec<(String, u16)>;
 
-/// The name of stellar `id` in `scene`, if it shows it: empty otherwise.
-pub(super) fn stellar_name(scene: Option<&SystemScene>, id: StellarId) -> &str {
+/// The name of stellar `id`: its name in `scene` if the scene holds it,
+/// or, for one the scene doesn't hold, such as one another system owns or
+/// a landed `M`'s in another system, its `spöb` name from `session`
+/// (`Session::stellar_name`), as the original reads a stellar's name with
+/// no check of the system (`_DrawStatusNav` @0x4a0fd-0x4a149). None for
+/// a stellar with neither. The nav readout, the landing refusals and
+/// [`message_text`] all name a stellar through this.
+pub(super) fn stellar_name(
+    scene: Option<&SystemScene>,
+    session: &Session,
+    id: StellarId,
+) -> Option<String> {
     scene
         .and_then(|scene| scene.stellars().iter().find(|named| named.id == id))
-        .map_or("", |named| named.name.as_str())
+        .map(|named| named.name.clone())
+        .or_else(|| session.stellar_name(id))
 }
 
 /// What the message line says of `message`, the names read from
@@ -664,27 +675,28 @@ pub(super) fn message_text(
     chance: &mut dyn Chance,
 ) -> Option<String> {
     let ship = || session.pilot().ship_name().unwrap_or_default();
+    let named = |stellar| stellar_name(scene, session, stellar).unwrap_or_default();
     match message {
         SimMessage::DockRequested { stellar, kind } => Some(request_line(
             *kind,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             ship(),
             RequestPicks::roll(*kind, chance),
         )),
         SimMessage::DockCleared { stellar, kind } => Some(approach_greeting(
             *kind,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             ship(),
             GreetingPicks::roll(*kind, chance),
         )),
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             &session.date_text(),
         )),
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             &key_label(LAND_KEY).unwrap_or_default(),
         )),
         _ => sim_message_text(message, session),

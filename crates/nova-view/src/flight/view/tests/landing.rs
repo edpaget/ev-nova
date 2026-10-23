@@ -435,6 +435,31 @@ fn l_at_an_unseen_planet_names_it_by_its_spob_name() {
     );
 }
 
+/// The messages that name a stellar name one the scene doesn't hold by
+/// its spöb name too, as the nav readout and the refusals do: a dock
+/// request and a land hint at "Hole", which another system owns.
+#[test]
+fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
+    let view = flight_with_unseen(site(150, (0.0, 300.0), StellarFlags::CAN_LAND));
+    let session = view.session().expect("flying");
+    let (_, mut chance) = scripted(&[0, 0]);
+    let request = SimMessage::DockRequested {
+        stellar: StellarId(150),
+        kind: DockKind::Planet,
+    };
+    let text = message_text(&request, session, view.scene.as_ref(), &mut chance)
+        .expect("a dock request is worded");
+    assert!(text.contains("Hole"), "{text}");
+    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+        stellar: StellarId(150),
+        station: false,
+    });
+    assert_eq!(
+        message_text(&hint, session, view.scene.as_ref(), &mut chance),
+        Some(land_hint(false, "Hole", "L"))
+    );
+}
+
 #[test]
 fn the_refusal_is_drawn_until_its_ticks_have_passed() {
     let mut view = flight();

@@ -12,7 +12,7 @@ use nova_sim::{
     OutfitOrder, OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session,
     Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
 };
-use nova_sim::{PlayerCommand, PlayerFate, TagNames};
+use nova_sim::{PlayerCommand, PlayerFate};
 
 use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
@@ -1370,15 +1370,10 @@ impl<
                 };
                 let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
                 // A stellar the scene doesn't hold, such as one another
-                // system owns, by its spöb name, as `nav_display` reads it.
-                let name = stellar.map_or_else(String::new, |stellar| {
-                    let named = stellar_name(self.scene.as_ref(), stellar);
-                    if named.is_empty() {
-                        session.stellar_name(stellar).unwrap_or_default()
-                    } else {
-                        named.to_owned()
-                    }
-                });
+                // system owns, by its spöb name (`stellar_name`).
+                let name = stellar
+                    .and_then(|stellar| stellar_name(self.scene.as_ref(), session, stellar))
+                    .unwrap_or_default();
                 let text = refusal_message(&refusal, gate, &name);
                 if let Some(text) = text {
                     self.say_for(text, landing_refusal_ticks(&refusal));
