@@ -1456,6 +1456,11 @@
 //!   engine follows the intent (see "Checked for stellar-fidelity phase
 //!   3"). When `spïn` 1000 cannot be loaded either, the slot stays empty,
 //!   drawing nothing; the engine draws its placeholder box and the reason.
+//!   Corrected by stellar-fidelity phase 8: a visible slot with no frame
+//!   faults at `_SWSetSpriteLocation`'s hot-spot read (@0xab665, from
+//!   @0x331aa and @0x2ef1a), so the engine's empty slot is the code's
+//!   continuation, not a state the original survives. The engine's
+//!   behaviour there is unchanged.
 //! - **Index -1** of `_masterStellarSprite` is an unwritten word of
 //!   `_masterStarSprite` (see "Checked for phase 7"), and other
 //!   out-of-range indexes read neighbouring statics. That is a
@@ -1583,16 +1588,17 @@
 //!   as `TypeWidth::OutOfRange` from `LandingSite::type_counts_frames`.
 //!   Stock `xTiles` × `yTiles` always equals the frame count, so stock
 //!   never reaches it.
-//! - **Such a `spïn` shown in a slot** has more effects the engine does
-//!   not copy, filed as story-runtime phase 19
-//!   (no-frame-count-spin-in-a-slot): a clone copies the count
-//!   into the slot (@0xac4ec) and sets its frame through
+//! - **Such a `spïn` shown in a slot**: a clone copies the count into
+//!   the slot (@0xac4ec) and sets its frame through
 //!   `_SWSetCurrentFrameIndex`, which divides by it (`idivl` @0xa90e7),
 //!   so a product of 0 divides by zero, and with a negative one it
 //!   returns before setting the frame (@0xa90ee), leaving the slot's
 //!   frame as it was: none after a rebuild, which empties it (@0x32e7a)
 //!   without filling it with graphic type 0, as its frames are not null
-//!   (@0x33241-0x33250).
+//!   (@0x33241-0x33250). Built by stellar-fidelity phase 8, which found
+//!   that the rebuild itself faults on such a slot (see "Checked for
+//!   stellar-fidelity phase 8"); the engine follows the state its code
+//!   leaves.
 //! - **The dock request** (`_HandlePlayerDockRequest`): after the
 //!   clearance state 0x3b544c above 0x2ed (@0x66c18), the ship's +0x4c at
 //!   most 0 (@0x66c32) and each velocity axis at most 0.75 (the float at
@@ -2167,8 +2173,9 @@
 //!     `_SWCreateSpriteFromSinglePictXY` @0x1ece3) and an 8-bit `rlëD`.
 //!     Read since stellar-fidelity phase 4: such a `Type` draws its own
 //!     sheet.
-//!   - A `spïn` whose tiles multiply to 0 or less (stellar-fidelity phase
-//!     8). Such a `Type` reads, so it is outside this phase's rule.
+//!   - A `spïn` whose tiles multiply to 0 or less: built by
+//!     stellar-fidelity phase 8. Such a `Type` reads, so it is outside
+//!     this phase's rule.
 //!
 //! ## Built by stellar-fidelity phase 4
 //!
@@ -2589,6 +2596,200 @@
 //!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
 //!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
 //!   and rdm:task/radar-blips-every-listed-stellar.
+//!
+//! ## Built by stellar-fidelity phase 8
+//!
+//! A sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is
+//! 0 or less keeps the frame it showed, as the original's code leaves it
+//! with its faults stepped over (see "Checked for stellar-fidelity phase
+//! 8"):
+//!
+//! - **from a rebuild point**, which empties every slot, it shows no
+//!   frame: nothing is drawn, the dock request's reach is 75, the click
+//!   falls back to the 64-pixel placeholder, and shots and deadly discs
+//!   read nothing (`DrawnSheet::NoFrame`);
+//! - **between rebuild points**, a flight frame's clone of such a master
+//!   into a slot showing a frame keeps that frame, frozen at its index and
+//!   placed as a 32-pixel sprite, its top left at the stellar's centre
+//!   less 16 on each axis (`nova_sim::Session::frame_frozen`). The dock
+//!   request then reads the loaded `Type`'s 32, a reach of 56;
+//! - **a stellar whose last rebuild point copied such a count** never
+//!   animates until the next (`nova_sim::Session::counts_no_frames`), even
+//!   when a later clone brings counting frames into its slot.
+//!
+//! A product of exactly 0, which divides by zero in the original, is read
+//! as the negative case. The state is `Rebuilt`'s (see the `rebuild`
+//! submodule): whether each slot's frames count none, the sheet whose
+//! frame a slot kept through such a clone, and the stellars that count
+//! none, shown through `Rebuilt::showing`, `Rebuilt::frozen` and
+//! `Rebuilt::still`. The catalog says whether each `DeadType` counts
+//! (`LandingSite::dead_counts_frames`) and whether graphic type 0 does
+//! (`PilotCatalog::fallback_counts_frames`), and graphic type 0's fill is
+//! the three-way `rebuild::Fallback`. The slot's size as
+//! `_GetSpriteXSize`/`_GetSpriteYSize` read it
+//! (`nova_sim`'s `Space::slot_sprite_size`) places the slot and sizes a
+//! hypergate's approach. The view draws a frozen frame shifted and keeps
+//! its frame shown while its count steps on, reading the frozen state
+//! after each tick's steps, since a flight frame changes it with no event.
+//!
+//! **Readings.** The Rulebook key
+//! [`uncounted_sheet`](crate::RuleKey::UncountedSheet) defaults to the
+//! engine's reading above. Its other reading is the behaviour before this
+//! phase: the sheet's own decoded frames are drawn and animated and the
+//! slot shows a frame, so a loaded `Type` reaches 56. That is also what the
+//! rebuild's repair (@0x332f7) means a frameless slot to get. The Bible
+//! says nothing of `xTiles` × `yTiles`.
+//!
+//! ## Checked for stellar-fidelity phase 8
+//!
+//! - **F1. `_SWSetCurrentFrameIndex`** (@0xa90b6) reads a negative index
+//!   as 0 (@0xa90d4-0xa90df) and divides it by the slot's count +0x54
+//!   (`idivl` @0xa90e7). It returns at @0xa919c when the count is not
+//!   above the remainder (`jle` @0xa90ec-0xa90ee), before it writes the
+//!   current frame +0x50 (@0xa9136 or @0xa91d2), the rect +0x1a..+0x20
+//!   (@0xa913f-0xa9191), the index +0x68 (@0xa9195) or the moved byte
+//!   +0x15 (@0xa9198). A count of 0 divides by zero (#DE @0xa90e7); a
+//!   negative count gives a remainder in [0, |count|), never below the
+//!   count, so it returns with nothing written.
+//! - **F2. `_SWCloneFramesFromMaster`** (@0xac436) returns -1 with the
+//!   slot untouched for a null master or slot (@0xac448-0xac462), a master
+//!   with no frames (@0xac463-0xac468) or a slot owning its frames (+0xd9,
+//!   @0xac46a). Otherwise it copies +0x4c, +0x98, +0x9c, the count +0x54
+//!   (@0xac4ec-0xac4ef), +0x58 and +0xd4 (@0xac4ce-0xac4fe); keeps the
+//!   slot's index +0x68 while below the new count, else 0
+//!   (@0xac504-0xac50a, @0xac532); calls `_SWSetCurrentFrameIndex`
+//!   (@0xac514); then reads the slot's current frame's lock byte (+0x50 →
+//!   +0x1c) with no null test (@0xac519-0xac51c), locking the slot when it
+//!   is clear (@0xac53f), and sets +0xb0 to 0 (@0xac524). A negative-count
+//!   master replaces the slot's frames and count but leaves its frame,
+//!   index and rect; with no current frame, the read at @0xac51c is
+//!   through null, a fault.
+//! - **F3. The rebuild point** (`_HandleStellarSystemVisibility`
+//!   @0x32aa5). The clear nulls +0x4c (@0x32e71), +0x50 (@0x32e7a) and
+//!   +0xd4 (@0x32e83) of every cloned slot (+0xda), keeping +0x54, sets
+//!   +0xd0 to -1 (@0x32e8f) and hides it (@0x32ea6). For each stellar
+//!   shown the rebuild loads the master if missing (@0x32f37-0x32f46),
+//!   makes the slot if none (`_SWCreateEmptySprite` @0x32f80, which nulls
+//!   +0x50 and +0x54, @0xa8eaf-0xa8eb6), clones only a master that is not
+//!   null (@0x32fe0-0x32ff6), locks (@0x3300d), sets the draw proc
+//!   (@0x33052) and shows the slot (@0x3306b), calls
+//!   `_SWSetCurrentFrameIndex(slot, +0x476)` (@0x33096), places it
+//!   (`_GetSpriteYSize` @0x330f3, `_GetSpriteXSize` @0x33143,
+//!   `_SWSetSpriteLocation` @0x331aa), copies the count, +0x474 = slot
+//!   +0x54 (@0x331c6-0x331c9), and resets a new slot's animation
+//!   (@0x331da-0x331fb). The clone always meets a slot with no current
+//!   frame, so a rebuild point showing a stellar whose shown graphic's
+//!   tiles multiply to 0 or less faults in the original: #DE @0xa90e7 from
+//!   @0xac514 for 0; the null read @0xac51c for a negative product, and
+//!   past it `_SWSetSpriteLocation` (@0xab640) reads the null frame's hot
+//!   spot (+0x2a/+0x2c, @0xab65e-0xab669, fault @0xab665, from @0x331aa).
+//!   The phase body's "the slot shows no frame, so the reach is 75" is
+//!   the state the code leaves with those faults stepped over: +0x50 stays
+//!   null, as every `_SWSetCurrentFrameIndex` refuses the count.
+//!   - **The check @0x33231-0x33321.** A slot in use whose +0x4c and
+//!     +0xd4 are not null skips graphic type 0's fill (@0x33241-0x33250)
+//!     and goes to @0x332d7: with +0x50 null it logs "warning: stellar
+//!     sprite had invalid frame pointer" (0xd8f04, @0x332de-0x332e5) and
+//!     calls `_SWSetCurrentFrameIndex(slot, 0)` (@0x332f7), which refuses
+//!     (or faults on) the same count; with a frame whose lock byte +0x1c
+//!     is clear it logs "warning: stellar sprite frame was not locked"
+//!     (0xd8f38, @0x33304-0x3330b); then it locks the slot (@0x33315). Its
+//!     repair cannot fill such a slot.
+//!   - **Graphic type 0's fill** (@0x332a1-0x332d0): when `spïn` 1000
+//!     itself counts no frames, the fill clones it (master 0 loaded) and
+//!     its `_SWSetCurrentFrameIndex(slot, 0)` (@0x332d0) refuses or faults:
+//!     the slot holds type 0's frames and shows none.
+//!   - `_SWLockSprite` (@0xaa965) locks no frame for a count of 0 or less
+//!     (@0xaa97c-0xaa981, @0xaa9c7-0xaa9cc), so it does not fault.
+//! - **F4. The sprite tick** (`_HandleStellarSprites` @0x2e6f1), the whole
+//!   function as it touches this. For each visible, owned slot
+//!   (@0x2e713-0x2e73e) it clones the shown master (@0x2e7e5). It animates
+//!   only when the stellar's own count +0x474 is above 1 (@0x2e802); its
+//!   `idivl`s by +0x474 (@0x2ed44, @0x2edf2) and `_Rand(+0x474)` calls
+//!   (@0x2ecf7, @0x2edb3) are behind that test, so never divide by 0. It
+//!   calls `_SWSetCurrentFrameIndex(slot, frame 0 or current)`
+//!   (@0x2ee20-0x2ee30), sizes the slot (`_GetSpriteXSize` @0x2ee3d,
+//!   `_GetSpriteYSize` @0x2ee4e) and places it (`_SWSetSpriteLocation`
+//!   @0x2ef1a). A hypergate's approach reads the slot's `_GetSpriteXSize`
+//!   doubled (@0x2e906-0x2e90e). A clone of a negative-count master into a
+//!   slot showing a frame replaces its frames and count; each
+//!   `_SWSetCurrentFrameIndex` refuses, so the slot keeps showing its
+//!   frame, frozen; `_GetSpriteXSize`/`_GetSpriteYSize` (@0x26d4-0x2701,
+//!   @0x2703-0x2731) give 32 when +0x50 is null or +0x68 is not in [0,
+//!   +0x54) (@0x26e5-0x26ef, @0x2714-0x271e), so the slot is placed as a
+//!   32-pixel sprite, and the stale frame keeps its own size
+//!   (`_SWSetSpriteLocation` moves the rect without resizing it,
+//!   @0xab66d-0xab6a0). A product of 0 faults there (#DE @0xa90e7 via
+//!   @0xac514); a clone into a slot with no frame faults at
+//!   @0xac519-0xac51c; a clone of a counting master into a frameless slot
+//!   sets its frame normally. No routine here calls `PlaySound` or
+//!   `_beepSnd`, so there is no `SimSound`.
+//! - **F5. Drawing.** The draw proc draws the slot's +0x50. The sprite
+//!   library's own frame advance (`_SWProcessSpriteLayer`
+//!   @0xb8110-0xb8118) skips a sprite whose frame time +0x5c is negative; `_SWCreateEmptySprite`
+//!   sets it to -1 (@0xa8ec4), the clone leaves it, and nothing calls
+//!   `_SWSetSpriteFrameTime` (@0xab5c3). So a frozen slot stays frozen.
+//! - **F6. Who else reads the count.** The stellar's +0x474:
+//!   `_InitObjects` (@0x1c8b9); the tick (@0x2e802-0x2ede3); the rebuild's
+//!   copy (@0x331c6-0x331c9), so a count of 0 or less keeps the stellar
+//!   still until the next rebuild point; and the dock request's take-off
+//!   (@0x67616-0x67646), which sets the current frame to count − 1, the
+//!   next to the current and the timer to −`AnimDelay`, with no effect for
+//!   a count of 1 or less. The slot's +0x54, through
+//!   `_GetSpriteXSize`/`_GetSpriteYSize`: the rebuild (@0x330f3,
+//!   @0x33143), the tick (@0x2e906, @0x2ee3d, @0x2ee4e), the nav target
+//!   brackets (`_HandleNavTargetSprites` @0x2fd6a, @0x2fe00, @0x2fe10) and
+//!   the hail dialog's picture (`_PlanetCommDialogUpdate`
+//!   @0x90f97-0x90faa). The `Type` master's count:
+//!   `_GetStellarSpriteXSize` (@0xaced-0xacff, phase 10's 32), read by the
+//!   dock request (@0x66cd9, @0x6773a) and NPC landing and gate entry
+//!   (@0x8dbdf), and the status radar (`_DrawStatusRadar`
+//!   @0x499e8-0x49a3f). The dock request tests the slot's +0x50
+//!   (@0x66ccf) and uses 75 when it is null (@0x66cc7).
+//! - **F7. Decisions.** The faults are the original's bug: not copied and
+//!   no key, as a crash is not a reading (as in stellar-fidelity phases 3
+//!   and 4). The stale frame is not a memory-layout accident, so it is
+//!   ported: between rebuild points a slot belongs to one stellar (+0xd0 is
+//!   set at the rebuild, slots handed out in `spöb` order), the rebuild
+//!   nulls +0x50 before any slot changes hands (@0x32e7a), and masters are
+//!   freed only at a rebuild point (@0x32d18-0x32e4e). So the stale frame
+//!   is always a live frame of a sheet the same stellar's slot held since
+//!   the last rebuild point: its `Type`, its `DeadType` or graphic type 0.
+//! - **Left out.**
+//!   - The faults: #DE @0xa90e7 for a product of 0 (from the clone
+//!     @0xac514, the rebuild @0x33096, @0x332d0 and @0x332f7, and the tick
+//!     @0x2ee30); the null read @0xac519-0xac51c; and
+//!     `_SWSetSpriteLocation`'s null hot-spot read @0xab665 (from @0x331aa
+//!     and @0x2ef1a).
+//!   - The crash-log lines "invalid frame pointer" (@0x332de) and "frame
+//!     was not locked" (@0x33304): diagnostics with no effect on play.
+//!   - Shots and deadly stellars against a frozen slot, the nav target
+//!     brackets and the hail dialog's picture sized by the slot, and the
+//!     scene's problems for an uncounted `spïn` (the original reports
+//!     nothing; none is added):
+//!     rdm:phase/stellar-fidelity-followups/phase-7-uncounted-slot-readers.
+//!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
+//!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
+//!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates
+//!     over the tiles; the view counts the decoded frames:
+//!     rdm:phase/stellar-fidelity-followups/phase-8-tiles-below-frame-count.
+//!   - Memory-layout accidents, not copied: a slot reused across a system
+//!     change that keeps another stellar's +0x54 through a failed clone
+//!     (@0x32fe0-0x32fea, @0x331c6), the engine keeping the state per
+//!     stellar as phase 1 does; and tiles above the frame count, which
+//!     read past the frame table (@0xa90f7).
+//!   - The take-off's +0x474 write (@0x67616-0x67646) for a count of 1 or
+//!     less: it has no effect.
+//! - **Left out, depending on unlanded work.**
+//!   - Clicking a frozen or frameless slot (`_HandlePlayer`
+//!     @0x6a5f9-0x6a686 reads the slot's rect +0x1a): a frozen slot's rect
+//!     is the stale frame's, its top left at the centre less 16. The
+//!     engine clicks a frozen stellar by its stale sheet's box, centred,
+//!     and a frameless one by the 64-pixel placeholder. In
+//!     rdm:phase/stellar-fidelity/phase-9-click-target-shape.
+//!   - The status radar's blip for a `Type` master that counts none (32,
+//!     the smallest): it depends on rdm:task/radar-blips-every-listed-stellar;
+//!     rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type.
 
 //! # Mission lifecycle
 //!

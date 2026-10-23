@@ -50,7 +50,16 @@
 //!   sheet ([`RuleKey::DeadTypeFallback`](crate::RuleKey::DeadTypeFallback))
 //!   and a whole one with no `Type` sheet
 //!   ([`RuleKey::TypeSheetFallback`](crate::RuleKey::TypeSheetFallback)),
-//!   read through `Session::drawn_sheet`.
+//!   read through `Session::drawn_sheet`;
+//! - stellar-fidelity phase 8: whether the frames each slot holds count
+//!   none, its `spïn`'s `xTiles` × `yTiles` 0 or less, so that a rebuild
+//!   point leaves it with no frame and a flight frame's clone keeps the
+//!   frame it showed ([`Rebuilt::showing`], [`Rebuilt::frozen`]), and
+//!   whether the count the last rebuild point copied was none
+//!   ([`Rebuilt::still`])
+//!   ([`RuleKey::UncountedSheet`](crate::RuleKey::UncountedSheet)), read
+//!   through `Session::drawn_sheet`, `Session::frame_frozen` and
+//!   `Session::counts_no_frames`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

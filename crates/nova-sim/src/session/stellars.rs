@@ -66,10 +66,16 @@
 //! "Built by stellar-fidelity phase 1"), and the sheet each slot holds,
 //! which a stellar showing no sheet that can be read draws
 //! ([`Session::drawn_sheet`], by [`RuleKey::DeadTypeFallback`] and
-//! [`RuleKey::TypeSheetFallback`]; "Built by stellar-fidelity phase 3").
+//! [`RuleKey::TypeSheetFallback`]; "Built by stellar-fidelity phase 3"),
+//! and, for a shown graphic whose `spïn` counts no frames, the slot left
+//! with no frame or the frame it kept, frozen, and the stellars that count
+//! none ([`Session::drawn_sheet`], [`Session::frame_frozen`],
+//! [`Session::counts_no_frames`], by [`RuleKey::UncountedSheet`]; "Built
+//! by stellar-fidelity phase 8").
 //! Each point rebuilds after the transition's own writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
-//! when the set, a counted sheet or a held sheet changed:
+//! when the set, a counted sheet, a held sheet, a slot's frame or a count
+//! changed:
 //!
 //! - every way into a system but a landed `M` or `N`, as the last step of
 //!   `Session::enter_system`: an in-flight `M` or `N` (@0x159a3), even
@@ -202,8 +208,12 @@ impl Session {
     /// the rebuild point that filled its slot (for a destroyed stellar
     /// with a `Type` sheet, exactly while it is dead since the last
     /// rebuild point), a `DeadType` sheet a flight frame cloned in since,
-    /// or graphic type 0's whenever its slot shows no frame, whether or
-    /// not that sheet can be read; its `Type` sheet by the other reading.
+    /// or graphic type 0's whenever its slot shows no frame and that sheet
+    /// cannot be read; its `Type` sheet by the other reading. By
+    /// [`RuleKey::UncountedSheet`]'s engine reading, a stellar whose shown
+    /// sheet reads but whose `spïn` counts no frames draws the frame its
+    /// slot shows, and [`DrawnSheet::NoFrame`] when it shows none, as does
+    /// one whose slot graphic type 0 filled with frames that count none.
     /// Its `Type` sheet for a stellar that is not among those shown. The
     /// click box ([`Session::select_stellar`]), the shots and the views
     /// read this one answer.
