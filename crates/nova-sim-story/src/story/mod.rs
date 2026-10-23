@@ -1750,11 +1750,11 @@
 //!   stellar newly shown counts its `Type` until a rebuild point says
 //!   otherwise. Carrying the state across systems is stellar-fidelity
 //!   phase 12 (stellar-animation-across-systems).
-//! - **Not switched**: `Flags2` 0x0001 and 0x0002 and an `AnimDelay` of 0
-//!   or less, which the original advances every frame (stellar-fidelity
-//!   phase 10, stellar-animation-flags). A hypergate draws the frame its
-//!   session steps it to instead (`Session::gate_frame`,
-//!   system-traffic-fidelity phase 7).
+//! - **Since built**: `Flags2` 0x0001 and 0x0002 and an `AnimDelay` of 0
+//!   or less, which the original advances every frame: see "Built by
+//!   stellar-fidelity phase 10". A hypergate draws the frame its session
+//!   steps it to instead (`Session::gate_frame`, system-traffic-fidelity
+//!   phase 7).
 //!
 //! **Readings.** The Rulebook key
 //! [`stellar_frame_count`](crate::RuleKey::StellarFrameCount) defaults to
@@ -1814,8 +1814,9 @@
 //!   clone left. At or above it, the timer is reset, the current frame
 //!   takes the next (@0x2ed7f) and the next becomes (next + 1) mod +0x474
 //!   (@0x2eddc-0x2edf4), then `_SWSetCurrentFrameIndex(slot, current)`
-//!   (@0x2ee05-0x2ee30). A delay of 0 or less advances every frame;
-//!   stellar-fidelity phase 10 takes that up.
+//!   (@0x2ee05-0x2ee30). A delay of 0 or less advances every frame: see
+//!   "Checked for stellar-fidelity phase 10", which reads the whole
+//!   sequential branch.
 //! - **The index wraps.** `_SWSetCurrentFrameIndex` reads a negative index
 //!   as 0 and takes it modulo the slot's own count (@0xa90d4-0xa90e9).
 //!   The clone keeps the slot's index while it is below the new count and
@@ -2899,6 +2900,119 @@
 //!   (`_HandleShipDisplay` @0x2cd1c-0x2cd9d, @0x2cdb5-0x2ce31).
 //! - **Integer widths**: the rect is shorts; the engine keeps `f32` and
 //!   `u32`.
+//!
+//! ## Built by stellar-fidelity phase 10
+//!
+//! A stellar's frames advance by the whole of `_HandleStellarSprites`'
+//! sequential branch (@0x2ec4b-0x2ee35): `Flags2` 0x0001 and 0x0002, and
+//! an `AnimDelay` of 0 or less. The view builds it
+//! (`nova_view::system::animation`'s `Frames`), as the frame a non-gate
+//! stellar shows is drawn state the session never reads.
+//!
+//! - **The gate.** A stellar animates when its counted frames are above 1,
+//!   its destroyed state is the one 0x0080 names, and it is not a
+//!   hypergate (0x1000). No delay gate: a threshold of 0 or less is met
+//!   every tick. A hypergate takes its own branch, ported by
+//!   `nova_sim::gate_sprite`; where no session steps it (the galaxy
+//!   viewer) it stays on frame 0, as a released, closed gate does
+//!   (@0x2ec33-0x2ec36).
+//! - **0x0001** shows frame 0 between every other frame: 0, 1, 0, 2, 0,
+//!   3, 0, 1, ...; with 2 frames, 0, 1, 0, 1. Every visit to frame 0 lasts
+//!   `Frame0Bias` × `AnimDelay` when the bias is above 1.
+//! - **0x0002** picks each next frame uniformly among the counted frames
+//!   but the one just made current; under 0x0001 as well, among 1 to
+//!   count − 1 but the current. The pick is one draw over the frames
+//!   allowed, on the view's own chance: flight's effects chance (never the
+//!   session's), and in the galaxy viewer the one
+//!   `AppScreen::with_effects_chance` gives its navigator.
+//! - **Frozen** (stellar-fidelity phase 8): a frozen slot's timer, current
+//!   and next frames step, its 0x0002 draws included, while the frame
+//!   shown stays. An uncounted slot (counted 1) does not animate and draws
+//!   nothing.
+//! - **Stock**: spöb 514 "Link" (sÿst 472, graphic 59, 32 frames,
+//!   `AnimDelay` 0, `Flags2` 0x2000) now plays a frame a tick, as in the
+//!   original; 24 stock stellars animate, all on the Wormhole graphic. No
+//!   stock `spöb` sets 0x0001 or 0x0002.
+//! - **Readings.** No key. The Bible's `AnimDelay` ("frame delay in 30ths
+//!   of a second") and `Frame0Bias` ("display-time multiplier for the
+//!   first frame") give no reading for a delay of 0 or less, and its
+//!   0x0001 ("shows frame 0 after each frame") and 0x0002 ("picks a random
+//!   next frame") agree with the original. The engine's old `AnimDelay > 0`
+//!   gate was a gap ("Not switched" under phase 1), not a reading.
+//! - **Left out**:
+//!   - the hypergate branch (@0x2e83c-0x2ec46), already built whole by
+//!     system-traffic-fidelity phase 7 (`nova_sim::gate_sprite`);
+//!   - the sprite-slot plumbing (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a),
+//!     the view's drawing from phases 1 and 8: `_HandleSpriteMurkiness`
+//!     (@0x2eea4) is rdm:task/murk-other-sprites, and whole-pixel
+//!     placement (@0x2eeab-0x2ef1a) is
+//!     rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement;
+//!   - the hang under 0x0001 | 0x0002 over 2 counted frames
+//!     (@0x2ece5-0x2ed1e), an original bug: the next frame stays, as
+//!     `nova_sim::gate_sprite` keeps a gate's;
+//!   - the integer widths: the 16-bit `Frame0Bias` × `AnimDelay` (`imul ax`
+//!     @0x2ec62, so 200 × 200 wraps to −25536), `_Rand`'s 16-bit count
+//!     sign-extended from +0x474 (@0x2eced), and the 16-bit wraps of
+//!     next + 1 (@0x2ed2e, @0x2eddc);
+//!   - the order of `_Rand`'s draws and its generator;
+//!   - the dock request's take-off reset, outside this function
+//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653):
+//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!
+//! ## Checked for stellar-fidelity phase 10
+//!
+//! Read with `objdump --x86-asm-syntax=intel -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`. The per-stellar fields are as "Checked for stellar-fidelity phase 1"
+//! records: `Flags2` +0x34, `AnimDelay` +0x470, `Frame0Bias` +0x472, the
+//! counted count +0x474, the current frame +0x476, the next +0x478 and
+//! the float timer +0x490.
+//!
+//! - **Before the branch** nothing tests `AnimDelay`: the 0x0080 test
+//!   (@0x2e77b-0x2e7bb), the count above 1 (@0x2e802), the timer gaining
+//!   `_gSpeedMult` (@0x2e810-0x2e825) and the hypergate test, the byte
+//!   +0x35 & 0x10 (@0x2e832), whose branch runs @0x2e83c-0x2ec46. Every
+//!   other stellar, a wormhole included, takes @0x2ec4b.
+//! - **The threshold** (@0x2ec4b-0x2ec83): `Frame0Bias` × `AnimDelay`
+//!   when the current frame is 0 and the bias above 1 (`imul ax`
+//!   @0x2ec62), else `AnimDelay`; then `timer >= threshold` as floats.
+//!   Below it the tick jumps to @0x2ee35, skipping
+//!   `_SWSetCurrentFrameIndex`.
+//! - **`AnimDelay` ≤ 0.** The loader copies it raw (@0x7761b) and
+//!   `Frame0Bias` too (@0x77631). The timer is at least 0 before the add
+//!   and `_gSpeedMult` is positive, so a threshold of 0 or less is met
+//!   every frame, the product of a bias with such a delay included.
+//! - **At the threshold** the timer is set to 0 (@0x2ec89). With 0x0001
+//!   (@0x2ec9b-0x2ec9f): a current frame other than 0 becomes 0, the next
+//!   untouched (@0x2eca5-0x2ecad, @0x2ed71); frame 0 takes the next
+//!   (@0x2ecb3-0x2ecba), and the next is drawn under 0x0002, `_Rand(count)`
+//!   again while it is 0 or the new current (@0x2ece5-0x2ed1e), or else
+//!   is (next + 1) mod count, 1 when that gives 0 (@0x2ed2e-0x2ed63).
+//!   Without 0x0001 the current takes the next (@0x2ed7f-0x2ed86), and
+//!   the next is drawn under 0x0002, again while it is the new current
+//!   (@0x2ed95-0x2edda), or else is (next + 1) mod count
+//!   (@0x2eddc-0x2edf4). Then `_SWSetCurrentFrameIndex(slot, current)`
+//!   (@0x2ee05-0x2ee30). `count` is always +0x474.
+//! - **The draw**: `_Rand` (@0xa4c76), uniform over 0 to n − 1 (as
+//!   `nova_sim::glow` records), with the counted count. Under both flags
+//!   with 2 counted frames no frame can be picked, and the loop never
+//!   ends: the game hangs. With 3 or more there is always one.
+//! - **Frozen**: `_SWSetCurrentFrameIndex` refuses a slot whose frames
+//!   count none (@0xa90e7-0xa90ee), but the branch runs anyway.
+//! - **Sound**: none. The function's calls (0x2e6f1-0x2ef40) are
+//!   `_StellarIsDestroyed`, `_LoadMasterStellarSprite`,
+//!   `_SWCloneFramesFromMaster`, `_SWSetSpriteVisible`, `_IsDisabled`,
+//!   `_AIShipIsEmergingFromHypergate`, `_AIShipIsShipGoingToStellar`,
+//!   `_GetSpriteXSize`/`YSize`, `_FloatAbs`, `_Rand` ×4,
+//!   `_SWSetCurrentFrameIndex`, `_HandleSpriteMurkiness` and
+//!   `_SWSetSpriteLocation`: no `PlaySound` or `_beepSnd`.
+//! - **The take-off reset** (`_HandlePlayerDockRequest`): @0x675ce-0x675fa
+//!   zeroes every `spöb`'s current and next frame (all 2048 records, 0x498
+//!   apart, to 0x24c000); when the byte at ebp−0x2a3 is set, likely the
+//!   gate exit whose escort loop runs @0x674ef-0x675c8, @0x675fc-0x67646
+//!   sets the stellar at ebp−0x298's current and next frames to count − 1
+//!   and its timer to −`AnimDelay`; then `_HandleStellarSystemVisibility`
+//!   rebuilds (@0x67653). Filed as
+//!   rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
 
 //! # Mission lifecycle
 //!
