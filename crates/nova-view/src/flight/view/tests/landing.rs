@@ -406,6 +406,35 @@ fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
     }
 }
 
+/// L selects a wormhole the system lists but another owns, and its dock
+/// request refuses it with the wormhole's line, #84 then #86, with no name
+/// (@0x6699a-0x669a4, @0x67cda-0x67d3c).
+#[test]
+fn l_near_an_unseen_wormhole_says_it_cannot_be_entered() {
+    let mut view = flight_with_unseen(unseen_wormhole());
+    tap(&mut view, LAND);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    assert_lasts(
+        &mut view,
+        &gate_refusal_message(GateKind::Wormhole),
+        LANDING_TICKS,
+    );
+}
+
+/// A planet another system owns is named by its spöb name, as the
+/// not-landable line reads it (#87/#88, @0x67d4c-0x67dc4).
+#[test]
+fn l_at_an_unseen_planet_names_it_by_its_spob_name() {
+    let mut view = flight_with_unseen(site(150, (0.0, 300.0), StellarFlags::CAN_LAND));
+    tap(&mut view, LAND);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    assert_lasts(
+        &mut view,
+        "Your ship is unable to land on  Hole. The planet's environment is too hostile.",
+        LANDING_TICKS,
+    );
+}
+
 #[test]
 fn the_refusal_is_drawn_until_its_ticks_have_passed() {
     let mut view = flight();

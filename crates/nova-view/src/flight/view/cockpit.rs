@@ -1089,12 +1089,20 @@ impl<C> FlightView<C> {
         let Ok(session) = &self.session else {
             return;
         };
-        if let Some(nav) = session.nav_brackets()
-            && let Some(stellar) = scene.stellars().iter().find(|s| s.id == nav.stellar)
-        {
-            let sprite = stellar.drawn().and_then(|sheet| sheet.as_ref().ok());
-            let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
-            let at = camera.world_to_screen(stellar.position);
+        if let Some(nav) = session.nav_brackets() {
+            // A selection the scene doesn't hold, such as a stellar
+            // another system owns, is bracketed at its spöb position with
+            // no sprite (`_HandleNavTargetSprites` @0x2fd9f-0x2fe41).
+            let (position, sprite) = scene
+                .stellars()
+                .iter()
+                .find(|s| s.id == nav.stellar)
+                .map_or((super::point(nav.position), None), |stellar| {
+                    let sprite = stellar.drawn().and_then(|sheet| sheet.as_ref().ok());
+                    let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
+                    (stellar.position, sprite)
+                });
+            let at = camera.world_to_screen(position);
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
         }
         if let Some(target) = session.target_brackets()

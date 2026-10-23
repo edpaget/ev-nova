@@ -353,6 +353,33 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
     assert_eq!(nav_icons(&view), corners_at(10000, broken, 64.0));
 }
 
+/// A selection the scene doesn't hold is bracketed at its spöb position
+/// at half 64 (`_HandleNavTargetSprites` @0x2fd9f-0x2fdda, @0x2fe41).
+#[test]
+fn an_unseen_selection_is_bracketed_at_its_spot_at_half_64() {
+    let mut view = flight_with_unseen(unseen_wormhole());
+    tap(&mut view, LAND);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    let hole = on_screen(&view, (0.0, 300.0));
+    assert_eq!(
+        nav_icons(&view),
+        corners_at(10000, hole, 64.0 + 196.0),
+        "flying in"
+    );
+    ticks(&mut view, 5);
+    let hole = on_screen(&view, (0.0, 300.0));
+    assert_eq!(nav_icons(&view), corners_at(10000, hole, 64.0));
+}
+
+/// `_DrawStatusNav` names any selected stellar by its spöb name
+/// (@0x4a0fd-0x4a149).
+#[test]
+fn the_hud_names_an_unseen_selection() {
+    let mut view = flight_with_unseen(unseen_wormhole());
+    tap(&mut view, LAND);
+    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Hole"]);
+}
+
 #[test]
 fn an_always_dominated_stellar_is_bracketed_green() {
     let mut sites = catalog().sites;

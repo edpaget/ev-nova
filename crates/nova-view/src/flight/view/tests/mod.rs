@@ -1357,6 +1357,43 @@ fn flight_among(sites: Vec<LandingSite>) -> View {
     FlightView::new(FakeCatalog { sites, ..catalog() })
 }
 
+/// A flight in Sol, which lists `unseen`, stellar 150 named "Hole", after
+/// Earth: system 128 lists it too and, the lowest visible lister, owns
+/// it, so Sol doesn't show it.
+fn flight_with_unseen(unseen: LandingSite) -> View {
+    assert_eq!(unseen.id, StellarId(150));
+    let mut catalog = FakeCatalog {
+        home: true,
+        gate_listers: vec![(SystemId(128), StellarId(150))],
+        sites: vec![site(128, (0.0, -600.0), StellarFlags::CAN_LAND), unseen],
+        ..catalog()
+    };
+    catalog
+        .place_names
+        .stellars
+        .insert(StellarId(150), "Hole".to_owned());
+    let view = FlightView::new(catalog);
+    let session = view.session().expect("flying");
+    assert_eq!(
+        session.stellars_shown().collect::<Vec<_>>(),
+        [StellarId(128)]
+    );
+    view
+}
+
+/// A wormhole as stock ones are (`Flags` 0x21, `Flags2` 0x2000), 300
+/// below the centre the ship starts at: within L's 500 pixels.
+fn unseen_wormhole() -> LandingSite {
+    LandingSite {
+        flags2: 0x2000,
+        ..site(
+            150,
+            (0.0, 300.0),
+            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+        )
+    }
+}
+
 const LAND: Key = Key::Char('l');
 
 /// The message drawn at its place, if any.
