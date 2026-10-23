@@ -33,7 +33,7 @@ use super::{
     assigned_message, assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay,
     jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, look, message_text,
     no_outfitter, pay_said, play_area, point, refusal_message, show_combat, show_destroyed,
-    show_gate_frames, shown_scene, stellar_name,
+    show_frozen_frames, show_gate_frames, shown_scene, stellar_name,
 };
 
 impl<
@@ -651,6 +651,7 @@ impl<
             }
             if let Some(scene) = &mut self.scene {
                 show_gate_frames(scene, session);
+                show_frozen_frames(scene, session);
             }
         }
         // The session set its line as it raised each of these, and the

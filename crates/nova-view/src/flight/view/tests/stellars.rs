@@ -785,6 +785,89 @@ fn a_stellar_of_one_type_frame_stays_still_after_y_until_the_next_rebuild_point(
     assert_eq!(dead_moon_frames(&mut view, 4), [1, 2, 0, 1], "the Bible's");
 }
 
+// A `spïn` that counts no frames (stellar-fidelity phase 8).
+
+/// A flight in Sol, by `rules`, whose Moon (129) can be destroyed and
+/// animates a frame a tick while whole, over a 4-frame `Type` sheet 50
+/// square whose `spïn` counts no frames, with a 2-frame `DeadType` sheet
+/// 70 square that counts.
+fn uncounted_moon(rules: Rulebook) -> View {
+    let mut catalog = FakeCatalog {
+        lives: vec![life(129, 0)],
+        moon: Some(MoonSheets {
+            width: 50,
+            dead_width: Some(70),
+            zero_width: 90,
+            frames: 4,
+            dead_frames: 2,
+            only_when_destroyed: false,
+        }),
+        ..catalog()
+    };
+    for site in catalog.sites.iter_mut().filter(|s| s.id == StellarId(129)) {
+        site.type_counts_frames = false;
+    }
+    FlightView::new(catalog).with_rules(rules)
+}
+
+/// The Moon's sprites drawn, with where each is centred less where the
+/// Moon is on screen.
+fn moon_sprites(view: &View) -> Vec<(ImageKey, Point)> {
+    let moon = view.scene().expect("a scene").stellars()[1].position;
+    let at = view.camera().world_to_screen(moon);
+    sprites(&drawn(view))
+        .into_iter()
+        .filter(|(image, _)| [1129, 2129, TYPE_ZERO].contains(&image.id))
+        .map(|(image, centre)| (image, Point::new(centre.x - at.x, centre.y - at.y)))
+        .collect()
+}
+
+#[test]
+fn a_stellar_whose_type_counts_no_frames_draws_nothing_then_its_dead_frame_frozen_and_shifted() {
+    let mut view = uncounted_moon(Rulebook::default());
+    view.tick(TICK);
+    assert_eq!(moon_sprites(&view), [], "flown: its slot shows no frame");
+    run_set(&mut view, "Y129");
+    view.tick(TICK);
+    assert_eq!(
+        moon_sprites(&view),
+        [(ImageKey::sprite(2129, 0), Point::new(0.0, 0.0))],
+        "its `DeadType`, still: it counted none at the rebuild point"
+    );
+    run_set(&mut view, "U129");
+    for _ in 0..4 {
+        view.tick(TICK);
+        assert_eq!(
+            moon_sprites(&view),
+            [(
+                ImageKey::sprite(2129, 0),
+                Point::new(35.0 - 16.0, 35.0 - 16.0)
+            )],
+            "the `DeadType` frame kept, where a 32-pixel slot puts it"
+        );
+    }
+    move_in_flight(&mut view);
+    view.tick(TICK);
+    assert_eq!(moon_sprites(&view), [], "a rebuild point empties it");
+}
+
+#[test]
+fn by_the_other_reading_a_type_that_counts_no_frames_draws_and_animates_its_sheet() {
+    let mut view = uncounted_moon(
+        Rulebook::default().with_override(RuleKey::UncountedSheet, RuleSource::Bible),
+    );
+    let frames: Vec<Vec<(ImageKey, Point)>> = (0..3)
+        .map(|_| {
+            view.tick(TICK);
+            moon_sprites(&view)
+        })
+        .collect();
+    assert_eq!(
+        frames,
+        [1, 2, 3].map(|frame| vec![(ImageKey::sprite(1129, frame), Point::new(0.0, 0.0))])
+    );
+}
+
 /// The Moon's frame shown.
 fn moon_frame(view: &View) -> u16 {
     sprites(&drawn(view))[1].0.frame

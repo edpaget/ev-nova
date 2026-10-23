@@ -1321,12 +1321,16 @@ struct Redrawn {
 /// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
 /// story-runtime phases 7 and 9, stellar-fidelity phase 1), which the
 /// click box reads too, and animating over the frame count the session
-/// says ([`Session::counted_sheet`], stellar-fidelity phase 1).
+/// says ([`Session::counted_sheet`], stellar-fidelity phase 1), or over
+/// none ([`Session::counts_no_frames`]), its frame frozen when the session
+/// says ([`Session::frame_frozen`], stellar-fidelity phase 8).
 fn look(session: &Session, id: StellarId) -> StellarLook {
     StellarLook {
         destroyed: session.galaxy().destroyed(id),
         drawn: session.drawn_sheet(id),
         counted: session.counted_sheet(id),
+        frozen: session.frame_frozen(id),
+        counts_none: session.counts_no_frames(id),
     }
 }
 
@@ -1334,6 +1338,13 @@ fn look(session: &Session, id: StellarId) -> StellarLook {
 /// original's per-frame sprite tick swaps its sheet.
 fn show_destroyed(scene: &mut SystemScene, session: &Session) {
     scene.set_destroyed(|id| look(session, id));
+}
+
+/// Marks each stellar of `scene` frozen as `session` holds it
+/// ([`Session::frame_frozen`]): after the steps of each tick, as a flight
+/// frame freezes or thaws a slot with no event (stellar-fidelity phase 8).
+fn show_frozen_frames(scene: &mut SystemScene, session: &Session) {
+    scene.set_frozen(|id| session.frame_frozen(id));
 }
 
 /// Draws each hypergate of `scene` on the frame `session` gives it

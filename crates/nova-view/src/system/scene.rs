@@ -27,9 +27,13 @@ const NAME_GAP: f32 = 4.0;
 const NAME_SIZE: f32 = 14.0;
 /// How far below a placeholder's name the reason goes.
 const MESSAGE_GAP: f32 = 18.0;
+/// Half the side `_GetSpriteXSize` and `_GetSpriteYSize` give a slot
+/// whose frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
+const FROZEN_HALF_SIDE: f32 = 16.0;
 
 /// One stellar, placed in the scene.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent facts the session sets
 pub struct SceneStellar {
     /// The `spöb`'s ID.
     pub id: StellarId,
@@ -55,6 +59,14 @@ pub struct SceneStellar {
     /// Which sheet's frame count it animates over, as last set: the
     /// session's answer (`Session::counted_sheet`).
     pub counted: DrawnSheet,
+    /// Whether its sprite slot shows a frame frozen, as last set
+    /// (`Session::frame_frozen`): the frame shown stays, and is drawn
+    /// where a 32-pixel sprite's would be, its top left at the centre
+    /// less 16 on each axis.
+    pub frozen: bool,
+    /// Whether it animates over no frames, as last set
+    /// (`Session::counts_no_frames`): it never animates.
+    pub counts_none: bool,
     /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown.
     pub type_zero_sprite: Result<StellarSheet, String>,
     /// Its animation state: the frame of the sheet drawn that shows, and
@@ -68,8 +80,10 @@ pub struct SceneStellar {
 
 /// How a stellar looks, for [`SystemScene::set_destroyed`] and
 /// [`SystemScene::rebuild`]: whether it is destroyed, which its animation
-/// reads, which sheet it draws (`Session::drawn_sheet`), and which sheet's
-/// frame count it animates over (`Session::counted_sheet`).
+/// reads, which sheet it draws (`Session::drawn_sheet`), which sheet's
+/// frame count it animates over (`Session::counted_sheet`), whether its
+/// frame is frozen (`Session::frame_frozen`), and whether it counts no
+/// frames (`Session::counts_no_frames`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StellarLook {
     /// Whether it is destroyed.
@@ -78,6 +92,10 @@ pub struct StellarLook {
     pub drawn: DrawnSheet,
     /// Which sheet's frame count it animates over.
     pub counted: DrawnSheet,
+    /// Whether its sprite slot shows a frame frozen.
+    pub frozen: bool,
+    /// Whether it animates over no frames until the next rebuild point.
+    pub counts_none: bool,
 }
 
 impl SceneStellar {
@@ -94,6 +112,8 @@ impl SceneStellar {
             destroyed: false,
             drawn: DrawnSheet::Type,
             counted: DrawnSheet::Type,
+            frozen: false,
+            counts_none: false,
             type_zero_sprite: type_zero,
             frames: Frames::new(),
             gate_frame: None,
@@ -135,13 +155,23 @@ impl SceneStellar {
             .map_or(NonZeroU16::MIN, |sheet| sheet.frames)
     }
 
-    /// One tick of its animation, over the counted sheet's frames, shown
-    /// on the sheet drawn.
+    /// One tick of its animation, over the counted sheet's frames (one
+    /// when it counts none), shown on the sheet drawn; a frozen frame
+    /// stays shown.
     fn step(&mut self) {
-        let counted = self.frame_count(self.counted);
-        let drawn = self.frame_count(self.drawn);
-        self.frames
-            .step(self.animation_data, self.destroyed, counted, drawn);
+        let counted = if self.counts_none {
+            NonZeroU16::MIN
+        } else {
+            self.frame_count(self.counted)
+        };
+        if self.frozen {
+            self.frames
+                .step_frozen(self.animation_data, self.destroyed, counted);
+        } else {
+            let drawn = self.frame_count(self.drawn);
+            self.frames
+                .step(self.animation_data, self.destroyed, counted, drawn);
+        }
     }
 
     /// How it looks now.
@@ -150,6 +180,25 @@ impl SceneStellar {
             destroyed: self.destroyed,
             drawn: self.drawn,
             counted: self.counted,
+            frozen: self.frozen,
+            counts_none: self.counts_none,
+        }
+    }
+
+    /// Where its sprite of `size` is centred when the stellar's centre is
+    /// at `at` on screen: there, or, for a frozen frame, where the
+    /// original places a 32-pixel slot (its top left at the centre less
+    /// 16 on each axis, `_GetSpriteXSize` @0x26d4-0x2701 and
+    /// `_SWSetSpriteLocation` moving the rect without resizing it,
+    /// @0xab66d-0xab6a0).
+    fn sprite_centre(&self, at: Point, (width, height): (f32, f32)) -> Point {
+        if self.frozen {
+            Point::new(
+                at.x + width / 2.0 - FROZEN_HALF_SIDE,
+                at.y + height / 2.0 - FROZEN_HALF_SIDE,
+            )
+        } else {
+            at
         }
     }
 }
@@ -266,6 +315,8 @@ impl SystemScene {
             let now = look(stellar.id);
             stellar.destroyed = now.destroyed;
             stellar.counted = now.counted;
+            stellar.frozen = now.frozen;
+            stellar.counts_none = now.counts_none;
             if stellar.drawn != now.drawn {
                 stellar.drawn = now.drawn;
                 let drawn = stellar.frame_count(now.drawn);
@@ -286,6 +337,8 @@ impl SystemScene {
                 stellar.destroyed = now.destroyed;
                 stellar.drawn = now.drawn;
                 stellar.counted = now.counted;
+                stellar.frozen = now.frozen;
+                stellar.counts_none = now.counts_none;
                 let drawn = stellar.frame_count(now.drawn);
                 stellar
                     .frames
@@ -300,6 +353,16 @@ impl SystemScene {
             for stellar in &mut self.stellars {
                 stellar.step();
             }
+        }
+    }
+
+    /// Marks each stellar's frame frozen or not as `frozen` gives it
+    /// (`Session::frame_frozen`): a flight frame's clone freezes or thaws
+    /// a slot with no event to tell it, so the view reads it after each
+    /// step, before the frame is drawn.
+    pub fn set_frozen(&mut self, frozen: impl Fn(StellarId) -> bool) {
+        for stellar in &mut self.stellars {
+            stellar.frozen = frozen(stellar.id);
         }
     }
 
@@ -331,22 +394,24 @@ impl SystemScene {
 pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
     let mut labels = Vec::new();
     for stellar in scene.stellars() {
-        let at = camera.world_to_screen(stellar.position);
-        let (width, height) = match stellar.drawn() {
-            None => (0.0, 0.0),
+        let centre = camera.world_to_screen(stellar.position);
+        let (at, (width, height)) = match stellar.drawn() {
+            None => (centre, (0.0, 0.0)),
             Some(Ok(sheet)) => {
                 let frame = stellar.gate_frame.map_or_else(
                     || stellar.frames.shown(),
                     |frame| frame % sheet.frames.get(),
                 );
+                let size = (sheet.frame_width as f32, sheet.frame_height as f32);
+                let at = stellar.sprite_centre(centre, size);
                 list.sprite(sheet.image.frame(frame), at, Color::WHITE);
-                (sheet.frame_width as f32, sheet.frame_height as f32)
+                (at, size)
             }
             Some(Err(message)) => {
-                crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
+                crossed_box(list, centre, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
-                    at.x - PLACEHOLDER_SIZE / 2.0,
-                    at.y + PLACEHOLDER_SIZE / 2.0 + NAME_GAP + MESSAGE_GAP,
+                    centre.x - PLACEHOLDER_SIZE / 2.0,
+                    centre.y + PLACEHOLDER_SIZE / 2.0 + NAME_GAP + MESSAGE_GAP,
                 );
                 list.text(
                     format!("Sprite unavailable: {message}"),
@@ -355,7 +420,7 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
                     None,
                     Color::ERROR,
                 );
-                (PLACEHOLDER_SIZE, PLACEHOLDER_SIZE)
+                (centre, (PLACEHOLDER_SIZE, PLACEHOLDER_SIZE))
             }
         };
         let name_at = Point::new(at.x - width / 2.0, at.y + height / 2.0 + NAME_GAP);
@@ -481,6 +546,8 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
+                    frozen: false,
+                    counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: true,
                     frames: Frames::new(),
@@ -496,6 +563,8 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
+                    frozen: false,
+                    counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: false,
                     frames: Frames::new(),
@@ -511,6 +580,8 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     counted: DrawnSheet::Type,
+                    frozen: false,
+                    counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: false,
                     frames: Frames::new(),
@@ -616,6 +687,8 @@ mod tests {
         destroyed: false,
         drawn: DrawnSheet::Type,
         counted: DrawnSheet::Type,
+        frozen: false,
+        counts_none: false,
     };
 
     /// A destroyed stellar drawing `drawn` and counting its frames.
@@ -624,6 +697,7 @@ mod tests {
             destroyed: true,
             drawn,
             counted: drawn,
+            ..WHOLE
         }
     }
 
@@ -785,9 +859,9 @@ mod tests {
     fn a_swap_keeps_the_frame_shown_while_it_is_in_range() {
         let drawing = |sheet| {
             move |_| StellarLook {
-                destroyed: false,
                 drawn: sheet,
                 counted: sheet,
+                ..WHOLE
             }
         };
         let mut scene = SystemScene::load(&dying(), SystemId(134));
@@ -814,6 +888,7 @@ mod tests {
             destroyed,
             drawn,
             counted,
+            ..WHOLE
         }
     }
 
@@ -1007,9 +1082,9 @@ mod tests {
         let sheets: Vec<DrawnSheet> = scene.stellars().iter().map(|s| s.drawn).collect();
         assert_eq!(sheets, [DrawnSheet::TypeZero; 4]);
         scene.set_destroyed(|_| StellarLook {
-            destroyed: false,
             drawn: DrawnSheet::TypeZero,
             counted: DrawnSheet::TypeZero,
+            ..WHOLE
         });
         scene.step(4);
         assert_eq!(
@@ -1091,6 +1166,94 @@ mod tests {
         assert_eq!(scene.stellars()[3].frames.shown(), 0);
         scene.step(6);
         assert_eq!(scene.stellars()[3].frames.shown(), 0, "one frame counted");
+    }
+
+    /// Where the sprite of `image` is centred.
+    fn sprite_at(scene: &SystemScene, image: ImageKey) -> Point {
+        let mut list = DrawList::new();
+        draw_stellars(&mut list, scene, &Camera::centred_on(Point::default()));
+        list.iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Sprite {
+                    image: drawn,
+                    center,
+                    ..
+                } if *drawn == image => Some(*center),
+                _ => None,
+            })
+            .expect("the sprite is drawn")
+    }
+
+    #[test]
+    fn a_frozen_stellar_draws_its_frame_kept_where_a_32_pixel_slot_puts_it() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.step(3);
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 1));
+        let frozen_153 = |id: StellarId| StellarLook {
+            frozen: id == StellarId(153),
+            ..WHOLE
+        };
+        scene.set_destroyed(frozen_153);
+        assert!(scene.stellars()[3].frozen);
+        scene.step(6);
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 1), "kept");
+        // An 8-pixel frame whose top left is the centre less 16: its
+        // centre is 12 up and left of the stellar's.
+        let at = Camera::centred_on(Point::default()).world_to_screen(Point::new(300.0, 0.0));
+        assert_eq!(
+            sprite_at(&scene, ImageKey::sprite(1003, 1)),
+            Point::new(at.x - 12.0, at.y - 12.0)
+        );
+        assert_eq!(
+            name_at(&scene, "Stellar 153"),
+            Point::new(at.x - 16.0, at.y - 8.0 + NAME_GAP),
+            "under the sprite drawn"
+        );
+        // Thawed, it steps on from the frame its count reached.
+        scene.set_destroyed(|_| WHOLE);
+        scene.step(2);
+        assert_eq!(
+            drawn(&scene)[3],
+            ImageKey::sprite(1003, 1),
+            "its count stepped on while frozen"
+        );
+        assert_eq!(
+            sprite_at(&scene, ImageKey::sprite(1003, 1)),
+            at,
+            "centred again"
+        );
+    }
+
+    #[test]
+    fn a_stellar_counting_no_frames_never_animates() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.set_destroyed(|_| StellarLook {
+            counts_none: true,
+            ..WHOLE
+        });
+        assert!(scene.stellars()[3].counts_none);
+        for _ in 0..8 {
+            scene.step(1);
+            assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 0));
+        }
+        scene.set_destroyed(|_| WHOLE);
+        scene.step(3);
+        assert_eq!(
+            drawn(&scene)[3],
+            ImageKey::sprite(1003, 1),
+            "it counts again"
+        );
+    }
+
+    #[test]
+    fn a_rebuild_takes_a_change_in_the_frozen_or_counting_state() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.rebuild(|_| StellarLook {
+            frozen: true,
+            counts_none: true,
+            ..WHOLE
+        });
+        assert!(scene.stellars().iter().all(|s| s.frozen && s.counts_none));
     }
 
     #[test]

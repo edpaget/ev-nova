@@ -150,6 +150,7 @@ fn a_destroyed_stellar_whose_dead_type_is_a_pict_pair_draws_it() {
         destroyed: true,
         drawn: DrawnSheet::Dead,
         counted: DrawnSheet::Dead,
+        ..StellarLook::default()
     });
     let (sprites, placeholder) = drawn(&scene);
     assert_eq!(

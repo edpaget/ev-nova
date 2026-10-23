@@ -95,9 +95,34 @@ impl Frames {
         counted: NonZeroU16,
         drawn: NonZeroU16,
     ) {
+        match self.advance(data, destroyed, counted) {
+            None => self.shown = 0,
+            Some(true) => self.shown = self.current % drawn.get(),
+            Some(false) => {}
+        }
+    }
+
+    /// One tick for a stellar whose sprite slot shows a frame frozen
+    /// (`Session::frame_frozen`, stellar-fidelity phase 8): its current
+    /// and next frames and its timer step as [`Frames::step`] steps them,
+    /// but the frame shown stays, whether it animates or not, as every
+    /// `_SWSetCurrentFrameIndex` the sprite tick calls refuses a slot
+    /// whose frames count none (@0x2ee20-0x2ee30, @0xa90e7-0xa90ee).
+    pub fn step_frozen(&mut self, data: AnimationData, destroyed: bool, counted: NonZeroU16) {
+        let _ = self.advance(data, destroyed, counted);
+    }
+
+    /// One tick of the timer and the current and next frames over
+    /// `counted`: `None` when the stellar does not animate, else whether
+    /// the current frame advanced.
+    fn advance(
+        &mut self,
+        data: AnimationData,
+        destroyed: bool,
+        counted: NonZeroU16,
+    ) -> Option<bool> {
         if !is_animated(data, destroyed, counted) {
-            self.shown = 0;
-            return;
+            return None;
         }
         self.timer += 1;
         let delay = u64::from(data.delay.unsigned_abs());
@@ -106,13 +131,14 @@ impl Frames {
         } else {
             delay
         };
-        if self.timer >= threshold {
-            self.timer = 0;
-            self.current = self.next;
-            // Below `counted`, which is a u16.
-            self.next = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
-            self.shown = self.current % drawn.get();
+        if self.timer < threshold {
+            return Some(false);
         }
+        self.timer = 0;
+        self.current = self.next;
+        // Below `counted`, which is a u16.
+        self.next = ((u32::from(self.next) + 1) % u32::from(counted.get())) as u16;
+        Some(true)
     }
 
     /// A rebuild point: the sheet drawn, of `drawn` frames, shows the
@@ -330,5 +356,29 @@ mod tests {
         assert_eq!(frames.shown(), 2, "frame 5 of 3");
         frames.reshow(count(3), true);
         assert_eq!(frames.shown(), 0);
+    }
+
+    #[test]
+    fn a_frozen_stellar_keeps_the_frame_shown_while_its_current_and_next_advance() {
+        let (every_tick, four) = (data(1, 0), count(4));
+        let mut frames = Frames::new();
+        frames.step(every_tick, false, four, four);
+        frames.step(every_tick, false, four, four);
+        assert_eq!(frames.shown(), 2);
+        frames.step_frozen(every_tick, false, four);
+        assert_eq!((frames.current, frames.next, frames.shown()), (3, 0, 2));
+        frames.step_frozen(every_tick, false, four);
+        assert_eq!((frames.current, frames.next, frames.shown()), (0, 1, 2));
+        // Not animating, it still keeps the frame shown, not frame 0.
+        for _ in 0..3 {
+            frames.step_frozen(every_tick, true, four);
+        }
+        assert_eq!((frames.current, frames.shown()), (0, 2));
+        // A swap after the freeze keeps an in-range frame; the next
+        // advance shows the current one.
+        frames.swap(count(3));
+        assert_eq!(frames.shown(), 2);
+        frames.step(every_tick, false, four, count(3));
+        assert_eq!(frames.shown(), 1);
     }
 }
