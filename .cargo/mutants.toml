@@ -577,6 +577,7 @@ exclude_re = [
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::voices -> Voices with Default::default\\(\\)$",
     # A stellar's frame 0 shows `AnimDelay` x `Frame0Bias` ticks only when
     # the bias is above 1; a bias of exactly 1 gives `AnimDelay` x 1, the
-    # same threshold as `AnimDelay`, so `>` and `>=` choose the same.
-    "system/animation\\.rs:.*replace > with >= in Frames::step",
+    # same threshold as `AnimDelay` (whatever its sign), so `>` and `>=`
+    # choose the same. The test sits in `Frames::advance`.
+    "system/animation\\.rs:.*replace > with >= in Frames::(step|advance)$",
 ]
