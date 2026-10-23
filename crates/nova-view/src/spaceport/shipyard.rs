@@ -1181,13 +1181,17 @@ impl ShipyardScreen {
         &self.shipyard
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index: none when nothing is listed, or, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// engine reading, when nothing is selected (on opening, after a press
+    /// on an empty cell or a scroll that moved).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.grid.cells().selected(self.shipyard.rows.len())
     }
 
-    /// The selected ship's row, if anything is listed.
+    /// The selected ship's row, if one is selected
+    /// ([`ShipyardScreen::selected`]).
     fn selected_row(&self) -> Option<&ShipRow> {
         self.selected().map(|index| &self.shipyard.rows[index])
     }

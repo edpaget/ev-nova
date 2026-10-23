@@ -231,13 +231,17 @@ impl HireScreen {
         &self.list
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index: none when nothing is listed, or, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// engine reading, when nothing is selected (on opening, after a press
+    /// on an empty cell or a scroll that moved).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.grid.cells().selected(self.list.rows.len())
     }
 
-    /// The selected ship's row, if anything is listed.
+    /// The selected ship's row, if one is selected
+    /// ([`HireScreen::selected`]).
     fn selected_row(&self) -> Option<&HireRow> {
         self.selected().map(|index| &self.list.rows[index])
     }
