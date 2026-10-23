@@ -57,6 +57,7 @@ mod stock_ship_lights;
 mod stock_spawn_availability;
 mod stock_stand_off;
 mod stock_star_map;
+mod stock_stellar_guns;
 mod stock_stellar_hazards;
 mod stock_storyline;
 mod stock_swarm;

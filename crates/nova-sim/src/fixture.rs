@@ -83,6 +83,13 @@ pub fn put_player_over(session: &mut Session, id: NpcId) {
     session.put_player_over(id);
 }
 
+/// Puts the player's ship in `session` at `at`, at rest: for a test that
+/// needs the player somewhere it did not fly to, such as in a stellar's
+/// gun range.
+pub fn place_player(session: &mut Session, at: crate::geometry::Vec2) {
+    session.place_player(at);
+}
+
 /// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
 /// for a test that draws a ship cloaked.
 pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
