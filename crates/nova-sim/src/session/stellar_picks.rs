@@ -30,9 +30,11 @@ use crate::pilot::Pilot;
 
 impl Chart {
     /// The stellars the land key's and F5's nearest pick walk, in
-    /// `NavDefs` order: each of `listed` that is shown here, or whose
-    /// holder, with the player in their system, is visible (the +0x44 the
-    /// walk tests, @0x27c3-0x27c7). So every stellar of `sites` is one.
+    /// `NavDefs` order: each of `listed` whose holder, with the player in
+    /// their system, is visible (the +0x44 the walk tests,
+    /// @0x27c3-0x27c7). The galaxy refresh moves a player whose system is
+    /// hidden, so the player's system is visible and every stellar of
+    /// `sites` is one.
     ///
     /// The original sets +0x44 at the rebuild points
     /// (`_HandleStellarSystemVisibility`); this reads the holder as the
@@ -42,11 +44,9 @@ impl Chart {
         self.listed
             .iter()
             .filter(|site| {
-                self.sites.iter().any(|shown| shown.id == site.id)
-                    || self
-                        .galaxy
-                        .active_holder(statics.listers(site.id), pilot.system)
-                        .is_some()
+                self.galaxy
+                    .active_holder(statics.listers(site.id), pilot.system)
+                    .is_some()
             })
             .copied()
             .collect()
@@ -367,21 +367,5 @@ pub(super) mod tests {
             Vec2::new(0.0, 0.0),
             "140, shown, at the centre"
         );
-    }
-
-    /// A stellar shown stays a candidate though its system is hidden
-    /// since the last rebuild point: its +0x44 is set at the rebuild
-    /// points, and the stellars shown stand for it until the next.
-    #[test]
-    fn a_stellar_shown_stays_a_candidate_after_its_system_is_hidden() {
-        let catalog = twice_listed(wormhole);
-        let mut session = in_131(&catalog, engine(), NEAR_140);
-        crate::session::tests::hide(&mut session, &catalog, &[131]);
-        assert_eq!(
-            session.stellars_shown().collect::<Vec<_>>(),
-            [StellarId(140)]
-        );
-        assert!(session.land().is_ok());
-        assert_eq!(session.nav_target(), Some(StellarId(140)));
     }
 }
