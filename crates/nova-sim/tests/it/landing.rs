@@ -209,6 +209,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         dead_graphic: None,
         dead_frame_size: None,
         type_counts_frames: true,
+        dead_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
         gravity: 0,

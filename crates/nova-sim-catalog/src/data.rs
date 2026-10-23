@@ -267,6 +267,8 @@ impl PilotCatalog for GameData {
                     dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
                     dead_frame_size,
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
+                    dead_counts_frames: dead_frame_size
+                        .is_none_or(|_| counts_frames(self, stellar.dead_type)),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
                     gravity: stellar.gravity,
@@ -431,6 +433,10 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        counts_frames(self, 0)
     }
 
     /// Each `Visibility` parsed once and shared
@@ -2625,6 +2631,7 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: true,
+                    dead_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
                     gravity: 0,
@@ -2649,6 +2656,7 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: false,
+                    dead_counts_frames: true,
                     exit_angle: 0,
                     tribute: 250,
                     gravity: 0,
@@ -2765,6 +2773,36 @@ mod tests {
             (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
         ]);
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn a_landing_site_counts_dead_frames_when_its_dead_types_spins_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (-1, 4, false),
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (System::TYPE, 130, system_with(&[128])),
+                // `Type` 4 has no `spïn`; `DeadType` 0 is `spïn` 1000.
+                (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 0)),
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            let site = data.landing_sites(SystemId(130))[0];
+            assert_eq!(site.dead_graphic, Some(0));
+            assert_eq!(site.dead_counts_frames, counts, "{x_tiles} x {y_tiles}");
+        }
+        let no_dead_sheet = store(&[
+            (System::TYPE, 130, system_with(&[128])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+        ]);
+        let site = no_dead_sheet.landing_sites(SystemId(130))[0];
+        assert_eq!(site.dead_graphic, None);
+        assert!(site.dead_counts_frames, "true with no `DeadType` sheet");
     }
 
     /// A `röid` of this `Strength` and `SpinRate`, with no yield, no
@@ -2982,6 +3020,31 @@ mod tests {
                 .fallback_frame_size(),
             None
         );
+    }
+
+    #[test]
+    fn graphic_type_0_counts_frames_when_spin_1000s_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (-1, 4, false),
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            assert_eq!(
+                data.fallback_counts_frames(),
+                counts,
+                "{x_tiles} x {y_tiles}"
+            );
+            let data = std::rc::Rc::new(data);
+            assert_eq!(PilotCatalog::fallback_counts_frames(&data), counts, "Rc");
+            assert_eq!(PilotCatalog::fallback_counts_frames(&&*data), counts, "&");
+        }
     }
 
     #[test]

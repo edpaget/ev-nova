@@ -90,6 +90,8 @@ pub struct FakePilotCatalog {
     /// Graphic type 0's sheet's frame size, or `None` when it does not
     /// read: 100 square, by default.
     pub fallback_frame: Option<(u32, u32)>,
+    /// Whether graphic type 0's `spïn` counts frames: true, by default.
+    pub fallback_counts: bool,
     /// Every `mïsn`: none, by default.
     pub missions: Vec<MissionRecord>,
     /// What the screens show of each `mïsn`: none, by default.
@@ -208,6 +210,7 @@ pub fn catalog() -> FakePilotCatalog {
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
+        fallback_counts: true,
         missions: Vec::new(),
         mission_texts: Vec::new(),
         place_names: PlaceNames::default(),
@@ -347,6 +350,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.fallback_frame
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        self.fallback_counts
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -752,6 +759,12 @@ mod tests {
             ..catalog()
         };
         assert_eq!(unread.fallback_frame_size(), None);
+        assert!(fake.fallback_counts_frames());
+        let uncounted = FakePilotCatalog {
+            fallback_counts: false,
+            ..catalog()
+        };
+        assert!(!uncounted.fallback_counts_frames());
     }
 
     #[test]

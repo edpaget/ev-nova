@@ -151,6 +151,14 @@ pub struct LandingSite {
     /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
     /// `_GetStellarSpriteXSize` @0xaced-0xacff).
     pub type_counts_frames: bool,
+    /// Whether its `DeadType`'s `spïn` gives a frame count above 0,
+    /// `xTiles` × `yTiles`, as [`type_counts_frames`](Self::type_counts_frames)
+    /// for its `Type`: a sprite slot cloning a master without one keeps
+    /// the frame it showed (`_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee;
+    /// stellar-fidelity phase 8). `true` where
+    /// [`dead_graphic`](Self::dead_graphic) is `None`, so it means
+    /// something only beside it.
+    pub dead_counts_frames: bool,
     /// Its `CustSndID`, raw, as [`GateSite::exit_angle`]: the heading an
     /// NPC comes out of it on when it is a hypergate or wormhole and the
     /// value is 0 to 359 (`nova_sim::gate::exit_heading`).
@@ -1976,6 +1984,17 @@ pub trait PilotCatalog {
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
     fn fallback_frame_size(&self) -> Option<(u32, u32)>;
+    /// Whether graphic type 0's `spïn` (1000) gives a frame count above 0,
+    /// `xTiles` × `yTiles`: a slot the original's rebuild fills with it
+    /// shows no frame when it does not (`_SWSetCurrentFrameIndex`
+    /// @0xa90e7-0xa90ee, called @0x332d0; stellar-fidelity phase 8).
+    /// Means something only beside a [`fallback_frame_size`] that is
+    /// `Some`. `true` unless overridden, as every stock `spïn` counts.
+    ///
+    /// [`fallback_frame_size`]: PilotCatalog::fallback_frame_size
+    fn fallback_counts_frames(&self) -> bool {
+        true
+    }
     /// Every `mïsn` that can be read, by ascending ID.
     fn missions(&self) -> Vec<MissionRecord>;
     /// What the screens show of every `mïsn` that can be read, by
@@ -2127,6 +2146,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).fallback_frame_size()
     }
 
+    fn fallback_counts_frames(&self) -> bool {
+        (**self).fallback_counts_frames()
+    }
+
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
     }
@@ -2261,6 +2284,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        (**self).fallback_counts_frames()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -2627,6 +2654,7 @@ mod tests {
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
+                dead_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
                 gravity: 0,

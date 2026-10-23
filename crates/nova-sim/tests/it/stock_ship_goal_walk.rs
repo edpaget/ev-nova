@@ -673,6 +673,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.fallback_frame_size()
     }
 
+    fn fallback_counts_frames(&self) -> bool {
+        self.data.fallback_counts_frames()
+    }
+
     fn missions(&self) -> Vec<MissionRecord> {
         let mut missions = self.data.missions();
         for record in missions.iter_mut().filter(|r| r.id == self.mission) {
