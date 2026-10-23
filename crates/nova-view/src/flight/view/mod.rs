@@ -585,7 +585,7 @@
 //! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
 //! slot, a new message replacing the old and its time, in the rect
 //! `_InitSprites` sets up ([`hud::message_box`](super::hud::message_box)), wrapped, in the system
-//! font at 12 pt in white ([`hud::draw_message`](super::hud::draw_message)). It is drawn over the
+//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). It is drawn over the
 //! starfield and under everything else, as the original draws it on the
 //! sprite world's background. Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the

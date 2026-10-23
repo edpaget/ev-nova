@@ -457,11 +457,11 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
     let text = vec!["abcd"; 60].join(" ");
     view.say_for(text.clone(), MESSAGE_TICKS);
     let mut expected = DrawList::new();
-    hud::draw_message(
+    hud::draw_message_box(&mut expected, VIEW_SIZE, Color::BLACK);
+    hud::draw_message_text(
         &mut expected,
         &text,
         VIEW_SIZE,
-        Color::BLACK,
         Some(&crate::text::fixture::MonoMetrics),
     );
     let list = drawn(&view);

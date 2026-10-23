@@ -464,33 +464,23 @@ pub fn message_box(view: (f32, f32)) -> Bounds {
     }
 }
 
-/// Draws the flight message `text` in [`message_box`] of a view `view`
-/// in size, as
-/// `_DisplayComm` (@0x90294-0x902f5) draws it with `TETextBox`:
-/// left-justified and wrapped to the box, in [`MESSAGE_FONT`] at
-/// [`MESSAGE_TEXT_SIZE`], white (`InitColors` @0x1bece sets the colour
-/// it is passed to 0xffff, 0xffff, 0xffff), over the box erased in
-/// `background`. See [`draw_message_in`].
-pub fn draw_message(
-    list: &mut DrawList,
-    text: &str,
-    view: (f32, f32),
-    background: Color,
-    metrics: Option<&dyn TextMetrics>,
-) {
-    draw_message_box(list, view, background);
-    draw_message_text(list, text, view, metrics);
-}
-
 /// Fills [`message_box`] of a view `view` in size in `background`, as
-/// `_DisplayComm` erases it in the sprite world's background frame
-/// before drawing the text (see [`draw_message_in`]).
+/// `_DisplayComm` erases the rect in the system background colour before
+/// `TETextBox` (`SetSystemBackgroundBackColor` @0x902cf: the current
+/// system's `BkgndColor`, or black without one, @0x6e06), hiding the
+/// starfield behind the text. The original erases it in the sprite
+/// world's background frame, under every sprite; the text is drawn
+/// apart, with [`draw_message_text`].
 pub fn draw_message_box(list: &mut DrawList, view: (f32, f32), background: Color) {
     fill_rect(list, message_box(view), background);
 }
 
 /// Draws the flight message `text` in [`message_box`] of a view `view`
-/// in size, without its box (see [`draw_message_in`]).
+/// in size, without its box ([`draw_message_box`]), as `_DisplayComm`
+/// (@0x90294-0x902f5) draws it with `TETextBox`: left-justified and
+/// wrapped to the box, in [`MESSAGE_FONT`] at [`MESSAGE_TEXT_SIZE`],
+/// white (`InitColors` @0x1bece sets the colour it is passed to 0xffff,
+/// 0xffff, 0xffff).
 pub fn draw_message_text(
     list: &mut DrawList,
     text: &str,
@@ -500,35 +490,16 @@ pub fn draw_message_text(
     draw_message_text_in(list, text, message_box(view), metrics);
 }
 
-/// Draws the flight message `text` in `area`: with `metrics`, through a
-/// [`TextBox`] as `TETextBox` draws it, each line it wraps to as a text
-/// of its own down from the area's top-left, every line whose top is
-/// inside the area; without, one text wrapped by the renderer at the
-/// area's width.
+/// Draws the flight message `text` in `area`, without its box: with
+/// `metrics`, through a [`TextBox`] as `TETextBox` draws it, each line
+/// it wraps to as a text of its own down from the area's top-left, every
+/// line whose top is inside the area; without, one text wrapped by the
+/// renderer at the area's width.
 ///
 /// `TETextBox` clips to the rect, so a line partly inside shows its top,
 /// clipped to the box. In the stock 1024 x 768 window [`message_box`] is
 /// 39 pixels tall: two whole lines of Charcoal 12 fit, and a third shows
 /// its top 10 pixels.
-///
-/// First the area is filled in `background`, as `_DisplayComm` erases
-/// the rect in the system background colour before `TETextBox`
-/// (`SetSystemBackgroundBackColor` @0x902cf: the current system's
-/// `BkgndColor`, or black without one, @0x6e06), hiding the starfield
-/// behind the text.
-pub fn draw_message_in(
-    list: &mut DrawList,
-    text: &str,
-    area: Bounds,
-    background: Color,
-    metrics: Option<&dyn TextMetrics>,
-) {
-    fill_rect(list, area, background);
-    draw_message_text_in(list, text, area, metrics);
-}
-
-/// Draws the flight message `text` in `area`, without its box (see
-/// [`draw_message_in`]).
 fn draw_message_text_in(
     list: &mut DrawList,
     text: &str,
@@ -2310,6 +2281,19 @@ mod tests {
     /// A deep blue background.
     const BLUE: Color = Color::rgba(0, 16, 82, 255);
 
+    /// The message's box in `background` and then its text, as the
+    /// flight view's world draws them apart.
+    fn draw_message(
+        list: &mut DrawList,
+        text: &str,
+        view: (f32, f32),
+        background: Color,
+        metrics: Option<&dyn TextMetrics>,
+    ) {
+        draw_message_box(list, view, background);
+        draw_message_text(list, text, view, metrics);
+    }
+
     #[test]
     fn a_message_is_drawn_in_the_box_at_12_pt_in_white() {
         let mut list = DrawList::new();
@@ -2327,23 +2311,6 @@ mod tests {
         );
         assert_eq!(MESSAGE_FONT, Font::Charcoal);
         assert_eq!(MESSAGE_TEXT_SIZE, 12.0);
-    }
-
-    #[test]
-    fn a_message_is_its_box_and_then_its_text_drawn_apart() {
-        let text = vec!["abcd"; 60].join(" ");
-        let mut whole = DrawList::new();
-        draw_message(&mut whole, &text, VIEW_SIZE, BLUE, Some(&MonoMetrics));
-        let mut apart = DrawList::new();
-        draw_message_box(&mut apart, VIEW_SIZE, BLUE);
-        let box_len = apart.len();
-        assert_eq!(box_len, 1, "the box alone");
-        draw_message_text(&mut apart, &text, VIEW_SIZE, Some(&MonoMetrics));
-        assert!(apart.len() > box_len, "then the text");
-        assert_eq!(
-            apart.iter().collect::<Vec<_>>(),
-            whole.iter().collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -2378,10 +2345,9 @@ mod tests {
         let area = Bounds::at(at(0.0, 0.0), 755.0, 1.5 * line);
         let text = vec!["abcd"; 100].join(" ");
         let mut list = DrawList::new();
-        draw_message_in(&mut list, &text, area, BLUE, Some(&MonoMetrics));
+        draw_message_text_in(&mut list, &text, area, Some(&MonoMetrics));
         let kinds: Vec<bool> = list
             .iter()
-            .skip(1)
             .map(|c| matches!(c, DrawCommand::Clipped { .. }))
             .collect();
         assert_eq!(kinds, [false, true], "one whole line, one clipped, no more");
@@ -2393,12 +2359,8 @@ mod tests {
         let area = Bounds::at(at(0.0, 0.0), 755.0, 2.0 * line);
         let text = vec!["abcd"; 60].join(" ");
         let mut list = DrawList::new();
-        draw_message_in(&mut list, &text, area, BLUE, Some(&MonoMetrics));
-        assert_eq!(
-            list.iter().count(),
-            1 + 2,
-            "the fill, and the second line ends on the bottom"
-        );
+        draw_message_text_in(&mut list, &text, area, Some(&MonoMetrics));
+        assert_eq!(list.iter().count(), 2, "the second line ends on the bottom");
     }
 
     #[test]
