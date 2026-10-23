@@ -327,3 +327,51 @@ fn without_a_text_input_template_the_built_in_christening_opens_with_a_warning()
     assert_eq!(without.showing(), Showing::Christening, "no dialogs at all");
     assert_eq!(without.take_warnings(), Vec::<String>::new());
 }
+
+/// Every text `screen` draws.
+fn christening_texts(screen: &AppScreen) -> Vec<String> {
+    drawn(screen)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_open_christening_is_drawn_with_its_prompt_and_default_name() {
+    let store = MemoryPilots::new();
+    let mut screen = christening_menu(christening_data(b""), &store, Rolls::default());
+    name_pilot(&mut screen, "Ada");
+    let texts = christening_texts(&screen);
+    let lines = screen
+        .christening()
+        .expect("christening")
+        .dialog()
+        .text(PROMPT_ITEM)
+        .expect("the prompt")
+        .lines()
+        .to_vec();
+    assert_eq!(lines.join(" "), format!("{PROMPT} Kestrel: "));
+    for line in &lines {
+        assert!(texts.contains(line), "{line:?} drawn in {texts:?}");
+    }
+    assert!(
+        texts.iter().any(|text| text.contains("Ring of Glory")),
+        "the default name drawn in {texts:?}"
+    );
+}
+
+#[test]
+fn the_christenings_beep_is_collected_while_it_is_open() {
+    let too_long = "a".repeat(nova_sim::shipyard::SHIP_NAME_CHARS + 1);
+    let store = MemoryPilots::new();
+    let mut screen = christening_menu(christening_data(b""), &store, Rolls::default());
+    name_pilot(&mut screen, "Ada");
+    screen.take_sounds();
+    type_text(&mut screen, &too_long);
+    screen.input(&key(Key::Enter, true));
+    assert!(screen.christening().is_some(), "still open");
+    assert!(screen.take_sounds().contains(&Sound::Ui(UiSound::Alert)));
+}
