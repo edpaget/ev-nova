@@ -11,12 +11,15 @@
 //!   shows, stepped tick by tick from its `spöb`'s animation fields.
 //! - [`scene`]: the [`SystemScene`], the system read once and laid out:
 //!   each stellar's world position, sheet and animation.
+//! - [`kept_frames`]: [`KeptFrames`], each stellar's animation state kept
+//!   across the systems a flight passes through.
 //! - [`view`]: the [`SystemView`] screen, which only reads the port.
 
 pub mod animation;
 pub mod camera;
 pub mod catalog;
 pub mod data;
+pub mod kept_frames;
 #[cfg(test)]
 mod pict_pair_tests;
 pub mod scene;
@@ -29,5 +32,6 @@ pub use catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
+pub use kept_frames::KeptFrames;
 pub use scene::{SceneStellar, StellarLook, SystemScene};
 pub use view::SystemView;

@@ -9,6 +9,7 @@ use std::num::NonZeroU16;
 
 use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
+use super::kept_frames::KeptFrames;
 use nova_sim::{Chance, DrawnSheet};
 
 use super::catalog::{
@@ -343,6 +344,26 @@ impl SystemScene {
                 stellar
                     .frames
                     .reshow(drawn, now.drawn == DrawnSheet::TypeZero);
+            }
+        }
+    }
+
+    /// Gives each stellar `kept` holds the animation state it was left
+    /// in ([`KeptFrames`]), shown on the sheet now drawn: its current
+    /// frame modulo that sheet's frame count, or frame 0 on graphic type
+    /// 0's ([`Frames::reshow`]), as the original's rebuild sets the slot
+    /// of a stellar shown again (`_HandleStellarSystemVisibility`
+    /// @0x33096, @0x332d0). A stellar `kept` has never seen keeps the
+    /// state it was laid out with. Called once the scene's look is set,
+    /// so the sheet drawn is the session's.
+    pub fn resume(&mut self, kept: &KeptFrames) {
+        for stellar in &mut self.stellars {
+            if let Some(frames) = kept.get(stellar.id) {
+                stellar.frames = frames;
+                let drawn = stellar.frame_count(stellar.drawn);
+                stellar
+                    .frames
+                    .reshow(drawn, stellar.drawn == DrawnSheet::TypeZero);
             }
         }
     }
@@ -1035,6 +1056,62 @@ mod tests {
         scene.step(6, &mut NeverFires);
         scene.rebuild(|_| look(false, DrawnSheet::Dead, DrawnSheet::Type));
         assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 1)]);
+    }
+
+    /// Stellar 160's animation state 6 ticks in (current frame 3 of its
+    /// `Type` sheet's 4), kept.
+    fn kept_on_frame_3() -> KeptFrames {
+        let mut left = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        left.step(6, &mut NeverFires);
+        assert_eq!(drawn(&left), [ImageKey::sprite(1160, 3)]);
+        let mut kept = KeptFrames::new();
+        kept.keep(&left);
+        kept
+    }
+
+    #[test]
+    fn resume_shows_the_current_frame_on_the_sheet_now_drawn() {
+        let kept = kept_on_frame_3();
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.set_destroyed(|_| look(false, DrawnSheet::Dead, DrawnSheet::Type));
+        scene.resume(&kept);
+        assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 1)], "3 of 2");
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.resume(&kept);
+        assert_eq!(drawn(&scene), [ImageKey::sprite(1160, 3)], "3 of 4");
+    }
+
+    #[test]
+    fn resume_on_graphic_type_0s_sheet_shows_frame_0() {
+        let kept = kept_on_frame_3();
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.set_destroyed(|_| look(true, DrawnSheet::TypeZero, DrawnSheet::Type));
+        scene.resume(&kept);
+        assert_eq!(drawn(&scene), [ImageKey::sprite(TYPE_ZERO, 0)]);
+        assert_eq!(
+            scene.stellars()[0].frames,
+            {
+                let mut frames = kept.get(StellarId(160)).expect("kept");
+                frames.reshow(NonZeroU16::MIN, true);
+                frames
+            },
+            "its frames kept"
+        );
+    }
+
+    #[test]
+    fn resume_on_a_slot_showing_no_frame_keeps_the_frames_and_draws_nothing() {
+        let kept = kept_on_frame_3();
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.set_destroyed(|_| look(false, DrawnSheet::NoFrame, DrawnSheet::Type));
+        scene.resume(&kept);
+        assert_eq!(drawn(&scene), []);
+        scene.rebuild(|_| WHOLE);
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(1160, 3)],
+            "the current frame kept through it"
+        );
     }
 
     #[test]
