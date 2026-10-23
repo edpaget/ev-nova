@@ -14,7 +14,7 @@ use crate::catalog::{
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
     PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
     StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -48,6 +48,8 @@ pub struct FakePilotCatalog {
     pub disasters: Vec<DisasterRecord>,
     /// Every `spöb`'s `Flags`, read with the goods.
     pub stellars: Vec<(StellarId, u32)>,
+    /// Every `spöb`'s gun: none, by default.
+    pub stellar_weapons: Vec<(StellarId, WeaponId)>,
     /// How many times the goods (commodities, `jünk`, `öops` and the
     /// stellars' flags) were read.
     pub goods_reads: RefCell<usize>,
@@ -188,6 +190,7 @@ pub fn catalog() -> FakePilotCatalog {
         junk: Vec::new(),
         disasters: Vec::new(),
         stellars: Vec::new(),
+        stellar_weapons: Vec::new(),
         goods_reads: RefCell::default(),
         traffic: Vec::new(),
         reinforcements: Vec::new(),
@@ -331,6 +334,10 @@ impl PilotCatalog for FakePilotCatalog {
     fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
         *self.goods_reads.borrow_mut() += 1;
         self.stellars.clone()
+    }
+
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        self.stellar_weapons.clone()
     }
 
     fn date_affixes(&self) -> DateAffixes {

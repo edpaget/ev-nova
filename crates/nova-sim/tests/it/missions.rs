@@ -177,6 +177,10 @@ impl PilotCatalog for Courier {
         Vec::new()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+        Vec::new()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }

@@ -1968,6 +1968,10 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with its `Flags`,
     /// raw.
     fn stellar_flags(&self) -> Vec<(StellarId, u32)>;
+    /// Every `spöb` that can be read, by ascending ID, whose `Weapon` names
+    /// a `wëap` (128 or more), with it. A `Weapon` of 127 or less is none
+    /// (`_LoadObjectData` @0x7779f-0x777b2): such a stellar has no gun.
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)>;
     /// The first `chär`'s `DatePrefix` and `DateSuffix`, or none (both
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
@@ -2130,6 +2134,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).stellar_flags()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        (**self).stellar_weapons()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         (**self).date_affixes()
     }
@@ -2268,6 +2276,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
         (**self).stellar_flags()
+    }
+
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        (**self).stellar_weapons()
     }
 
     fn date_affixes(&self) -> DateAffixes {
@@ -2756,6 +2768,10 @@ mod tests {
             vec![(StellarId(128), 0x20)]
         }
 
+        fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+            Vec::new()
+        }
+
         /// Stellar 128, back after 7 days.
         fn stellar_lives(&self) -> Vec<StellarLife> {
             vec![StellarLife {
@@ -3013,6 +3029,10 @@ mod tests {
         }
 
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
+        fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
             Vec::new()
         }
 

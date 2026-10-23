@@ -1164,6 +1164,7 @@ impl Session {
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
+            stellar_weapons: catalog.stellar_weapons().into_iter().collect(),
         };
         let mut session = Self {
             mode: Mode::Flying,

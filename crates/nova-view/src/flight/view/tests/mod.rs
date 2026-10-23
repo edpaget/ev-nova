@@ -614,6 +614,10 @@ impl PilotCatalog for FakeCatalog {
         Vec::new()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+        Vec::new()
+    }
+
     /// Stock's: no prefix, and " NC".
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes {

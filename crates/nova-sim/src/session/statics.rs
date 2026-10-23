@@ -115,6 +115,10 @@ pub(super) struct Statics {
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     pub(super) stellar_marks: StellarMarks,
+    /// Each stellar's gun, by ID, read when the session starts: the
+    /// `wëap` its `Weapon` names, which `_HandleStellarWeapons` fires (see
+    /// the `stellar_guns` module). A stellar not here has none.
+    pub(super) stellar_weapons: BTreeMap<StellarId, WeaponId>,
 }
 
 #[cfg(test)]
@@ -150,5 +154,22 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.statics.class_speed(ShipId(200)), 3.5);
         assert_eq!(session.statics.class_speed(ShipId(999)), 0.0, "no record");
+    }
+
+    #[test]
+    fn a_session_reads_each_stellars_gun_by_id() {
+        let mut catalog = crate::testkit::catalog();
+        catalog.stellar_weapons = vec![
+            (StellarId(130), WeaponId(199)),
+            (StellarId(128), WeaponId(196)),
+        ];
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.statics.stellar_weapons,
+            BTreeMap::from([
+                (StellarId(128), WeaponId(196)),
+                (StellarId(130), WeaponId(199)),
+            ])
+        );
     }
 }

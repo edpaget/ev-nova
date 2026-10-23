@@ -657,6 +657,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.stellar_flags()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+        self.data.stellar_weapons()
+    }
+
     fn date_affixes(&self) -> cat::DateAffixes {
         self.data.date_affixes()
     }

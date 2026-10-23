@@ -413,6 +413,17 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    /// No upper bound is checked here: a `Weapon` past the last `wëap`
+    /// finds no record, and the session gives that stellar no gun.
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let weapon = stellar.ok()?.record.weapon?;
+                (weapon.0 >= 128).then_some((StellarId(id), weapon))
+            })
+            .collect()
+    }
+
     fn stellar_lives(&self) -> Vec<StellarLife> {
         self.records::<Stellar>()
             .filter_map(|(id, stellar)| {
@@ -3836,6 +3847,34 @@ mod tests {
             "the unreadable 129 left out"
         );
         assert_eq!(store(&[]).stellar_flags(), []);
+    }
+
+    /// A `spöb` whose `Weapon` (0x23A) is `weapon`.
+    fn gunned(weapon: i16) -> Vec<u8> {
+        let mut bytes = stellar(0, 0, 0, 0, 0);
+        put_i16s(&mut bytes, 0x23A, &[weapon]);
+        bytes
+    }
+
+    #[test]
+    fn stellar_weapons_list_every_readable_spöb_whose_weapon_is_128_or_more_by_id() {
+        let data = store(&[
+            (Stellar::TYPE, 133, gunned(199)),
+            (Stellar::TYPE, 128, gunned(128)),
+            (Stellar::TYPE, 129, short(gunned(196))),
+            (Stellar::TYPE, 130, gunned(0)),
+            (Stellar::TYPE, 131, gunned(-1)),
+            (Stellar::TYPE, 132, gunned(127)),
+        ]);
+        assert_eq!(
+            data.stellar_weapons(),
+            [
+                (StellarId(128), WeaponId(128)),
+                (StellarId(133), WeaponId(199)),
+            ],
+            "the unreadable 129 left out; 0, -1 and 127 are none (@0x7779f-0x777b2)"
+        );
+        assert_eq!(store(&[]).stellar_weapons(), []);
     }
 
     /// A `wëap` with every field the combat catalog reads set to
