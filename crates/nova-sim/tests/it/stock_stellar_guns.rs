@@ -12,12 +12,11 @@ use nova_data::GameData;
 use nova_sim::chance::NeverFires;
 use nova_sim::combat::stellar_guns::GUARDED_BY_DEFENDERS;
 use nova_sim::pilot::Pilot;
-use nova_sim::{
-    CombatEvent, PilotCatalog, Rules, Session, ShipRef, StellarId, SystemId, Vec2, WeaponId,
-};
+use nova_sim::{CombatEvent, PilotCatalog, Rules, Session, ShipRef, StellarId, SystemId, WeaponId};
 
-/// A new stock pilot flying in `system` at `stellar`, its record there
-/// `record`, at rest 100 pixels to the stellar's right.
+/// A new stock pilot flying in `system` from `stellar`, its record there
+/// `record`: at rest on the stellar's centre, as a load puts it
+/// (`_LoadPilotData` @0x75329-0x75354), well within its gun's range.
 fn beside(data: &GameData, system: i16, stellar: i16, record: i16) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
@@ -26,13 +25,13 @@ fn beside(data: &GameData, system: i16, stellar: i16, record: i16) -> Session {
     save["system"] = serde_json::json!(system);
     save["system_legal"] = serde_json::json!([{"system": system, "record": record}]);
     let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, there).expect("flies");
+    let session = Session::fly(data, there).expect("flies");
     let site = data
         .landing_sites(SystemId(system))
         .into_iter()
         .find(|site| site.id == StellarId(stellar))
         .expect("the system lists it");
-    nova_sim::fixture::place_player(&mut session, site.position + Vec2::new(100.0, 0.0));
+    assert_eq!(session.player().position, site.position, "on the stellar");
     session
 }
 

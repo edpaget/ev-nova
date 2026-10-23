@@ -137,16 +137,6 @@ impl Session {
     }
 }
 
-impl Session {
-    /// Puts the player's ship at `at`, at rest, for
-    /// [`fixture::place_player`](crate::fixture::place_player).
-    #[cfg(any(test, feature = "fixture"))]
-    pub(crate) fn place_player(&mut self, at: crate::geometry::Vec2) {
-        self.ship.player.position = at;
-        self.ship.player.velocity = crate::geometry::Vec2::ZERO;
-    }
-}
-
 impl Space {
     /// Keeps each of `guns`' timer, forgetting one ready with no burst
     /// under way, as none is the same.
