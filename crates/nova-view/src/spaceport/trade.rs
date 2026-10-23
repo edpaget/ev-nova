@@ -86,7 +86,7 @@ use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawList, fill_rect, frame_rect, rule};
 use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
@@ -226,36 +226,6 @@ fn positions(market: &Market) -> Vec<Option<usize>> {
         }
     }
     positions
-}
-
-/// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
-/// covers it: both ends included.
-fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
-    let area = Bounds {
-        min: from,
-        max: Point::new(to.x + 1.0, to.y + 1.0),
-    };
-    fill_rect(list, area, color);
-}
-
-/// `FrameRect(rect)` in `color`: a one-pixel border just inside it.
-fn frame(list: &mut DrawList, rect: Bounds, color: Color) {
-    let (left, top) = (rect.min.x, rect.min.y);
-    let (right, bottom) = (rect.max.x - 1.0, rect.max.y - 1.0);
-    rule(list, Point::new(left, top), Point::new(right, top), color);
-    rule(
-        list,
-        Point::new(left, bottom),
-        Point::new(right, bottom),
-        color,
-    );
-    rule(list, Point::new(left, top), Point::new(left, bottom), color);
-    rule(
-        list,
-        Point::new(right, top),
-        Point::new(right, bottom),
-        color,
-    );
 }
 
 /// The exchange, laid out.
@@ -653,7 +623,7 @@ impl TradeScreen {
         let Some(header) = laid.dialog.item_bounds(HEADER_ITEM) else {
             return;
         };
-        frame(list, header, DARK_GREY);
+        frame_rect(list, header, DARK_GREY);
         let words = &self.market.words;
         let baseline = header.min.y + HEADER_BASELINE;
         let labels = [
@@ -750,7 +720,7 @@ impl TradeScreen {
             let (dx, dy) = SUMMARY_INSET;
             let text = self.market.summary.text(&self.market.words);
             inverted_box(laid, list, &text, summary.inset(dx, dy));
-            frame(list, summary, DARK_GREY);
+            frame_rect(list, summary, DARK_GREY);
         }
         if !self.market.events.is_empty()
             && let Some(event) = laid.dialog.item_bounds(EVENT_ITEM)

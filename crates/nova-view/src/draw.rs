@@ -705,6 +705,37 @@ pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
     );
 }
 
+/// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
+/// covers it: both ends included.
+pub fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
+    let area = Bounds {
+        min: from,
+        max: Point::new(to.x + 1.0, to.y + 1.0),
+    };
+    fill_rect(list, area, color);
+}
+
+/// QuickDraw's `FrameRect(rect)` in `color`: a one-pixel border just
+/// inside it, ruled top, bottom, left, then right.
+pub fn frame_rect(list: &mut DrawList, rect: Bounds, color: Color) {
+    let (left, top) = (rect.min.x, rect.min.y);
+    let (right, bottom) = (rect.max.x - 1.0, rect.max.y - 1.0);
+    rule(list, Point::new(left, top), Point::new(right, top), color);
+    rule(
+        list,
+        Point::new(left, bottom),
+        Point::new(right, bottom),
+        color,
+    );
+    rule(list, Point::new(left, top), Point::new(left, bottom), color);
+    rule(
+        list,
+        Point::new(right, top),
+        Point::new(right, bottom),
+        color,
+    );
+}
+
 /// The one command [`fill_rect`] draws for `area` in `color`, for tests
 /// to compare drawn commands against.
 #[cfg(test)]
@@ -729,6 +760,37 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn a_rule_covers_both_ends_as_a_pen_1_line_to_does() {
+        let mut list = DrawList::new();
+        rule(&mut list, at(2.0, 5.0), at(9.0, 5.0), Color::WHITE);
+        let area = Bounds {
+            min: at(2.0, 5.0),
+            max: at(10.0, 6.0),
+        };
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [fill_command(area, Color::WHITE)]
+        );
+    }
+
+    #[test]
+    fn frame_rect_rules_a_one_pixel_border_just_inside_the_rect() {
+        let red = Color::rgba(255, 0, 0, 255);
+        let mut list = DrawList::new();
+        frame_rect(&mut list, Bounds::at(at(10.0, 20.0), 84.0, 55.0), red);
+        let edge = |min: Point, max: Point| fill_command(Bounds { min, max }, red);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                edge(at(10.0, 20.0), at(94.0, 21.0)),
+                edge(at(10.0, 74.0), at(94.0, 75.0)),
+                edge(at(10.0, 20.0), at(11.0, 75.0)),
+                edge(at(93.0, 20.0), at(94.0, 75.0)),
+            ]
+        );
     }
 
     #[test]
