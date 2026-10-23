@@ -1321,6 +1321,21 @@ impl Npc {
         }
     }
 
+    /// Whether it is jumping in, goal 8 (`_AIIsShipJumpingIn` @0x82f12):
+    /// gliding in ([`Mode::JumpingIn`]) or bursting out of its gate
+    /// ([`Mode::LeavingGate`]) from its first moving tick (@0x8dd8a). Unlike
+    /// [`in_hyperspace`](Self::in_hyperspace), a ship whose warp out is
+    /// under way is not jumping in. A stellar's gun holds fire at such a
+    /// ship (`_IsThreatToStellar` @0x9f16-0x9f2a).
+    #[must_use]
+    pub fn jumping_in(&self) -> bool {
+        match self.mode {
+            Mode::JumpingIn { .. } => true,
+            Mode::LeavingGate { tick } => tick > 0,
+            _ => false,
+        }
+    }
+
     /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
     /// @0x2e884-0x2e8d7): coming out of it, waiting or its wait just run
     /// out ([`Mode::LeavingGate`] at tick 0)
@@ -2390,6 +2405,35 @@ mod tests {
         assert!(npc.in_hyperspace(), "warping out");
         npc.warp.stage = 0.0;
         assert!(!npc.in_hyperspace(), "its warp over");
+    }
+
+    #[test]
+    fn a_ship_is_jumping_in_gliding_in_or_bursting_out_of_its_gate_but_not_warping_out() {
+        let gate = StellarId(129);
+        for (mode, jumping) in [
+            (Mode::JumpingIn { tick: 0 }, true),
+            (Mode::JumpingIn { tick: 7 }, true),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::HeldAtGate { ticks_left: 5 }, false),
+            (
+                Mode::EnteringGate {
+                    gate,
+                    ticks_left: 5,
+                },
+                false,
+            ),
+            (Mode::Coasting { ticks_left: 5 }, false),
+            (Mode::Flying, false),
+        ] {
+            let npc = Npc { mode, ..plain(1) };
+            assert_eq!(npc.jumping_in(), jumping, "{mode:?}");
+        }
+        let mut warping = plain(1);
+        warping.warp.stage = 2.0;
+        assert!(warping.in_hyperspace(), "warping out");
+        assert!(!warping.jumping_in(), "goal 8 is the arrival alone");
     }
 
     /// The player's hired escort, NPC `id`.
