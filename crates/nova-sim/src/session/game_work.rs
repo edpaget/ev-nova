@@ -49,7 +49,10 @@
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]).
+//!    settled ([`Session::ship_loop`]); then the stellar guns
+//!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
+//!    @0x444d2), each armed stellar firing at its target (see the
+//!    `stellar_guns` module).
 //! 7. The stellar hazards, gravity's pull and the deadly stellars' kills
 //!    (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e), then
 //!    `_HandleBeams` (@0x4453d), its hits settled
@@ -295,6 +298,9 @@ impl Session {
             None => Motion::Again,
         };
         self.ship_loop(start, motion, pass, rules, chance);
+        // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
+        // (@0x444d7).
+        self.stellar_guns(pass, rules, chance);
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
         self.beams_phase(pass, rules, chance);

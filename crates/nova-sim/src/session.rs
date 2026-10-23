@@ -545,6 +545,7 @@ mod status_cargo;
 mod steering;
 #[cfg(test)]
 mod stellar_attackers;
+mod stellar_guns;
 mod stellars;
 mod story;
 mod stray_words;
@@ -2392,6 +2393,7 @@ impl Session {
             .map(npc_escape::AtStep::of)
             .collect();
         self.handle_npcs(pass, rules, chance);
+        self.stellar_guns(pass, rules, chance);
         self.beams_phase(pass, rules, chance);
         // The words the pass's stray beams stepped, before the NPCs'
         // escape pods read the crew pods left (see the `npc_escape`
