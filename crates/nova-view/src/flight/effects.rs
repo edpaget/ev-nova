@@ -84,6 +84,13 @@
 //!   (@0xc5a61, @0xc5b2b), and both its paths draw the same: it changes
 //!   nothing, so a burst carries none.
 //!
+//! - A stellar's gun ([`CombatEvent::StellarFired`]) sounds its weapon's
+//!   `snd ` from the stellar at its [`FireSound`](nova_sim::FireSound)'s
+//!   priority, 5, every shot: `_HandleStellarWeapons` tests no looped
+//!   sound (@0x2f553-0x2f59a), so neither reading of
+//!   [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait)
+//!   holds it.
+//!
 //! - A dying NPC's escape pod ([`CombatEvent::PodEjected`]) is heard as
 //!   `snd ` 372 from where its ship is
 //!   ([`ESCAPE_POD_SOUND`](nova_sim::sound::ESCAPE_POD_SOUND)), whether
@@ -344,6 +351,21 @@ impl Effects {
                 let priority = u16::from(fire.priority);
                 let heard = heard(sound, point(at), scene.player, priority, until_stopped);
                 self.sounds.push(heard);
+            }
+            // `_HandleStellarWeapons` plays it every shot, with no looped
+            // test (@0x2f553-0x2f59a), so nothing is kept by firer.
+            CombatEvent::StellarFired {
+                weapon,
+                at,
+                sound: fire,
+                ..
+            } => {
+                let Some(sound) = looks.weapon(weapon).and_then(|look| look.sound) else {
+                    return;
+                };
+                let priority = u16::from(fire.priority);
+                self.sounds
+                    .push(heard(sound, point(at), scene.player, priority, false));
             }
             CombatEvent::ShotDown { at } | CombatEvent::Fizzled { at } => {
                 self.spawn(TYPE_ZERO, point(at), 0.0, looks, scene.caps);
@@ -1533,6 +1555,66 @@ mod tests {
                 until_stopped: false,
             };
             assert_eq!(effects.take_sounds(), [launched; 2], "{:?}", scene.looped);
+        }
+    }
+
+    /// Stellar 128 firing `weapon` from (`x`, `y`) at the stellar gun's
+    /// priority, with no looped test.
+    fn stellar_fired(weapon: i16, x: f32, y: f32) -> CombatEvent {
+        CombatEvent::StellarFired {
+            stellar: nova_sim::StellarId(128),
+            weapon: WeaponId(weapon),
+            at: Vec2::new(x, y),
+            sound: FireSound {
+                priority: 5,
+                unless_playing: false,
+            },
+        }
+    }
+
+    #[test]
+    fn a_stellars_gun_sounds_from_the_stellar_at_priority_5_every_shot() {
+        for scene in [heard_at(at(10.0, 20.0)), per_firer_at(at(10.0, 20.0))] {
+            let mut effects = Effects::default();
+            for event in [
+                stellar_fired(128, 300.0, -400.0),
+                stellar_fired(155, -5.2, 7.6),
+                stellar_fired(155, -5.2, 7.6),
+                stellar_fired(147, 0.0, 0.0),
+            ] {
+                effects.apply(&event, &scene, &looks(), &mut Script::default());
+            }
+            let sound = |id, offset| CombatSound {
+                sound: SoundId(id),
+                offset,
+                priority: 5,
+                until_stopped: false,
+            };
+            assert_eq!(
+                effects.take_sounds(),
+                [
+                    sound(208, (290, -420)),
+                    sound(205, (-15, -12)),
+                    sound(205, (-15, -12)),
+                ],
+                "{:?}: a looped weapon every shot, one of no sound unheard",
+                scene.looped
+            );
+            assert_eq!(
+                effects,
+                Effects::default(),
+                "{:?}: nothing kept",
+                scene.looped
+            );
+        }
+    }
+
+    /// The scene with each firer's looped weapon waiting on its own, its
+    /// player at `player`.
+    fn per_firer_at(player: Point) -> Scene {
+        Scene {
+            player,
+            ..per_firer()
         }
     }
 

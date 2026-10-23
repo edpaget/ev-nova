@@ -457,7 +457,7 @@ use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
 use crate::bay::FIGHTER_BAY;
-use crate::catalog::{GovtId, ShipId, WeaponId};
+use crate::catalog::{GovtId, ShipId, StellarId, WeaponId};
 use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
@@ -633,6 +633,21 @@ pub enum CombatEvent {
         /// How the ship was moving.
         velocity: Vec2,
     },
+    /// A stellar's gun fired a shot (`_HandleStellarWeapons`
+    /// @0x2f553-0x2f59a, see [`stellar_guns`]): its weapon's `Sound` is
+    /// heard from the stellar, once a shot, at
+    /// [`STELLAR_GUN_PRIORITY`], with no looped test. A stellar is no
+    /// ship, so [`CombatEvent::Fired`] can't carry it.
+    StellarFired {
+        /// The stellar.
+        stellar: StellarId,
+        /// Its weapon.
+        weapon: WeaponId,
+        /// Where it fired from: the stellar.
+        at: Vec2,
+        /// How its weapon's `Sound` plays.
+        sound: FireSound,
+    },
 }
 
 /// How a weapon's firing sounds: its `Sound` (`snd ` 200 + `Sound`,
@@ -674,6 +689,11 @@ pub const AI_FIRE_PRIORITY: u8 = 4;
 /// fighter launched (`_AILaunchFighter` @0x81433, played @0x81466 after
 /// `_LaunchFighter` succeeds @0x8141c-0x81423), with no looped test.
 pub const BAY_LAUNCH_PRIORITY: u8 = 5;
+
+/// The priority a stellar's gun plays its weapon's sound at, once a shot
+/// (`_HandleStellarWeapons` `_PlaySoundDistance(-1, snd, 5, …)`
+/// @0x2f59a), with no looped test ([`CombatEvent::StellarFired`]).
+pub const STELLAR_GUN_PRIORITY: u8 = 5;
 
 /// The priority a shot's released sub-munitions play their weapon's sound
 /// at, once a release, at the parent (`_SpawnShotSubmunitions` @0x3f23b-0x3f2f2,

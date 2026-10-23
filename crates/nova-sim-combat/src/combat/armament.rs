@@ -1485,7 +1485,7 @@ fn secondaries(mounts: &[Mount]) -> impl Iterator<Item = &WeaponSpec> {
 /// The shots in a burst of `spec` carried `count` times
 /// (`_WeaponBurstInterval` @0x831c): its `BurstCount` for copies that
 /// fire together (`Flags` 0x0040), and `BurstCount` × `count` otherwise.
-fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
+pub(super) fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
     if spec.flags & SIMULTANEOUS == 0 {
         spec.burst_count * count
     } else {
