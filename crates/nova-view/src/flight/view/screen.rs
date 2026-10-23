@@ -366,12 +366,6 @@ impl<
         };
         let camera = self.camera();
         list.world(|list| self.draw_world(list, scene, &camera));
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        // `_PostDrawCallback`'s order: the floating map over the sprites
-        // and icons, under the escort menu (@0x38b95-0x38c72).
-        self.draw_floating_map(list);
-        self.escort_menu
-            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         if self.overlays.title {
             list.text(
                 format!("{} (sÿst {})", scene.name(), scene.id().0),

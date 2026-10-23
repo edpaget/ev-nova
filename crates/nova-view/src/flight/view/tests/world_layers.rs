@@ -151,3 +151,77 @@ fn a_smoke_puff_is_drawn_over_the_boxes_and_under_the_shots_and_ships() {
     let order = [pod, puff, shot, ship, trail];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
+
+/// Whether a command is the floating map's border: a line in the
+/// `FloatingMap` colour on the frame's edges.
+fn floating_border_line(command: &DrawCommand) -> bool {
+    let mut list = DrawList::new();
+    list.push(command.clone());
+    !floating_border(&list).is_empty()
+}
+
+#[test]
+fn the_floating_map_is_drawn_over_the_over_beams_and_under_the_particles() {
+    let mut view = firing_with_sprays();
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    ticks(&mut view, 2);
+    let list = drawn(&view);
+    let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
+    let floating = first(&list, floating_border_line);
+    let particle = first(&list, orange_dot);
+    // `_PostDrawCallback`: `_FloaterDrawCallback` (@0x38c8d), then
+    // `jmp _DrawParticlesOffscreen` (@0x38c9a).
+    let order = [over, floating, particle];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+}
+
+#[test]
+fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
+    let mut view = firing_with_sprays();
+    plot(&mut view, 131);
+    view.input(&key(JUMP, true));
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    ticks(&mut view, 2);
+    let list = drawn(&view);
+    let message_box = first(&list, |command| {
+        *command == fill_command(hud::message_box(VIEW_SIZE), Color::BLACK)
+    });
+    let stellar = first(&list, sprite_of(1128));
+    let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
+    let text = first(&list, |command| *command == message_drawn(TOO_CLOSE));
+    let floating = first(&list, floating_border_line);
+    // The box is `_DisplayComm`'s erase of the background frame, under
+    // every sprite; `_FloaterDrawCallback` ORs the background's message
+    // rect over the sprites (@0x38b52-0x38b90), then blits the floating
+    // map (@0x38b95-0x38c0a).
+    let order = [message_box, stellar, over, text, floating];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+}
+
+#[test]
+fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
+    let mut view = fighters_out();
+    tap(&mut view, MENU_KEY);
+    assert!(view.escort_menu().is_open());
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    ticks(&mut view, 1);
+    let list = drawn(&view);
+    let floating = first(&list, floating_border_line);
+    let menu = first(&list, |command| {
+        *command == fill_command(escort_menu_frame(), Color::BLACK)
+    });
+    let hud = hud_at(&list);
+    // `_FloaterDrawCallback`: the floating map (@0x38b95-0x38c0a), then
+    // the escort menu (@0x38c0f-0x38c5b), both in the world.
+    assert!(floating < menu && menu < hud, "{floating} {menu} {hud}");
+    assert_eq!(
+        list.layered().nth(menu).map(|(layer, _)| layer),
+        Some(crate::DrawLayer::World)
+    );
+}
+
+/// The escort menu's frame.
+fn escort_menu_frame() -> Bounds {
+    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
+    Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT)
+}

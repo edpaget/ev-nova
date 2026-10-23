@@ -1304,6 +1304,9 @@ fn choosing_super_xbr_in_flight_or_leaving_it_rebuilds_the_atlas_when_the_dialog
     assert_eq!(saved(&store)["frame_upscaler"], "native");
 
     harness.ok();
+    // The cursor sprite is in the world now: take it away from the OK
+    // button, where the click left it, so the world is as before.
+    harness.send(WindowEvent::PointerLeft);
     let after = harness.frame_calls();
     assert_eq!(after[0], GpuCall::ClearPages, "the next frame rebuilds");
     assert!(uploads_enlarged(&after), "{:?}", uploads(&after));

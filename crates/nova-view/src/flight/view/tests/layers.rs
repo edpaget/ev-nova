@@ -148,24 +148,29 @@ fn the_message_line_is_overlay_text_drawn_among_the_world() {
         .iter()
         .position(|command| *command == message_drawn(TOO_CLOSE))
         .expect("the message");
+    let message_box = list
+        .iter()
+        .position(|command| *command == fill_command(hud::message_box(VIEW_SIZE), Color::BLACK))
+        .expect("its box");
     let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
     assert_eq!(layers[message], DrawLayer::Overlay);
     assert_eq!(
-        list.iter().nth(message - 1),
-        Some(&fill_command(hud::message_box(VIEW_SIZE), Color::BLACK)),
-        "its box under it"
-    );
-    assert_eq!(
-        layers[message - 1],
+        layers[message_box],
         DrawLayer::World,
         "the box in the world"
     );
-    assert_eq!(layers[message - 2], DrawLayer::World, "over the stars");
-    assert!(is_star(list.iter().nth(message - 2).expect("drawn")));
-    assert_eq!(layers[message + 1], DrawLayer::World, "under the stellars");
+    assert_eq!(layers[message_box - 1], DrawLayer::World, "over the stars");
+    assert!(is_star(list.iter().nth(message_box - 1).expect("drawn")));
+    assert_eq!(
+        layers[message_box + 1],
+        DrawLayer::World,
+        "under the stellars"
+    );
     assert!(sprite_of(1128)(
-        list.iter().nth(message + 1).expect("drawn")
+        list.iter().nth(message_box + 1).expect("drawn")
     ));
+    let ship = first(&list, sprite_of(2000));
+    assert!(ship < message, "the text over the ships, with the floaters");
     assert_world_then_overlay(&list);
 }
 
@@ -242,5 +247,29 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
     let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
     assert_eq!(layers[at], DrawLayer::Overlay);
     assert!(world_end(&list) > 0);
+    assert_world_then_overlay(&list);
+}
+
+#[test]
+fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
+    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
+    let mut view = fighters_out();
+    tap(&mut view, MENU_KEY);
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    let list = drawn(&view);
+    let border = floating_border(&list);
+    assert!(!border.is_empty(), "the floating map is up");
+    for line in &border {
+        assert_all_in(&list, DrawLayer::World, |command| command == line);
+    }
+    let menu = fill_command(Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT), Color::BLACK);
+    assert_all_in(&list, DrawLayer::World, |command| *command == menu);
+    assert_all_in(
+        &list,
+        DrawLayer::Overlay,
+        |command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"),
+    );
+    assert_all_in(&list, DrawLayer::Overlay, is_text);
     assert_world_then_overlay(&list);
 }

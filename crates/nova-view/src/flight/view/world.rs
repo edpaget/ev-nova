@@ -38,9 +38,9 @@ use super::stars;
 
 impl<C> FlightView<C> {
     /// Draws the sprite world, pass by pass in [`WORLD_PASSES`]' order
-    /// (see the module docs). The message line, drawn over the stars, has
-    /// its box filled in the system's background ([`message_background`]),
-    /// in the world; its text is overlay among the world
+    /// (see the module docs). The message line's box is drawn over the
+    /// stars and its text with the floaters; the text, the floating map's
+    /// and the escort menu's included, is overlay among the world
     /// ([`DrawList::world`]).
     pub(super) fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
         let beams = self.shown_beams(camera);
@@ -71,9 +71,7 @@ impl<C> FlightView<C> {
                     self.effects.draw_explosions(list, camera, &self.looks);
                 }
                 WorldPass::Layer(SpriteLayer::Targets) => self.draw_targets(list, scene, camera),
-                // The floating map and the escort menu are drawn in the
-                // overlay, after the world (see the module docs).
-                WorldPass::Floaters => {}
+                WorldPass::Floaters => self.draw_floaters(list),
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
@@ -119,21 +117,48 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Draws the stars, then the message line over them.
+    /// Draws `_FloaterDrawCallback`'s floaters (0x38b2d), which
+    /// `_PostDrawCallback` draws after every layer and before the
+    /// particles (@0x38c8d-0x38c9a): the message line's text, as the
+    /// callback ORs the background frame's message rect over the sprites
+    /// (@0x38b52-0x38b90; its box stays under the sprites, in
+    /// [`FlightView::draw_stars_and_message`]), then the floating map
+    /// (@0x38b95-0x38c0a), then the escort menu (@0x38c0f-0x38c5b).
+    ///
+    /// The text of all three (the message, the floating map's names, the
+    /// escort menu's title, rows and orders) is overlay
+    /// ([`DrawList::world`]). Drawn at the window's resolution every
+    /// command draws in list order, so the text stays under the
+    /// particles; drawn into a world texture under a frame upscaler, the
+    /// world is laid out before the overlay and the text draws over the
+    /// particles (rdm:phase/play-feel-cross-roadmap/phase-3-floater-text-under-the-particles-upscaled).
+    fn draw_floaters(&self, list: &mut DrawList) {
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message_text(list, message, self.view, metrics);
+        }
+        self.draw_floating_map(list);
+        self.escort_menu
+            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
+    }
+
+    /// Draws the stars, then the message line's box over them, erased in
+    /// the system's background ([`message_background`]), as `_DisplayComm`
+    /// erases the background frame's message rect. Its text is drawn
+    /// with the floaters ([`FlightView::draw_floaters`]).
     fn draw_stars_and_message(&self, list: &mut DrawList, camera: &Camera) {
         let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
             session.rules().source_for(RuleKey::FlightStarfield)
         });
         stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
+        if self.message().is_some() {
             let background = message_background(
                 self.session
                     .as_ref()
                     .ok()
                     .and_then(Session::system_background),
             );
-            hud::draw_message(list, message, self.view, background, metrics);
+            hud::draw_message_box(list, self.view, background);
         }
     }
 

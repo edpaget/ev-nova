@@ -478,7 +478,26 @@ pub fn draw_message(
     background: Color,
     metrics: Option<&dyn TextMetrics>,
 ) {
-    draw_message_in(list, text, message_box(view), background, metrics);
+    draw_message_box(list, view, background);
+    draw_message_text(list, text, view, metrics);
+}
+
+/// Fills [`message_box`] of a view `view` in size in `background`, as
+/// `_DisplayComm` erases it in the sprite world's background frame
+/// before drawing the text (see [`draw_message_in`]).
+pub fn draw_message_box(list: &mut DrawList, view: (f32, f32), background: Color) {
+    fill_rect(list, message_box(view), background);
+}
+
+/// Draws the flight message `text` in [`message_box`] of a view `view`
+/// in size, without its box (see [`draw_message_in`]).
+pub fn draw_message_text(
+    list: &mut DrawList,
+    text: &str,
+    view: (f32, f32),
+    metrics: Option<&dyn TextMetrics>,
+) {
+    draw_message_text_in(list, text, message_box(view), metrics);
 }
 
 /// Draws the flight message `text` in `area`: with `metrics`, through a
@@ -505,6 +524,17 @@ pub fn draw_message_in(
     metrics: Option<&dyn TextMetrics>,
 ) {
     fill_rect(list, area, background);
+    draw_message_text_in(list, text, area, metrics);
+}
+
+/// Draws the flight message `text` in `area`, without its box (see
+/// [`draw_message_in`]).
+fn draw_message_text_in(
+    list: &mut DrawList,
+    text: &str,
+    area: Bounds,
+    metrics: Option<&dyn TextMetrics>,
+) {
     let (font, size) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE);
     let Some(metrics) = metrics else {
         list.text_in(font, text, area.min, size, Some(area.width()), Color::WHITE);
@@ -2297,6 +2327,23 @@ mod tests {
         );
         assert_eq!(MESSAGE_FONT, Font::Charcoal);
         assert_eq!(MESSAGE_TEXT_SIZE, 12.0);
+    }
+
+    #[test]
+    fn a_message_is_its_box_and_then_its_text_drawn_apart() {
+        let text = vec!["abcd"; 60].join(" ");
+        let mut whole = DrawList::new();
+        draw_message(&mut whole, &text, VIEW_SIZE, BLUE, Some(&MonoMetrics));
+        let mut apart = DrawList::new();
+        draw_message_box(&mut apart, VIEW_SIZE, BLUE);
+        let box_len = apart.len();
+        assert_eq!(box_len, 1, "the box alone");
+        draw_message_text(&mut apart, &text, VIEW_SIZE, Some(&MonoMetrics));
+        assert!(apart.len() > box_len, "then the text");
+        assert_eq!(
+            apart.iter().collect::<Vec<_>>(),
+            whole.iter().collect::<Vec<_>>()
+        );
     }
 
     #[test]
