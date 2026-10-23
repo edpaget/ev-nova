@@ -2768,8 +2768,9 @@ mod tests {
             vec![(StellarId(128), 0x20)]
         }
 
+        /// Stellar 128, armed with 196.
         fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
-            Vec::new()
+            vec![(StellarId(128), WeaponId(196))]
         }
 
         /// Stellar 128, back after 7 days.
@@ -2956,6 +2957,7 @@ mod tests {
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
             format!("{:?}", catalog.voices()),
+            format!("{:?}", catalog.stellar_weapons()),
         ]
     }
 
@@ -3169,6 +3171,7 @@ mod tests {
             direct[36].contains("GovtId(128): GovtVoice { set: Some(3)"),
             "forwarded, not a default: {direct:?}"
         );
+        assert_eq!(direct[37], "[(StellarId(128), WeaponId(196))]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

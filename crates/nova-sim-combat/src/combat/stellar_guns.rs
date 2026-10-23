@@ -426,7 +426,7 @@ mod tests {
 
     /// The Federation (class 1, `CrimeTol` 6) is the pirates' (class 2)
     /// enemy, the locals (class 3, `CrimeTol` 10) are at peace with
-    /// everyone, and the aliens are xenophobic.
+    /// everyone, and the aliens (`CrimeTol` 5) are xenophobic.
     fn govts() -> Governments {
         let federation = GovtRecord {
             classes: [1, -1, -1, -1],
@@ -447,6 +447,7 @@ mod tests {
         let aliens = GovtRecord {
             classes: [4, -1, -1, -1],
             flags: XENOPHOBIC,
+            crime_tol: 5,
             ..govt(131)
         };
         Governments::new([federation, pirates, locals, aliens])
@@ -630,11 +631,12 @@ mod tests {
             },
             ..gun()
         };
-        assert!(threat(&at_record(alien, -1), &player()));
+        assert!(threat(&at_record(alien, -1), &player()), "above -CrimeTol");
         assert!(
             !threat(&at_record(alien, 0), &player()),
             "though the class is its enemy"
         );
+        assert!(!threat(&at_record(alien, 3), &player()));
     }
 
     #[test]

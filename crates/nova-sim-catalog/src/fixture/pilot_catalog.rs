@@ -565,6 +565,16 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_arms_the_stellars_it_is_given() {
+        let fake = FakePilotCatalog {
+            stellar_weapons: vec![(StellarId(128), WeaponId(196))],
+            ..catalog()
+        };
+        assert_eq!(fake.stellar_weapons(), [(StellarId(128), WeaponId(196))]);
+        assert_eq!(catalog().stellar_weapons(), [], "none by default");
+    }
+
+    #[test]
     fn the_fake_lists_no_stellar_whose_every_lister_is_gone() {
         let fake = FakePilotCatalog {
             systems: vec![SystemId(131)],
