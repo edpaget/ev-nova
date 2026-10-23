@@ -1362,7 +1362,8 @@ impl<
                     LandingRefusal::TooFar { stellar, .. }
                     | LandingRefusal::TooFast { stellar, .. }
                     | LandingRefusal::NotLandable { stellar, .. }
-                    | LandingRefusal::Denied { stellar, .. } => Some(stellar),
+                    | LandingRefusal::Denied { stellar, .. }
+                    | LandingRefusal::CannotPayFee { stellar, .. } => Some(stellar),
                     LandingRefusal::Jumping
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable

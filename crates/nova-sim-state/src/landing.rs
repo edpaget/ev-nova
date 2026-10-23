@@ -37,17 +37,26 @@
 //!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
 //!    #84/#88/#90, "Your ship is unable to land on ... The planet's
 //!    environment is too hostile."). The request is kept.
-//! 3. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
+//! 3. **The fee** (@0x669b4-0x66a80): when a fee is due ([`fee_due`])
+//!    and it is more than the pilot's cash, signed (@0x669d0-0x669d6, so
+//!    a pilot with exactly the fee pays it), it refuses with
+//!    [`LandingRefusal::CannotPayFee`], silently, and drops the request
+//!    (@0x67cc1-0x67cd0). It comes before the cloak, the disabled ship's
+//!    silent press, the uninhabited stellar and the clearance, so it
+//!    refuses the first press as well as the landing one. The charge
+//!    ([`pay_fee`]) is the `nova_sim::Session`'s, on landing and on
+//!    entering a hypergate or wormhole (@0x66db9-0x66df5).
+//! 4. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
 //!    stellar's at [`CLEARED`], "No response." is said
-//!    ([`DockSaid::NoResponse`]), and the press goes on to 4, so it lands
+//!    ([`DockSaid::NoResponse`]), and the press goes on to 5, so it lands
 //!    in the same press when it can.
-//! 4. **The attempt** (@0x66bd2-0x67800): when the request is the
+//! 5. **The attempt** (@0x66bd2-0x67800): when the request is the
 //!    stellar's, it lands if [`check_landing`] allows, and the request
 //!    ends. Otherwise the refusal keeps the request and the target, and
 //!    the player tries again (the manual: "If you're too far away, or if
 //!    you're moving too fast ... your ship's computer will beep at you and
 //!    you can try again").
-//! 5. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
+//! 6. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
 //!    traffic control is asked ([`cleared`]), the old counter granting it
 //!    ([`Standing::granted`]). Cleared, the request becomes the stellar's,
 //!    at [`REQUESTED_NEAR`] in silence within
@@ -117,10 +126,6 @@
 //!   @0x97112-0x97125), domination by Demand Tribute (+0x46 written
 //!   @0x978fa, cleared @0x9740f) and `_DoPlanetCommDialog`'s blessing
 //!   (@0x96c15): rdm:task/planet-domination.
-//! - The fee: its refusal (@0x669b4-0x66a80), the approach greeting's fee
-//!   line (@0x64d70-0x64e58) and the charge (@0x66db9-0x66df5):
-//!   rdm:task/landing-fee. The engine models no fee, and no stock stellar
-//!   has one.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
 //!   disabled or dying ship (@0x66aee-0x66b14), which the
 //!   `nova_sim::Session` refuses up front with
@@ -129,8 +134,6 @@
 //! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
 //!   which beeps `snd ` 153 at the shared tail (@0x67e8f): the engine
 //!   has no player cloak (rdm:task/cloaking-device).
-//! - The fee refusal (@0x669b4-0x66a80), which is silent
-//!   (rdm:task/landing-fee).
 //! - The player's AI wait (+0x4c, tested @0x66c29-0x66c36 and zeroed
 //!   @0x66b6d): the player's +0x4c is never above 0, so the test always
 //!   passes, and the engine keeps none.
@@ -283,7 +286,7 @@ pub enum LandingRefusal {
     Jumping,
     /// The ship is disabled, breaking up or destroyed: refused silently,
     /// the dock request's bare epilogue 0x67eef, after the landability
-    /// check (and the fee and cloak, not modelled) for a disabled ship,
+    /// and fee checks (and the cloak, not modelled) for a disabled ship,
     /// and before anything for a breaking-up or destroyed one (see
     /// `nova_sim::Session::land`).
     Disabled,
@@ -318,6 +321,21 @@ pub enum LandingRefusal {
         /// Its `MinStatus`.
         min_status: i16,
     },
+    /// The pilot can't pay the stellar's landing `Fee`
+    /// (`_HandlePlayerDockRequest` @0x669b4-0x66a80): a fee is due
+    /// ([`fee_due`]) and is more than the pilot's cash. It says `STR#`
+    /// 2002 #61 "You don't have enough", " ", `_creditsCString`
+    /// "credits", " " and #62 "to pay the hypergate fee." at a hypergate,
+    /// else #63 "to pay the docking fee." at a station, else #64 "to pay
+    /// the landing fee.", for 250 ticks (`_DisplayComm` @0x67c88-0x67cbc).
+    /// The dock request is dropped (@0x67cc1-0x67cd0). Silent: it plays
+    /// no `_beepSnd`.
+    CannotPayFee {
+        /// The stellar.
+        stellar: StellarId,
+        /// Whether it is a station.
+        station: bool,
+    },
     /// The ship is moving too fast.
     TooFast {
         /// The stellar.
@@ -341,7 +359,7 @@ impl LandingRefusal {
     /// (`_HandlePlayer` @0x6a8cb, @0x6a90f, and `_FindNearestStellar`
     /// giving -1 @0x6a94c), [`Self::Disabled`] goes to its bare epilogue
     /// (0x67eef), and [`Self::Denied`] plays `_beepSnd[1]` instead
-    /// (@0x67ec6).
+    /// (@0x67ec6). [`Self::CannotPayFee`] plays nothing (@0x669b4-0x66a80).
     ///
     /// A [`Self::NotLandable`] from a press with no target beeps too: the
     /// press selects the nearest stellar with the can-land flag
@@ -567,7 +585,8 @@ pub struct DockPress {
 }
 
 /// What the land key does with the navigation target `target` and the
-/// dock request `dock`, for the ship `player` among the system's
+/// dock request `dock`, for the ship `player`, its pilot holding `cash`,
+/// among the system's
 /// stellars `sites` (in navigation order), where `held` says whether the
 /// player's system holds a stellar (its owner word, +0x14, is the
 /// player's system), `cleared` says whether
@@ -584,6 +603,7 @@ pub fn land_or_select(
     target: Option<StellarId>,
     dock: Option<DockRequest>,
     player: &ShipState,
+    cash: i64,
     sites: &[LandingSite],
     held: impl Fn(&LandingSite) -> bool,
     cleared: impl Fn(&LandingSite) -> bool,
@@ -615,6 +635,14 @@ pub fn land_or_select(
         };
     }
     let (stellar, station) = (site.id, is_station(site));
+    if fee_due(site).is_some_and(|fee| fee > cash) {
+        return DockPress {
+            selected,
+            dock: None,
+            said: None,
+            outcome: Err(LandingRefusal::CannotPayFee { stellar, station }),
+        };
+    }
     let (mut dock, mut said) = (dock, None);
     if has(site, StellarFlags::UNINHABITED) {
         dock = Some(DockRequest {
@@ -657,6 +685,31 @@ pub fn land_or_select(
         said,
         Ok(LandOutcome::Requested { stellar, station }),
     )
+}
+
+/// The landing fee `site` charges, when one is due: its `Fee` when that is
+/// above 0 and it is not dominated, else `None`. `_HandlePlayerDockRequest`
+/// tests the same for its refusal (`Fee` @0x669b7-0x669b9, the domination
+/// byte +0x46 @0x669bf-0x669c3) and its charge (@0x66dd1-0x66dd5), and
+/// `_HandlePlayerDockApproach` for the greeting's fee line
+/// (@0x64d87-0x64d96).
+///
+/// The engine knows only the always-dominated `Flags2`
+/// [`DOMINATED`](crate::market::DOMINATED); domination by Demand Tribute
+/// (the runtime byte) is rdm:task/planet-domination's, and this is the one
+/// reader to switch when it lands.
+#[must_use]
+pub fn fee_due(site: &LandingSite) -> Option<i64> {
+    (site.fee > 0 && site.flags2 & crate::market::DOMINATED == 0).then_some(i64::from(site.fee))
+}
+
+/// The cash a pilot holding `cash` has left after paying `fee`: their
+/// difference, and 0 when that is negative (`subl` @0x66de3, the clamp
+/// @0x66deb-0x66df5). The press refuses a pilot who can't pay first
+/// ([`LandingRefusal::CannotPayFee`]), so the clamp is never met from it.
+#[must_use]
+pub fn pay_fee(cash: i64, fee: i64) -> i64 {
+    (cash - fee).max(0)
 }
 
 /// Whether `site` can be landed on at all, by its flags and whether it is
@@ -1010,6 +1063,9 @@ mod tests {
     /// only care about the record itself.
     const GOVT: Option<GovtId> = Some(GovtId(128));
 
+    /// Cash enough for any fee the tests set.
+    const RICH: i64 = 1_000_000;
+
     /// A landable planet at (`x`, `y`), 100 x 60 (radius 50), anyone may
     /// land on.
     fn site(id: i16, x: f32, y: f32) -> LandingSite {
@@ -1091,6 +1147,7 @@ mod tests {
                 permission: CLEARED,
             }),
             player,
+            RICH,
             std::slice::from_ref(site),
             |_| true,
             |_| panic!("traffic control is asked"),
@@ -1118,6 +1175,7 @@ mod tests {
             None,
             None,
             &parked(),
+            RICH,
             std::slice::from_ref(site),
             |_| true,
             |site| landing_record(site, system_govt, &record) >= site.min_status,
@@ -1145,6 +1203,7 @@ mod tests {
                 Some(site.id),
                 request(128, CLEARED),
                 &parked(),
+                RICH,
                 std::slice::from_ref(&site),
                 |_| false,
                 |_| panic!("traffic control is asked"),
@@ -1169,6 +1228,7 @@ mod tests {
             None,
             None,
             &parked(),
+            RICH,
             &sites,
             |site| site.id != StellarId(128),
             |_| true,
@@ -1545,6 +1605,7 @@ mod tests {
             None,
             None,
             &parked(),
+            RICH,
             &sites,
             |_| true,
             |_| panic!("traffic control is asked"),
@@ -1663,6 +1724,7 @@ mod tests {
                 None,
                 None,
                 &parked(),
+                RICH,
                 &sites,
                 |_| true,
                 |_| true,
@@ -2342,6 +2404,7 @@ mod tests {
             target.map(StellarId),
             dock,
             player,
+            RICH,
             sites,
             |_| true,
             |_| clear,
@@ -3000,9 +3063,194 @@ mod tests {
                 station,
                 min_status: 10,
             },
+            // No `PlaySound` on the fee refusal's path (@0x669b4-0x66a80,
+            // `_DisplayComm` @0x67c88-0x67cbc).
+            LandingRefusal::CannotPayFee { stellar, station },
         ];
         for refusal in silent {
             assert!(!refusal.beeps(), "{refusal:?}");
         }
+    }
+
+    /// `site` with this `Fee`.
+    fn charging(fee: i32, site: LandingSite) -> LandingSite {
+        LandingSite { fee, ..site }
+    }
+
+    #[test]
+    fn a_fee_is_due_only_when_above_0_at_a_stellar_not_dominated() {
+        // `Fee > 0` (@0x669b7-0x669b9) and the domination byte clear
+        // (@0x669bf-0x669c3), as the charge (@0x66dd1-0x66dd5) and the
+        // greeting (@0x64d87-0x64d96) read them.
+        let planet = site(128, 0.0, 0.0);
+        assert_eq!(fee_due(&charging(0, planet)), None);
+        assert_eq!(fee_due(&charging(-5, planet)), None);
+        assert_eq!(fee_due(&charging(100, planet)), Some(100));
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..charging(100, planet)
+        };
+        assert_eq!(fee_due(&dominated), None);
+    }
+
+    #[test]
+    fn paying_a_fee_takes_it_from_the_cash_and_never_below_0() {
+        // `subl` @0x66de3, then a negative cash set to 0 @0x66deb-0x66df5.
+        assert_eq!(pay_fee(500, 100), 400);
+        assert_eq!(pay_fee(100, 100), 0);
+        assert_eq!(pay_fee(50, 100), 0);
+    }
+
+    /// L pressed by a ship parked over `site`, the system's one stellar,
+    /// with `cash`, `site` selected and `dock` requested, traffic control
+    /// clearing as `clear` says.
+    fn pay(
+        site: &LandingSite,
+        cash: i64,
+        dock: Option<DockRequest>,
+        clear: impl Fn(&LandingSite) -> bool,
+    ) -> DockPress {
+        land_or_select(
+            Some(site.id),
+            dock,
+            &parked(),
+            cash,
+            std::slice::from_ref(site),
+            |_| true,
+            clear,
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        )
+    }
+
+    #[test]
+    fn a_player_who_cannot_pay_the_fee_is_refused_and_the_request_dropped() {
+        // `Fee > cash`, signed (@0x669d0-0x669d6): the request is dropped
+        // (`_dockTarget`/`_dockPermission` = -1 @0x67cc1-0x67cd0).
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = pay(&site, 99, request(128, CLEARED), |_| {
+            panic!("traffic control is asked")
+        });
+        assert_eq!(
+            press,
+            DockPress {
+                selected: None,
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::CannotPayFee {
+                    stellar: StellarId(128),
+                    station: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_player_with_exactly_the_fee_lands() {
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = pay(&site, 100, request(128, CLEARED), |_| true);
+        assert_eq!(press.outcome, landed(128));
+        assert_eq!(press.dock, None);
+    }
+
+    #[test]
+    fn the_fee_refuses_the_first_press_before_traffic_control_is_asked() {
+        // @0x669b4 comes before the clearance block (@0x67903).
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = land_or_select(
+            None,
+            None,
+            &parked(),
+            0,
+            std::slice::from_ref(&site),
+            |_| true,
+            |_| panic!("traffic control is asked"),
+            |_| panic!("the reach is read"),
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            press,
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::CannotPayFee {
+                    stellar: StellarId(128),
+                    station: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn the_fee_refuses_an_uninhabited_stellar_before_no_response() {
+        // @0x669b4 comes before the uninhabited test (@0x66b51).
+        let site = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..charging(100, site(128, 0.0, 0.0))
+        };
+        let press = pay(&site, 0, None, |_| true);
+        assert_eq!(press.said, None);
+        assert_eq!(press.dock, None);
+        assert!(matches!(
+            press.outcome,
+            Err(LandingRefusal::CannotPayFee { .. })
+        ));
+    }
+
+    #[test]
+    fn a_stellar_that_is_not_landable_is_refused_so_before_its_fee() {
+        let not_landable = charging(100, with_flags(0));
+        assert!(matches!(
+            pay(&not_landable, 0, None, |_| true).outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
+        let site = charging(100, site(128, 0.0, 0.0));
+        let unheld = land_or_select(
+            Some(site.id),
+            None,
+            &parked(),
+            0,
+            std::slice::from_ref(&site),
+            |_| false,
+            |_| true,
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert!(matches!(
+            unheld.outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
+    }
+
+    #[test]
+    fn no_fee_due_refuses_nobody() {
+        let planet = site(128, 0.0, 0.0);
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..charging(100, planet)
+        };
+        for site in [dominated, charging(0, planet), charging(-5, planet)] {
+            let press = pay(&site, 0, request(128, CLEARED), |_| true);
+            assert_eq!(press.outcome, landed(128), "{site:?}");
+        }
+    }
+
+    #[test]
+    fn a_station_that_cannot_be_paid_says_so() {
+        let station = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::STATION,
+            ..charging(100, site(128, 0.0, 0.0))
+        };
+        assert_eq!(
+            pay(&station, 0, None, |_| true).outcome,
+            Err(LandingRefusal::CannotPayFee {
+                stellar: StellarId(128),
+                station: true,
+            })
+        );
     }
 }

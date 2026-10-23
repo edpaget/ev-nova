@@ -478,6 +478,7 @@ mod ionization;
 mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
+mod landing_fee;
 mod launch_frame;
 mod lost_lead;
 mod lost_target;
@@ -3342,11 +3343,22 @@ impl Session {
     /// then awaits [`Session::enter_hypergate`] or
     /// [`Session::enter_wormhole`], until the next tick.
     ///
+    /// A stellar's landing `Fee`, when one is due
+    /// ([`landing::fee_due`](crate::landing::fee_due)), refuses a pilot
+    /// whose cash is below it ([`LandingRefusal::CannotPayFee`],
+    /// @0x669b4-0x66a80) right after the not-landable check, before the
+    /// disabled ship's press, the uninhabited stellar's reply and the
+    /// clearance: silently, the dock request dropped, the selection kept.
+    /// A press that lands, or enters a hypergate or wormhole, charges it
+    /// before the gate branch (@0x66db9-0x66df5); a hypergate map
+    /// cancelled after does not refund it (see the `landing_fee` module).
+    ///
     /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
     /// does for it and no further: with no target it selects one, starting
     /// its fly-in, as the land key does before the dock request
     /// (@0x6a8fb-0x6a932); a target that can't be landed on is refused as
-    /// an intact ship's is (@0x66977-0x669aa), and with nothing to select
+    /// an intact ship's is (@0x66977-0x669aa), so is a pilot who can't pay
+    /// the fee (@0x669b4, the request dropped), and with nothing to select
     /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`])
     /// the press makes no dock request, as an intact ship's makes none
     /// (@0x6a94c). Then the dock
@@ -3396,6 +3408,7 @@ impl Session {
             self.nav_target(),
             self.port.dock,
             &self.ship.player,
+            self.pilot.cash,
             &candidates,
             |site| self.chart.held_here(&self.pilot, &self.statics, site.id),
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
@@ -3409,6 +3422,12 @@ impl Session {
         if disabled {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
+                Err(refusal @ LandingRefusal::CannotPayFee { .. }) => {
+                    // The original drops the request (@0x67cc1-0x67cd0)
+                    // before reaching `_IsDisabled`.
+                    self.port.dock = press.dock;
+                    Err(refusal)
+                }
                 Err(
                     refusal @ (LandingRefusal::NotLandable { .. }
                     | LandingRefusal::NoStellars
@@ -3419,6 +3438,9 @@ impl Session {
         }
         let outcome = self.apply_press(press)?;
         if let LandOutcome::Landed(stellar) = outcome {
+            // Before the branch on the stellar's kind (@0x66db9-0x66df5),
+            // so a gate's entry pays it too.
+            self.chart.charge_fee(stellar, &mut self.pilot);
             if let Some(kind) = self.gate_kind(stellar) {
                 self.ship.warp.gate = Some(stellar);
                 return Ok(LandPress::AtGate { stellar, kind });

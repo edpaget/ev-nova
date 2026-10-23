@@ -85,7 +85,8 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 }
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
-/// or too fast, [`LANDING_TICKS`] denied or not landable, and
+/// or too fast, [`LANDING_TICKS`] denied, not landable or short of the
+/// fee (`_DisplayComm` @0x67c88), and
 /// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
 /// one where the land key makes no dock request (jumping, no stellars,
 /// nothing landable), shows no message ([`refusal_message`]), so its
@@ -94,7 +95,9 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
-        LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
+        LandingRefusal::Denied { .. }
+        | LandingRefusal::NotLandable { .. }
+        | LandingRefusal::CannotPayFee { .. } => LANDING_TICKS,
         LandingRefusal::Jumping
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
@@ -848,6 +851,18 @@ pub const LAND_ON: &str = "land on ";
 pub const DOCKING_DENIED: &str = "Docking request denied.";
 /// `STR#` 2002 #83.
 pub const LANDING_DENIED: &str = "Landing request denied.";
+/// `STR#` 2002 #61: the fee refusal's opening (@0x669e9-0x669fc).
+pub const NOT_ENOUGH: &str = "You don't have enough";
+/// `_creditsCString` (0x184560): the word the fee refusal and the
+/// approach greeting's fee line put after the number or #61, plural
+/// whatever the amount (@0x66a0f-0x66a1b, @0x64e34-0x64e40).
+pub const CREDITS: &str = "credits";
+/// `STR#` 2002 #62: the fee refusal's tail at a hypergate (@0x66a40).
+pub const TO_PAY_HYPERGATE_FEE: &str = "to pay the hypergate fee.";
+/// `STR#` 2002 #63: the fee refusal's tail at a station (@0x66a50).
+pub const TO_PAY_DOCKING_FEE: &str = "to pay the docking fee.";
+/// `STR#` 2002 #64: the fee refusal's tail elsewhere (@0x66a60).
+pub const TO_PAY_LANDING_FEE: &str = "to pay the landing fee.";
 /// `STR#` 2002 #89: why a ship cannot dock at a station.
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
@@ -1030,6 +1045,10 @@ pub fn approach_greeting(
 ///   [`HOSTILE_STATION`] or [`HOSTILE_PLANET`].
 /// - Denied (@0x67ea3-0x67eea): [`HYPERGATE_DENIED`] at a hypergate only;
 ///   a wormhole says the station's or the planet's.
+/// - Short of the fee (@0x669e9-0x66a60): [`NOT_ENOUGH`], " ", [`CREDITS`],
+///   " ", then [`TO_PAY_HYPERGATE_FEE`] at a hypergate, else
+///   [`TO_PAY_DOCKING_FEE`] at a station or [`TO_PAY_LANDING_FEE`], so a
+///   wormhole says the station's or the planet's.
 #[must_use]
 pub fn refusal_message(
     refusal: &LandingRefusal,
@@ -1077,6 +1096,14 @@ pub fn refusal_message(
             } else {
                 pick(station, DOCKING_DENIED, LANDING_DENIED)
             }
+        }
+        LandingRefusal::CannotPayFee { station, .. } => {
+            let tail = if gate == Some(GateKind::Hypergate) {
+                TO_PAY_HYPERGATE_FEE
+            } else {
+                pick(station, TO_PAY_DOCKING_FEE, TO_PAY_LANDING_FEE)
+            };
+            return Some(format!("{NOT_ENOUGH} {CREDITS} {tail}"));
         }
     };
     Some(text.to_owned())
@@ -1672,6 +1699,48 @@ mod tests {
                 "The station's hull integrity is too unstable.",
                 "The planet's environment is too hostile.",
             ]
+        );
+    }
+
+    #[test]
+    fn a_pilot_who_cannot_pay_is_told_which_fee() {
+        // #61, " ", `_creditsCString`, " ", then #62 at a hypergate (its
+        // bit tested first), else #63 at a station, else #64
+        // (@0x669e9-0x66a60): a wormhole takes the station's or planet's.
+        let stellar = StellarId(128);
+        let fee = |station, gate| {
+            refusal_message(
+                &LandingRefusal::CannotPayFee { stellar, station },
+                gate,
+                "Earth",
+            )
+        };
+        let landing = "You don't have enough credits to pay the landing fee.";
+        let docking = "You don't have enough credits to pay the docking fee.";
+        let hypergate = "You don't have enough credits to pay the hypergate fee.";
+        assert_eq!(fee(false, None).as_deref(), Some(landing));
+        assert_eq!(fee(true, None).as_deref(), Some(docking));
+        for station in [false, true] {
+            assert_eq!(
+                fee(station, Some(GateKind::Hypergate)).as_deref(),
+                Some(hypergate)
+            );
+        }
+        assert_eq!(
+            fee(false, Some(GateKind::Wormhole)).as_deref(),
+            Some(landing)
+        );
+        assert_eq!(
+            fee(true, Some(GateKind::Wormhole)).as_deref(),
+            Some(docking)
+        );
+        assert_eq!(
+            landing_refusal_ticks(&LandingRefusal::CannotPayFee {
+                stellar,
+                station: false,
+            }),
+            250,
+            "`_DisplayComm(text, 0xfa, …)` @0x67c88"
         );
     }
 
