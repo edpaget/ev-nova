@@ -38,7 +38,7 @@ use nova_sim::{HireList, HireRow, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
+    self, CellGrid, GridColors, INSET, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
 };
 use super::layout::DONE_LABEL;
 use super::shipyard::{
@@ -48,13 +48,13 @@ use super::shipyard::{
 };
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
@@ -127,6 +127,8 @@ pub struct HireScreen {
     laid: Result<Laid, String>,
     list: HireList,
     catalog: CatalogHandle,
+    /// The grid's frame colours, read from the catalog once.
+    colors: GridColors,
     /// Each ship's base image, read once.
     bases: Vec<(ShipId, i16)>,
     style: ButtonStyle,
@@ -192,6 +194,7 @@ impl HireScreen {
         let mut screen = Self {
             laid,
             list,
+            colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
             bases,
             style,
@@ -381,22 +384,30 @@ impl HireScreen {
         self.grid.cell_at(grid, at, self.list.rows.len())
     }
 
+    /// The shown cells, each its name's lines, then its frame in `GridDim`;
+    /// then, last, the selected cell framed again in `GridBright`. No cell
+    /// is filled (`_ShipyardDialogUpdate` @0x58f44-0x58f69,
+    /// @0x58f9d-0x58fbf, which draws hire mode's grid as the shipyard's).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
-        for (index, cell) in self.grid.shown(area, self.list.rows.len()) {
+        let count = self.list.rows.len();
+        for (index, cell) in self.grid.shown(area, count) {
             let row = &self.list.rows[index];
-            if Some(index) == self.selected() {
-                fill_rect(list, cell, SELECTED_COLOR);
-            }
-            outline(list, cell, GREY);
             let mut y = cell.min.y + INSET;
             for (line, color) in name_lines(&row.short_name) {
                 text(list, line, Point::new(cell.min.x + INSET, y), color);
                 y += line_height;
             }
+            grid::frame_cell(list, cell, self.colors.dim);
+        }
+        if let Some(cell) = self
+            .selected()
+            .and_then(|index| self.grid.shown_bounds(area, index, count))
+        {
+            grid::frame_cell(list, cell, self.colors.bright);
         }
     }
 
@@ -519,7 +530,7 @@ mod tests {
     use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
-    use crate::draw::{DrawCommand, fill_rect};
+    use crate::draw::{DrawCommand, frame_rect};
     use crate::font::Font;
     use crate::image::ImageKey;
     use crate::input::MouseButton;
@@ -614,6 +625,12 @@ mod tests {
 
         fn button_style(&self) -> ButtonStyle {
             panic!("the style is given")
+        }
+    }
+
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::TEST_GRID_COLORS
         }
     }
 
@@ -1170,21 +1187,108 @@ mod tests {
         ] {
             assert!(shown.contains(&expected), "{expected:?}: {shown:?}");
         }
-        let highlight = |index: usize| {
-            let mut list = DrawList::new();
-            fill_rect(
-                &mut list,
-                screen.cell_bounds(index).expect("a cell"),
-                SELECTED_COLOR,
+        assert!(contains(&commands, &bright_frame(&screen, 0)));
+        assert!(!contains(&commands, &bright_frame(&screen, 1)), "one");
+        assert!(contains(&commands, &frame(&screen, 1)));
+    }
+
+    /// Shown cell `index`'s frame in `color`.
+    fn framed(screen: &HireScreen, index: usize, color: Color) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        frame_rect(&mut list, screen.cell_bounds(index).expect("a cell"), color);
+        list.iter().cloned().collect()
+    }
+
+    /// Shown cell `index`'s frame in the fake's `GridDim`.
+    fn frame(screen: &HireScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.dim)
+    }
+
+    /// Shown cell `index`'s selection: framed in the fake's `GridBright`.
+    fn bright_frame(screen: &HireScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.bright)
+    }
+
+    fn position(commands: &[DrawCommand], part: &[DrawCommand]) -> Option<usize> {
+        commands
+            .windows(part.len())
+            .position(|window| window == part)
+    }
+
+    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
+        position(commands, part).is_some()
+    }
+
+    #[test]
+    fn every_shown_cell_is_framed_dim_and_the_selected_one_bright_last_and_unfilled() {
+        let mut screen = screen_of(&art(), long(22));
+        let grid_item = item(&screen, GRID_ITEM);
+        let commands = drawn(&screen);
+        let mut last_dim = 0;
+        for index in 0..20 {
+            assert_eq!(
+                screen.cell_bounds(index),
+                Some(grid::cell_bounds(grid_item, index))
             );
-            list.iter().cloned().collect::<Vec<_>>()
+            let at = position(&commands, &frame(&screen, index)).expect("framed");
+            last_dim = last_dim.max(at);
+        }
+        let named = |n: usize| {
+            texts(&screen)
+                .iter()
+                .any(|(text, _, _)| *text == format!("{}", 200 + n))
         };
-        assert!(commands.windows(1).any(|w| w == highlight(0)));
-        assert!(!commands.windows(1).any(|w| w == highlight(1)), "one");
-        let mut frame = DrawList::new();
-        outline(&mut frame, screen.cell_bounds(1).expect("a cell"), GREY);
-        let frame: Vec<_> = frame.iter().cloned().collect();
-        assert!(commands.windows(frame.len()).any(|w| w == frame));
+        assert!(named(19) && !named(20), "20 cells shown");
+        assert!(
+            !contains(&commands, &frame(&screen, 20)),
+            "none past the fifth row"
+        );
+        let bright = position(&commands, &bright_frame(&screen, 0)).expect("selected");
+        assert!(bright > last_dim, "after every dim frame");
+        let cell = screen.cell_bounds(0).expect("a cell");
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Line { from, to, width, .. }
+                    if from.x == cell.min.x && to.x == cell.max.x && *width == cell.height()
+            )),
+            "the selected cell is not filled"
+        );
+        screen.input(&key(Key::Right, false));
+        let commands = drawn(&screen);
+        assert!(!contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &bright_frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_press_is_hit_tested_on_the_84_by_55_division() {
+        let mut screen = screen_of(&art(), long(22));
+        let grid = item(&screen, GRID_ITEM);
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0 + 1.0, grid.min.y + 1.0),
+        );
+        assert_eq!(screen.selected(), Some(1));
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 83.0, grid.min.y + 54.0),
+        );
+        assert_eq!(screen.selected(), Some(0), "83 right, 54 down is cell 0");
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0, grid.min.y + 55.0),
+        );
+        assert_eq!(screen.selected(), Some(5));
+        click(&mut screen, Point::new(grid.max.x - 0.5, grid.max.y - 0.5));
+        assert_eq!(
+            screen.selected(),
+            Some(19),
+            "the last cell reaches the corner"
+        );
+        click(&mut screen, Point::new(grid.max.x, grid.min.y + 1.0));
+        assert_eq!(screen.selected(), Some(19), "the right edge is out");
+        click(&mut screen, Point::new(grid.min.x + 1.0, grid.max.y));
+        assert_eq!(screen.selected(), Some(19), "the bottom edge is out");
     }
 
     #[test]
@@ -1194,9 +1298,10 @@ mod tests {
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        click_item(&mut screen, SCROLL_DOWN_ITEM);
-        assert_eq!(screen.top_row(), 2, "never past the end");
+        assert_eq!(screen.top_row(), 1, "never past the end");
         click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
         screen.input(&key(Key::Down, false));
         assert_eq!(screen.selected(), Some(4));

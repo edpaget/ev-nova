@@ -134,7 +134,7 @@ use nova_sim::{
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, credits_text, draw_amount_rows, tons_text};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
+    self, CellGrid, GridColors, GridLooks, INSET, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
     TextStyle, text,
 };
 use super::layout::DONE_LABEL;
@@ -155,7 +155,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
@@ -648,14 +648,21 @@ pub trait ShipBaseImages {
 /// [`DescriptionSource`], the graphic it names, through
 /// [`DescriptionGraphics`], whether a picture exists, through
 /// [`SpaceportCatalog::picture_exists`], and the ships' base images,
-/// through [`ShipBaseImages`]. Anything that is all four is one.
+/// through [`ShipBaseImages`], and the grid's colours, through
+/// [`GridLooks`]. Anything that is all five is one.
 pub trait ShipyardCatalog:
-    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages
+    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + GridLooks
 {
 }
 
-impl<T: SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + ?Sized>
-    ShipyardCatalog for T
+impl<
+    T: SpaceportCatalog
+        + DescriptionSource
+        + DescriptionGraphics
+        + ShipBaseImages
+        + GridLooks
+        + ?Sized,
+> ShipyardCatalog for T
 {
 }
 
@@ -912,6 +919,8 @@ pub struct ShipyardScreen {
     laid: Result<Laid, String>,
     shipyard: Shipyard,
     catalog: CatalogHandle,
+    /// The grid's frame colours, read from the catalog once.
+    colors: GridColors,
     /// Each ship's base image, read once.
     bases: Vec<(ShipId, i16)>,
     /// Each listed ship's picture, by row, read once a list (none without
@@ -996,6 +1005,7 @@ impl ShipyardScreen {
         let mut screen = Self {
             laid,
             shipyard,
+            colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
             bases,
             pictures: Vec::new(),
@@ -1414,6 +1424,10 @@ impl ShipyardScreen {
         }
     }
 
+    /// The shown cells, each its picture, the current mark and its name,
+    /// then its frame in `GridDim`; then, last, the selected cell framed
+    /// again in `GridBright`. No cell is filled (`_ShipyardDialogUpdate`
+    /// @0x58b30-0x58f91, @0x58f9d-0x58fbf).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
@@ -1424,17 +1438,21 @@ impl ShipyardScreen {
             text(list, NO_SHIPS, origin, TEXT_COLOR);
             return;
         }
-        for (index, cell) in self.grid.shown(area, self.shipyard.rows.len()) {
+        let count = self.shipyard.rows.len();
+        for (index, cell) in self.grid.shown(area, count) {
             let row = &self.shipyard.rows[index];
-            if Some(index) == self.selected() {
-                fill_rect(list, cell, SELECTED_COLOR);
-            }
-            outline(list, cell, GREY);
             grid::draw_cell_picture(list, cell, self.pictures[index]);
             if row.id == self.shipyard.current {
                 grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
             }
             grid::draw_cell_name(list, metrics, cell, &row.short_name);
+            grid::frame_cell(list, cell, self.colors.dim);
+        }
+        if let Some(cell) = self
+            .selected()
+            .and_then(|index| self.grid.shown_bounds(area, index, count))
+        {
+            grid::frame_cell(list, cell, self.colors.bright);
         }
     }
 
@@ -1622,12 +1640,13 @@ mod tests {
     use nova_sim::{RuleSource, Rulebook, ShipFacts, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, frame_rect};
     use crate::flight::view::MAP_KEY;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
     use crate::spaceport::credits::AMOUNT_COLUMN;
+    use crate::spaceport::grid::GREY;
     use crate::spaceport::grid::TEXT_SIZE;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -1750,6 +1769,12 @@ mod tests {
 
         fn button_style(&self) -> ButtonStyle {
             panic!("the style is given")
+        }
+    }
+
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::TEST_GRID_COLORS
         }
     }
 
@@ -2129,7 +2154,7 @@ mod tests {
         assert!(screen.info_panel().is_none());
         assert_eq!(
             screen.cell_bounds(5),
-            Some(rect(138.0 + 83.0, 230.0 + 67.0, 83.0, 67.0))
+            Some(rect(138.0 + 83.0, 230.0 + 54.0, 84.0, 55.0))
         );
     }
 
@@ -2172,19 +2197,100 @@ mod tests {
             .filter(|(text, _, _)| text == CURRENT_MARK)
             .count();
         assert_eq!(marks, 1, "only the ship flown");
-        let mut highlight = DrawList::new();
-        fill_rect(
-            &mut highlight,
-            screen.cell_bounds(0).expect("a cell"),
-            SELECTED_COLOR,
+        assert!(contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &frame(&screen, 3)));
+        assert!(
+            !contains(&commands, &frame(&screen, 4)),
+            "no frame on an empty cell"
         );
-        let highlight: Vec<_> = highlight.iter().cloned().collect();
-        assert!(commands.windows(highlight.len()).any(|w| w == highlight));
-        let mut frame = DrawList::new();
-        outline(&mut frame, screen.cell_bounds(3).expect("a cell"), GREY);
-        let frame: Vec<_> = frame.iter().cloned().collect();
-        assert!(commands.windows(frame.len()).any(|w| w == frame));
         assert!(!words(&screen).contains(&NO_SHIPS.to_owned()));
+    }
+
+    /// Shown cell `index`'s frame in `color`.
+    fn framed(screen: &ShipyardScreen, index: usize, color: Color) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        frame_rect(&mut list, screen.cell_bounds(index).expect("a cell"), color);
+        list.iter().cloned().collect()
+    }
+
+    /// Shown cell `index`'s frame in the fake's `GridDim`.
+    fn frame(screen: &ShipyardScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.dim)
+    }
+
+    /// Shown cell `index`'s selection: framed in the fake's `GridBright`.
+    fn bright_frame(screen: &ShipyardScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.bright)
+    }
+
+    fn position(commands: &[DrawCommand], part: &[DrawCommand]) -> Option<usize> {
+        commands
+            .windows(part.len())
+            .position(|window| window == part)
+    }
+
+    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
+        position(commands, part).is_some()
+    }
+
+    #[test]
+    fn every_shown_cell_is_framed_dim_and_the_selected_one_bright_last_and_unfilled() {
+        let mut screen = screen_of(long(22));
+        let grid_item = item(&screen, GRID_ITEM);
+        let commands = drawn(&screen);
+        let mut last_dim = 0;
+        for index in 0..20 {
+            assert_eq!(
+                screen.cell_bounds(index),
+                Some(grid::cell_bounds(grid_item, index))
+            );
+            let at = position(&commands, &frame(&screen, index)).expect("framed");
+            last_dim = last_dim.max(at);
+        }
+        let named = |n: usize| words(&screen).contains(&format!("Hull {n}"));
+        assert!(named(19) && !named(20), "20 cells shown");
+        let bright = position(&commands, &bright_frame(&screen, 0)).expect("selected");
+        assert!(bright > last_dim, "after every dim frame");
+        let cell = screen.cell_bounds(0).expect("a cell");
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Line { from, to, width, .. }
+                    if from.x == cell.min.x && to.x == cell.max.x && *width == cell.height()
+            )),
+            "the selected cell is not filled"
+        );
+        press(&mut screen, Key::Right);
+        let commands = drawn(&screen);
+        assert!(!contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &bright_frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_press_is_hit_tested_on_the_84_by_55_division() {
+        let mut screen = screen_of(long(22));
+        let grid = item(&screen, GRID_ITEM);
+        click_cell(&mut screen, 6);
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 83.0, grid.min.y + 54.0),
+        );
+        assert_eq!(screen.selected(), Some(0), "83 right, 54 down is cell 0");
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0, grid.min.y + 55.0),
+        );
+        assert_eq!(screen.selected(), Some(5));
+        click(&mut screen, Point::new(grid.max.x - 0.5, grid.max.y - 0.5));
+        assert_eq!(
+            screen.selected(),
+            Some(19),
+            "the last cell reaches the corner"
+        );
+        click(&mut screen, Point::new(grid.max.x, grid.min.y + 1.0));
+        assert_eq!(screen.selected(), Some(19), "the right edge is out");
+        click(&mut screen, Point::new(grid.min.x + 1.0, grid.max.y));
+        assert_eq!(screen.selected(), Some(19), "the bottom edge is out");
     }
 
     /// `count` ships, numbered from 200.
@@ -2214,16 +2320,18 @@ mod tests {
         assert_eq!(screen.selected(), Some(6));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        click_item(&mut screen, SCROLL_DOWN_ITEM);
-        assert_eq!(screen.top_row(), 2, "never past the end");
+        assert_eq!(screen.top_row(), 1, "never past the end");
         let names: Vec<_> = words(&screen)
             .into_iter()
             .filter(|w| w.starts_with("Hull "))
             .collect();
-        assert_eq!(names.first().map(String::as_str), Some("Hull 8"));
-        click_item(&mut screen, SCROLL_UP_ITEM);
-        assert_eq!(screen.top_row(), 1);
+        assert_eq!(names.first().map(String::as_str), Some("Hull 4"));
+        assert_eq!(names.last().map(String::as_str), Some("Hull 21"));
         click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(4));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0);
+        click_cell(&mut screen, 4);
         assert_eq!(screen.selected(), Some(4));
         let grid = item(&screen, GRID_ITEM);
         click(&mut screen, Point::new(grid.min.x - 1.0, grid.min.y + 1.0));

@@ -3,10 +3,15 @@
 //! `ShortName`'s lines; and the selected item's picture, or "No Picture"
 //! and "Available" centred on its item, and its description, as read.
 //!
-//! The grid shows [`COLUMNS`] cells across and [`GRID_ROWS`] down, each
-//! [`CELL_WIDTH`] x [`CELL_HEIGHT`] from the grid item's top left. One cell
-//! is selected; the grid scrolls a row at a time, never past either end,
-//! and always shows the selected cell when the selection moves.
+//! The grid shows [`COLUMNS`] cells across and [`GRID_ROWS`] down, the 20
+//! slots of `_SetupListRects` (@0x51a2c-0x51af8): each a [`CELL_WIDTH`] x
+//! [`CELL_HEIGHT`] frame, set [`CELL_PITCH_X`] x [`CELL_PITCH_Y`] apart from
+//! the grid item's top left, so neighbouring frames share a line. Every
+//! listed cell is framed in the `cölr` `GridDim` colour and the selected one
+//! framed again, last, in `GridBright` ([`GridColors`]); no cell is filled. A
+//! press is hit-tested on the frame's size, not the pitch. One cell is
+//! selected; the grid scrolls a row at a time, never past either end, and
+//! always shows the selected cell when the selection moves.
 //!
 //! A cell shows its item's picture, stretched to [`ICON_SIZE`] square,
 //! centred across the cell near its top; its `ShortName` centred across
@@ -19,7 +24,7 @@
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -31,12 +36,26 @@ use crate::ui::text_box::TextBox;
 
 /// How many cells across the grid shows.
 pub const COLUMNS: usize = 4;
-/// How many rows of cells the grid shows at once.
-pub const GRID_ROWS: usize = 4;
-/// A cell's width: four fit the stock grid's 333.
-pub const CELL_WIDTH: f32 = 83.0;
-/// A cell's height: four fit the stock grid's 271.
-pub const CELL_HEIGHT: f32 = 67.0;
+/// How many rows of cells the grid shows at once: `_SetupListRects` lays
+/// out 20 slots, and the dialog updates draw a slot only while its index
+/// less the scroll is at most 0x13 (`_OutfitDialogUpdate` @0x573ef,
+/// `_ShipyardDialogUpdate` @0x58b30).
+pub const GRID_ROWS: usize = 5;
+/// A cell's frame's width, 0x54 (`_SetupListRects` @0x51a99), and the
+/// width a press's column is divided by (`_OutfitFilter` @0x585b1,
+/// `_ShipyardFilter` @0x609dc).
+pub const CELL_WIDTH: f32 = 84.0;
+/// A cell's frame's height, 0x37 (`_SetupListRects` @0x51a99), and the
+/// height a press's row is divided by (`_OutfitFilter` @0x585b1,
+/// `_ShipyardFilter` @0x609fe).
+pub const CELL_HEIGHT: f32 = 55.0;
+/// The step from one cell's left to the next's, 0x53: one less than the
+/// width, so neighbouring frames share a line, and four fill the stock
+/// grid's 333 with the last frame's line.
+pub const CELL_PITCH_X: f32 = 83.0;
+/// The step from one row's top to the next's, 0x36: one less than the
+/// height, and five fill the stock grid's 271.
+pub const CELL_PITCH_Y: f32 = 54.0;
 
 /// `STR#` 2002 #213: the first line drawn on a missing picture.
 pub const NO_PICTURE: &str = "No Picture";
@@ -53,11 +72,50 @@ pub const TEXT_FONT: Font = Font::Geneva;
 pub const TEXT_SIZE: f32 = 10.0;
 /// A line that starts with a letter or digit, and the info box.
 pub const TEXT_COLOR: Color = Color::WHITE;
-/// A line that starts with anything else, the cells' frames and an arrow
-/// that cannot scroll.
+/// A line that starts with anything else, and an arrow that cannot
+/// scroll.
 pub const GREY: Color = Color::DIM;
-/// The selected cell's background.
-pub const SELECTED_COLOR: Color = Color::rgba(40, 60, 140, 255);
+
+/// The grid's two frame colours, `_shopGridColor`: `cölr`'s `GridBright`
+/// then `GridDim` (@0x57848-0x578c7, @0x58f44-0x58fbf).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridColors {
+    /// Every listed cell's frame, `_shopGridColor`[1].
+    pub dim: Color,
+    /// The selected cell's frame, drawn over the dim ones,
+    /// `_shopGridColor`[0].
+    pub bright: Color,
+}
+
+impl GridColors {
+    /// Stock `cölr` 128's: `GridDim` 0x404040 and `GridBright` 0xFF0000.
+    pub const STOCK: Self = Self {
+        dim: Color::from_rgb24(0x0040_4040),
+        bright: Color::from_rgb24(0x00FF_0000),
+    };
+}
+
+/// The grid's look.
+pub trait GridLooks {
+    /// The grid's colours, from `cölr` 128, or [`GridColors::STOCK`] when
+    /// it is missing or does not decode.
+    fn grid_colors(&self) -> GridColors;
+}
+
+/// Distinct non-stock grid colours, for test fakes to tell the frames
+/// apart.
+#[cfg(test)]
+pub(crate) const TEST_GRID_COLORS: GridColors = GridColors {
+    dim: Color::rgba(1, 2, 3, 255),
+    bright: Color::rgba(4, 5, 6, 255),
+};
+
+/// Frames `cell` in `color`, as the dialog updates `FrameRect` each listed
+/// cell and then the selected one.
+pub fn frame_cell(list: &mut DrawList, cell: Bounds, color: Color) {
+    frame_rect(list, cell, color);
+}
+
 /// How far into a cell or box each line of text starts.
 pub const INSET: f32 = 4.0;
 
@@ -83,8 +141,8 @@ pub fn text(list: &mut DrawList, text: &str, origin: Point, color: Color) {
 /// `PICT` into a 32 x 32 slot (`_RetrieveMenuIcon` @0x4f425, its slots set
 /// by `_SetupListRects` @0x51afe-0x51b36).
 pub const ICON_SIZE: f32 = 32.0;
-/// How far a cell's picture's top is above the cell's centre
-/// (`_SetupListRects` @0x51a9e-0x51af0).
+/// How far a cell's picture's top is above the cell's whole-number centre
+/// (`_SetupListRects` @0x51a9e-0x51af0): 3 below a 55-tall cell's top.
 pub const ICON_RISE: f32 = 24.0;
 /// The corner text's (the owned count's or the mark's) baseline, below the
 /// cell's top (`_OutfitDialogUpdate` @0x57471-0x5752d).
@@ -102,12 +160,15 @@ pub const ONE_LINE_BASELINE: f32 = 6.0;
 pub const NAME_LINE_STEP: f32 = NAME_BASELINES[0] - NAME_BASELINES[1];
 
 /// Where a cell's picture goes: [`ICON_SIZE`] square, centred across the
-/// cell, its top [`ICON_RISE`] above the cell's centre.
+/// cell, its top [`ICON_RISE`] above the cell's centre. The centre is
+/// halved to a whole number on each axis, as `_SetupListRects` truncates
+/// (left + right) / 2 and (top + bottom) / 2 (@0x51a9e-0x51ad0).
 #[must_use]
 pub fn icon_bounds(cell: Bounds) -> Bounds {
     let c = cell.center();
+    let (x, y) = (c.x.floor(), c.y.floor());
     Bounds::at(
-        Point::new(c.x - ICON_SIZE / 2.0, c.y - ICON_RISE),
+        Point::new(x - ICON_SIZE / 2.0, y - ICON_RISE),
         ICON_SIZE,
         ICON_SIZE,
     )
@@ -232,13 +293,15 @@ pub fn draw_corner_text(
 }
 
 /// Where cell `index` (counted from the grid's first row shown) is, in a
-/// grid item at `grid`.
+/// grid item at `grid`: a [`CELL_WIDTH`] x [`CELL_HEIGHT`] frame,
+/// [`CELL_PITCH_X`] x [`CELL_PITCH_Y`] a step, as `_SetupListRects` sets
+/// each slot (@0x51a2c-0x51a99).
 #[must_use]
 pub fn cell_bounds(grid: Bounds, index: usize) -> Bounds {
     let (row, column) = (index / COLUMNS, index % COLUMNS);
     let min = Point::new(
-        grid.min.x + CELL_WIDTH * column as f32,
-        grid.min.y + CELL_HEIGHT * row as f32,
+        grid.min.x + CELL_PITCH_X * column as f32,
+        grid.min.y + CELL_PITCH_Y * row as f32,
     );
     Bounds::at(min, CELL_WIDTH, CELL_HEIGHT)
 }
@@ -321,12 +384,15 @@ impl CellGrid {
 
     /// The index, counted with the scroll, of the cell position under
     /// `at` on a grid item at `grid`, listed or not: `None` outside the
-    /// item or past its [`COLUMNS`] x [`GRID_ROWS`] cells, as the
-    /// original bounds the column and row (`_OutfitFilter`
-    /// @0x585ea-0x58607).
+    /// item, which `PtInRect` tests half-open (its right and bottom edges
+    /// out), or past its [`COLUMNS`] x [`GRID_ROWS`] cells. The column is
+    /// the press's offset divided by [`CELL_WIDTH`] and the row by
+    /// [`CELL_HEIGHT`], the frame's size rather than the drawing pitch, as
+    /// `_OutfitFilter` (@0x585a4-0x58607) and `_ShipyardFilter`, which
+    /// also runs the hire screen (@0x609cf-0x60a32), divide it.
     #[must_use]
     pub fn cell_under(&self, grid: Bounds, at: Point) -> Option<usize> {
-        if !grid.contains(at) {
+        if !grid.contains_half_open(at) {
             return None;
         }
         let column = ((at.x - grid.min.x) / CELL_WIDTH) as usize;
@@ -342,6 +408,17 @@ impl CellGrid {
     #[must_use]
     pub fn cell_at(&self, grid: Bounds, at: Point, count: usize) -> Option<usize> {
         self.cell_under(grid, at).filter(|&index| index < count)
+    }
+
+    /// Where listed cell `index` of `count` is in a grid item at `grid`,
+    /// when it is shown.
+    #[must_use]
+    pub fn shown_bounds(&self, grid: Bounds, index: usize, count: usize) -> Option<Bounds> {
+        let first = self.top_row * COLUMNS;
+        let shown = first..count.min(first + COLUMNS * GRID_ROWS);
+        shown
+            .contains(&index)
+            .then(|| cell_bounds(grid, index - first))
     }
 
     /// The cells of `count` shown, each index with where its cell is in a
@@ -538,19 +615,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    #[test]
-    fn the_icon_is_32_square_centred_across_and_24_above_the_cells_centre() {
-        assert_eq!(
-            icon_bounds(rect(10.0, 20.0, 83.0, 67.0)),
-            rect(35.5, 29.5, 32.0, 32.0)
-        );
-        assert_eq!(
-            icon_bounds(rect(0.0, 0.0, 84.0, 55.0)),
-            rect(26.0, 3.5, 32.0, 32.0),
-            "3 below the top of the original's 55-tall cell"
-        );
     }
 
     #[test]
@@ -771,42 +835,76 @@ mod tests {
     }
 
     #[test]
-    fn cells_go_across_then_down_from_the_grids_corner() {
+    fn cells_are_84_by_55_frames_on_an_83_by_54_pitch_from_the_grids_corner() {
         let grid = rect(10.0, 20.0, 333.0, 271.0);
-        assert_eq!(cell_bounds(grid, 0), rect(10.0, 20.0, 83.0, 67.0));
-        assert_eq!(cell_bounds(grid, 5), rect(93.0, 87.0, 83.0, 67.0));
+        assert_eq!(cell_bounds(grid, 0), rect(10.0, 20.0, 84.0, 55.0));
+        assert_eq!(cell_bounds(grid, 1), rect(93.0, 20.0, 84.0, 55.0));
+        assert_eq!(cell_bounds(grid, 4), rect(10.0, 74.0, 84.0, 55.0));
+        assert_eq!(cell_bounds(grid, 5), rect(93.0, 74.0, 84.0, 55.0));
+        let last = cell_bounds(grid, 19);
+        assert_eq!(last, rect(10.0 + 249.0, 20.0 + 216.0, 84.0, 55.0));
+        assert_eq!(
+            last.max, grid.max,
+            "the last frame ends on the stock item's corner"
+        );
+    }
+
+    #[test]
+    fn the_icons_top_is_from_the_cells_whole_centre() {
+        // `_SetupListRects` halves top + bottom to a whole number: a 55-tall
+        // cell's centre is 27 below its top, so the icon's top is 3 below it.
+        assert_eq!(
+            icon_bounds(rect(0.0, 0.0, 84.0, 55.0)),
+            rect(26.0, 3.0, 32.0, 32.0)
+        );
+        assert_eq!(
+            icon_bounds(rect(10.0, 20.0, 83.0, 67.0)),
+            rect(35.0, 29.0, 32.0, 32.0),
+            "both axes floored"
+        );
     }
 
     #[test]
     fn the_selection_clamps_and_the_grid_follows_it() {
         let mut grid = CellGrid::default();
         assert_eq!(grid.selected(0), None);
+        // 22 cells are 6 rows: the grid's last first row is 1.
         grid.select(30, 22);
-        assert_eq!((grid.selected(22), grid.top_row()), (Some(21), 2));
+        assert_eq!((grid.selected(22), grid.top_row()), (Some(21), 1));
         assert_eq!(grid.selected_raw(), 21);
         assert_eq!(grid.can_scroll(22), (true, false));
         grid.select(0, 22);
         assert_eq!((grid.selected(22), grid.top_row()), (Some(0), 0));
+        assert_eq!(grid.can_scroll(22), (false, true));
+        grid.select(19, 22);
+        assert_eq!(grid.top_row(), 0, "the fifth row shows without scrolling");
+        assert!(grid.arrow(Key::Down, 22));
+        assert_eq!((grid.selected(22), grid.top_row()), (Some(21), 1));
+        grid.select(0, 22);
         assert!(grid.arrow(Key::Down, 22));
         assert_eq!(grid.selected(22), Some(4));
         assert!(!grid.arrow(Key::Enter, 22));
         assert_eq!(grid.selected(22), Some(4));
         grid.scroll(true, 22);
         grid.scroll(true, 22);
-        grid.scroll(true, 22);
-        assert_eq!(grid.top_row(), 2);
-        assert_eq!(grid.can_scroll(16), (true, false));
+        assert_eq!(grid.top_row(), 1, "never past the end");
+        assert_eq!(grid.can_scroll(20), (true, false));
+        assert_eq!(CellGrid::default().can_scroll(20), (false, false));
+        assert_eq!(CellGrid::default().can_scroll(21), (false, true));
     }
 
     #[test]
     fn the_cells_shown_are_the_rows_from_the_top_one() {
         let area = rect(0.0, 0.0, 333.0, 271.0);
+        let top = CellGrid::default().shown(area, 22);
+        assert_eq!(top.len(), 20, "4 x 5 cells");
+        assert_eq!(top[19], (19, cell_bounds(area, 19)));
         let mut grid = CellGrid::default();
         grid.scroll(true, 22);
         let shown = grid.shown(area, 22);
-        assert_eq!(shown.len(), 16);
+        assert_eq!(shown.len(), 18);
         assert_eq!(shown[0], (4, cell_bounds(area, 0)));
-        assert_eq!(shown[15].0, 19);
+        assert_eq!(shown[17], (21, cell_bounds(area, 17)));
         assert_eq!(grid.shown(area, 3).len(), 0, "nothing past the end");
         assert_eq!(CellGrid::default().shown(area, 3).len(), 3);
         assert_eq!(
@@ -817,28 +915,59 @@ mod tests {
     }
 
     #[test]
+    fn a_listed_cell_has_bounds_only_while_shown() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let mut grid = CellGrid::default();
+        assert_eq!(grid.shown_bounds(area, 0, 22), Some(cell_bounds(area, 0)));
+        assert_eq!(grid.shown_bounds(area, 19, 22), Some(cell_bounds(area, 19)));
+        assert_eq!(grid.shown_bounds(area, 20, 22), None, "below the fifth row");
+        assert_eq!(grid.shown_bounds(area, 5, 5), None, "not listed");
+        grid.scroll(true, 22);
+        assert_eq!(grid.shown_bounds(area, 3, 22), None, "scrolled off the top");
+        assert_eq!(grid.shown_bounds(area, 4, 22), Some(cell_bounds(area, 0)));
+        assert_eq!(grid.shown_bounds(area, 21, 22), Some(cell_bounds(area, 17)));
+        assert_eq!(grid.shown_bounds(area, 22, 22), None);
+    }
+
+    #[test]
+    fn a_press_is_divided_by_84_across_and_55_down_as_the_filters_divide_it() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let grid = CellGrid::default();
+        let across = |dx: f32| grid.cell_under(area, Point::new(10.0 + dx, 21.0));
+        assert_eq!(across(0.0), Some(0), "the left edge is in");
+        assert_eq!(across(83.0), Some(0), "not on the 83 pitch");
+        assert_eq!(across(84.0), Some(1));
+        assert_eq!(across(332.0), Some(3));
+        assert_eq!(across(333.0), None, "the right edge is out");
+        let down = |dy: f32| grid.cell_under(area, Point::new(11.0, 20.0 + dy));
+        assert_eq!(down(0.0), Some(0), "the top edge is in");
+        assert_eq!(down(54.0), Some(0), "not on the 54 pitch");
+        assert_eq!(down(55.0), Some(4));
+        assert_eq!(down(270.0), Some(16));
+        assert_eq!(down(271.0), None, "the bottom edge is out");
+        let mut scrolled = CellGrid::default();
+        scrolled.scroll(true, 22);
+        assert_eq!(
+            scrolled.cell_under(area, Point::new(10.0 + 84.0, 20.0 + 55.0)),
+            Some(4 + 5),
+            "a row down from the scroll"
+        );
+    }
+
+    #[test]
     fn a_point_on_an_unlisted_cell_is_under_a_cell_but_at_none() {
         let area = rect(10.0, 20.0, 333.0, 271.0);
         let grid = CellGrid::default();
         let listed = Point::new(100.0, 30.0);
         assert_eq!(grid.cell_under(area, listed), Some(1));
         assert_eq!(grid.cell_at(area, listed, 6), Some(1));
-        let empty = Point::new(100.0, 160.0);
+        let empty = Point::new(100.0, 140.0);
         assert_eq!(grid.cell_under(area, empty), Some(9), "an empty cell");
         assert_eq!(grid.cell_at(area, empty, 6), None);
-        let next = Point::new(190.0, 100.0);
+        let next = Point::new(190.0, 90.0);
         assert_eq!(grid.cell_under(area, next), Some(6));
         assert_eq!(grid.cell_at(area, next, 7), Some(6), "the last listed");
         assert_eq!(grid.cell_at(area, next, 6), None, "the first empty");
-        let last = Point::new(10.0 + 83.0 * 4.0 - 0.5, 20.0 + 67.0 * 4.0 - 0.5);
-        assert_eq!(grid.cell_under(area, last), Some(15), "the last cell");
-        for past in [
-            Point::new(10.0 + 83.0 * 4.0 + 0.5, 30.0),
-            Point::new(20.0, 20.0 + 67.0 * 4.0 + 0.5),
-        ] {
-            assert_eq!(grid.cell_under(area, past), None, "past the cells");
-            assert_eq!(grid.cell_at(area, past, 22), None);
-        }
         for outside in [Point::new(9.5, 30.0), Point::new(20.0, 19.5)] {
             assert_eq!(grid.cell_under(area, outside), None, "outside");
             assert_eq!(grid.cell_at(area, outside, 22), None);
@@ -846,10 +975,9 @@ mod tests {
 
         let mut scrolled = CellGrid::default();
         scrolled.scroll(true, 22);
-        scrolled.scroll(true, 22);
-        assert_eq!(scrolled.cell_under(area, listed), Some(9), "scrolled");
-        assert_eq!(scrolled.cell_at(area, listed, 22), Some(9));
-        let empty = Point::new(10.0 + 83.0 * 3.5, 20.0 + 67.0 * 3.5);
+        assert_eq!(scrolled.cell_under(area, listed), Some(5), "scrolled");
+        assert_eq!(scrolled.cell_at(area, listed, 22), Some(5));
+        let empty = Point::new(10.0 + 84.0 * 3.5, 20.0 + 55.0 * 4.5);
         assert_eq!(scrolled.cell_under(area, empty), Some(23));
         assert_eq!(scrolled.cell_at(area, empty, 22), None);
     }

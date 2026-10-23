@@ -4079,6 +4079,12 @@ pub(in crate::spaceport) mod tests {
 
     use crate::spaceport::shipyard::ShipOrder;
 
+    impl crate::spaceport::grid::GridLooks for FakePort {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::GridColors::STOCK
+        }
+    }
+
     impl ShipBaseImages for FakePort {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
             Vec::new()

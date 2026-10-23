@@ -923,6 +923,12 @@ mod tests {
         }
     }
 
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::GridColors::STOCK
+        }
+    }
+
     impl ShipBaseImages for FakeArt {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
             Vec::new()
