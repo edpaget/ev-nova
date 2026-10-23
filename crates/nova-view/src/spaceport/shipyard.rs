@@ -152,13 +152,12 @@ use nova_sim::{
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, credits_text, draw_amount_rows, tons_text};
 use super::grid::{
-    self, CellGrid, GridColors, GridLooks, INSET, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
-    TextStyle, text,
+    self, GridColors, GridLooks, INSET, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, TextStyle, text,
 };
-use super::grid_clicks::CellClicks;
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -946,9 +945,8 @@ pub struct ShipyardScreen {
     /// the dialog).
     pictures: Vec<Option<i16>>,
     style: ButtonStyle,
-    grid: CellGrid,
-    /// The last cell position pressed, for a double-click.
-    clicks: CellClicks,
+    /// The grid, its selection as `_ShipyardFilter` keeps it.
+    grid: ShipyardGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
     /// The ship requested, until it is taken, and whether B asked.
@@ -1026,6 +1024,7 @@ impl ShipyardScreen {
         } else {
             Vec::new()
         };
+        let grid = ShipyardGrid::open(&shipyard.rules, shipyard.rows.len());
         let mut screen = Self {
             laid,
             shipyard,
@@ -1034,8 +1033,7 @@ impl ShipyardScreen {
             bases,
             pictures: Vec::new(),
             style,
-            grid: CellGrid::default(),
-            clicks: CellClicks::default(),
+            grid,
             panel: None,
             request: None,
             asked_by_key: false,
@@ -1049,23 +1047,8 @@ impl ShipyardScreen {
             sounds: Vec::new(),
         };
         screen.read_pictures();
-        if screen.follows_shipyard_filter() {
-            screen.grid.clear();
-            screen.selected_changed();
-        } else {
-            screen.select(0);
-        }
+        screen.selected_changed();
         screen
-    }
-
-    /// Whether the grid's selection follows `_ShipyardFilter`'s, which can
-    /// be none ([`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)
-    /// by the engine).
-    fn follows_shipyard_filter(&self) -> bool {
-        self.shipyard
-            .rules
-            .source_for(nova_sim::RuleKey::GridSelection)
-            == RuleSource::Engine
     }
 
     /// The shipyard with mission offers, each shown in the offer dialog of
@@ -1186,7 +1169,7 @@ impl ShipyardScreen {
     /// the shipyard. The time since the last press on the grid runs on
     /// too, as `_ShipyardFilter` measures it by the event's clock.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
-        self.clicks.advance(dt);
+        self.grid.advance(dt);
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -1201,7 +1184,7 @@ impl ShipyardScreen {
     /// The selected cell's index, if anything is listed.
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.shipyard.rows.len())
+        self.grid.cells().selected(self.shipyard.rows.len())
     }
 
     /// The selected ship's row, if anything is listed.
@@ -1212,7 +1195,7 @@ impl ShipyardScreen {
     /// The grid's first row shown.
     #[must_use]
     pub fn top_row(&self) -> usize {
-        self.grid.top_row()
+        self.grid.cells().top_row()
     }
 
     /// The dialog, if it could be laid out.
@@ -1345,8 +1328,8 @@ impl ShipyardScreen {
             .and_then(|id| shipyard.rows.iter().position(|row| row.id == id));
         self.shipyard = shipyard;
         self.read_pictures();
-        if self.grid.highlighted() {
-            self.select(kept.unwrap_or(self.grid.selected_raw()));
+        if self.grid.cells().highlighted() {
+            self.select(kept.unwrap_or(self.grid.cells().selected_raw()));
         } else {
             self.selected_changed();
         }
@@ -1463,50 +1446,39 @@ impl ShipyardScreen {
         }
     }
 
-    /// Scrolls the grid a row down, or up, never past either end. By the
-    /// engine, a scroll that moves selects nothing, as items 12 and 13 set
-    /// the cell and the ship to -1 and empty the description
-    /// (`_DoShipyardDialog` @0x5f580-0x5f5be, @0x5f60b-0x5f670); the last
-    /// press is kept.
+    /// Scrolls the grid a row down, or up, never past either end; by the
+    /// engine, a scroll that moves selects nothing and empties the
+    /// description ([`ShipyardGrid::scroll`]).
     fn scroll(&mut self, down: bool) {
-        if self.grid.scroll(down, self.shipyard.rows.len()) && self.follows_shipyard_filter() {
-            self.grid.clear();
+        if self.grid.scroll(down, self.shipyard.rows.len()) {
             self.selected_changed();
         }
     }
 
     /// A press on the grid at list index `index`, listed or not, and says
-    /// whether the grid took it. A listed cell is selected; an empty one,
-    /// by the engine, selects nothing (`_ShipyardFilter` @0x60a5d-0x60a73)
-    /// and goes no further, and by the other reading is left to the
-    /// dialog, as the port ignored it. By either reading the press is
-    /// remembered by its visible position, an empty one forgetting the
-    /// last, and a second press on a listed position within
-    /// [`DOUBLE_CLICK_TICKS`](super::grid_clicks::DOUBLE_CLICK_TICKS)
-    /// opens Info ([`CellClicks`], @0x60cd7-0x60d71).
+    /// whether the grid took it ([`ShipyardGrid::press`]): a listed cell is
+    /// selected, and a double-click on it opens Info; an empty one selects
+    /// nothing by the engine and is left to the dialog by the other
+    /// reading.
     fn press_cell(&mut self, index: usize) -> bool {
-        let listed = index < self.shipyard.rows.len();
-        let position = self.grid.visible_position(index);
-        let double = self.clicks.press(listed.then_some(position));
-        if listed {
-            self.select(index);
-        } else if self.follows_shipyard_filter() {
-            self.grid.clear();
-            self.selected_changed();
-        } else {
-            return false;
-        }
-        if double {
-            self.open_info();
+        match self.grid.press(index, self.shipyard.rows.len()) {
+            PressOutcome::Selected { double } => {
+                self.selected_changed();
+                if double {
+                    self.open_info();
+                }
+            }
+            PressOutcome::Cleared => self.selected_changed(),
+            PressOutcome::FallThrough => return false,
         }
         true
     }
 
     /// The list index under `at` on the grid, listed or not
-    /// ([`CellGrid::cell_under`]).
+    /// ([`CellGrid::cell_under`](grid::CellGrid::cell_under)).
     fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_under(grid, at)
+        self.grid.cells().cell_under(grid, at)
     }
 
     /// The info panel's input: Done, Return and Escape close it.
@@ -1535,7 +1507,7 @@ impl ShipyardScreen {
         }
         let count = self.shipyard.rows.len();
         let selected = self.selected();
-        self.grid.draw_cells(
+        self.grid.cells().draw_cells(
             list,
             area,
             count,
@@ -1666,7 +1638,7 @@ impl Screen for ShipyardScreen {
     /// for the next offer runs down, the Info panel or the name prompt
     /// covering the shipyard while either is open.
     fn tick(&mut self, dt: Duration) {
-        self.clicks.advance(dt);
+        self.grid.advance(dt);
         let covered = self.panel.is_some() || self.naming.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
@@ -1697,7 +1669,7 @@ impl Screen for ShipyardScreen {
             list,
             laid.dialog.item_bounds(SCROLL_UP_ITEM),
             laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
-            self.grid.can_scroll(count),
+            self.grid.cells().can_scroll(count),
         );
         laid.dialog.draw(list);
         self.draw_panel(laid, list);

@@ -21,7 +21,7 @@
 //! which the port's comm dialog stands in for.
 //!
 //! Its grid's selection follows
-//! [`RuleKey::GridSelection`] as the shipyard's does (see
+//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) as the shipyard's does (see
 //! [`shipyard`](super::shipyard)): by the engine it opens with nothing
 //! selected, and an empty cell pressed or a scroll that moves selects
 //! nothing; by the other reading it opens on the first cell and keeps
@@ -44,19 +44,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
-use nova_sim::{HireList, HireRow, RuleKey, RuleSource, ShipId};
+use nova_sim::{HireList, HireRow, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
-use super::grid::{
-    self, CellGrid, GridColors, INSET, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
-};
-use super::grid_clicks::CellClicks;
+use super::grid::{self, GridColors, INSET, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text};
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
     INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
     ShipyardCatalog, open_panel, ship_picture,
 };
+use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -144,9 +142,8 @@ pub struct HireScreen {
     /// Each ship's base image, read once.
     bases: Vec<(ShipId, i16)>,
     style: ButtonStyle,
-    grid: CellGrid,
-    /// The last cell position pressed, for a double-click.
-    clicks: CellClicks,
+    /// The grid, its selection as `_ShipyardFilter` keeps it.
+    grid: ShipyardGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
     /// The ship asked for, until it is taken.
@@ -165,7 +162,7 @@ impl HireScreen {
     /// ship's picture and description read from `catalog`, which gives
     /// the ships' base images once, now. By the engine nothing is
     /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
-    /// reading of [`RuleKey::GridSelection`], read from `list`'s rules,
+    /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection), read from `list`'s rules,
     /// the first cell is.
     #[must_use]
     pub fn new(
@@ -209,6 +206,7 @@ impl HireScreen {
         } else {
             Vec::new()
         };
+        let grid = ShipyardGrid::open(&list.rules, list.rows.len());
         let mut screen = Self {
             laid,
             list,
@@ -216,27 +214,15 @@ impl HireScreen {
             catalog: CatalogHandle(catalog),
             bases,
             style,
-            grid: CellGrid::default(),
-            clicks: CellClicks::default(),
+            grid,
             panel: None,
             order: None,
             closed: false,
             description_request: None,
             sounds: Vec::new(),
         };
-        if screen.follows_shipyard_filter() {
-            screen.grid.clear();
-            screen.selected_changed();
-        } else {
-            screen.select(0);
-        }
+        screen.selected_changed();
         screen
-    }
-
-    /// Whether the grid's selection follows `_ShipyardFilter`'s, which can
-    /// be none ([`RuleKey::GridSelection`] by the engine).
-    fn follows_shipyard_filter(&self) -> bool {
-        self.list.rules.source_for(RuleKey::GridSelection) == RuleSource::Engine
     }
 
     /// The ships shown.
@@ -248,7 +234,7 @@ impl HireScreen {
     /// The selected cell's index, if anything is listed.
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.list.rows.len())
+        self.grid.cells().selected(self.list.rows.len())
     }
 
     /// The selected ship's row, if anything is listed.
@@ -259,7 +245,7 @@ impl HireScreen {
     /// The grid's first row shown.
     #[must_use]
     pub fn top_row(&self) -> usize {
-        self.grid.top_row()
+        self.grid.cells().top_row()
     }
 
     /// The dialog, if it could be laid out.
@@ -327,13 +313,6 @@ impl HireScreen {
     pub fn cell_bounds(&self, index: usize) -> Option<Bounds> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
         Some(grid::cell_bounds(grid, index))
-    }
-
-    /// Selects cell `index`, or the last when there is no such cell, and
-    /// scrolls the grid to show it.
-    fn select(&mut self, index: usize) {
-        self.grid.select(index, self.list.rows.len());
-        self.selected_changed();
     }
 
     /// Greys Hire Escort when the selected ship cannot be hired, and Info
@@ -422,42 +401,35 @@ impl HireScreen {
     /// engine, a scroll that moves selects nothing, as the shipyard's
     /// does (`_DoShipyardDialog` @0x5f580-0x5f5be, @0x5f60b-0x5f670).
     fn scroll(&mut self, down: bool) {
-        if self.grid.scroll(down, self.list.rows.len()) && self.follows_shipyard_filter() {
-            self.grid.clear();
+        if self.grid.scroll(down, self.list.rows.len()) {
             self.selected_changed();
         }
     }
 
     /// A press on the grid at list index `index`, listed or not, and says
     /// whether the grid took it, as the shipyard's does
-    /// ([`ShipyardScreen`](super::shipyard::ShipyardScreen)): a listed cell
-    /// is selected; an empty one selects nothing by the engine and is left
-    /// to the dialog by the other reading; and a second press on a listed
-    /// position soon after the first opens Info ([`CellClicks`],
-    /// `_ShipyardFilter` @0x60a5d-0x60a73, @0x60cd7-0x60d71).
+    /// ([`ShipyardGrid::press`]): a listed cell is selected, and a
+    /// double-click on it opens Info; an empty one selects nothing by the
+    /// engine and is left to the dialog by the other reading.
     fn press_cell(&mut self, index: usize) -> bool {
-        let listed = index < self.list.rows.len();
-        let position = self.grid.visible_position(index);
-        let double = self.clicks.press(listed.then_some(position));
-        if listed {
-            self.select(index);
-        } else if self.follows_shipyard_filter() {
-            self.grid.clear();
-            self.selected_changed();
-        } else {
-            return false;
-        }
-        if double {
-            self.open_info();
+        match self.grid.press(index, self.list.rows.len()) {
+            PressOutcome::Selected { double } => {
+                self.selected_changed();
+                if double {
+                    self.open_info();
+                }
+            }
+            PressOutcome::Cleared => self.selected_changed(),
+            PressOutcome::FallThrough => return false,
         }
         true
     }
 
     /// The list index under `at` on the grid, listed or not
-    /// ([`CellGrid::cell_under`]).
+    /// ([`CellGrid::cell_under`](grid::CellGrid::cell_under)).
     fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_under(grid, at)
+        self.grid.cells().cell_under(grid, at)
     }
 
     /// The shown cells, each its name's lines, then its frame in `GridDim`;
@@ -471,7 +443,7 @@ impl HireScreen {
         };
         let count = self.list.rows.len();
         let selected = self.selected();
-        self.grid.draw_cells(
+        self.grid.cells().draw_cells(
             list,
             area,
             count,
@@ -559,7 +531,7 @@ impl Screen for HireScreen {
 
     /// The time since the last press on the grid runs on.
     fn tick(&mut self, dt: Duration) {
-        self.clicks.advance(dt);
+        self.grid.advance(dt);
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -587,7 +559,7 @@ impl Screen for HireScreen {
             list,
             laid.dialog.item_bounds(SCROLL_UP_ITEM),
             laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
-            self.grid.can_scroll(count),
+            self.grid.cells().can_scroll(count),
         );
         laid.dialog.draw(list);
         if let Some(panel) = &self.panel {

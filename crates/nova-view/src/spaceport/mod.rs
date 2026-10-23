@@ -34,6 +34,8 @@
 //!   description.
 //! - [`grid_clicks`]: the shipyard's and the hire screen's double-click
 //!   on a cell, which opens Info.
+//! - [`shipyard_grid`]: the shipyard's and the hire screen's grid
+//!   selection, as `_ShipyardFilter` keeps it for both.
 //! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
 //!   their dialogs in, over themselves.
 //! - [`port_map`]: the [`PortMap`] the spaceport asks for, the bar's or a
@@ -59,6 +61,7 @@ pub mod port_map;
 pub mod quantity_ask;
 pub mod service;
 pub mod shipyard;
+mod shipyard_grid;
 pub mod trade;
 pub mod view;
 
