@@ -595,5 +595,5 @@ exclude_re = [
     # the next one lets the cell move on, but the step back after it
     # (@0x5835a-0x583b8) returns to the last listed, the cell it left, so
     # the filter's own check (@0x5823c-0x5824a) changes nothing seen.
-    "nova-view/src/spaceport/grid_arrows\\.rs:167:37: replace \\+ with \\* in filter$",
+    "nova-view/src/spaceport/grid_arrows\\.rs:154:37: replace \\+ with \\* in filter$",
 ]
