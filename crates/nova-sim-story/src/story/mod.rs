@@ -3121,6 +3121,140 @@
 //! - **Hypergates**: the gate branch's state is these same three fields,
 //!   so a gate keeps its sprite across systems and does not step while
 //!   not shown.
+//!
+//! ## Built by stellar-fidelity phase 13
+//!
+//! A stellar with a `Weapon` defends itself: each pass, after the ship
+//! loop and before the beams, it fires at the nearest ship threatening it,
+//! leading it (`nova_sim_combat::combat::stellar_guns`, the session's
+//! `stellar_guns` module).
+//!
+//! - **Which stellars.** Each the player's system lists, in `NavDefs`
+//!   order, that is active (its holder visible), not destroyed and armed
+//!   with a `wëap` the session holds. A stellar another visible system
+//!   holds still fires, unshown, as the original tests no owner.
+//! - **Who is a threat.** Nobody, to a dominated stellar. An NPC jumping
+//!   in is none. A `Flags2` 0x0200 stellar waits for a defence ship of its
+//!   own, which the engine never spawns, so the four stock ones never
+//!   fire. Any other NPC is a threat when it is an enemy of the stellar's
+//!   own government. The player and the ships it leads directly are
+//!   judged by the player's record in the system (by `LegalRecords`),
+//!   against the `CrimeTol` and xenophobia of the stellar's government or
+//!   else its system's, and by whether the player's class government is
+//!   an enemy of the stellar's own; the stellar's own government's peace
+//!   blessing, the effective government's IFF mark and the player's dock
+//!   request at it spare them.
+//! - **The shot.** The nearest threat in range, not cloaked, and not
+//!   disabled for a disable-only or massless weapon, is fired at from the
+//!   stellar's centre at the lead angle, plus the inaccuracy; the shot is
+//!   no ship's (source -1), so it hits only its target and its hits are
+//!   no one's crime. Its reload is the weapon's, or its burst reload at a
+//!   burst's end. Each shot is heard from the stellar at priority 5,
+//!   looped or not.
+//! - **The timers** outlive the system, are zeroed for every active
+//!   stellar each day and are never saved.
+//! - **Readings.** No key. The routine's oddities (escorts weighed by the
+//!   player's standing, the blessing read from the stellar's own
+//!   government alone, the class test against the stellar's own
+//!   government) are the original's, and no Bible text gives another
+//!   reading. The record goes through `LegalRecords` and the full shot
+//!   table through `CombatCaps`, as everywhere else. `PdHostility`'s other
+//!   reading now calls a shot no ship launched hostile unasked, as its
+//!   firer is only a placeholder.
+//!
+//! ## Checked for stellar-fidelity phase 13
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386). Layouts: spöb
+//! stride 0x498 (`*0x3b5010`), ship 0xc940 (`*0x3b5138`, slot 0 the
+//! player), wëap 0xc8, gövt 0x88, sÿst 0x1fc, shot 0x48 × 128
+//! (`*0x3b5474`).
+//!
+//! - **Where it runs.** `_DoPlayGameWork` calls `_HandleStellarWeapons`
+//!   once, @0x444d7, after `_HandleStellarSprites` @0x444d2 and before
+//!   `_HandleAsteroids` @0x444f5, `_HandleGravity` @0x44509 and
+//!   `_HandleBeams` @0x4453d, on both passes. Landed, nothing calls it.
+//! - **`_HandleStellarWeapons`** (@0x2ef3a-0x2f5d1):
+//!   - returns at once when `*0x3b523c` is set (@0x2ef46), which only
+//!     `_PrepareAllSprites` sets, never around this call;
+//!   - walks the player's system's 16 `NavDefs` (@0x2ef7e-0x2efdb),
+//!     skipping -1, a stellar not active (+0x44, set @0x32c42/@0x32cdf),
+//!     one with no weapon (+0x2c = -1; `_LoadObjectData`
+//!     @0x773f3-0x777b2 makes a `Weapon` of 127 or less -1, and any other
+//!     the index ID − 128 with no upper bound) and a destroyed one
+//!     (`_StellarIsDestroyed` @0x2efd4);
+//!   - counts the float reload +0x494 down by `_gSpeedMult` while it is
+//!     above 0, doing nothing else (@0x2efee-0x2eff9, @0x2f5a1-0x2f5b2);
+//!   - picks the nearest ship of slots 0-63 that is active, not cloaked
+//!     (@0x2f074), a threat (@0x2f096), within the weapon's range +0x5c
+//!     squared in f32 (@0x2f0b3-0x2f0c4) and, for a disable-only
+//!     (`Flags2` 0x1000) or massless (`MassDmg` 0) weapon
+//!     (@0x2f01e-0x2f033), not disabled (@0x2f0d6); a new best needs a
+//!     strictly smaller distance (@0x2f003-0x2f11a);
+//!   - takes the first shot slot of life below -1.0 (@0x2f120-0x2f151),
+//!     or skips the stellar with none;
+//!   - builds the shot (@0x2f157-0x2f2ed): at the stellar's whole-pixel
+//!     place, at rest, source -1 (+0x2c), aimed at the target (+0x2a),
+//!     disable-only by the weapon (+0x44, @0x2f1f1), life `Count`, the
+//!     jam +0x30 and +0x24/+0x32/+0x36 zeroed, the spin timer +0x1c zeroed
+//!     (@0x2f26d), the spin start by `Flags` 0x0004, the decay seed, the
+//!     system and durability max(`Durability`, 0); no miss roll (+0x42)
+//!     and no sensor-interference roll;
+//!   - aims it at `_CalcSpobLeadAngle` plus `Rand(2i) − i` for an
+//!     `Inaccuracy` above 0, wrapped once (@0x2f2f1-0x2f3c9), and sends it
+//!     at `_Accel(trunc(heading), Speed)` from rest (@0x2f3ce-0x2f3fe);
+//!   - rolls `Rand(JamVuln + 1)` per type above 0 (@0x2f40c-0x2f454);
+//!   - puts it in the shot layer whatever its guidance (@0x2f46f);
+//!   - sets the reload to `trunc(Reload)`, or, once a bursting weapon's
+//!     count +0x2e reaches `_WeaponBurstInterval(weapon, 1)` (@0x831c), to
+//!     `BurstReload`, the count back to 0 (@0x2f4be-0x2f545);
+//!   - plays `_PlaySoundDistance(-1, snd, 5, stellar, player)`
+//!     (@0x2f553-0x2f59a), with no looped test.
+//!   - +0x494 and +0x2e are zeroed for every active stellar by the daily
+//!     step (`_IncrementGameTime` @0xb5df, @0xb5ed) and `_InitObjects`
+//!     (@0x1c902, @0x1c90f), and never saved.
+//! - **`_IsThreatToStellar(ship, stellar)`** (@0x9ef7-0xa0ae), in order:
+//!   a dominated stellar (+0x46) sees no threat (@0x9f0c); an NPC jumping
+//!   in (`_AIIsShipJumpingIn` @0x82f12, goal 8) is none (@0x9f16-0x9f2a);
+//!   for `Flags2` 0x0200 (@0x9f30) only the player and the ships it leads
+//!   directly are threats, and only while +0x47 is set (@0x9f36-0x9f5c),
+//!   which `_DoPlayGameWork` sets each frame for the stellar an active NPC
+//!   defends (ship +0x8c, @0x443d4-0x4444f); any other NPC is a threat by
+//!   `_GovtEnemies(stellar Govt, ship govt)` (@0x9f61-0x9f73 → @0xa080);
+//!   the player's side by `G` = the stellar's government or else the
+//!   system's (none: no threat), `_playerRecord[system]` (@0x9fb8) below
+//!   −`CrimeTol(G)` (@0x9fe3-0x9feb), else for a xenophobic `G` below 0
+//!   (@0x9fed-0x9ff8), else `_GovtEnemies(class +0x9f4, stellar Govt)`
+//!   (@0x9ffa-0xa028); spared by the inlined `_PlayerBlessedByGovt(own,
+//!   0)` (@0xa02e-0xa04a, 0 for -1, so a system government's blessing
+//!   never spares), `G`'s +0x83 (@0xa05f-0xa06a) or `_dockTarget` being
+//!   the stellar (@0xa06e-0xa07a). No sound, no `_Rand`.
+//! - **`_CalcSpobLeadAngle(stellar, ship)`** (@0x2b2f0-0x2b42e): the
+//!   bearing for a stellar with no weapon, else the table angle to where
+//!   the ship will be after d / speed in f32, a rocket's timing by
+//!   `_CalcLeadAngle`'s doubles (0xdd540-0xdd558), with no firer velocity
+//!   and no guidance gate. No sound, no `_Rand`.
+//! - **Stock.** 95 `spöb` carry a `Weapon` of 128 or more (196 ×15, 197
+//!   ×27, 159 ×22, 199 ×21, 198 ×9, 131 ×1); 7 more carry 0, none. Earth
+//!   128, Port Kane 137, Pyrogenesis I 161 and New Ireland 508 have
+//!   `Flags2` 0x0200. None is disable-only, planet-type or bursting; the
+//!   Enormous Ion Turret (198) is massless.
+//! - **Left out**, each with its owner:
+//!   - +0x47, the defence ship in the system (@0x9f30-0x9f5c; set
+//!     @0x44411-0x4444f, @0x3d4a8): the engine spawns no stellar defence
+//!     ships, so it is always clear and the four stock 0x0200 stellars
+//!     never fire; the gate is built and fed false. Task
+//!     `planet-domination`.
+//!   - +0x46, domination by a hail (@0x9f0c): the engine has only
+//!     `Flags2` 0x0020, which is fed. Task `planet-domination`.
+//!   - a `Weapon` past the last `wëap` (@0x777a9): a read past the table,
+//!     a memory-layout accident; the engine gives that stellar no gun.
+//!   - the frozen-flag test `*0x3b523c` (@0x2ef46): never set when the
+//!     routine runs.
+//!   - the player's own cloak: none until task `cloaking-device`, then it
+//!     applies with no change here.
+//!   - shot fields with no engine state: the decay seed +0x18, the system
+//!     +0x2e, the zeroed +0x24/+0x32/+0x36, the collide proc and frame
+//!     clone (@0x2f487, @0x2f4b9); the spin start +0x34 is the view's.
 
 //! # Mission lifecycle
 //!

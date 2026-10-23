@@ -249,7 +249,7 @@ impl Combat {
     /// player's system's `NavDefs` order, fires at its target among
     /// `fighters` as its timer allows, by `arena`'s arsenal and
     /// governments, its inaccuracy and jamming rolls drawn on `chance`
-    /// (see [`Combat::guns_fire`]). The session runs it after the ship
+    /// (see `Combat::guns_fire`). The session runs it after the ship
     /// loop and before `_HandleBeams`, on either pass, and keeps each
     /// gun's timer.
     pub fn fire_stellar_guns(

@@ -30,7 +30,7 @@
 //!   the stellar the player asked to dock at.
 //!
 //! **The timers** ([`GunTimer`], the original's +0x494 and +0x2e) are kept
-//! on [`Space`](super::Space) by stellar, across systems, and zeroed for
+//! on [`Space`] by stellar, across systems, and zeroed for
 //! every active stellar by the daily step (`_IncrementGameTime` @0xb5df,
 //! @0xb5ed). They are never saved, so a new or loaded pilot starts with
 //! none, as `_InitObjects` zeroes them (@0x1c902, @0x1c90f).

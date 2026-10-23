@@ -65,8 +65,10 @@
 //!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
 //!   (`landing::cleared`, `mission::dominated`, `Chart::markup`), and
 //!   the stored byte is task planet-domination's;
-//! - +0x47, the defence fleet launched, cleared for every stellar
-//!   (@0x32d5d): task planet-domination;
+//! - +0x47, a defence ship of the stellar in the system, set and
+//!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
+//!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
+//!   for a `Flags2` 0x0200 stellar (@0x9f36): task planet-domination;
 //! - unloading the master sprites no longer needed (@0x32d74-0x32e4e):
 //!   nothing observable, not modelled;
 //! - the sprite slots and their fallback frames (@0x32e54-0x33331): the

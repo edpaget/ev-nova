@@ -26,7 +26,9 @@
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
 //!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); of the
 //!    rules below only rule 8 applies to it, as the branch jumps there,
-//!    and rules 9 and 10 pass for a firer of -1.
+//!    and rules 9 and 10 pass for a firer of -1. Besides a shot turned on
+//!    its firer and a sub-munition of one, a stellar's gun launches such
+//!    shots ([`stellar_guns`](super::stellar_guns)).
 //!
 //! Every shot, a ship's or not, also never hits (rule 8) a ship whose
 //! class's planet-type bit (`Flags` 0x0400) differs from its weapon's
