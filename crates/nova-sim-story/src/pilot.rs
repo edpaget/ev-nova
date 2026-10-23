@@ -99,6 +99,7 @@ use crate::outfit_effects::Rgb15;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
+use crate::trade_dialog::MissionLoad;
 
 /// How far a system is explored: the original's `sÿst` +0x90, which
 /// takes 0, 1 or 2 and is only ever raised.
@@ -142,6 +143,10 @@ pub struct Pilot {
     pub reserves: Reserves,
     /// The systems still to jump to, in order, ending at the destination.
     pub course: Vec<SystemId>,
+    /// The system the course was last started or advanced from: the
+    /// original's course slot 0 (`_hyperRoute`, 0x3b51c8), where `None`
+    /// is -1. `course` holds the original's slots 1 and up.
+    pub course_start: Option<SystemId>,
     /// Every system the pilot has been in: those at
     /// [`ExploredLevel::Explored`] or above.
     pub explored: BTreeSet<SystemId>,
@@ -256,6 +261,7 @@ impl Pilot {
             cash: i64::from(character.cash.max(0)),
             reserves: stats.full(),
             course: Vec::new(),
+            course_start: None,
             explored: BTreeSet::from([system]),
             charted: BTreeSet::new(),
             reinforcement_days: BTreeMap::new(),
@@ -431,6 +437,28 @@ impl Pilot {
     #[must_use]
     pub fn course(&self) -> &[SystemId] {
         &self.course
+    }
+
+    /// The system the course was last started or advanced from (see
+    /// [`Pilot::course_start`](#structfield.course_start)).
+    #[must_use]
+    pub fn course_start(&self) -> Option<SystemId> {
+        self.course_start
+    }
+
+    /// Empties the course, its start included: all 32 of the original's
+    /// slots -1.
+    pub fn clear_course(&mut self) {
+        self.course.clear();
+        self.course_start = None;
+    }
+
+    /// Empties the course's hops and starts it at `system`, as Clear Route
+    /// (@0x12c74-0x12c98) and the gate exits (@0x63e0e-0x63e3c,
+    /// @0x64708-0x64731) do.
+    pub fn restart_course(&mut self, system: SystemId) {
+        self.course.clear();
+        self.course_start = Some(system);
     }
 
     /// Every system the pilot has been in, by ascending ID.
@@ -636,7 +664,8 @@ impl LegalRecords for Pilot {
 }
 
 /// The pilot at an exchange: its cash, the goods it holds, the mission
-/// cargo aboard ([`Pilot::total_cargo`]) and the events under way.
+/// cargo aboard ([`Pilot::total_cargo`]), each mission slot's cargo and
+/// the events under way.
 impl Trader for Pilot {
     fn cash(&self) -> i64 {
         self.cash
@@ -652,6 +681,19 @@ impl Trader for Pilot {
 
     fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent> {
         &self.events
+    }
+
+    /// Each held mission slot's cargo, in slot order: whether it is
+    /// aboard, its cargo type and its tons.
+    fn mission_loads(&self) -> Vec<MissionLoad> {
+        self.missions
+            .iter()
+            .map(|(_, active)| MissionLoad {
+                aboard: active.aboard,
+                cargo_type: active.cargo_type,
+                tons: active.cargo_tons,
+            })
+            .collect()
     }
 
     fn cash_mut(&mut self) -> &mut i64 {
@@ -712,6 +754,28 @@ mod tests {
         assert_eq!(pilot.stellar(), None);
         assert_eq!(pilot.date(), GameDate::from_start(START));
         assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn clearing_the_course_empties_its_hops_and_its_start() {
+        let mut pilot =
+            Pilot::new(&starting([Some(131), None, None, None]), "Ada").expect("starts");
+        pilot.course = vec![SystemId(132)];
+        pilot.course_start = Some(SystemId(131));
+        pilot.clear_course();
+        assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn restarting_the_course_empties_its_hops_and_starts_it_at_a_system() {
+        let mut pilot =
+            Pilot::new(&starting([Some(131), None, None, None]), "Ada").expect("starts");
+        pilot.course = vec![SystemId(132)];
+        pilot.restart_course(SystemId(133));
+        assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), Some(SystemId(133)));
     }
 
     #[test]
@@ -1320,5 +1384,39 @@ mod tests {
         assert_eq!(pilot.cash(), 750);
         assert_eq!(pilot.held(Good::Commodity(5)), 2);
         assert_eq!(pilot.held(Good::Commodity(3)), 7);
+    }
+
+    #[test]
+    fn the_trader_port_gives_each_mission_slots_cargo() {
+        use crate::mission::ActiveMission;
+        use crate::mission::fixture::carrying;
+        use crate::trade_dialog::MissionLoad;
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(Trader::mission_loads(&pilot), []);
+        pilot.missions.put(3, carrying(140, 5));
+        pilot.missions.put(
+            1,
+            ActiveMission {
+                cargo_type: None,
+                aboard: false,
+                ..carrying(141, -2)
+            },
+        );
+        assert_eq!(
+            Trader::mission_loads(&pilot),
+            [
+                MissionLoad {
+                    aboard: false,
+                    cargo_type: None,
+                    tons: -2,
+                },
+                MissionLoad {
+                    aboard: true,
+                    cargo_type: Some(0),
+                    tons: 5,
+                },
+            ],
+            "in slot order"
+        );
     }
 }

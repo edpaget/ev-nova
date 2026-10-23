@@ -32,7 +32,9 @@
 //! ([`Session::take_quotes`]), with a beep ([`SimSound::HailQuote`]).
 //! A person escorting the player says none, nor does one gone for good
 //! (@0x33c62), as one whose mission was accepted with `Flags` 0x0100
-//! is. One of `Flags` 0x0400 says it only while its `LinkMission` is
+//! is, nor one whose ship doesn't see the player (a cloaked player,
+//! `_ShipVisibleToShip` @0x33c87, which gates every quote and the 0x0400
+//! check below). One of `Flags` 0x0400 says it only while its `LinkMission` is
 //! available from a ship (`_HandleShip` @0x33dc7-0x33e31), its
 //! `AvailBits` by the engine the verdict cached at the last refresh or
 //! check of it ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits)).
@@ -80,7 +82,7 @@ use std::rc::Rc;
 
 use super::missions::TextSource;
 use super::{Outbox, Session, Setup, Space, Statics, hire};
-use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
+use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch, SystemId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -98,9 +100,14 @@ use crate::traffic::npc::{Mode, Npc, NpcId, NpcPerson};
 /// frame (`_HandleShip` @0x33c45-0x33cb4, @0x33dc7-0x33de0), naming its
 /// slot around the check: a person of a `LinkMission` (`linked`) and
 /// `Flags` 0x0400, with a hail quote, flying, while the player is not
-/// jumping. Its other gates (the ship seen by the player's) are not
-/// modelled.
-fn checks_mission(npc: &Npc, person: &NpcPerson, linked: bool, player_jumping: bool) -> bool {
+/// jumping and the ship sees it (`seen`, `_ShipVisibleToShip` @0x33c87).
+fn checks_mission(
+    npc: &Npc,
+    person: &NpcPerson,
+    linked: bool,
+    player_jumping: bool,
+    seen: bool,
+) -> bool {
     let flying = npc.mode == Mode::Flying
         && !matches!(
             npc.condition,
@@ -111,6 +118,7 @@ fn checks_mission(npc: &Npc, person: &NpcPerson, linked: bool, player_jumping: b
         && person.hail_quote != -1
         && flying
         && !player_jumping
+        && seen
 }
 
 /// A person's hail quote said, for the flight's message line.
@@ -253,11 +261,20 @@ impl Session {
                         .traffic
                         .person(person.id)
                         .and_then(|spawned| spawned.record.link_mission);
-                    mission_checked |=
-                        checks_mission(npc, &person, linked.is_some(), self.jumping().is_some());
+                    // The ship's sight of the player gates the whole
+                    // quote block (`_HandleShip` @0x33c87).
+                    let seen = around.sees(npc, ShipRef::Player);
+                    mission_checked |= checks_mission(
+                        npc,
+                        &person,
+                        linked.is_some(),
+                        self.jumping().is_some(),
+                        seen,
+                    );
                     let view = QuoteView {
                         liked: likes_player(npc, &around, self.mission_hail(npc)),
                         player_jumping: self.jumping().is_some(),
+                        seen,
                         player_ai,
                         mission_available: linked.is_some_and(|mission| {
                             self.quoted_mission_available(MissionId(mission))
@@ -402,10 +419,12 @@ impl Session {
     /// session held every grudge at its settle step before weapons-fidelity
     /// phase 45. Record only, not filed: in the original these hits were
     /// answered in turn, but the NPCs are discarded with the system, so
-    /// their reactions are never seen, and the grudge is kept.
-    pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike]) {
+    /// their reactions are never seen, and the grudge is kept. The NPCs
+    /// fly among the world of `left`, the system the strikes are left in
+    /// ([`Session::world_in`]).
+    pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike], left: SystemId) {
         let hit: Vec<NpcId> = {
-            let world = self.world();
+            let world = self.world_in(left);
             let around = world.around(self.space.traffic.npcs());
             strikes
                 .iter()
@@ -2032,6 +2051,47 @@ mod tests {
         );
         session.space.traffic.npcs_mut()[0].condition = Condition::Intact;
         assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
+    /// The player fully cloaked, or not, as `cloaked` says.
+    fn cloak_player(session: &mut Session, cloaked: bool) {
+        session.ship.cloak.cloak = if cloaked {
+            crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            }
+        } else {
+            crate::cloak::Cloak::default()
+        };
+    }
+
+    #[test]
+    fn a_0x0400_person_checks_its_mission_only_while_it_sees_the_player() {
+        // `_ShipVisibleToShip(player, ship)` @0x33c87 gates the filter.
+        let (catalog, mut session) = linked_quoting();
+        cloak_player(&mut session, true);
+        assert_eq!(
+            osn_after_tick(&catalog, &mut session),
+            "Earlier",
+            "a cloaked player out of sight: no check"
+        );
+        cloak_player(&mut session, false);
+        assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
+    #[test]
+    fn a_person_says_no_hail_quote_to_a_cloaked_player_it_cannot_see() {
+        let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
+        session.space.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        cloak_player(&mut session, true);
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[0, 0]),
+            (vec![], vec![]),
+            "no quote, no draw"
+        );
+        cloak_player(&mut session, false);
+        let (said, _) = quote_tick(&catalog, &mut session, &[1, 0]);
+        assert_eq!(said.len(), 1, "seen, the attack quote is due");
     }
 
     #[test]

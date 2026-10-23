@@ -15,7 +15,9 @@
 //!    `TETextBox` (@0x47d7b, @0x47e2c) inverted (@0x47d83, @0x47e34):
 //!    white Geneva text on an opaque black box, flush left, as written,
 //!    its tags not filled. The story's box covers the commercial's last
-//!    10 px, as it is drawn second.
+//!    10 px, as it is drawn second. A `TETextBox` never scrolls, and a
+//!    line that straddles its bottom edge shows its top part ([`TextBox`]):
+//!    Geneva 10 shows four whole story lines and the top 4 px of a fifth.
 //!
 //! The screen beeps as it opens and as it closes (`_beepSnd[1]` @0x47f36
 //! and `_beepSnd[2]` @0x4814e, raised as [`UiSound::NewsOpened`] and
@@ -43,7 +45,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::DialogTemplate;
-use crate::ui::scroll_text::ScrollText;
+use crate::ui::text_box::TextBox;
 
 /// The news dialog's `DLOG` ID.
 pub const NEWS_DIALOG: i16 = 1014;
@@ -76,8 +78,8 @@ pub fn shown_news_picture(asked: i16, exists: impl Fn(i16) -> bool) -> Option<i1
 struct Laid {
     bounds: Bounds,
     picture: Option<i16>,
-    commercial: ScrollText,
-    story: ScrollText,
+    commercial: TextBox,
+    story: TextBox,
 }
 
 /// The news dialog, open over the bar.
@@ -105,7 +107,7 @@ impl NewsScreen {
             let left = bounds.min.x + SIDE_INSET;
             let right = bounds.max.x - SIDE_INSET;
             let boxed = |text: &str, top: f32, bottom: f32| {
-                ScrollText::new(
+                TextBox::new(
                     text,
                     Font::Geneva,
                     BODY_SIZE,
@@ -148,13 +150,13 @@ impl NewsScreen {
 
     /// The commercial line's box, if it could be laid out.
     #[must_use]
-    pub fn commercial(&self) -> Option<&ScrollText> {
+    pub fn commercial(&self) -> Option<&TextBox> {
         self.laid.as_ref().ok().map(|laid| &laid.commercial)
     }
 
     /// The story's box, if it could be laid out.
     #[must_use]
-    pub fn story(&self) -> Option<&ScrollText> {
+    pub fn story(&self) -> Option<&TextBox> {
         self.laid.as_ref().ok().map(|laid| &laid.story)
     }
 
@@ -406,6 +408,50 @@ mod tests {
         assert_eq!(first_text.0, "Buy Bibble");
         assert_eq!(first_text.2, Color::WHITE);
         assert_eq!(first_text.1, Point::new(ORIGIN.x + 10.0, ORIGIN.y + 140.0));
+    }
+
+    #[test]
+    fn a_long_story_shows_its_partly_clipped_last_line_inside_the_story_box() {
+        // 56 words of 4 characters: 11 a line in 280 px, so 6 lines.
+        let words: Vec<String> = (0..56).map(|n| format!("w{n:03}")).collect();
+        let news = News {
+            commercial: String::new(),
+            story: words.join(" "),
+        };
+        let screen = NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news, None);
+        let story = screen.story().expect("laid out");
+        assert!(story.lines().len() >= 6, "{:?}", story.lines());
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let plain: Vec<(String, f32)> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } => Some((text.clone(), origin.y)),
+                _ => None,
+            })
+            .collect();
+        let whole: Vec<(String, f32)> = (0..4)
+            .map(|n| (story.lines()[n].clone(), ORIGIN.y + 170.0 + 12.0 * n as f32))
+            .collect();
+        assert_eq!(plain, whole, "four whole lines, none at or below 226");
+        let clipped: Vec<_> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { clip, command } => Some((*clip, command.as_ref())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(clipped.len(), 1, "{clipped:?}");
+        let (clip, inner) = clipped[0];
+        assert_eq!(
+            clip,
+            Bounds::at(Point::new(ORIGIN.x + 10.0, ORIGIN.y + 170.0), 280.0, 56.0)
+        );
+        let DrawCommand::Text { text, origin, .. } = inner else {
+            panic!("not text: {inner:?}");
+        };
+        assert_eq!(text, &story.lines()[4]);
+        assert_eq!(*origin, Point::new(ORIGIN.x + 10.0, ORIGIN.y + 218.0));
     }
 
     #[test]

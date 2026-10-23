@@ -35,10 +35,9 @@ impl Colorize {
     /// narrowed to 5 bits as the display's RGB555 holds them.
     #[must_use]
     pub fn toward(level: u8, colour: u32) -> Self {
-        let channel = |shift: u32| ((colour >> shift) & 0xff) as u8 >> 3;
         Self {
             level,
-            rgb5: [channel(16), channel(8), channel(0)],
+            rgb5: crate::color::rgb555_channels(colour),
         }
     }
 

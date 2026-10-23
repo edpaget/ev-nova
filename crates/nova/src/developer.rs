@@ -1,5 +1,6 @@
 //! The developer settings: the port's own overlays on the flight screen,
-//! which the original does not draw, as the settings file turns them on.
+//! which the original does not draw, and the original's cheat mode, as
+//! the settings file turns them on.
 //!
 //! The settings file (the one that keeps the sound settings and the
 //! rules; see [`config`](crate::config)) holds them in one top-level
@@ -7,17 +8,20 @@
 //!
 //! ```json
 //! {
-//!   "developer": { "flight_title": true, "help_line": true }
+//!   "developer": { "flight_title": true, "help_line": true, "cheats": true }
 //! }
 //! ```
 //!
 //! - [`FLIGHT_TITLE`]: the system's name and `sÿst` ID at the top left of
 //!   flight.
 //! - [`HELP_LINE`]: the line of keys at the bottom of flight.
+//! - [`CHEATS`]: the original's cheat mode (`_cheatsActive` 0xdeb60),
+//!   which nothing in 1.1 turns on. For now it only shows the player
+//!   info's IDs.
 //!
-//! Both are off unless set to `true`. They are not [`Rulebook`] rules:
-//! neither reading is the original's. None of this is part of the pilot
-//! save.
+//! All are off unless set to `true`. They are not [`Rulebook`] rules:
+//! none is a different reading of the original. None of this is part of
+//! the pilot save.
 //!
 //! [`Rulebook`]: nova_sim::Rulebook
 
@@ -31,12 +35,13 @@ pub const DEVELOPER: &str = "developer";
 pub const FLIGHT_TITLE: &str = "flight_title";
 /// The developer setting that draws the flight's help line.
 pub const HELP_LINE: &str = "help_line";
+/// The developer setting that turns the original's cheat mode on.
+pub const CHEATS: &str = "cheats";
 
-/// The overlays the settings saved in `store` turn on, and the warnings
-/// to print.
+/// The developer settings saved in `store`, and the warnings to print.
 ///
 /// With no store, nothing saved, settings that cannot be read or are not
-/// a JSON object, or no [`DEVELOPER`] object, both are off, silently: the
+/// a JSON object, or no [`DEVELOPER`] object, all are off, silently: the
 /// sound settings' keeper warns about settings it cannot use. A
 /// [`DEVELOPER`] that is not an object, and a setting that is not a
 /// bool, are off, with a warning naming its key.
@@ -69,6 +74,7 @@ pub fn flight_overlays(
     let overlays = FlightOverlays {
         title: on(FLIGHT_TITLE),
         help: on(HELP_LINE),
+        cheats: on(CHEATS),
     };
     (overlays, warnings)
 }
@@ -107,6 +113,7 @@ mod tests {
     const OFF: FlightOverlays = FlightOverlays {
         title: false,
         help: false,
+        cheats: false,
     };
 
     #[test]
@@ -148,7 +155,8 @@ mod tests {
             (
                 FlightOverlays {
                     title: true,
-                    help: false
+                    help: false,
+                    cheats: false,
                 },
                 vec![]
             )
@@ -158,7 +166,8 @@ mod tests {
             (
                 FlightOverlays {
                     title: false,
-                    help: true
+                    help: true,
+                    cheats: false,
                 },
                 vec![]
             )
@@ -170,7 +179,8 @@ mod tests {
             (
                 FlightOverlays {
                     title: true,
-                    help: true
+                    help: true,
+                    cheats: false,
                 },
                 vec![]
             )
@@ -187,7 +197,8 @@ mod tests {
                 (
                     FlightOverlays {
                         title: false,
-                        help: true
+                        help: true,
+                        cheats: false,
                     },
                     vec![
                         "nova: the saved \"developer\".\"flight_title\" in memory is not true \
@@ -204,10 +215,63 @@ mod tests {
                 (
                     FlightOverlays {
                         title: true,
-                        help: false
+                        help: false,
+                        cheats: false,
                     },
                     vec![
                         "nova: the saved \"developer\".\"help_line\" in memory is not true or \
+                         false; leaving it off"
+                            .to_owned()
+                    ]
+                ),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn cheats_is_read_from_the_developer_object() {
+        assert_eq!(CHEATS, "cheats");
+        let cheating = FlightOverlays {
+            cheats: true,
+            ..OFF
+        };
+        assert_eq!(
+            overlays_of(r#"{"developer": {"cheats": true}}"#),
+            (cheating, vec![])
+        );
+        for text in [
+            r#"{"developer": {"cheats": false}}"#,
+            r#"{"developer": {"flight_title": false}}"#,
+            r#"{"cheats": true}"#,
+        ] {
+            assert_eq!(overlays_of(text), (OFF, vec![]), "{text}");
+        }
+        assert_eq!(
+            overlays_of(
+                r#"{"developer": {"flight_title": true, "help_line": true, "cheats": true}}"#
+            ),
+            (
+                FlightOverlays {
+                    title: true,
+                    help: true,
+                    cheats: true,
+                },
+                vec![]
+            )
+        );
+    }
+
+    #[test]
+    fn a_cheats_that_is_not_a_bool_is_off_with_a_warning() {
+        for value in [r#""true""#, "1", "null"] {
+            let text = format!(r#"{{"developer": {{"cheats": {value}, "help_line": true}}}}"#);
+            assert_eq!(
+                overlays_of(&text),
+                (
+                    FlightOverlays { help: true, ..OFF },
+                    vec![
+                        "nova: the saved \"developer\".\"cheats\" in memory is not true or \
                          false; leaving it off"
                             .to_owned()
                     ]

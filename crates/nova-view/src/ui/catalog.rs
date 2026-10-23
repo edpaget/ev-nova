@@ -1,6 +1,6 @@
 //! The widgets' ports: dialog templates from the interface file, and
-//! descriptions, the graphics they name and the button style from the
-//! game data, in the core's terms.
+//! descriptions, the graphics they name, the button style and picture
+//! sizes from the game data, in the core's terms.
 
 use std::rc::Rc;
 
@@ -35,6 +35,29 @@ pub trait DescriptionGraphics {
     /// say ([`DescMovie::from_desc`]); none when it names none, or the
     /// `dësc` is missing or does not decode.
     fn description_movie(&self, id: i16) -> Option<DescMovie>;
+}
+
+/// The sizes of the pictures a widget lays itself out around, such as
+/// the player info's background.
+pub trait PictureSizes {
+    /// `PICT` `id`'s width and height; none when it is missing or does
+    /// not decode.
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)>;
+}
+
+/// Borrowed picture sizes are picture sizes.
+impl<T: PictureSizes + ?Sized> PictureSizes for &T {
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).picture_size(id)
+    }
+}
+
+/// Shared picture sizes are picture sizes, so the app can read them from
+/// the game data it holds once.
+impl<T: PictureSizes + ?Sized> PictureSizes for Rc<T> {
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).picture_size(id)
+    }
 }
 
 /// Borrowed dialog resources are dialog resources.
@@ -178,6 +201,23 @@ mod tests {
     fn borrowed_and_shared_graphics_read_movies() {
         assert_eq!(movie(&Fake, 13), Some("13.mov".to_owned()));
         assert_eq!(movie(Rc::new(Fake), 14), Some("14.mov".to_owned()));
+    }
+
+    impl PictureSizes for Fake {
+        fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+            (id > 0).then_some((id.unsigned_abs().into(), 2))
+        }
+    }
+
+    fn size(pictures: impl PictureSizes, id: i16) -> Option<(u32, u32)> {
+        pictures.picture_size(id)
+    }
+
+    #[test]
+    fn borrowed_and_shared_picture_sizes_are_picture_sizes() {
+        assert_eq!(size(&Fake, 413), Some((413, 2)));
+        assert_eq!(size(Rc::new(Fake), 300), Some((300, 2)));
+        assert_eq!(size(Rc::new(Fake), -1), None);
     }
 
     #[test]

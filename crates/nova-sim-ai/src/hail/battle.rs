@@ -12,16 +12,18 @@ use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, NpcId};
 
 /// Request Assistance while the player is threatened (see the module
-/// docs), `target` being [`RuleKey::BattleHelpTarget`]'s reading and
-/// `brave_trader` [`RuleKey::BraveTraderBattleHelp`]'s, picking on
-/// `chance`.
+/// docs), `target` being [`RuleKey::BattleHelpTarget`]'s reading,
+/// `brave_trader` [`RuleKey::BraveTraderBattleHelp`]'s and `gone`
+/// [`RuleKey::BattleHelpGoneSlots`]'s, picking on `chance`.
 ///
 /// [`RuleKey::BattleHelpTarget`]: crate::RuleKey::BattleHelpTarget
 /// [`RuleKey::BraveTraderBattleHelp`]: crate::RuleKey::BraveTraderBattleHelp
+/// [`RuleKey::BattleHelpGoneSlots`]: crate::RuleKey::BattleHelpGoneSlots
 pub(super) fn defend(
     hail: &Hail,
     target: RuleSource,
     brave_trader: RuleSource,
+    gone: RuleSource,
     chance: &mut dyn Chance,
 ) -> Answer {
     if !hail.threatened_by_enemy {
@@ -29,7 +31,7 @@ pub(super) fn defend(
     }
     if hail.dispositions.battle_help {
         return on_my_way(Defence {
-            threat: enemy_threat_pick(hail, target, chance),
+            threat: enemy_threat_pick(hail, target, gone, chance),
             reinforce: true,
             drop_travel: false,
         });
@@ -55,7 +57,7 @@ pub(super) fn defend(
         return Answer::say(Reply::Comm(RATHER_NOT));
     }
     let defence = Defence {
-        threat: enemy_threat_pick(hail, target, chance),
+        threat: enemy_threat_pick(hail, target, gone, chance),
         reinforce: false,
         drop_travel: false,
     };
@@ -94,18 +96,31 @@ fn on_my_way(defence: Defence) -> Answer {
 /// helper or not; by the other reading only one whose government
 /// [`Governments::npc_enemies`](crate::govt::Governments::npc_enemies)
 /// finds an enemy of the helper's, as its name says. With none, nothing
-/// is drawn and there is no threat (+0x70 = -1, @0x82daa). It reads no
-/// active flag (+0xb8), so the original also counts a slot whose ship has
-/// gone but left those fields; the engine keeps no such slot
-/// (rdm:phase/crons-news-ranks-fidelity/phase-35-battle-help-counts-gone-slots).
+/// is drawn and there is no threat (+0x70 = -1, @0x82daa).
+///
+/// It reads no active flag (+0xb8), so the original also counts a slot
+/// whose ship left with those fields intact: a hostile person swapped for
+/// its mission ship on the hail (@0x62520), whose record the traffic keeps
+/// at its berth ([`traffic::vacated`](crate::traffic::vacated)). By
+/// `gone`, the reading of
+/// [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots),
+/// the engine counts those [`Hail::vacated_threats`] too, under the same
+/// government reading; by the other, only ships in the system. A helper
+/// sent at one says "Okay, I'm on my way." and lets it go at its next
+/// think, as no ship in the system answers to it.
 pub(crate) fn enemy_threat_pick(
     hail: &Hail,
     rule: RuleSource,
+    gone: RuleSource,
     chance: &mut dyn Chance,
 ) -> Option<NpcId> {
     let me = hail.npc.govt;
+    let vacated = hail
+        .vacated_threats()
+        .filter(|_| gone == RuleSource::Engine);
     let threats: Vec<NpcId> = hail
         .threats_to_player()
+        .chain(vacated)
         .filter(|other| rule == RuleSource::Engine || hail.govts.npc_enemies(me, other.govt))
         .map(|npc| npc.id)
         .collect();
@@ -152,6 +167,7 @@ mod tests {
     use crate::ai::Goal;
     use crate::catalog::{GovtId, GovtRecord};
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::govt::Governments;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::traffic::npc::{AiType, Npc};
@@ -490,18 +506,25 @@ mod tests {
     }
 
     #[test]
-    fn request_assistance_reads_both_battle_keys_from_the_rulebook() {
+    fn request_assistance_reads_all_three_battle_keys_from_the_rulebook() {
         assert_eq!(
             RequestAssistance::from_rulebook(&Rulebook::default()),
             engine()
         );
         let rulebook = Rulebook::default()
             .with_override(RuleKey::BattleHelpTarget, BIBLE)
-            .with_override(RuleKey::BraveTraderBattleHelp, BIBLE);
+            .with_override(RuleKey::BraveTraderBattleHelp, BIBLE)
+            .with_override(RuleKey::BattleHelpGoneSlots, BIBLE);
         let request = RequestAssistance::from_rulebook(&rulebook);
         assert_eq!(request.battle_help_target, BIBLE);
         assert_eq!(request.brave_trader_help, BIBLE);
+        assert_eq!(request.battle_help_gone, BIBLE);
         assert_eq!(request.quiet_hails, ENGINE);
+        let only_gone = Rulebook::default().with_override(RuleKey::BattleHelpGoneSlots, BIBLE);
+        let request = RequestAssistance::from_rulebook(&only_gone);
+        assert_eq!(request.battle_help_gone, BIBLE);
+        assert_eq!(request.battle_help_target, ENGINE);
+        assert_eq!(request.brave_trader_help, ENGINE);
     }
 
     // The target picks.
@@ -520,9 +543,268 @@ mod tests {
         (picked, chance.asked)
     }
 
-    /// `_AIFightEnemyThreatToPlayer`'s pick under `rule`.
+    /// `_AIFightEnemyThreatToPlayer`'s pick under `rule`, counting the
+    /// vacated berths by the engine.
     fn enemy(rule: RuleSource) -> impl Fn(&Hail, &mut dyn Chance) -> Option<NpcId> {
-        move |hail, chance| enemy_threat_pick(hail, rule, chance)
+        enemy_counting(rule, ENGINE)
+    }
+
+    /// `_AIFightEnemyThreatToPlayer`'s pick under `rule`, counting the
+    /// vacated berths by `gone`.
+    fn enemy_counting(
+        rule: RuleSource,
+        gone: RuleSource,
+    ) -> impl Fn(&Hail, &mut dyn Chance) -> Option<NpcId> {
+        move |hail, chance| enemy_threat_pick(hail, rule, gone, chance)
+    }
+
+    /// What `pick` picks among `npcs` and the vacated berths' last ships
+    /// `vacated` for NPC 1 of 140, drawing `draws`, and the draws asked.
+    fn picked_among(
+        npcs: &[Npc],
+        vacated: &[Npc],
+        draws: &[u32],
+        pick: impl Fn(&Hail, &mut dyn Chance) -> Option<NpcId>,
+    ) -> (Option<NpcId>, Vec<u32>) {
+        let govts = rivals();
+        let npc = helper(AiType::Warship);
+        let mut chance = Draws::of(draws);
+        let hail = Hail {
+            vacated,
+            ..threatened(&npc, npcs, &govts)
+        };
+        let picked = pick(&hail, &mut chance);
+        (picked, chance.asked)
+    }
+
+    /// NPC 7 of 142 (an enemy of 140), attacking the player, the last
+    /// ship of berth 5: a hostile person swapped for its mission ship.
+    fn swapped_out() -> Npc {
+        let mut npc = flying(7, Some(142), Goal::Attack(ShipRef::Player));
+        npc.target = Some(ShipRef::Player);
+        npc.berth = 5;
+        npc
+    }
+
+    #[test]
+    fn by_the_engine_the_enemy_pick_counts_and_picks_a_swapped_out_hostile_person() {
+        // @0x82c80-0x82dba test no active flag (+0xb8), and the swap
+        // clears only that (@0x62520).
+        let npcs = [pirate()];
+        let vacated = [swapped_out()];
+        let gone = enemy_counting(ENGINE, ENGINE);
+        assert_eq!(
+            picked_among(&npcs, &vacated, &[1], &gone),
+            (Some(NpcId(7)), vec![2])
+        );
+        assert_eq!(
+            picked_among(&npcs, &vacated, &[0], &gone),
+            (Some(NpcId(2)), vec![2])
+        );
+        assert_eq!(
+            picked_among(&[], &vacated, &[0], &gone),
+            (Some(NpcId(7)), vec![1]),
+            "alone"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_of_battle_help_gone_slots_only_ships_in_the_system_are_counted() {
+        let npcs = [pirate()];
+        let vacated = [swapped_out()];
+        for rule in [ENGINE, BIBLE] {
+            assert_eq!(
+                picked_among(&npcs, &vacated, &[0], enemy_counting(rule, BIBLE)),
+                (Some(NpcId(2)), vec![1]),
+                "{rule:?}"
+            );
+            assert_eq!(
+                picked_among(&[], &vacated, &[], enemy_counting(rule, BIBLE)),
+                (None, vec![]),
+                "{rule:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vacated_ship_that_does_not_threaten_the_player_is_not_counted() {
+        // +0x70 == 0 and AI state 3 or 4 (@0x82d77-0x82d8c), not
+        // `_IsDisabled` (@0x82d5a) or `_IsDying` (@0x82d6a).
+        let npcs = [pirate()];
+        let leaving = flying(7, Some(142), Goal::JumpOut);
+        let on_an_npc = flying(7, Some(142), Goal::Attack(ShipRef::Npc(NpcId(3))));
+        let mut disabled = swapped_out();
+        disabled.condition = Condition::Disabled;
+        let mut dying = swapped_out();
+        dying.condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        for npc in [leaving, on_an_npc, disabled, dying] {
+            let vacated = [Npc { berth: 5, ..npc }];
+            assert_eq!(
+                picked_among(&npcs, &vacated, &[0], enemy(ENGINE)),
+                (Some(NpcId(2)), vec![1]),
+                "{:?} {:?}",
+                vacated[0].goal,
+                vacated[0].condition
+            );
+        }
+    }
+
+    #[test]
+    fn a_vacated_berth_held_again_is_not_counted() {
+        // A ship taking the slot rewrites +0x70 and +0xc8c8; the traffic
+        // drops the record then, and the pick holds to it too.
+        let mut taken = pirate();
+        taken.berth = 5;
+        let npcs = [taken];
+        let vacated = [swapped_out()];
+        assert_eq!(
+            picked_among(&npcs, &vacated, &[0], enemy(ENGINE)),
+            (Some(NpcId(2)), vec![1]),
+            "berth 5 held by NPC 2"
+        );
+        // The helper's own slot (@0x82d36-0x82d48): the hailed helper, NPC
+        // 1, is not among `npcs`, and the pirate sits at another berth, so
+        // only the helper's own berth keeps the record out.
+        let mut elsewhere = pirate();
+        elsewhere.berth = 2;
+        let mut at_helpers = swapped_out();
+        at_helpers.berth = helper(AiType::Warship).berth;
+        assert_ne!(elsewhere.berth, at_helpers.berth);
+        assert_eq!(
+            picked_among(&[elsewhere], &[at_helpers], &[0], enemy(ENGINE)),
+            (Some(NpcId(2)), vec![1]),
+            "the helper's berth"
+        );
+    }
+
+    #[test]
+    fn under_battle_help_target_bible_a_vacated_ship_of_no_enemy_government_is_not_counted() {
+        let npcs = [pirate()];
+        let mut friend = swapped_out();
+        friend.govt = Some(GovtId(143));
+        assert_eq!(
+            picked_among(
+                &npcs,
+                &[friend.clone()],
+                &[0],
+                enemy_counting(BIBLE, ENGINE)
+            ),
+            (Some(NpcId(2)), vec![1])
+        );
+        assert_eq!(
+            picked_among(&npcs, &[friend], &[1], enemy_counting(ENGINE, ENGINE)),
+            (Some(NpcId(7)), vec![2]),
+            "by the engine any government"
+        );
+    }
+
+    #[test]
+    fn the_free_pick_never_counts_a_vacated_ship() {
+        // `_AIFightThreatToPlayer` asks `_IsThreatToPlayer` (@0x7f501),
+        // which tests +0xb8.
+        let npcs = [pirate()];
+        assert_eq!(
+            picked_among(&npcs, &[swapped_out()], &[0], threat_pick),
+            (Some(NpcId(2)), vec![1])
+        );
+    }
+
+    #[test]
+    fn a_vacated_threat_alone_does_not_threaten_the_player() {
+        // `_IsPlayerThreatened` (@0x8245c) and `_IsPlayerThreatenedByMyEnemy`
+        // (@0x824a0) test +0xb8.
+        let govts = rivals();
+        let npcs = [helper(AiType::Warship)];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&[], &npcs)
+        };
+        let talk = crate::hail::Conversation::open(
+            100_000,
+            false,
+            0xC000,
+            &mut Draws::of(&[3, 40, 1, 1, 0, 1]),
+        );
+        let vacated = [swapped_out()];
+        let hail = Hail {
+            vacated: &vacated,
+            ..Hail::new(
+                &npcs[0],
+                &around,
+                Dispositions::default(),
+                &talk,
+                None,
+                None,
+            )
+        };
+        assert!(!hail.player_threatened);
+        assert!(!hail.threatened_by_enemy);
+        let (_, asked) = pressed(engine(), &hail, &[]);
+        assert!(asked.is_empty(), "nothing drawn");
+    }
+
+    #[test]
+    fn rank_battle_help_sent_at_a_vacated_ship_still_calls_for_reinforcements() {
+        // @0x9636d follows the pick whatever it found.
+        let govts = rivals();
+        let npc = helper(AiType::Warship);
+        let vacated = [swapped_out()];
+        let hail = Hail {
+            dispositions: Dispositions {
+                battle_help: true,
+                ..Dispositions::default()
+            },
+            vacated: &vacated,
+            ..threatened(&npc, &[], &govts)
+        };
+        let (answer, asked) = pressed(engine(), &hail, &[0]);
+        assert_eq!(
+            answer,
+            Answer {
+                deed: Some(Deed::Defend(Defence {
+                    threat: Some(NpcId(7)),
+                    reinforce: true,
+                    drop_travel: false,
+                })),
+                ..says(ON_MY_WAY)
+            }
+        );
+        assert_eq!(asked, [1]);
+    }
+
+    #[test]
+    fn a_paid_helper_counts_a_vacated_berth_by_battle_help_gone_slots() {
+        // The paid route's pick (@0x96440-0x96454, @0x964d7-0x964ee) is
+        // `_AIFightEnemyThreatToPlayer`, under both keys.
+        let govts = rivals();
+        let npcs = [pirate()];
+        let npc = helper(AiType::Warship);
+        let vacated = [swapped_out()];
+        let hail = Hail {
+            vacated: &vacated,
+            ..threatened(&npc, &npcs, &govts)
+        };
+        let (answer, asked) = pressed(engine(), &hail, &[1]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(7)), "by the engine");
+        assert_eq!(asked, [2]);
+        let gone_bible = RequestAssistance {
+            battle_help_gone: BIBLE,
+            ..engine()
+        };
+        let (answer, asked) = pressed(gone_bible, &hail, &[0]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(2)), "gone by the Bible");
+        assert_eq!(asked, [1]);
+        // The enemy berth counts whichever reading of the target.
+        let target_bible = RequestAssistance {
+            battle_help_target: BIBLE,
+            ..engine()
+        };
+        let (answer, asked) = pressed(target_bible, &hail, &[1]);
+        assert_eq!(answer, price(PAY_ME_FIRST, NpcId(7)), "target by the Bible");
+        assert_eq!(asked, [2]);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::spaceport::OfferNames;
 
 // The mission screens.
 
@@ -39,6 +40,20 @@ fn the_mission_screens_go_through_the_session() {
         Some(computer.rows[1].clone()),
         "loaded through the session"
     );
+    let munged = OfferNames::munged(&view, MissionId(130), "Run <PAY>");
+    assert_eq!(
+        munged,
+        view.session()
+            .ok()
+            .and_then(|session| session.offer_text(MissionId(130), "Run <PAY>")),
+        "the session's munge"
+    );
+    assert!(munged.is_some_and(|name| !name.contains("<PAY>")), "filled");
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(999), "Run"),
+        None,
+        "not offered"
+    );
     assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
     assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
     let texts: Vec<_> = view
@@ -70,6 +85,7 @@ fn the_mission_screens_go_through_the_session() {
         Err(ComputerRefusal::NoneAvailable)
     );
     assert_eq!(broken.show_computer_row(MissionId(130)), None);
+    assert_eq!(OfferNames::munged(&broken, MissionId(130), "Run"), None);
     assert_eq!(
         broken.accept_mission(MissionId(130)),
         Err(AcceptError::NotOffered)
@@ -1932,6 +1948,21 @@ fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
     assert!(view.session().expect("flying").preparing_jump().is_some());
     assert!(view.player_info().is_some(), "the getter reads it");
     assert_eq!(view.open_player_info(), None, "no opening (@0x5a02a)");
+}
+
+#[test]
+fn open_player_info_carries_the_cheats_setting() {
+    let mut view = flight();
+    assert!(
+        !view.open_player_info().expect("opens").cheats,
+        "off by default"
+    );
+    let mut view = flight().with_overlays(FlightOverlays {
+        cheats: true,
+        ..FlightOverlays::default()
+    });
+    assert!(view.open_player_info().expect("opens").cheats);
+    assert!(view.player_info().expect("reads").cheats, "the getter too");
 }
 
 #[test]

@@ -129,6 +129,9 @@
 mod ai_launch;
 mod burst_reload;
 mod idle_bays;
+#[cfg(test)]
+mod rating_stretch;
+mod reloading;
 
 use std::collections::BTreeMap;
 
@@ -886,13 +889,17 @@ impl Armament {
     ///    spawned, and by the other reading only when it did, as `spend`
     ///    says ([`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
     /// 3. With nothing spawned, nothing else changes (@0x88dc0).
-    /// 4. Otherwise it reloads by [`ai_fire::reload`]; a burst counts one a
-    ///    call, spends at a multiple of its `BurstCount` when it spends at
+    /// 4. Otherwise it reloads by [`ai_fire::reload`], stretched by the
+    ///    player's rating when `at_player` says the ship fires at the
+    ///    player ([`PlayerRating::stretch`](ai_fire::PlayerRating::stretch),
+    ///    @0x88fb3-0x8901b); a burst counts one a call, spends at a multiple of its `BurstCount` when it spends at
     ///    the burst's end ([`burst_end`]), and past its interval
     ///    (`BurstCount`, times the count unless its copies fire together)
-    ///    starts again on its `BurstReload` (@0x8901f-0x891ad); an
-    ///    exclusive weapon ([`EXCLUSIVE`]) holds every other weapon's
-    ///    reload at its own plus [`EXCLUSIVE_HOLD`] (@0x891c8-0x8922a); and
+    ///    starts again on its `BurstReload`, which replaces the stretched
+    ///    reload unstretched (@0x8901f-0x891ad); an exclusive weapon
+    ///    ([`EXCLUSIVE`]) holds every other weapon's reload at its own
+    ///    stored reload, stretched or not, plus [`EXCLUSIVE_HOLD`]
+    ///    (@0x891c8-0x8922a); and
     ///    an unguided gun or rocket becomes the last gun
     ///    ([`Armament::last_gun`], @0x89230-0x89258).
     // Each is a separate borrow the fight holds, as for `fire`, and the
@@ -909,6 +916,7 @@ impl Armament {
         reports: &mut Reports,
         spend: RuleSource,
         spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
+        at_player: Option<ai_fire::PlayerRating>,
     ) -> Option<Volley> {
         if condition != Condition::Intact {
             return None;
@@ -953,6 +961,9 @@ impl Armament {
         }
         let spawned = u32::try_from(launches.len()).unwrap_or(u32::MAX);
         let mut held = ai_fire::reload(&spec, spawned, count);
+        if let Some(rating) = at_player {
+            held = rating.stretch(held);
+        }
         // The NPC's burst end spends its own slot while it holds any
         // (@0x890a5).
         let own = (spec.guidance_99() || rounds.held(spec.id) > 0).then_some(spec.id);
@@ -2514,6 +2525,7 @@ mod tests {
                 &mut Reports::default(),
                 RuleSource::Engine,
                 &mut at_seven,
+                None,
             )
             .expect("a volley");
         assert_eq!(volley.launches[0].inaccuracy, 8.0);
@@ -2575,6 +2587,7 @@ mod tests {
                 &mut self.reports,
                 spend,
                 spawn,
+                None,
             );
             armament.reload();
             volley
@@ -2700,6 +2713,7 @@ mod tests {
             &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
+            None,
         );
         assert_eq!(volley, None);
         assert_eq!(supplies.rounds.slot(WeaponId(130)), 8, "not intact");
@@ -3107,6 +3121,7 @@ mod tests {
             &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
+            None,
         );
         assert_eq!(disabled, None);
         assert_eq!(

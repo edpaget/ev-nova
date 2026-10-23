@@ -53,6 +53,34 @@ impl<T: TextMetrics + ?Sized> TextMetrics for Rc<T> {
     }
 }
 
+/// The ellipsis `TruncString` ends a truncated text with.
+pub const ELLIPSIS: &str = "…";
+
+/// `text` cut to fit `width`, measured by `metrics` in `font` at `size`,
+/// as `TruncString` with `truncEnd` cuts it: a text that fits comes back
+/// whole, and one that doesn't keeps the longest leading run of whole
+/// characters that fits with [`ELLIPSIS`] after it. With room for no
+/// more than the ellipsis it is the ellipsis alone, and with less (or a
+/// width that is not a number) nothing.
+#[must_use]
+pub fn truncate_end(
+    metrics: &impl TextMetrics,
+    font: Font,
+    size: f32,
+    text: &str,
+    width: f32,
+) -> String {
+    let fits = |candidate: &str| metrics.width(font, size, candidate) <= width;
+    if fits(text) {
+        return text.to_owned();
+    }
+    let ends = std::iter::once(0).chain(text.char_indices().skip(1).map(|(at, _)| at));
+    ends.map(|end| format!("{}{ELLIPSIS}", &text[..end]))
+        .take_while(|candidate| fits(candidate))
+        .last()
+        .unwrap_or_default()
+}
+
 /// `text` broken into lines no wider than `width`, measured by `metrics`
 /// in `font` at `size`.
 ///
@@ -248,6 +276,36 @@ mod tests {
             wrap(&MonoMetrics, Font::Charcoal, 10.0, text, 45.0),
             ["aaaa", "aaaa"]
         );
+    }
+
+    /// `text` cut to `width` in Geneva 10: 5 units a character.
+    fn cut(text: &str, width: f32) -> String {
+        truncate_end(&MonoMetrics, Font::Geneva, 10.0, text, width)
+    }
+
+    #[test]
+    fn a_text_that_fits_is_not_truncated() {
+        assert_eq!(cut("abcd", 20.0), "abcd");
+        assert_eq!(cut("", 0.0), "");
+        assert_eq!(cut("abcd", f32::INFINITY), "abcd");
+    }
+
+    #[test]
+    fn a_text_too_wide_keeps_its_longest_prefix_that_fits_with_the_ellipsis() {
+        assert_eq!(cut("abcdef", 25.0), "abcd…");
+        assert_eq!(cut("abcdef", 24.9), "abc…");
+        assert_eq!(cut("abcde", 24.9), "abc…");
+        assert_eq!(cut("äöüßx", 15.0), "äö…", "whole characters");
+        assert_eq!(ELLIPSIS, "…");
+    }
+
+    #[test]
+    fn with_room_for_the_ellipsis_alone_it_is_the_ellipsis_and_with_less_nothing() {
+        assert_eq!(cut("abc", 5.0), "…");
+        assert_eq!(cut("abc", 9.9), "…");
+        for width in [4.9, 0.0, -1.0, f32::NAN] {
+            assert_eq!(cut("abc", width), "", "{width}");
+        }
     }
 
     #[test]

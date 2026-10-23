@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
+use nova_data::graphics::{CICN, PICT, decode_cicn};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -128,9 +128,7 @@ impl StatusBars for GameData {
     }
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-        let found = self.resource(PICT, id)?;
-        let picture = decode_pict(found.resource.data()).ok()?;
-        Some((picture.width(), picture.height()))
+        crate::ui::PictureSizes::picture_size(self, id)
     }
 
     fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
@@ -150,8 +148,6 @@ pub const FIRST_BOX_SPIN: i16 = 500;
 /// The mouse cursor's `spïn`, which `_InitSprites` loads with
 /// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
 pub const CURSOR_SPIN: i16 = 650;
-/// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
-pub const FIRST_BOOM_SOUND: i16 = 300;
 /// The first target picture, `PICT` 3000 for `shïp` 128
 /// (`_LoadSprites`).
 pub const FIRST_TARGET_PICTURE: i16 = 3000;
@@ -219,7 +215,7 @@ impl CombatLooks for GameData {
         Some(Ok(BoomLook {
             sheet: effect_sheet(self, FIRST_BOOM_SPIN.saturating_add(boom.graphic_index)),
             advance: f32::from(boom.frame_advance) * FRAME_ADVANCE_UNIT,
-            sound: offset_sound(FIRST_BOOM_SOUND, boom.sound_index),
+            sound: nova_sim::catalog::explosion_sound(boom.sound_index),
         }))
     }
 
@@ -1124,6 +1120,7 @@ mod tests {
         let data = named_store(&[
             (Boom::TYPE, 130, None, boom(100, 2, 0)),
             (Boom::TYPE, 135, None, boom(30, -1, 5)),
+            (Boom::TYPE, 136, None, boom(100, 64, 0)),
             (Spin::TYPE, 400, None, spin(400)),
             (RLED, 400, None, sheet(12)),
             (Spin::TYPE, 405, None, spin(405)),
@@ -1136,6 +1133,10 @@ mod tests {
         assert_eq!(slow.sheet, Ok(sheet_of(405, 20)));
         assert!((slow.advance - 0.3).abs() < 1e-6, "{slow:?}");
         assert_eq!(slow.sound, None);
+        // `_CreateExplosion` plays `SoundIndex` 0-63 alone
+        // (@0x3f8dc-0x3f8e5).
+        let past = data.boom_look(BoomId(136)).expect("there").expect("reads");
+        assert_eq!(past.sound, None, "past the 64 explosion sounds");
     }
 
     #[test]

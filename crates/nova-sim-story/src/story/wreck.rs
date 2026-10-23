@@ -76,15 +76,18 @@ pub fn full_strength(life: &StellarLife) -> i64 {
 }
 
 /// The explosion `Y` makes at the stellar `life`: its `ExplodType`, when
-/// it is `shown` (among the stellars of the player's system, the ship in
-/// flight: one made while landed would be cleared on the take-off) and
-/// was not destroyed before the `Y` (@0x15a59-0x15ab4). Its `Strength` does not matter, so an
-/// invincible stellar, which the engine's
+/// it is `owned` (its owner word, +0x14, is the player's system, +0x74,
+/// @0x15a64-0x15a6c, docked or not) and was not destroyed before the `Y`
+/// (`_StellarIsDestroyed` @0x15a71); with none (-1, @0x15a85) there is
+/// nothing to explode. Its `Strength` does not matter, so an invincible
+/// stellar, which the engine's
 /// [`RuleKey::DestroyInvincible`](crate::RuleKey::DestroyInvincible)
-/// leaves whole, explodes all the same.
+/// leaves whole, explodes all the same. The explosion is heard at once;
+/// one made while docked is never drawn, as the take-off kills it before
+/// its first frame (`_HandlePlayerDockRequest` @0x66f40-0x66f6f).
 #[must_use]
-pub fn explodes_on_y(life: &StellarLife, shown: bool, destroyed_before: bool) -> Option<Explosion> {
-    life.explosion.filter(|_| shown && !destroyed_before)
+pub fn explodes_on_y(life: &StellarLife, owned: bool, destroyed_before: bool) -> Option<Explosion> {
+    life.explosion.filter(|_| owned && !destroyed_before)
 }
 
 /// What a day does to a destroyed stellar.
@@ -200,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn y_explodes_a_stellar_shown_and_whole_that_has_an_explosion() {
+    fn y_explodes_a_stellar_of_the_players_system_and_whole_that_has_an_explosion() {
         let boom = Explosion::decode(3);
         let exploding = |strength| StellarLife {
             explosion: boom,
@@ -215,7 +218,7 @@ mod tests {
         assert_eq!(
             explodes_on_y(&exploding(100), false, false),
             None,
-            "not shown"
+            "another system's, or no one's"
         );
         assert_eq!(
             explodes_on_y(&exploding(100), true, true),

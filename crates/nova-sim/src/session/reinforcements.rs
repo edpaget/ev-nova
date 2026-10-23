@@ -106,7 +106,11 @@ impl Session {
     /// The clock of the player's system: its timer and the pilot's
     /// countdown there.
     fn clock_here(&self) -> Clock {
-        let system = self.pilot.system;
+        self.clock_in(self.pilot.system)
+    }
+
+    /// The clock of `system`: its timer and the pilot's countdown there.
+    fn clock_in(&self, system: SystemId) -> Clock {
         Clock {
             timer: self
                 .space
@@ -213,8 +217,14 @@ impl Session {
     /// The fleet coming to the player's system, while its timer runs: what
     /// the warships' and interceptors' odds retreat read.
     pub(super) fn reinforcements_coming(&self) -> Option<Coming> {
+        self.reinforcements_coming_to(self.pilot.system)
+    }
+
+    /// The fleet coming to `system`, while its timer runs: what the
+    /// warships' and interceptors' odds retreat read in that system.
+    pub(super) fn reinforcements_coming_to(&self, system: SystemId) -> Option<Coming> {
         let fleet = self.space.traffic.reinforcement_fleet()?;
-        self.clock_here()
+        self.clock_in(system)
             .coming()
             .then_some(Coming { govt: fleet.govt })
     }

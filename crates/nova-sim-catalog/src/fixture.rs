@@ -388,6 +388,7 @@ pub fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         interference: 0,
         murk: 0,
         message: -1,
+        background: 0,
     }
 }
 

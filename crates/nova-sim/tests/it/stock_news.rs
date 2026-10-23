@@ -14,20 +14,25 @@
 //!   shows `STR#` 8101's generic news.
 //! - `öops` 128 "An enormous food surplus" (`Stellar` 137 Port Kane,
 //!   commodity 0, `PriceDelta` -15) tells its story from `STR#` 2002's
-//!   pieces and `STR#` 4001's "food".
+//!   pieces and `STR#` 4001's "food". Under way at Port Kane, its line
+//!   shows on the exchange there: "An enormous food surplus has lowered
+//!   the price of food.", or by the other reading of `exchange_events`
+//!   its name.
 
 use crate::common;
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_data::records::cron::Cron;
 use nova_sim::catalog::ListedStellar;
+use nova_sim::market::ActiveEvent;
 use nova_sim::news::{self, CARGO_NAMES, COMMERCIALS, GENERIC_NEWS, StoryWords};
 use nova_sim::story::listers_of;
 use nova_sim::{
-    Bit, Chance, CommCatalog, CronId, DisasterId, GameDate, GovtId, PilotCatalog, PlaceNames,
-    RuleKey, RuleSource, Rulebook, Session, StellarId, SystemId, TagNames,
+    Bit, Chance, CommCatalog, CronId, DisasterId, GameDate, GovtId, Pilot, PilotCatalog,
+    PlaceNames, RuleKey, RuleSource, Rulebook, Session, StellarId, SystemId, TagNames,
 };
 
 fn bit(n: u16) -> Bit {
@@ -203,4 +208,48 @@ fn the_food_surplus_makes_the_news_at_port_kane() {
             "Today's top news: An enormous food surplus has lowered the price of food on Port Kane."
         )
     );
+}
+
+/// A new stock pilot reading the stock strings, its rules `rules`, with
+/// `öops` 128 under way at Port Kane (`spöb` 137, in the start system),
+/// and landed there.
+fn surplus_at_port_kane(data: &Rc<GameData>, rules: Rulebook) -> Session {
+    let mut pilot = Pilot::new(data.as_ref(), "Stock").expect("the stock first chär starts");
+    pilot.stellar = Some(StellarId(137));
+    pilot.events = BTreeMap::from([(
+        DisasterId(128),
+        ActiveEvent {
+            days: 30,
+            stellar: Some(StellarId(137)),
+        },
+    )]);
+    let system = pilot.system;
+    let mut session = Session::fly(data.as_ref(), pilot)
+        .expect("flies")
+        .with_strings(Rc::clone(data) as Rc<dyn CommCatalog>)
+        .with_rules(rules);
+    session
+        .land_at(data.as_ref(), system, StellarId(137))
+        .expect("Port Kane is landable");
+    session
+}
+
+#[test]
+fn the_food_surplus_shows_on_port_kanes_exchange() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let market = surplus_at_port_kane(&data, Rulebook::default())
+        .market()
+        .expect("a trade center");
+    assert_eq!(
+        market.events,
+        ["An enormous food surplus has lowered the price of food."]
+    );
+    let bible = Rulebook::default().with_override(RuleKey::ExchangeEvents, RuleSource::Bible);
+    let market = surplus_at_port_kane(&data, bible)
+        .market()
+        .expect("a trade center");
+    assert_eq!(market.events, ["An enormous food surplus"]);
 }

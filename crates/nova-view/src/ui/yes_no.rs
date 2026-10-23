@@ -70,6 +70,7 @@ impl YesNoDialog {
                 font: Font::Geneva,
                 size: STATIC_TEXT_SIZE,
                 color: STATIC_TEXT_COLOR,
+                backing: None,
             },
         )];
         let mut dialog = Dialog::new(template, &roles, metrics)

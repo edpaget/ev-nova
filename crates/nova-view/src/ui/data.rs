@@ -1,8 +1,9 @@
 //! The widgets' ports over `nova_data`: dialog templates from the
-//! interface file ([`InterfaceData`]), and descriptions, their graphics
-//! and the button style from the game data ([`GameData`]). Thin
-//! mappings; the decisions are the core's.
+//! interface file ([`InterfaceData`]), and descriptions, their graphics,
+//! the button style and picture sizes from the game data ([`GameData`]).
+//! Thin mappings; the decisions are the core's.
 
+use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
@@ -11,7 +12,7 @@ use nova_data::{GameData, InterfaceData, Rect};
 use nova_sim::DescMovie;
 
 use super::button::ButtonStyle;
-use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources};
+use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources, PictureSizes};
 use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use crate::color::Color;
 use crate::font::Font;
@@ -120,6 +121,13 @@ impl DescriptionGraphics for GameData {
             }
             _ => None,
         }
+    }
+}
+
+impl PictureSizes for GameData {
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+        let picture = decode_pict(self.resource(PICT, id)?.resource.data()).ok()?;
+        Some((picture.width(), picture.height()))
     }
 }
 
@@ -449,5 +457,23 @@ mod tests {
         let err = data.description(128).expect_err("bad");
         let expected = data.get::<Desc>(128).expect("present").expect_err("bad");
         assert_eq!(err, expected.to_string());
+    }
+
+    fn picture(width: i16, height: i16) -> Vec<u8> {
+        use nova_data::graphics::fixture::{DirectBits, PictBuilder};
+        let bounds = [0, 0, height, width];
+        let pixels = vec![0x4210; (width * height) as usize];
+        PictBuilder::new(bounds)
+            .direct_bits(&DirectBits::rgb555(bounds, &pixels))
+            .end()
+            .build()
+    }
+
+    #[test]
+    fn a_pictures_size_is_its_decoded_width_and_height() {
+        let data = game(&[(PICT, 8518, picture(300, 30)), (PICT, 8519, vec![0; 4])]);
+        assert_eq!(data.picture_size(8518), Some((300, 30)));
+        assert_eq!(data.picture_size(8519), None, "undecodable");
+        assert_eq!(data.picture_size(8520), None, "missing");
     }
 }

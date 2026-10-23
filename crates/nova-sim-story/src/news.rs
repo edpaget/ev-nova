@@ -408,6 +408,28 @@ pub fn oops_story(
     if event.name.is_empty() {
         return None;
     }
+    let clause = event_clause(event, words, names)?;
+    Some(format!(
+        "{} {} {} {}.",
+        words.top_news,
+        clause,
+        words.on,
+        names.stellar_name(place).unwrap_or_default(),
+    ))
+}
+
+/// The clause the news and the exchange both build for `event`: "NAME
+/// has raised|lowered the price of CARGO", with #[`RAISED`] for a
+/// `PriceDelta` above 0 and #[`LOWERED`] otherwise (0 included). `None`
+/// for a negative commodity ([`market::event_commodity`]), which the
+/// original names `_lcCargoName[-1]`, out of bounds. A missing word or
+/// cargo name reads empty. Each caller keeps its own guards and framing.
+#[must_use]
+pub(crate) fn event_clause(
+    event: &DisasterRecord,
+    words: &StoryWords,
+    names: &dyn TagNames,
+) -> Option<String> {
     let cargo = market::event_commodity(event.commodity)?;
     let moved = if event.price_delta > 0 {
         &words.raised
@@ -415,15 +437,12 @@ pub fn oops_story(
         &words.lowered
     };
     Some(format!(
-        "{} {} {} {} {} {} {} {}.",
-        words.top_news,
+        "{} {} {} {} {}",
         event.name,
         words.has,
         moved,
         words.price_of,
         names.cargo_name(cargo).unwrap_or_default(),
-        words.on,
-        names.stellar_name(place).unwrap_or_default(),
     ))
 }
 
@@ -1012,6 +1031,27 @@ mod tests {
             ..drought(15)
         };
         assert_eq!(story(&negative, Some(DOCKED)), None);
+    }
+
+    #[test]
+    fn the_event_clause_names_the_move_and_the_cargo() {
+        let clause = |event: &DisasterRecord| event_clause(event, &words(), &Names);
+        assert_eq!(
+            clause(&drought(15)).as_deref(),
+            Some("A drought has raised the price of food")
+        );
+        for delta in [-15, 0] {
+            assert_eq!(
+                clause(&drought(delta)).as_deref(),
+                Some("A drought has lowered the price of food"),
+                "delta {delta}"
+            );
+        }
+        let negative = DisasterRecord {
+            commodity: -1,
+            ..drought(15)
+        };
+        assert_eq!(clause(&negative), None);
     }
 
     #[test]

@@ -93,7 +93,6 @@ mod tests {
     use crate::catalog::SystemId;
     use crate::chance::NeverFires;
     use crate::flight::Controls;
-    use crate::session::entry::NoTraffic;
     use crate::session::tests::{at_gate, at_wormhole, gated, wormholes};
     use crate::sound::SimSound;
     use crate::testkit::{catalog, jump, land_now};
@@ -103,7 +102,7 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("took off");
         let _ = session.take_sounds();
         session

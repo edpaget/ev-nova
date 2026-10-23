@@ -176,7 +176,7 @@ impl Session {
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
-            SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
+            SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
             SetOp::RemoveOutfit(outfit) => {
                 self.ship
                     .script_remove(&mut self.pilot, &self.statics, &self.setup, *outfit);
@@ -235,6 +235,9 @@ impl Session {
             // handing them here.
             SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
         }
+        // Every move applies at its operator, as `_EvalSetExp` applies it
+        // (see the `operator_moves` module).
+        self.apply_moves_at_operator(chance);
     }
 
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
@@ -345,8 +348,9 @@ impl MissionRun {
     /// goes on to the next (@0x15873; C, E and H by @0x156e0, the bits by
     /// their signed checks @0x1524a, @0x15271, @0x15298), but for `N`,
     /// whose check (@0x158e3) runs the move's tail (@0x1593f): that queues
-    /// a stay by [`ScriptEffectRules::out_of_range_move`]'s engine reading,
-    /// and does nothing by the other.
+    /// a stay, applied at once at its operator (see the `operator_moves`
+    /// module), by [`ScriptEffectRules::out_of_range_move`]'s engine
+    /// reading, and does nothing by the other.
     ///
     /// `P`, `T` and `Q` have no check, and a number past 32767, the
     /// engine's widest ID, names no resource, so each does what the
@@ -631,7 +635,7 @@ mod tests {
         assert_eq!(session.take_script_notes(), []);
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());
-        assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
+        assert_eq!(settled.moved, Some(SystemId(130)), "M and N's entry owed");
         assert!(session.leave_due(), "Q held");
         let _ = session.take_off(&catalog, &mut Scripted::default());
         session.tick(crate::flight::Controls::default());

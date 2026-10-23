@@ -254,27 +254,27 @@ impl Harness {
     /// read through it start the audio core and the router. It runs as on
     /// Windows, whatever the host, so its monitor offers exclusive modes.
     fn new(store: &MemorySettings) -> Self {
-        Self::with_table(store, SoundTable::ORIGINAL)
+        Self::with_table(store, &SoundTable::ORIGINAL)
     }
 
     /// The game started over `store` as [`Harness::new`] starts it, but
     /// running on `os`.
     fn on_os(store: &MemorySettings, os: Os) -> Self {
-        Self::build(store, SoundTable::ORIGINAL, false, os)
+        Self::build(store, &SoundTable::ORIGINAL, false, os)
     }
 
     /// The game started over `store`, its audio core playing `table`.
-    fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
+    fn with_table(store: &MemorySettings, table: &SoundTable) -> Self {
         Self::build(store, table, false, Os::Windows)
     }
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
     fn on_main_menu(store: &MemorySettings) -> Self {
-        Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
+        Self::build(store, &SoundTable::ORIGINAL, true, Os::Windows)
     }
 
-    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool, os: Os) -> Self {
+    fn build(store: &MemorySettings, table: &SoundTable, main_menu: bool, os: Os) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
@@ -293,7 +293,7 @@ impl Harness {
             .with_prefs(settings.prefs());
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
+        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, *table)
             .with_settings(settings.audio);
         let window = FakeWindow {
             fullscreen: Vec::new(),
@@ -633,7 +633,7 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
         engine: Some(SoundId(ENGINE)),
         ..SoundTable::ORIGINAL
     };
-    let mut harness = Harness::with_table(&store, table);
+    let mut harness = Harness::with_table(&store, &table);
     let effects = effects_level_volume(4);
     let engine = AudioCommand::StartLoop {
         sound: SoundId(ENGINE),

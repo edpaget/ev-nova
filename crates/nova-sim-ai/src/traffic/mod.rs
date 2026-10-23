@@ -160,6 +160,8 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+#[cfg(test)]
+mod area_cloak_tests;
 pub mod assist_think;
 pub mod autopilot;
 pub mod berth_blink;
@@ -168,6 +170,9 @@ pub mod berth_kept;
 pub mod berth_picks;
 pub mod berth_search;
 pub mod board_wait;
+pub mod cloak_situation;
+#[cfg(test)]
+mod cloak_think_tests;
 #[cfg(test)]
 mod comm_call_tests;
 #[cfg(test)]
@@ -238,6 +243,7 @@ pub mod strength;
 pub mod succession;
 pub mod table;
 pub mod tractor_hold;
+pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
 pub mod warp_out;
@@ -286,6 +292,7 @@ use plunder::{HighLevel, PirateEvent};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{ShipKind, SpawnPerson, SpawnTable};
+use vacated::VacatedBerths;
 
 /// The ship-table slots a traffic spawn leaves free:
 /// `_GenericRandomShipSpawn(arg1, reserve)` (@0x3c89f) searches only the
@@ -503,12 +510,14 @@ fn starting_mode(entry: Entry) -> Mode {
     }
 }
 
-/// The cloak a new ship starts with ([`Traffic::add`]): fading in when
-/// set up `cloaked` ([`NewShip::cloaked`]), else none.
-fn starting_cloak(cloaked: bool) -> Cloak {
+/// The cloak a new ship of `gear` starts with ([`Traffic::add`]): fading
+/// in when set up `cloaked` ([`NewShip::cloaked`]), else none. Cloaking
+/// is `_DoShipCloak` (`_SetupShipsInSystem` @0x43121), so a cloak that
+/// zeroes shields takes its `shield` ([`cloak::cloak_ship`]).
+fn starting_cloak(cloaked: bool, gear: cloak::CloakGear, shield: &mut f32) -> Cloak {
     let mut cloak = Cloak::default();
     if cloaked {
-        cloak.cloak();
+        cloak::cloak_ship(&mut cloak, gear, shield);
     }
     cloak
 }
@@ -583,6 +592,22 @@ pub struct World<'a> {
     /// engine; capped at the tank, a full tank done too, by the other
     /// reading ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
     pub refuel_cap: RuleSource,
+    /// When a weapon reloads, for a ship type's `Flags2` 0x0100 cloak
+    /// ([`cloak_situation::Around::cloak_on_reload`]): past its `Reload`
+    /// by the engine, on a burst reload by the Bible
+    /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
+    pub cloak_on_reload: RuleSource,
+    /// Which reserves an NPC's cloak needs to hold, as its frame hold asks
+    /// `_ShipCanCloak` ([`Npc::can_cloak`](npc::Npc::can_cloak)): fuel
+    /// alone by the engine, by the cloak mod's `ModVal` by the Bible
+    /// ([`RuleKey::CloakReserves`](crate::RuleKey::CloakReserves)).
+    pub cloak_reserves: RuleSource,
+    /// Whether an NPC's frame hold keeps a ship riding its leader's area
+    /// cloak ([`area_cloak::holds`](crate::area_cloak::holds)): by the
+    /// engine only one that can cloak by its own gear, by the Bible a ship
+    /// riding too
+    /// ([`RuleKey::AreaCloakHold`](crate::RuleKey::AreaCloakHold)).
+    pub area_cloak_hold: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -705,6 +730,9 @@ impl<'a> World<'a> {
             npc_jump_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             refuel_cap: RuleSource::Engine,
+            cloak_on_reload: RuleSource::Engine,
+            cloak_reserves: RuleSource::Engine,
+            area_cloak_hold: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             boxes: &[],
@@ -811,6 +839,9 @@ pub struct Traffic {
     /// The ships gone since the last decision pass whose slots a think may
     /// still read ([`gone`]).
     gone: GoneShips,
+    /// The last ship of each berth whose slot lost only its active flag,
+    /// until a ship takes the berth or the system is left ([`vacated`]).
+    vacated: VacatedBerths,
     /// The frame's work on the message line, in slot order, since it was
     /// last taken ([`Traffic::take_on_line`]): the calls the decisions
     /// made, the scans of the player, what the pirates and repairers did
@@ -944,6 +975,7 @@ impl Traffic {
             departed: Vec::new(),
             freed: Vec::new(),
             gone: GoneShips::default(),
+            vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
@@ -1020,6 +1052,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.gone.clear();
+        self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -1138,6 +1171,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.gone.clear();
+        self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -1350,8 +1384,7 @@ impl Traffic {
             }
         }
         self.take_gate_waits(behaviour, world, &picked);
-        let player = world.player.map(|player| player.state);
-        self.think_cloaks(player, &picked);
+        self.think_cloaks(world, &picked);
         room
     }
 
@@ -1705,32 +1738,67 @@ impl Traffic {
             .collect()
     }
 
-    /// Each flying NPC `picked` says (one flag an NPC) thinks its cloak
-    /// (`_AIHandleCloaking`, see [`cloak`]),
-    /// knowing whether it is disabled, retreats (fleeing), and where the
-    /// ship it attacks is, among the NPCs and the `player`.
-    fn think_cloaks(&mut self, player: Option<ShipState>, picked: &[bool]) {
+    /// Each NPC `picked` says (one flag an NPC) that is flying, gliding
+    /// in from hyperspace or bursting out of a gate thinks its cloak
+    /// (`_AIHandleCloaking`, see [`cloak`]), in the
+    /// [situation](cloak_situation::situation) it reads in `world`: where
+    /// the ship it attacks is, among the NPCs and the player, its leader's
+    /// cloak and whether the leader carries an area cloak, and the asteroid
+    /// in slot 0. Its leader is [`Npc::leader_ref`]'s, so a ship that
+    /// escorts the player takes the player, with the cloak the player's
+    /// display step left it this pass, as the parent rule reads the
+    /// player's slot (+0x9a 0, @0x83633-0x8366d). Whether it keeps close
+    /// formation is its last flight's ([`Npc::close_form`]), as the think
+    /// runs before the high level writes the sub-goal (@0x8fcaa before
+    /// @0x901e5). The original thinks a glide and a burst too
+    /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
+    /// emerging, held at its gate, coasting, entering a gate or adrift
+    /// waits out +0x4c, so its cloak doesn't think.
+    fn think_cloaks(&mut self, world: &World, picked: &[bool]) {
+        let player = world.player.map(|player| player.state);
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
-        for (npc, _) in self
+        let leaders: Vec<Option<(ShipState, Cloak, bool)>> = self
             .npcs
-            .iter_mut()
-            .zip(picked)
-            .filter(|(npc, picked)| **picked && npc.mode == Mode::Flying)
+            .iter()
+            .map(|npc| {
+                crate::ai::sight::leader_cloak_and_area(npc, &self.npcs, world.player.as_ref())
+            })
+            .collect();
+        for ((npc, _), leader) in
+            self.npcs
+                .iter_mut()
+                .zip(picked)
+                .zip(leaders)
+                .filter(|((npc, picked), _)| {
+                    **picked
+                        && matches!(
+                            npc.mode,
+                            Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
+                        )
+                })
         {
             let attacking = npc.goal.attacking().and_then(|ship| match ship {
                 ShipRef::Player => player,
                 ShipRef::Npc(id) => states
                     .iter()
                     .find(|(other, _)| *other == id)
-                    .map(|(_, state)| *state),
+                    .map(|&(_, state)| state),
             });
-            let situation = cloak::Situation {
-                disabled: npc.condition == Condition::Disabled,
-                retreating: matches!(npc.goal, Goal::Flee(_)),
+            let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),
+                leader: leader.map(|(_, cloak, _)| cloak),
+                leader_area: leader.is_some_and(|(_, _, area)| area),
+                mining_rock: world.mining_rock.is_some(),
+                cloak_on_reload: world.cloak_on_reload,
             };
-            cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
+            let situation = cloak_situation::situation(npc, around);
+            cloak::think(
+                &mut npc.cloak,
+                npc.cloak_gear,
+                situation,
+                &mut npc.reserves.shield.now,
+            );
         }
     }
 
@@ -1740,17 +1808,49 @@ impl Traffic {
     /// the way the fade goes ([`cloak::think`]), and whether a ship is
     /// cloaked turns on its fade, so it reads as it did before the think.
     /// The fade steps at the ship's display step
-    /// ([`Traffic::step_fades`]).
-    fn hold_cloaks(&mut self) {
-        for npc in &mut self.npcs {
+    /// ([`Traffic::step_fades`]). Then each that was cloaked pays its
+    /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204),
+    /// even one the hold just uncloaked. Whether it can cloak reads
+    /// [`World::cloak_reserves`]; whether the hold keeps a ship riding its
+    /// leader's area cloak, [`World::area_cloak_hold`]
+    /// ([`area_cloak::holds`](crate::area_cloak::holds)). The ride is the
+    /// one this tick's flight picks: the hold follows the frame's high
+    /// level (`_AIDispatch` @0x4429d before `_HandleShip` @0x444ad), so it
+    /// reads close formation fresh ([`Npc::keeps_close_formation`] with
+    /// its sight of its leader), not the last flight's [`Npc::close_form`].
+    fn hold_cloaks(&mut self, world: &World) {
+        let rides: Vec<bool> = {
+            let around = world.around(&self.npcs);
+            self.npcs
+                .iter()
+                .map(|npc| {
+                    let leader = crate::ai::sight::leader_cloak_and_area(
+                        npc,
+                        &self.npcs,
+                        world.player.as_ref(),
+                    );
+                    leader.is_some_and(|(state, cloak, area)| {
+                        let seen = around.sees_leader(npc);
+                        let close = npc.keeps_close_formation(Some(&state), seen, world.flight);
+                        crate::area_cloak::rides(close, cloak.is_cloaked(), area)
+                    })
+                })
+                .collect()
+        };
+        for (npc, ride) in self.npcs.iter_mut().zip(rides) {
             if npc.cloak.is_cloaked() {
-                let able = npc.can_cloak();
-                cloak::hold(&mut npc.cloak, able);
+                let able = npc.can_cloak(world.cloak_reserves);
+                let keeps = crate::area_cloak::holds(able, ride, world.area_cloak_hold);
+                cloak::hold(&mut npc.cloak, keeps);
+                let usage = npc.cloak_gear.shield_usage;
+                cloak::drain_shield(&mut npc.reserves.shield.now, usage, true);
             }
         }
     }
 
-    /// Each NPC's cloak fade a tick on ([`Cloak::step`](cloak::Cloak::step)),
+    /// Each NPC's cloak fade a tick on
+    /// ([`Cloak::display_step`](cloak::Cloak::display_step): a dying one
+    /// then falls at twice the rate),
     /// as `_HandleShipDisplay` steps it once a frame (@0x2d088-0x2d164),
     /// right after the ship's own `_HandleShip` (@0x444ad): so after its
     /// pick. The session runs it once after the whole NPC loop
@@ -1760,7 +1860,8 @@ impl Traffic {
     /// reads the targets' conditions, not their cloaks.
     pub fn step_fades(&mut self) {
         for npc in &mut self.npcs {
-            npc.cloak.step(npc.cloak_gear.fast());
+            let dying = npc.condition.is_dying(npc.reserves.armor);
+            npc.cloak.display_step(npc.cloak_gear.fast(), dying);
         }
     }
 
@@ -2185,6 +2286,8 @@ impl Traffic {
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
         self.mark_spawned(berth);
+        // A ship taking the slot rewrites the vacated record ([`vacated`]).
+        self.vacated.taken(berth);
         self.npcs.push(npc);
         id
     }
@@ -2579,7 +2682,8 @@ impl Traffic {
                 placed.push(None);
                 continue;
             };
-            let (reserves, condition) = starting_reserves(kind, person, ship.derelict);
+            let (mut reserves, condition) = starting_reserves(kind, person, ship.derelict);
+            let cloak = starting_cloak(ship.cloaked, kind.cloak, &mut reserves.shield.now);
             let traits = person
                 .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
@@ -2657,7 +2761,7 @@ impl Traffic {
                 person: traits,
                 mission: ship.mission,
                 aux: ship.aux,
-                cloak: starting_cloak(ship.cloaked),
+                cloak,
                 cloak_gear: kind.cloak,
                 led_out: false,
                 emerges_from: ship.entry.gate(),
@@ -2689,6 +2793,7 @@ impl Traffic {
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
                 owed_burst: None,
+                close_form: false,
                 fleet_slot: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,
@@ -2701,6 +2806,7 @@ impl Traffic {
             npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);
+            self.vacated.taken(berth);
             self.npcs.push(npc);
         }
         if formation == NpcFormation::Original {
@@ -3273,12 +3379,38 @@ mod tests {
             fade: FADE_FULL,
             direction: 0,
         };
-        npc.mode = Mode::JumpingIn { tick: 0 };
+        npc.mode = Mode::Coasting { ticks_left: 30 };
         npc.reserves.fuel.now = 0.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, 0, "not held yet");
         traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, -1, "held");
+    }
+
+    #[test]
+    fn a_dying_ships_fade_falls_at_twice_the_rate_after_its_step() {
+        // `_HandleShipDisplay` sets direction -2 for a dying ship with any
+        // fade left (@0x2d169-0x2d17e), after the step.
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let npc = &mut traffic.npcs[0];
+        npc.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        npc.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        traffic.step_fades();
+        assert_eq!(
+            traffic.npcs()[0].cloak,
+            Cloak {
+                fade: FADE_FULL,
+                direction: -2
+            }
+        );
+        traffic.step_fades();
+        assert_eq!(traffic.npcs()[0].cloak.fade, FADE_FULL - 1.5);
     }
 
     #[test]
@@ -4317,6 +4449,8 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         };
         let world = World {
             player: Some(player),
@@ -4363,6 +4497,7 @@ mod tests {
             &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
         assert_eq!(npc.armament.last_gun(), Some(WeaponId(128)));
         let player = PlayerSide {
@@ -4384,6 +4519,8 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         };
         let world = World {
             player: Some(player),
@@ -5851,6 +5988,8 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         }
     }
 
@@ -6390,6 +6529,11 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        shield_usage: 0,
+        fuel_usage: 0,
+        zeroes_shields: false,
+        can_cloak_mod: Some(0x080b),
+        area: false,
         scanner: crate::cloak::Scanner::NONE,
     };
 
@@ -6609,7 +6753,7 @@ mod tests {
                 fade: FADE_FULL,
                 direction: 0,
             };
-            npc.mode = Mode::JumpingIn { tick: 0 };
+            npc.mode = Mode::Coasting { ticks_left: 30 };
             npc.reserves.fuel.now = fuel;
             if disabled {
                 npc.condition = Condition::Disabled;
@@ -6622,7 +6766,7 @@ mod tests {
             );
         }
         for mode in [
-            Mode::JumpingIn { tick: 0 },
+            Mode::Emerging { ticks_left: 30 },
             Mode::Coasting { ticks_left: 30 },
         ] {
             let mut able = with_mission_ship(ZEPHYR, false, 0.0);
@@ -6634,6 +6778,72 @@ mod tests {
             able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
             assert_eq!(able.npcs()[0].cloak.direction, 0, "{mode:?}, no think");
         }
+    }
+
+    /// The Zephyr's cloak, paying shield usage 8 (Cloaking Organ 268).
+    const ORGAN: CloakGear = CloakGear {
+        shield_usage: 8,
+        ..ZEPHYR
+    };
+
+    #[test]
+    fn a_cloaked_ship_pays_its_cloaks_shield_each_frame_even_the_one_it_must_uncloak() {
+        let paid = 100.0 - 8.0 * crate::cloak::CLOAK_UPKEEP_RATE;
+        for (fuel, mode) in [
+            (100.0, Mode::JumpingIn { tick: 0 }),
+            (0.0, Mode::JumpingIn { tick: 0 }),
+        ] {
+            let mut traffic = with_mission_ship(ORGAN, false, 0.0);
+            let npc = &mut traffic.npcs[0];
+            npc.cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            npc.mode = mode;
+            npc.reserves.fuel.now = fuel;
+            npc.reserves.shield.now = 100.0;
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(traffic.npcs()[0].reserves.shield.now, paid, "fuel {fuel}");
+        }
+        let mut seen = with_mission_ship(ORGAN, false, 0.0);
+        seen.npcs[0].reserves.shield.now = 100.0;
+        seen.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(seen.npcs()[0].reserves.shield.now, 100.0, "not cloaked");
+    }
+
+    #[test]
+    fn a_cloaked_ship_whose_shield_cannot_pay_its_cloak_uncloaks_on_its_think() {
+        let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
+        for (gear, shield, direction) in [(ORGAN, 0.0, -1), (ORGAN, 50.0, 0), (ZEPHYR, 0.0, 0)] {
+            let mut traffic = with_mission_ship(gear, false, 0.0);
+            let npc = &mut traffic.npcs[0];
+            npc.cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            npc.reserves.shield.now = shield;
+            traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(
+                traffic.npcs()[0].cloak.direction,
+                direction,
+                "usage {}, shield {shield}",
+                gear.shield_usage
+            );
+        }
+    }
+
+    #[test]
+    fn a_ship_set_up_cloaked_with_a_zeroing_cloak_starts_without_its_shield() {
+        let zeroing = CloakGear {
+            zeroes_shields: true,
+            ..ZEPHYR
+        };
+        let traffic = with_mission_ship(zeroing, true, 0.0);
+        assert_eq!(traffic.npcs()[0].reserves.shield.now, 0.0);
+        let uncloaked = with_mission_ship(zeroing, false, 0.0);
+        assert!(uncloaked.npcs()[0].reserves.shield.now > 0.0);
+        let kept = with_mission_ship(ZEPHYR, true, 0.0);
+        assert!(kept.npcs()[0].reserves.shield.now > 0.0);
     }
 
     // The escort-strength timer.

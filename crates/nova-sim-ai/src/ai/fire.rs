@@ -128,8 +128,8 @@
 //!   [`CloakGear::scanner`](crate::cloak::CloakGear::scanner)), nor at a
 //!   cloaked target unless it carries one with bit 0x0008
 //!   (`_ShipCanTargetCloakedShips` @0x811e7-0x811fd); the player counts
-//!   its own ship type's bit ([`PlayerSide::untargetable`]) and never
-//!   cloaks. None either while the damage the shots in flight aim at the
+//!   its own ship type's bit ([`PlayerSide::untargetable`]) and its own
+//!   cloak ([`PlayerSide::cloak`]). None either while the damage the shots in flight aim at the
 //!   target ([`Surroundings::targeted`],
 //!   [`Combat::targeted_damage`](crate::combat::Combat::targeted_damage))
 //!   is at least [`SUFFICIENT_DAMAGE`] times its shield and armour
@@ -965,12 +965,10 @@ fn sight_of<'a>(
         let standing = reserves.shield.now + reserves.armor.now;
         f64::from(around.aimed_at(ship)) >= SUFFICIENT_DAMAGE * f64::from(standing)
     });
-    // The player has no cloak.
     let (untargetable, cloaked) = match ship {
-        ShipRef::Player => (
-            around.player.is_some_and(|player| player.untargetable),
-            false,
-        ),
+        ShipRef::Player => around.player.map_or((false, false), |player| {
+            (player.untargetable, player.cloak.is_cloaked())
+        }),
         ShipRef::Npc(id) => around.npc(id).map_or((false, false), |other| {
             (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
         }),
@@ -1274,6 +1272,8 @@ mod tests {
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
             speed: 0.0,
+            cloak: crate::cloak::Cloak::default(),
+            area_cloak: false,
         }
     }
 
@@ -1375,6 +1375,69 @@ mod tests {
         assert_eq!(fired_at_npc(&untargetable_bit, 0.0, -300.0, cloaked), None);
         let sees = scanning(npc, SEES_CLOAKED);
         assert_eq!(fired_at_npc(&sees, 0.0, -300.0, cloaked), id(131));
+    }
+
+    /// What `npc` fires at the cloaked player (`x`, `y`) from [`SHOOTER`],
+    /// its shields up.
+    fn fired_at_cloaked_player(npc: &Npc, x: f32, y: f32) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(crate::ai::fixture::cloaked_player(player_at(
+                SHOOTER.x + x,
+                SHOOTER.y + y,
+                50.0,
+            ))),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    #[test]
+    fn a_missile_flies_at_a_cloaked_player_only_with_the_shooters_cloak_bit() {
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131), "uncloaked");
+        assert_eq!(fired_at_cloaked_player(&npc, 0.0, -300.0), None);
+        let untargetable_bit = scanning(npc.clone(), SEES_UNTARGETABLE);
+        assert_eq!(
+            fired_at_cloaked_player(&untargetable_bit, 0.0, -300.0),
+            None
+        );
+        let sees = scanning(npc, SEES_CLOAKED);
+        assert_eq!(fired_at_cloaked_player(&sees, 0.0, -300.0), id(131));
+    }
+
+    #[test]
+    fn an_npc_holds_its_guns_at_a_cloaked_player_it_cannot_see_and_fires_once_its_scanner_sees_it()
+    {
+        let gun = WeaponRecord {
+            count: 30,
+            ..gun(130, 1, 1)
+        };
+        let turret = WeaponRecord {
+            count: 30,
+            ..guided(130, 4)
+        };
+        for (npc, case) in [
+            (shooter(&[gun], ATTACK), "a gun (@0x7ff25)"),
+            (
+                shooter(&[turret], Goal::Flee(ShipRef::Player)),
+                "a turret (@0x80b69)",
+            ),
+        ] {
+            assert_eq!(fired(&npc, 0.0, -150.0, 50.0), id(130), "{case} uncloaked");
+            assert_eq!(fired_at_cloaked_player(&npc, 0.0, -150.0), None, "{case}");
+            let scans = scanning(npc, SCANS_SCREEN);
+            assert_eq!(
+                fired_at_cloaked_player(&scans, 0.0, -150.0),
+                id(130),
+                "{case} scanned"
+            );
+            assert_eq!(
+                fired_at_cloaked_player(&scans, 0.0, -250.0),
+                None,
+                "{case} scanner out of reach"
+            );
+        }
     }
 
     #[test]
@@ -1971,6 +2034,7 @@ mod tests {
             &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
         npc
     }

@@ -38,7 +38,8 @@
 //!
 //! Left out: the 8-bit
 //! depth's translucency 32 − n (@0x2c78b-0x2c79d), as the engine draws at
-//! 16-bit only; and the cloak's effect on the layer, the cloak roadmaps'.
+//! 16-bit only. A cloak holds the layer to trunc(40 − fade) and jitters it
+//! (see [`cloak_fade`](super::cloak_fade)).
 
 use std::collections::BTreeMap;
 

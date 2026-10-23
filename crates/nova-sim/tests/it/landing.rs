@@ -49,9 +49,7 @@ impl CombatCatalog for Pilot {
 }
 
 /// No traffic: the system takes off into is empty.
-struct NoTraffic;
-
-impl TrafficCatalog for NoTraffic {
+impl TrafficCatalog for Pilot {
     fn system_traffic(&self, _id: SystemId) -> Option<SystemTraffic> {
         None
     }
@@ -236,6 +234,20 @@ fn requested(station: bool) -> LandPress {
 }
 
 #[test]
+fn a_cloaked_player_is_told_to_disengage_its_cloak_first() {
+    // `_HandlePlayerDockRequest`'s `_ShipIsCloaked` (@0x66a8e).
+    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
+    let full = nova_sim::cloak::Cloak {
+        fade: nova_sim::cloak::FADE_FULL,
+        direction: 0,
+    };
+    nova_sim::fixture::set_player_cloak(&mut session, full);
+    assert_eq!(session.player_cloak(), full);
+    assert_eq!(session.land(), Err(LandingRefusal::Cloaked));
+    assert_eq!(session.landed(), None);
+}
+
+#[test]
 fn the_first_l_requests_clearance_and_the_second_lands_after_a_tick() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
     assert_eq!(session.land(), Ok(requested(false)));
@@ -292,7 +304,10 @@ fn a_new_pilot_is_denied_where_a_record_is_needed() {
 
 #[test]
 fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
-    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
+    let catalog = Pilot {
+        sites: vec![at_centre(StellarFlags::CAN_LAND, 0)],
+    };
+    let mut session = Session::start(&catalog).expect("starts");
     let thrust = Controls {
         thrust: true,
         ..Controls::default()
@@ -333,7 +348,7 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
     assert_eq!(
-        session.take_off(&NoTraffic, &mut NeverFires),
+        session.take_off(&catalog, &mut NeverFires),
         Some(StellarId(128))
     );
     assert_eq!(session.landed(), None);

@@ -1,4 +1,5 @@
 use super::*;
+use nova_sim::cloak::CloakShown;
 
 // Traffic.
 
@@ -87,7 +88,7 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
 }
 
 #[test]
-fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
+fn a_fully_cloaked_ship_is_hidden_and_one_fading_out_drawn_fading() {
     let (_, chance) = scripted(&placed(850, 650, 90));
     let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
         .with_chance(chance)
@@ -101,8 +102,8 @@ fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
     npc.cloak.fade = 8.0;
     assert_eq!(
         session.cloak_shown(&npc),
-        CloakShown::Opaque,
-        "faded out enough to be seen"
+        CloakShown::Fading(8.0),
+        "still fading"
     );
 }
 
@@ -2282,6 +2283,95 @@ fn arriving_clears_the_effects() {
     arrive_now(&mut view);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
     assert_eq!(*view.effects(), Effects::default());
+}
+
+/// [`armed`]'s flight whose Proxima, 140, Alpha Centauri's stellar at its
+/// centre, explodes in `bööm` 128 (explosion type 0), which sounds `snd `
+/// 302, as a crön's `Y140` destroys it on the first day.
+fn proxima_on_the_day() -> FakeCatalog {
+    let mut catalog = armed(0, &[BLASTER]);
+    catalog.lives = vec![nova_sim::StellarLife {
+        explosion: nova_sim::catalog::Explosion::decode(0),
+        ..life(140, 0)
+    }];
+    catalog.boom_sounds = vec![(nova_sim::BoomId(128), nova_sim::SoundId(302))];
+    catalog.crons = vec![nova_sim::catalog::CronRecord {
+        id: nova_sim::catalog::CronId(128),
+        first_day: 0,
+        first_month: 0,
+        first_year: 0,
+        last_day: 0,
+        last_month: 0,
+        last_year: 0,
+        random: 100,
+        duration: 0,
+        pre_holdoff: 0,
+        post_holdoff: 0,
+        flags: 0,
+        enable_on: Test::default(),
+        on_start: nova_sim::Script::parse("Y140"),
+        on_end: nova_sim::Script::default(),
+        contribute: 0,
+        require: 0,
+        news_govt: [-1; 4],
+        govt_news: [-1; 4],
+        ind_news: -1,
+    }];
+    catalog
+}
+
+/// Jumps to Alpha Centauri, ticking until the tick the session arrives,
+/// and no further.
+fn arrive_in_131(view: &mut View) {
+    plot(view, 131);
+    fly_out(view);
+    jump_now(view);
+    for _ in 0..1000 {
+        view.tick(TICK);
+        if view.session().expect("flying").system() == SystemId(131) {
+            return;
+        }
+    }
+    panic!("never arrived");
+}
+
+#[test]
+fn a_crons_y_on_a_jumps_day_is_drawn_on_the_arrivals_first_frame() {
+    // The explosion stays in the explod table through the arrival
+    // (@0x1d7fb), advanced once by `_PrepareAllSprites` (@0x6c59c).
+    let mut view = fighting(proxima_on_the_day(), &[]);
+    arrive_in_131(&mut view);
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "{explosions:?}");
+    assert_eq!(explosions[0].boom, nova_sim::BoomId(128));
+    assert_eq!(explosions[0].at, Point::new(0.0, 0.0), "Proxima's place");
+    assert_eq!(explosions[0].frame, 1.0, "advanced once");
+}
+
+#[test]
+fn a_ys_explosion_plays_no_boom_sound_from_the_view() {
+    let mut view = fighting(proxima_on_the_day(), &[]);
+    arrive_in_131(&mut view);
+    let mut sounds = view.take_sounds();
+    view.tick(TICK);
+    sounds.extend(view.take_sounds());
+    let heard = |sound: &Sound| match sound {
+        Sound::Sim(nova_sim::SimSound::Explosion { sound, .. })
+        | Sound::Combat(CombatSound { sound, .. }) => *sound == nova_sim::SoundId(302),
+        _ => false,
+    };
+    assert_eq!(
+        sounds
+            .iter()
+            .filter(|sound| heard(sound))
+            .collect::<Vec<_>>(),
+        [&Sound::Sim(nova_sim::SimSound::Explosion {
+            sound: nova_sim::SoundId(302),
+            offset: (1350, 0),
+            priority: 6,
+        })],
+        "the session's, once"
+    );
 }
 
 /// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which

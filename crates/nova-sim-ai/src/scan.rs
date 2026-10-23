@@ -13,9 +13,10 @@
 //! @0x7e483-0x7e491); it has a government (@0x7e497); that government's
 //! `SmugPenalty` is not 0 (gövt +0x48, @0x7e4a8-0x7e4bf); it is within
 //! 100.0 of the player on both axes (@0x7e4c5-0x7e52d,
-//! [`within_reach`]); and `Rand(100)` ≤ 75 (@0x7e54c-0x7e55c). The
-//! visibility test between the reach and the draw (`_ShipVisibleToShip`
-//! @0x7e53f) always passes: the engine's player has no cloak. The reach
+//! [`within_reach`]); it sees the player (`_ShipVisibleToShip` @0x7e53f,
+//! [`sight::sees_player`](crate::ai::sight::sees_player): a cloaked
+//! player is seen by a cloak scanner on screen, or by its own escort with
+//! a cloak); and `Rand(100)` ≤ 75 (@0x7e54c-0x7e55c). The reach
 //! is tested again before each contraband loop (@0x7eacb-0x7eb3f,
 //! @0x7ef0d-0x7ef7b); nothing moves in between, so once is enough.
 //!
@@ -79,14 +80,22 @@ pub const SCAN_ROLL: u32 = 75;
 const SCAN_FINE_SHARE: f64 = 0.0001;
 
 /// Whether a ship of AI type `ai_type` and government `govt`, `off` from
-/// the player, scans the player, drawing on `chance` (see the module
-/// docs' gates): only a warship or an interceptor, of a government with
-/// a `SmugPenalty`, within reach, then on a draw of `Rand(100)` of 75 or
-/// less. Nothing is drawn when an earlier gate fails.
-pub fn goes_on(ai_type: AiType, govt: &GovtRecord, off: Vec2, chance: &mut dyn Chance) -> bool {
+/// the player and seeing it as `seen` says, scans the player, drawing on
+/// `chance` (see the module docs' gates): only a warship or an
+/// interceptor, of a government with a `SmugPenalty`, within reach,
+/// seeing the player, then on a draw of `Rand(100)` of 75 or less.
+/// Nothing is drawn when an earlier gate fails.
+pub fn goes_on(
+    ai_type: AiType,
+    govt: &GovtRecord,
+    off: Vec2,
+    seen: bool,
+    chance: &mut dyn Chance,
+) -> bool {
     matches!(ai_type, AiType::Warship | AiType::Interceptor)
         && govt.penalties.smuggle != 0
         && within_reach(off)
+        && seen
         && chance.below(100) <= SCAN_ROLL
 }
 
@@ -275,12 +284,41 @@ mod tests {
         }
     }
 
-    /// Whether a ship of `ai_type`, `off` from the player, scans for
-    /// `govt` on a draw of `draw`, and the draws asked.
+    /// Whether a ship of `ai_type`, `off` from the player and seeing it,
+    /// scans for `govt` on a draw of `draw`, and the draws asked.
     fn gate(ai_type: AiType, govt: &GovtRecord, off: Vec2, draw: u32) -> (bool, Vec<u32>) {
+        gate_seen(ai_type, govt, off, true, draw)
+    }
+
+    /// [`gate`], the player `seen` by the ship or not.
+    fn gate_seen(
+        ai_type: AiType,
+        govt: &GovtRecord,
+        off: Vec2,
+        seen: bool,
+        draw: u32,
+    ) -> (bool, Vec<u32>) {
         let mut chance = Draws::of(&[draw]);
-        let goes = goes_on(ai_type, govt, off, &mut chance);
+        let goes = goes_on(ai_type, govt, off, seen, &mut chance);
         (goes, chance.asked)
+    }
+
+    #[test]
+    fn a_scanner_that_cannot_see_the_player_scans_nothing_and_draws_nothing() {
+        // `_ShipVisibleToShip(player, scanner)` @0x7e53f, after the reach
+        // and before `Rand(100)`.
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            assert_eq!(
+                gate_seen(ai_type, &scanning(0), Vec2::ZERO, false, 0),
+                (false, vec![]),
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                gate_seen(ai_type, &scanning(0), Vec2::ZERO, true, 0),
+                (true, vec![100]),
+                "{ai_type:?} seen"
+            );
+        }
     }
 
     #[test]

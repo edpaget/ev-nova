@@ -12,24 +12,29 @@
 //! [`clearance`] module's [`DockRequest`]. L, in this
 //! order:
 //!
-//! 1. **The stellar.** The navigation target; with none, or one no
-//!    longer in the system, the nearest stellar with the can-land flag,
-//!    destroyed or not ([`nearest_stellar`], `_FindNearestStellar`),
-//!    station or planet, which the press selects ([`DockPress::selected`])
-//!    and goes on with (@0x6a8ed-0x6a956); a pick it can't land on is
-//!    selected and then refused at step 2. (The "no longer in the system"
-//!    fallback can't be reached from the `Session`: its selection only
-//!    ever holds stellars of `sites`, see hud-fidelity phase 37.) With
+//! 1. **The stellar.** The navigation target, the stellar held wherever
+//!    it is now, never swapped for another (`_HandlePlayer` @0x6a8ed goes
+//!    to the nearest pick only when +0x6c is -1); with none, the nearest
+//!    stellar with the can-land flag, destroyed or not
+//!    ([`nearest_stellar`], `_FindNearestStellar`), station or planet,
+//!    which the press selects ([`DockPress::selected`]) and goes on with
+//!    (@0x6a8ed-0x6a956); a pick it can't land on is selected and then
+//!    refused at step 2. With
 //!    stellars but none with the can-land flag it selects nothing and
 //!    refuses with
 //!    [`LandingRefusal::NothingLandable`]; with no stellars,
 //!    [`LandingRefusal::NoStellars`]. Both are silent: the land key makes
 //!    no dock request (@0x6a94c).
 //! 2. **Not landable** (@0x6695c-0x669ae): a stellar that cannot be landed
-//!    on refuses with
+//!    on (`_StellarIsLandable` @0x66977), or that the player's system no
+//!    longer holds, its owner (+0x14) not the player's system (+0x74,
+//!    @0x6699a-0x669a4) or it inactive (+0x44, @0x669aa), refuses with
 //!    [`LandingRefusal::NotLandable`], wherever the ship is (`STR#` 2002
 //!    #84/#88/#90, "Your ship is unable to land on ... The planet's
-//!    environment is too hostile."). The request is kept.
+//!    environment is too hostile.", @0x67cda-0x67e8f). The request is
+//!    kept. The owner can differ from the player's system between rebuild
+//!    points, once a galaxy change has given the stellar to another
+//!    system; the caller says whether the system holds it.
 //! 3. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
 //!    stellar's at [`CLEARED`], "No response." is said
 //!    ([`DockSaid::NoResponse`]), and the press goes on to 4, so it lands
@@ -109,13 +114,11 @@
 //!   rdm:task/landing-fee. The engine models no fee, and no stock stellar
 //!   has one.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
-//!   disabled or dying ship (@0x66aee-0x66b14), which the
-//!   `nova_sim::Session` refuses up front with
-//!   [`LandingRefusal::Disabled`]:
-//!   rdm:phase/player-death/phase-16-handle-player-left-out-gates.
-//! - The cloak refusal (`_ShipIsCloaked` @0x66a8e, STR# 2002 #73),
-//!   which beeps `snd ` 153 at the shared tail (@0x67e8f): the engine
-//!   has no player cloak (rdm:task/cloaking-device).
+//!   disabled or dying ship (@0x66aee-0x66b14) are the
+//!   `nova_sim::Session`'s, which refuses them after the press's
+//!   landability with [`LandingRefusal::Cloaked`] (STR# 2002 #73,
+//!   beeping `snd ` 153 at the shared tail @0x67e8f) and
+//!   [`LandingRefusal::Disabled`], the cloak first.
 //! - The fee refusal (@0x669b4-0x66a80), which is silent
 //!   (rdm:task/landing-fee).
 //! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
@@ -243,10 +246,17 @@ pub enum LandingRefusal {
     Jumping,
     /// The ship is disabled, breaking up or destroyed: refused silently,
     /// the dock request's bare epilogue 0x67eef, after the landability
-    /// check (and the fee and cloak, not modelled) for a disabled ship,
-    /// and before anything for a breaking-up or destroyed one (see
-    /// `nova_sim::Session::land`).
+    /// check, the fee (not modelled) and the cloak ([`Self::Cloaked`])
+    /// for a disabled ship, and before anything for a breaking-up or
+    /// destroyed one (see `nova_sim::Session::land`).
     Disabled,
+    /// The ship is cloaked: "Disengage cloaking device first." (STR#
+    /// 2002 #73, `_DisplayComm` for 250 ticks @0x66ade), then the shared
+    /// tail's beep (`_ShipIsCloaked` @0x66a8e → 0x67e67). It comes after
+    /// the landability check (@0x66977-0x669ae) and the fee, and before
+    /// the disabled test (@0x66aee) and the reach, speed, approach and
+    /// clearance (@0x66c23 on).
+    Cloaked,
     /// The system has no stellars, so the land key has nothing to select
     /// and makes no dock request (@0x6a94c): a silent refusal.
     NoStellars,
@@ -293,7 +303,8 @@ impl LandingRefusal {
     /// Whether `_HandlePlayerDockRequest` beeps `_beepSnd[3]` (`snd ` 153)
     /// for this refusal: a stellar that can't be landed on (wrong
     /// government or inactive, @0x66977-0x669ae, `PlaySound` @0x67e8f,
-    /// before `_IsDisabled`, so a disabled ship's beeps too), out of
+    /// before `_IsDisabled`, so a disabled ship's beeps too), a cloaked
+    /// ship (@0x66a8e → 0x67e67), out of
     /// reach (@0x66cfd, @0x676aa), or pressed again before the approach
     /// clears or moving too fast (@0x66c23-0x66c66, @0x676fe). The
     /// others are silent of it: [`Self::Jumping`], [`Self::NoStellars`]
@@ -311,7 +322,7 @@ impl LandingRefusal {
     pub fn beeps(&self) -> bool {
         matches!(
             self,
-            Self::NotLandable { .. } | Self::TooFar { .. } | Self::TooFast { .. }
+            Self::NotLandable { .. } | Self::Cloaked | Self::TooFar { .. } | Self::TooFast { .. }
         )
     }
 }
@@ -460,18 +471,20 @@ pub struct DockPress {
     pub outcome: Result<LandOutcome, LandingRefusal>,
 }
 
-/// What the land key does with the navigation target `target` and the
-/// dock request `dock`, for the ship `player` among the system's
-/// stellars `sites` (in navigation order), where `cleared` says whether
-/// traffic control clears the pilot to request docking at an inhabited
-/// stellar ([`cleared`]) and `reach` gives a stellar's [`LandingReach`]:
-/// see the module docs.
+/// What the land key does with the navigation target `target` (the
+/// stellar held, wherever it is now) and the dock request `dock`, for the
+/// ship `player` among the system's stellars `sites` (in navigation
+/// order), where `cleared` says whether traffic control clears the pilot
+/// to request docking at an inhabited stellar ([`cleared`]), `held` says
+/// whether the player's system still holds a stellar, owned and active,
+/// and `reach` gives a stellar's [`LandingReach`]: see the module docs.
 pub fn land_or_select(
-    target: Option<StellarId>,
+    target: Option<&LandingSite>,
     dock: Option<DockRequest>,
     player: &ShipState,
     sites: &[LandingSite],
     cleared: impl Fn(&LandingSite) -> bool,
+    held: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
 ) -> DockPress {
     let refused = |refusal| DockPress {
@@ -480,7 +493,6 @@ pub fn land_or_select(
         said: None,
         outcome: Err(refusal),
     };
-    let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
     let (site, selected) = match target {
         Some(site) => (site, None),
         None => match nearest_stellar_site(player.position, sites) {
@@ -489,7 +501,7 @@ pub fn land_or_select(
             None => return refused(LandingRefusal::NothingLandable),
         },
     };
-    if !is_landable(site) {
+    if !is_landable(site) || !held(site) {
         return DockPress {
             selected,
             dock,
@@ -891,7 +903,7 @@ mod tests {
     /// landed on, or the refusal. Traffic control is not asked.
     fn check(player: &ShipState, site: &LandingSite) -> Result<StellarId, LandingRefusal> {
         let press = land_or_select(
-            Some(site.id),
+            Some(site),
             Some(DockRequest {
                 stellar: site.id,
                 permission: CLEARED,
@@ -899,6 +911,7 @@ mod tests {
             player,
             std::slice::from_ref(site),
             |_| panic!("traffic control is asked"),
+            |_| true,
             engine_reach,
         );
         press.outcome.map(|outcome| match outcome {
@@ -923,6 +936,7 @@ mod tests {
             &parked(),
             std::slice::from_ref(site),
             |site| landing_record(site, system_govt, &record) >= site.min_status,
+            |_| true,
             engine_reach,
         );
         press.outcome.map(|outcome| match outcome {
@@ -1619,8 +1633,9 @@ mod tests {
         ]
     }
 
-    /// L pressed with `target` selected and `dock` requested, for a ship
-    /// `player` among `sites`, traffic control clearing as `clear` says.
+    /// L pressed with `target` of `sites` selected and `dock` requested,
+    /// for a ship `player` among `sites`, traffic control clearing as
+    /// `clear` says, and every stellar held by the player's system.
     fn press_with(
         target: Option<i16>,
         dock: Option<DockRequest>,
@@ -1628,12 +1643,19 @@ mod tests {
         sites: &[LandingSite],
         clear: bool,
     ) -> DockPress {
+        let target = target.map(|id| {
+            sites
+                .iter()
+                .find(|site| site.id == StellarId(id))
+                .expect("a target among the sites")
+        });
         land_or_select(
-            target.map(StellarId),
+            target,
             dock,
             player,
             sites,
             |_| clear,
+            |_| true,
             engine_reach,
         )
     }
@@ -1701,10 +1723,88 @@ mod tests {
     }
 
     #[test]
-    fn a_target_no_longer_in_the_system_is_as_good_as_none() {
-        let pressed = press(Some(140), &parked(), &system());
-        assert_eq!(pressed.selected, Some(StellarId(128)));
-        assert_eq!(pressed.outcome, requested(128, false));
+    fn a_held_target_no_longer_in_the_system_is_refused_as_not_landable() {
+        // The held stellar is never swapped for the nearest
+        // (`_HandlePlayer` @0x6a8ed): its owner and active rechecks
+        // (@0x6699a-0x669aa) refuse it.
+        let sites = system();
+        let gone = site(140, 0.0, 0.0);
+        let pressed = land_or_select(
+            Some(&gone),
+            request(128, 0x2ed),
+            &parked(),
+            &sites,
+            |_| panic!("traffic control is asked"),
+            |site| sites.contains(site),
+            engine_reach,
+        );
+        assert_eq!(
+            pressed,
+            DockPress {
+                selected: None,
+                dock: request(128, 0x2ed),
+                said: None,
+                outcome: Err(LandingRefusal::NotLandable {
+                    stellar: StellarId(140),
+                    station: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_target_its_system_no_longer_holds_is_refused_as_not_landable_with_a_beep() {
+        let sites = system();
+        let pressed = land_or_select(
+            Some(&sites[2]),
+            request(130, CLEARED),
+            &ship(400.0, 0.0, 0.0, 0.0),
+            &sites,
+            |_| panic!("traffic control is asked"),
+            |site| site.id != StellarId(130),
+            engine_reach,
+        );
+        let refusal = LandingRefusal::NotLandable {
+            stellar: StellarId(130),
+            station: true,
+        };
+        assert_eq!(
+            pressed,
+            DockPress {
+                selected: None,
+                dock: request(130, CLEARED),
+                said: None,
+                outcome: Err(refusal),
+            },
+            "after the landability check, before the attempt"
+        );
+        assert!(refusal.beeps());
+    }
+
+    #[test]
+    fn a_nearest_pick_its_system_no_longer_holds_is_selected_then_refused() {
+        let sites = system();
+        let pressed = land_or_select(
+            None,
+            None,
+            &parked(),
+            &sites,
+            |_| panic!("traffic control is asked"),
+            |site| site.id != StellarId(128),
+            engine_reach,
+        );
+        assert_eq!(
+            pressed,
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::NotLandable {
+                    stellar: StellarId(128),
+                    station: false,
+                }),
+            }
+        );
     }
 
     #[test]
@@ -2037,10 +2137,6 @@ mod tests {
             press(None, &parked(), &[]).outcome,
             Err(LandingRefusal::NoStellars)
         );
-        assert_eq!(
-            press(Some(128), &parked(), &[]).outcome,
-            Err(LandingRefusal::NoStellars)
-        );
     }
 
     // Clearance.
@@ -2291,5 +2387,12 @@ mod tests {
         for refusal in silent {
             assert!(!refusal.beeps(), "{refusal:?}");
         }
+    }
+
+    #[test]
+    fn a_cloaked_refusal_beeps() {
+        // `_ShipIsCloaked` @0x66a8e jumps to the shared tail 0x67e67,
+        // which plays `_beepSnd[3]` (@0x67e8f).
+        assert!(LandingRefusal::Cloaked.beeps());
     }
 }

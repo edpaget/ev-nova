@@ -158,6 +158,10 @@ pub enum BoardRefusal {
     TooFar,
     /// The player does not face the target's way, nor its reverse.
     Misaligned,
+    /// The player is cloaked: refused silently, with a target, before
+    /// every check (`_ShipIsCloaked` @0x6503f → 0x6605a, the no-target
+    /// return @0x65031 first).
+    Cloaked,
 }
 
 /// The ship the player tries to board, as the boarding checks see it.
@@ -188,10 +192,11 @@ pub const MAX_RELATIVE_SPEED: f32 = 0.5;
 pub const FACING_LIMIT: i16 = 30;
 
 impl BoardRefusal {
-    /// Whether the player is told nothing: no target, or not facing it.
+    /// Whether the player is told nothing: no target, not facing it, or
+    /// cloaked.
     #[must_use]
     pub fn silent(self) -> bool {
-        matches!(self, Self::NoTarget | Self::Misaligned)
+        matches!(self, Self::NoTarget | Self::Misaligned | Self::Cloaked)
     }
 }
 
@@ -2016,5 +2021,12 @@ mod tests {
         ] {
             assert!(!loud.silent(), "{loud:?}");
         }
+    }
+
+    #[test]
+    fn a_cloaked_refusal_is_silent() {
+        // `_ShipIsCloaked` @0x6503f returns through 0x6605a before the
+        // latch is set (@0x6504c): no beep, no line.
+        assert!(BoardRefusal::Cloaked.silent());
     }
 }

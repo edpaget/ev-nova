@@ -313,6 +313,57 @@ mod tests {
         }
     }
 
+    // The cloak.
+
+    /// A cloak still fading out: a ship disabled while cloaked.
+    const FADING_OUT: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: 12.0,
+        direction: -1,
+    };
+
+    /// [`aboard`] `catalog`'s trader, its cloak still fading out.
+    fn aboard_fading(catalog: &FakePilotCatalog) -> Session {
+        let mut session = aboard(catalog);
+        session.space.npc_mut(ON_BOARD.npc).expect("here").cloak = FADING_OUT;
+        session
+    }
+
+    /// The trader's cloak once it has joined the fleet.
+    fn joined_cloak(session: &Session) -> crate::cloak::Cloak {
+        assert!(session.is_escort(ON_BOARD.npc), "joined");
+        session.space.npc(ON_BOARD.npc).expect("here").cloak
+    }
+
+    /// `_DoPlunderDialog`'s escort path zeroes the captured ship's fade
+    /// direction (+0xc8d8 @0x946e3) and fade (+0x64 @0x946f9), whichever
+    /// way it joins: at once for a crewless player's ship, or once the
+    /// assignment dialog asks it to be an escort.
+    #[test]
+    fn a_ship_captured_while_its_cloak_still_fades_joins_at_fade_0_with_no_direction() {
+        let catalog = boardable();
+        let mut session = aboard_fading(&catalog);
+        for record in &mut session.statics_mut().ships {
+            if record.id == ShipId(128) {
+                record.crew = 0;
+            }
+        }
+        assert_eq!(
+            take(&mut session, Take::Capture, &[0, 1]).0,
+            Taken::Escorted
+        );
+        assert_eq!(joined_cloak(&session), crate::cloak::Cloak::default());
+        let mut session = aboard_fading(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[0, 1]).0,
+            Taken::Captured
+        );
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(joined_cloak(&session), crate::cloak::Cloak::default());
+    }
+
     // The escorts counted.
 
     #[test]

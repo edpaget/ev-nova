@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::draw::DrawList;
+use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -145,6 +145,9 @@ pub enum Role {
         size: f32,
         /// Its colour.
         color: Color,
+        /// A filled box drawn under it, with its text inset, or `None` for
+        /// text straight on whatever is below.
+        backing: Option<TextBacking>,
     },
     /// Not there at all: not drawn, not hit-tested and never focused, as
     /// if it were outside the dialog. Any kind of item can be hidden.
@@ -152,6 +155,29 @@ pub enum Role {
     /// Shown greyed and never activated: a button draws disabled. Any
     /// kind of item can be greyed.
     Greyed,
+}
+
+/// A filled box under a scrolling text: the box the original paints or
+/// inverts behind a dialog's text item, white text on black.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextBacking {
+    /// The box's colour.
+    pub fill: Color,
+    /// How far inside the item the box is, on every side.
+    pub fill_inset: f32,
+    /// How far inside the item the text is set: across, then down, on
+    /// both sides of each axis, as `InsetRect` takes them.
+    pub text_inset: (f32, f32),
+}
+
+impl TextBacking {
+    /// A black box filling the whole item, the text set over all of it:
+    /// `TETextBox` black on white, then `InvertRect` over the item.
+    pub const BLACK_BOX: Self = Self {
+        fill: Color::BLACK,
+        fill_inset: 0.0,
+        text_inset: (0.0, 0.0),
+    };
 }
 
 /// A dialog's frame: three pictures stacked top to bottom over its bounds,
@@ -181,10 +207,12 @@ pub enum DialogEvent {
 #[derive(Clone, Debug, PartialEq)]
 enum Widget {
     Button(Button),
-    /// Wrapped text; it scrolls when `scrolls`.
+    /// Wrapped text; it scrolls when `scrolls`, over a box filled in a
+    /// colour when `fill` holds one.
     Text {
         text: ScrollText,
         scrolls: bool,
+        fill: Option<(Bounds, Color)>,
     },
     /// Laid out and hit-tested, but not drawn.
     Blank,
@@ -431,6 +459,7 @@ impl Dialog {
             Widget::Text {
                 text,
                 scrolls: true,
+                ..
             } => Some(text),
             _ => None,
         })
@@ -481,6 +510,7 @@ impl Dialog {
                         Widget::Text {
                             text,
                             scrolls: true,
+                            ..
                         } => Some(text),
                         _ => None,
                     });
@@ -589,7 +619,12 @@ impl Dialog {
                         outline(list, item.bounds, self.style.up);
                     }
                 }
-                Widget::Text { text, .. } => text.draw(list),
+                Widget::Text { text, fill, .. } => {
+                    if let Some((area, color)) = fill {
+                        fill_rect(list, *area, *color);
+                    }
+                    text.draw(list);
+                }
                 Widget::Blank => {}
             }
         }
@@ -623,6 +658,7 @@ fn widget(
                 metrics,
             ),
             scrolls: false,
+            fill: None,
         },
         (ItemSpec::User, Some(Role::Button(label))) => button(label),
         (
@@ -632,11 +668,22 @@ fn widget(
                 font,
                 size,
                 color,
+                backing,
             }),
-        ) => Widget::Text {
-            text: ScrollText::new(text, *font, *size, *color, bounds, metrics),
-            scrolls: true,
-        },
+        ) => {
+            let (text_rect, fill) = match backing {
+                None => (bounds, None),
+                Some(backing) => (
+                    bounds.inset(backing.text_inset.0, backing.text_inset.1),
+                    Some((bounds.grown(-backing.fill_inset), backing.fill)),
+                ),
+            };
+            Widget::Text {
+                text: ScrollText::new(text, *font, *size, *color, text_rect, metrics),
+                scrolls: true,
+                fill,
+            }
+        }
         _ => Widget::Blank,
     }
 }
@@ -659,7 +706,7 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
 
@@ -1247,6 +1294,7 @@ mod tests {
                     font: Font::Geneva,
                     size: 10.0,
                     color: Color::WHITE,
+                    backing: None,
                 },
             ),
         ]
@@ -1330,6 +1378,99 @@ mod tests {
         let before = drawn(&dialog);
         dialog.input(&key(Key::Down));
         assert_eq!(drawn(&dialog), before);
+    }
+
+    /// `desc_like`'s roles, its text item (3) backed by `backing`.
+    fn backed_roles(text: &str, backing: TextBacking) -> Vec<(usize, Role)> {
+        let mut roles = desc_roles(text);
+        if let Role::ScrollText { backing: slot, .. } = &mut roles[1].1 {
+            *slot = Some(backing);
+        }
+        roles
+    }
+
+    /// A box filled red, inset 1, its text inset (5, 3).
+    const INSET: TextBacking = TextBacking {
+        fill: Color::rgba(255, 0, 0, 255),
+        fill_inset: 1.0,
+        text_inset: (5.0, 3.0),
+    };
+
+    #[test]
+    fn a_backed_text_fills_its_box_before_its_text_runs() {
+        let dialog = dialog(
+            &desc_like(),
+            &backed_roles("l0\rl1", TextBacking::BLACK_BOX),
+        );
+        let commands = drawn(&dialog);
+        // The button's three pictures and label, the fill, then the lines.
+        assert_eq!(
+            commands[4],
+            fill_command(rect(10.0, 10.0, 40.0, 36.0), Color::BLACK)
+        );
+        assert!(
+            matches!(&commands[5], DrawCommand::Text { text, .. } if text == "l0"),
+            "{commands:#?}"
+        );
+        assert_eq!(commands.len(), 7);
+    }
+
+    #[test]
+    fn a_backed_text_is_wrapped_and_placed_in_its_inset_box() {
+        // Item 3 is 40 x 36 at (10, 10): inset (5, 3) it is 30 x 30 at
+        // (15, 13), 6 Geneva-10 characters a line and 2 lines of 12.
+        let mut dialog = dialog(&desc_like(), &backed_roles("abcdef gh\rl1\rl2", INSET));
+        let commands = drawn(&dialog);
+        assert_eq!(
+            commands[4],
+            fill_command(rect(11.0, 11.0, 38.0, 34.0), INSET.fill)
+        );
+        assert!(
+            matches!(
+                &commands[5],
+                DrawCommand::Text { text, origin, .. }
+                    if text == "abcdef" && *origin == at(15.0, 13.0)
+            ),
+            "{commands:#?}"
+        );
+        let text = dialog.text(3).expect("text");
+        assert_eq!((text.visible(), text.lines().len()), (2, 4));
+        dialog.set_text(3, "abcdefg");
+        let text = dialog.text(3).expect("text");
+        assert_eq!(
+            text.rect(),
+            rect(15.0, 13.0, 30.0, 30.0),
+            "kept on set_text"
+        );
+        assert_eq!(text.lines(), ["abcdef", "g"]);
+    }
+
+    #[test]
+    fn an_unbacked_text_draws_no_fill() {
+        let dialog = dialog(&desc_like(), &desc_roles("l0"));
+        assert!(
+            !drawn(&dialog)
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Line { .. })),
+        );
+    }
+
+    #[test]
+    fn a_backed_text_outside_the_dialog_draws_nothing() {
+        let mut template = desc_like();
+        template.items[2].bounds = rect(10.0, 150.0, 40.0, 36.0);
+        let dialog = dialog(&template, &backed_roles("l0", TextBacking::BLACK_BOX));
+        // Only the button's pictures and label.
+        assert_eq!(drawn(&dialog).len(), 4);
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_a_backed_text() {
+        let mut dialog = dialog(&desc_like(), &backed_roles("l0\rl1\rl2\rl3\rl4", INSET));
+        dialog.input(&key(Key::Down));
+        assert_eq!(dialog.text(3).expect("text").first(), 1);
+        dialog.input(&key(Key::Up));
+        assert_eq!(dialog.text(3).expect("text").first(), 0);
     }
 
     #[test]

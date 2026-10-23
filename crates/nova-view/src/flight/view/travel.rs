@@ -26,7 +26,7 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{
-    EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
+    CLOAK_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
     HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
     NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY,
     SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with,
@@ -35,6 +35,18 @@ use super::{
     pay_said, play_area, point, refusal_message, show_combat, show_destroyed, show_gate_frames,
     shown_scene, stellar_name, window_width,
 };
+
+/// What [`FlightView::held_triggers`] holds for the steps.
+struct HeldTriggers {
+    /// The primary and secondary fire keys.
+    fire: (bool, bool),
+    /// The eject chord.
+    eject: bool,
+    /// The self-destruct chord.
+    self_destruct: bool,
+    /// The cloak key.
+    cloak: bool,
+}
 
 impl<
     C: PilotCatalog
@@ -530,9 +542,11 @@ impl<
     }
 
     /// The triggers held as the steps run: the primary and secondary
-    /// fire keys, the eject chord and the self-destruct chord, each chord
-    /// only while the player's fate takes its command.
-    fn held_triggers(&self) -> ((bool, bool), bool, bool) {
+    /// fire keys, the eject chord, the self-destruct chord and the cloak
+    /// key, each chord and the cloak only while the player's fate takes
+    /// its command. The cloak key needs no Command (`_QuickKeyCheck`
+    /// @0x705b7).
+    fn held_triggers(&self) -> HeldTriggers {
         let fire = (
             self.held.contains(&FIRE_KEY),
             self.held.contains(&SECONDARY_KEY),
@@ -540,9 +554,12 @@ impl<
         let chord = |command, key| {
             self.takes(command) && self.held.contains(&Key::Command) && self.held.contains(&key)
         };
-        let eject = chord(PlayerCommand::Eject, EJECT_KEY);
-        let self_destruct = chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY);
-        (fire, eject, self_destruct)
+        HeldTriggers {
+            fire,
+            eject: chord(PlayerCommand::Eject, EJECT_KEY),
+            self_destruct: chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY),
+            cloak: self.takes(PlayerCommand::Cloak) && self.held.contains(&CLOAK_KEY),
+        }
     }
 
     /// Runs up to `steps` of the session's steps, each only while
@@ -561,7 +578,12 @@ impl<
     /// view laid out afresh where the rescue put the ship.
     pub(super) fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
         let controls = self.controls();
-        let (fire, eject, self_destruct) = self.held_triggers();
+        let HeldTriggers {
+            fire,
+            eject,
+            self_destruct,
+            cloak,
+        } = self.held_triggers();
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
@@ -571,6 +593,7 @@ impl<
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.hold_self_destruct(self_destruct);
+            session.hold_cloak(cloak);
             session.set_double_time_key(self.double_time);
             session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));
@@ -805,6 +828,7 @@ impl<
     /// replaces the arrival line's suffix too.
     fn arrived(&mut self) {
         self.catch_up();
+        self.show_arrival_explosions();
         // Every arrival sets `_mapScroll` to the system arrived in: a
         // jump's (`_HandlePlayer` @0x6c073), a hypergate's
         // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
@@ -965,6 +989,29 @@ impl<
         self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
+    }
+
+    /// Shows the explosions the jump left pending, a crön's `Y` on its
+    /// days among them, in the scene just laid out, so they are on the
+    /// arrival's first frame: the original keeps its explod table through
+    /// the arrival (only `_ResetPlayer` empties it, @0x1d7fb), and its
+    /// `_PrepareAllSprites` advances them once (@0x6c59c, `_HandleExplods`
+    /// @0x3a7ce) before the frame's own pass, which the steps' order from
+    /// spawn to draw stands for. A `Y`'s carries no sound of its own (see
+    /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
+    fn show_arrival_explosions(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let scene = effects_scene(session);
+        let chance = &mut self.effects_chance;
+        let events = session.take_combat_events();
+        for event in &events {
+            self.effects.apply(event, &scene, &self.looks, chance);
+        }
+        if !events.is_empty() {
+            self.effects.step(&[], &scene, &self.looks, chance);
+        }
     }
 
     /// The pilot flying, as the developer tools' desk: its edits reach
@@ -1316,7 +1363,8 @@ impl<
                     LandingRefusal::Jumping
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable
-                    | LandingRefusal::Disabled => None,
+                    | LandingRefusal::Disabled
+                    | LandingRefusal::Cloaked => None,
                 };
                 let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
                 let name = stellar.map_or("", |stellar| stellar_name(self.scene.as_ref(), stellar));

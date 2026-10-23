@@ -2836,6 +2836,7 @@ fn a_stock_interference_system_confuses_a_stock_seeker() {
     let field = nova_sim::Field {
         frame: 0,
         interference: obatta.interference,
+        ..nova_sim::Field::default()
     };
     for id in [135, 137] {
         let missile = stock_weapon(&data, id);
@@ -5674,6 +5675,8 @@ fn stock_pick_made(
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
         speed: 0.0,
+        cloak: nova_sim::cloak::Cloak::default(),
+        area_cloak: false,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

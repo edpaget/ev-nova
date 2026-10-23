@@ -201,6 +201,28 @@ fn starting_data(on_start: &[u8]) -> Rc<GameData> {
     game_data_starting(false, false, false, on_start, b"")
 }
 
+/// [`data`], where Alpha (128) links Beta (129), which is visible
+/// until bit 5 is set (`Visibility` `!b5`), and the `chär`'s `OnStart`
+/// sets bit 5: a new pilot hides Beta as its game begins.
+fn hiding_beta_data() -> Rc<GameData> {
+    let mut built = game_data_fork(false, false, false, 100, b"b5", b"", None).build();
+    let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+    built.put_u16(alpha + 0x04, 129);
+    let beta = built.layout.data_entry(System::TYPE, 129) + 4;
+    for (at, byte) in b"!b5".iter().enumerate() {
+        built.put_u8(beta + 0x96 + at, *byte);
+    }
+    loaded_bytes(built.bytes)
+}
+
+/// Whether the pilot of `flight` has explored Beta (129).
+fn explored_beta(flight: &FlightView<Rc<GameData>>) -> bool {
+    flight
+        .pilot()
+        .expect("a pilot")
+        .has_explored(nova_sim::SystemId(129))
+}
+
 /// [`outfitting_data`], where the booster's `OnPurchase` is
 /// `on_purchase`, and `STR#` 25048 holds "Off you go, <PSN>."
 fn hooked_outfitting_data(on_purchase: &[u8]) -> Rc<GameData> {
@@ -371,6 +393,24 @@ fn game_data_fork(
         .resource(Spin::TYPE, 650, None, &spin)
         .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
         .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
+        .resource(PICT, 8518, None, &upper_cap_picture())
+}
+
+/// The player info's upper cap's size in [`game_data_fork`]: not the
+/// stock 413 x 40, so a layout from the stock sizes shows.
+const UPPER_CAP_SIZE: (i16, i16) = (300, 30);
+
+/// A grey `PICT` [`UPPER_CAP_SIZE`]: the player info's upper cap
+/// (`PICT` 8518), the only one of its background pictures the fixture
+/// data holds.
+fn upper_cap_picture() -> Vec<u8> {
+    let (width, height) = UPPER_CAP_SIZE;
+    let bounds = [0, 0, height, width];
+    let count = usize::try_from(width * height).expect("positive");
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &vec![0x4210; count]))
+        .end()
+        .build()
 }
 
 /// `fork` with the main menu's art, so the menu draws the original's

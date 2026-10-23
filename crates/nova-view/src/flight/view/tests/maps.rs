@@ -919,35 +919,28 @@ fn a_disabled_ship_draws_under_the_escorts() {
 }
 
 #[test]
-fn cloak_alpha_maps_each_shown_state_to_a_tint_alpha() {
-    assert_eq!(cloak_alpha(CloakShown::Opaque), Some(255));
-    assert_eq!(cloak_alpha(CloakShown::Translucent(0x1e)), Some(135));
-    assert_eq!(cloak_alpha(CloakShown::Translucent(0)), Some(255));
-    assert_eq!(
-        cloak_alpha(CloakShown::Translucent(0x20)),
-        Some(128),
-        "127.5, rounded to nearest"
-    );
-    assert_eq!(cloak_alpha(CloakShown::Hidden), None);
-}
-
-#[test]
-fn a_fully_cloaked_escort_is_drawn_at_its_translucent_alpha() {
+fn a_fully_cloaked_escort_is_drawn_at_its_full_fades_translucency() {
     let (mut view, ships) = escorted_on_a_mission();
     let session = view.session.as_mut().expect("flying");
     nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
     let list = drawn(&view);
     let at = npc_on_screen(&view, ships.mission);
-    let tint = list.iter().find_map(|command| match *command {
+    let hull = list.iter().find_map(|command| match *command {
         DrawCommand::Sprite {
             image,
             center,
             tint,
-            ..
-        } if image.id == 2001 && center == at => Some(tint),
+            blend,
+        } if image.id == 2001 && center == at => Some((tint, blend)),
         _ => None,
     });
-    assert_eq!(tint.map(|tint| tint.a), Some(135));
+    assert_eq!(
+        hull,
+        Some((
+            crate::draw::translucent_tint(4, 30),
+            crate::draw::Blend::OrTranslucent
+        ))
+    );
 }
 
 // The floating map.

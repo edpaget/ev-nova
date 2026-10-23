@@ -14,7 +14,12 @@ use crate::navigation::NavMode;
 use crate::story::OverlaidGalaxy;
 use crate::traffic::npc::NpcId;
 
+use super::LastRefresh;
+use super::jump_moves::JumpWindow;
+use super::map_walk::MapWalk;
 use super::nav::NavSlot;
+use super::operator_moves::PendingMove;
+use super::take_off_moves::TakeOffWindow;
 
 /// What the player sees of the galaxy and has selected in it, in
 /// `Session`'s former field order.
@@ -69,6 +74,36 @@ pub(super) struct Chart {
     /// settling: by the other reading of [`RuleKey::VisibilityRefresh`](crate::rulebook::RuleKey::VisibilityRefresh)
     /// the settling refreshes the galaxy then.
     pub(super) galaxy_stale: bool,
+    /// What the last galaxy refresh left hidden, for a new pilot made
+    /// later in the run (see the `last_refresh` module): nothing hidden
+    /// before the first refresh, which `Session::fly` runs.
+    pub(super) last_refresh: LastRefresh,
+    /// What a session earlier in the run left, which a new pilot's
+    /// neighbour pass reads by the engine; `None` at launch.
+    pub(super) carried_refresh: Option<LastRefresh>,
+    /// A jump's window, from its end to its entry, while one is open: an
+    /// in-flight move in it is the jump's own (see the `jump_moves`
+    /// module). It sits with the jump's other writes of the player's
+    /// system ([`Chart::write_jump_system`]).
+    pub(super) jump_window: Option<JumpWindow>,
+    /// A take-off's window, from the ship leaving the spaceport to its
+    /// last nebula pass, while one is open: a move in it is the landed
+    /// tail, applied at its operator (see the `take_off_moves` module).
+    /// Not saved: no save falls inside it.
+    pub(super) take_off_window: Option<TakeOffWindow>,
+    /// The entry an `M` or `N` applied at its operator outside both
+    /// windows still owes, for the next settling with a catalog (see the
+    /// `operator_moves` module). Not saved: every driver settles before a
+    /// save.
+    pub(super) pending_move: Option<PendingMove>,
+    /// Whether an in-flight move's own enter-system dispatch is running,
+    /// so a move inside it only raises its event (see the
+    /// `operator_moves` module).
+    pub(super) move_dispatching: bool,
+    /// The exploration walk's visited set and reach, shared by every walk
+    /// as the original's globals are (see the `map_walk` module); not
+    /// saved.
+    pub(super) walk: MapWalk,
 }
 
 impl Chart {
@@ -91,6 +126,13 @@ impl Chart {
             next_sites: None,
             known: BTreeSet::new(),
             galaxy_stale: false,
+            last_refresh: LastRefresh::default(),
+            carried_refresh: None,
+            jump_window: None,
+            take_off_window: None,
+            pending_move: None,
+            move_dispatching: false,
+            walk: MapWalk::default(),
         }
     }
 }

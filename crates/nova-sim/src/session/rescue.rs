@@ -92,14 +92,17 @@
 //! visible ([`OverlaidGalaxy::visible`](crate::story::OverlaidGalaxy::visible)),
 //! known (+0x1ec, @0xd166; [`Session::is_known`]) and explored
 //! ([`Pilot::has_explored`](crate::Pilot::has_explored)). A stellar is active (+0x44)
-//! while a visible system owns it
-//! ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)), as
+//! while a visible system holds it
+//! ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder): its
+//! owner, else the system that rescued it, kept until the next refresh,
+//! else the player's system when that lists it), as
 //! `_HandleStellarSystemVisibility` sets it from its owner's visibility
-//! (@0x32c42-0x32cdf), and is read with the overlay's destruction; the
-//! rest of the test is [`qualifies`], against the player's record in the
-//! system searched. The system the pod goes to is the found stellar's
-//! owner (+0x14, @0x68f87-0x68f9e), or the system it was found in when no
-//! system owns it.
+//! after its rescue (@0x32c42-0x32cdf), and is read with the overlay's
+//! destruction; the rest of the test is [`qualifies`], against the
+//! player's record in the system searched. The system the pod goes to is
+//! the found stellar's owner word (+0x14, @0x68f87-0x68f9e), the rescue's
+//! included, so a system shadowed at its place that rescued it, or the
+//! system it was found in when no system holds it.
 
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
@@ -170,10 +173,15 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
             .into_iter()
             .map(|site| {
                 let site = self.session.chart.galaxy.site(site);
-                let active = self
-                    .session
+                let session = self.session;
+                let active = session
                     .chart
-                    .stellar_owner(&self.session.statics, site.id)
+                    .galaxy
+                    .active_holder(
+                        site.id,
+                        session.statics.listers(site.id),
+                        session.pilot.system,
+                    )
                     .is_some();
                 (site.id, qualifies(&site, active, record))
             })
@@ -195,8 +203,11 @@ impl Session {
             return false;
         }
         let save_due = self.out.save_due;
-        let from = self.pilot.system;
         self.end_every_mission_for_rescue(&mut &mut *chance);
+        // The escape search starts from +0x74 as the `OnAbort`s left it
+        // (@0x68f24), before `_ResetPlayer` and the `OnPurchase`, whose
+        // move the search's own write then supersedes (@0x68f7f, @0x68f9e).
+        let from = self.pilot.system;
         self.reset_player_for_rescue();
         self.ship_hook(RESCUE_SHIP, ShipHook::Purchase, &mut &mut *chance);
         let system = self.escape_destination(from, catalog);
@@ -213,7 +224,14 @@ impl Session {
                 hold: false,
             },
         };
-        self.enter_system(Entry::Rescue, arrival, catalog, catalog, chance);
+        self.enter_system(
+            Entry::Rescue,
+            self.pilot.system,
+            arrival,
+            catalog,
+            catalog,
+            chance,
+        );
         self.ship
             .fill_reserves_for_rescue(&mut self.pilot, &self.setup);
         let days = RESCUE_DAYS + u32::from(chance.roll(RESCUE_EXTRA_DAYS));
@@ -290,6 +308,10 @@ impl Session {
         self.ship.fate.pod_zeroed = false;
         self.chart.target = None;
         self.ship.fate.self_destruct.reset();
+        // The cloak's fade and direction (@0x1d457-0x1d462); the key and
+        // its latch are globals `_ResetPlayer` leaves (see the
+        // `player_cloak` module).
+        self.ship.cloak.cloak = crate::cloak::Cloak::default();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
@@ -299,7 +321,7 @@ impl Session {
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.ship.secondary = None;
         self.pilot.jumped_from = None;
-        self.pilot.course.clear();
+        self.pilot.clear_course();
         self.pilot.cargo.clear();
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
@@ -349,7 +371,7 @@ impl Session {
             RESCUE_FALLBACK,
             |(stellar, found_in)| {
                 self.chart
-                    .stellar_owner(&self.statics, stellar)
+                    .holder_of(&self.pilot, &self.statics, stellar)
                     .unwrap_or(found_in)
             },
         )
@@ -392,15 +414,6 @@ impl Chart {
             &BTreeMap::new(),
             &statics.govts,
         ));
-    }
-
-    /// The system a visible system owns `stellar` in, if any.
-    fn stellar_owner(&self, statics: &Statics, stellar: StellarId) -> Option<SystemId> {
-        let listed = statics
-            .listed_stellars
-            .iter()
-            .find(|listed| listed.id == stellar)?;
-        self.galaxy.owner(&listed.systems)
     }
 }
 
@@ -568,7 +581,7 @@ mod tests {
         assert_eq!(
             session
                 .chart
-                .stellar_owner(&session.statics, StellarId(170)),
+                .holder_of(&session.pilot, &session.statics, StellarId(170)),
             None,
             "133 stands for 134's place"
         );
@@ -579,6 +592,43 @@ mod tests {
         assert_eq!(
             session.escape_destination(SystemId(130), &catalog),
             SystemId(133)
+        );
+    }
+
+    #[test]
+    fn the_pod_goes_where_a_kept_rescue_holds_the_found_stellar_and_counts_it_active() {
+        // 130 links to 134 alone, shadowed by 133 at its place; 135,
+        // shadowed by 131 at its place, lists 134's shipyard 170 too, so no
+        // system owns it.
+        let mut catalog = galaxy();
+        catalog.star_map[0].links = vec![SystemId(134)];
+        catalog.star_map.push(star(134, (-600.0, 0.0), &[]));
+        catalog.star_map.push(star(135, (600.0, 0.0), &[]));
+        catalog.systems.extend([SystemId(134), SystemId(135)]);
+        catalog.sites.push((SystemId(134), vec![yard(170)]));
+        catalog.sites.push((SystemId(135), vec![yard(170)]));
+        let mut session = explored(&catalog, &[134]);
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            RESCUE_FALLBACK,
+            "held by no system: inactive, passed over"
+        );
+        // The rescue 135 kept at a rebuild point there (@0x32ca1).
+        let listed = session.statics.listed_stellars.clone();
+        session.chart.galaxy.keep_rescues(&listed, SystemId(135));
+        assert_eq!(
+            session.galaxy().rescued(StellarId(170)),
+            Some(SystemId(135))
+        );
+        assert_eq!(
+            session.search_map(&catalog).stellars(SystemId(134)),
+            [(StellarId(170), true)],
+            "active in its visible rescuer (+0x44, @0x32cbe-0x32cdf)"
+        );
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            SystemId(135),
+            "the found stellar's owner word, the rescue's (@0x68f87-0x68f9e)"
         );
     }
 
@@ -741,6 +791,40 @@ mod tests {
         session.ship.fate.pod_zeroed = true;
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
+    }
+
+    #[test]
+    fn a_player_ejecting_cloaked_keeps_its_cloak_in_the_pod_until_the_rescue_clears_it() {
+        // The pod's frames return before the key and the upkeep
+        // (@0x68ddd), and a full fade with no direction holds; the rescue's
+        // `_ResetPlayer` clears it (@0x1d457-0x1d462).
+        use crate::cloak::{Cloak, FADE_FULL};
+        let full = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.ship.fate.rescue_due = false;
+        session.pod = Some(300);
+        session.ship.cloak.cloak = full;
+        session.pilot.reserves.fuel.now = 0.0;
+        session.hold_cloak(true);
+        let _ = session.take_sounds();
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert_eq!(session.player_cloak(), full, "kept in the pod");
+        assert!(
+            !session.take_sounds().iter().any(|sound| matches!(
+                sound,
+                crate::sound::SimSound::Uncloaked | crate::sound::SimSound::Refused
+            )),
+            "no key and no upkeep"
+        );
+        session.pod = Some(0);
+        session.ship.fate.rescue_due = true;
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.player_cloak(), Cloak::default(), "_ResetPlayer");
+        assert!(session.ship.cloak.held, "the key is the view's");
     }
 
     #[test]
@@ -911,6 +995,42 @@ mod tests {
     }
 
     #[test]
+    fn the_escape_search_starts_where_the_on_aborts_moved_the_player() {
+        // `_HandlePlayer` reads +0x74 for the search (@0x68f24) after the
+        // abort loop's `OnAbort`s: an `N132` there, applied at its
+        // operator, starts the search from 132, which links nowhere.
+        let mut catalog = rescuing();
+        catalog.missions[0].on_abort = Script::parse("N132");
+        let mut session = due(&catalog);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(130, 0));
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.system(), RESCUE_FALLBACK, "not 130's 131");
+        assert_eq!(session.chart.pending_move, None, "its entry completed");
+    }
+
+    #[test]
+    fn the_escape_search_supersedes_ship_128s_on_purchase_move() {
+        // The search runs after `shïp` 128's `OnPurchase` (@0x68f55) and
+        // writes +0x74 over its move (@0x68f7f, @0x68f9e).
+        let mut catalog = rescuing();
+        for record in &mut catalog.ship_records {
+            if record.id == RESCUE_SHIP {
+                record.on_purchase = Script::parse("b21 M133");
+            }
+        }
+        let mut session = due(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert!(session.control_bit(bit(21)));
+        assert_eq!(session.system(), SystemId(131), "the search's, from 130");
+        assert_eq!(session.chart.pending_move, None);
+        assert_eq!(session.settle_script(&catalog, &mut NeverFires).moved, None);
+        assert_eq!(session.system(), SystemId(131));
+    }
+
+    #[test]
     fn the_rescued_player_is_not_landed_and_the_system_is_populated_afresh() {
         let mut catalog = rescuing();
         let mut dude_types = [(-1, 0); 8];
@@ -1026,6 +1146,7 @@ mod tests {
         session.pod = Some(0);
         session.ship.fate.rescue_due = true;
         session.pilot.course = vec![SystemId(131), SystemId(132)];
+        session.pilot.course_start = Some(SystemId(133));
         session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
         session.ship.secondary = Some(WeaponId(128));
         session.pilot.jumped_from = Some(SystemId(133));
@@ -1047,6 +1168,7 @@ mod tests {
         assert_eq!(session.system(), RESCUE_FALLBACK);
         assert!(session.pilot.has_explored(RESCUE_FALLBACK), "explored");
         assert_eq!(session.pilot.course(), []);
+        assert_eq!(session.pilot.course_start(), None);
         assert_eq!(session.pilot.paint, None);
         assert_eq!(session.ship.secondary, None);
         assert_eq!(session.pilot.jumped_from, None);

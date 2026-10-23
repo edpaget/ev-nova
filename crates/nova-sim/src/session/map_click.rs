@@ -129,7 +129,8 @@ impl Session {
     }
 
     /// Clear Route, from its button or C (@0x12c69-0x12dbf): the course
-    /// cleared and the selection let go with the mode kept, in flight, in
+    /// cleared and started at the current system (@0x12c74-0x12c98), and
+    /// the selection let go with the mode kept, in flight, in
     /// port and on the hypergate map alike. The caller turns
     /// `showClearRouteButton` off and redraws the nav area at once
     /// (`_DrawStatus` @0x12dba).
@@ -204,7 +205,7 @@ impl Chart {
     /// `showClearRouteButton` off and redraws the nav area at once
     /// (`_DrawStatus` @0x12dba).
     fn clear_route(&mut self, pilot: &mut Pilot) {
-        pilot.course.clear();
+        pilot.restart_course(pilot.system);
         self.deselect();
     }
 
@@ -277,6 +278,7 @@ impl Chart {
     /// reading (see the module docs).
     fn shift_click(&mut self, pilot: &mut Pilot, setup: &Setup, pick: SystemId) -> MapClicked {
         let edit = map_route::shift_click(
+            pilot.course_start,
             &pilot.course,
             pilot.system,
             pick,
@@ -289,6 +291,7 @@ impl Chart {
             },
         );
         pilot.course = edit.course;
+        pilot.course_start = edit.start;
         MapClicked {
             selected: edit.appended.then_some(pick),
             gate_pick: None,
@@ -668,6 +671,11 @@ mod tests {
         let mut session = hub_session();
         assert_eq!(shift_click(&mut session, &[131]), shifted(Some(131)));
         assert_eq!(session.course(), ids(&[131]));
+        assert_eq!(
+            session.pilot.course_start(),
+            Some(session.system()),
+            "the new start written back"
+        );
         assert_eq!(session.nav_mode(), NavMode::Off, "nothing cued");
         session.pilot.explore(SystemId(131));
         assert_eq!(shift_click(&mut session, &[132]), shifted(Some(132)));
@@ -735,9 +743,11 @@ mod tests {
     fn a_shift_click_at_the_current_systems_place_clears_the_course() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.pilot.course = ids(&[131, 132]);
+        session.pilot.course_start = Some(SystemId(130));
         session.chart.nav = hyperspace(131);
         assert_eq!(shift_click(&mut session, &[130]), shifted(None));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot.course_start(), None, "the start cleared");
         assert_eq!(session.nav_mode(), hyperspace(131), "no nav written");
     }
 
@@ -799,9 +809,15 @@ mod tests {
     fn clear_route_empties_the_course_and_lets_go_of_the_selection_keeping_the_mode() {
         let mut session = hub_session();
         session.pilot.course = ids(&[131, 132]);
+        session.pilot.course_start = Some(SystemId(133));
         session.chart.nav = hyperspace(131);
         session.clear_route();
         assert_eq!(session.course(), []);
+        assert_eq!(
+            session.pilot.course_start(),
+            Some(session.system()),
+            "started at the current system"
+        );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
 
         let mut session = hub_session();

@@ -414,6 +414,7 @@ pub mod plunder;
 pub mod projectile;
 mod proximity;
 pub mod report;
+pub mod script_explosions;
 pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
@@ -535,6 +536,16 @@ pub enum CombatEvent {
         /// loaded `BlastRadius` is floored at none: a negative size
         /// scatters none either way.
         size: f32,
+    },
+    /// An explosion of size 0 whose sound the session has raised already,
+    /// as a `SimSound::Explosion`: a stellar a `Y` destroyed (`_EvalSetExp`
+    /// @0x15ab4; see the [`script_explosions`] module). Drawn as an
+    /// [`Exploded`](Self::Exploded) is, its sound not played again.
+    ExplodedHeard {
+        /// Where.
+        at: Vec2,
+        /// Its explosion.
+        explosion: Explosion,
     },
     /// A ship was disabled.
     Disabled {
@@ -923,8 +934,10 @@ pub struct Fighter<'a> {
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
     /// Whether it is cloaked: it fires only its weapons that fire while
-    /// cloaked ([`Armament::has_ammo`]), and point defence sees it only
-    /// with a cloak scanner ([`defence::choose_ship`]). The player never is.
+    /// cloaked ([`Armament::has_ammo`]; the player's fire,
+    /// `_FirePlayerWeapon` @0x627f5-0x62814, and its point defence
+    /// @0x3931c-0x3932f, too), and point defence sees it only with a cloak
+    /// scanner ([`defence::choose_ship`]).
     pub cloaked: bool,
     /// The ship it attacks or snipes at, which point defence reads as
     /// fighting that ship (`_IsShipFightingMe` @0x827fa: the original's
@@ -963,7 +976,11 @@ pub struct Fighter<'a> {
     pub cloak_scanner: bool,
     /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
     /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
-    /// [`Sight::has_cloak`]). The player never has.
+    /// [`Sight::has_cloak`]). An NPC's is its own cloak, or the area branch
+    /// (@0x964c-0x96bf): its leader's area cloak it rides in close
+    /// formation ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak)).
+    /// The player's reads the outfits it owns; it has no leader, so nothing
+    /// reads it yet.
     pub has_cloak: bool,
     /// How strongly it jams each jamming type (`_ShipECM`, see
     /// [`jamming`]), whatever its condition: a disabled ship jams nothing.
@@ -1075,6 +1092,11 @@ pub struct Field {
     /// against as it is launched, whoever fires it (`_SpawnShot`
     /// @0x3eab2-0x3eb66).
     pub interference: i16,
+    /// The player's combat rating against `shïp` 128's `Strength`: what
+    /// stretches the reload of an NPC's pick fired at the player
+    /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
+    /// @0x88fb3-0x8901b). The default stretches nothing.
+    pub player_rating: ai_fire::PlayerRating,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -2160,6 +2182,9 @@ impl Combat {
             &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            // Only a ship whose target is slot 0, the player, is stretched
+            // (@0x88fb3).
+            (fighter.target == Some(ShipRef::Player)).then_some(self.field.player_rating),
         );
         let Some(volley) = volley else {
             return;
@@ -3640,6 +3665,7 @@ mod tests {
     mod lineup;
     mod plunder_fire;
     mod proximity_slots;
+    mod rating_stretch;
     mod shot_slots;
     mod shot_visits;
     mod stellar_hazards;
@@ -11894,6 +11920,7 @@ mod tests {
         let field = |frame| Field {
             frame,
             interference: 100,
+            ..Field::default()
         };
         // Fired on frame 0, it moves on frames 1 to 15.
         for frame in 0..16 {

@@ -634,3 +634,29 @@ fn the_string_lists_reach_the_session() {
         ["Kestrel"]
     );
 }
+
+// Draw order (crons-news-ranks-fidelity phase 14).
+
+#[test]
+fn overlapping_stellars_are_drawn_lowest_id_first_whatever_their_navdefs_order() {
+    let mut catalog = FakeCatalog {
+        sol_more: vec![stellar(127, "Under the Moon", (300, -200), 1)],
+        ..catalog()
+    };
+    catalog
+        .sites
+        .push(site(127, (300.0, -200.0), StellarFlags::CAN_LAND));
+    let mut view = FlightView::new(catalog);
+    view.tick(TICK);
+    assert_eq!(
+        scene_ids(&view),
+        [StellarId(128), StellarId(129), StellarId(127)],
+        "Sol lists the Moon before 127"
+    );
+    let images: Vec<i16> = sprites(&drawn(&view))
+        .into_iter()
+        .map(|(image, _)| image.id)
+        .filter(|id| (1127..=1129).contains(id))
+        .collect();
+    assert_eq!(images, [1127, 1128, 1129], "127 under the Moon");
+}

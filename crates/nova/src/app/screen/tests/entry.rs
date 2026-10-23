@@ -11,6 +11,27 @@ const SECOND: Duration = DEATH_FADE_FOR;
 /// The intro text's `dësc`.
 const INTRO_TEXT: i16 = 600;
 
+#[test]
+fn entering_play_takes_the_refresh_a_later_new_pilot_reads_afresh() {
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(hiding_beta_data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create_held(&mut screen, "Ada");
+    let held = screen.game.as_ref().expect("Ada's game held");
+    assert_eq!(
+        held.last_refresh(),
+        Some(nova_sim::LastRefresh::default()),
+        "before her OnStart hid Beta"
+    );
+    enter_ship(&mut screen);
+    assert_eq!(
+        flight(&screen).last_refresh(),
+        Some(nova_sim::LastRefresh::hiding([nova_sim::SystemId(129)])),
+        "_EnterGameFromMainScreen @0x19f81"
+    );
+}
+
 /// The alpha of the black covering the whole view, if the last thing
 /// `screen` draws is one.
 #[allow(clippy::float_cmp)] // The view's height, exactly as drawn.

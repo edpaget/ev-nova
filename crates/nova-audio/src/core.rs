@@ -200,6 +200,8 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.script_message, at::SCRIPT_MESSAGE);
             }
             SimSound::RedAlert => self.play(self.table.red_alert, at::RED_ALERT),
+            SimSound::Cloaked => self.play(self.table.cloak, at::CLOAK),
+            SimSound::Uncloaked => self.play(self.table.uncloak, at::CLOAK),
             SimSound::CargoJettisoned => self.play(self.table.jettison, at::JETTISON),
             SimSound::ScanFailedMission => {
                 self.play(self.table.scan_failed, at::SCAN_FAILED);
@@ -286,6 +288,17 @@ impl<A: Audio> AudioCore<A> {
             | SimSound::SelfDestructCancelled
             | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
+            // Heard as a fight's explosion is (`_PlaySoundDistance`).
+            SimSound::Explosion {
+                sound,
+                offset,
+                priority,
+            } => self.take_fight(CombatSound {
+                sound,
+                offset,
+                priority,
+                until_stopped: false,
+            }),
             SimSound::Voice { sound } => self.play(Some(sound), at::VOICE),
             SimSound::HaltVoice { sound } => self.halt(&[sound]),
         }
@@ -913,6 +926,8 @@ mod tests {
             (ARRIVED, at::ARRIVAL),
             (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
             (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
+            (Sound::Sim(SimSound::Cloaked), at::CLOAK),
+            (Sound::Sim(SimSound::Uncloaked), at::CLOAK),
             (Sound::Sim(SimSound::CargoJettisoned), at::JETTISON),
             (Sound::Sim(SimSound::ScanFailedMission), at::SCAN_FAILED),
             (Sound::Sim(SimSound::Smuggling), at::SMUGGLING),
@@ -1549,6 +1564,19 @@ mod tests {
             &[Sound::Sim(SimSound::RedAlert)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_cloak_plays_381_and_the_uncloak_380_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Cloaked)]);
+        assert_eq!(drain(&log), [play(381, 0.5)]);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Uncloaked)],
+        );
+        assert_eq!(drain(&log), [play(380, 0.5)]);
     }
 
     #[test]
@@ -2403,6 +2431,31 @@ mod tests {
         drain(&log);
         core.update(Some(Showing::Flight), &[fight(208, (0, 0))]);
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_ys_explosion_plays_its_snd_at_its_priority_by_its_distance() {
+        // `_CreateExplosion`'s `_PlaySoundDistance(-1, snd, 6, ..)`
+        // (@0x3f8f1-0x3f91a), docked as in flight.
+        let explosion = |offset| {
+            Sound::Sim(SimSound::Explosion {
+                sound: SoundId(302),
+                offset,
+                priority: 6,
+            })
+        };
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Flight), &[explosion((400, 0))]);
+        assert_eq!(drain(&log), [play(302, 0.3125)], "by its distance");
+        core.update(Some(Showing::Spaceport), &[explosion((0, 0))]);
+        assert_eq!(drain(&log), [play(302, 0.5)], "docked");
+        let (mut core, log) = original();
+        core.update(Some(Showing::Flight), &[fight(208, (0, 0))]);
+        core.update(None, &[explosion((0, 0))]);
+        let played = drain_prioritised(&log);
+        assert_eq!(priorities(&played), [Priority::new(4), Priority::new(6)]);
     }
 
     // Music.

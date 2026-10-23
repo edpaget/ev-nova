@@ -13,6 +13,7 @@ use nova_sim::{
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
 use crate::draw::crossed_box;
+use crate::draw::fill_command;
 use crate::draw::lights_tint;
 use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
 use crate::flight::catalog::{
@@ -60,6 +61,7 @@ use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
+mod cloak;
 mod combat;
 mod comm_line;
 mod controls;
@@ -113,6 +115,8 @@ struct FakeCatalog {
     sol_interference: i16,
     /// System 130's `Murk`: none, by default.
     sol_murk: i16,
+    /// System 130's `BkgndColor`: black, by default.
+    sol_background: u32,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The escorts' voices: none, by default.
@@ -217,6 +221,8 @@ struct FakeCatalog {
     place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
     crons: Vec<nova_sim::catalog::CronRecord>,
+    /// Each `bööm`'s sound, as the session reads it: none, by default.
+    boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
     /// Each system's government, in the session's map and the course
     /// map's catalog: none, by default.
     governed: Vec<(i16, i16)>,
@@ -364,6 +370,7 @@ fn catalog() -> FakeCatalog {
         sol_navs: Vec::new(),
         sol_interference: 0,
         sol_murk: 0,
+        sol_background: 0,
         alpha_buoy: -1,
         voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
@@ -375,6 +382,7 @@ fn catalog() -> FakeCatalog {
         visibility: Vec::new(),
         place_names: nova_sim::catalog::PlaceNames::default(),
         crons: Vec::new(),
+        boom_sounds: Vec::new(),
         governed: Vec::new(),
         lived: Vec::new(),
     }
@@ -496,6 +504,7 @@ impl PilotCatalog for FakeCatalog {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
         let sol = self.sol_links();
@@ -504,6 +513,7 @@ impl PilotCatalog for FakeCatalog {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
                 murk: self.sol_murk,
+                background: self.sol_background,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {
@@ -623,6 +633,10 @@ impl PilotCatalog for FakeCatalog {
 
     fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
         self.crons.clone()
+    }
+
+    fn boom_sounds(&self) -> Vec<(nova_sim::BoomId, nova_sim::SoundId)> {
+        self.boom_sounds.clone()
     }
 
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
@@ -1180,6 +1194,7 @@ fn texts(list: &DrawList) -> Vec<String> {
 const TITLED: FlightOverlays = FlightOverlays {
     title: true,
     help: true,
+    cheats: false,
 };
 fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {

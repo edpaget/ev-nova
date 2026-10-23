@@ -115,8 +115,16 @@
 //! - [`escort_voice`]: who among the player's escorts speaks, and when:
 //!   a command's acknowledgement, the 1-in-3 call on a new target and the
 //!   victory.
-//! - [`exploration`]: which systems a map outfit explores
-//!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`exchange_events`]: what the commodity exchange says of the price
+//!   events at the stellar docked at, the disputed
+//!   [`exchange_events::exchange_events`], which [`Session::market`]
+//!   puts in [`Market::events`](market::Market::events).
+//! - [`exploration`]: which walks a map outfit runs
+//!   ([`exploration::map_walks`]) and which systems are inhabited.
+//! - [`map_walk`]: the exploration walk a map grant, the take-off and a
+//!   jump's re-explore run, as `_AutoSetExploration` runs it
+//!   ([`map_walk::auto_set_exploration`]), over a
+//!   [`WalkSite`](map_walk::WalkSite).
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
 //!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
@@ -361,6 +369,7 @@ pub use nova_sim_base::ionization;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;
 pub use nova_sim_catalog::control;
+pub use nova_sim_combat::area_cloak;
 pub use nova_sim_combat::asteroid;
 pub use nova_sim_combat::bay;
 pub use nova_sim_combat::cloak;
@@ -376,7 +385,9 @@ pub use nova_sim_port::escape;
 pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
+pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
+pub use nova_sim_story::map_walk;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub use nova_sim_base::flight;
@@ -413,6 +424,7 @@ pub use nova_sim_state::landing;
 pub use nova_sim_state::legal;
 pub use nova_sim_state::market;
 pub use nova_sim_state::outfit_effects;
+pub use nova_sim_state::trade_dialog;
 pub use nova_sim_story::mission;
 pub use nova_sim_story::nebula;
 pub use nova_sim_story::news;
@@ -430,6 +442,7 @@ pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
 pub use nova_sim_base::skill;
 pub use nova_sim_base::speed_cap;
+pub use nova_sim_combat::player_cloak;
 pub use nova_sim_combat::sabotage;
 pub use nova_sim_combat::self_destruct;
 pub mod save;
@@ -558,7 +571,7 @@ pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
 pub use self_destruct::SelfDestruct;
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
-    HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress,
+    HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, LastRefresh, MapClicked, MapPress,
     MissionComputer, MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind,
     NotOffered, OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav,
     ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
@@ -575,6 +588,7 @@ pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCa
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use trade_dialog::{CargoSummary, HeldIn, PriceMarker, TradeWords};
 pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Leave, Traffic, World};

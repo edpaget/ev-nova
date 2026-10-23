@@ -93,7 +93,8 @@
 //! - Goal 0xc (@0x8ef40-0x8f0fb), the goal `_AIMakeEscortFlyInForm` gives
 //!   a hired escort: `_EscortAI` sets goal 0xa again on every think
 //!   (@0x83da3, @0x83e40, @0x83f00), and at full speed every frame is a
-//!   think, so the high level never sees it.
+//!   think, so the high level never sees it. Its player sight (@0x8efba)
+//!   goes with it.
 //! - Goal 0xa's +0x8c gate, as a defence-fleet ship runs
 //!   `_DefenseShipAI`, not `_EscortAI`; its leader -1 gate, as a ship of
 //!   goal 0xa never flies it with no leader: `_AICheckParentExists` moves

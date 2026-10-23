@@ -57,17 +57,12 @@ impl Session {
     /// Whether gravity leaves `npc` alone (`_ShipResistsGravity`): its
     /// hull or its inertialess flight, never its outfits. Whether it keeps
     /// close formation reads its leader's place and its sight of it
-    /// (`_ShipVisibleToShip` @0x8ed5f): an NPC leader by
-    /// [`sight::npc_sees`], the player always seen.
+    /// (`_ShipVisibleToShip` @0x8ed5f, [`sight::sees_leader`], as the
+    /// formation flight reads it): an escort that can't see its cloaked
+    /// player stops (sub 1) and so keeps no close formation.
     fn npc_resists_gravity(&self, npc: &Npc) -> bool {
         let leader = self.leader_state(npc);
-        let seen = match npc.leader_ref() {
-            Some(ShipRef::Npc(id)) => self
-                .space
-                .npc(id)
-                .is_none_or(|leader| sight::npc_sees(npc, leader)),
-            _ => true,
-        };
+        let seen = sight::sees_leader(npc, self.npcs(), Some(&self.player_side()));
         resists_gravity(
             npc.hull.stellar_immune,
             npc.flies_inertialess(leader.as_ref(), seen, self.setup.flight_rules()),
@@ -397,6 +392,50 @@ mod tests {
                 near(npc(&session).state.velocity, pulled),
                 "not inertialess there"
             );
+        }
+    }
+
+    #[test]
+    fn an_inertialess_escort_of_a_cloaked_player_it_cannot_see_resists_gravity_as_one_out_of_close_formation()
+     {
+        // `_ShipVisibleToShip(player, escort)` @0x8ed5f: unseen, the escort
+        // stops (sub 1) and so keeps no close formation.
+        use crate::ai::Goal;
+        use crate::escort::{EscortDuty, FormationSlot};
+        let cloaked = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        for rules in readings() {
+            for (scanner, case) in [(false, "unseen"), (true, "scanned")] {
+                let catalog = armed();
+                let mut session = among(rules, &catalog, &[east()], 1);
+                session.ship.player.position = Vec2::new(1500.0, 1500.0);
+                session.ship.cloak.cloak = cloaked;
+                let formation = FormationSlot {
+                    slot: 0,
+                    ships: 1,
+                    spacing: 30.0,
+                };
+                let slot = formation.position(&session.ship.player);
+                let escort = npc_mut(&mut session);
+                escort.escort = Some(EscortDuty {
+                    formation,
+                    order: None,
+                });
+                escort.goal = Goal::Formation { guard: None };
+                escort.stats.inertialess_hull = true;
+                escort.cloak_gear.scanner.on_screen = scanner;
+                escort.state.position = slot;
+                fight(&mut session);
+                let velocity = npc(&session).state.velocity;
+                if scanner {
+                    let pulled = pull(slot, Vec2::new(2000.0, 0.0), 40, 1.0);
+                    assert!(near(velocity, pulled), "{case}: {velocity:?}");
+                } else {
+                    assert_eq!(velocity, Vec2::ZERO, "{case}: inertialess");
+                }
+            }
         }
     }
 

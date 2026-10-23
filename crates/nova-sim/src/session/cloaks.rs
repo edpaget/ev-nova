@@ -16,8 +16,8 @@
 //! - **Drawn** ([`Session::cloak_shown`], `_HandleShipDisplay`
 //!   @0x2d187-0x2d1cd): fully cloaked, a ship the player leads, or any
 //!   ship while the player scans on screen, is drawn faint and any other
-//!   not at all; short of that, a led ship is drawn, and any other while
-//!   the player sees past its cloak.
+//!   not at all; short of that, every ship with a fade is drawn jittered
+//!   and faint (@0x2d2c0-0x2d648), and one with none as it is.
 //! - **The radar** ([`Session::on_radar`], `_DrawStatusRadar`
 //!   @0x49ac6-0x49af5): a cloaked ship shows only when its own cloak shows
 //!   there or the player scans for cloaked ships on the radar.
@@ -38,12 +38,25 @@
 //!   conditions also start the burst weapons of the ship's class on their
 //!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
 //!   not.
+//! - **Reserves**: whether an NPC can cloak, for its frame hold,
+//!   cloak-when-hit and the observe goal, reads
+//!   [`RuleKey::CloakReserves`] (see `Npc::can_cloak`).
+//! - **Area cloaks** (see [`area_cloak`](crate::area_cloak)): the traffic's
+//!   world carries the player's area cloak, from the outfits it owns
+//!   (`Session::player_side`), and whether an NPC's frame hold keeps a ship
+//!   riding one, by [`RuleKey::AreaCloakHold`]. An NPC fights with a cloak
+//!   (`_HasCloak`) when it has one of its own or rides its leader's area
+//!   cloak, so its homing shots see that leader cloaked.
+//!
+//! The player's own cloak, its draw and its hit decloak, are the
+//! `player_cloak` module's.
 
 use super::{PlayerShip, Session, Space, Statics};
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::pilot::Pilot;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::Npc;
 
 impl Session {
@@ -60,8 +73,7 @@ impl Session {
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
-    /// it waits at, which [`Session::sees`] holds unseen: what the view
-    /// draws a ship fading in at its gate by.
+    /// it waits at, which [`Session::sees`] holds unseen.
     #[must_use]
     pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
         self.ship.sees_past_cloak(&self.pilot, &self.statics, npc)
@@ -74,16 +86,14 @@ impl Session {
     /// leads is drawn faint, and so is any ship while the player scans for
     /// cloaked ships on screen, at any range, as @0x2d1aa has no range test
     /// ([`cloak::full_fade_translucency`]); any other is not drawn. Still
-    /// fading, or uncloaked, a ship the player leads is drawn, and any
-    /// other while the player sees past its cloak
-    /// ([`Session::sees_past_cloak`]). The original draws every ship still
-    /// fading jittered and translucent (@0x2d2c0-0x2d648), which
-    /// rdm:phase/cloaking-fidelity/phase-1-cloak-fade-and-sounds owns;
-    /// until then an opaque led ship is the nearest the engine draws. A
-    /// ship waiting at its gate is left to the view's tint, as now.
+    /// fading (a fade above 0), every ship is drawn jittered and faint,
+    /// whoever leads it and whether or not the player sees past its cloak
+    /// ([`CloakShown::Fading`], @0x2d2c0-0x2d648); with no fade it is
+    /// drawn as it is (@0x2d169-0x2d16c). A ship waiting at its gate is
+    /// left to the view's tint, as now.
     #[must_use]
     pub fn cloak_shown(&self, npc: &Npc) -> CloakShown {
-        self.ship.cloak_shown(&self.pilot, &self.statics, npc)
+        PlayerShip::cloak_shown(&self.pilot, &self.statics, npc)
     }
 
     /// Whether `npc` shows on the player's radar: uncloaked, its cloak
@@ -133,7 +143,8 @@ impl Session {
     /// Whether a watched `npc` is observed now: seen, and, when it can
     /// cloak, on screen (`_MissionObjectivesCheck` @0x9ea5c-0x9eb15).
     pub(super) fn observes(&self, npc: &Npc) -> bool {
-        self.sees(npc) && (!npc.can_cloak() || self.on_screen(npc))
+        let reserves = self.setup.rules.source_for(RuleKey::CloakReserves);
+        self.sees(npc) && (!npc.can_cloak(reserves) || self.on_screen(npc))
     }
 }
 
@@ -145,8 +156,7 @@ impl PlayerShip {
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
-    /// it waits at, which [`Session::sees`] holds unseen: what the view
-    /// draws a ship fading in at its gate by.
+    /// it waits at, which [`Session::sees`] holds unseen.
     #[must_use]
     fn sees_past_cloak(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
         let observer = Observer {
@@ -164,28 +174,16 @@ impl PlayerShip {
     /// leads is drawn faint, and so is any ship while the player scans for
     /// cloaked ships on screen, at any range, as @0x2d1aa has no range test
     /// ([`cloak::full_fade_translucency`]); any other is not drawn. Still
-    /// fading, or uncloaked, a ship the player leads is drawn, and any
-    /// other while the player sees past its cloak
-    /// ([`Session::sees_past_cloak`]). The original draws every ship still
-    /// fading jittered and translucent (@0x2d2c0-0x2d648), which
-    /// rdm:phase/cloaking-fidelity/phase-1-cloak-fade-and-sounds owns;
-    /// until then an opaque led ship is the nearest the engine draws. A
-    /// ship waiting at its gate is left to the view's tint, as now.
+    /// fading (a fade above 0), every ship is drawn jittered and faint,
+    /// whoever leads it and whether or not the player sees past its cloak
+    /// ([`CloakShown::Fading`], @0x2d2c0-0x2d648); with no fade it is
+    /// drawn as it is (@0x2d169-0x2d16c). A ship waiting at its gate is
+    /// left to the view's tint, as now.
     #[must_use]
-    fn cloak_shown(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> CloakShown {
+    fn cloak_shown(pilot: &Pilot, statics: &Statics, npc: &Npc) -> CloakShown {
         let led = npc.escorts_player();
-        if npc.cloak.full() {
-            let level = cloak::full_fade_translucency(led, scanner(pilot, statics).on_screen);
-            if level < cloak::TRANSLUCENCY_STEPS {
-                CloakShown::Translucent(level)
-            } else {
-                CloakShown::Hidden
-            }
-        } else if led || self.sees_past_cloak(pilot, statics, npc) {
-            CloakShown::Opaque
-        } else {
-            CloakShown::Hidden
-        }
+        let level = cloak::full_fade_translucency(led, scanner(pilot, statics).on_screen);
+        cloak::shown(npc.cloak, level)
     }
 }
 
@@ -209,7 +207,15 @@ impl Space {
     /// ([`Armament::force_burst_reload`](crate::combat::armament::Armament::force_burst_reload)),
     /// cloaked already or not, as `_DamageShip` calls
     /// `_AIForceBurstReload` (@0x3bbd5) before `_DoShipCloak` (@0x3bbdd).
-    pub(super) fn cloak_hits(&mut self, statics: &Statics, strikes: &[Strike]) {
+    ///
+    /// Whether the NPC can cloak reads `reserves`
+    /// ([`RuleKey::CloakReserves`]).
+    pub(super) fn cloak_hits(
+        &mut self,
+        statics: &Statics,
+        reserves: RuleSource,
+        strikes: &[Strike],
+    ) {
         for strike in strikes.iter().filter(|strike| strike.direct) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -218,14 +224,18 @@ impl Space {
             let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
                 continue;
             };
-            let can_cloak = npc.can_cloak();
+            let can_cloak = npc.can_cloak(reserves);
             // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
             // hit only for a ship source (@0x3bb9f), as if it were
             // attacking; nor does an unanswered one, whose reaction block
             // is skipped.
             let holds =
                 !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds) {
+            // The fight has already taken the hit's damage, as `_DamageShip`
+            // does (@0x3ac11-0x3acbd) before it cloaks (@0x3bbdd), so a cloak
+            // that zeroes shields zeroes what the hit left.
+            let shield = &mut npc.reserves.shield.now;
+            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds, shield) {
                 npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
             }
         }
@@ -249,6 +259,9 @@ mod tests {
     use crate::session::tests::{CAN_CLOAK, CLOAKED, armed, facing_an_npc, holding_260, scanning};
     use crate::traffic::npc::MissionMark;
 
+    /// The engine's reading of `cloak_reserves`.
+    const ENGINE: crate::rulebook::RuleSource = crate::rulebook::RuleSource::Engine;
+
     #[test]
     fn an_unanswered_hit_never_cloaks_its_ship_but_still_uncloaks_it() {
         // A clear answer flag skips the reaction block, cloak-when-hit
@@ -268,9 +281,11 @@ mod tests {
             flags2: CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
-        session.space.cloak_hits(&session.statics, &[unanswered]);
+        session
+            .space
+            .cloak_hits(&session.statics, ENGINE, &[unanswered]);
         assert_eq!(session.npcs()[0].cloak, Cloak::default());
-        session.space.cloak_hits(&session.statics, &[hit]);
+        session.space.cloak_hits(&session.statics, ENGINE, &[hit]);
         assert_eq!(session.npcs()[0].cloak.direction, 1, "answered");
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = CloakGear {
@@ -278,8 +293,37 @@ mod tests {
             ..CAN_CLOAK
         };
         npc.cloak = CLOAKED;
-        session.space.cloak_hits(&session.statics, &[unanswered]);
+        session
+            .space
+            .cloak_hits(&session.statics, ENGINE, &[unanswered]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
+
+    #[test]
+    fn a_hit_that_cloaks_a_ship_with_a_zeroing_cloak_zeroes_its_shield() {
+        use crate::cloak::{CLOAK_WHEN_HIT, CloakGear};
+        use crate::combat::ShipRef;
+        use crate::combat::fixture::strike;
+        use crate::traffic::npc::NpcId;
+        let catalog = armed();
+        for (zeroes_shields, left) in [(true, 0.0), (false, 40.0)] {
+            let mut session = facing_an_npc(&catalog, 180);
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.cloak_gear = CloakGear {
+                flags2: CLOAK_WHEN_HIT,
+                zeroes_shields,
+                ..CAN_CLOAK
+            };
+            npc.reserves.shield.now = 40.0;
+            session.space.cloak_hits(
+                &session.statics,
+                ENGINE,
+                &[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)],
+            );
+            let npc = &session.npcs()[0];
+            assert_eq!(npc.cloak.direction, 1);
+            assert_eq!(npc.reserves.shield.now, left, "zeroes {zeroes_shields}");
+        }
     }
 
     /// [`armed`] whose blaster (128, its class's) bursts 15 shots and
@@ -329,7 +373,7 @@ mod tests {
                 .all(|mount| mount.reload == 0.0),
             "ready"
         );
-        session.space.cloak_hits(&session.statics, hits);
+        session.space.cloak_hits(&session.statics, ENGINE, hits);
         session.npcs()[0]
             .armament
             .mounts()
@@ -380,7 +424,7 @@ mod tests {
         };
         npc.cloak = CLOAKED;
         let hit: Strike = strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
-        session.space.cloak_hits(&session.statics, &[hit]);
+        session.space.cloak_hits(&session.statics, ENGINE, &[hit]);
         let npc = &session.npcs()[0];
         assert_eq!(npc.cloak, CLOAKED);
         assert_eq!(npc.armament.mounts()[0].reload, 40.0);
@@ -431,14 +475,374 @@ mod tests {
     }
 
     #[test]
-    fn a_led_ship_still_fading_is_drawn_and_a_stranger_only_while_seen() {
+    fn every_ship_still_fading_is_drawn_fading_led_or_not_and_no_fade_is_opaque() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         assert_eq!(shown(&mut session, 0.0, 0), CloakShown::Opaque, "uncloaked");
-        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Hidden);
-        assert_eq!(shown(&mut session, 8.0, -1), CloakShown::Opaque, "seen");
+        assert_eq!(
+            shown(&mut session, -0.5, 0),
+            CloakShown::Opaque,
+            "drifted under"
+        );
+        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Fading(31.9));
+        assert_eq!(shown(&mut session, 8.0, -1), CloakShown::Fading(8.0));
+        assert_eq!(shown(&mut session, 0.5, -2), CloakShown::Fading(0.5));
         lead(&mut session);
-        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Opaque, "led");
+        assert_eq!(
+            shown(&mut session, 31.9, 1),
+            CloakShown::Fading(31.9),
+            "led"
+        );
         assert_eq!(shown(&mut session, 0.0, 0), CloakShown::Opaque);
+    }
+
+    #[test]
+    fn an_npc_cloaking_and_uncloaking_raises_no_cloak_sound() {
+        // `_DoShipCloak` and `_DoShipUncloak` play their sounds only for
+        // the player (+0x86 0, @0xdec0, @0xdf9e).
+        use crate::cloak::{CLOAK_WHEN_HIT, CloakGear};
+        use crate::combat::ShipRef;
+        use crate::combat::fixture::strike;
+        use crate::traffic::npc::NpcId;
+        use nova_sim_catalog::sound::SimSound;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.space.traffic.npcs_mut()[0].cloak_gear = CloakGear {
+            flags2: CLOAK_WHEN_HIT,
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        session.take_sounds();
+        session.space.cloak_hits(
+            &session.statics,
+            ENGINE,
+            &[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)],
+        );
+        assert_eq!(session.npcs()[0].cloak.direction, 1, "cloaking");
+        session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.space.cloak_hits(
+            &session.statics,
+            ENGINE,
+            &[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)],
+        );
+        assert_eq!(session.npcs()[0].cloak.direction, -1, "uncloaking");
+        let sounds = session.take_sounds();
+        assert!(
+            !sounds
+                .iter()
+                .any(|s| matches!(s, SimSound::Cloaked | SimSound::Uncloaked)),
+            "{sounds:?}"
+        );
+    }
+
+    /// Keeps each NPC's goal.
+    #[derive(Debug)]
+    struct Keep;
+
+    impl crate::ai::Behaviour for Keep {
+        fn decide(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            _: &crate::ai::Surroundings,
+            _: &mut dyn crate::chance::Chance,
+        ) -> crate::ai::Goal {
+            npc.goal
+        }
+    }
+
+    /// NPC 0's cloak after `ticks` of the traffic, keeping its goal
+    /// `goal`, set up cloaked with a ship type's `Flags2` `flags2`.
+    fn cloak_after(goal: crate::ai::Goal, flags2: u16, ticks: u32) -> crate::cloak::Cloak {
+        use nova_sim_base::fixture::Draws;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            flags2,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        npc.goal = goal;
+        for _ in 0..ticks {
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+        }
+        session.npcs()[0].cloak
+    }
+
+    #[test]
+    fn a_cloaked_npc_cloaking_as_it_travels_stays_cloaked_landing_and_a_plain_one_uncloaks() {
+        use crate::ai::Goal;
+        use crate::catalog::StellarId;
+        use crate::cloak::CLOAK_TRAVELLING;
+        let landing = Goal::Land(StellarId(128));
+        assert_eq!(cloak_after(landing, CLOAK_TRAVELLING, 5), CLOAKED);
+        assert_eq!(cloak_after(landing, 0, 1).direction, -1);
+    }
+
+    #[test]
+    fn the_traffic_thinks_cloaks_in_a_world_holding_the_rulebooks_cloak_on_reload() {
+        use crate::cloak::CLOAK_RELOADING;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        use nova_sim_base::fixture::Draws;
+        // A blaster whose burst reload is its `Reload`: past `Reload` by
+        // neither reading's timer, on its burst reload by the Bible's.
+        let mut catalog = armed();
+        catalog.weapons[0].burst_count = 3;
+        catalog.weapons[0].burst_reload = catalog.weapons[0].reload;
+        for (source, cloaks) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = Rulebook::default().with_override(RuleKey::CloakOnReload, source);
+            let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+            assert_eq!(session.world().cloak_on_reload, source);
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.cloak_gear = crate::cloak::CloakGear {
+                flags2: CLOAK_RELOADING,
+                ..CAN_CLOAK
+            };
+            npc.goal = crate::ai::Goal::Hold;
+            let mut armament = Armament::new([(WeaponSpec::new(&catalog.weapons[0]), 1)]);
+            let class = armament.clone();
+            armament.force_burst_reload(&class);
+            npc.armament = armament;
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            assert_eq!(session.npcs()[0].cloak.direction == 1, cloaks, "{source:?}");
+        }
+    }
+
+    /// A cloak whose `ModVal` asks shield (a usage of 8, as the Polaris
+    /// organ 268's 0x080b), costing none in upkeep here so only
+    /// `_ShipCanCloak` reads it.
+    const ASKS_SHIELD: crate::cloak::CloakGear = crate::cloak::CloakGear {
+        can_cloak_mod: Some(0x0800),
+        ..CAN_CLOAK
+    };
+
+    /// `catalog`'s [`facing_an_npc`] under `source`'s reading of
+    /// `cloak_reserves`, its NPC 0 of [`ASKS_SHIELD`] with no shield left.
+    fn shieldless(
+        catalog: &nova_sim_catalog::fixture::FakePilotCatalog,
+        source: crate::rulebook::RuleSource,
+    ) -> Session {
+        use crate::rulebook::{RuleKey, Rulebook};
+        let rules = Rulebook::default().with_override(RuleKey::CloakReserves, source);
+        let mut session = facing_an_npc(catalog, 180).with_rules(rules);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.cloak_gear = ASKS_SHIELD;
+        npc.reserves.shield.now = 0.0;
+        assert!(npc.reserves.fuel.now > 0.0, "fuel left");
+        session
+    }
+
+    #[test]
+    fn the_traffic_holds_npc_cloaks_in_a_world_holding_the_rulebooks_cloak_reserves() {
+        use crate::ai::Goal;
+        use crate::catalog::StellarId;
+        use crate::cloak::CLOAK_TRAVELLING;
+        use crate::rulebook::RuleSource;
+        use nova_sim_base::fixture::Draws;
+        let catalog = armed();
+        for (source, holds) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = shieldless(&catalog, source);
+            assert_eq!(session.world().cloak_reserves, source);
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            // Travelling keeps its cloak by the think.
+            npc.cloak_gear.flags2 = CLOAK_TRAVELLING;
+            npc.cloak = CLOAKED;
+            npc.goal = Goal::Land(StellarId(128));
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            assert_eq!(session.npcs()[0].cloak.direction >= 0, holds, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_cloak_reserves_rule_reaches_an_npcs_hold_its_cloak_when_hit_and_the_observe_goal() {
+        use crate::cloak::CLOAK_WHEN_HIT;
+        use crate::combat::ShipRef;
+        use crate::combat::fixture::strike;
+        use crate::rulebook::RuleSource;
+        use crate::traffic::npc::NpcId;
+        let catalog = armed();
+        for (source, can_cloak) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = shieldless(&catalog, source);
+            session.space.traffic.npcs_mut()[0].cloak_gear.flags2 = CLOAK_WHEN_HIT;
+            session.space.cloak_hits(
+                &session.statics,
+                source,
+                &[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)],
+            );
+            assert_eq!(
+                session.npcs()[0].cloak.direction == 1,
+                can_cloak,
+                "{source:?}: cloak-when-hit"
+            );
+
+            // Seen, uncloaked, but off screen: a ship that can cloak is
+            // observed only on screen.
+            let player = session.player().position;
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.cloak = crate::cloak::Cloak::default();
+            npc.state.position = player + Vec2::new(2000.0, 0.0);
+            assert!(session.sees(&session.npcs()[0]));
+            assert_eq!(
+                session.observes(&session.npcs()[0]),
+                !can_cloak,
+                "{source:?}: the observe goal"
+            );
+        }
+    }
+
+    /// [`armed`], with outfit 300, an area cloak (a `ModType` 17 mod of
+    /// `ModVal` 0x1000).
+    fn area_cloaking() -> nova_sim_catalog::fixture::FakePilotCatalog {
+        use crate::cloak::{AREA_CLOAK, MOD_CLOAK};
+        let mut catalog = armed();
+        catalog.outfits.push(nova_sim_catalog::fixture::outfit(
+            300,
+            &[(MOD_CLOAK, AREA_CLOAK)],
+        ));
+        catalog
+    }
+
+    /// `catalog`'s [`facing_an_npc`] under `source`'s reading of
+    /// `area_cloak_hold`, the player owning outfit 300 and fuel to spare,
+    /// its NPC 0 its hired escort in close formation with it, keeping
+    /// formation, with no cloak of its own.
+    fn riding(
+        catalog: &nova_sim_catalog::fixture::FakePilotCatalog,
+        source: crate::rulebook::RuleSource,
+    ) -> Session {
+        use crate::rulebook::{RuleKey, Rulebook};
+        let rules = Rulebook::default().with_override(RuleKey::AreaCloakHold, source);
+        let mut session = facing_an_npc(catalog, 180).with_rules(rules);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        session.pilot.reserves.fuel.now = 100.0;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.escort = Some(crate::escort::EscortDuty {
+            formation: FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        npc.goal = crate::ai::Goal::Formation { guard: None };
+        npc.close_form = true;
+        assert!(!npc.cloak_gear.device, "no cloak of its own");
+        session
+    }
+
+    #[test]
+    fn the_player_side_carries_the_area_cloak_of_the_outfits_it_owns() {
+        let catalog = area_cloaking();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(!session.player_side().area_cloak, "not owned");
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        assert!(session.player_side().area_cloak);
+        assert!(
+            session
+                .world()
+                .player
+                .is_some_and(|player| player.area_cloak)
+        );
+        let plain = super::super::tests::scanning(crate::cloak::SCAN_SCREEN);
+        assert!(!holding_260(&plain).player_side().area_cloak, "a scanner");
+    }
+
+    #[test]
+    fn the_traffic_holds_npc_cloaks_in_a_world_holding_the_rulebooks_area_cloak_hold() {
+        use crate::rulebook::RuleSource;
+        use nova_sim_base::fixture::Draws;
+        let catalog = area_cloaking();
+        for (source, holds) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let mut session = riding(&catalog, source);
+            assert_eq!(session.world().area_cloak_hold, source);
+            session.ship.cloak.cloak = CLOAKED;
+            session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            assert_eq!(session.npcs()[0].cloak.direction >= 0, holds, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn an_escort_in_close_formation_keeps_formation_on_the_area_cloaked_player() {
+        use crate::chance::NeverFires;
+        use crate::combat::Rules;
+        use crate::rulebook::RuleSource;
+        use nova_sim_base::fixture::Draws;
+        let catalog = area_cloaking();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = riding(&catalog, source);
+            session.hold_cloak(true);
+            let mut read_cloaked = false;
+            for frame in 0..120 {
+                session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                let escort = &session.npcs()[0];
+                assert!(escort.close_form, "{source:?} {frame}: keeps formation");
+                read_cloaked |= escort.cloak.is_cloaked();
+                if source == RuleSource::Engine {
+                    assert!(!escort.cloak.full(), "{frame}: uncloaked each time");
+                }
+            }
+            assert!(session.player_cloak().full(), "the player cloaked");
+            assert!(read_cloaked, "{source:?}: its think cloaks it");
+            let escort = &session.npcs()[0];
+            if source == RuleSource::Bible {
+                assert_eq!(escort.cloak, CLOAKED, "faded in and held");
+            }
+            assert!(
+                crate::ai::sight::sees_player(escort, &session.player_side()),
+                "{source:?}: it sees its cloaked player"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fleet_escort_riding_its_leaders_area_cloak_fights_with_a_cloak() {
+        // `_HandleShotGuidance` (@0x322d8) asks `_ShipVisibleToShip`, whose
+        // cloaked-escort term asks `_HasCloak`, area branch and all.
+        let catalog = armed();
+        let has_cloak = |close_form: bool, area: bool| {
+            let mut session = facing_an_npc(&catalog, 180);
+            let mut leader = crate::testkit::npc(7, crate::stats::ShipStats::default());
+            leader.cloak = CLOAKED;
+            leader.cloak_gear.area = area;
+            let lead = session.space.traffic.add_npc(leader);
+            let escort = &mut session.space.traffic.npcs_mut()[0];
+            escort.leader = Some(lead);
+            escort.close_form = close_form;
+            let (_, npcs) = session.fight_terms();
+            npcs[0].has_cloak
+        };
+        assert!(has_cloak(true, true));
+        assert!(!has_cloak(false, true), "out of close formation");
+        assert!(!has_cloak(true, false), "no area cloak");
+    }
+
+    #[test]
+    fn the_players_escort_riding_its_area_cloak_fights_with_a_cloak() {
+        // The player's escorts are the main riders: the player owns the
+        // area cloak, and its escort's parent slot (+0x9a) is the player.
+        use crate::rulebook::RuleSource;
+        let catalog = area_cloaking();
+        let has_cloak = |area: bool| {
+            let mut session = riding(&catalog, RuleSource::Engine);
+            if !area {
+                session.pilot.outfits.remove(&crate::catalog::OutfitId(300));
+            }
+            assert_eq!(session.player_side().area_cloak, area);
+            session.ship.cloak.cloak = CLOAKED;
+            let (_, npcs) = session.fight_terms();
+            npcs[0].has_cloak
+        };
+        assert!(has_cloak(true), "rides the cloaked player's area cloak");
+        assert!(!has_cloak(false), "no area cloak");
     }
 }

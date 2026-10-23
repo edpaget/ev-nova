@@ -37,11 +37,60 @@ impl Color {
         let [_, r, g, b] = raw.to_be_bytes();
         Self::rgba(r, g, b, 255)
     }
+
+    /// The opaque colour of 5-bit channels `rgb5` (red, green, blue, each
+    /// 0 to 31), widened to 8 bits by bit replication,
+    /// `(c5 << 3) | (c5 >> 2)`, as the renderer widens an RGB555 texel.
+    #[must_use]
+    pub const fn from_rgb555(rgb5: [u8; 3]) -> Self {
+        let [r, g, b] = rgb5;
+        Self::rgba(widen5(r), widen5(g), widen5(b), 255)
+    }
+
+    /// The opaque colour a 24-bit `00RRGGBB` value shows as on the
+    /// original's thousands-of-colours (RGB555) display: each channel
+    /// narrowed to its top 5 bits ([`rgb555_channels`]) and widened back
+    /// ([`Color::from_rgb555`]).
+    #[must_use]
+    pub const fn from_rgb24_as_rgb555(raw: u32) -> Self {
+        Self::from_rgb555(rgb555_channels(raw))
+    }
+}
+
+/// A 5-bit channel widened to 8 bits by bit replication.
+const fn widen5(c5: u8) -> u8 {
+    (c5 << 3) | (c5 >> 2)
+}
+
+/// The red, green and blue of a 24-bit `00RRGGBB` value as the display's
+/// RGB555 holds them: each byte's top 5 bits, `byte >> 3`.
+#[must_use]
+pub const fn rgb555_channels(raw: u32) -> [u8; 3] {
+    let [_, r, g, b] = raw.to_be_bytes();
+    [r >> 3, g >> 3, b >> 3]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_24_bit_colour_shows_at_rgb555_each_channel_narrowed_then_widened() {
+        let channel = |byte: u32| Color::from_rgb24_as_rgb555(byte << 16).r;
+        assert_eq!(channel(0x07), 0x00, "below a 5-bit step");
+        assert_eq!(channel(0x0F), 0x08);
+        assert_eq!(channel(0xFF), 0xFF);
+        assert_eq!(
+            Color::from_rgb24_as_rgb555(0xAB12_3456),
+            Color::rgba(0x10, 0x31, 0x52, 255),
+            "the top byte ignored"
+        );
+        assert_eq!(rgb555_channels(0x0012_3456), [2, 6, 10]);
+        assert_eq!(
+            Color::from_rgb555([31, 0, 16]),
+            Color::rgba(255, 0, 132, 255)
+        );
+    }
 
     #[test]
     fn constants_are_opaque_white_and_black() {

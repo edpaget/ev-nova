@@ -43,6 +43,10 @@
 //! - **A gate's colorize** ([`gate_colorize`](super::gate_colorize)): an
 //!   NPC entering or leaving a gate takes the gate's white in place of
 //!   its ion tint and murk, and its layers copy it as they copy the tint.
+//! - **A cloak** ([`ShipDraw::cloak`], see [`cloak_fade`](super::cloak_fade)):
+//!   its hull and alt take the cloak's level and blend in place of their
+//!   tint and murk, they, the glow, the lights and the weapon glow move
+//!   by its jitter, and the layers are held to its caps or hidden.
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
@@ -55,6 +59,7 @@ use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 use nova_sim::traffic::npc::NpcId;
 
 use super::catalog::{LayerSheet, ShipSheet};
+use super::cloak_fade::CloakDraw;
 use super::held_alt::AltLayer;
 use super::murk::murk_tint;
 use super::solid_runs::solid_overlay;
@@ -112,6 +117,10 @@ pub struct ShipDraw<'a> {
     /// Its hull's tint before its murk: white, at the alpha its fade,
     /// cloak or `BaseTransp` leaves.
     pub tint: Color,
+    /// How its cloak changes its drawing, if it does: its hull's tint and
+    /// blend, its jitter, and its layers' caps
+    /// ([`CloakDraw`], see [`cloak_fade`](super::cloak_fade)).
+    pub cloak: Option<CloakDraw>,
     /// Whether its hull, and so its alt layer, is drawn.
     pub hull: bool,
     /// Its sprite murk, 0 for the player.
@@ -144,8 +153,12 @@ fn draw_layer(
 ) {
     match colorize.filter(|colorize| colorize.mixes()) {
         Some(colorize) => list.colorized_sprite(image, at, tint, blend, colorize),
-        None if blend == Blend::Or => list.or_sprite(image, at, tint),
-        None => list.sprite(image, at, tint),
+        None => list.push(crate::DrawCommand::Sprite {
+            image,
+            center: at,
+            tint,
+            blend,
+        }),
     };
 }
 
@@ -166,13 +179,24 @@ impl ShipDraw<'_> {
         turning(self.spec, self.sheet).index(self.drawn.set, self.heading)
     }
 
-    /// The hull's tint and colorize: its unmurked tint colorized by its
-    /// ion tint, or its murk.
-    fn hull_tint(&self) -> (Color, Option<Colorize>) {
-        match self.colorize {
-            Some(colorize) => (self.tint, Some(colorize)),
-            None => (murk_tint(self.tint, self.murk), None),
+    /// The hull's tint, colorize and blend: its unmurked tint colorized by
+    /// its ion tint, or its murk, drawn plainly; or, cloaked, its cloak's
+    /// tint and blend in place of its tint and murk, as the cloak writes
+    /// the channel factors after them.
+    fn hull_tint(&self) -> (Color, Option<Colorize>, Blend) {
+        if let Some((tint, blend)) = self.cloak.and_then(|cloak| cloak.hull) {
+            return (tint, self.colorize, blend);
         }
+        match self.colorize {
+            Some(colorize) => (self.tint, Some(colorize), Blend::Normal),
+            None => (murk_tint(self.tint, self.murk), None, Blend::Normal),
+        }
+    }
+
+    /// How far its cloak moves its hull and the layers that move with it.
+    fn offset(&self) -> Point {
+        self.cloak
+            .map_or(Point::new(0.0, 0.0), |cloak| cloak.offset)
     }
 
     /// Its alt layer as drawn at `at` this frame, when its hull is drawn
@@ -185,12 +209,14 @@ impl ShipDraw<'_> {
             return None;
         };
         let frame = turning(self.spec, self.sheet).index(set, self.heading) % layer.frames.get();
-        let (tint, colorize) = self.hull_tint();
+        let (tint, colorize, blend) = self.hull_tint();
+        let offset = self.offset();
         Some(AltLayer {
             image: ImageKey::sprite(layer.image_id, frame),
-            at,
+            at: Point::new(at.x + offset.x, at.y + offset.y),
             tint,
             colorize,
+            blend,
         })
     }
 
@@ -200,14 +226,24 @@ impl ShipDraw<'_> {
     /// (@0x2bd58-0x2bdad).
     pub fn draw(&self, list: &mut DrawList, at: Point, alt: Option<AltLayer>) {
         let frame = self.frame();
-        let (hull_tint, colorize) = self.hull_tint();
+        let (hull_tint, colorize, hull_blend) = self.hull_tint();
+        let shield_at = at;
+        let offset = self.offset();
+        let at = Point::new(at.x + offset.x, at.y + offset.y);
         if self.hull {
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
-            draw_layer(list, (hull, at, hull_tint, Blend::Normal), colorize);
+            draw_layer(list, (hull, at, hull_tint, hull_blend), colorize);
             if self.sheet.solid {
                 solid_overlay(list, self.sheet.image_id, frame, at);
             }
         }
+        // A cloak holds the glow and lights to its cap, or hides them, and
+        // the weapon glow to its own cap.
+        let layers = |level: u8| match self.cloak {
+            Some(cloak) => cloak.layers.map(|cap| level.min(cap)),
+            None => Some(level),
+        };
+        let weapon_cap = self.cloak.map_or(u8::MAX, |cloak| cloak.weapon);
         // The level an NPC's layers are held below and colorized at: the
         // hull's ion tint's, or its murk.
         let murk = colorize.map_or(self.murk, |colorize| colorize.level);
@@ -242,22 +278,27 @@ impl ShipDraw<'_> {
                 }
             };
         let lights_murk = if self.held { lights_murk(murk) } else { 0 };
-        let glow = self.glow.map(|level| held(level, murk));
+        let glow = self.glow.and_then(|level| layers(held(level, murk)));
         add(list, self.sheet.glow, glow, murk, frame);
-        let lights = self.lights.map(|level| held(level, lights_murk));
+        let lights = self
+            .lights
+            .and_then(|level| layers(held(level, lights_murk)));
         add(list, self.sheet.lights, lights, lights_murk, frame);
-        let weapon = self.weapon.map(|level| held(level, murk));
+        let weapon = self.weapon.map(|level| held(level, murk).min(weapon_cap));
         add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
         if let Some(alt) = alt {
-            let blend = Blend::Normal;
-            draw_layer(list, (alt.image, alt.at, alt.tint, blend), alt.colorize);
+            draw_layer(list, (alt.image, alt.at, alt.tint, alt.blend), alt.colorize);
             let alt_sheet = self.sheet.alt;
             if alt_sheet.is_some_and(|layer| layer.solid && layer.image_id == alt.image.id) {
                 solid_overlay(list, alt.image.id, alt.image.frame, alt.at);
             }
         }
-        if let (Some(layer), Some(level)) = (self.sheet.shield, self.shield) {
+        let shield = self
+            .shield
+            .filter(|_| self.cloak.is_none_or(|cloak| cloak.shield));
+        if let (Some(layer), Some(level)) = (self.sheet.shield, shield) {
+            let at = shield_at;
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
             let image = ImageKey::sprite(layer.image_id, frame);
             let tint = match colorize {

@@ -94,8 +94,7 @@ fn ship_bases(data: &GameData) -> Vec<(ShipId, i16)> {
 
 /// `PICT` `id`'s width and height, if it exists and decodes.
 fn picture_size(data: &GameData, id: i16) -> Option<(u32, u32)> {
-    let image = decode_pict(data.resource(PICT, id)?.resource.data()).ok()?;
-    Some((image.width(), image.height()))
+    crate::ui::PictureSizes::picture_size(data, id)
 }
 
 impl MainScreenSource for GameData {

@@ -34,7 +34,8 @@ use crate::news::{CARGO_NAMES, MISC_STRINGS};
 use crate::outfitter::outfit_mods;
 use crate::pilot::Pilot;
 use crate::player_info::{
-    self, COMMODITIES, Domination, HeldCargo, LEGAL_STATUS_STRINGS, MissionLoad, PlayerInfo, Words,
+    self, COMMODITIES, CheatIds, Domination, HeldCargo, LEGAL_STATUS_STRINGS, MissionLoad,
+    PlayerInfo, Words,
 };
 use crate::rulebook::RuleKey;
 use crate::shipyard;
@@ -201,6 +202,15 @@ impl Session {
             honors,
             jettisonable: player_info::has_jettisonable_cargo(&cargo),
             words,
+            cheat_ids: CheatIds {
+                system: self.pilot.system.0,
+                record: self
+                    .chart
+                    .legal_record_shown(&self.pilot, &self.setup, catalog),
+                kills: self.pilot.combat_rating,
+                class: self.pilot.ship.0,
+            },
+            cheats: false,
         }
     }
 }
@@ -296,7 +306,9 @@ impl Chart {
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
-                let holder = self.galaxy.holder(&listed.systems, pilot.system)?;
+                let holder = self
+                    .galaxy
+                    .holder(listed.id, &listed.systems, pilot.system)?;
                 let sites = catalog.landing_sites(holder);
                 let site = sites.iter().find(|site| site.id == listed.id)?;
                 Some(player_info::tribute_of(site))
@@ -315,15 +327,30 @@ impl Chart {
         catalog: &impl PilotCatalog,
         words: &Words,
     ) -> String {
-        let system = pilot.system;
-        let sites = overlaid_sites(&self.galaxy, catalog, system);
-        let inhabited = player_info::system_is_inhabited(
-            sites.iter().map(|site| (uninhabited(site), gate(site))),
-        );
-        if !inhabited {
+        if !self.inhabited(catalog, pilot.system) {
             return words.not_available.to_string();
         }
-        self.legal_status_in(pilot, statics, setup, catalog, system, words)
+        self.legal_status_in(pilot, statics, setup, catalog, pilot.system, words)
+    }
+
+    /// The record the Legal Status row was read from, which cheat mode
+    /// appends (@0x52a16-0x52a5d): `None` in an uninhabited system, whose
+    /// "N/A" gets no suffix.
+    fn legal_record_shown(
+        &self,
+        pilot: &Pilot,
+        setup: &Setup,
+        catalog: &impl PilotCatalog,
+    ) -> Option<i16> {
+        self.inhabited(catalog, pilot.system)
+            .then(|| self.record_in(pilot, setup, pilot.system, None))
+    }
+
+    /// Whether `system` is inhabited (`_SystemIsInhabited` 0x4c4a), its
+    /// stellars read from `catalog`.
+    fn inhabited(&self, catalog: &impl PilotCatalog, system: SystemId) -> bool {
+        let sites = overlaid_sites(&self.galaxy, catalog, system);
+        player_info::system_is_inhabited(sites.iter().map(|site| (uninhabited(site), gate(site))))
     }
 
     /// The legal status string in `system`, as `_DrawLegalStatusString`
@@ -348,7 +375,7 @@ impl Chart {
         let govt = self.galaxy.govt(system);
         let counting = sites.iter().take(3).filter(|site| {
             self.galaxy
-                .active_holder(statics.listers(site.id), pilot.system)
+                .active_holder(site.id, statics.listers(site.id), pilot.system)
                 .is_some()
                 && !uninhabited(site)
                 && is_landable(site)
@@ -382,8 +409,9 @@ mod tests {
     use crate::govt::XENOPHOBIC;
     use crate::outfitter::OutfitFlags;
     use crate::pilot::Escort;
-    use crate::player_info::{EnergyShown, IncomeLine, Reach};
+    use crate::player_info::{CheatIds, EnergyShown, IncomeLine, Reach};
     use crate::reserves::Reserves;
+    use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{alternates, hide, with_alternate};
     use crate::testkit::{
         FAST, FakePilotCatalog, carrying, catalog, govt, mission, outfit, planet, rank, ship,
@@ -623,6 +651,13 @@ mod tests {
                 honors: None,
                 jettisonable: false,
                 words: Words::from_list(&[]),
+                cheat_ids: CheatIds {
+                    system: 130,
+                    record: Some(0),
+                    kills: 0,
+                    class: 128,
+                },
+                cheats: false,
             }
         );
         assert!(!info.date.is_empty());
@@ -953,6 +988,87 @@ mod tests {
         assert_eq!(
             &*info.words.not_available, "n/a",
             "the same #396 for the screen's other rows"
+        );
+    }
+
+    #[test]
+    fn the_info_carries_the_cheat_ids() {
+        let catalog = governed();
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        session.pilot.set_system_record(SystemId(131), 50);
+        session.pilot.combat_rating = 12;
+        let info = session.player_info(&catalog);
+        assert_eq!(
+            info.cheat_ids,
+            CheatIds {
+                system: 131,
+                record: Some(50),
+                kills: 12,
+                class: session.pilot.ship.0,
+            }
+        );
+        assert!(!info.cheats, "the session leaves cheat mode off");
+    }
+
+    #[test]
+    fn an_uninhabited_system_carries_no_record_id() {
+        let mut catalog = governed();
+        catalog.sites[1] = (
+            SystemId(131),
+            vec![LandingSite {
+                flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+                ..planet(140, 0.0, 0.0)
+            }],
+        );
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        session.pilot.set_system_record(SystemId(131), 50);
+        assert_eq!(session.player_info(&catalog).cheat_ids.record, None);
+    }
+
+    #[test]
+    fn a_xenophobic_governments_n_a_still_carries_the_record_id() {
+        let mut catalog = governed();
+        for star in &mut catalog.star_map {
+            if star.id.0 == 131 {
+                star.govt = Some(GovtId(129));
+            }
+        }
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        session.pilot.set_system_record(SystemId(131), 50);
+        let info = session.player_info(&catalog);
+        assert_eq!(info.legal_status, "N/A", "129 is xenophobic");
+        assert_eq!(
+            info.cheat_ids.record,
+            Some(50),
+            "the inhabited branch appends the record after the N/A (@0x52a16)"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_the_record_id_is_the_systems_governments_record() {
+        let catalog = governed();
+        let rules = Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists))
+            .with_rules(rules);
+        session.pilot.set_system_record(SystemId(131), -5);
+        session.pilot.set_legal_record(GovtId(128), 50);
+        let info = session.player_info(&catalog);
+        assert_eq!(
+            info.cheat_ids.record,
+            Some(50),
+            "131's government 128, not 131's own record"
+        );
+        assert_eq!(
+            info.legal_status, "status 12",
+            "the Legal Status row reads the same record"
         );
     }
 

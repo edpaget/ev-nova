@@ -15,8 +15,8 @@ use nova_sim::{
     StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, KeptBerths, MissionInfo, MissionInfoPress, OfferPrompt,
-    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
+    ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
+    OfferPrompt, PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
     story::sprite_pool::StellarSpritePool,
 };
 
@@ -88,6 +88,15 @@ impl<
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.place_ship();
+        }
+    }
+
+    /// Enters play from the main screen as [`Session::enter_game`] does:
+    /// the refresh a later new pilot reads is taken afresh. A session that
+    /// failed enters nothing.
+    pub fn enter_game(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.enter_game();
         }
     }
 
@@ -358,6 +367,27 @@ impl<
         self.session.as_ref().ok().map(Session::kept_berths)
     }
 
+    /// The flight with a new pilot's neighbour pass reading `carried`,
+    /// what an earlier flight of the same run left
+    /// ([`Session::with_last_refresh`]).
+    #[must_use]
+    pub fn with_last_refresh(self, carried: LastRefresh) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_last_refresh(carried)),
+            ..self
+        }
+    }
+
+    /// What the flight's last galaxy refresh left hidden, for a new pilot
+    /// made later in the run ([`Session::last_refresh`]), or `None` when
+    /// its session never started.
+    #[must_use]
+    pub fn last_refresh(&self) -> Option<LastRefresh> {
+        self.session.as_ref().ok().map(Session::last_refresh)
+    }
+
     /// The flight with `terms` giving the fee and wage of a hire
     /// ([`Session::with_hire_terms`]).
     #[must_use]
@@ -560,13 +590,14 @@ impl<
     }
 
     /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog, changing nothing; `None` for a
-    /// session that failed. An opening of the screen is
+    /// gives it from the screen's catalog, marked with the cheats setting,
+    /// changing nothing; `None` for a session that failed. An opening of
+    /// the screen is
     /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
-        Some(session.player_info(&self.catalog))
+        Some(self.marked(session.player_info(&self.catalog)))
     }
 
     /// What the main screen's pilot panel says about the pilot, as
@@ -581,11 +612,22 @@ impl<
     /// The player info dialog opens, as [`Session::open_player_info`] has
     /// it: the session resets first, so the screen it gives shows the
     /// cargo trimmed; none in a jump or while the ship breaks up, when
-    /// nothing opens, or for a session that failed. The router opens the
-    /// screen on it, from flight and from the spaceport alike.
+    /// nothing opens, or for a session that failed. It is marked with the
+    /// cheats setting. The router opens the screen on it, from flight and
+    /// from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
         let session = self.session.as_mut().ok()?;
-        session.open_player_info(&self.catalog)
+        let info = session.open_player_info(&self.catalog)?;
+        Some(self.marked(info))
+    }
+
+    /// `info` marked with the cheats setting ([`FlightOverlays::cheats`]),
+    /// which the session leaves off.
+    fn marked(&self, info: PlayerInfo) -> PlayerInfo {
+        PlayerInfo {
+            cheats: self.overlays.cheats,
+            ..info
+        }
     }
 
     /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) outside a jump, its [`PlayerCommand`]

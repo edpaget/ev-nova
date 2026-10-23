@@ -77,6 +77,7 @@ use crate::geometry::{Bounds, Point};
 use crate::oval::oval_frame_pixels;
 use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
+use crate::ui::text_box::TextBox;
 use crate::{Color, DrawList, Font, ImageKey};
 
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
@@ -467,46 +468,48 @@ pub fn message_box(view: (f32, f32)) -> Bounds {
 /// `_DisplayComm` (@0x90294-0x902f5) draws it with `TETextBox`:
 /// left-justified and wrapped to the box, in [`MESSAGE_FONT`] at
 /// [`MESSAGE_TEXT_SIZE`], white (`InitColors` @0x1bece sets the colour
-/// it is passed to 0xffff, 0xffff, 0xffff). See [`draw_message_in`].
+/// it is passed to 0xffff, 0xffff, 0xffff), over the box erased in
+/// `background`. See [`draw_message_in`].
 pub fn draw_message(
     list: &mut DrawList,
     text: &str,
     view: (f32, f32),
+    background: Color,
     metrics: Option<&dyn TextMetrics>,
 ) {
-    draw_message_in(list, text, message_box(view), metrics);
+    draw_message_in(list, text, message_box(view), background, metrics);
 }
 
-/// Draws the flight message `text` in `area`: with `metrics`, each line
-/// it wraps to as a text of its own down from the area's top-left, up to
-/// the last whose bottom is inside the area; without, one text wrapped by
-/// the renderer at the area's width.
+/// Draws the flight message `text` in `area`: with `metrics`, through a
+/// [`TextBox`] as `TETextBox` draws it, each line it wraps to as a text
+/// of its own down from the area's top-left, every line whose top is
+/// inside the area; without, one text wrapped by the renderer at the
+/// area's width.
 ///
-/// `TETextBox` clips to the rect, so a line partly inside shows its top.
-/// A draw list cannot clip, so such a line is left out whole: in the
-/// stock window the box holds two lines, and a third shows none of its
-/// top 10 pixels.
+/// `TETextBox` clips to the rect, so a line partly inside shows its top,
+/// clipped to the box. In the stock 1024 x 768 window [`message_box`] is
+/// 39 pixels tall: two whole lines of Charcoal 12 fit, and a third shows
+/// its top 10 pixels.
+///
+/// First the area is filled in `background`, as `_DisplayComm` erases
+/// the rect in the system background colour before `TETextBox`
+/// (`SetSystemBackgroundBackColor` @0x902cf: the current system's
+/// `BkgndColor`, or black without one, @0x6e06), hiding the starfield
+/// behind the text.
 pub fn draw_message_in(
     list: &mut DrawList,
     text: &str,
     area: Bounds,
+    background: Color,
     metrics: Option<&dyn TextMetrics>,
 ) {
-    let (font, size, width) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE, area.width());
+    fill_rect(list, area, background);
+    let (font, size) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE);
     let Some(metrics) = metrics else {
-        list.text_in(font, text, area.min, size, Some(width), Color::WHITE);
+        list.text_in(font, text, area.min, size, Some(area.width()), Color::WHITE);
         return;
     };
-    let line_height = metrics.line_height(font, size);
-    let mut top = area.min.y;
-    for line in crate::text::wrap(&metrics, font, size, text, width) {
-        if top + line_height > area.max.y {
-            break;
-        }
-        let origin = Point::new(area.min.x, top);
-        list.text_in(font, line, origin, size, None, Color::WHITE);
-        top += line_height;
-    }
+    TextBox::new(text, font, size, Color::WHITE, area, &metrics).draw(list);
 }
 
 /// Draws `cargo` in the layout's cargo area, at the bar's `origin`, as
@@ -722,6 +725,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::draw::fill_command;
     use crate::flight::radar::{RadarShip, RadarStellar};
     use crate::system::camera::VIEW_SIZE;
     use crate::text::fixture::MonoMetrics;
@@ -2272,11 +2276,20 @@ mod tests {
         }
     }
 
+    /// A deep blue background.
+    const BLUE: Color = Color::rgba(0, 16, 82, 255);
+
     #[test]
     fn a_message_is_drawn_in_the_box_at_12_pt_in_white() {
         let mut list = DrawList::new();
-        draw_message(&mut list, "Mission failed.", VIEW_SIZE, Some(&MonoMetrics));
-        let drawn: Vec<&DrawCommand> = list.iter().collect();
+        draw_message(
+            &mut list,
+            "Mission failed.",
+            VIEW_SIZE,
+            Color::BLACK,
+            Some(&MonoMetrics),
+        );
+        let drawn: Vec<&DrawCommand> = list.iter().skip(1).collect();
         assert_eq!(
             drawn,
             [&message_text("Mission failed.", at(25.0, 724.0), None)]
@@ -2290,40 +2303,40 @@ mod tests {
         // 60 words of 4: 299 characters at 7.2 each, 104 to a 755-wide line.
         let text = vec!["abcd"; 60].join(" ");
         let mut list = DrawList::new();
-        draw_message(&mut list, &text, VIEW_SIZE, Some(&MonoMetrics));
-        let lines: Vec<(String, Point)> = list
-            .iter()
-            .map(|c| match c {
-                DrawCommand::Text {
-                    text,
-                    origin,
-                    font,
-                    size,
-                    color,
-                    wrap_width,
-                } => {
-                    assert_eq!(
-                        (*font, *size, *color, *wrap_width),
-                        (MESSAGE_FONT, 12.0, Color::WHITE, None)
-                    );
-                    (text.clone(), *origin)
-                }
-                other => panic!("{other:?}"),
-            })
-            .collect();
+        draw_message(&mut list, &text, VIEW_SIZE, BLUE, Some(&MonoMetrics));
         let all = crate::text::wrap(&MonoMetrics, Font::Charcoal, 12.0, &text, 755.0);
         assert_eq!(all.len(), 3, "a third line to clip");
+        let drawn: Vec<&DrawCommand> = list.iter().skip(1).collect();
         assert_eq!(
-            lines,
+            drawn,
             [
-                (all[0].clone(), at(25.0, 724.0)),
-                (all[1].clone(), at(25.0, 724.0 + 14.4)),
+                &message_text(&all[0], at(25.0, 724.0), None),
+                &message_text(&all[1], at(25.0, 724.0 + 14.4), None),
+                &DrawCommand::Clipped {
+                    clip: message_box(VIEW_SIZE),
+                    command: Box::new(message_text(&all[2], at(25.0, 724.0 + 28.8), None)),
+                },
             ],
-            "the third line's bottom, 767.2, passes 763"
+            "the third line's bottom, 767.2, passes 763: it shows its top"
         );
-        for (line, _) in &lines {
+        for line in &all {
             assert!(MonoMetrics.width(Font::Charcoal, 12.0, line) <= 755.0);
         }
+    }
+
+    #[test]
+    fn no_line_below_the_box_is_drawn() {
+        let line = MonoMetrics.line_height(MESSAGE_FONT, MESSAGE_TEXT_SIZE);
+        let area = Bounds::at(at(0.0, 0.0), 755.0, 1.5 * line);
+        let text = vec!["abcd"; 100].join(" ");
+        let mut list = DrawList::new();
+        draw_message_in(&mut list, &text, area, BLUE, Some(&MonoMetrics));
+        let kinds: Vec<bool> = list
+            .iter()
+            .skip(1)
+            .map(|c| matches!(c, DrawCommand::Clipped { .. }))
+            .collect();
+        assert_eq!(kinds, [false, true], "one whole line, one clipped, no more");
     }
 
     #[test]
@@ -2332,22 +2345,50 @@ mod tests {
         let area = Bounds::at(at(0.0, 0.0), 755.0, 2.0 * line);
         let text = vec!["abcd"; 60].join(" ");
         let mut list = DrawList::new();
-        draw_message_in(&mut list, &text, area, Some(&MonoMetrics));
-        assert_eq!(list.iter().count(), 2, "the second line ends on the bottom");
+        draw_message_in(&mut list, &text, area, BLUE, Some(&MonoMetrics));
+        assert_eq!(
+            list.iter().count(),
+            1 + 2,
+            "the fill, and the second line ends on the bottom"
+        );
     }
 
     #[test]
     fn without_metrics_the_message_wraps_at_the_box_width() {
         let mut list = DrawList::new();
-        draw_message(&mut list, "Mission failed.", VIEW_SIZE, None);
+        draw_message(&mut list, "Mission failed.", VIEW_SIZE, BLUE, None);
         let drawn: Vec<&DrawCommand> = list.iter().collect();
         assert_eq!(
             drawn,
-            [&message_text(
-                "Mission failed.",
-                at(25.0, 724.0),
-                Some(755.0)
-            )]
+            [
+                &fill_command(message_box(VIEW_SIZE), BLUE),
+                &message_text("Mission failed.", at(25.0, 724.0), Some(755.0))
+            ]
         );
+    }
+
+    #[test]
+    fn the_message_box_is_filled_in_the_background_before_the_text() {
+        // `_DisplayComm` erases the rect in the system's colour
+        // (@0x902cf) before `TETextBox`.
+        for background in [Color::BLACK, BLUE] {
+            let mut list = DrawList::new();
+            draw_message(
+                &mut list,
+                "Mission failed.",
+                VIEW_SIZE,
+                background,
+                Some(&MonoMetrics),
+            );
+            let drawn: Vec<&DrawCommand> = list.iter().collect();
+            assert_eq!(
+                drawn,
+                [
+                    &fill_command(message_box(VIEW_SIZE), background),
+                    &message_text("Mission failed.", at(25.0, 724.0), None)
+                ],
+                "{background:?}"
+            );
+        }
     }
 }

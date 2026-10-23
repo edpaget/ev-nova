@@ -23,11 +23,16 @@
 //! nor a relocation (`_MissionHandlePlayerEnteredNewSystem`
 //! @0x99f5b-0x99fae). The original runs it before the system's ships are
 //! set up (@0x6c15d before @0x6c1f9, @0x67159 before @0x672e0), so a
-//! `ShipStart` 1 slot it restarts brings none at that setup. Here the
-//! setup comes first, as the system is entered, and the hook as the
-//! entry settles: the setup on such an entry ([`Session::populate`]
-//! through the entry table) leaves out every slot the hook is about to
-//! restart. Its timer is drawn after the setup's draws, not before. On a
+//! `ShipStart` 1 slot it restarts brings none at that setup. A jump's
+//! arrival does the same: `Session::arrive` dispatches its
+//! `EnteredSystem` after the days, before the re-explore and the setup,
+//! and checks the goals once the setup is done, as the original's
+//! per-frame poll first finds them (@0x9edb5), so the hook checks none on
+//! a jump. On the other entries the setup comes first, as the system is
+//! entered, and the hook as the entry settles: the setup on such an
+//! entry ([`Session::populate`] through the entry table) leaves out
+//! every slot the hook is about to restart. Its timer is drawn after the
+//! setup's draws, not before. On a
 //! hypergate's or wormhole's exit the original's loop A then overwrites
 //! the restart of every slot whose ships follow the player (`ShipSyst`
 //! -6, @0x6716a-0x67294), so, as the engine reads
@@ -373,7 +378,11 @@ impl Session {
                 if restarts_on(how) {
                     self.aux_on_entry(slot, how, chance);
                 }
-                if self.mode.landed().is_none() {
+                // A jump's hook, and a move's during the jump, run in the
+                // jump's window, before the setup, so their first check
+                // waits for the setup (`Session::arrive`; see the
+                // `jump_moves` module).
+                if self.mode.landed().is_none() && !self.chart.in_jump_window() {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
@@ -495,7 +504,8 @@ impl Session {
     /// its appear timer not running, brings ships left of them
     /// ([`spawn::mission_ships`]). `entering`
     /// by an entry whose enter-system hook is still to run, a slot the
-    /// hook is about to restart brings none (see the module docs). With the ships,
+    /// hook is about to restart brings none (see the module docs); a
+    /// jump's hook has run already, so its entry passes none. With the ships,
     /// the slots it took and their missions, in order, a slot of no
     /// `düde` among them: each is auto-aborted with `Flags` 0x0001
     /// ([`Session::abort_set_up`]).
@@ -840,7 +850,9 @@ impl Session {
     /// ([`swapped_ship_type`]), kept as the slot's type, else of the
     /// slot's type ([`Session::uniform_preset`]), takes the person's place
     /// ([`spawn::swapped_mission_ship`]); the person's NPC is taken out,
-    /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
+    /// every other NPC letting it go, its slot keeping its record as
+    /// @0x62520 clears only +0xb8 ([`Traffic::vacate`](crate::traffic::Traffic::vacate));
+    /// the ship raises [`Fate::Arrived`];
     /// and it becomes the player's target when the person was, its
     /// brackets settled (@0x62538; see the `brackets` module). The
     /// original also marks the target panel for redraw
@@ -949,7 +961,10 @@ impl Session {
         }
         let targeted = self.chart.target == Some(npc);
         self.space.drop_quarry(npc);
-        self.space.traffic.remove(npc);
+        // @0x62520 clears only the person's +0xb8: its slot keeps its
+        // record, which battle help still counts (see the
+        // `vacated_berths` module).
+        self.space.traffic.vacate(npc);
         // The ship brought in above is numbered last.
         let swapped_in = self.space.last_npc();
         if targeted {
@@ -1564,7 +1579,7 @@ pub(super) mod tests {
     use crate::mission::FailedBy;
     use crate::mission::aux_ships::AuxShips;
     use crate::session::mission_screens::MissionTextKind;
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, ship};
+    use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, planet, ship};
     use crate::traffic::npc::{Mode, Npc};
 
     /// `STR#` 7000 names; 7001 subtitles.
@@ -2128,12 +2143,19 @@ pub(super) mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
         take_off(&mut session, &catalog);
+        // Set up cloaked (`_SetupShipsInSystem` @0x43121), then stepped
+        // twice before the first frame by the take-off's two
+        // `_PrepareAllSprites` (@0x6764e, @0x67658).
         assert!(
+            session.npcs().iter().all(|npc| npc.mission.is_some()
+                && npc.cloak.direction == 1
+                && npc.cloak.fade == 2.0 * crate::cloak::FADE_RATE),
+            "fading in: {:?}",
             session
                 .npcs()
                 .iter()
-                .all(|npc| npc.mission.is_some() && npc.cloak.direction == 1),
-            "fading in"
+                .map(|npc| npc.cloak)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2318,6 +2340,224 @@ pub(super) mod tests {
         let catalog_ticks = 199;
         ticks(&mut session, &catalog, catalog_ticks);
         assert_eq!(marked(&session), [0, 0]);
+    }
+
+    /// Slot 0's appear timer as each `X` applies.
+    #[derive(Debug, Default)]
+    struct Appears(std::cell::RefCell<Vec<i16>>);
+
+    impl crate::session::control::SetOpObserver for Appears {
+        fn saw(&self, op: &crate::control::SetOp, session: &Session) {
+            if matches!(op, crate::control::SetOp::Explore(_)) {
+                self.0.borrow_mut().push(ships_of(session).appear);
+            }
+        }
+    }
+
+    #[test]
+    fn a_jumps_hook_restarts_a_slots_appear_timer_before_the_re_explore_and_its_setup() {
+        // The nebula around 131 is active only from the jump's refresh, so
+        // only the re-explore (@0x6c1db) runs its `X132`: after the hook
+        // (@0x6c15d), before the setup (@0x6c1f9).
+        let mut catalog = ships_catalog(shipping(131, 1));
+        catalog.nebulae.push(crate::testkit::nebula(
+            128,
+            (500, -100, 200, 200),
+            "b5",
+            "X132",
+        ));
+        let mut session = accepted(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.appear = -1;
+        }
+        take_off(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("b5").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        let seen = Rc::new(Appears::default());
+        let mut session = session.with_set_op_observer(seen.clone());
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(*seen.0.borrow(), [199], "restarted by the re-explore");
+        assert!(marked(&session).is_empty(), "none set up");
+    }
+
+    #[test]
+    fn a_jumps_goal_check_runs_after_its_setup() {
+        // No goal, `Flags` 0x0001 and `ShipStart` 1, its ships in 131 with
+        // none arrived: the hook restarts their timer, the setup brings
+        // none, and the check after it leaves the goals unmet while they
+        // are still to come (@0x9ed8e-0x9ed98).
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        catalog.missions[0].ships.start = 1;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.appear = -1;
+        }
+        let _ = shown(&mut session);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_some(), "still held");
+        assert_eq!(ships_of(&session).appear, 199, "restarted");
+        assert!(!goals_met(&session));
+        assert_eq!(bits(&session), Vec::<u16>::new(), "no OnAbort");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+    }
+
+    #[test]
+    fn a_jumps_setup_auto_aborts_before_its_goal_check_could_meet_the_goals() {
+        // No goal, `Flags` 0x0001, `ShipStart` 0, its ships in 131 and none
+        // arrived: a check would meet it, but the setup comes first, brings
+        // the ships and auto-aborts it (@0x43169-0x4317e), so the check
+        // after finds the slot free and shows no `ShipDoneText`.
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+        }
+        let _ = shown(&mut session);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(session.npcs().len(), 2, "set up");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+    }
+
+    #[test]
+    fn a_move_on_a_jumps_day_checks_no_goal_before_the_setup() {
+        // As above, its ships in 133, where a crön's `M133` on the jump's
+        // day takes the player: the move's hook (@0x159a8) checks no goal,
+        // as the check is per frame (@0x9edb5), and the jump's setup brings
+        // the ships and auto-aborts first.
+        let mut catalog = returning(-1, 0x0001);
+        catalog.missions[0].ships.syst = 133;
+        catalog.systems.push(SystemId(133));
+        catalog
+            .sites
+            .push((SystemId(133), vec![planet(150, 300.0, -200.0)]));
+        let mut on_the_day = crate::session::crons::tests::scripted(128, 1, "M133", "");
+        on_the_day.enable_on = crate::control::Test::parse("b30");
+        catalog.crons.push(on_the_day);
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+        }
+        session.run_set(&SetExpr::parse("b30").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        let _ = shown(&mut session);
+        session.ship.player.position = Vec2::ZERO;
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(133)));
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+    }
+
+    /// [`returning`]'s mission 140 of no goal and `Flags` 0x0001, its two
+    /// ships in 130 with none arrived, `days_left` days left and `CanAbort`
+    /// 0, so a failure keeps it in its slot: a jump to 131 leaves its ships
+    /// behind, so the setup brings none and auto-aborts nothing, and the
+    /// first check after it would meet the goals (@0x9e7ef-0x9e821,
+    /// @0x9eb85). Its texts taken.
+    fn timed_hunt_left_behind(days_left: u32) -> (FakePilotCatalog, Session) {
+        let mut catalog = returning(-1, AUTO_ABORT);
+        catalog.missions[0].ships.syst = 130;
+        catalog.missions[0].time_limit = 10;
+        catalog.missions[0].can_abort = 0;
+        let mut session = accepted(&catalog);
+        take_off_unaborted(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 0;
+            active.days_left = Some(days_left);
+        }
+        let _ = shown(&mut session);
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_deadline_lapsing_on_a_jumps_day_fails_the_mission_before_its_first_goal_check() {
+        // `_MissionObjectivesCheck` checks the deadline first
+        // (@0x9eba5-0x9ec61) and skips the goals-met moment once the
+        // mission has failed (@0x9ec70).
+        let (catalog, mut session) = timed_hunt_left_behind(1);
+        let _ = session.take_messages();
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(
+            failed(&session),
+            Some(FailedBy::Quick),
+            "failed by its deadline"
+        );
+        assert!(bits(&session).contains(&5), "OnFailure ran");
+        assert!(!bits(&session).contains(&7), "no auto-abort's OnAbort");
+        assert!(
+            !shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "no ShipDoneText"
+        );
+        assert_eq!(
+            session
+                .take_messages()
+                .iter()
+                .filter(|message| **message == SimMessage::DeadlineMissed)
+                .count(),
+            1,
+            "the deadline applied once"
+        );
+    }
+
+    #[test]
+    fn a_deadline_not_lapsing_on_a_jumps_day_leaves_the_first_goal_check_to_meet_the_goals() {
+        let (catalog, mut session) = timed_hunt_left_behind(5);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert!(bits(&session).contains(&7), "OnAbort ran");
+        assert!(!bits(&session).contains(&5), "no OnFailure");
+        assert!(
+            shown(&mut session)
+                .iter()
+                .any(|(kind, _)| *kind == MissionTextKind::ShipDone),
+            "ShipDoneText"
+        );
+    }
+
+    #[test]
+    fn a_jumps_goal_check_finds_an_escort_unmet_once_the_hook_restarts_its_ships() {
+        // An escort goal met, its two ships arrived, `ShipStart` 1 in 131:
+        // the hook zeroes the arrived count (@0x99fae), so the first check
+        // after the setup finds ships still to come (@0x9e852-0x9e85d).
+        let escorts = MissionShip {
+            goal: 3,
+            ..shipping(131, 1)
+        };
+        let catalog = ships_catalog(escorts);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = true;
+            active.ships.arrived = 2;
+            active.ships.appear = -1;
+        }
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(ships_of(&session).arrived, 0, "restarted");
+        assert!(!goals_met(&session), "checked after the setup");
     }
 
     #[test]

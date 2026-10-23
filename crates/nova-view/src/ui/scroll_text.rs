@@ -8,8 +8,8 @@ use crate::input::{Input, Key};
 use crate::text::{TextMetrics, wrap};
 
 /// Text wrapped to a box's width once, when it is made, and shown as many
-/// whole lines as fit the box's height, from a first line the arrow keys
-/// move. Nothing is drawn outside the box, so the renderer needs no clip.
+/// whole lines as fit the box's height (at least one in a box as tall as
+/// the text's size), from a first line the arrow keys move. Nothing is drawn outside the box, so the renderer needs no clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollText {
     lines: Vec<String>,
@@ -35,8 +35,15 @@ impl ScrollText {
         metrics: &impl TextMetrics,
     ) -> Self {
         let line_height = metrics.line_height(font, size);
-        // A NaN or negative quotient (no room, or no line height) is 0.
-        let visible = (rect.height() / line_height).floor() as usize;
+        // A NaN or negative quotient (no room, or no line height) is 0. A
+        // box at least as tall as the text's size, short of a whole line
+        // with its leading, still holds the first line's glyphs.
+        let whole = (rect.height() / line_height).floor() as usize;
+        let visible = if rect.height() >= size {
+            whole.max(1)
+        } else {
+            whole
+        };
         Self {
             lines: wrap(metrics, font, size, text, rect.width()),
             font,
@@ -205,8 +212,20 @@ mod tests {
         assert_eq!(scroll("a", 36.0).visible(), 3);
         assert_eq!(scroll("a", 47.9).visible(), 3);
         assert_eq!(scroll("a", 48.0).visible(), 4);
-        assert_eq!(scroll("a", 11.9).visible(), 0);
+        assert_eq!(scroll("a", 9.9).visible(), 0);
         assert_eq!(scroll("a", -5.0).visible(), 0);
+    }
+
+    #[test]
+    fn a_box_as_tall_as_the_text_but_short_of_a_line_shows_its_first_line() {
+        // A line's glyphs are the size high, its leading below them: the
+        // mission computer's offer name, Times 18 (21.6 a line) in a box
+        // 21 high, shows its first line as `TETextBox` does.
+        for height in [10.0, 11.9] {
+            let text = scroll("a b", height);
+            assert_eq!(text.visible(), 1, "{height}");
+            assert_eq!(texts(&text).len(), 1, "{height}");
+        }
     }
 
     #[test]
