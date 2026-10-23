@@ -1092,7 +1092,7 @@ impl<C> FlightView<C> {
         if let Some(nav) = session.nav_brackets()
             && let Some(stellar) = scene.stellars().iter().find(|s| s.id == nav.stellar)
         {
-            let sprite = stellar.drawn().as_ref().ok();
+            let sprite = stellar.drawn().and_then(|sheet| sheet.as_ref().ok());
             let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
             let at = camera.world_to_screen(stellar.position);
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);

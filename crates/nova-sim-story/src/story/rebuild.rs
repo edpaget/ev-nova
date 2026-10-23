@@ -72,6 +72,11 @@ pub enum DrawnSheet {
     /// Graphic type 0's sheet (`spïn` 1000), which the original's rebuild
     /// fills an empty sprite slot with.
     TypeZero,
+    /// No frame: its sprite slot holds the frames of a sheet that reads
+    /// but shows none of them, as a slot cloning a `spïn` whose `xTiles` ×
+    /// `yTiles` is 0 or less is left from a rebuild point (see the `story`
+    /// module's "Built by stellar-fidelity phase 8"). Nothing is drawn.
+    NoFrame,
 }
 
 /// What graphic type 0's sheet (`spïn` 1000) gives the original's rebuild

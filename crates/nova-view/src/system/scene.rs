@@ -104,17 +104,21 @@ impl SceneStellar {
     /// sheet; the `DeadType` sheet (or why it cannot be shown), or the
     /// `Type` sheet when the stellar has no different graphic; or graphic
     /// type 0's sheet, as the original's rebuild fills a sprite slot it
-    /// left empty (story-runtime phase 9).
-    pub fn drawn(&self) -> &Result<StellarSheet, String> {
+    /// left empty (story-runtime phase 9). `None` when its slot shows no
+    /// frame ([`DrawnSheet::NoFrame`], stellar-fidelity phase 8): nothing
+    /// is drawn.
+    #[must_use]
+    pub fn drawn(&self) -> Option<&Result<StellarSheet, String>> {
         self.sheet(self.drawn)
     }
 
     /// The sheet `which` names (see [`drawn`](Self::drawn)).
-    fn sheet(&self, which: DrawnSheet) -> &Result<StellarSheet, String> {
+    fn sheet(&self, which: DrawnSheet) -> Option<&Result<StellarSheet, String>> {
         match (which, &self.dead_sprite) {
-            (DrawnSheet::Type, _) | (DrawnSheet::Dead, None) => &self.sprite,
-            (DrawnSheet::Dead, Some(dead)) => dead,
-            (DrawnSheet::TypeZero, _) => &self.type_zero_sprite,
+            (DrawnSheet::Type, _) | (DrawnSheet::Dead, None) => Some(&self.sprite),
+            (DrawnSheet::Dead, Some(dead)) => Some(dead),
+            (DrawnSheet::TypeZero, _) => Some(&self.type_zero_sprite),
+            (DrawnSheet::NoFrame, _) => None,
         }
     }
 
@@ -124,10 +128,10 @@ impl SceneStellar {
     }
 
     /// How many frames the sheet `which` names has: 1 when it cannot be
-    /// read.
+    /// read or names none.
     fn frame_count(&self, which: DrawnSheet) -> NonZeroU16 {
         self.sheet(which)
-            .as_ref()
+            .and_then(|sheet| sheet.as_ref().ok())
             .map_or(NonZeroU16::MIN, |sheet| sheet.frames)
     }
 
@@ -321,14 +325,16 @@ impl SystemScene {
 /// Draws every stellar of `scene` where `camera` puts it, at the frame its
 /// animation shows, or a hypergate on the frame its session gave it
 /// ([`SystemScene::set_gate_frames`]), modulo its sheet's frames: each
-/// sprite (or, without a sheet, a placeholder box and the reason), then
-/// every name under its stellar, so no sprite covers a name.
+/// sprite (or, without a sheet, a placeholder box and the reason, and with
+/// a slot showing no frame, nothing), then every name under its stellar,
+/// so no sprite covers a name.
 pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
     let mut labels = Vec::new();
     for stellar in scene.stellars() {
         let at = camera.world_to_screen(stellar.position);
         let (width, height) = match stellar.drawn() {
-            Ok(sheet) => {
+            None => (0.0, 0.0),
+            Some(Ok(sheet)) => {
                 let frame = stellar.gate_frame.map_or_else(
                     || stellar.frames.shown(),
                     |frame| frame % sheet.frames.get(),
@@ -336,7 +342,7 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
                 list.sprite(sheet.image.frame(frame), at, Color::WHITE);
                 (sheet.frame_width as f32, sheet.frame_height as f32)
             }
-            Err(message) => {
+            Some(Err(message)) => {
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
                     at.x - PLACEHOLDER_SIZE / 2.0,
@@ -706,10 +712,10 @@ mod tests {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
         scene.set_destroyed(|_| dead(DrawnSheet::Dead));
         assert!(scene.stellars().iter().all(|stellar| stellar.destroyed));
-        assert_eq!(scene.stellars()[1].drawn(), &Ok(sheet(1001, 1)));
+        assert_eq!(scene.stellars()[1].drawn(), Some(&Ok(sheet(1001, 1))));
         assert_eq!(
             scene.stellars()[2].drawn(),
-            &Err("no spïn 1007".to_owned()),
+            Some(&Err("no spïn 1007".to_owned())),
             "an unreadable one says why"
         );
     }
@@ -1032,12 +1038,70 @@ mod tests {
         );
     }
 
+    // A slot showing no frame (stellar-fidelity phase 8).
+
+    #[test]
+    fn a_stellar_drawing_no_frame_draws_no_sprite_only_its_name_under_its_centre() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.set_destroyed(|id| {
+            if id == StellarId(151) {
+                StellarLook {
+                    drawn: DrawnSheet::NoFrame,
+                    counted: DrawnSheet::Type,
+                    ..WHOLE
+                }
+            } else {
+                WHOLE
+            }
+        });
+        assert_eq!(scene.stellars()[1].drawn(), None);
+        assert_eq!(
+            drawn(&scene),
+            [
+                ImageKey::sprite(1000, 0),
+                ImageKey::sprite(1002, 0),
+                ImageKey::sprite(1003, 0),
+            ],
+            "nothing for 151"
+        );
+        let at = Camera::centred_on(Point::default()).world_to_screen(Point::new(100.0, 0.0));
+        assert_eq!(
+            name_at(&scene, "Stellar 151"),
+            Point::new(at.x, at.y + NAME_GAP)
+        );
+        let mut list = DrawList::new();
+        draw_stellars(&mut list, &scene, &Camera::centred_on(Point::default()));
+        assert!(
+            !list
+                .iter()
+                .any(|command| matches!(command, crate::DrawCommand::Text { text, .. } if text.starts_with("Sprite unavailable"))),
+            "no placeholder either"
+        );
+    }
+
+    #[test]
+    fn a_stellar_drawing_no_frame_counts_one_and_a_rebuild_to_it_shows_frame_0() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.step(6);
+        scene.rebuild(|_| StellarLook {
+            drawn: DrawnSheet::NoFrame,
+            counted: DrawnSheet::NoFrame,
+            ..WHOLE
+        });
+        assert_eq!(scene.stellars()[3].frames.shown(), 0);
+        scene.step(6);
+        assert_eq!(scene.stellars()[3].frames.shown(), 0, "one frame counted");
+    }
+
     #[test]
     fn a_type_zero_sheet_that_cannot_be_read_draws_the_placeholder_and_why() {
         let mut catalog = dying();
         catalog.systems[0].type_zero_sprite = Err("no spïn 1000".to_owned());
         let mut scene = SystemScene::load(&catalog, SystemId(134));
         scene.set_destroyed(|_| dead(DrawnSheet::TypeZero));
-        assert_eq!(scene.stellars()[1].drawn(), &Err("no spïn 1000".to_owned()));
+        assert_eq!(
+            scene.stellars()[1].drawn(),
+            Some(&Err("no spïn 1000".to_owned()))
+        );
     }
 }

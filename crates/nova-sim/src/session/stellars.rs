@@ -135,6 +135,11 @@ use std::collections::BTreeMap;
 /// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
 const STELLAR_KILLINGS: usize = 10;
 
+/// The side `_GetSpriteXSize` and `_GetSpriteYSize` give a sprite slot
+/// with no frame, or whose frame index is not below its count
+/// (@0x26e5-0x26ef, @0x2714-0x271e).
+pub(super) const NO_SPRITE_SIDE: u32 = 32;
+
 impl Session {
     /// Whether `stellar` has been dead since the last rebuild point: it
     /// is among the stellars shown, the last rebuild point found it
@@ -209,8 +214,31 @@ impl Session {
             .iter()
             .find(|site| site.id == stellar)
             .map_or(DrawnSheet::Type, |site| {
-                self.space.site_sheet(&self.setup, site)
+                self.space.site_sheet(&self.statics, &self.setup, site)
             })
+    }
+
+    /// Whether `stellar`'s sprite slot shows a frame frozen, by
+    /// [`RuleKey::UncountedSheet`]'s engine reading: a flight frame cloned
+    /// into it a sheet whose `spïn` counts no frames, so it keeps the
+    /// frame it showed ([`Session::drawn_sheet`]), never stepping it, and
+    /// is placed as a 32-pixel sprite, its top left at the stellar's
+    /// centre less 16 on each axis (see the `story` module's "Built by
+    /// stellar-fidelity phase 8").
+    #[must_use]
+    pub fn frame_frozen(&self, stellar: StellarId) -> bool {
+        self.space.frame_frozen(&self.setup, stellar)
+    }
+
+    /// Whether `stellar` animates over no frames until the next rebuild
+    /// point, by the engine readings of [`RuleKey::UncountedSheet`] and
+    /// [`RuleKey::StellarFrameCount`]: the last rebuild point copied a
+    /// count of none from its slot (@0x331c6-0x331c9), so it never
+    /// animates (`_HandleStellarSprites` @0x2e802), even when a later
+    /// clone brings counting frames into the slot.
+    #[must_use]
+    pub fn counts_no_frames(&self, stellar: StellarId) -> bool {
+        self.space.counts_no_frames(&self.setup, stellar)
     }
 
     /// The sheet whose frame count `stellar` animates over, by
@@ -507,19 +535,32 @@ impl Space {
 
     /// [`Session::drawn_sheet`] for `site`, one of the stellars shown: its
     /// `DeadType` sheet while destroyed and its `Type` sheet while whole,
-    /// each when it can be read. A stellar showing no sheet that can be
-    /// read draws, by the engine's reading of the key that governs it
-    /// ([`RuleKey::DeadTypeFallback`] while destroyed,
-    /// [`RuleKey::TypeSheetFallback`] while whole), what its sprite slot
-    /// holds (`Rebuilt::held`), or graphic type 0 when its slot shows no
-    /// frame, the view then drawing the placeholder with that sheet's
-    /// reason; and its `Type` by the other reading.
-    fn site_sheet(&self, setup: &Setup, site: &LandingSite) -> DrawnSheet {
-        if site.destroyed && site.dead_frame_size.is_some() {
-            return DrawnSheet::Dead;
-        }
-        if !site.destroyed && site.frame_size.is_some() {
-            return DrawnSheet::Type;
+    /// each when it can be read and, by [`RuleKey::UncountedSheet`]'s
+    /// engine reading, counts frames. One that reads but counts none
+    /// draws the frame its sprite slot shows (`Rebuilt::showing`), or
+    /// [`DrawnSheet::NoFrame`] when it shows none. A stellar showing no
+    /// sheet that can be read draws, by the engine's reading of the key
+    /// that governs it ([`RuleKey::DeadTypeFallback`] while destroyed,
+    /// [`RuleKey::TypeSheetFallback`] while whole), the frame its slot
+    /// shows; when it shows none, graphic type 0 when that cannot be read,
+    /// the view then drawing the placeholder with that sheet's reason,
+    /// and otherwise no frame; and its `Type` by the other reading.
+    fn site_sheet(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> DrawnSheet {
+        let honours_counts = setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine;
+        let showing = self.rebuilt.showing(site.id);
+        let readable = if site.destroyed {
+            site.dead_frame_size
+                .map(|_| (DrawnSheet::Dead, site.dead_counts_frames))
+        } else {
+            site.frame_size
+                .map(|_| (DrawnSheet::Type, site.type_counts_frames))
+        };
+        if let Some((sheet, counts)) = readable {
+            return if counts || !honours_counts {
+                sheet
+            } else {
+                showing.unwrap_or(DrawnSheet::NoFrame)
+            };
         }
         let key = if site.destroyed {
             RuleKey::DeadTypeFallback
@@ -528,11 +569,27 @@ impl Space {
         };
         if setup.rules.source_for(key) == RuleSource::Bible {
             DrawnSheet::Type
-        } else if self.rebuilt.shows_frame(site.id) {
-            self.rebuilt.held(site.id)
-        } else {
+        } else if let Some(showing) = showing {
+            showing
+        } else if statics.fallback_frame.is_none() {
             DrawnSheet::TypeZero
+        } else {
+            DrawnSheet::NoFrame
         }
+    }
+
+    /// [`Session::frame_frozen`].
+    fn frame_frozen(&self, setup: &Setup, stellar: StellarId) -> bool {
+        setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine
+            && self.rebuilt.frozen(stellar)
+    }
+
+    /// [`Session::counts_no_frames`].
+    fn counts_no_frames(&self, setup: &Setup, stellar: StellarId) -> bool {
+        let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
+        engine(RuleKey::UncountedSheet)
+            && engine(RuleKey::StellarFrameCount)
+            && self.rebuilt.still(stellar)
     }
 
     /// [`Session::counted_sheet`] by [`RuleKey::StellarFrameCount`]'s
@@ -561,10 +618,31 @@ impl Space {
         setup: &Setup,
         site: &LandingSite,
     ) -> Option<(u32, u32)> {
-        match self.site_sheet(setup, site) {
+        match self.site_sheet(statics, setup, site) {
             DrawnSheet::Type => site.frame_size,
             DrawnSheet::Dead => site.dead_frame_size,
             DrawnSheet::TypeZero => statics.fallback_frame,
+            DrawnSheet::NoFrame => None,
+        }
+    }
+
+    /// The size `_GetSpriteXSize` and `_GetSpriteYSize` give `site`'s
+    /// sprite slot (@0x26d4-0x2731): `None` when it shows no frame,
+    /// [`NO_SPRITE_SIDE`] square when the frames it holds count none (a
+    /// frame frozen, [`Session::frame_frozen`]), and otherwise the frame
+    /// drawn's ([`Space::drawn_frame_size`]).
+    pub(super) fn slot_sprite_size(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<(u32, u32)> {
+        if !self.rebuilt.shows_frame(site.id) {
+            None
+        } else if self.frame_frozen(setup, site.id) {
+            Some((NO_SPRITE_SIDE, NO_SPRITE_SIDE))
+        } else {
+            self.drawn_frame_size(statics, setup, site)
         }
     }
 
@@ -2955,6 +3033,148 @@ mod tests {
         let both = frame_count(RuleSource::Bible)
             .with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
         assert_eq!(counted_128(&session.with_rules(both)), Type);
+    }
+
+    // A `spïn` that counts no frames (stellar-fidelity phase 8).
+
+    /// [`clicking`]'s stellar 128, 40 square, with a `DeadType` sheet 200
+    /// square that counts, whose `Type` counts no frames.
+    fn frozen_on_dead() -> FakePilotCatalog {
+        let mut catalog = clicking(Some((200, 200)), Some((100, 100)));
+        catalog.sites[0].1[0].type_counts_frames = false;
+        catalog
+    }
+
+    #[test]
+    fn a_whole_stellar_whose_type_counts_no_frames_draws_no_frame_then_keeps_its_dead_frame_frozen()
+    {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "flown");
+        assert!(!session.frame_frozen(StellarId(128)));
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "a frame");
+        run(&mut session, "Y128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        frame(&mut session);
+        assert!(!session.frame_frozen(StellarId(128)));
+        run(&mut session, "U128");
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead, "kept");
+        assert!(session.frame_frozen(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "a rebuild point");
+        assert!(!session.frame_frozen(StellarId(128)));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_type_that_counts_no_frames_draws_its_type() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog).with_rules(uncounted_sheet(RuleSource::Bible));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        assert!(!session.frame_frozen(StellarId(128)));
+        assert!(!session.counts_no_frames(StellarId(128)));
+    }
+
+    #[test]
+    fn a_destroyed_stellar_whose_dead_type_counts_no_frames_draws_no_frame_from_a_rebuild_point() {
+        let mut catalog = frozen_on_dead();
+        catalog.sites[0].1[0].type_counts_frames = true;
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            DrawnSheet::Type,
+            "its `Type` frame kept"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+    }
+
+    #[test]
+    fn graphic_type_0_that_counts_no_frames_leaves_a_slot_it_fills_with_no_frame() {
+        let mut catalog = clicking(None, Some((100, 100)));
+        catalog.fallback_counts = false;
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        // Phase 3's placeholder, with no graphic type 0 to read.
+        let catalog = clicking(None, None);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::TypeZero);
+    }
+
+    #[test]
+    fn a_stellar_counts_no_frames_from_a_rebuild_point_showing_an_uncounted_type_until_one_clones_a_counting_sheet()
+     {
+        let catalog = frozen_on_dead();
+        let me = StellarId(128);
+        let mut session = quiet(&catalog);
+        assert!(session.counts_no_frames(me), "flown");
+        keeps_a_dead_frame(&mut session);
+        assert!(session.counts_no_frames(me), "until a rebuild point");
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert!(session.counts_no_frames(me));
+        rebuild(&mut session, &catalog);
+        assert!(!session.counts_no_frames(me), "its `DeadType` counts");
+        // By the other reading of either key, it counts.
+        for rules in [
+            uncounted_sheet(RuleSource::Bible),
+            frame_count(RuleSource::Bible),
+        ] {
+            let mut session = quiet(&catalog).with_rules(rules);
+            rebuild(&mut session, &catalog);
+            assert!(!session.counts_no_frames(me), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn a_slot_showing_no_frame_has_no_frame_size_and_a_frozen_one_its_kept_sheets() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        let site = session.chart.sites[0];
+        let frame_size = |session: &Session| {
+            session
+                .space
+                .drawn_frame_size(&session.statics, &session.setup, &site)
+        };
+        assert_eq!(frame_size(&session), None);
+        // The 64-pixel placeholder: 32 a side.
+        assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 34.0, 0.0), None);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(frame_size(&session), Some((200, 200)));
+        // Clicked by its `DeadType` box, centred (see "Left out").
+        assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(
+            session
+                .stellar_targets()
+                .iter()
+                .map(|target| target.radius)
+                .collect::<Vec<_>>(),
+            [100.0]
+        );
+    }
+
+    #[test]
+    fn shots_pass_through_a_stellar_whose_slot_shows_no_frame() {
+        let mut catalog = shooting([life(128, 2)]);
+        catalog.sites[0].1[0].type_counts_frames = false;
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        let events = fire(&mut session, 5);
+        assert_eq!(booms(&events, 2), [], "no hit");
+        assert_eq!(destroyed(&session, 128), None);
     }
 
     #[test]

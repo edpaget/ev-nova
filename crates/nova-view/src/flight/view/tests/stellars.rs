@@ -641,7 +641,7 @@ fn agreeing(dead: bool, reading: RuleSource) -> View {
 fn moon_drawn_and_clicked(view: &mut View) -> i16 {
     let moon = &view.scene().expect("a scene").stellars()[1];
     assert_eq!(moon.id, StellarId(129));
-    let sheet = moon.drawn().clone().expect("a sheet");
+    let sheet = moon.drawn().expect("drawn").clone().expect("a sheet");
     let (at, half) = (moon.position, sheet.frame_width as f32 / 2.0);
     for (dx, picked) in [(1.0 - half, Some(StellarId(129))), (-1.0 - half, None)] {
         view.session.as_mut().expect("flying").nav_off();

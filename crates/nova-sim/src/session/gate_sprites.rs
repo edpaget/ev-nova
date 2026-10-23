@@ -12,14 +12,12 @@
 //! a gate still shown keeps its sprite, a gate newly shown starts closed,
 //! and one no longer shown is let go.
 
+use super::stellars::NO_SPRITE_SIDE;
 use super::{Chart, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
 use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
-
-/// The width `_GetSpriteXSize` gives a sprite with no frame (@0x2701).
-const NO_SPRITE_WIDTH: u32 = 32;
 
 impl Session {
     /// The frame hypergate `gate` draws, or `None` for a stellar shown
@@ -68,7 +66,8 @@ impl Session {
     /// this tick's approach ran in `fly_player`, as `_HandleStellarSprites`
     /// runs after `_HandlePlayer`; its random picks drawn on `chance`. A ship
     /// heading in holds it within [`approach_reach`] of the width of the
-    /// frame its slot draws ([`NO_SPRITE_WIDTH`] with none), grown by
+    /// its slot ([`Space::slot_sprite_size`], [`NO_SPRITE_SIDE`] with no
+    /// frame), grown by
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
@@ -88,13 +87,12 @@ impl Session {
 }
 
 impl Space {
-    /// The width `_GetSpriteXSize` gives `site`'s sprite slot: its drawn
-    /// frame's, or [`NO_SPRITE_WIDTH`] when the slot shows none
-    /// (@0x26d4-0x2701).
+    /// The width `_GetSpriteXSize` gives `site`'s sprite slot
+    /// ([`Space::slot_sprite_size`]), or [`NO_SPRITE_SIDE`] when the slot
+    /// shows no frame (@0x26d4-0x2701).
     fn slot_sprite_width(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> u32 {
-        self.drawn_frame_size(statics, setup, site)
-            .filter(|_| self.rebuilt.shows_frame(site.id))
-            .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
+        self.slot_sprite_size(statics, setup, site)
+            .map_or(NO_SPRITE_SIDE, |(width, _)| width)
     }
 }
 
@@ -333,6 +331,34 @@ mod tests {
         assert!(!opens(150.0, true), "no frame: beyond 64");
         assert!(opens(63.0, true), "no frame: within 64");
         assert!(!opens(64.0, true));
+    }
+
+    #[test]
+    fn a_gate_slot_frozen_on_a_frame_its_type_could_not_replace_is_held_open_within_twice_32() {
+        // Hypergate 300's `Type` counts no frames; its `DeadType`, 100
+        // wide, does.
+        let mut catalog = gated();
+        let gate = &mut catalog.sites[0].1[1];
+        gate.type_counts_frames = false;
+        gate.dead_graphic = Some(9);
+        gate.dead_frame_size = Some((100, 100));
+        let still = crate::handling::ShipFields { speed: 0, ..FAST };
+        let opens = |out: f32| {
+            let mut session = flying(&catalog);
+            // `Y`, a frame, `U`, a frame: the `Type` clone keeps the
+            // `DeadType` frame.
+            let sites = session.chart.sites.clone();
+            let rebuilt = &mut session.space.rebuilt;
+            rebuilt.frame(&sites, |id| id == StellarId(300), RuleSource::Engine);
+            rebuilt.frame(&sites, |_| false, RuleSource::Engine);
+            assert!(session.frame_frozen(StellarId(300)));
+            heading_in(&mut session, still, GATE_AT.x + out);
+            tick(&mut session, &catalog);
+            session.gate_frame(StellarId(300)) > Some(0)
+        };
+        assert!(!opens(150.0), "a 32-pixel slot, not 100: beyond 64");
+        assert!(opens(63.0), "within 64");
+        assert!(!opens(64.0));
     }
 
     #[test]

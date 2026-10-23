@@ -35,7 +35,10 @@ impl<C> FlightView<C> {
                 .map(|stellar| RadarStellar {
                     position: stellar.position,
                     square: stellar.radar_square,
-                    sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                    sprite_width: stellar
+                        .drawn()
+                        .and_then(|sheet| sheet.as_ref().ok())
+                        .map(|sheet| sheet.frame_width),
                     iff: session
                         .stellar_iff(stellar.id)
                         .unwrap_or(StellarIff::Unlandable),
