@@ -644,6 +644,7 @@ use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
+use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
@@ -1001,6 +1002,13 @@ pub struct FlightView<C> {
     session: Result<Session, String>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
+    /// Each stellar's animation state as the scene that last showed it
+    /// left it: the original's per-`spöb` current frame, next frame and
+    /// timer (+0x476, +0x478, +0x490), kept per flight so a stellar shown
+    /// again resumes where it stood ([`KeptFrames`], stellar-fidelity
+    /// phase 12). A load or a new pilot is a new flight, so every stellar
+    /// starts afresh then.
+    kept_frames: KeptFrames,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
     /// The class `sheet` and `status_bar` were read for; `None` when the

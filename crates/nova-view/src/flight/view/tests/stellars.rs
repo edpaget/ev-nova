@@ -751,10 +751,11 @@ fn after_y_a_stellar_animates_over_its_old_frame_count_until_the_next_rebuild_po
         [1, 2, 0, 0, 1, 2, 0, 0, 1],
         "Type's 4 frames over the DeadType's 3"
     );
+    // The rebuild keeps current frame 1, next 2, from the Type's count.
     move_in_flight(&mut view);
     assert_eq!(
         dead_moon_frames(&mut view, 7),
-        [1, 2, 0, 1, 2, 0, 1],
+        [2, 0, 1, 2, 0, 1, 2],
         "the DeadType's 3"
     );
     let mut view = flickering(4, frame_count_by(RuleSource::Engine));
@@ -905,15 +906,132 @@ fn a_take_off_shows_a_stellars_current_frame_on_the_sheet_it_now_draws() {
 }
 
 #[test]
-fn laying_a_system_out_starts_its_stellars_animations_afresh() {
+fn a_move_within_the_system_keeps_its_stellars_animations() {
     let mut view = flight();
     ticks(&mut view, 2);
     assert_eq!(moon_frame(&view), 2);
     move_in_flight(&mut view);
     assert!(view.catch_up().system, "laid out");
-    assert_eq!(moon_frame(&view), 0);
+    assert_eq!(moon_frame(&view), 2, "where it was");
     view.tick(TICK);
-    assert_eq!(moon_frame(&view), 1);
+    assert_eq!(moon_frame(&view), 3, "and on from there");
+}
+
+#[test]
+fn a_stellar_left_on_frame_2_shows_frame_2_after_jumping_away_and_back() {
+    let mut view = flight();
+    ticks(&mut view, 2);
+    assert_eq!(moon_frame(&view), 2);
+    run_set(&mut view, "M131");
+    settle_session(&mut view);
+    assert!(view.catch_up().system, "laid out in Alpha Centauri");
+    ticks(&mut view, 5);
+    run_set(&mut view, "M130");
+    settle_session(&mut view);
+    assert!(view.catch_up().system, "laid out in Sol again");
+    assert_eq!(moon_frame(&view), 2, "nothing stepped while away");
+    view.tick(TICK);
+    assert_eq!(moon_frame(&view), 3, "and on from there");
+}
+
+/// The Moon's animation state as `view` keeps it while Sol is not shown.
+fn moon_kept(view: &View) -> Option<u16> {
+    view.kept_frames
+        .get(StellarId(129))
+        .map(|frames| frames.shown())
+}
+
+#[test]
+fn a_real_jump_away_and_back_resumes_the_frame_shown_on_leaving() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    let mut last = moon_frame(&view);
+    while view.session().map(Session::system) == Ok(SystemId(130)) {
+        last = moon_frame(&view);
+        view.tick(TICK);
+    }
+    // The tick the jump ends in steps the stellars before the session
+    // arrives (`step_stellars` runs before the steps): one frame on from
+    // the last drawn in Sol.
+    let left = moon_kept(&view).expect("kept as Sol was let go");
+    assert_eq!(left, (last + 1) % 4);
+    assert_ne!(left, 0, "a frame a fresh layout would not show");
+    while view.jump_effect().is_some() {
+        view.tick(TICK);
+    }
+    plot(&mut view, 130);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    assert_eq!(moon_kept(&view), Some(left), "still while away");
+    while view.session().map(Session::system) == Ok(SystemId(131)) {
+        view.tick(TICK);
+    }
+    // Sol is laid out on the tick the jump ends, after that tick's step:
+    // the frame drawn on arrival is the one it was left on.
+    assert_eq!(moon_frame(&view), left, "resumed on arrival");
+    view.tick(TICK);
+    assert_eq!(moon_frame(&view), (left + 1) % 4, "and on from there");
+}
+
+/// The frame Proxima (140) shows, while the scene holds it.
+fn proxima_frame(view: &View) -> Option<u16> {
+    view.scene()
+        .expect("laid out")
+        .stellars()
+        .iter()
+        .find(|stellar| stellar.id == StellarId(140))
+        .map(|stellar| stellar.frames.shown())
+}
+
+#[test]
+fn a_stellar_shown_again_in_the_same_system_resumes() {
+    let catalog = FakeCatalog {
+        proxima_frames: 4,
+        ..proxima_in_sol()
+    };
+    let mut view = FlightView::with_pilot(catalog, docked_pilot("Ada"));
+    land_now(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+    move_to(&mut view, 131, 140);
+    view.tick(TICK);
+    assert_eq!(scene_ids(&view), [StellarId(140)], "docked at it");
+    ticks(&mut view, 2);
+    let docked = proxima_frame(&view).expect("shown");
+    assert_ne!(docked, 0, "under way");
+    assert_eq!(view.take_off(), Some(StellarId(140)));
+    assert_eq!(scene_ids(&view), [], "let go by the take-off's rebuild");
+    // Docked at Earth, then moved back to Proxima: shown again.
+    let session = view.session.as_mut().expect("flying");
+    session
+        .land_at(&view.catalog, SystemId(130), StellarId(128))
+        .expect("lands");
+    move_to(&mut view, 131, 140);
+    view.catch_up();
+    assert_eq!(scene_ids(&view), [StellarId(140)], "shown again");
+    assert_eq!(proxima_frame(&view), Some(docked), "where it was left");
+}
+
+#[test]
+fn a_load_shows_every_stellar_from_frame_0() {
+    let mut view = flight();
+    ticks(&mut view, 2);
+    assert_eq!(moon_frame(&view), 2);
+    let pilot = view.pilot().expect("flying").clone();
+    let mut loaded = FlightView::loaded(catalog(), pilot.clone(), Rulebook::default());
+    assert_eq!(moon_frame(&loaded), 0, "loaded");
+    loaded.tick(TICK);
+    assert_eq!(moon_frame(&loaded), 1, "loaded, then on");
+    let mut resumed = FlightView::with_pilot(catalog(), pilot);
+    assert_eq!(moon_frame(&resumed), 0, "resumed");
+    resumed.tick(TICK);
+    assert_eq!(moon_frame(&resumed), 1, "resumed, then on");
+    // A new pilot's flight is ticked once past the land hint.
+    let mut new = new_pilot(FlightView::new(catalog()));
+    assert_eq!(moon_frame(&new), 1, "a new pilot's, one tick in");
+    new.tick(TICK);
+    assert_eq!(moon_frame(&new), 2, "a new pilot's, then on");
 }
 
 #[test]

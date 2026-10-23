@@ -120,6 +120,9 @@ struct FakeCatalog {
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     sol_more: Vec<StellarContents>,
+    /// How many frames Proxima's (140's) `Type` sheet has in Alpha
+    /// Centauri: 1, by default.
+    proxima_frames: u16,
     systems_read: RefCell<Vec<SystemId>>,
     /// The `dësc`s: none, by default.
     descriptions: Vec<(i16, String)>,
@@ -387,6 +390,7 @@ fn catalog() -> FakeCatalog {
         alpha_buoy: -1,
         voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
+        proxima_frames: 1,
         gates: Vec::new(),
         gate_listers: Vec::new(),
         lives: Vec::new(),
@@ -801,7 +805,10 @@ impl SystemCatalog for FakeCatalog {
                 .chain(self.sol_more.iter().cloned())
                 .collect(),
             ),
-            131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
+            131 => (
+                "Alpha Centauri",
+                vec![dying(140, "Proxima", (0, 0), self.proxima_frames)],
+            ),
             132 if self.onward => ("Barnard", Vec::new()),
             133 if self.reborn => (
                 "Alpha Reborn",

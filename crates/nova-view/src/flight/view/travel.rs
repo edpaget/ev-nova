@@ -913,8 +913,8 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
-        if reshown && let Ok(session) = &self.session {
-            self.scene = Some(shown_scene(&self.catalog, session));
+        if reshown {
+            self.show_scene();
         }
         if redrawn.rebuilt {
             self.rebuild_stellars();
@@ -971,19 +971,40 @@ impl<
         }
     }
 
-    /// Lays out `system`, the session's: its scene, read from the catalog
-    /// with the stellars the session shows ([`shown_scene`]), the course
-    /// map's course, and the ship drawn
-    /// from where it is, the last system's NPCs and effects let go.
-    fn lay_out(&mut self, system: SystemId) {
+    /// Lets go of the scene shown, keeping each of its stellars'
+    /// animation state
+    /// ([`KeptFrames::keep`](crate::system::kept_frames::KeptFrames::keep)),
+    /// and shows the session's in its place, read from the catalog with the stellars the session
+    /// shows ([`shown_scene`]): each stellar looking as the session holds
+    /// it ([`show_destroyed`]), then each the flight has shown before
+    /// resumed where it was left, on the sheet it now draws
+    /// ([`SystemScene::resume`](crate::system::scene::SystemScene::resume)),
+    /// and each hypergate on its session's frame. The look is set before
+    /// the frames resume, so the rebuild or redraw that follows finds it
+    /// unchanged and leaves them alone.
+    fn show_scene(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some({
-            let mut scene = shown_scene(&self.catalog, session);
-            show_gate_frames(&mut scene, session);
-            scene
-        });
+        if let Some(left) = &self.scene {
+            self.kept_frames.keep(left);
+        }
+        let mut scene = shown_scene(&self.catalog, session);
+        show_destroyed(&mut scene, session);
+        scene.resume(&self.kept_frames);
+        show_gate_frames(&mut scene, session);
+        self.scene = Some(scene);
+    }
+
+    /// Lays out `system`, the session's: its scene ([`FlightView::show_scene`]),
+    /// each stellar shown before resuming its animation where it was left,
+    /// the course map's course, and the ship drawn from where it is, the
+    /// last system's NPCs and effects let go.
+    fn lay_out(&mut self, system: SystemId) {
+        self.show_scene();
+        let Ok(session) = &self.session else {
+            return;
+        };
         self.map.show_course(system, &session.course_shown());
         self.previous = *session.player();
         self.alpha = 0.0;
