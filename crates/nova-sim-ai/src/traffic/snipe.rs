@@ -4,7 +4,8 @@
 //!
 //! - **Its target** (+0x70) gone, or itself disabled (@0x870ab-0x870b9),
 //!   it does nothing: its thrust is already none from the handler's entry
-//!   (@0x851f1) and nothing slows it, so it coasts.
+//!   (@0x851f1) and nothing slows it, so it coasts, its heading truncated
+//!   as the entry's +0x68 has it (@0x8522d).
 //! - **Moving** ([`moving`]): 0.35 or more on either axis ([`MOVING`],
 //!   @0x870bf-0x87109), each axis's float speed widened and tested
 //!   against the double 0.35, so a speed of the float 0.35 is not
@@ -19,8 +20,11 @@
 //!   it, and the table bearing for one of no record (the original reads
 //!   whatever memory is there), so it turns toward its target
 //!   and thrusts: not a brake at all
-//!   ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)). It
-//!   thrusts while its turn rate plus [`THRUST_SLACK`] is more than how
+//!   ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
+//!   `_HandleShip` turns it to the heading it wants ([`flight::turn_to`],
+//!   @0x34460-0x3458e): by its turn while more than that off in whole
+//!   degrees, onto it otherwise. It thrusts, by its heading before the
+//!   turn, while its turn rate plus [`THRUST_SLACK`] is more than how
 //!   far it is off, its heading truncated to whole degrees
 //!   (`_AngularDifference`, [`fire::off_by`]; strict, @0x871ef-0x87255),
 //!   with no reverse key. Its
@@ -28,13 +32,14 @@
 //!   straight to `_AILaunchFighter` (@0x87329).
 //! - **Moving and inertialess** ([`inertialess_brake`], @0x8710f-0x8713a):
 //!   its thrust is `_ShipAccelRate` reversed, a whole tick's acceleration
-//!   off its speed, with no turn and no thrust shown; then, as above, it
+//!   off its speed, with no thrust shown and no heading wanted, so its
+//!   heading is truncated; then, as above, it
 //!   runs no pass and goes to the launch (@0x8713a → @0x87329). The
 //!   autopilot chooses it for an inertialess sniper.
 //! - **At rest**: its velocity slows by [`DAMPING`] each tick
-//!   (@0x8725a-0x8728e), it turns to the plain bearing of its target in
-//!   the table's whole degrees (`_CalcInterceptAngle` @0x872aa, not a
-//!   lead), and never thrusts. It fires while its heading, truncated to
+//!   (@0x8725a-0x8728e), it is turned as above to the plain bearing of its
+//!   target in the table's whole degrees (`_CalcInterceptAngle` @0x872aa,
+//!   not a lead), and never thrusts. It fires while its heading, truncated to
 //!   whole degrees, faces that bearing within [`GUN_FACING`] turns,
 //!   strictly ([`facing`], @0x872c3-0x872fe).
 //!
@@ -42,12 +47,11 @@
 
 use crate::ai::fire::{self, GUN_FACING};
 use crate::combat::armament::Arsenal;
-use crate::flight::{Controls, ShipState};
+use crate::flight::{self, Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
-use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
 use crate::trig;
 
@@ -98,18 +102,22 @@ pub fn facing(npc: &Npc, at: &ShipState) -> bool {
 /// +0x30 is `_ShipAccelRate` reversed, which `_HandleShip` takes as a whole
 /// tick's acceleration off its speed, capped at its top speed and floored
 /// at none ([`step_speed`] by [`REVERSE`], @0x34aef-0x34b68). It takes no
-/// heading (+0x68 stays the handler entry's, its own), and a reversed
-/// thrust shows none (@0x34eef-0x34eff), so the controls are none. The
+/// heading (+0x68 stays the handler entry's, its own), so its heading is
+/// truncated ([`flight::turn_to_own`]), and a reversed thrust shows none
+/// (@0x34eef-0x34eff), so the controls are none. The
 /// speed is moved here, as no thrust key is held for the step to move it.
 pub fn inertialess_brake(npc: &mut Npc, handling: &Handling) -> Controls {
     npc.speed = step_speed(npc.speed, REVERSE, handling.accel, handling.max_speed);
+    flight::turn_to_own(&mut npc.state);
     Controls::default()
 }
 
 /// The controls `npc` snipes by this tick at its target at `target`, on
 /// `handling`, slowing it first when it is at rest; the lead angle a
 /// moving one with a last gun turns to by `lead`'s reading, for that gun's
-/// record in `weapons` (see the module docs). With no target it coasts.
+/// record in `weapons` (see the module docs), turned to the heading it
+/// wants ([`flight::turn_to`]). With no target it coasts, its heading
+/// truncated.
 pub fn fly(
     npc: &mut Npc,
     target: Option<&ShipState>,
@@ -118,18 +126,17 @@ pub fn fly(
     weapons: &Arsenal,
 ) -> Controls {
     let Some(target) = target else {
+        // No +0x68 written: the low level's default (@0x8522d).
+        flight::turn_to_own(&mut npc.state);
         return Controls::default();
     };
     let state = npc.state;
     if !moving(&state) {
         npc.state.velocity = state.velocity * DAMPING;
+        // +0x68, the table's whole-degree bearing (@0x872aa, @0x872b7).
+        let bearing = trig::intercept_angle(state.position, target.position);
         return Controls {
-            // +0x68, the table's whole-degree bearing (@0x872aa, @0x872b7).
-            turn: steer(
-                state.heading,
-                f32::from(trig::intercept_angle(state.position, target.position)),
-                handling,
-            ),
+            turn: flight::turn_to(&mut npc.state, bearing, handling.turn_rate),
             ..Controls::default()
         };
     }
@@ -138,9 +145,11 @@ pub fn fly(
         (Some(gun), RuleSource::Engine) => fire::lead(npc, target, weapons.weapon(gun)),
         _ => retro(state.velocity),
     };
+    // By its heading before `_HandleShip` turns it.
+    let thrust = fire::off_by(state.heading, wanted) < handling.turn_rate + THRUST_SLACK;
     Controls {
-        thrust: fire::off_by(state.heading, wanted) < handling.turn_rate + THRUST_SLACK,
-        turn: steer(state.heading, f32::from(wanted), handling),
+        thrust,
+        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
         reverse: false,
         ..Controls::default()
     }
@@ -256,16 +265,70 @@ mod tests {
         assert_eq!(npc.state.velocity, Vec2::new(0.2 * 0.95, -0.3 * 0.95));
         assert_eq!(controls.turn, Turn::Right, "to 90");
         assert!(!controls.thrust && !controls.reverse);
-        // Within half a turn of the bearing, not of the lead: it holds.
-        let mut on_bearing = sniper(at(0.0, 0.0, 0.0, 0.0, 89.0));
-        let held = fly(
-            &mut on_bearing,
+        // Within its turn of the bearing, not of the lead: put on it.
+        for heading in [88.6, 89.0, 92.9] {
+            let mut on_bearing = sniper(at(0.0, 0.0, 0.0, 0.0, heading));
+            let held = fly(
+                &mut on_bearing,
+                Some(&target),
+                &FAST_HANDLING,
+                RuleSource::Engine,
+                &records(),
+            );
+            assert_eq!(held, Controls::default(), "{heading}");
+            assert_eq!(on_bearing.state.heading, 90.0, "{heading}");
+        }
+    }
+
+    #[test]
+    fn at_rest_it_measures_its_gap_to_the_bearing_in_whole_degrees() {
+        // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off.
+        let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let mut npc = sniper(at(0.0, 0.0, 0.0, 0.0, 88.1));
+        let handling = Handling {
+            turn_rate: 1.95,
+            ..FAST_HANDLING
+        };
+        let controls = fly(
+            &mut npc,
             Some(&target),
-            &FAST_HANDLING,
+            &handling,
             RuleSource::Engine,
             &records(),
         );
-        assert_eq!(held, Controls::default());
+        assert_eq!((controls.turn, npc.state.heading), (Turn::Right, 88.1));
+    }
+
+    #[test]
+    fn moving_within_its_turn_of_its_retro_heading_it_is_put_on_it() {
+        // Moving down at 2: its retro heading is 0.
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        for heading in [1.4, 358.6] {
+            let mut npc = sniper(at(0.0, 0.0, 0.0, 2.0, heading));
+            let controls = fly(
+                &mut npc,
+                Some(&target),
+                &FAST_HANDLING,
+                RuleSource::Engine,
+                &records(),
+            );
+            assert!(controls.thrust, "{heading}");
+            assert_eq!((controls.turn, npc.state.heading), (Turn::None, 0.0));
+        }
+        // 358.1 is 1.9 off, within 1.95, but 358 is 2 whole degrees off.
+        let handling = Handling {
+            turn_rate: 1.95,
+            ..FAST_HANDLING
+        };
+        let mut npc = sniper(at(0.0, 0.0, 0.0, 2.0, 358.1));
+        let controls = fly(
+            &mut npc,
+            Some(&target),
+            &handling,
+            RuleSource::Engine,
+            &records(),
+        );
+        assert_eq!((controls.turn, npc.state.heading), (Turn::Right, 358.1));
     }
 
     #[test]
@@ -375,7 +438,8 @@ mod tests {
             &records(),
         );
         assert!(controls.thrust, "toward its target");
-        assert_eq!(controls.turn, Turn::Right);
+        // 3 whole degrees off the lead, within its turn: put on it.
+        assert_eq!((controls.turn, engine.state.heading), (Turn::None, 79.0));
         // At 3.6 a tick, 83.9 is 83, 4 off the lead, less than 4.6: it
         // thrusts, where the fractional 4.9 would not (@0x871f2).
         let mut whole = having_fired(sniper(at(0.0, 0.0, 0.0, 2.0, 83.9)));
@@ -465,8 +529,8 @@ mod tests {
     }
 
     #[test]
-    fn with_its_target_gone_it_coasts() {
-        let mut npc = sniper(at(0.0, 0.0, 0.1, 2.0, 0.0));
+    fn with_its_target_gone_it_coasts_its_heading_truncated() {
+        let mut npc = sniper(at(0.0, 0.0, 0.1, 2.0, 12.7));
         let controls = fly(
             &mut npc,
             None,
@@ -476,23 +540,31 @@ mod tests {
         );
         assert_eq!(controls, Controls::default());
         assert_eq!(npc.state.velocity, Vec2::new(0.1, 2.0), "not slowed");
+        assert_eq!(npc.state.heading, 12.0, "+0x68's default (@0x8522d)");
     }
 
     #[test]
-    fn an_inertialess_brake_takes_a_whole_ticks_acceleration_off_its_speed_with_no_turn_or_thrust()
-    {
+    fn an_inertialess_brake_takes_a_whole_ticks_acceleration_off_its_speed_and_truncates_its_heading()
+     {
         // FAST: 0.18 a tick, 6 at most.
         let handling = ShipStats::new(FAST, &[]).handling;
         assert_eq!((handling.accel, handling.max_speed), (0.18, 6.0));
         let braked = |speed: f32| {
-            let start = at(10.0, -20.0, 0.0, -3.0, 40.0);
+            let start = at(10.0, -20.0, 0.0, -3.0, 40.6);
             let mut npc = Npc {
                 speed,
                 ..sniper(start)
             };
             let controls = inertialess_brake(&mut npc, &handling);
             assert_eq!(controls, Controls::default());
-            assert_eq!(npc.state, start, "its heading and velocity untouched");
+            assert_eq!(
+                npc.state,
+                ShipState {
+                    heading: 40.0,
+                    ..start
+                },
+                "its velocity untouched, its heading +0x68's default"
+            );
             npc.speed
         };
         assert!((braked(3.0) - 2.82).abs() < 1e-6, "{}", braked(3.0));
@@ -534,19 +606,23 @@ mod tests {
 
     #[test]
     fn at_rest_it_turns_to_the_tables_bearing_of_its_target() {
-        // The target at (300, 300), table bearing 134: at 136.4 it is 2.4
-        // off, beyond half a turn (1.5), so it turns left, where the
-        // float's 135 is 1.4 off and it would hold (+0x68 @0x872b7).
+        // The target at (300, 300), table bearing 134 (+0x68 @0x872b7),
+        // where the float's is 135: at 136.4 it is put on 134, and at 138
+        // it is 4 off, beyond its turn, and turns left.
         let target = at(300.0, 300.0, 0.0, 0.0, 0.0);
-        let mut npc = sniper(at(0.0, 0.0, 0.0, 0.0, 136.4));
-        let controls = fly(
-            &mut npc,
-            Some(&target),
-            &FAST_HANDLING,
-            RuleSource::Engine,
-            &records(),
-        );
-        assert_eq!(controls.turn, Turn::Left);
-        assert!(!controls.thrust);
+        let flown = |heading: f32| {
+            let mut npc = sniper(at(0.0, 0.0, 0.0, 0.0, heading));
+            let controls = fly(
+                &mut npc,
+                Some(&target),
+                &FAST_HANDLING,
+                RuleSource::Engine,
+                &records(),
+            );
+            assert!(!controls.thrust);
+            (controls.turn, npc.state.heading)
+        };
+        assert_eq!(flown(136.4), (Turn::None, 134.0));
+        assert_eq!(flown(138.0), (Turn::Left, 138.0));
     }
 }

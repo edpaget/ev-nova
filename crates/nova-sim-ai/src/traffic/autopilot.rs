@@ -107,8 +107,9 @@
 //!   engine, its target's lead) and thrusting within its turn rate and
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
-//!   sub-goal 0xe, @0x8709d-0x87334). Moving and inertialess, it takes a
-//!   whole tick's acceleration off its speed with no turn
+//!   sub-goal 0xe, @0x8709d-0x87334), `_HandleShip` turning it as
+//!   [`flight::turn_to`] does. Moving and inertialess, it takes a whole
+//!   tick's acceleration off its speed, its heading truncated
 //!   ([`snipe::inertialess_brake`], @0x8710f-0x8713a).
 //! - [`Goal::Attack`], [`Goal::Snipe`] or [`Goal::Plunder`] while it
 //!   searches for a target it lost sight of
@@ -843,6 +844,8 @@ fn fight(
                     // +0x30 = -`_ShipAccelRate` (@0x8710f-0x8713a): the
                     // burst takes its place, or else the brake.
                     let controls = if npc.owed_burst.is_some() {
+                        // No +0x68 written: the low level's default.
+                        flight::turn_to_own(&mut npc.state);
                         Controls::default()
                     } else {
                         snipe::inertialess_brake(npc, handling)

@@ -194,6 +194,8 @@ pub mod fly_pass;
 pub mod formation_flight;
 pub mod gate_entry;
 pub mod gone;
+#[cfg(test)]
+mod handle_turn_tests;
 pub mod held_burst;
 #[cfg(test)]
 mod held_burst_tests;
