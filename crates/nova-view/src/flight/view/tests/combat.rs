@@ -1944,6 +1944,31 @@ fn an_exploded_player_takes_no_command() {
     assert_ne!(view.message(), Some(NO_ESCORTS));
 }
 
+#[test]
+fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
+    for k in [
+        Key::Function(1),
+        STELLAR_SLOT_KEYS[1][0],
+        NEAREST_STELLAR_KEY,
+    ] {
+        let mut view = exploded();
+        let nav = nav_target(&view);
+        view.take_sounds();
+        view.input(&key(k, true));
+        ticks(&mut view, 3);
+        assert_eq!(nav_target(&view), nav, "{k:?} held");
+        view.input(&key(k, false));
+        tap_slot(&mut view, k);
+        assert_eq!(nav_target(&view), nav, "{k:?} tapped");
+        assert!(
+            !view
+                .take_sounds()
+                .contains(&Sound::Sim(SimSound::NavSelected)),
+            "{k:?}: no select sound"
+        );
+    }
+}
+
 /// Where `view` draws [`catalog`]'s stellar 129, checked to be in the
 /// space a click picks from, clear of the status panel.
 fn stellar_129_on_screen(view: &View) -> Point {
