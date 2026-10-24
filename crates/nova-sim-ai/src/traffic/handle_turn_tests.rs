@@ -13,15 +13,17 @@ use super::npc::Npc;
 use crate::ai::Goal;
 use crate::ai::fire::Manoeuvre;
 use crate::ai::pursuit::{Body, Frame};
+use crate::catalog::{LandingSite, StellarId};
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
-use crate::flight::{FlightRules, ShipState};
+use crate::flight::{AT_REST_SPEED, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::ShipFields;
 use crate::stats::{INERTIALESS_HULL, ShipStats};
 use crate::trig;
 use nova_sim_base::fixture::{Draws, FAST};
+use nova_sim_catalog::fixture::planet;
 use std::collections::BTreeMap;
 
 /// [`FAST`] with an inertialess hull.
@@ -52,11 +54,16 @@ fn ship(fields: ShipFields, goal: Goal, start: ShipState, speed: f32) -> Npc {
 /// Flies `npc` one tick at its own top speed beside `other`, under the
 /// original's rules.
 fn fly(npc: &mut Npc, other: Option<&ShipState>) -> Outcome {
+    fly_among(npc, &[], other)
+}
+
+/// [`fly`] among `sites`.
+fn fly_among(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
     let speeds = TopSpeeds::own_of(npc);
     let weapons = crate::ai::fixture::records_of([&*npc]);
     autopilot::fly(
         npc,
-        &[],
+        sites,
         &BTreeMap::new(),
         other,
         false,
@@ -235,4 +242,104 @@ fn a_ship_holding_or_assisting_with_no_docking_has_its_heading_truncated() {
             assert_eq!(coasting.state.heading, 37.0, "{goal:?}");
         }
     }
+}
+
+// The engine's stand-ins: `autopilot::brake`, sub 1 for every goal the
+// autopilot stops, and the velocity match its approach, rejoin and follow
+// fly by. Each wants a whole-degree heading and `_HandleShip` turns it.
+
+/// A ship of `fields` idling at the centre, moving at `velocity` and
+/// facing `heading`, turning `rate` degrees a tick: its heading after a
+/// tick's brake.
+fn braked(fields: ShipFields, velocity: Vec2, heading: f32, rate: f32) -> f32 {
+    let start = at(0.0, 0.0, velocity.x, velocity.y, heading);
+    let mut idle = ship(fields, Goal::Idle, start, velocity.length());
+    idle.stats.handling.turn_rate = rate;
+    assert_eq!(fly(&mut idle, None), Outcome::Flying);
+    idle.state.heading
+}
+
+#[test]
+fn a_ship_braking_within_its_turn_of_its_whole_retro_heading_is_put_on_it() {
+    // Moving at (1, 1) the table's retro heading is 314, the float's 315
+    // (`snipe::retro`, as sub 1 reads it, @0x85440-0x8546e).
+    assert_eq!(braked(FAST, Vec2::new(1.0, 1.0), 315.4, 3.0), 314.0);
+    assert_eq!(braked(FAST, Vec2::new(0.0, -3.0), 178.6, 3.0), 180.0);
+}
+
+#[test]
+fn a_ship_braking_measures_its_gap_to_its_retro_heading_in_whole_degrees() {
+    // 178.1 is 1.9 off 180, within 1.95, but 178 is 2 whole degrees off.
+    let heading = braked(FAST, Vec2::new(0.0, -3.0), 178.1, 1.95);
+    assert!((heading - 180.05).abs() < 1e-4, "{heading}");
+}
+
+#[test]
+fn a_ship_braking_at_rest_or_inertialess_has_its_heading_truncated() {
+    let creeping = Vec2::new(0.0, AT_REST_SPEED);
+    assert_eq!(braked(FAST, creeping, 37.6, 3.0), 37.0, "at rest");
+    // The inertialess brake writes no +0x68 (@0x853d7-0x85403).
+    assert_eq!(braked(RAVEN, Vec2::new(0.0, -3.0), 37.6, 3.0), 37.0);
+}
+
+#[test]
+fn a_ship_braking_from_3_comes_to_rest_on_a_whole_degree() {
+    let mut idle = ship(FAST, Goal::Idle, at(0.0, 0.0, 0.0, -3.0, 0.0), 0.0);
+    let accel = idle.stats.handling.accel;
+    for _ in 0..200 {
+        fly(&mut idle, None);
+    }
+    assert!(
+        idle.state.velocity.length() <= accel / 2.0,
+        "{:?}",
+        idle.state
+    );
+    assert_eq!(idle.state.heading, idle.state.heading.trunc());
+}
+
+/// A ship of `fields` landing on a planet far off at `planet`, at rest
+/// at the centre facing `heading`, turning `rate` degrees a tick: its
+/// heading after a tick of its approach.
+fn landing(fields: ShipFields, planet_at: Vec2, heading: f32, rate: f32) -> f32 {
+    let sites = [planet(140, planet_at.x, planet_at.y)];
+    let start = at(0.0, 0.0, 0.0, 0.0, heading);
+    let mut lander = ship(fields, Goal::Land(StellarId(140)), start, 0.0);
+    lander.stats.handling.turn_rate = rate;
+    assert_eq!(fly_among(&mut lander, &sites, None), Outcome::Flying);
+    lander.state.heading
+}
+
+#[test]
+fn a_ship_matching_a_velocity_within_its_turn_of_the_changes_table_heading_is_put_on_it() {
+    // Wanting (1, 1) the table's heading is 134, the float's 135: the
+    // table heading of the change × 100, as sub 1 reads its velocity.
+    let down_right = Vec2::new(5000.0, 5000.0);
+    for fields in [FAST, RAVEN] {
+        assert_eq!(landing(fields, down_right, 135.4, 3.0), 134.0);
+        assert_eq!(landing(fields, Vec2::new(0.0, -5000.0), 1.4, 3.0), 0.0);
+    }
+}
+
+#[test]
+fn a_ship_matching_a_velocity_measures_its_gap_in_whole_degrees() {
+    // 358.1 is 1.9 off 0, within 1.95, but 358 is 2 whole degrees off.
+    for fields in [FAST, RAVEN] {
+        let heading = landing(fields, Vec2::new(0.0, -5000.0), 358.1, 1.95);
+        assert!((heading - 0.05).abs() < 1e-4, "{heading}");
+    }
+}
+
+#[test]
+fn an_inspector_matching_its_leads_velocity_has_its_heading_truncated() {
+    // Within its margin it wants the lead's velocity, which it has.
+    let lead = at(50.0, 0.0, 1.0, 0.0, 90.0);
+    let goal = Goal::Inspect(ShipRef::Player);
+    let mut alongside = ship(FAST, goal, at(0.0, 0.0, 1.0, 0.0, 37.6), 0.0);
+    assert_eq!(fly(&mut alongside, Some(&lead)), Outcome::Flying);
+    assert_eq!(alongside.state.heading, 37.0);
+    // Far off it closes, turned onto the change's heading, 0.
+    let far = at(0.0, -3000.0, 0.0, 0.0, 0.0);
+    let mut closing = ship(FAST, goal, at(0.0, 0.0, 0.0, 0.0, 1.4), 0.0);
+    fly(&mut closing, Some(&far));
+    assert_eq!(closing.state.heading, 0.0);
 }

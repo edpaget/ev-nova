@@ -9,7 +9,8 @@
 //! [`inertialess`] module says.
 //!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
-//!   any sideways drift, and brakes (Down and thrust) once its stopping
+//!   any sideways drift, and brakes (turning to its retro heading and
+//!   thrusting, [`brake`]) once its stopping
 //!   distance reaches the distance left. It lands within the stellar's
 //!   [`landing_radius`] at or below [`LANDING_SPEED`]. That circle is not
 //!   the player's landing distance
@@ -503,12 +504,11 @@ fn fly_mobile(
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
-    let state = npc.state;
     let Flight { controls, word } = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
-            Some(site) if over(&state, site) => return Outcome::Landed(stellar),
+            Some(site) if over(&npc.state, site) => return Outcome::Landed(stellar),
             Some(site) => land_approach(npc, site, &handling, inertia).into(),
-            None => braking(&state, &handling, inertia),
+            None => braking(&mut npc.state, &handling, inertia),
         },
         Goal::EnterGate(gate) => {
             match enter_box(npc, sites, type_widths, gate, &handling, inertia) {
@@ -517,20 +517,20 @@ fn fly_mobile(
             }
         }
         Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
-        Goal::Inspect(_) => follow_or_brake(&state, &handling, other, inertia),
+        Goal::Inspect(_) => follow_or_brake(&mut npc.state, &handling, other, inertia),
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
-            follow_or_brake(&state, &handling, other, inertia)
+            follow_or_brake(&mut npc.state, &handling, other, inertia)
         }
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
         // Searching for a target out of sight: sub 1, a stop (@0x8d814).
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } if lost_sight::searching(npc) => {
-            braking(&state, &handling, inertia)
+            braking(&mut npc.state, &handling, inertia)
         }
-        Goal::Plunder { .. } if other_disabled => braking(&state, &handling, inertia),
+        Goal::Plunder { .. } if other_disabled => braking(&mut npc.state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
                 if let Some((body, speed_cap)) =
@@ -563,7 +563,7 @@ fn fly_mobile(
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead, weapons).into()
             }
-            None => braking(&state, &handling, inertia),
+            None => braking(&mut npc.state, &handling, inertia),
         },
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
@@ -588,10 +588,10 @@ fn fly_mobile(
         // State 16 flies order 1, a stop, with slot 0 empty, else order
         // 0x13 or 0x14; state 17 flies order 0x15.
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
-            .unwrap_or_else(|| braking(&state, &handling, inertia)),
+            .unwrap_or_else(|| braking(&mut npc.state, &handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
         Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(&state, &handling, inertia)
+            braking(&mut npc.state, &handling, inertia)
         }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
@@ -653,11 +653,11 @@ fn enter_box(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == gate) else {
-        return Ok(braking(&npc.state, handling, inertia));
+        return Ok(braking(&mut npc.state, handling, inertia));
     };
     let reach = gate_entry::gate_reach(site, type_widths);
     if !gate_entry::inside(site.position, npc.state.position, reach) {
-        return Ok(approach(&npc.state, handling, site.position, inertia).into());
+        return Ok(approach(&mut npc.state, handling, site.position, inertia).into());
     }
     npc.state.velocity = Vec2::ZERO;
     npc.mode = Mode::EnteringGate {
@@ -678,7 +678,7 @@ fn formation(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
-        return Ok(braking(&npc.state, handling, inertia));
+        return Ok(braking(&mut npc.state, handling, inertia));
     };
     let slot = place.position(leader);
     let off = slot - npc.state.position;
@@ -686,7 +686,7 @@ fn formation(
         keep_formation(npc, leader, slot, handling);
         return Err(Outcome::Flying);
     }
-    Ok(rejoin(&npc.state, handling, slot, leader.velocity, inertia).into())
+    Ok(rejoin(&mut npc.state, handling, slot, leader.velocity, inertia).into())
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module
@@ -701,13 +701,13 @@ fn dock(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
-        return Ok(braking(&npc.state, handling, inertia));
+        return Ok(braking(&mut npc.state, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
     if !within(dock.window) {
         return Ok(rejoin(
-            &npc.state,
+            &mut npc.state,
             handling,
             carrier.position,
             carrier.velocity,
@@ -729,7 +729,7 @@ fn dock(
 /// [`APPROACH_FORMATION`] of it on each axis, closing at the speed it can
 /// still brake from; farther off, at full speed towards it.
 fn rejoin(
-    state: &ShipState,
+    state: &mut ShipState,
     handling: &Handling,
     to: Vec2,
     velocity: Vec2,
@@ -790,27 +790,6 @@ fn dock_in(
         towards(at.x, carrier.position.x),
         towards(at.y, carrier.position.y),
     );
-}
-
-/// Turns from `heading` towards `wanted`, not at all within half a tick's
-/// turn, where turning would only overshoot.
-///
-/// This is the port's turn, not `_HandleShip`'s
-/// ([`flight::turn_to`], @0x34460-0x3458e), which
-/// measures the gap in whole degrees, turns by the rate only while the gap
-/// is more than that, and otherwise puts the ship on the heading it wants.
-/// The substates still turning by this are
-/// rdm:phase/escort-fleet-fidelity-followups/phase-3-substates-turn-as-handle-ship-does's.
-pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
-    let off = shortest_turn(heading, wanted);
-    let half_turn = handling.turn_rate / 2.0;
-    if off > half_turn {
-        Turn::Right
-    } else if off < -half_turn {
-        Turn::Left
-    } else {
-        Turn::None
-    }
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
@@ -1291,16 +1270,20 @@ fn land_approach(
     handling: &Handling,
     inertia: Inertia,
 ) -> Controls {
-    let state = npc.state;
-    if (site.position - state.position).length() <= landing_radius(site) {
+    if (site.position - npc.state.position).length() <= landing_radius(site) {
         ship_display::landing_unfold(npc);
     }
-    approach(&state, handling, site.position, inertia)
+    approach(&mut npc.state, handling, site.position, inertia)
 }
 
 /// Heads for `target` at full speed, and brakes once the ship's stopping
 /// distance reaches the distance left.
-fn approach(state: &ShipState, handling: &Handling, target: Vec2, inertia: Inertia) -> Controls {
+fn approach(
+    state: &mut ShipState,
+    handling: &Handling,
+    target: Vec2,
+    inertia: Inertia,
+) -> Controls {
     let to = target - state.position;
     let distance = to.length();
     if distance <= stopping_distance(state, handling, inertia) {
@@ -1338,26 +1321,33 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
     speed * (turning.ceil() + 1.0) + speed * speed / (2.0 * handling.accel)
 }
 
-/// Turns to face against the ship's motion (Down) and thrusts once it
-/// does, until thrust would only push it the other way; nothing at or
-/// below [`AT_REST_SPEED`] (see [`stopping_distance`]). An inertialess
-/// ship brakes as substate 1 does ([`inertialess::brake`]).
-pub(crate) fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
+/// Turns to face against the ship at `state`'s motion and thrusts once
+/// it does, until thrust would only push it the other way; nothing at or
+/// below [`AT_REST_SPEED`] (see [`stopping_distance`]). It stands in for
+/// sub 1 for every goal the autopilot stops, so it wants sub 1's
+/// whole-degree retro heading ([`snipe::retro`], @0x85440-0x8546e) and
+/// turns to it as `_HandleShip` turns it ([`flight::turn_to`]); it thrusts
+/// once that turn puts it on the heading, this tick. At rest it wants
+/// none, its heading truncated ([`flight::turn_to_own`]). An inertialess
+/// ship brakes as substate 1 does ([`inertialess::brake`]), which wants
+/// no heading either.
+pub(crate) fn brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Controls {
     if let Inertia::Inertialess { .. } = inertia {
-        return inertialess::brake(state);
+        let controls = inertialess::brake(state);
+        flight::turn_to_own(state);
+        return controls;
     }
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {
+        flight::turn_to_own(state);
         return Controls::default();
     }
-    let behind = heading_of(state.velocity * -1.0);
-    // Down lands exactly on the heading behind within one tick's turn,
-    // before this tick's thrust.
-    let facing_back = shortest_turn(state.heading, behind).abs() <= handling.turn_rate;
+    let turn = flight::turn_to(state, snipe::retro(state.velocity), handling.turn_rate);
+    // Put on its retro heading this tick, before this tick's thrust.
+    let facing_back = turn == Turn::None;
     Controls {
         thrust: facing_back && speed > handling.accel / 2.0,
-        turn: Turn::None,
-        reverse: true,
+        turn,
         ..Controls::default()
     }
 }
@@ -1365,14 +1355,14 @@ pub(crate) fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) ->
 /// [`brake`] as sub 1's flight ([`held_burst::Flight::stop`]), which
 /// keeps an owed burst: `brake` stands in for sub 1 for every goal the
 /// autopilot flies.
-fn braking(state: &ShipState, handling: &Handling, inertia: Inertia) -> Flight {
+fn braking(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
     Flight::stop(brake(state, handling, inertia), handling, inertia)
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there
 /// ([`braking`]).
 fn follow_or_brake(
-    state: &ShipState,
+    state: &mut ShipState,
     handling: &Handling,
     lead: Option<&ShipState>,
     inertia: Inertia,
@@ -1386,7 +1376,12 @@ fn follow_or_brake(
 /// Keeps within [`FOLLOW_DISTANCE`] of a lead at `lead`: closing at the
 /// speed it can still brake from in the distance beyond it, on top of the
 /// lead's velocity, and matching the lead's velocity within it.
-fn follow(state: &ShipState, handling: &Handling, lead: &ShipState, inertia: Inertia) -> Controls {
+fn follow(
+    state: &mut ShipState,
+    handling: &Handling,
+    lead: &ShipState,
+    inertia: Inertia,
+) -> Controls {
     close_on(
         state,
         handling,
@@ -1401,7 +1396,7 @@ fn follow(state: &ShipState, handling: &Handling, lead: &ShipState, inertia: Ine
 /// at the speed it can still brake from in the distance beyond the
 /// margin, on top of that velocity, and matching it within the margin.
 fn close_on(
-    state: &ShipState,
+    state: &mut ShipState,
     handling: &Handling,
     target: Vec2,
     velocity: Vec2,
@@ -1466,11 +1461,15 @@ fn braking_speed(distance: f32, handling: &Handling, inertia: Inertia) -> f32 {
 }
 
 /// Turns towards the change that takes the ship's velocity to `desired`,
-/// and thrusts once it faces it; coasts once the velocity is within half
-/// a tick's thrust of it. An inertialess ship matches its speed instead
+/// and thrusts once it faces it, by its heading before the turn; coasts
+/// once the velocity is within half a tick's thrust of it, its heading
+/// truncated ([`flight::turn_to_own`]). The heading it wants is the
+/// table heading of the change, `_CalcInterceptAngle((0,0), change ×
+/// 100.0)`, as sub 1 reads its velocity, and `_HandleShip` turns it there
+/// ([`flight::turn_to`]). An inertialess ship matches its speed instead
 /// ([`inertialess::match_speed`]).
 fn match_velocity(
-    state: &ShipState,
+    state: &mut ShipState,
     handling: &Handling,
     desired: Vec2,
     inertia: Inertia,
@@ -1480,13 +1479,15 @@ fn match_velocity(
     }
     let change = desired - state.velocity;
     if change.length() <= handling.accel / 2.0 {
+        flight::turn_to_own(state);
         return Controls::default();
     }
-    let wanted = heading_of(change);
-    let off = shortest_turn(state.heading, wanted);
+    let off = shortest_turn(state.heading, heading_of(change));
+    let thrust = off.abs() <= ALIGNED.max(handling.turn_rate);
+    let wanted = trig::intercept_angle(Vec2::ZERO, change * 100.0);
     Controls {
-        thrust: off.abs() <= ALIGNED.max(handling.turn_rate),
-        turn: steer(state.heading, wanted, handling),
+        thrust,
+        turn: flight::turn_to(state, wanted, handling.turn_rate),
         reverse: false,
         ..Controls::default()
     }
@@ -1521,15 +1522,15 @@ mod tests {
     }
 
     fn brake(state: &ShipState, handling: &Handling) -> Controls {
-        super::brake(state, handling, Inertia::Inertial)
+        super::brake(&mut state.clone(), handling, Inertia::Inertial)
     }
 
     fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
-        super::match_velocity(state, handling, desired, Inertia::Inertial)
+        super::match_velocity(&mut state.clone(), handling, desired, Inertia::Inertial)
     }
 
     fn follow(state: &ShipState, handling: &Handling, lead: &ShipState) -> Controls {
-        super::follow(state, handling, lead, Inertia::Inertial)
+        super::follow(&mut state.clone(), handling, lead, Inertia::Inertial)
     }
 
     /// Flies `npc` at its own top speed, with no lead: the autopilot as
@@ -3558,10 +3559,11 @@ mod tests {
         let a = handling.accel;
         let brake_at =
             |speed: f32, heading: f32| brake(&at(0.0, 0.0, 0.0, -speed, heading), &handling);
+        // It turns to its retro heading itself, by `_HandleShip`'s turn.
         let turning = brake_at(3.0, 0.0);
         assert_eq!(
             (turning.reverse, turning.thrust, turning.turn),
-            (true, false, Turn::None)
+            (false, false, Turn::Right)
         );
         assert!(
             brake_at(3.0, 177.0).thrust,
@@ -3588,7 +3590,7 @@ mod tests {
     }
 
     #[test]
-    fn matching_a_velocity_turns_only_beyond_half_a_ticks_turn() {
+    fn matching_a_velocity_turns_only_beyond_a_ticks_turn_in_whole_degrees() {
         let handling = fast();
         let facing = |heading: f32| {
             match_velocity(
@@ -3597,12 +3599,13 @@ mod tests {
                 Vec2::new(0.0, -6.0),
             )
         };
-        // Wanting heading 0, from either side.
-        assert_eq!(facing(358.5).turn, Turn::None, "1.5° short: half a turn");
-        assert_eq!(facing(358.4).turn, Turn::Right);
-        assert_eq!(facing(1.5).turn, Turn::None);
-        assert_eq!(facing(1.6).turn, Turn::Left);
-        assert_eq!(facing(358.8).turn, Turn::None);
+        // Wanting heading 0, from either side: within a turn (3) in whole
+        // degrees it is put on it, which shows no turn.
+        assert_eq!(facing(357.0).turn, Turn::None, "3 short: a turn");
+        assert_eq!(facing(356.9).turn, Turn::Right, "356 is 4 short");
+        assert_eq!(facing(3.9).turn, Turn::None, "3 past");
+        assert_eq!(facing(4.0).turn, Turn::Left);
+        assert_eq!(facing(358.4).turn, Turn::None);
         // Thrust within the aligned cone or a tick's turn, whichever is
         // wider.
         assert!(facing(5.0).thrust && !facing(5.1).thrust);

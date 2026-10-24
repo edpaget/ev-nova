@@ -2177,10 +2177,14 @@ pub(super) mod tests {
         assert_eq!(aboard(&session, raider), 0, "drained by its pick");
         fight(&mut session, &catalog, &ai);
         assert_eq!(vipers(&session).len(), 1, "none left to launch");
+        // The one launched may dock back as its carrier draws off: none
+        // more is ever out.
+        let mut most = 0;
         for _ in 0..240 {
             fight(&mut session, &catalog, &ai);
+            most = most.max(vipers(&session).len());
         }
-        assert_eq!(vipers(&session).len(), 1, "none more");
+        assert_eq!(most, 1, "none more");
         assert!(
             session.reserves().shield.now < 30.0,
             "the fighters' shots: {:?}",

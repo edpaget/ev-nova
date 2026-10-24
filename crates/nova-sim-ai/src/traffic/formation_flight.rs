@@ -316,7 +316,7 @@ pub(crate) fn fly(
 ) {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
         // `autopilot::brake` stands in for sub 1, which keeps +0x34.
-        let controls = autopilot::brake(&npc.state, handling, inertia);
+        let controls = autopilot::brake(&mut npc.state, handling, inertia);
         let word = Word::stop(controls, handling, inertia);
         held_burst::step(npc, handling, controls, flight, inertia, word);
         return;
