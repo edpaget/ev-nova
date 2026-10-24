@@ -483,7 +483,7 @@ fn fly_mobile(
     let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
     if pod_flight::is_pod(npc) {
-        let controls = pod_flight::controls(npc, &handling);
+        let controls = pod_flight::controls(npc);
         held_burst::step(npc, &handling, controls, flight, inertia, Word::Writes);
         return Outcome::Flying;
     }
