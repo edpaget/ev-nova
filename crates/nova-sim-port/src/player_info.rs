@@ -1145,6 +1145,11 @@ pub struct PlayerInfo {
     pub system: String,
     /// The legal status string, or "N/A".
     pub legal_status: String,
+    /// The combat rating's words, `STR#` 138 by
+    /// `nova_sim::rating::string_index` (`_DrawCombatRatingString` @0x57e5, drawn by
+    /// `_PlayerInfoDialogUpdate` @0x52ade); empty when the list has no
+    /// such entry.
+    pub combat_rating: String,
     /// The ship's name.
     pub ship_name: String,
     /// The ship class's name.

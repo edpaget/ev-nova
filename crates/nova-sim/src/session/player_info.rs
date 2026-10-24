@@ -182,6 +182,7 @@ impl Session {
                 catalog,
                 &words,
             ),
+            combat_rating: self.setup.combat_rating_text(self.pilot.combat_rating),
             ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
             ship_class: self
                 .ship_name(self.pilot.ship)
@@ -410,6 +411,7 @@ mod tests {
     use crate::outfitter::OutfitFlags;
     use crate::pilot::Escort;
     use crate::player_info::{CheatIds, EnergyShown, IncomeLine, Reach};
+    use crate::rating::RATING_STRINGS;
     use crate::reserves::Reserves;
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{alternates, hide, with_alternate};
@@ -420,8 +422,9 @@ mod tests {
 
     /// `STR#` 2002, every string empty but #392 "und" and #396 "N/A";
     /// `STR#` 134, the
-    /// legal statuses, each "status n" for its entry n; `STR#` 4001,
-    /// "food" and "*passengers".
+    /// legal statuses, each "status n" for its entry n; `STR#` 138, each
+    /// "rating n" for its entry n, #11 missing; `STR#` 4001, "food" and
+    /// "*passengers".
     #[derive(Debug)]
     struct Lists;
 
@@ -435,6 +438,7 @@ mod tests {
                     strings
                 }
                 LEGAL_STATUS_STRINGS => (1..=18).map(|n| format!("status {n}")).collect(),
+                RATING_STRINGS => (1..=10).map(|n| format!("rating {n}")).collect(),
                 CARGO_NAMES => vec!["food".to_owned(), "*passengers".to_owned()],
                 _ => Vec::new(),
             }
@@ -629,6 +633,7 @@ mod tests {
                 date: session.med_date_text(),
                 system: "Sol".to_owned(),
                 legal_status: String::new(),
+                combat_rating: String::new(),
                 ship_name: "Bitsy".to_owned(),
                 ship_class: "Ship 128".to_owned(),
                 turn_rate: 90,
@@ -1010,6 +1015,25 @@ mod tests {
             }
         );
         assert!(!info.cheats, "the session leaves cheat mode off");
+    }
+
+    #[test]
+    fn the_combat_rating_row_reads_the_ratings_words() {
+        let catalog = governed();
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        assert_eq!(session.player_info(&catalog).combat_rating, "rating 1");
+        session.pilot.combat_rating = 150;
+        assert_eq!(session.player_info(&catalog).combat_rating, "rating 3");
+        session.pilot.combat_rating = 6_400;
+        let info = session.player_info(&catalog);
+        assert_eq!(info.combat_rating, "rating 9");
+        assert_eq!(
+            info.combat_rating,
+            session.pilot_panel(&catalog).combat_rating,
+            "the pilot panel's"
+        );
     }
 
     #[test]

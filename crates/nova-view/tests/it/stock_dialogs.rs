@@ -1062,6 +1062,7 @@ fn blank_player_info() -> nova_sim::PlayerInfo {
         date: String::new(),
         system: String::new(),
         legal_status: String::new(),
+        combat_rating: String::new(),
         ship_name: String::new(),
         ship_class: String::new(),
         turn_rate: 0,

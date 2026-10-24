@@ -25,6 +25,7 @@ mod stock_board_reach;
 mod stock_christening;
 mod stock_cloak_conditions;
 mod stock_cloak_when_hit_burst;
+mod stock_combat_rating;
 mod stock_comm_calls;
 mod stock_conditional_text;
 mod stock_crons;

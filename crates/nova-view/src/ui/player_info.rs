@@ -25,8 +25,9 @@
 //! - **General** ([`general_texts`]): each row a label at h +5 or +0xcd
 //!   and a value at +0x50 or +0x118 from the content box's top-left, on
 //!   baselines +0xc to +0x8c, 0x10 apart (@0x527b0-0x53731). Combat
-//!   Rating shows [`PLACEHOLDER`] until rdm:task/combat-rating-readers
-//!   lands ([`PLACEHOLDER_FIELDS`]). With the info's cheat mode on,
+//!   Rating shows the combat rating's words, `STR#` 138 by the rating
+//!   (`_DrawCombatRatingString` @0x57e5, called @0x52ade; the info's
+//!   `combat_rating`). With the info's cheat mode on,
 //!   System, Legal Status (in an inhabited system), Combat Rating and
 //!   Ship Class are followed by their IDs, " (n)", in the value's white
 //!   ([`cheat_suffix`], @0x52951, @0x52a16, @0x52ae3, @0x52c1d).
@@ -189,11 +190,6 @@ pub const VALUE_COLOR: Color = Color::WHITE;
 /// Every text's size, in Geneva: `_smallTextSize` (@0x1d3eb).
 pub const TEXT_SIZE: f32 = 9.0;
 
-/// What a field the engine cannot show yet shows.
-pub const PLACEHOLDER: &str = "\u{2014}";
-/// The fields that show [`PLACEHOLDER`], by label: the combat rating,
-/// until rdm:task/combat-rating-readers.
-pub const PLACEHOLDER_FIELDS: [&str; 1] = ["Combat Rating"];
 /// The buttons drawn that do nothing: none.
 pub const INERT_BUTTONS: [&str; 0] = [];
 
@@ -430,7 +426,7 @@ pub fn general_texts(
         [
             (
                 &words.combat_rating_label,
-                with_id(PLACEHOLDER, Some(ids.kills)),
+                with_id(&info.combat_rating, Some(ids.kills)),
             ),
             (&words.max_speed_label, info.max_speed.to_string()),
         ],
@@ -1040,6 +1036,7 @@ mod tests {
             date: "June 23rd, 1177 NC".to_owned(),
             system: "Sol".to_owned(),
             legal_status: "Citizen".to_owned(),
+            combat_rating: "Average".to_owned(),
             ship_name: "Bitsy".to_owned(),
             ship_class: "Shuttle".to_owned(),
             turn_rate: 90,
@@ -1179,14 +1176,8 @@ mod tests {
     }
 
     #[test]
-    fn the_placeholder_fields_and_inert_buttons_are_listed() {
-        assert_eq!(PLACEHOLDER_FIELDS, ["Combat Rating"]);
+    fn no_button_is_inert() {
         assert!(INERT_BUTTONS.is_empty());
-        assert!(
-            Words::STOCK
-                .combat_rating_label
-                .starts_with(PLACEHOLDER_FIELDS[0])
-        );
     }
 
     #[test]
@@ -1286,7 +1277,7 @@ mod tests {
                 row("Accel Rate:", "450", 205.0, 60.0),
             ],
             [
-                row("Combat Rating:", PLACEHOLDER, 5.0, 76.0),
+                row("Combat Rating:", "Average", 5.0, 76.0),
                 row("Max Speed:", "600", 205.0, 76.0),
             ],
             [
@@ -1678,7 +1669,7 @@ mod tests {
         for (value, with_id) in [
             ("Sol", "Sol (130)"),
             ("Citizen", "Citizen (5)"),
-            (PLACEHOLDER, &format!("{PLACEHOLDER} (12)")),
+            ("Average", "Average (12)"),
             ("Shuttle", "Shuttle (128)"),
         ] {
             let placed = expected

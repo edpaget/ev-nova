@@ -447,6 +447,7 @@ mod chart;
 mod clearance;
 mod cloaks;
 mod collision_order;
+mod combat_rating;
 mod comm_calls;
 mod control;
 mod course;
