@@ -2171,6 +2171,45 @@ pub(super) mod tests {
         assert_eq!(helper.owed_burst, None);
     }
 
+    /// [`targeting`]'s idle warship, provoked, paid to give the player
+    /// `help`: the player short of fuel for a refuel, disabled for a
+    /// repair.
+    fn paid_while_provoked(catalog: &FakePilotCatalog, help: Help) -> Session {
+        let mut session = targeting(catalog);
+        npc(&mut session).provoked = 5.0;
+        match help {
+            Help::Refuel => session.pilot.reserves.fuel.now = 40.0,
+            Help::Repair => session.ship.condition = Condition::Disabled,
+        }
+        hail(&mut session, catalog);
+        press(&mut session, catalog, 1, 99);
+        let view = haggle(&mut session, catalog, Haggle::Accept);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        session
+    }
+
+    #[test]
+    fn a_provoked_ship_paid_for_help_forgets_its_provocation_and_keeps_helping() {
+        // `_AIMakeShipRefuelPlayer` (@0x82dc1) and `_AIMakeShipRepairPlayer`
+        // (@0x82df8) store `movw $0, 0x96`: the provocation is gone. An
+        // assister's type think returns for goals 9 and 0xf provoked or
+        // not (`traffic::assist_think`), so the ticks below pass either
+        // way; the reset itself is what the first assert pins.
+        let catalog = hailable();
+        for help in [Help::Refuel, Help::Repair] {
+            let mut session = paid_while_provoked(&catalog, help);
+            let helper = &session.npcs()[0];
+            assert_eq!(helper.provoked, 0.0, "{help:?}");
+            assert_eq!(helper.goal, Goal::Assist(help));
+            assert_eq!(helper.target, Some(ShipRef::Player));
+            decide(&mut session, &catalog, 30, |npc| {
+                assert_eq!(npc.goal, Goal::Assist(help), "{help:?}");
+                assert_eq!(npc.target, Some(ShipRef::Player));
+                assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
+            });
+        }
+    }
+
     #[test]
     fn requested_help_declined_is_laughed_off() {
         let catalog = hailable();
