@@ -329,8 +329,8 @@ mod tests {
         assert_eq!(view.reply, format!("{name} is a good place to buy food."));
     }
 
-    /// [`advising`] with the food surplus (128, at 128 "Earth", -15) under
-    /// way for `days`, at `stellar`.
+    /// `catalog` with the food surplus (`öops` 128, at 128 "Earth", -15),
+    /// Earth a planet.
     fn surplus(catalog: &mut FakePilotCatalog) {
         catalog.disasters = vec![DisasterRecord {
             id: DisasterId(128),
@@ -342,6 +342,10 @@ mod tests {
             freq: 0,
             ..DisasterRecord::default()
         }];
+        catalog.stellars = vec![(
+            StellarId(128),
+            StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER | FOOD_LOW,
+        )];
     }
 
     fn under_way(session: &mut Session, days: u16, stellar: Option<i16>) {
