@@ -240,6 +240,7 @@ impl Session {
                     carried: false,
                     wage: Some(wage),
                     person: None,
+                    mark: None,
                 });
             }
         });
@@ -802,6 +803,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -886,6 +888,7 @@ mod tests {
                 carried: false,
                 wage: Some(100),
                 person: None,
+                mark: None,
             }]
         );
         assert!(session.take_save_due());

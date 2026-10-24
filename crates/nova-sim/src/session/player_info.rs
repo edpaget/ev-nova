@@ -568,6 +568,7 @@ mod tests {
             carried: false,
             wage,
             person: None,
+            mark: None,
         }
     }
 

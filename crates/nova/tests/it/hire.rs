@@ -789,7 +789,8 @@ fn with_hirelings(pilot: &Pilot, cash: i64, docked: bool, count: usize) -> Pilot
         "order": null,
         "carried": false,
         "wage": 100,
-        "person": null
+        "person": null,
+        "mark": null
     });
     save["escorts"] = serde_json::Value::Array(vec![hireling; count]);
     nova_sim::save::decode(&save.to_string()).expect("a pilot")

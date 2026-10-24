@@ -981,6 +981,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         });
         session.pilot.escorts = vec![filler; crate::board::MAX_ESCORTS];
         assert_eq!(

@@ -349,6 +349,7 @@ mod tests {
             carried,
             wage,
             person: Some(PersonId(700)),
+            mark: None,
         }
     }
 

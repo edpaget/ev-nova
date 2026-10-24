@@ -358,6 +358,7 @@ mod tests {
             carried: false,
             wage: Some(100),
             person: None,
+            mark: None,
         });
         session.set_credits(1000);
         session.set_date(date(1178, 6, 23));
@@ -1136,6 +1137,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         };
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.escorts = vec![escort(false), escort(true)];

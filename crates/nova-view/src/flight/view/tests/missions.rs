@@ -1071,7 +1071,8 @@ fn with_paid_fleet(pilot: &Pilot, escorts: &[(i16, bool, Option<i64>)]) -> Pilot
                 "order": null,
                 "carried": carried,
                 "wage": wage,
-                "person": null
+                "person": null,
+                "mark": null
             })
         })
         .collect();

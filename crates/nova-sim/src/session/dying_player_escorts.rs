@@ -123,6 +123,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 

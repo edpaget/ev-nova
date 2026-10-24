@@ -770,6 +770,7 @@ mod tests {
             carried: false,
             wage: None,
             person: person.map(PersonId),
+            mark: None,
         };
         let fleet = [escort(None), escort(Some(130))];
         let world = PersonWorld {

@@ -1200,6 +1200,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
@@ -1216,6 +1217,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         };
         pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
         assert_eq!(pilot.escort_count(), 2);
@@ -1232,6 +1234,7 @@ mod tests {
             carried: false,
             wage,
             person: None,
+            mark: None,
         };
         assert!(!escort(None).hired(), "captured");
         assert!(escort(Some(0)).hired());

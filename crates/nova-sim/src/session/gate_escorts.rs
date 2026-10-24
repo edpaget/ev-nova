@@ -119,6 +119,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 

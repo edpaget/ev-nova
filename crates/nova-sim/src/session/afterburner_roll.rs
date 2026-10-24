@@ -213,6 +213,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.pilot.combat_rating = 1000;

@@ -5724,6 +5724,7 @@ impl Session {
             carried: false,
             wage: None,
             person,
+            mark: None,
         };
         // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
         // so its slot's.
@@ -10482,6 +10483,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -24820,6 +24822,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -24840,6 +24843,7 @@ pub(super) mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             };
             MAX_ESCORTS
         ];
@@ -25399,6 +25403,7 @@ pub(super) mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             };
             MAX_ESCORTS
         ];
@@ -25420,6 +25425,7 @@ pub(super) mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         };
         let fleet = |escorts: usize, fighters: usize| {
             let mut fleet = vec![escort(false); escorts];
@@ -25495,6 +25501,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -25976,6 +25983,7 @@ pub(super) mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             }],
             "the old ship, stock and full"
         );
@@ -27941,6 +27949,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         session.populate(catalog, &mut NeverFires);
         session.hold_fire(true, false);

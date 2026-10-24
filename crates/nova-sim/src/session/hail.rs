@@ -3181,6 +3181,7 @@ pub(super) mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -3390,6 +3391,7 @@ pub(super) mod tests {
                 carried: false,
                 wage: None,
                 person: Some(crate::catalog::PersonId(600)),
+                mark: None,
             }],
             "its reserves as they were, not halved"
         );

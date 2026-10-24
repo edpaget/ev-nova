@@ -219,6 +219,7 @@ impl PlayerShip {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 }
@@ -275,6 +276,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 

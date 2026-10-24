@@ -312,6 +312,7 @@ fn reentering_shuts_the_escort_menu_and_starts_the_cursor_hidden() {
         carried: false,
         wage: None,
         person: None,
+        mark: None,
     });
     pilot.seen_intro = true;
     store.put("Ada", &nova_sim::save::encode(&pilot));

@@ -190,6 +190,7 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         // The first tick places it on its slot.
