@@ -935,4 +935,46 @@ mod tests {
             assert_eq!((controls.turn, resting.heading), (Turn::None, 37.0));
         }
     }
+
+    /// A ship at `heading` turning `rate` degrees a tick, holding 1.0,
+    /// matching its velocity to 4 east (table heading 90): the turn
+    /// `match_speed` gives it, and its heading after the tick's step.
+    fn matched_east(heading: f32, rate: f32) -> (Turn, f32) {
+        let handling = Handling {
+            max_speed: 6.0,
+            accel: 0.2,
+            turn_rate: rate,
+        };
+        let mut state = at(0.0, 0.0, 0.0, 0.0, heading);
+        let controls = super::match_speed(&mut state, 1.0, &handling, Vec2::new(4.0, 0.0));
+        let mut speed = 1.0;
+        crate::flight::inertialess_step(
+            &mut state,
+            &mut speed,
+            &handling,
+            controls,
+            FlightRules::default(),
+        );
+        (controls.turn, state.heading)
+    }
+
+    #[test]
+    fn matching_a_velocity_measures_its_gap_to_the_table_heading_in_whole_degrees() {
+        // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off:
+        // it turns by its rate, where a float gap would put it on 90.
+        let (turn, heading) = matched_east(88.1, 1.95);
+        assert_eq!(turn, Turn::Right);
+        assert!((heading - 90.05).abs() < 1e-4, "{heading}");
+        // 91.9 is 91, 1 off: within the turn, put on 90.
+        assert_eq!(matched_east(91.9, 1.95), (Turn::None, 90.0));
+    }
+
+    #[test]
+    fn matching_a_velocity_beyond_its_turn_of_the_table_heading_steps_by_its_rate() {
+        assert_eq!(matched_east(80.0, 3.0), (Turn::Right, 83.0));
+        assert_eq!(matched_east(100.0, 3.0), (Turn::Left, 97.0));
+        // The short way round across 0.
+        assert_eq!(matched_east(300.0, 3.0), (Turn::Right, 303.0));
+        assert_eq!(matched_east(93.0, 3.0), (Turn::None, 90.0), "a turn off");
+    }
 }
