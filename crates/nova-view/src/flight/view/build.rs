@@ -82,21 +82,27 @@ impl<
     /// flight's chance: for a pilot just created, before its first save.
     /// The
     /// ship, which the beginning puts at (50, 50), is drawn there from the
-    /// first frame, not on its way from where the view was read. A
-    /// session that failed begins nothing.
+    /// first frame, not on its way from where the view was read, and the
+    /// stars are scattered afresh about it when the flight is next caught
+    /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
+    /// that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.place_ship();
+            self.stars_due = true;
         }
     }
 
     /// Enters play from the main screen as [`Session::enter_game`] does:
-    /// the refresh a later new pilot reads is taken afresh. A session that
+    /// the refresh a later new pilot reads is taken afresh, and the stars
+    /// are scattered afresh when the flight is next caught up with, as
+    /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
     /// failed enters nothing.
     pub fn enter_game(&mut self) {
         if let Ok(session) = &mut self.session {
             session.enter_game();
+            self.stars_due = true;
         }
     }
 
@@ -214,6 +220,7 @@ impl<
             death_fade: None,
             hyperspace_effects: true,
             smoke_trails: true,
+            parallax_starfield: true,
             weapon_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
@@ -258,6 +265,8 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            stars: crate::flight::stars::Starfield::new(),
+            stars_due: true,
             flashes: BTreeMap::new(),
             held_alts: std::cell::RefCell::default(),
             glows: crate::flight::weapon_glow::WeaponGlows::default(),
@@ -794,6 +803,30 @@ impl<
     #[must_use]
     pub fn hyperspace_effects(&self) -> bool {
         self.hyperspace_effects
+    }
+
+    /// The flight with each scattering of the stars giving them their own
+    /// parallax factors or not, as the Parallax Starfield preference is on
+    /// (the default) or off.
+    #[must_use]
+    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
+        Self {
+            parallax_starfield,
+            ..self
+        }
+    }
+
+    /// Sets whether the stars get their own parallax factors. It takes
+    /// effect at the next scattering; the stars already scattered keep
+    /// their factors.
+    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
+        self.parallax_starfield = parallax_starfield;
+    }
+
+    /// Whether the stars' scatterings give them their own parallax factors.
+    #[must_use]
+    pub fn parallax_starfield(&self) -> bool {
+        self.parallax_starfield
     }
 
     /// The flight with shots leaving their particle trails and smoke or

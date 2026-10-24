@@ -38,6 +38,30 @@ pub fn appeared(mut screen: nova::app::screen::AppScreen) -> nova::app::screen::
     screen
 }
 
+/// Stock "Text Input" (`DITL` 3001)'s six items, the new pilot's ship
+/// christening and the shipyard's name prompt, each built by `item` from
+/// its rectangle (left, top, right, bottom), its type byte and its data:
+/// OK, a picture, the prompt, a picture, the field and Cancel.
+pub fn text_input_items(item: impl Fn((i16, i16, i16, i16), u8, &[u8]) -> Vec<u8>) -> Vec<Vec<u8>> {
+    const BUTTON: u8 = 4;
+    const STATIC_TEXT: u8 = 8;
+    const EDIT_TEXT: u8 = 16;
+    const PICTURE: u8 = 64;
+    const DISABLED: u8 = 0x80;
+    vec![
+        item((252, 106, 322, 126), BUTTON, b"OK"),
+        item(
+            (7, 147, 39, 179),
+            PICTURE | DISABLED,
+            &129_i16.to_be_bytes(),
+        ),
+        item((52, 5, 347, 55), STATIC_TEXT | DISABLED, b"^0"),
+        item((7, 5, 39, 37), PICTURE | DISABLED, &130_i16.to_be_bytes()),
+        item((91, 64, 291, 80), EDIT_TEXT, b""),
+        item((170, 106, 240, 126), BUTTON, b"Cancel"),
+    ]
+}
+
 /// Where the main menu's Enter Ship button is pressed. A pilot created or
 /// opened from the menu is held there, not flown, and a click here enters
 /// play with it.

@@ -1053,14 +1053,6 @@ impl<C> FlightView<C> {
         self.session.as_mut().ok()?.shipyard(&mut self.chance)
     }
 
-    /// The prompt for naming a ship of class `ship` before it is bought,
-    /// as [`Session::ship_naming`] gives it, on the flight's chance; a
-    /// session that failed has no shipyard.
-    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        session.ship_naming(ship, &mut self.chance)
-    }
-
     /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
     /// does; nothing for a session that failed. The whole bar is redrawn
     /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
@@ -1083,5 +1075,16 @@ impl<C> FlightView<C> {
 impl<C> crate::spaceport::OfferNames for FlightView<C> {
     fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
         self.session.as_ref().ok()?.offer_text(mission, raw)
+    }
+}
+
+impl<C: nova_sim::CommCatalog> FlightView<C> {
+    /// The prompt for naming a ship of class `ship` before it is bought,
+    /// as [`Session::ship_naming`] gives it, its words read from the
+    /// flight's catalog, on the flight's chance; a session that failed
+    /// has no shipyard.
+    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
+        session.ship_naming(ship, &self.catalog, &mut self.chance)
     }
 }

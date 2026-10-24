@@ -17,7 +17,12 @@
 //!   still heard, as `_CreateExplosion` plays its sound whether
 //!   `_SpawnExplod` found it a slot or not (@0x3f91a). The extras take
 //!   their slots first, so a size of 163 or more fills the pool alone and
-//!   the main one is lost, heard. At most [`MAX_PARTICLES`] particles are
+//!   the main one is lost, heard. Each explosion takes the first free
+//!   slot (`_SpawnExplod` @0x3f5dc-0x3f697, the first of 32 whose frame
+//!   is below 0.0), and `_explodLayer` draws them in slot order, so a new
+//!   one in a freed lower slot draws under an older one in a higher slot
+//!   ([`Effects::explosions`], [`Effects::draw_explosions`]). Without the
+//!   caps the pool is unbounded but still first-free. At most [`MAX_PARTICLES`] particles are
 //!   kept, of a burst or of debris, one more dropped; and a particle of
 //!   no life is never moved, drawn or freed, holding its count of the
 //!   pool until it is cleared (`_MoveParticles` @0xc6134-0xc613a).
@@ -92,6 +97,14 @@
 //!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
+//! The explosions and the particles draw in different places among the
+//! world's sprites ([`nova_sim::sprite_layer`]): the explosions in
+//! `_explodLayer` (0x3b52b8; `_SpawnExplod` @0x3f5ef takes an
+//! `_explodData` slot), over the ships and their turret shots and under
+//! the beams over the ships ([`Effects::draw_explosions`]); the particles
+//! in no layer, last of all, by `_PostDrawCallback`'s
+//! `_DrawParticlesOffscreen` (@0x38c9a) ([`Effects::draw_particles`]).
+//!
 //! The effects draw on their own [`Chance`], never on the simulation's.
 
 use std::collections::BTreeMap;
@@ -102,6 +115,7 @@ use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::pods::{EscapePods, Pod};
+use super::slot_pool::SlotPool;
 use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
@@ -291,7 +305,7 @@ pub struct Dying {
 /// The fight's explosions, debris and sounds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Effects {
-    explosions: Vec<Explosion>,
+    explosions: SlotPool<Explosion>,
     particles: Vec<Particle>,
     sounds: Vec<CombatSound>,
     /// Each looped weapon sound still playing, by firer and weapon, with
@@ -480,17 +494,18 @@ impl Effects {
     /// Sets off `boom` at `at`, hidden for `delay`, unless the `caps` hold
     /// the pool full or its look was not read; whether it went off.
     fn spawn(&mut self, boom: BoomId, at: Point, delay: f32, looks: &Looks, caps: bool) -> bool {
-        let room = !caps || self.explosions.len() < MAX_EXPLOSIONS;
-        let spawned = room && looks.boom(boom).is_some();
-        if spawned {
-            self.explosions.push(Explosion {
-                boom,
-                at,
-                frame: 0.0,
-                delay,
-            });
+        if looks.boom(boom).is_none() {
+            return false;
         }
-        spawned
+        let explosion = Explosion {
+            boom,
+            at,
+            frame: 0.0,
+            delay,
+        };
+        self.explosions
+            .insert(explosion, caps.then_some(MAX_EXPLOSIONS))
+            .is_some()
     }
 
     /// Sets off `explosion` at `at` with `size`, heard from the player in
@@ -605,15 +620,24 @@ impl Effects {
         }
     }
 
-    /// Draws the explosions shown, as `looks` says, and the debris, where
-    /// `camera` shows them.
-    pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
+    /// Draws the explosions shown, as `looks` says, where `camera` shows
+    /// them: the sprites of `_explodLayer`
+    /// ([`SpriteLayer::Explosions`](nova_sim::sprite_layer::SpriteLayer::Explosions)),
+    /// over the ships and their turret shots and under the beams over the
+    /// ships.
+    pub fn draw_explosions(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
         for explosion in self.explosions.iter().filter(|e| e.delay <= 0.0) {
             if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
                 let frame = ImageKey::sprite(sheet.image_id, explosion.frame as u16);
                 list.sprite(frame, camera.world_to_screen(explosion.at), translucent());
             }
         }
+    }
+
+    /// Draws the particles, the bursts' and the debris, where `camera`
+    /// shows them: last of the world, after the beams over the ships
+    /// ([`WorldPass::Particles`](nova_sim::sprite_layer::WorldPass::Particles)).
+    pub fn draw_particles(&self, list: &mut DrawList, camera: &Camera) {
         for piece in &self.particles {
             let color = Color {
                 a: particle_alpha(piece.life),
@@ -629,16 +653,16 @@ impl Effects {
         self.pods.draw(list, camera, looks);
     }
 
-    /// The escape pods adrift.
+    /// The escape pods adrift, in slot order.
     #[must_use]
-    pub fn pods(&self) -> &[Pod] {
+    pub fn pods(&self) -> Vec<Pod> {
         self.pods.pods()
     }
 
-    /// The explosions going off.
+    /// The explosions going off, in slot order (see the module docs).
     #[must_use]
-    pub fn explosions(&self) -> &[Explosion] {
-        &self.explosions
+    pub fn explosions(&self) -> Vec<Explosion> {
+        self.explosions.to_vec()
     }
 
     /// The particles flying: debris and bursts.
@@ -767,6 +791,7 @@ mod tests {
             asteroids: BTreeMap::new(),
             cursor: None,
             pod: None,
+            stars: None,
         }
     }
 
@@ -940,7 +965,7 @@ mod tests {
         assert_eq!(effects.take_sounds(), [explosion_sound(303, (3, 4))]);
         assert_eq!(frames(&effects), [0.0]);
         let mut list = DrawList::new();
-        effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks());
         assert_eq!(list, DrawList::new());
         steps(&mut effects, 1);
         assert_eq!(effects.explosions(), [], "past its one frame");
@@ -962,6 +987,30 @@ mod tests {
         // `_SpawnExplod` found it a slot (@0x3f91a).
         assert_eq!(effects.take_sounds().len(), 33, "the 33rd still heard");
         assert_eq!(MAX_EXPLOSIONS, 32);
+    }
+
+    #[test]
+    fn a_new_explosion_takes_a_freed_lower_slot_and_draws_under_an_older_one() {
+        let mut effects = Effects::default();
+        exploded(&mut effects, 129, at(1.0, 0.0));
+        exploded(&mut effects, 130, at(2.0, 0.0));
+        steps(&mut effects, 2);
+        let [older] = effects.explosions()[..] else {
+            panic!("the 2-frame one ended: {:?}", effects.explosions());
+        };
+        exploded(&mut effects, 128, at(3.0, 0.0));
+        let slots: Vec<_> = effects.explosions().iter().map(|e| e.boom).collect();
+        assert_eq!(slots, [BoomId(128), older.boom], "in slot order");
+        let mut list = DrawList::new();
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks());
+        let drawn: Vec<_> = list
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, .. } => Some(image.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, [400, 402], "the new one first, under the older");
     }
 
     #[test]
@@ -1085,7 +1134,7 @@ mod tests {
         );
         let list = |effects: &Effects| {
             let mut list = DrawList::new();
-            effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks());
             list.iter()
                 .filter(|c| matches!(c, DrawCommand::Sprite { image, .. } if image.id == 401))
                 .count()
@@ -1874,7 +1923,8 @@ mod tests {
         effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         let camera = Camera::centred_on(at(10.0, 20.0));
         let mut list = DrawList::new();
-        effects.draw(&mut list, &camera, &looks());
+        effects.draw_explosions(&mut list, &camera, &looks());
+        effects.draw_particles(&mut list, &camera);
         let commands: Vec<DrawCommand> = list.iter().cloned().collect();
         assert_eq!(
             commands[0],
@@ -1900,6 +1950,40 @@ mod tests {
         );
     }
 
+    /// An explosion going off and the debris of a destroyed ship.
+    fn exploded_and_debris() -> Effects {
+        let mut effects = Effects::default();
+        exploded(&mut effects, 130, at(10.0, 20.0));
+        let mut chance = Script::of(&[0, 0, 0]);
+        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
+        effects
+    }
+
+    #[test]
+    fn draw_explosions_draws_the_explosions_alone() {
+        let effects = exploded_and_debris();
+        let mut list = DrawList::new();
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks());
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(commands.len(), 1);
+        assert!(
+            matches!(commands[0], DrawCommand::Sprite { image, .. } if image.id == 402),
+            "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn draw_particles_draws_the_particles_alone() {
+        let effects = exploded_and_debris();
+        let mut list = DrawList::new();
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+        assert_eq!(list.iter().count(), 16);
+        assert!(
+            list.iter()
+                .all(|command| matches!(command, DrawCommand::Dot { .. }))
+        );
+    }
+
     #[test]
     fn a_particle_fades_over_its_last_32_ticks() {
         assert_eq!(particle_alpha(40), 255, "opaque above 32");
@@ -1913,7 +1997,7 @@ mod tests {
         effects.apply(&burst(1, 0, (40, 40), 0.0), &scene(), &looks(), &mut chance);
         let alphas = |effects: &Effects| {
             let mut list = DrawList::new();
-            effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+            effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
             list.iter()
                 .filter_map(|command| match *command {
                     DrawCommand::Dot { color, .. } => Some(color.a),
@@ -2042,7 +2126,7 @@ mod tests {
             &mut Script::default(),
         );
         let mut list = DrawList::new();
-        effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
         let colours: Vec<Color> = list
             .iter()
             .filter_map(|command| match command {

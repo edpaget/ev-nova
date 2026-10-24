@@ -25,18 +25,21 @@ use crate::system::catalog::SystemCatalog;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
+use super::stars;
 use super::{
-    CLOAK_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
-    HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
-    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY,
-    SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with,
-    assigned_message, assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay,
-    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
-    pay_said, play_area, point, refusal_message, show_combat, show_destroyed, show_gate_frames,
-    shown_scene, stellar_name, window_width,
+    CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS,
+    HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
+    MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
+    SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead,
+    arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
+    gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
+    landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area, point, refusal_message,
+    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
+// Each is its own key or chord, held on its own.
+#[allow(clippy::struct_excessive_bools)]
 struct HeldTriggers {
     /// The primary and secondary fire keys.
     fire: (bool, bool),
@@ -46,6 +49,8 @@ struct HeldTriggers {
     self_destruct: bool,
     /// The cloak key.
     cloak: bool,
+    /// The weapon safety key.
+    safety: bool,
 }
 
 impl<
@@ -184,9 +189,10 @@ impl<
         self.open_map_as(MapOpening::Plain);
     }
 
-    /// [`FlightView::open_map`], opened `by` whoever opens it, which
-    /// gives the map its marks ([`FlightView::open_dialog_map`]), and the
-    /// nav noted as it opens (`_DoSystemMap` @0x12349).
+    /// [`FlightView::open_map`], opened `by` whoever opens it (flight, the
+    /// bar, a port screen or a mission dialog), which gives the map its
+    /// marks ([`FlightView::open_dialog_map`]) and its close's restore, and
+    /// the nav noted as it opens (`_DoSystemMap` @0x12349).
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
         self.map_opened = Some(MapOpened {
             by,
@@ -269,8 +275,9 @@ impl<
     }
 
     /// The input to the map opened over a screen: in port
-    /// ([`FlightView::open_bar_map`]), or by a mission dialog docked or in
-    /// flight ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
+    /// ([`FlightView::open_bar_map`], [`FlightView::open_port_screen_map`]),
+    /// or by a mission dialog docked or in flight
+    /// ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
     /// closes it ([`FlightView::close_map`]), unless
     /// Find is open, where it types, and anything else goes to the map, so
     /// flight's own keys and cursor stay out of the port.
@@ -542,9 +549,9 @@ impl<
     }
 
     /// The triggers held as the steps run: the primary and secondary
-    /// fire keys, the eject chord, the self-destruct chord and the cloak
-    /// key, each chord and the cloak only while the player's fate takes
-    /// its command. The cloak key needs no Command (`_QuickKeyCheck`
+    /// fire keys, the eject chord, the self-destruct chord, the cloak key
+    /// and the weapon safety key, each chord, the cloak and the safety
+    /// only while the player's fate takes its command. The cloak key needs no Command (`_QuickKeyCheck`
     /// @0x705b7).
     fn held_triggers(&self) -> HeldTriggers {
         let fire = (
@@ -559,6 +566,7 @@ impl<
             eject: chord(PlayerCommand::Eject, EJECT_KEY),
             self_destruct: chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY),
             cloak: self.takes(PlayerCommand::Cloak) && self.held.contains(&CLOAK_KEY),
+            safety: self.takes(PlayerCommand::DeselectWeapon) && self.held.contains(&DESELECT_KEY),
         }
     }
 
@@ -576,6 +584,7 @@ impl<
     /// and double time are held as the keys say, and a pass whose ship
     /// tick brings the escape pod's rescue ends the stepping there, the
     /// view laid out afresh where the rescue put the ship.
+    #[allow(clippy::too_many_lines)] // each pass's steps, in the original's order
     pub(super) fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
         let controls = self.controls();
         let HeldTriggers {
@@ -583,17 +592,20 @@ impl<
             eject,
             self_destruct,
             cloak,
+            safety,
         } = self.held_triggers();
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
+        let anchor = self.anchor();
         if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area(self.view));
+            session.set_play_area(play_area(self.view, anchor));
             session.set_window_width(window_width(self.view));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.hold_self_destruct(self_destruct);
             session.hold_cloak(cloak);
+            session.hold_weapon_safety(safety);
             session.set_double_time_key(self.double_time);
             session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));
@@ -671,6 +683,9 @@ impl<
                     let trails = self.smoke_trails;
                     self.shot_looks
                         .step(session, &self.looks, effects, trails, chance);
+                    let first = (!again).then_some(self.previous.position);
+                    let place = (self.view, anchor, &self.looks);
+                    stars::step(&mut self.stars, session, place, first, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -911,6 +926,7 @@ impl<
                 SessionEvent::StellarChanged => redrawn.stellar = true,
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
+                SessionEvent::StarfieldReset => redrawn.stars = true,
             }
         }
         if redrawn.galaxy {
@@ -946,6 +962,9 @@ impl<
         if redrawn.system {
             self.redraw_status();
         }
+        if std::mem::take(&mut self.stars_due) || redrawn.stars {
+            self.reset_stars();
+        }
         // The open map's drawing follows the galaxy, the explored and known
         // sets, the course and the nav. The flight is paused while it is
         // open, so this is rare: a set expression or the developer tools.
@@ -956,6 +975,24 @@ impl<
             self.redraw_map();
         }
         redrawn
+    }
+
+    /// Scatters the stars afresh about the ship and places them once, on
+    /// the effects' chance, when the session draws the original's
+    /// starfield (see the `stars` module).
+    fn reset_stars(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        if stars::original(session, &self.looks) {
+            let at = stars::surroundings(session, self.view, self.anchor(), &self.looks);
+            stars::reset(
+                &mut self.stars,
+                &at,
+                self.parallax_starfield,
+                &mut self.effects_chance,
+            );
+        }
     }
 
     /// Draws each stellar of the scene shown as the session holds it
@@ -1417,7 +1454,11 @@ impl<
     /// ([`Session::restore_bar_nav`], `_DoBarDialog` @0x492b7-0x492d3),
     /// with no redraw, as `_UpdateAllPortDialogs` (@0x492d7) draws no
     /// status, so the nav area shows the map's selection until the port's
-    /// next nav redraw, such as the bar's close; a mission dialog its own
+    /// next nav redraw, such as the bar's close; a port screen its own
+    /// ([`FlightView::open_port_screen_map`]), with no redraw either: the
+    /// exchange and the outfitter the nav they opened with, and the
+    /// spaceport, the shipyard, the hire screen and the ship description
+    /// the nav as the map opened; a mission dialog its own
     /// ([`FlightView::open_dialog_map`]): the offer's, the computer's and
     /// the briefing's the nav as the map opened, docked or in flight, the
     /// computer's then redrawing the nav area, and mission info's nothing.

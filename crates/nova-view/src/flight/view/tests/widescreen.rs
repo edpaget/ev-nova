@@ -1,5 +1,6 @@
 //! Flight in a view widened to 1365 x 768, a 16:9 window's: the HUD at
-//! the original's places for that width, the ship at the view's centre,
+//! the original's places for that width, the ship at the play area's
+//! centre (the `anchor` tests cover the other reading),
 //! every visible-area rule measured against the widened view, and the
 //! course map in its 1024-wide frame, centred.
 
@@ -108,26 +109,26 @@ fn the_floating_map_and_the_escort_menu_and_double_time_icon_keep_their_rules() 
 }
 
 #[test]
-fn the_ship_is_drawn_at_the_widened_views_centre() {
+fn the_ship_is_drawn_at_the_widened_play_areas_centre() {
     let view = widened(flight());
     assert_eq!(
         ship_sprites(&view),
-        [(ImageKey::sprite(2000, 0), at(682.0, 384.0))]
+        [(ImageKey::sprite(2000, 0), at(585.0, 384.0))]
     );
 }
 
-/// An idle NPC at (`x`, 0), the player at the centre, and stellar 150 at
-/// (−600, 0).
+/// An idle NPC at (`x`, 0), the player at the play area's centre, and
+/// stellar 150 at (−500, 0).
 fn npc_at(x: i32) -> View {
     let placed = placed(u32::try_from(x + 750).expect("in range"), 750, 0);
     let (_, chance) = scripted(&placed);
     let mut catalog = FakeCatalog {
-        sol_more: vec![stellar(150, "West", (-600, 0), 1)],
+        sol_more: vec![stellar(150, "West", (-500, 0), 1)],
         ..trafficked(&[130], 1, 129, 3)
     };
     catalog
         .sites
-        .push(site(150, (-600.0, 0.0), StellarFlags::CAN_LAND));
+        .push(site(150, (-500.0, 0.0), StellarFlags::CAN_LAND));
     let mut view = widened(
         FlightView::new(catalog)
             .with_chance(chance)
@@ -138,16 +139,18 @@ fn npc_at(x: i32) -> View {
 }
 
 #[test]
-fn a_ship_and_a_stellar_600_left_of_the_player_are_drawn_on_screen() {
-    let mut view = npc_at(-600);
+fn a_ship_and_a_stellar_500_left_of_the_player_are_drawn_on_screen() {
+    // 500 left of the player is off the classic view's left edge, 415
+    // from it.
+    let mut view = npc_at(-500);
     let list = drawn(&view);
-    let at_82: Vec<ImageKey> = sprites(&list)
+    let at_85: Vec<ImageKey> = sprites(&list)
         .into_iter()
-        .filter(|&(_, center)| center == at(82.0, 384.0))
+        .filter(|&(_, center)| center == at(85.0, 384.0))
         .map(|(image, _)| image)
         .collect();
     assert_eq!(
-        at_82.len(),
+        at_85.len(),
         4,
         "the stellar, and the ship with its glow and lights: {list:?}"
     );
@@ -175,8 +178,8 @@ fn a_ship_and_a_stellar_600_left_of_the_player_are_drawn_on_screen() {
         panic!("no brackets: {corners:?}");
     };
     assert_eq!(top_left.y, top_right.y);
-    let half = top_right.x - 82.0;
-    assert_eq!(brackets::corners(at(82.0, 384.0), half)[0], top_left);
+    let half = top_right.x - 85.0;
+    assert_eq!(brackets::corners(at(85.0, 384.0), half)[0], top_left);
 }
 
 #[test]
@@ -186,23 +189,23 @@ fn the_session_measures_the_widened_play_area() {
     let area = view.session().expect("flying").play_area();
     assert_eq!(
         (area.left, area.top, area.right, area.bottom),
-        (-682.0, -384.0, 489.0, 384.0)
+        (-585.0, -384.0, 586.0, 384.0)
     );
     let mut classic = flight();
     classic.tick(TICK);
     let area = classic.session().expect("flying").play_area();
     assert_eq!(
         (area.left, area.top, area.right, area.bottom),
-        (-512.0, -384.0, 318.0, 384.0)
+        (-415.0, -384.0, 415.0, 384.0)
     );
 }
 
 #[test]
 fn a_click_left_of_the_widened_bar_targets_and_one_on_it_does_nothing() {
-    let mut view = npc_at(1100 - 682);
+    let mut view = npc_at(1100 - 585);
     click(&mut view, at(1100.0, 384.0));
     assert_eq!(target_of(&view), Some(NpcId(0)), "drawn at x 1100");
-    let mut view = npc_at(1180 - 682);
+    let mut view = npc_at(1180 - 585);
     click(&mut view, at(1180.0, 384.0));
     assert_eq!(target_of(&view), None, "a status bar click");
 }

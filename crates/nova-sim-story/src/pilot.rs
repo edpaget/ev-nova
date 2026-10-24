@@ -4,8 +4,8 @@
 //! A new pilot starts as the first `chär` by ascending ID says: its ship,
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
-//! records, its ship named after its class (the `chär`'s own christening
-//! prompt is not shown yet), owning its ship's stock weapons and their `AmmoLoad` as
+//! records, its ship named after its class until the New Pilot flow
+//! christens it, owning its ship's stock weapons and their `AmmoLoad` as
 //! outfits ([`Arsenal::stock_outfits`]) and then its default items
 //! (repeated slots adding up), as `_DoNewPilot` fits them (@0x18f48,
 //! @0x18f4d), and with the ship's shield, armour and fuel full at what it
@@ -44,14 +44,21 @@
 //! paint is saved, as the original's pilot file keeps it
 //! (`_WritePilotData` @0x727f2); drawing it is not done yet.
 //!
+//! It keeps its nickname, the original's `_playerNickname` (0x3b5290),
+//! which the New Pilot dialog sets (`_DoNewPilot` @0x191ca-0x191dc) and the
+//! pilot file keeps (+0x5d98, `_WritePilotData` @0x727cc-0x727e9): empty
+//! for none, as a pilot built without the dialog has.
+//!
 //! It keeps its ship's name, the original's `_shipName`: a new pilot's
-//! ship is named after its class (the `shïp`'s name; the original's
-//! new-pilot dialog asks for one, `_CullNameString` @0x19195, which is
-//! not shown yet), and a pilot from a save made before ships had names
-//! is named after its class when flown. The `T` set operator renames it
-//! (see the session's `ship_change` module); buying or capturing a ship
-//! leaves the name as it is for now (the shipyard's name dialog is not
-//! shown yet), and nothing displays it yet.
+//! ship is named after its class (the `shïp`'s name) until the New Pilot
+//! flow christens it ([`Pilot::with_ship_name`], `nova_sim::christening`,
+//! `_DoNewPilot` @0x18cca-0x18d76, @0x19189-0x191ae), so a pilot built
+//! without the prompt, in a headless run or a test, keeps its class's
+//! name. A pilot from a save made before ships had names is named after
+//! its class when flown. The `T` set operator renames it (see the
+//! session's `ship_change` module), and buying a ship names it from the
+//! shipyard's name prompt (`nova_sim::Session::buy_ship`); capturing a
+//! ship leaves the name as it is.
 //!
 //! It keeps what play has changed of the galaxy, the
 //! [`GalaxyOverlay`]: none on a new pilot, so its galaxy is the
@@ -126,6 +133,9 @@ pub enum ExploredLevel {
 pub struct Pilot {
     /// The pilot's name; empty for a pilot that is never saved.
     pub name: String,
+    /// The pilot's nickname (`_playerNickname`, 0x3b5290); empty for none,
+    /// which `<PNN>` reads as the name.
+    pub nickname: String,
     /// The ship class flown.
     pub ship: ShipId,
     /// The ship's name. `None` for a ship never named: a save from
@@ -253,6 +263,7 @@ impl Pilot {
         let stats = ShipStats::new(fields, &outfit_mods(&outfits, &records));
         Ok(Self {
             name: name.to_owned(),
+            nickname: String::new(),
             ship,
             ship_name: Some(class_name(&catalog.ships(), ship)),
             system,
@@ -294,6 +305,29 @@ impl Pilot {
     #[must_use]
     pub fn with_gender(self, gender: Gender) -> Self {
         Self { gender, ..self }
+    }
+
+    /// The pilot with its ship named `name`, everything else unchanged:
+    /// the name the New Pilot flow christens it with.
+    #[must_use]
+    pub fn with_ship_name(self, name: String) -> Self {
+        Self {
+            ship_name: Some(name),
+            ..self
+        }
+    }
+
+    /// The pilot with nickname `nickname`, everything else unchanged: the
+    /// nickname the New Pilot dialog keeps (`_DoNewPilot` @0x191ca-0x191dc).
+    #[must_use]
+    pub fn with_nickname(self, nickname: String) -> Self {
+        Self { nickname, ..self }
+    }
+
+    /// The pilot's nickname; empty for none.
+    #[must_use]
+    pub fn nickname(&self) -> &str {
+        &self.nickname
     }
 
     /// The player's gender.
@@ -788,6 +822,35 @@ mod tests {
         assert_eq!(pilot.ship_name(), Some("Ship 128"));
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert_eq!(pilot.ship_name(), Some(""), "no record of its class");
+    }
+
+    #[test]
+    fn a_pilot_with_a_ship_name_changes_only_its_ship_name() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let named = pilot.clone().with_ship_name("Raven".to_owned());
+        assert_eq!(named.ship_name(), Some("Raven"));
+        assert_eq!(
+            Pilot {
+                ship_name: pilot.ship_name.clone(),
+                ..named
+            },
+            pilot
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_has_no_nickname_until_given_one() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.nickname(), "");
+        let nicknamed = pilot.clone().with_nickname("Hunter".to_owned());
+        assert_eq!(nicknamed.nickname(), "Hunter");
+        assert_eq!(
+            Pilot {
+                nickname: String::new(),
+                ..nicknamed
+            },
+            pilot
+        );
     }
 
     #[test]

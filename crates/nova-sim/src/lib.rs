@@ -62,6 +62,10 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`christening`]: christening a new pilot's ship, as `_DoNewPilot`
+//!   asks: the prompt and its default
+//!   ([`Christening`](christening::Christening)) and the name kept
+//!   ([`christen`](christening::christen)).
 //! - [`clearance`]: the dock request the land key makes
 //!   ([`DockRequest`]), its counter, and the dock approach that counts it
 //!   on every frame and greets the pilot ([`approach`]).
@@ -222,6 +226,10 @@
 //!   ([`mission::select_stellar`]), each [`mission::Offer`]'s resolved
 //!   values ([`mission::resolve`]), and the per-visit [`mission::Offers`]
 //!   with the roll table `AvailRandom` reads.
+//! - [`new_pilot`]: the New Pilot dialog's name and nickname: the
+//!   defaults `_DoNewPilot` opens it with
+//!   ([`name_defaults`](new_pilot::name_defaults)) and the names kept
+//!   ([`kept_name`](new_pilot::kept_name)).
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
@@ -305,9 +313,11 @@
 //! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
 //!   disabled at the bottom, then the ships the player leads, then the
 //!   rest with the player.
-//! - [`sprite_layer`]: the order the ship and shot layers are drawn in
-//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), shots under or over the
-//!   ships as `_SpawnShot` and `_SetupSpriteWorld` place them.
+//! - [`sprite_layer`]: the order the flight world's 14 sprite layers
+//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), the beams, the
+//!   floaters and the particles are drawn in ([`WORLD_PASSES`](sprite_layer::WORLD_PASSES)),
+//!   shots under or over the ships as `_SpawnShot` and `_SetupSpriteWorld`
+//!   place them.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -376,6 +386,7 @@ pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
 pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::board;
+pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;
 pub use nova_sim_ai::escort;
@@ -416,6 +427,7 @@ pub use nova_sim_port::grant;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
 pub use nova_sim_port::murk;
+pub use nova_sim_port::new_pilot;
 pub use nova_sim_port::order_loop;
 pub use nova_sim_port::outfitter;
 pub use nova_sim_port::player_info;

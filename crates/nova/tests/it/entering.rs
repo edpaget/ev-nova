@@ -21,6 +21,8 @@ fn new_pilot(game: &mut Harness) {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     assert_eq!(game.showing(), Showing::MainMenu);
 }
 

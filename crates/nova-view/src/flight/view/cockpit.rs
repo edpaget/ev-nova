@@ -35,22 +35,23 @@ use nova_sim::sprite_layer::SpriteLayer;
 use super::sprites::{Sprite, sprite_stack};
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::{Camera, VIEW_SIZE};
+use crate::system::camera::{Anchor, Camera, VIEW_SIZE};
 use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Input, Key, Point, UiSound};
+use nova_sim::RuleSource;
 
 use super::{
-    AFTERBURNER_KEY, BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
-    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView,
-    HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
-    OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
-    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading,
-    shown_position, window_width,
+    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY,
+    FLIGHT_KEYS, FlightView, HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
+    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY,
+    NEAREST_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY,
+    STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
+    drawn_size, npc_tint, shown_heading, shown_position, window_width,
 };
 
 impl<C> FlightView<C> {
@@ -115,14 +116,17 @@ impl<C> FlightView<C> {
     /// hovering as the pointer is over something targetable now
     /// ([`FlightView::hovering`]), once the session's steps have run and
     /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it.
+    /// last step, or a flight key held, fades it; the weapon safety key
+    /// ([`DESELECT_KEY`]) only by its press, as `_HandlePlayer` sets
+    /// *0x3b5550 for it only on the pass it lets go of a secondary
+    /// (@0x6ade1), which its press has faded already.
     pub(super) fn step_cursor(&mut self, steps: u32) {
         if steps == 0 {
             return;
         }
         let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
         let hovering = self.hovering();
-        let held = !self.held.is_empty();
+        let held = self.held.iter().any(|&key| key != DESELECT_KEY);
         for _ in 0..steps {
             self.cursor.step(hovering, frames, held);
         }
@@ -174,36 +178,57 @@ impl<C> FlightView<C> {
         session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
-    /// Draws the ships and the shots, bottom first, in their layers as
-    /// the session stacks them ([`sprites`](super::sprites)): the ships as
+    /// The ships and the shots, bottom first, each in its layer as the
+    /// session stacks them ([`sprites`](super::sprites)): the ships as
     /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
     /// each layer in the order the session's rules overlap them, and the
     /// shots among them by their layers ([`nova_sim::sprite_layer`]).
-    /// Without a session it draws the player alone. The order and each
-    /// cloak's level are read from the session as the frame is drawn, so
-    /// nothing waits past it.
-    pub(super) fn draw_sprites(&self, list: &mut DrawList, camera: &Camera) {
-        let player = camera.world_to_screen(self.shown_position());
+    /// Without a session, the player alone, in the ships' layer. The order
+    /// is read from the session as the frame is drawn, so nothing waits
+    /// past it.
+    pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
         let Ok(session) = &self.session else {
-            self.draw_ship(list, player, ShipDrawn::Full);
-            return;
+            return vec![(SpriteLayer::Ships, Sprite::Ship(ShipRef::Player))];
         };
-        let npcs = self.shown_npcs();
-        let fade = session
-            .rules()
-            .source_for(nova_sim::RuleKey::TranslucentShotFade);
-        let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
-        for sprite in stacked {
-            match sprite {
-                Sprite::Ship(ShipRef::Player) => {
+        sprite_stack(session.draw_layers(), self.shown_shots(camera))
+    }
+
+    /// Draws the sprites of `stacked` in `layer`, in their order: the
+    /// player, the NPCs among `npcs` (as [`FlightView::shown_npcs`] places
+    /// them) and the shots. Each cloak's level is read from the session as
+    /// the frame is drawn. Without a session only the player is drawn,
+    /// in full.
+    pub(super) fn draw_sprite_layer(
+        &self,
+        list: &mut DrawList,
+        camera: &Camera,
+        stacked: &[(SpriteLayer, Sprite)],
+        npcs: &[(&Npc, Point, f32)],
+        layer: SpriteLayer,
+    ) {
+        let player = camera.world_to_screen(self.shown_position());
+        let sprites = stacked.iter().filter(|(on, _)| *on == layer);
+        for (_, sprite) in sprites {
+            match (sprite, &self.session) {
+                (Sprite::Ship(ShipRef::Player), Ok(session)) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
-                Sprite::Ship(ShipRef::Npc(id)) => {
-                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
+                (Sprite::Ship(ShipRef::Player), Err(_)) => {
+                    self.draw_ship(list, player, ShipDrawn::Full);
+                }
+                (Sprite::Ship(ShipRef::Npc(id)), Ok(session)) => {
+                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == *id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
-                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks, fade),
+                (Sprite::Shot(shot), Ok(session)) => {
+                    let fade = session
+                        .rules()
+                        .source_for(nova_sim::RuleKey::TranslucentShotFade);
+                    weapons::draw_shot(list, shot, &self.looks, fade);
+                }
+                // Without a session there are no NPCs or shots.
+                (Sprite::Ship(ShipRef::Npc(_)) | Sprite::Shot(_), Err(_)) => {}
             }
         }
     }
@@ -335,10 +360,21 @@ impl<C> FlightView<C> {
         self.flashes.get(&ship).and_then(ShieldFlash::drawn)
     }
 
-    /// The camera, on the ship as drawn, in the view's size.
+    /// The camera, on the ship as drawn, in the view's size, drawing it at
+    /// the flight's [`anchor`](FlightView::anchor).
     #[must_use]
     pub fn camera(&self) -> Camera {
-        Camera::centred_on_in(self.shown_position(), self.view)
+        Camera::centred_on_in(self.shown_position(), self.view).with_anchor(self.anchor())
+    }
+
+    /// Where flight draws the player's ship, as the session's rules read
+    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), the
+    /// original's play area centre with no session.
+    pub(super) fn anchor(&self) -> Anchor {
+        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(nova_sim::RuleKey::FlightAnchor)
+        });
+        Anchor::in_flight(source)
     }
 
     /// The view's size in logical units: Nova's 1024 x 768 until
@@ -484,6 +520,7 @@ impl<C> FlightView<C> {
             | ESCORT_RECALL_KEY => PlayerCommand::Escort,
             _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
             SELECT_KEY => PlayerCommand::SelectWeapon,
+            DESELECT_KEY => PlayerCommand::DeselectWeapon,
             NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
                 PlayerCommand::Nav
             }
@@ -881,7 +918,10 @@ impl<C> FlightView<C> {
     /// - Target Select, Tab, with Shift and Option ([`TARGET_KEY`],
     ///   @0x69f1c-0x69ffb), and Closest Target, R and Option-R
     ///   ([`NEAREST_KEY`], @0x6a9b7-0x6aae7);
-    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf);
+    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf).
+    ///   Weapon Safety, S ([`DESELECT_KEY`], @0x6adc2-0x6ae1b), reads no
+    ///   jump state either; it is held, not pressed, so no press filter
+    ///   applies to it;
     /// - Option-\` ([`NAV_OFF_KEY`] with Option, @0x69a17-0x69a90), which
     ///   lets go of the ship target;
     /// - Board, B ([`BOARD_KEY`], @0x6a98b-0x6a9a8);
@@ -1146,7 +1186,8 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the Red Alert icon the session shows, if any, over the
-    /// brackets on the interface layer (see the `alert` module).
+    /// brackets and the cursor in the target layer, in the world (see the
+    /// `alert` module).
     pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
         let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
         if let (Some(icon), Some(width)) = (icon, self.alert_width) {

@@ -720,8 +720,7 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     assert_eq!(view.jump_effect(), None);
     let list = drawn(&view);
     assert_eq!(fade(&list), None);
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     assert!(list.iter().take(stars.len()).eq(stars.iter()));
     let flying = player(&view);
     view.input(&key(Key::Up, true));
@@ -1214,16 +1213,20 @@ fn option_backquote_clears_the_target_through_a_jump_and_nav_off_is_ignored() {
 }
 
 #[test]
-fn weapon_select_is_taken_through_a_jump() {
+fn weapon_select_and_safety_are_taken_through_a_jump() {
     for mut view in through_a_jump(|| fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[])) {
         let stage = stage(&view);
         assert_eq!(secondary_of(&view), None, "{stage}");
-        tap(&mut view, SELECT_KEY);
+        tap_and_step(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}");
-        tap(&mut view, SELECT_KEY);
+        tap_and_step(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(MISSILE), "{stage}");
         alt_tap(&mut view, SELECT_KEY);
+        ticks(&mut view, 1);
         assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}: Option-W");
+        view.input(&key(DESELECT_KEY, true));
+        ticks(&mut view, 1);
+        assert_eq!(secondary_of(&view), None, "{stage}: Weapon Safety");
     }
 }
 

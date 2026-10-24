@@ -49,6 +49,7 @@ pub mod control;
 pub mod data;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod resource_name;
 pub mod sound;
 pub mod strings;
 pub mod voice;
@@ -69,4 +70,5 @@ pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
+pub use resource_name::trim_resource_name;
 pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};

@@ -385,6 +385,7 @@ impl Session {
                 .person(person)
                 .map_or("", |person| &person.record.name),
             pilot: &self.pilot.name,
+            nickname: &self.pilot.nickname,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             ranks: self.run.rank_names(&self.pilot, &self.statics, &self.setup),
@@ -2505,6 +2506,21 @@ mod tests {
         turn_ace(&mut session);
         let (said, _) = quote_tick(&catalog, &mut session, &[1]);
         assert_eq!(said, [""], "an empty STR");
+    }
+
+    #[test]
+    fn a_hail_quote_reads_pnn_as_the_pilots_nickname_or_name_without_one() {
+        for (nickname, want) in [("Hunter", "Hi Hunter!"), ("", "Hi Stock!")] {
+            let (mut catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+            catalog.string_patches = vec![(
+                5000,
+                crate::catalog::StringPatch::Text("Hi <PNN>!".to_owned()),
+            )];
+            session.pilot.nickname = nickname.to_owned();
+            turn_ace(&mut session);
+            let (said, _) = quote_tick(&catalog, &mut session, &[1]);
+            assert_eq!(said, [want], "nickname {nickname:?}");
+        }
     }
 
     #[test]

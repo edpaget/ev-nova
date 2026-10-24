@@ -29,6 +29,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
+use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
     HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
@@ -71,6 +72,7 @@ impl AppScreen {
             scaling: nova_view::Scaling::list(&[nova_view::Upscaler::Native]),
             menu: None,
             new_pilot: None,
+            christening: None,
             open_pilot: None,
             load_note: None,
             note_hides_game: false,
@@ -118,7 +120,7 @@ impl AppScreen {
     }
 
     /// The router with each flight rolling each day's events and its
-    /// traffic on `chance`.
+    /// traffic on `chance`, and a new pilot's christening its default.
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
@@ -351,6 +353,7 @@ impl AppScreen {
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_smoke_trails(self.prefs.smoke_trails)
+            .with_parallax_starfield(self.prefs.parallax_starfield)
             .with_weapon_effects(self.flight_weapon_effects())
             .with_sound_prefs(self.prefs.sound)
             .with_double_time(self.double_time)
@@ -435,6 +438,12 @@ impl AppScreen {
     #[must_use]
     pub fn new_pilot(&self) -> Option<&NewPilotDialog> {
         self.new_pilot.as_ref()
+    }
+
+    /// The new pilot's ship christening, while it is open.
+    #[must_use]
+    pub fn christening(&self) -> Option<&TextInputDialog> {
+        self.christening.as_ref().map(|open| &open.dialog)
     }
 
     /// The saved pilots' list, while it is open.
@@ -648,6 +657,9 @@ impl AppScreen {
         if self.new_pilot.is_some() {
             return Showing::NewPilot;
         }
+        if self.christening.is_some() {
+            return Showing::Christening;
+        }
         if self.open_pilot.is_some() {
             return Showing::OpenPilot;
         }
@@ -726,7 +738,8 @@ impl AppScreen {
     }
 
     /// Whether flight's course map is open over the spaceport: the bar's
-    /// map ([`FlightView::open_bar_map`]) or a mission dialog's
+    /// map ([`FlightView::open_bar_map`]), a port screen's
+    /// ([`FlightView::open_port_screen_map`]) or a mission dialog's
     /// ([`FlightView::open_dialog_map`]).
     pub(super) fn port_map_open(&self) -> bool {
         self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)

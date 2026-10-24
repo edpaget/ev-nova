@@ -4,7 +4,12 @@
 //! mode (`_DoShipyardDialog` with `_shipBuyMode` 1).
 //!
 //! It is the shipyard screen's twin, built from the same pieces: the grid
-//! of ships ([`grid`](super::grid)), each cell its `ShortName`'s lines; the
+//! of ships ([`grid`](super::grid)), each cell drawn as the shipyard's:
+//! the ship's picture in its icon slot ([`grid::draw_cell_picture`],
+//! `_RetrieveMenuIcon` @0x58bc0-0x58bf3) and its `ShortName` split in two
+//! lines and centred under it ([`grid::draw_cell_name`], @0x58d11-0x58f33),
+//! since `_ShipyardDialogUpdate`'s cell loop (@0x58b30-0x58f91) never reads
+//! `_shipBuyMode`; the
 //! selected ship's picture ([`ship_picture`]); its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
@@ -20,8 +25,21 @@
 //! shows an escort's daily pay only once it is hired, in the escort dialog,
 //! which the port's comm dialog stands in for.
 //!
-//! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
-//! selected ship, and is greyed when it cannot be hired. H acts on a
+//! Its grid's selection follows
+//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) as the shipyard's does (see
+//! [`shipyard`](super::shipyard)): by the engine it opens with nothing
+//! selected, and an empty cell pressed or a scroll that moves selects
+//! nothing; by the other reading it opens on the first cell and keeps
+//! it. Its arrow keys move the selection by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows) as the
+//! shipyard's do: by the engine, Up on the first row and Down onto an
+//! empty cell stay, and Page Up and Page Down move as Up and Down. By both, a second press on a cell within 15 Mac ticks opens Info,
+//! as `_ShipyardFilter` does in hire mode too (@0x60cd7-0x60d12).
+//!
+//! Hire Escort (item 1, `STR#` 150 #13), clicked or with H, asks for the
+//! selected ship, and is greyed when it cannot be hired; H with no ship
+//! selected, or one that cannot be hired, beeps
+//! ([`UiSound::BuyRefused`], @0x5f22a-0x5f256). H acts on a
 //! press only, never a key repeat, so a held H hires one ship. The screen
 //! only records the order ([`HireScreen::take_order`]): whoever holds the
 //! session hires it, and the spaceport closes the screen back to the bar
@@ -37,24 +55,24 @@ use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
 use nova_sim::{HireList, HireRow, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
-use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
-};
+use super::grid::{self, GridColors, Shown};
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
     INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
     ShipyardCatalog, open_panel, ship_picture,
 };
+use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
@@ -127,10 +145,13 @@ pub struct HireScreen {
     laid: Result<Laid, String>,
     list: HireList,
     catalog: CatalogHandle,
-    /// Each ship's base image, read once.
-    bases: Vec<(ShipId, i16)>,
+    /// The grid's frame colours, read from the catalog once.
+    colors: GridColors,
+    /// Each listed ship's cell picture, read once when there is a dialog.
+    pictures: Vec<Option<i16>>,
     style: ButtonStyle,
-    grid: CellGrid,
+    /// The grid, its selection as `_ShipyardFilter` keeps it.
+    grid: ShipyardGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
     /// The ship asked for, until it is taken.
@@ -138,6 +159,7 @@ pub struct HireScreen {
     closed: bool,
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
+    sounds: Vec<Sound>,
 }
 
 impl HireScreen {
@@ -145,8 +167,11 @@ impl HireScreen {
     /// dialog's template and the metrics its text is measured by, or why
     /// there are none; the info panel by `info`, "Shipyard Info" (Info is
     /// greyed without it). Its buttons are labelled in `style`, and each
-    /// ship's picture and description read from `catalog`, which gives
-    /// the ships' base images once, now. The first cell is selected.
+    /// ship's picture and description read from `catalog`, each listed
+    /// ship's cell picture once, now. By the engine nothing is
+    /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
+    /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection), read from `list`'s rules,
+    /// the first cell is.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -184,24 +209,31 @@ impl HireScreen {
                 info,
             }
         });
-        let bases = if laid.is_ok() {
-            catalog.ship_base_images()
+        let pictures = if laid.is_ok() {
+            let bases = catalog.ship_base_images();
+            list.rows
+                .iter()
+                .map(|row| ship_picture(row.id, &bases, |id| catalog.picture_exists(id)))
+                .collect()
         } else {
             Vec::new()
         };
+        let grid = ShipyardGrid::open(&list.rules, list.rows.len());
         let mut screen = Self {
             laid,
             list,
+            colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
-            bases,
+            pictures,
             style,
-            grid: CellGrid::default(),
+            grid,
             panel: None,
             order: None,
             closed: false,
             description_request: None,
+            sounds: Vec::new(),
         };
-        screen.select(0);
+        screen.selected_changed();
         screen
     }
 
@@ -211,13 +243,17 @@ impl HireScreen {
         &self.list
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index: none when nothing is listed, or, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// engine reading, when nothing is selected (on opening, after a press
+    /// on an empty cell or a scroll that moved).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.list.rows.len())
+        self.grid.cells().selected(self.list.rows.len())
     }
 
-    /// The selected ship's row, if anything is listed.
+    /// The selected ship's row, if one is selected
+    /// ([`HireScreen::selected`]).
     fn selected_row(&self) -> Option<&HireRow> {
         self.selected().map(|index| &self.list.rows[index])
     }
@@ -225,7 +261,7 @@ impl HireScreen {
     /// The grid's first row shown.
     #[must_use]
     pub fn top_row(&self) -> usize {
-        self.grid.top_row()
+        self.grid.cells().top_row()
     }
 
     /// The dialog, if it could be laid out.
@@ -295,23 +331,24 @@ impl HireScreen {
         Some(grid::cell_bounds(grid, index))
     }
 
-    /// Selects cell `index`, or the last when there is no such cell, and
-    /// scrolls the grid to show it.
-    fn select(&mut self, index: usize) {
-        self.grid.select(index, self.list.rows.len());
-        self.selected_changed();
-    }
-
-    /// Greys Hire Escort when the selected ship cannot be hired, and
-    /// reads its picture and description if they are not shown already.
+    /// Greys Hire Escort when the selected ship cannot be hired, and Info
+    /// with none selected (`_DrawShipyardButtons` @0x2a3f7-0x2a405) or
+    /// without its panel, and reads the ship's picture and description if
+    /// they are not shown already. With none selected, none is shown
+    /// (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
     fn selected_changed(&mut self) {
         let hires = self.selected_row().is_some_and(|row| row.hire.is_ok());
+        let picture = self
+            .selected()
+            .and_then(|index| self.pictures.get(index).copied().flatten());
         let ship = self.selected_row().map(|row| row.id);
         let catalog = Rc::clone(&self.catalog.0);
         let Ok(laid) = &mut self.laid else {
             return;
         };
         laid.dialog.set_greyed(HIRE_ITEM, !hires);
+        laid.dialog
+            .set_greyed(INFO_ITEM, laid.info.plain.is_err() || ship.is_none());
         let Some(ship) = ship else {
             laid.shown = None;
             return;
@@ -323,17 +360,21 @@ impl HireScreen {
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let picture = ship_picture(ship, &self.bases, |id| catalog.picture_exists(id));
         let description = Some(pilot_desc_id(ship));
         self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
     }
 
-    /// Asks for the selected ship, if it can be hired.
+    /// Asks for the selected ship, if it can be hired; otherwise beeps
+    /// ([`UiSound::BuyRefused`]), as `_DoShipyardDialog`'s item 1 does in
+    /// hire mode with no ship or one it cannot hire (@0x5e9bb-0x5e9d6,
+    /// @0x5f22a-0x5f256).
     fn ask(&mut self) {
         if let Some(row) = self.selected_row().filter(|row| row.hire.is_ok()) {
             self.order = Some(row.id);
+        } else {
+            self.sounds.push(Sound::Ui(UiSound::BuyRefused));
         }
     }
 
@@ -364,40 +405,77 @@ impl HireScreen {
     /// opens the panel, and the arrows scroll. Any other item does
     /// nothing.
     fn activate(&mut self, item: usize) {
-        let count = self.list.rows.len();
         match item {
             DONE_ITEM => self.closed = true,
             HIRE_ITEM => self.ask(),
             INFO_ITEM => self.open_info(),
-            SCROLL_UP_ITEM => self.grid.scroll(false, count),
-            SCROLL_DOWN_ITEM => self.grid.scroll(true, count),
+            SCROLL_UP_ITEM => self.scroll(false),
+            SCROLL_DOWN_ITEM => self.scroll(true),
             _ => {}
         }
     }
 
-    /// The cell index under `at` on the grid, if a listed ship is there.
-    fn cell_at(&self, at: Point) -> Option<usize> {
-        let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_at(grid, at, self.list.rows.len())
+    /// Scrolls the grid a row down, or up, never past either end. By the
+    /// engine, a scroll that moves selects nothing, as the shipyard's
+    /// does (`_DoShipyardDialog` @0x5f580-0x5f5be, @0x5f60b-0x5f670).
+    fn scroll(&mut self, down: bool) {
+        if self.grid.scroll(down, self.list.rows.len()) {
+            self.selected_changed();
+        }
     }
 
+    /// A press on the grid at list index `index`, listed or not, and says
+    /// whether the grid took it, as the shipyard's does
+    /// ([`ShipyardGrid::press`]): a listed cell is selected, and a
+    /// double-click on it opens Info; an empty one selects nothing by the
+    /// engine and is left to the dialog by the other reading.
+    fn press_cell(&mut self, index: usize) -> bool {
+        match self.grid.press(index, self.list.rows.len()) {
+            PressOutcome::Selected { double } => {
+                self.selected_changed();
+                if double {
+                    self.open_info();
+                }
+            }
+            PressOutcome::Cleared => self.selected_changed(),
+            PressOutcome::FallThrough => return false,
+        }
+        true
+    }
+
+    /// The list index under `at` on the grid, listed or not
+    /// ([`CellGrid::cell_under`](grid::CellGrid::cell_under)).
+    fn cell_under(&self, at: Point) -> Option<usize> {
+        let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
+        self.grid.cells().cell_under(grid, at)
+    }
+
+    /// The shown cells, each drawn as the shipyard's: the ship's picture in
+    /// its icon slot ([`grid::draw_cell_picture`]) and its two-line
+    /// `ShortName` centred under it ([`grid::draw_cell_name`]), then its
+    /// frame in `GridDim`;
+    /// then, last, the selected cell framed again in `GridBright`. No cell
+    /// is filled (`_ShipyardDialogUpdate` @0x58f44-0x58f69,
+    /// @0x58f9d-0x58fbf, which draws hire mode's grid as the shipyard's).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
+        let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
-        for (index, cell) in self.grid.shown(area, self.list.rows.len()) {
-            let row = &self.list.rows[index];
-            if Some(index) == self.selected() {
-                fill_rect(list, cell, SELECTED_COLOR);
-            }
-            outline(list, cell, GREY);
-            let mut y = cell.min.y + INSET;
-            for (line, color) in name_lines(&row.short_name) {
-                text(list, line, Point::new(cell.min.x + INSET, y), color);
-                y += line_height;
-            }
-        }
+        let count = self.list.rows.len();
+        let selected = self.selected();
+        self.grid.cells().draw_cells(
+            list,
+            area,
+            count,
+            selected,
+            self.colors,
+            |list, index, cell| {
+                let row = &self.list.rows[index];
+                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                grid::draw_cell_name(list, metrics, cell, &row.short_name);
+            },
+        );
     }
 
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
@@ -444,19 +522,22 @@ impl Screen for HireScreen {
             _ => false,
         };
         let pressed_once = |wanted: Key| matches!(*input, Input::Key { key, pressed: true, repeat: false } if key == wanted);
+        let on_grid = match *input {
+            Input::PointerButton {
+                pressed: true, at, ..
+            } => self
+                .cell_under(at)
+                .is_some_and(|index| self.press_cell(index)),
+            _ => false,
+        };
         if arrow {
             self.selected_changed();
         } else if pressed_once(HIRE_KEY) {
             self.ask();
         } else if pressed_once(INFO_KEY) {
             self.open_info();
-        } else if let Some(index) = match *input {
-            Input::PointerButton {
-                pressed: true, at, ..
-            } => self.cell_at(at),
-            _ => None,
-        } {
-            self.select(index);
+        } else if on_grid {
+            // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
             if let Some(DialogEvent::Item(item)) = event {
@@ -466,8 +547,10 @@ impl Screen for HireScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The time since the last press on the grid runs on.
+    fn tick(&mut self, dt: Duration) {
+        self.grid.advance(dt);
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -494,7 +577,7 @@ impl Screen for HireScreen {
             list,
             laid.dialog.item_bounds(SCROLL_UP_ITEM),
             laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
-            self.grid.can_scroll(count),
+            self.grid.cells().can_scroll(count),
         );
         laid.dialog.draw(list);
         if let Some(panel) = &self.panel {
@@ -509,6 +592,12 @@ impl Screen for HireScreen {
             laid.dialog.cancel_pointer();
         }
     }
+
+    /// The refused hire's beep ([`UiSound::BuyRefused`]); the buttons are
+    /// silent.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
 }
 
 #[cfg(test)]
@@ -519,7 +608,7 @@ mod tests {
     use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
-    use crate::draw::{DrawCommand, fill_rect};
+    use crate::draw::{DrawCommand, frame_rect};
     use crate::font::Font;
     use crate::image::ImageKey;
     use crate::input::MouseButton;
@@ -589,7 +678,8 @@ mod tests {
     }
 
     /// Ship 128's picture (`PICT` 5000) exists; every description is
-    /// "dësc n.". Records what it is asked.
+    /// "dësc n.". Ship 141 shares 128's base image, so its own missing
+    /// picture falls back to 5000. Records what it is asked.
     struct FakeArt {
         /// Each `dësc` with a `Graphic`, and it.
         graphics: Vec<(i16, i16)>,
@@ -617,9 +707,15 @@ mod tests {
         }
     }
 
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::TEST_GRID_COLORS
+        }
+    }
+
     impl ShipBaseImages for FakeArt {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            Vec::new()
+            vec![(ShipId(128), 128), (ShipId(141), 128)]
         }
     }
 
@@ -709,6 +805,7 @@ mod tests {
     /// the cash does not cover; 25,000 credits in hand.
     fn list() -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: vec![
                 row(128, 970, 100, Ok(())),
                 row(140, 50_000, 1, Err(HireRefusal::CannotAfford)),
@@ -718,7 +815,8 @@ mod tests {
         }
     }
 
-    fn screen_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
+    /// The hire screen as it opens, with nothing selected by the engine.
+    fn opened_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         HireScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
@@ -727,6 +825,17 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         )
+    }
+
+    /// The hire screen opened, then the first cell selected, as Right
+    /// picks it from no selection (an arrow, so no press is remembered
+    /// for a double-click).
+    fn screen_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
+        let mut screen = opened_of(art, list);
+        if screen.selected().is_none() {
+            screen.input(&key(Key::Right, false));
+        }
+        screen
     }
 
     fn screen() -> HireScreen {
@@ -832,7 +941,7 @@ mod tests {
 
     #[test]
     fn the_named_values() {
-        assert_eq!((HIRE_ITEM, HIRE_KEY), (7, Key::Char('h')));
+        assert_eq!((HIRE_ITEM, HIRE_KEY), (1, Key::Char('h')));
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
@@ -914,6 +1023,7 @@ mod tests {
         let screen = screen_of(
             &art(),
             HireList {
+                rules: nova_sim::Rulebook::default(),
                 rows: vec![row(128, 2_500_000, 100, Ok(()))],
                 cash: -1_500,
                 room: true,
@@ -960,10 +1070,15 @@ mod tests {
         let art = art();
         let screen = screen_of(&art, list());
         assert_eq!(*art.asked.borrow(), ["dësc 14000"]);
-        assert!(drawn(&screen).iter().any(|command| matches!(
-            command,
-            DrawCommand::StretchedPicture { image, .. } if image.id == 5000
-        )));
+        let picture = item(&screen, PICTURE_ITEM).min;
+        assert!(
+            drawn(&screen).iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { image, top_left, .. }
+                    if image.id == 5000 && *top_left == picture
+            )),
+            "the picture item, not just the grid cell, shows PICT 5000"
+        );
         let mut screen = screen;
         screen.input(&key(Key::Right, false));
         assert_eq!(*art.asked.borrow(), ["dësc 14000", "dësc 14012"]);
@@ -992,6 +1107,31 @@ mod tests {
             assert!(words.contains(&line.to_owned()), "{line}: {words:?}");
         }
         assert!(!words.contains(&"(current)".to_owned()));
+    }
+
+    /// `_DrawShipyardButtons` @0x2a3bf-0x2a3dc labels item 1 Hire Escort in
+    /// hire mode and item 7 Done; `_DoShipyardDialog` hires on 1 (@0x5e9b0)
+    /// and exits on 7 (@0x5f6bd).
+    #[test]
+    fn hire_escort_is_item_1_and_done_is_item_7() {
+        let mut screen = screen();
+        let labels = texts(&screen);
+        for (label, number) in [(HIRE_ESCORT, 1), ("Done", 7)] {
+            let bounds = item(&screen, number);
+            assert!(
+                labels
+                    .iter()
+                    .any(|(t, at, _)| t == label && bounds.contains(*at)),
+                "{label} in item {number}: {labels:?}"
+            );
+        }
+        let hire = item(&screen, 1).center();
+        click(&mut screen, hire);
+        assert_eq!(screen.take_order(), Some(ShipId(128)));
+        assert!(!screen.closed());
+        let done = item(&screen, 7).center();
+        click(&mut screen, done);
+        assert!(screen.closed());
     }
 
     #[test]
@@ -1034,6 +1174,7 @@ mod tests {
                 art,
                 ButtonStyle::STOCK,
             );
+            bare.input(&key(Key::Right, false));
             assert!(!enabled(&bare, INFO_LABEL));
             assert_eq!(bare.selected(), Some(0));
             bare.input(&key(INFO_KEY, false));
@@ -1055,6 +1196,7 @@ mod tests {
             let mut screen = screen_of(
                 &art(),
                 HireList {
+                    rules: nova_sim::Rulebook::default(),
                     rows: vec![row],
                     ..list()
                 },
@@ -1127,6 +1269,7 @@ mod tests {
         let empty = screen_of(
             &art(),
             HireList {
+                rules: nova_sim::Rulebook::default(),
                 rows: Vec::new(),
                 cash: 0,
                 room: true,
@@ -1140,6 +1283,7 @@ mod tests {
     /// `count` ships, numbered from 200, two lines each.
     fn long(count: usize) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..count)
                 .map(|n| row(200 + i16::try_from(n).expect("few"), 10, 1, Ok(())))
                 .collect(),
@@ -1153,38 +1297,139 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_shows_each_ships_lines_in_its_cell_and_highlights_the_selected() {
-        let screen = screen();
+    fn the_grid_draws_each_cell_as_the_shipyard_does_and_highlights_the_selected() {
+        let art = art();
+        let screen = screen_of(&art, list());
         let commands = drawn(&screen);
-        let cell = |index: usize, dy: f32| {
-            let bounds = screen.cell_bounds(index).expect("a cell");
-            Point::new(bounds.min.x + INSET, bounds.min.y + dy)
-        };
-        let line = MonoMetrics.line_height(TEXT_FONT, TEXT_SIZE);
-        let shown = texts(&screen);
-        for expected in [
-            ("Ship".to_owned(), cell(0, INSET), TEXT_COLOR),
-            ("128".to_owned(), cell(0, INSET + line), TEXT_COLOR),
-            ("Ship".to_owned(), cell(1, INSET), TEXT_COLOR),
-            ("140".to_owned(), cell(1, INSET + line), TEXT_COLOR),
-        ] {
-            assert!(shown.contains(&expected), "{expected:?}: {shown:?}");
-        }
-        let highlight = |index: usize| {
-            let mut list = DrawList::new();
-            fill_rect(
-                &mut list,
-                screen.cell_bounds(index).expect("a cell"),
-                SELECTED_COLOR,
+        for index in [0, 1] {
+            let row = &screen.list.rows[index];
+            let cell = screen.cell_bounds(index).expect("a cell");
+            let mut expected = DrawList::new();
+            let picture =
+                ship_picture(row.id, &art.ship_base_images(), |id| art.picture_exists(id));
+            grid::draw_cell_picture(&mut expected, cell, picture);
+            grid::draw_cell_name(&mut expected, &MonoMetrics, cell, &row.short_name);
+            let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+            assert!(contains(&commands, &expected), "cell {index}: {commands:?}");
+            let top_left = Point::new(cell.min.x + grid::INSET, cell.min.y + grid::INSET);
+            assert!(
+                !texts(&screen)
+                    .iter()
+                    .any(|(_, origin, _)| *origin == top_left),
+                "cell {index} names at its top-left"
             );
-            list.iter().cloned().collect::<Vec<_>>()
-        };
-        assert!(commands.windows(1).any(|w| w == highlight(0)));
-        assert!(!commands.windows(1).any(|w| w == highlight(1)), "one");
-        let mut frame = DrawList::new();
-        outline(&mut frame, screen.cell_bounds(1).expect("a cell"), GREY);
-        let frame: Vec<_> = frame.iter().cloned().collect();
-        assert!(commands.windows(frame.len()).any(|w| w == frame));
+        }
+        assert!(contains(&commands, &bright_frame(&screen, 0)));
+        assert!(!contains(&commands, &bright_frame(&screen, 1)), "one");
+        assert!(contains(&commands, &frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_ship_without_its_own_picture_shows_its_bases_in_the_grid_and_the_picture_item() {
+        let art = art();
+        let mut hires = list();
+        hires.rows.push(row(141, 900, 1, Ok(())));
+        let mut screen = screen_of(&art, hires);
+        let bases = art.ship_base_images();
+        assert!(!art.picture_exists(5013), "141's own picture is missing");
+        assert_eq!(
+            ship_picture(ShipId(141), &bases, |id| art.picture_exists(id)),
+            Some(5000)
+        );
+        let cell = screen.cell_bounds(2).expect("a cell");
+        let mut expected = DrawList::new();
+        grid::draw_cell_picture(&mut expected, cell, Some(5000));
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert!(
+            contains(&drawn(&screen), &expected),
+            "the grid cell shows PICT 5000"
+        );
+        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::Right, false));
+        assert_eq!(screen.selected(), Some(2));
+        let picture = item(&screen, PICTURE_ITEM).min;
+        assert!(
+            drawn(&screen).iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { image, top_left, .. }
+                    if image.id == 5000 && *top_left == picture
+            )),
+            "the picture item shows the base's PICT 5000"
+        );
+    }
+
+    /// Shown cell `index`'s frame in `color`.
+    fn framed(screen: &HireScreen, index: usize, color: Color) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        frame_rect(&mut list, screen.cell_bounds(index).expect("a cell"), color);
+        list.iter().cloned().collect()
+    }
+
+    /// Shown cell `index`'s frame in the fake's `GridDim`.
+    fn frame(screen: &HireScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.dim)
+    }
+
+    /// Shown cell `index`'s selection: framed in the fake's `GridBright`.
+    fn bright_frame(screen: &HireScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.bright)
+    }
+
+    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
+        commands.windows(part.len()).any(|window| window == part)
+    }
+
+    /// The frame rule itself is `grid::CellGrid::draw_cells`'s, tested
+    /// there; this checks the hire screen hands it its grid item, rows,
+    /// selection and `cölr` colours.
+    #[test]
+    fn the_grid_is_drawn_by_the_shared_cell_rule_on_its_item_in_the_catalogs_colours() {
+        let mut screen = screen_of(&art(), long(22));
+        let grid_item = item(&screen, GRID_ITEM);
+        let commands = drawn(&screen);
+        for index in 0..20 {
+            assert_eq!(
+                screen.cell_bounds(index),
+                Some(grid::cell_bounds(grid_item, index))
+            );
+            assert!(contains(&commands, &frame(&screen, index)), "{index}");
+        }
+        assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
+        screen.input(&key(Key::Right, false));
+        let commands = drawn(&screen);
+        assert!(!contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &bright_frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_press_is_hit_tested_on_the_84_by_55_division() {
+        let mut screen = screen_of(&art(), long(22));
+        let grid = item(&screen, GRID_ITEM);
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0 + 1.0, grid.min.y + 1.0),
+        );
+        assert_eq!(screen.selected(), Some(1));
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 83.0, grid.min.y + 54.0),
+        );
+        assert_eq!(screen.selected(), Some(0), "83 right, 54 down is cell 0");
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0, grid.min.y + 55.0),
+        );
+        assert_eq!(screen.selected(), Some(5));
+        click(&mut screen, Point::new(grid.max.x - 0.5, grid.max.y - 0.5));
+        assert_eq!(
+            screen.selected(),
+            Some(19),
+            "the last cell reaches the corner"
+        );
+        click(&mut screen, Point::new(grid.max.x, grid.min.y + 1.0));
+        assert_eq!(screen.selected(), Some(19), "the right edge is out");
+        click(&mut screen, Point::new(grid.min.x + 1.0, grid.max.y));
+        assert_eq!(screen.selected(), Some(19), "the bottom edge is out");
     }
 
     #[test]
@@ -1194,9 +1439,10 @@ mod tests {
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        click_item(&mut screen, SCROLL_DOWN_ITEM);
-        assert_eq!(screen.top_row(), 2, "never past the end");
+        assert_eq!(screen.top_row(), 1, "never past the end");
         click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
         screen.input(&key(Key::Down, false));
         assert_eq!(screen.selected(), Some(4));
@@ -1207,6 +1453,7 @@ mod tests {
         let mut row = row(128, 970, 100, Ok(()));
         row.specs.long_name = "The Long 128".to_owned();
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: vec![row],
             ..list()
         }
@@ -1383,5 +1630,225 @@ mod tests {
             }
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
+    }
+
+    // The selection as `_ShipyardFilter` keeps it in hire mode
+    // (`RuleKey::GridSelection`).
+
+    /// The Bible's reading of the grid's selection: the port's, where the
+    /// selection is the highlighted cell.
+    fn bible() -> nova_sim::Rulebook {
+        nova_sim::Rulebook::default().with_override(
+            nova_sim::RuleKey::GridSelection,
+            nova_sim::RuleSource::Bible,
+        )
+    }
+
+    fn click_cell(screen: &mut HireScreen, index: usize) {
+        let at = screen.cell_bounds(index).expect("a cell").center();
+        click(screen, at);
+    }
+
+    /// Whether the screen shows no ship: Hire Escort and Info greyed, and
+    /// no cell bright, no picture, no info box and no description drawn.
+    fn shows_no_ship(screen: &HireScreen) -> bool {
+        let commands = drawn(screen);
+        let bright = (0..20).any(|index| contains(&commands, &bright_frame(screen, index)));
+        let picture = item(screen, PICTURE_ITEM);
+        let pictured = commands.iter().any(|c| {
+            matches!(c, DrawCommand::StretchedPicture { top_left, .. } if *top_left == picture.min)
+        }) || texts(screen).iter().any(|(_, at, _)| picture.contains(*at));
+        !enabled(screen, HIRE_ESCORT)
+            && !enabled(screen, INFO_LABEL)
+            && !bright
+            && !pictured
+            && info_box(screen).is_empty()
+            && !texts(screen).iter().any(|(w, _, _)| w.starts_with("dësc"))
+    }
+
+    #[test]
+    fn by_the_engine_it_opens_with_nothing_selected() {
+        let art = art();
+        let mut screen = opened_of(&art, list());
+        assert_eq!(screen.selected(), None);
+        assert!(shows_no_ship(&screen));
+        assert_eq!(screen.take_description_request(), None, "none to load");
+        assert!(art.asked.borrow().is_empty(), "no description read");
+    }
+
+    #[test]
+    fn by_the_engine_an_empty_cell_pressed_selects_nothing() {
+        let mut screen = opened_of(&art(), list());
+        click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(!shows_no_ship(&screen));
+        click_cell(&mut screen, 2);
+        assert_eq!(screen.selected(), None, "the empty position past the last");
+        assert!(shows_no_ship(&screen));
+        assert_eq!(screen.take_order(), None, "it reaches no button");
+        assert!(!screen.closed());
+        assert_eq!(screen.take_sounds(), [], "silent");
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_moves_selects_nothing() {
+        let mut screen = opened_of(&art(), long(30));
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (1, None));
+        assert!(shows_no_ship(&screen));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_cell(&mut screen, 2);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (3, Some(14)),
+            "at the bottom it neither scrolls nor clears"
+        );
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (2, None));
+    }
+
+    #[test]
+    fn by_the_other_reading_it_opens_on_the_first_cell_and_keeps_it() {
+        let mut screen = opened_of(
+            &art(),
+            HireList {
+                rules: bible(),
+                ..long(30)
+            },
+        );
+        assert_eq!(screen.selected(), Some(0), "the first cell");
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (1, Some(5)),
+            "a scroll keeps it"
+        );
+        let mut short = opened_of(
+            &art(),
+            HireList {
+                rules: bible(),
+                ..list()
+            },
+        );
+        click_cell(&mut short, 0);
+        click_cell(&mut short, 2);
+        assert_eq!(short.selected(), Some(0), "an empty cell is ignored");
+        assert!(enabled(&short, HIRE_ESCORT));
+    }
+
+    #[test]
+    fn a_second_press_on_a_cell_within_15_mac_ticks_opens_info_by_either_reading() {
+        use nova_sim::mission::screens::mac_ticks;
+        for rules in [nova_sim::Rulebook::default(), bible()] {
+            let opened = || opened_of(&art(), HireList { rules, ..list() });
+            let mut screen = opened();
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_none(), "one press");
+            screen.tick(mac_ticks(15));
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_some(), "{rules:?}");
+            assert!(texts(&screen).iter().any(|(w, _, _)| w == "Ship 140"));
+
+            let mut slow = opened();
+            click_cell(&mut slow, 1);
+            slow.tick(mac_ticks(16));
+            click_cell(&mut slow, 1);
+            assert!(slow.info_panel().is_none(), "16 ticks apart");
+
+            let mut broken = opened();
+            click_cell(&mut broken, 1);
+            click_cell(&mut broken, 2);
+            click_cell(&mut broken, 1);
+            assert!(broken.info_panel().is_none(), "an empty press between");
+        }
+    }
+
+    #[test]
+    fn a_double_click_is_by_position_so_one_across_a_scroll_opens_the_ship_now_shown() {
+        let mut screen = opened_of(&art(), long(30));
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert!(screen.info_panel().is_none());
+        click_cell(&mut screen, 5);
+        assert_eq!(screen.selected(), Some(9), "the ship now at position 5");
+        assert!(screen.info_panel().is_some());
+        assert!(texts(&screen).iter().any(|(w, _, _)| w == "Ship 209"));
+    }
+
+    #[test]
+    fn h_refused_beeps_and_space_with_nothing_selected_is_silent() {
+        let mut screen = opened_of(&art(), list());
+        press_key(&mut screen, HIRE_KEY);
+        assert_eq!(screen.take_order(), None, "nothing selected");
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::BuyRefused)]);
+        press_key(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_none());
+        assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
+        for rules in [nova_sim::Rulebook::default(), bible()] {
+            let mut screen = opened_of(&art(), HireList { rules, ..list() });
+            click_cell(&mut screen, 1);
+            press_key(&mut screen, HIRE_KEY);
+            assert_eq!(screen.take_order(), None, "too dear");
+            assert_eq!(
+                screen.take_sounds(),
+                [Sound::Ui(UiSound::BuyRefused)],
+                "{rules:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
+        let mut screen = opened_of(&art(), long(30));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        press_key(&mut screen, Key::Left);
+        assert_eq!(screen.selected(), Some(23), "the last shown");
+        let mut short = opened_of(&art(), list());
+        press_key(&mut short, Key::Down);
+        assert_eq!(short.selected(), Some(0), "the first shown");
+        assert!(enabled(&short, HIRE_ESCORT));
+    }
+
+    fn press_key(screen: &mut HireScreen, k: Key) {
+        screen.input(&key(k, false));
+    }
+
+    #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        // Six escorts, the second too dear: Down from 3 finds index 7
+        // empty, and Up from 5 reaches 1, on the first row.
+        let six = |rules: nova_sim::Rulebook| {
+            let mut list = long(6);
+            list.rows[1].hire = Err(HireRefusal::CannotAfford);
+            HireList { rules, ..list }
+        };
+        let arrowed = |rules: nova_sim::Rulebook, from: usize, keys: &[Key]| {
+            let mut screen = opened_of(&art(), six(rules));
+            click_cell(&mut screen, from);
+            for &k in keys {
+                press_key(&mut screen, k);
+            }
+            (screen.selected(), enabled(&screen, HIRE_ESCORT))
+        };
+        let engine = nova_sim::Rulebook::default;
+        assert_eq!(arrowed(engine(), 3, &[Key::Down]), (Some(3), true));
+        assert_eq!(arrowed(engine(), 3, &[Key::PageDown]), (Some(3), true));
+        assert_eq!(arrowed(engine(), 5, &[Key::Up]), (Some(1), false));
+        assert_eq!(arrowed(engine(), 5, &[Key::Up, Key::Up]), (Some(1), false));
+        assert_eq!(
+            arrowed(engine(), 5, &[Key::PageUp, Key::PageUp]),
+            (Some(1), false)
+        );
+        assert_eq!(arrowed(engine(), 1, &[Key::PageDown]), (Some(5), true));
+        let clamped = || {
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::GridArrows, nova_sim::RuleSource::Bible)
+        };
+        assert_eq!(arrowed(clamped(), 3, &[Key::Down]), (Some(5), true));
+        assert_eq!(arrowed(clamped(), 5, &[Key::Up, Key::Up]), (Some(0), true));
     }
 }

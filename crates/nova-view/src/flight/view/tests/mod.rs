@@ -17,7 +17,7 @@ use crate::draw::fill_command;
 use crate::draw::lights_tint;
 use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
 use crate::flight::catalog::{
-    Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
+    Blink, BoomLook, GovtId, LayerSheet, StarSheet, StatusBarLayout, TargetCard, WeaponLook,
 };
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS};
@@ -60,6 +60,7 @@ use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
+mod anchor;
 mod boarding;
 mod cloak;
 mod combat;
@@ -78,11 +79,14 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod port_screen_map;
 mod self_destruct;
 mod ship_drawing;
 mod shots;
+mod stars;
 mod stellars;
 mod widescreen;
+mod world_layers;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -166,6 +170,9 @@ struct FakeCatalog {
     box_sheet: Result<EffectSheet, String>,
     /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
     cursor_sheet: Result<EffectSheet, String>,
+    /// The stars' sheet: none, by default, so no star is drawn
+    /// ([`star_sheet`] draws them).
+    star_sheet: Result<StarSheet, String>,
     /// The asteroid types: none, by default.
     asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
@@ -355,6 +362,7 @@ fn catalog() -> FakeCatalog {
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
+        star_sheet: Err("no spïn 700".to_owned()),
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
         strings: Vec::new(),
@@ -948,6 +956,10 @@ impl CombatLooks for FakeCatalog {
             first_icon: 1000 + 8 * i16::from(set),
         })
     }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        self.star_sheet.clone()
+    }
 }
 
 /// The escort menu in its own colours, so tests can tell them.
@@ -998,6 +1010,11 @@ impl StatusBars for FakeCatalog {
 fn flight() -> View {
     FlightView::new(catalog())
 }
+
+/// Where flight draws the player's ship in Nova's own 1024 x 768 by the
+/// original's reading of [`RuleKey::FlightAnchor`]: the play area's
+/// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
+const PLAYER_AT: Point = Point::new(415.0, 384.0);
 
 fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
@@ -1136,9 +1153,53 @@ fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
     }
 }
 
+/// The stars' sheet, `rlëD` 700 of 16 frames of 5 × 5, as stock's.
+fn star_sheet() -> StarSheet {
+    StarSheet {
+        image_id: 700,
+        frames: NonZeroU16::new(16).expect("non-zero"),
+        size: (5, 5),
+    }
+}
+
+/// [`catalog`] with the stars' sheet, so flight draws its stars.
+fn starry() -> FakeCatalog {
+    FakeCatalog {
+        star_sheet: Ok(star_sheet()),
+        ..catalog()
+    }
+}
+
+/// The stars `view` draws first in its world: its starfield's, `alpha` of
+/// the way between its last two snapshots, by its rules' reading of
+/// [`RuleKey::FlightStarfield`].
+fn drawn_stars(view: &View) -> Vec<DrawCommand> {
+    let source = view.session().map_or(RuleSource::Engine, |session| {
+        session.rules().source_for(RuleKey::FlightStarfield)
+    });
+    let mut list = DrawList::new();
+    let stars = (&view.stars, &view.looks);
+    super::stars::draw(&mut list, stars, source, &view.camera(), view.alpha);
+    list.iter().cloned().collect()
+}
+
+/// Whether `command` is one of the stars [`star_sheet`] draws.
+fn is_star(command: &DrawCommand) -> bool {
+    matches!(
+        command,
+        DrawCommand::Sprite {
+            image,
+            blend: Blend::Or,
+            ..
+        } if image.id == 700
+    )
+}
+
+/// The sprites drawn, the stars left out.
 fn sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
     list.iter()
-        .filter_map(|command| match command {
+        .filter(|command| !is_star(command))
+        .filter_map(|command| match unclipped(command) {
             DrawCommand::Sprite { image, center, .. } => Some((*image, *center)),
             _ => None,
         })
@@ -1352,6 +1413,13 @@ fn ms(millis: u64) -> Duration {
 fn tap(view: &mut View, k: Key) {
     view.input(&key(k, true));
     view.input(&key(k, false));
+}
+
+/// Taps `k`, then runs the step whose secondary block takes it (see
+/// `nova_sim::session`'s `secondary_select`).
+fn tap_and_step(view: &mut View, k: Key) {
+    tap(view, k);
+    ticks(view, 1);
 }
 
 /// Where system `id` is on the course map, brought into item 3 first: the
@@ -2481,7 +2549,16 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+}
+
+/// `command`, or what it draws when it is [`DrawCommand::Clipped`]: the
+/// cursor is clipped to the play area.
+fn unclipped(command: &DrawCommand) -> &DrawCommand {
+    match command {
+        DrawCommand::Clipped { command, .. } => unclipped(command),
+        command => command,
+    }
 }
 
 /// Whether a command draws a `cïcn` in `ids`.

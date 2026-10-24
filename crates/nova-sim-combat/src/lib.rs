@@ -65,7 +65,8 @@
 //! - [`self_repair`]: a disabled ship repairing itself
 //!   ([`can_self_repair`](self_repair::can_self_repair)), and a former
 //!   escort rejoining the player as it does.
-//! - [`sprite_layer`]: the order the ship and shot layers are drawn in.
+//! - [`sprite_layer`]: the order the flight world's sprite layers, beams
+//!   and particles are drawn in.
 //! - [`ship_layer`]: the layers ships are drawn in
 //!   ([`ShipLayer`](ship_layer::ShipLayer)): the disabled at the bottom,
 //!   then the ships the player leads, then the rest with the player.

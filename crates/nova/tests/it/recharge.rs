@@ -14,6 +14,7 @@
 //! It takes off with the tank full. A pilot with too few credits is
 //! refused, and told why.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -278,6 +279,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 
 /// Stock "Create a new pilot:" (`DLOG` 3102) and "Spaceport" (`DLOG`
 /// 1000), whose item 4 is Recharge's.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -323,6 +326,8 @@ fn interface() -> InterfaceData {
     let file = fork(&[
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -619,6 +624,8 @@ fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
     ] {
         game.type_key(code, Some(letter));
     }
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);

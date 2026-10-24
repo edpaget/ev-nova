@@ -34,6 +34,13 @@ pub struct Prefs {
     /// ships' `shän` `WeapImageID` sprites load (`_LoadExtendedShipSprites`
     /// @0x2343c-0x2344b). The original reads it only at launch.
     pub weapon_effects: bool,
+    /// Whether each star of the starfield gets its own parallax factor,
+    /// the original's Parallax Starfield preference (`_settings` +0xb,
+    /// stored by `_LoadPrefs` @0xced11 and the dialog's `accept:`
+    /// @0xcff03): set, `_RandomizeStars` draws each star's factor as
+    /// `Rand(35)` x 0.01 (@0x0b2c4-0x0b2f0); clear, every factor is 0
+    /// (@0x0b2f2-0x0b2fa). It applies at the next scattering.
+    pub parallax_starfield: bool,
     /// How the game runs fullscreen: borderless, or in an exclusive
     /// display mode the dialog's picker chose. Not the original's: its
     /// dialog has no such control.
@@ -51,7 +58,8 @@ impl Default for Prefs {
     /// and `QuickTimeMovies` as NO (`_LoadPrefs` @0xce8ac, @0xce8ee), and
     /// a clear byte means on; `SmokeTrails` as NO (@0xce949-0xce972),
     /// which `Keys.nib` negates, so it too means on; and `WeaponEffects`
-    /// as YES (@0xce96a-0xce993). Fullscreen borderless, and Scaling
+    /// as YES (@0xce96a-0xce993); and `ParallaxStarfield` on when the key
+    /// is missing (@0xcecee). Fullscreen borderless, and Scaling
     /// native.
     fn default() -> Self {
         Self {
@@ -60,6 +68,7 @@ impl Default for Prefs {
             quicktime_movies: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             fullscreen: FullscreenKind::Borderless,
             scaling: Scaling::Native,
         }
@@ -80,6 +89,7 @@ mod tests {
                 quicktime_movies: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
             }

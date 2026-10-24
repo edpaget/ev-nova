@@ -1944,6 +1944,8 @@ fn the_hire_screens_info_panels_close_redraws_the_port_bar() {
     let mut game = bought_the_racer(&store);
     game.click_port(BAR);
     game.tap(Key::Char('h'));
+    // It opens with nothing selected: Right picks the first ship.
+    game.tap(Key::Right);
     game.tap(Key::Space);
     let hire = game
         .spaceport()

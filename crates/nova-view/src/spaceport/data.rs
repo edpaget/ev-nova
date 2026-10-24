@@ -1,6 +1,6 @@
 //! The spaceport's ports over the game data: a thin mapping from
 //! `GameData`'s `spöb` records, `PICT`s, `shän` base images and `cölr`
-//! 128's list colours.
+//! 128's list and grid colours.
 
 use nova_data::GameData;
 use nova_data::graphics::PICT;
@@ -10,12 +10,26 @@ use nova_data::records::stellar::Stellar;
 use nova_sim::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
+use super::grid::{GridColors, GridLooks};
 use super::shipyard::ShipBaseImages;
 use super::trade::{ListColors, ListLooks};
 use crate::color::Color;
 
-/// The `cölr` the list colours come from.
+/// The `cölr` the list and grid colours come from.
 const COLORS_ID: i16 = 128;
+
+/// Decodes on every call; the shops' screens ask once, as each opens.
+impl GridLooks for GameData {
+    fn grid_colors(&self) -> GridColors {
+        let Some(Ok(colors)) = self.get::<Colors>(COLORS_ID) else {
+            return GridColors::STOCK;
+        };
+        GridColors {
+            dim: Color::from_rgb24(colors.record.grid_dim),
+            bright: Color::from_rgb24(colors.record.grid_bright),
+        }
+    }
+}
 
 /// Decodes on every call; the trade center's screen asks once, as the
 /// spaceport opens.
@@ -208,6 +222,39 @@ mod tests {
             holding(&[(Colors::TYPE, 128, vec![0; 3])]).list_colors(),
             ListColors::STOCK,
             "undecodable"
+        );
+    }
+
+    #[test]
+    fn grid_colors_come_from_colr_128_or_the_stock() {
+        let mut bytes = vec![0; Colors::SIZE.expect("fixed")];
+        bytes[0x56..0x5A].copy_from_slice(&0x00AB_CDEF_u32.to_be_bytes());
+        bytes[0x5A..0x5E].copy_from_slice(&0x0012_3456_u32.to_be_bytes());
+        assert_eq!(
+            holding(&[(Colors::TYPE, 128, bytes.clone())]).grid_colors(),
+            GridColors {
+                bright: Color::rgba(0xAB, 0xCD, 0xEF, 255),
+                dim: Color::rgba(0x12, 0x34, 0x56, 255),
+            }
+        );
+        assert_eq!(holding(&[]).grid_colors(), GridColors::STOCK);
+        assert_eq!(
+            holding(&[(Colors::TYPE, 129, bytes)]).grid_colors(),
+            GridColors::STOCK,
+            "only 128"
+        );
+        assert_eq!(
+            holding(&[(Colors::TYPE, 128, vec![0; 3])]).grid_colors(),
+            GridColors::STOCK,
+            "undecodable"
+        );
+        assert_eq!(
+            GridColors::STOCK,
+            GridColors {
+                bright: Color::rgba(0xFF, 0, 0, 255),
+                dim: Color::rgba(0x40, 0x40, 0x40, 255),
+            },
+            "stock cölr 128's"
         );
     }
 

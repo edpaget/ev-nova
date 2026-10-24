@@ -817,6 +817,7 @@ fn a_new_pilot_flies_and_is_saved_with_the_gender_chosen() {
     }
     type_text(&mut screen, "Ada");
     screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
     enter_ship(&mut screen);
     assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Female);
     assert_eq!(saved(&store, "Ada").gender(), nova_sim::Gender::Female);
@@ -968,7 +969,7 @@ fn cancelling_new_pilot_goes_back_to_the_menu() {
 }
 
 #[test]
-fn a_name_already_saved_is_refused_whatever_its_case() {
+fn without_the_yes_no_dialog_a_name_already_saved_is_refused_whatever_its_case() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");

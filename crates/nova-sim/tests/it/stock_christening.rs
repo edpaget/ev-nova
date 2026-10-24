@@ -1,0 +1,92 @@
+//! A new stock pilot's ship christening (rdm play-feel phase 10): the
+//! prompt `_DoNewPilot` builds from `STR#` 2002 #121 and the first
+//! `chär`'s ship's `LongName`, and the three `STR#` 128 defaults its roll
+//! picks among; and the New Pilot dialog's `STR#` 128 name and nickname
+//! defaults (phase 19). Skips, passing, when `NOVA_DATA` is unset.
+
+use crate::common;
+
+use nova_sim::christening::christening;
+use nova_sim::pilot::Pilot;
+use nova_sim::shipyard;
+use nova_sim::{Chance, PilotCatalog, ShipId};
+
+/// Every roll is `.0`; nothing fires.
+struct Rolls(u16);
+
+impl Chance for Rolls {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        n - 1
+    }
+
+    fn roll(&mut self, _sides: u16) -> u16 {
+        self.0
+    }
+}
+
+#[test]
+fn a_new_stock_pilot_is_asked_to_christen_its_ship_with_a_stock_default() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let ships = data.ships();
+    for (roll, name) in [
+        (0, "Ring of Glory"),
+        (1, "Snowy Owl"),
+        (2, "Cardinal Virtue"),
+    ] {
+        let asked = christening(&data, &ships, pilot.ship(), &mut Rolls(roll));
+        assert!(
+            asked
+                .prompt
+                .starts_with("Now, please christen your brand-new "),
+            "{asked:?}"
+        );
+        assert!(asked.prompt.ends_with(": "), "{asked:?}");
+        assert!(asked.prompt.len() > "Now, please christen your brand-new : ".len());
+        assert_eq!(asked.default, name, "roll {roll}");
+    }
+}
+
+/// The shipyard's name prompt (rdm play-feel phase 20) opens with the
+/// stock `STR#` 2002 #120.
+#[test]
+fn the_stock_shipyard_asks_to_name_your_new_ship() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let ships = data.ships();
+    let shuttle = ships
+        .iter()
+        .find(|record| record.id == ShipId(128))
+        .expect("the stock Shuttle");
+    let naming = shipyard::naming(&data, shuttle, &mut Rolls(0));
+    assert_eq!(
+        naming.prompt,
+        format!("Please name your new {}: ", shuttle.long_name)
+    );
+}
+
+/// The New Pilot dialog's stock defaults (rdm play-feel phase 19):
+/// `STR#` 128 #1-#3 for the name and #4-#6 for the nickname, each its
+/// own roll of three.
+#[test]
+fn a_new_stock_pilot_opens_with_a_stock_name_and_nickname() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    for (roll, name, nickname) in [
+        (0, "Shane Merrol", "Hunter"),
+        (1, "Cade Connelly", "Hawkeye"),
+        (2, "Goroth Obarskyr", "Maverick"),
+    ] {
+        let defaults = nova_sim::new_pilot::name_defaults(&data, &mut Rolls(roll));
+        assert_eq!(defaults.name, name, "roll {roll}");
+        assert_eq!(defaults.nickname, nickname, "roll {roll}");
+    }
+}

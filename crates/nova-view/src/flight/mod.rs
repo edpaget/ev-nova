@@ -38,10 +38,14 @@
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
 //!   one is added to what is under it ([`ShotShade`](shot_fade::ShotShade)).
+//! - `slot_pool`: the original's fixed sprite tables, a new item taking
+//!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
+//! - [`stars`]: the starfield as the original builds it, 20 star sprites
+//!   scattered, wrapped and scrolled about the ship.
 //! - [`target`]: the target panel and the secondary weapon's line.
 //! - [`trails`]: the particle trail a shot leaves at its tail.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
@@ -75,10 +79,12 @@ pub mod pods;
 pub mod radar;
 pub mod ship_layers;
 pub mod shot_fade;
+pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
 pub mod spin;
 pub mod sprite;
+pub mod stars;
 pub mod target;
 pub mod trails;
 pub mod view;
@@ -86,10 +92,10 @@ pub mod weapon_glow;
 pub mod weapons;
 
 pub use catalog::{
-    BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBarLayout,
-    StatusBars, TargetCard, WeaponLook,
+    BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StarSheet,
+    StatusBarLayout, StatusBars, TargetCard, WeaponLook,
 };
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, MapOpener, SharedChance};
+pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, SharedChance};

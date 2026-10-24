@@ -280,8 +280,8 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         );
         for (item, x, w) in [
             (INFO_ITEM, 253.0, 89.0),
-            (SHIPYARD_DONE, 365.0, 109.0),
-            (BUY_SHIP_ITEM, 480.0, 109.0),
+            (SHIPYARD_DONE, 480.0, 109.0),
+            (BUY_SHIP_ITEM, 365.0, 109.0),
         ] {
             assert_eq!(
                 dialog.item_bounds(item),
@@ -299,6 +299,14 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             let picture = decode_pict(picture.resource.data()).expect("decodes");
             assert_eq!((picture.width(), picture.height()), size, "{id}");
         }
+        // It opens with nothing selected, as `_DoShipyardDialog` does;
+        // Right picks the first cell.
+        assert_eq!(screen.selected(), None, "nothing selected as it opens");
+        screen.input(&nova_view::Input::Key {
+            key: nova_view::Key::Right,
+            pressed: true,
+            repeat: false,
+        });
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(
@@ -484,7 +492,7 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         let mut session = fly(&data, &save);
         session.shipyard(&mut Fires).expect("a shipyard");
         let naming = session
-            .ship_naming(nova_sim::ShipId(128), &mut Highest)
+            .ship_naming(nova_sim::ShipId(128), &data, &mut Highest)
             .expect("the Shuttle can be bought");
         assert_eq!(
             naming.prompt,

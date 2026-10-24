@@ -20,6 +20,14 @@
 //!   [`BoardingRule`](board::BoardingRule) port with Nova's
 //!   [`NovaBoarding`](board::NovaBoarding): who repels boarders, the
 //!   capture odds and the capture roll, a person's credits and its grant.
+//! - [`christening`]: christening a new pilot's ship: the prompt and
+//!   default `_DoNewPilot` asks with
+//!   ([`Christening`](christening::Christening)) and the name kept
+//!   ([`christen`](christening::christen)).
+//! - [`new_pilot`]: the New Pilot dialog's name and nickname: the
+//!   defaults `_DoNewPilot` opens it with
+//!   ([`name_defaults`](new_pilot::name_defaults)) and the names kept
+//!   ([`kept_name`](new_pilot::kept_name)).
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
@@ -101,12 +109,14 @@ use nova_sim_state::{clearance, cron, landing, market, outfit_effects, stats};
 use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags};
 
 pub mod board;
+pub mod christening;
 pub mod escape;
 pub mod gate_sprite;
 pub mod grant;
 pub mod hire;
 pub mod iff;
 pub mod murk;
+pub mod new_pilot;
 pub mod npc_escape;
 pub mod order_loop;
 pub mod outfitter;
@@ -114,4 +124,5 @@ pub mod player_info;
 pub mod recharge;
 pub mod ship_change;
 pub mod shipyard;
+pub(crate) mod string_entry;
 pub mod wares;

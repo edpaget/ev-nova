@@ -86,7 +86,8 @@ use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawList, fill_rect, frame_rect, rule};
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -227,36 +228,6 @@ fn positions(market: &Market) -> Vec<Option<usize>> {
     positions
 }
 
-/// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
-/// covers it: both ends included.
-fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
-    let area = Bounds {
-        min: from,
-        max: Point::new(to.x + 1.0, to.y + 1.0),
-    };
-    fill_rect(list, area, color);
-}
-
-/// `FrameRect(rect)` in `color`: a one-pixel border just inside it.
-fn frame(list: &mut DrawList, rect: Bounds, color: Color) {
-    let (left, top) = (rect.min.x, rect.min.y);
-    let (right, bottom) = (rect.max.x - 1.0, rect.max.y - 1.0);
-    rule(list, Point::new(left, top), Point::new(right, top), color);
-    rule(
-        list,
-        Point::new(left, bottom),
-        Point::new(right, bottom),
-        color,
-    );
-    rule(list, Point::new(left, top), Point::new(left, bottom), color);
-    rule(
-        list,
-        Point::new(right, top),
-        Point::new(right, bottom),
-        color,
-    );
-}
-
 /// The exchange, laid out.
 #[derive(Clone, Debug)]
 struct Laid {
@@ -272,6 +243,19 @@ impl std::fmt::Debug for MetricsHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("TextMetrics")
     }
+}
+
+/// What the screen's own keys asked for, until each is taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyAsks {
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// asked for the player info screen.
+    player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    mission_info: bool,
+    /// Whether the map key asked for the course map.
+    map: bool,
 }
 
 /// The Trade Center of the stellar landed on.
@@ -291,11 +275,8 @@ pub struct TradeScreen {
     quantity: QuantityAsk<(usize, Direction)>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
-    player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
-    /// asked for the mission info screen.
-    info_requested: bool,
+    /// What its keys asked for, until each is taken.
+    asks: KeyAsks,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
@@ -341,8 +322,7 @@ impl TradeScreen {
             top: 0,
             quantity: QuantityAsk::new(quantity.ok(), style),
             offering: None,
-            player_info: false,
-            info_requested: false,
+            asks: KeyAsks::default(),
             order: None,
             closed: false,
             style,
@@ -390,7 +370,15 @@ impl TradeScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
-        std::mem::take(&mut self.player_info) || offer
+        std::mem::take(&mut self.asks.player_info) || offer
+    }
+
+    /// Whether the map key (`_keyPrefs` +0x12, a press) has asked for the
+    /// course map since this was last asked, once (`_TradeFilter` item 2, @0x4e0e7-0x4e0fa, ungated by `_mapDialog`): never in the
+    /// dialogs open over the exchange or its offer, and never without its
+    /// dialog. Whoever holds the session opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
     }
 
     /// The mission of the offer open over it, when the offer's map key
@@ -407,7 +395,7 @@ impl TradeScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_info_request);
-        std::mem::take(&mut self.info_requested) || offer
+        std::mem::take(&mut self.asks.mission_info) || offer
     }
 
     /// Whether the trade center has asked for an offer since this was last
@@ -635,7 +623,7 @@ impl TradeScreen {
         let Some(header) = laid.dialog.item_bounds(HEADER_ITEM) else {
             return;
         };
-        frame(list, header, DARK_GREY);
+        frame_rect(list, header, DARK_GREY);
         let words = &self.market.words;
         let baseline = header.min.y + HEADER_BASELINE;
         let labels = [
@@ -732,7 +720,7 @@ impl TradeScreen {
             let (dx, dy) = SUMMARY_INSET;
             let text = self.market.summary.text(&self.market.words);
             inverted_box(laid, list, &text, summary.inset(dx, dy));
-            frame(list, summary, DARK_GREY);
+            frame_rect(list, summary, DARK_GREY);
         }
         if !self.market.events.is_empty()
             && let Some(event) = laid.dialog.item_bounds(EVENT_ITEM)
@@ -787,12 +775,16 @@ impl Screen for TradeScreen {
             }
             return ScreenAction::None;
         };
+        if is_map_press(input) {
+            self.asks.map = true;
+            return ScreenAction::None;
+        }
         if is_player_info_press(input) {
-            self.player_info = true;
+            self.asks.player_info = true;
             return ScreenAction::None;
         }
         if is_mission_info_press(input) {
-            self.info_requested = true;
+            self.asks.mission_info = true;
             return ScreenAction::None;
         }
         match *input {
@@ -2627,6 +2619,38 @@ mod tests {
         );
         press(&mut broken, i);
         assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_on_a_press_not_in_the_quantity_dialog() {
+        let m = crate::flight::view::MAP_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_map_request());
+        screen.input(&key(m, true, true));
+        screen.input(&key(m, false, false));
+        assert!(!screen.take_map_request(), "a repeat or a release");
+        press(&mut screen, m);
+        assert!(screen.take_map_request());
+        assert!(!screen.take_map_request(), "once");
+        assert!(!screen.take_player_info_request());
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut broken = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, m);
+        assert!(!broken.take_map_request(), "no dialog");
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the offer's");
+        assert!(screen.take_offer_map_request().is_some());
     }
 
     #[test]

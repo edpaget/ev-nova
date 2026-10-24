@@ -205,6 +205,9 @@ impl Screen for AppScreen {
         let mut dialogs = DrawList::new();
         let under_map = [
             self.new_pilot.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.christening
+                .as_ref()
+                .map(|open| &open.dialog as &dyn Screen),
             self.open_pilot.as_ref().map(|pilots| pilots as &dyn Screen),
             self.load_note.as_ref().map(|note| note as &dyn Screen),
             self.question
@@ -343,6 +346,9 @@ impl Screen for AppScreen {
             self.new_pilot
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
+            self.christening
+                .as_mut()
+                .map(|open| &mut open.dialog as &mut dyn Screen),
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.load_note.as_mut().map(|note| note as &mut dyn Screen),
             self.question

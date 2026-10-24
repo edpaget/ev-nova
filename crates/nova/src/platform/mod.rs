@@ -125,6 +125,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::ArrowRight) => Key::Right,
         PhysicalKey::Code(KeyCode::ArrowUp) => Key::Up,
         PhysicalKey::Code(KeyCode::ArrowDown) => Key::Down,
+        // The shop grids' Page Up and Page Down, Mac key codes 0x74 and
+        // 0x79, fn+Up and fn+Down on a Mac laptop.
+        PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
+        PhysicalKey::Code(KeyCode::PageDown) => Key::PageDown,
         PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => Key::Enter,
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
@@ -280,6 +284,8 @@ mod tests {
             (KeyCode::ArrowRight, Key::Right),
             (KeyCode::ArrowUp, Key::Up),
             (KeyCode::ArrowDown, Key::Down),
+            (KeyCode::PageUp, Key::PageUp),
+            (KeyCode::PageDown, Key::PageDown),
             (KeyCode::Enter, Key::Enter),
             (KeyCode::NumpadEnter, Key::Enter),
             (KeyCode::Escape, Key::Escape),
@@ -346,7 +352,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 44] = [
+    const GAME_CHARACTER_KEYS: [Key; 45] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -356,6 +362,7 @@ mod tests {
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
         nova_view::flight::view::SELECT_KEY,
+        nova_view::flight::view::DESELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
         nova_view::flight::view::HYPERSPACE_MODE_KEY,

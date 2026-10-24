@@ -21,6 +21,26 @@
 //! @0x58b30-0x58f91). With nothing listed, the grid says so (`STR#` 2002
 //! #223).
 //!
+//! The selection follows
+//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection). By the
+//! engine, as `_DoShipyardDialog` and `_ShipyardFilter` keep it, the
+//! shipyard opens with nothing selected (@0x5e6d8-0x5e705); a press on an
+//! empty cell selects nothing (@0x60a5d-0x60a73) and reaches no button;
+//! and a scroll arrow that scrolls selects nothing (@0x5f580-0x5f5be,
+//! @0x5f60b-0x5f670). With nothing selected, Buy Ship and Info are greyed
+//! and no picture, info box or description is drawn. An arrow key then
+//! highlights the first cell shown (Right, Down) or the last (Left, Up),
+//! as `_ShipyardFilter` does from no cell (@0x60734-0x607b7). With a cell
+//! highlighted, an arrow key moves it by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the engine,
+//! Up on the first row and Down onto an empty cell stay
+//! (@0x6057a-0x6072f). Page Up and Page Down move as Up and Down. By the
+//! other reading of the selection, the first cell is
+//! selected as it opens, a press on an empty cell is ignored, and a scroll
+//! keeps the selection. By both, a second press on the same cell position
+//! within 15 Mac ticks of the first opens Info ([`grid_clicks`](super::grid_clicks),
+//! @0x60cd7-0x60d12).
+//!
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
 //! `shän` base image, as the Bible says target pictures are shared, or
@@ -36,7 +56,9 @@
 //!
 //! Buy Ship, clicked or with B, requests the selected ship, and is greyed
 //! when it cannot be bought, the class flown among them (`_CalcShipCanBuy`
-//! @0x4f6f5-0x4f6fc; the original has no words for why). B acts
+//! @0x4f6f5-0x4f6fc; the original has no words for why). B with no ship
+//! selected, or one that cannot be bought, beeps
+//! ([`UiSound::BuyRefused`], `_beepSnd[3]`, @0x5f22a-0x5f256). B acts
 //! on a press only, never a key repeat, unlike the Outfitter's. A held B
 //! no longer re-buys the class just bought, which is now the class flown
 //! and refused ([`ShipRefusal::AlreadyFlown`](nova_sim::shipyard::ShipRefusal::AlreadyFlown)),
@@ -134,26 +156,28 @@ use nova_sim::{
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, credits_text, draw_amount_rows, tons_text};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
-    TextStyle, text,
+    self, GridColors, GridLooks, INSET, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, TextStyle, text,
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
+use crate::flight::PortScreen;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
@@ -177,14 +201,17 @@ pub const INFO_BACKGROUND: ImageKey = ImageKey::picture(8506);
 /// (`_DoShipyardDescription` @0x5b758-0x5b77e).
 pub const PICTURE_INFO_BACKGROUND: ImageKey = ImageKey::picture(8507);
 
-/// Done's item.
-pub const DONE_ITEM: usize = 1;
+/// Done's item: `_DrawShipyardButtons` labels item 7 Done (@0x2a314) and
+/// `_DoShipyardDialog` exits on it (@0x5f6bd).
+pub const DONE_ITEM: usize = 7;
 /// The grid's item.
 pub const GRID_ITEM: usize = 5;
 /// The description's item.
 pub const DESCRIPTION_ITEM: usize = 6;
-/// Buy Ship's item.
-pub const BUY_ITEM: usize = 7;
+/// Buy Ship's item: `_DrawShipyardButtons` labels item 1 Buy Ship, or Hire
+/// Escort on the hire screen (@0x2a335, @0x2a3bf-0x2a3dc), and
+/// `_DoShipyardDialog` buys or hires on it (@0x5e9b0).
+pub const BUY_ITEM: usize = 1;
 /// The picture's item.
 pub const PICTURE_ITEM: usize = 8;
 /// The info box's item.
@@ -646,14 +673,21 @@ pub trait ShipBaseImages {
 /// [`DescriptionSource`], the graphic it names, through
 /// [`DescriptionGraphics`], whether a picture exists, through
 /// [`SpaceportCatalog::picture_exists`], and the ships' base images,
-/// through [`ShipBaseImages`]. Anything that is all four is one.
+/// through [`ShipBaseImages`], and the grid's colours, through
+/// [`GridLooks`]. Anything that is all five is one.
 pub trait ShipyardCatalog:
-    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages
+    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + GridLooks
 {
 }
 
-impl<T: SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + ?Sized>
-    ShipyardCatalog for T
+impl<
+    T: SpaceportCatalog
+        + DescriptionSource
+        + DescriptionGraphics
+        + ShipBaseImages
+        + GridLooks
+        + ?Sized,
+> ShipyardCatalog for T
 {
 }
 
@@ -898,6 +932,9 @@ struct InfoAsks {
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen.
     mission_info: bool,
+    /// The map the map key asked for: the shipyard's, or the Info
+    /// panel's.
+    map: Option<PortScreen>,
 }
 
 /// The Shipyard of the stellar landed on.
@@ -907,13 +944,16 @@ pub struct ShipyardScreen {
     laid: Result<Laid, String>,
     shipyard: Shipyard,
     catalog: CatalogHandle,
+    /// The grid's frame colours, read from the catalog once.
+    colors: GridColors,
     /// Each ship's base image, read once.
     bases: Vec<(ShipId, i16)>,
     /// Each listed ship's picture, by row, read once a list (none without
     /// the dialog).
     pictures: Vec<Option<i16>>,
     style: ButtonStyle,
-    grid: CellGrid,
+    /// The grid, its selection as `_ShipyardFilter` keeps it.
+    grid: ShipyardGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
     /// The ship requested, until it is taken, and whether B asked.
@@ -943,7 +983,10 @@ impl ShipyardScreen {
     /// greyed without it); and the name prompt by `text_input`, "Text
     /// Input" (or else its fallback). Its buttons are labelled in `style`, and each
     /// ship's picture and description read from `catalog`, which gives
-    /// the ships' base images once, now. The first cell is selected.
+    /// the ships' base images once, now. By the engine nothing is
+    /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
+    /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection),
+    /// the first cell is.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -988,14 +1031,16 @@ impl ShipyardScreen {
         } else {
             Vec::new()
         };
+        let grid = ShipyardGrid::open(&shipyard.rules, shipyard.rows.len());
         let mut screen = Self {
             laid,
             shipyard,
+            colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
             bases,
             pictures: Vec::new(),
             style,
-            grid: CellGrid::default(),
+            grid,
             panel: None,
             request: None,
             asked_by_key: false,
@@ -1009,7 +1054,7 @@ impl ShipyardScreen {
             sounds: Vec::new(),
         };
         screen.read_pictures();
-        screen.select(0);
+        screen.selected_changed();
         screen
     }
 
@@ -1046,6 +1091,16 @@ impl ShipyardScreen {
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
         std::mem::take(&mut self.asks.player_info) || offer
+    }
+
+    /// The map the map key (`_keyPrefs` +0x12, a press) asked for since
+    /// this was last asked, once: the shipyard's (`_ShipyardFilter` item 3,
+    /// @0x608ed-0x6090b), or the ship description's while the Info panel
+    /// is open (`_ShipDescFilter` item 4, @0x51108-0x51126). Never at the
+    /// name prompt, which takes M as a letter, and never without the
+    /// dialog. Whoever holds the session opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> Option<PortScreen> {
+        self.asks.map.take()
     }
 
     /// The mission of the offer open over it, when the offer's map key
@@ -1118,8 +1173,10 @@ impl ShipyardScreen {
     }
 
     /// Ticks only its offers' timer, as covered: something is open over
-    /// the shipyard.
+    /// the shipyard. The time since the last press on the grid runs on
+    /// too, as `_ShipyardFilter` measures it by the event's clock.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        self.grid.advance(dt);
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -1131,13 +1188,17 @@ impl ShipyardScreen {
         &self.shipyard
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index: none when nothing is listed, or, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// engine reading, when nothing is selected (on opening, after a press
+    /// on an empty cell or a scroll that moved).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.shipyard.rows.len())
+        self.grid.cells().selected(self.shipyard.rows.len())
     }
 
-    /// The selected ship's row, if anything is listed.
+    /// The selected ship's row, if one is selected
+    /// ([`ShipyardScreen::selected`]).
     fn selected_row(&self) -> Option<&ShipRow> {
         self.selected().map(|index| &self.shipyard.rows[index])
     }
@@ -1145,7 +1206,7 @@ impl ShipyardScreen {
     /// The grid's first row shown.
     #[must_use]
     pub fn top_row(&self) -> usize {
-        self.grid.top_row()
+        self.grid.cells().top_row()
     }
 
     /// The dialog, if it could be laid out.
@@ -1269,7 +1330,8 @@ impl ShipyardScreen {
     }
 
     /// Shows `shipyard`, the shipyard after an order, keeping the same
-    /// ship selected when it is still listed, or the cell where it was.
+    /// ship selected when it is still listed, or the cell where it was;
+    /// with nothing selected, nothing stays selected.
     pub fn set_shipyard(&mut self, shipyard: Shipyard) {
         let kept = self
             .selected_row()
@@ -1277,7 +1339,11 @@ impl ShipyardScreen {
             .and_then(|id| shipyard.rows.iter().position(|row| row.id == id));
         self.shipyard = shipyard;
         self.read_pictures();
-        self.select(kept.unwrap_or(self.grid.selected_raw()));
+        if self.grid.cells().highlighted() {
+            self.select(kept.unwrap_or(self.grid.cells().selected_raw()));
+        } else {
+            self.selected_changed();
+        }
     }
 
     /// Reads each listed ship's picture, when there is a dialog to show
@@ -1302,8 +1368,11 @@ impl ShipyardScreen {
         self.selected_changed();
     }
 
-    /// Greys Buy Ship when the selected ship cannot be bought, and reads
-    /// its picture and description if they are not shown already.
+    /// Greys Buy Ship when the selected ship cannot be bought, and Info
+    /// with none selected (as `_DrawShipyardButtons` draws it,
+    /// @0x2a3f7-0x2a405) or without its panel, and reads the ship's
+    /// picture and description if they are not shown already. With none
+    /// selected, none is shown (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
     fn selected_changed(&mut self) {
         let buys = self
             .selected_row()
@@ -1317,6 +1386,8 @@ impl ShipyardScreen {
             return;
         };
         laid.dialog.set_greyed(BUY_ITEM, !buys);
+        laid.dialog
+            .set_greyed(INFO_ITEM, laid.info.plain.is_err() || selected.is_none());
         let Some((ship, picture)) = selected else {
             laid.shown = None;
             return;
@@ -1335,13 +1406,17 @@ impl ShipyardScreen {
     }
 
     /// Requests the selected ship, if it can be bought, saying whether B
-    /// asked.
+    /// asked; otherwise beeps ([`UiSound::BuyRefused`]), as
+    /// `_DoShipyardDialog`'s item 1 does with no ship or one it cannot
+    /// buy (@0x5e9bb-0x5e9d6, @0x5f22a-0x5f256).
     fn ask(&mut self, by_key: bool) {
         if let Some(row) = self
             .selected_row()
             .filter(|row| self.shipyard.can(row.id).is_ok())
         {
             self.request = Some((row.id, by_key));
+        } else {
+            self.sounds.push(Sound::Ui(UiSound::BuyRefused));
         }
     }
 
@@ -1372,21 +1447,49 @@ impl ShipyardScreen {
     /// opens the panel, and the arrows scroll. Any other item does
     /// nothing.
     fn activate(&mut self, item: usize) {
-        let count = self.shipyard.rows.len();
         match item {
             DONE_ITEM => self.closed = true,
             BUY_ITEM => self.ask(false),
             INFO_ITEM => self.open_info(),
-            SCROLL_UP_ITEM => self.grid.scroll(false, count),
-            SCROLL_DOWN_ITEM => self.grid.scroll(true, count),
+            SCROLL_UP_ITEM => self.scroll(false),
+            SCROLL_DOWN_ITEM => self.scroll(true),
             _ => {}
         }
     }
 
-    /// The cell index under `at` on the grid, if a listed ship is there.
-    fn cell_at(&self, at: Point) -> Option<usize> {
+    /// Scrolls the grid a row down, or up, never past either end; by the
+    /// engine, a scroll that moves selects nothing and empties the
+    /// description ([`ShipyardGrid::scroll`]).
+    fn scroll(&mut self, down: bool) {
+        if self.grid.scroll(down, self.shipyard.rows.len()) {
+            self.selected_changed();
+        }
+    }
+
+    /// A press on the grid at list index `index`, listed or not, and says
+    /// whether the grid took it ([`ShipyardGrid::press`]): a listed cell is
+    /// selected, and a double-click on it opens Info; an empty one selects
+    /// nothing by the engine and is left to the dialog by the other
+    /// reading.
+    fn press_cell(&mut self, index: usize) -> bool {
+        match self.grid.press(index, self.shipyard.rows.len()) {
+            PressOutcome::Selected { double } => {
+                self.selected_changed();
+                if double {
+                    self.open_info();
+                }
+            }
+            PressOutcome::Cleared => self.selected_changed(),
+            PressOutcome::FallThrough => return false,
+        }
+        true
+    }
+
+    /// The list index under `at` on the grid, listed or not
+    /// ([`CellGrid::cell_under`](grid::CellGrid::cell_under)).
+    fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_at(grid, at, self.shipyard.rows.len())
+        self.grid.cells().cell_under(grid, at)
     }
 
     /// The info panel's input: Done, Return and Escape close it.
@@ -1399,6 +1502,10 @@ impl ShipyardScreen {
         }
     }
 
+    /// The shown cells, each its picture, the current mark and its name,
+    /// then its frame in `GridDim`; then, last, the selected cell framed
+    /// again in `GridBright`. No cell is filled (`_ShipyardDialogUpdate`
+    /// @0x58b30-0x58f91, @0x58f9d-0x58fbf).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
@@ -1409,18 +1516,23 @@ impl ShipyardScreen {
             text(list, NO_SHIPS, origin, TEXT_COLOR);
             return;
         }
-        for (index, cell) in self.grid.shown(area, self.shipyard.rows.len()) {
-            let row = &self.shipyard.rows[index];
-            if Some(index) == self.selected() {
-                fill_rect(list, cell, SELECTED_COLOR);
-            }
-            outline(list, cell, GREY);
-            grid::draw_cell_picture(list, cell, self.pictures[index]);
-            if row.id == self.shipyard.current {
-                grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
-            }
-            grid::draw_cell_name(list, metrics, cell, &row.short_name);
-        }
+        let count = self.shipyard.rows.len();
+        let selected = self.selected();
+        self.grid.cells().draw_cells(
+            list,
+            area,
+            count,
+            selected,
+            self.colors,
+            |list, index, cell| {
+                let row = &self.shipyard.rows[index];
+                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                if row.id == self.shipyard.current {
+                    grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
+                }
+                grid::draw_cell_name(list, metrics, cell, &row.short_name);
+            },
+        );
     }
 
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
@@ -1480,6 +1592,14 @@ impl Screen for ShipyardScreen {
             }
             return ScreenAction::None;
         }
+        if is_map_press(input) {
+            self.asks.map = Some(if self.panel.is_some() {
+                PortScreen::ShipDescription
+            } else {
+                PortScreen::Shipyard
+            });
+            return ScreenAction::None;
+        }
         if is_player_info_press(input) {
             self.asks.player_info = true;
             return ScreenAction::None;
@@ -1500,19 +1620,22 @@ impl Screen for ShipyardScreen {
             _ => false,
         };
         let pressed_once = |wanted: Key| matches!(*input, Input::Key { key, pressed: true, repeat: false } if key == wanted);
+        let on_grid = match *input {
+            Input::PointerButton {
+                pressed: true, at, ..
+            } => self
+                .cell_under(at)
+                .is_some_and(|index| self.press_cell(index)),
+            _ => false,
+        };
         if arrow {
             self.selected_changed();
         } else if pressed_once(BUY_KEY) {
             self.ask(true);
         } else if pressed_once(INFO_KEY) {
             self.open_info();
-        } else if let Some(index) = match *input {
-            Input::PointerButton {
-                pressed: true, at, ..
-            } => self.cell_at(at),
-            _ => None,
-        } {
-            self.select(index);
+        } else if on_grid {
+            // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
             if let Some(DialogEvent::Item(item)) = event {
@@ -1522,9 +1645,11 @@ impl Screen for ShipyardScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down, the Info panel or the name
-    /// prompt covering the shipyard while either is open.
+    /// The time since the last press on the grid runs on, and the wait
+    /// for the next offer runs down, the Info panel or the name prompt
+    /// covering the shipyard while either is open.
     fn tick(&mut self, dt: Duration) {
+        self.grid.advance(dt);
         let covered = self.panel.is_some() || self.naming.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
@@ -1555,7 +1680,7 @@ impl Screen for ShipyardScreen {
             list,
             laid.dialog.item_bounds(SCROLL_UP_ITEM),
             laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
-            self.grid.can_scroll(count),
+            self.grid.cells().can_scroll(count),
         );
         laid.dialog.draw(list);
         self.draw_panel(laid, list);
@@ -1599,11 +1724,13 @@ mod tests {
     use nova_sim::{RuleSource, Rulebook, ShipFacts, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, frame_rect};
+    use crate::flight::view::MAP_KEY;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
     use crate::spaceport::credits::AMOUNT_COLUMN;
+    use crate::spaceport::grid::GREY;
     use crate::spaceport::grid::TEXT_SIZE;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -1729,6 +1856,12 @@ mod tests {
         }
     }
 
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::TEST_GRID_COLORS
+        }
+    }
+
     impl ShipBaseImages for FakeArt {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
             self.asked.borrow_mut().push("bases".to_owned());
@@ -1838,7 +1971,8 @@ mod tests {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn screen_with(shipyard: Shipyard, art: &Rc<FakeArt>) -> ShipyardScreen {
+    /// The shipyard as it opens, with nothing selected by the engine.
+    fn opened_with(shipyard: Shipyard, art: &Rc<FakeArt>) -> ShipyardScreen {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         ShipyardScreen::new(
             Ok(layout()),
@@ -1848,6 +1982,17 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         )
+    }
+
+    /// The shipyard opened, then the first cell selected, as Right picks
+    /// it from no selection (an arrow, so no press is remembered for a
+    /// double-click).
+    fn screen_with(shipyard: Shipyard, art: &Rc<FakeArt>) -> ShipyardScreen {
+        let mut screen = opened_with(shipyard, art);
+        if screen.selected().is_none() {
+            press(&mut screen, Key::Right);
+        }
+        screen
     }
 
     fn screen_of(shipyard: Shipyard) -> ShipyardScreen {
@@ -1979,7 +2124,7 @@ mod tests {
                 SCROLL_UP_ITEM,
                 SCROLL_DOWN_ITEM
             ],
-            [1, 5, 6, 7, 8, 9, 10, 12, 13]
+            [7, 5, 6, 1, 8, 9, 10, 12, 13]
         );
         assert_eq!(
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
@@ -2105,7 +2250,7 @@ mod tests {
         assert!(screen.info_panel().is_none());
         assert_eq!(
             screen.cell_bounds(5),
-            Some(rect(138.0 + 83.0, 230.0 + 67.0, 83.0, 67.0))
+            Some(rect(138.0 + 83.0, 230.0 + 54.0, 84.0, 55.0))
         );
     }
 
@@ -2148,19 +2293,83 @@ mod tests {
             .filter(|(text, _, _)| text == CURRENT_MARK)
             .count();
         assert_eq!(marks, 1, "only the ship flown");
-        let mut highlight = DrawList::new();
-        fill_rect(
-            &mut highlight,
-            screen.cell_bounds(0).expect("a cell"),
-            SELECTED_COLOR,
+        assert!(contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &frame(&screen, 3)));
+        assert!(
+            !contains(&commands, &frame(&screen, 4)),
+            "no frame on an empty cell"
         );
-        let highlight: Vec<_> = highlight.iter().cloned().collect();
-        assert!(commands.windows(highlight.len()).any(|w| w == highlight));
-        let mut frame = DrawList::new();
-        outline(&mut frame, screen.cell_bounds(3).expect("a cell"), GREY);
-        let frame: Vec<_> = frame.iter().cloned().collect();
-        assert!(commands.windows(frame.len()).any(|w| w == frame));
         assert!(!words(&screen).contains(&NO_SHIPS.to_owned()));
+    }
+
+    /// Shown cell `index`'s frame in `color`.
+    fn framed(screen: &ShipyardScreen, index: usize, color: Color) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        frame_rect(&mut list, screen.cell_bounds(index).expect("a cell"), color);
+        list.iter().cloned().collect()
+    }
+
+    /// Shown cell `index`'s frame in the fake's `GridDim`.
+    fn frame(screen: &ShipyardScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.dim)
+    }
+
+    /// Shown cell `index`'s selection: framed in the fake's `GridBright`.
+    fn bright_frame(screen: &ShipyardScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.bright)
+    }
+
+    fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
+        commands.windows(part.len()).any(|window| window == part)
+    }
+
+    /// The frame rule itself is `grid::CellGrid::draw_cells`'s, tested
+    /// there; this checks the shipyard hands it its grid item, rows,
+    /// selection and `cölr` colours.
+    #[test]
+    fn the_grid_is_drawn_by_the_shared_cell_rule_on_its_item_in_the_catalogs_colours() {
+        let mut screen = screen_of(long(22));
+        let grid_item = item(&screen, GRID_ITEM);
+        let commands = drawn(&screen);
+        for index in 0..20 {
+            assert_eq!(
+                screen.cell_bounds(index),
+                Some(grid::cell_bounds(grid_item, index))
+            );
+            assert!(contains(&commands, &frame(&screen, index)), "{index}");
+        }
+        assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
+        press(&mut screen, Key::Right);
+        let commands = drawn(&screen);
+        assert!(!contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &bright_frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_press_is_hit_tested_on_the_84_by_55_division() {
+        let mut screen = screen_of(long(22));
+        let grid = item(&screen, GRID_ITEM);
+        click_cell(&mut screen, 6);
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 83.0, grid.min.y + 54.0),
+        );
+        assert_eq!(screen.selected(), Some(0), "83 right, 54 down is cell 0");
+        click(
+            &mut screen,
+            Point::new(grid.min.x + 84.0, grid.min.y + 55.0),
+        );
+        assert_eq!(screen.selected(), Some(5));
+        click(&mut screen, Point::new(grid.max.x - 0.5, grid.max.y - 0.5));
+        assert_eq!(
+            screen.selected(),
+            Some(19),
+            "the last cell reaches the corner"
+        );
+        click(&mut screen, Point::new(grid.max.x, grid.min.y + 1.0));
+        assert_eq!(screen.selected(), Some(19), "the right edge is out");
+        click(&mut screen, Point::new(grid.min.x + 1.0, grid.max.y));
+        assert_eq!(screen.selected(), Some(19), "the bottom edge is out");
     }
 
     /// `count` ships, numbered from 200.
@@ -2190,23 +2399,25 @@ mod tests {
         assert_eq!(screen.selected(), Some(6));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        click_item(&mut screen, SCROLL_DOWN_ITEM);
-        assert_eq!(screen.top_row(), 2, "never past the end");
+        assert_eq!(screen.top_row(), 1, "never past the end");
         let names: Vec<_> = words(&screen)
             .into_iter()
             .filter(|w| w.starts_with("Hull "))
             .collect();
-        assert_eq!(names.first().map(String::as_str), Some("Hull 8"));
-        click_item(&mut screen, SCROLL_UP_ITEM);
-        assert_eq!(screen.top_row(), 1);
+        assert_eq!(names.first().map(String::as_str), Some("Hull 4"));
+        assert_eq!(names.last().map(String::as_str), Some("Hull 21"));
         click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(4));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0);
+        click_cell(&mut screen, 4);
         assert_eq!(screen.selected(), Some(4));
         let grid = item(&screen, GRID_ITEM);
         click(&mut screen, Point::new(grid.min.x - 1.0, grid.min.y + 1.0));
         assert_eq!(screen.selected(), Some(4), "outside the grid");
         let mut short = screen_of(shipyard());
         click_cell(&mut short, 5);
-        assert_eq!(short.selected(), Some(0), "an empty cell");
+        assert_eq!(short.selected(), None, "an empty cell selects nothing");
         assert_eq!(short.take_sounds(), [], "cells are silent");
     }
 
@@ -2646,6 +2857,287 @@ mod tests {
         assert_eq!(screen.take_request(), None);
         assert!(screen.info_panel().is_none());
         assert_eq!(*art.asked.borrow(), ["bases"], "nothing else to read");
+    }
+
+    #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        // Four listed: Down from the Heavy Shuttle finds index 5 empty, and
+        // Up from the Courier is on the first row.
+        let arrowed = |rules: Rulebook, from: usize, k: Key| {
+            let mut screen = opened_with(
+                Shipyard {
+                    rules,
+                    ..shipyard()
+                },
+                &art(),
+            );
+            click_cell(&mut screen, from);
+            press(&mut screen, k);
+            (screen.selected(), enabled(&screen, BUY_SHIP_LABEL))
+        };
+        let engine = Rulebook::default;
+        assert_eq!(arrowed(engine(), 1, Key::Down), (Some(1), true));
+        assert_eq!(arrowed(engine(), 1, Key::PageDown), (Some(1), true));
+        assert_eq!(arrowed(engine(), 2, Key::Up), (Some(2), false));
+        assert_eq!(arrowed(engine(), 2, Key::PageUp), (Some(2), false));
+        assert_eq!(arrowed(engine(), 0, Key::PageDown), (Some(0), false));
+        let clamped =
+            || Rulebook::default().with_override(nova_sim::RuleKey::GridArrows, RuleSource::Bible);
+        assert_eq!(
+            arrowed(clamped(), 1, Key::Down),
+            (Some(3), false),
+            "the Viper, not for sale"
+        );
+        assert_eq!(
+            arrowed(clamped(), 2, Key::Up),
+            (Some(0), false),
+            "the class flown"
+        );
+    }
+
+    // The selection as `_ShipyardFilter` keeps it (`RuleKey::GridSelection`).
+
+    /// The Bible's reading of the grid's selection: the port's, where the
+    /// selection is the highlighted cell.
+    fn bible() -> Rulebook {
+        Rulebook::default().with_override(nova_sim::RuleKey::GridSelection, RuleSource::Bible)
+    }
+
+    /// Whether the screen shows no ship: Buy Ship and Info greyed, and no
+    /// cell bright, no picture, no info box and no description drawn.
+    fn shows_no_ship(screen: &ShipyardScreen) -> bool {
+        let commands = drawn(screen);
+        let bright = (0..20).any(|index| contains(&commands, &bright_frame(screen, index)));
+        let picture = item(screen, PICTURE_ITEM);
+        let pictured = commands.iter().any(|c| {
+            matches!(c, DrawCommand::StretchedPicture { top_left, .. } if *top_left == picture.min)
+        });
+        !enabled(screen, BUY_SHIP_LABEL)
+            && !enabled(screen, INFO_LABEL)
+            && !bright
+            && !pictured
+            && in_picture(screen).is_empty()
+            && info_box(screen).is_empty()
+            && !words(screen).iter().any(|w| w.starts_with("dësc"))
+    }
+
+    #[test]
+    fn by_the_engine_it_opens_with_nothing_selected() {
+        let art = art();
+        let mut screen = opened_with(shipyard(), &art);
+        assert_eq!(screen.selected(), None);
+        assert!(shows_no_ship(&screen));
+        assert_eq!(screen.take_description_request(), None, "none to load");
+        assert_eq!(
+            *art.asked.borrow(),
+            [
+                "bases",
+                "PICT 5000",
+                "PICT 5001",
+                "PICT 5002",
+                "PICT 5003",
+                "PICT 5000"
+            ]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_empty_cell_pressed_selects_nothing() {
+        let mut screen = opened_with(shipyard(), &art());
+        click_cell(&mut screen, 1);
+        assert_eq!(screen.selected(), Some(1));
+        assert!(!shows_no_ship(&screen));
+        click_cell(&mut screen, 5);
+        assert_eq!(screen.selected(), None, "the empty position past the last");
+        assert!(shows_no_ship(&screen));
+        let mut first_empty = opened_with(shipyard(), &art());
+        click_cell(&mut first_empty, 1);
+        click_cell(&mut first_empty, 4);
+        assert_eq!(first_empty.selected(), None, "the first empty position");
+        assert_eq!(screen.take_request(), None, "it reaches no button");
+        assert!(!screen.closed());
+        assert_eq!(screen.take_sounds(), [], "silent");
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_moves_selects_nothing() {
+        let mut screen = opened_with(long(30), &art());
+        click_cell(&mut screen, 5);
+        assert_eq!(screen.selected(), Some(5));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (1, None));
+        assert!(shows_no_ship(&screen));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(screen.top_row(), 3, "30 listed: the last first row");
+        click_cell(&mut screen, 2);
+        assert_eq!(screen.selected(), Some(14));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (3, Some(14)),
+            "at the bottom it neither scrolls nor clears"
+        );
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!((screen.top_row(), screen.selected()), (2, None));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        click_cell(&mut screen, 3);
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (0, Some(3)),
+            "at the top it neither scrolls nor clears"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_it_opens_on_the_first_cell_and_keeps_it() {
+        let mut screen = opened_with(
+            Shipyard {
+                rules: bible(),
+                ..long(30)
+            },
+            &art(),
+        );
+        assert_eq!(screen.selected(), Some(0), "the first cell");
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(
+            (screen.top_row(), screen.selected()),
+            (1, Some(5)),
+            "a scroll keeps it"
+        );
+        let mut short = opened_with(
+            Shipyard {
+                rules: bible(),
+                ..shipyard()
+            },
+            &art(),
+        );
+        click_cell(&mut short, 1);
+        click_cell(&mut short, 5);
+        assert_eq!(short.selected(), Some(1), "an empty cell is ignored");
+        assert!(enabled(&short, BUY_SHIP_LABEL));
+    }
+
+    #[test]
+    fn a_second_press_on_a_cell_within_15_mac_ticks_opens_info_by_either_reading() {
+        use nova_sim::mission::screens::mac_ticks;
+        for rules in [Rulebook::default(), bible()] {
+            let opened = || {
+                opened_with(
+                    Shipyard {
+                        rules,
+                        ..shipyard()
+                    },
+                    &art(),
+                )
+            };
+            let mut screen = opened();
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_none(), "one press");
+            screen.tick(mac_ticks(15));
+            click_cell(&mut screen, 1);
+            assert!(screen.info_panel().is_some(), "{rules:?}");
+            assert!(words(&screen).contains(&"Ship 129".to_owned()));
+
+            let mut slow = opened();
+            click_cell(&mut slow, 1);
+            slow.tick(mac_ticks(16));
+            click_cell(&mut slow, 1);
+            assert!(slow.info_panel().is_none(), "16 ticks apart");
+
+            let mut covered = opened();
+            click_cell(&mut covered, 1);
+            covered.tick_covered(mac_ticks(16));
+            click_cell(&mut covered, 1);
+            assert!(
+                covered.info_panel().is_none(),
+                "the time covered counts, as `when` is the clock's"
+            );
+
+            let mut moved = opened();
+            click_cell(&mut moved, 0);
+            click_cell(&mut moved, 1);
+            assert!(moved.info_panel().is_none(), "another cell");
+            click_cell(&mut moved, 1);
+            assert!(moved.info_panel().is_some(), "then the same one");
+
+            let mut broken = opened();
+            click_cell(&mut broken, 1);
+            click_cell(&mut broken, 5);
+            click_cell(&mut broken, 1);
+            assert!(broken.info_panel().is_none(), "an empty press between");
+        }
+    }
+
+    #[test]
+    fn a_double_click_is_by_position_so_one_across_a_scroll_opens_the_ship_now_shown() {
+        let mut screen = opened_with(long(30), &art());
+        click_cell(&mut screen, 5);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert!(screen.info_panel().is_none());
+        click_cell(&mut screen, 5);
+        assert_eq!(screen.selected(), Some(9), "the ship now at position 5");
+        assert!(screen.info_panel().is_some());
+        assert!(words(&screen).contains(&"Ship 209".to_owned()));
+    }
+
+    #[test]
+    fn b_refused_beeps_and_space_with_nothing_selected_is_silent() {
+        for rules in [Rulebook::default(), bible()] {
+            let mut screen = opened_with(
+                Shipyard {
+                    rules,
+                    ..shipyard()
+                },
+                &art(),
+            );
+            if rules == Rulebook::default() {
+                press(&mut screen, BUY_KEY);
+                assert_eq!(screen.take_request(), None, "nothing selected");
+                assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::BuyRefused)]);
+                press(&mut screen, INFO_KEY);
+                assert!(screen.info_panel().is_none());
+                assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
+            }
+            click_cell(&mut screen, 0);
+            press(&mut screen, BUY_KEY);
+            assert_eq!(screen.take_request(), None, "the class flown");
+            assert_eq!(
+                screen.take_sounds(),
+                [Sound::Ui(UiSound::BuyRefused)],
+                "{rules:?}"
+            );
+            press(&mut screen, Key::Right);
+            press(&mut screen, BUY_KEY);
+            assert_eq!(screen.take_request(), Some(ShipId(129)));
+            assert_eq!(screen.take_sounds(), [], "a buy does not beep");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
+        let mut screen = opened_with(long(30), &art());
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.selected(), Some(0));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        press(&mut screen, Key::Left);
+        assert_eq!(screen.selected(), Some(23), "the last shown");
+        assert!(enabled(&screen, BUY_SHIP_LABEL));
+        let mut short = opened_with(shipyard(), &art());
+        click_cell(&mut short, 5);
+        press(&mut short, Key::Up);
+        assert_eq!(short.selected(), Some(3), "the last listed");
+    }
+
+    #[test]
+    fn by_the_engine_a_new_shipyard_keeps_nothing_selected() {
+        let mut screen = opened_with(shipyard(), &art());
+        screen.set_shipyard(shipyard());
+        assert_eq!(screen.selected(), None);
+        assert!(shows_no_ship(&screen));
     }
 
     // Naming the ship.
@@ -3178,6 +3670,7 @@ mod tests {
             ButtonStyle::STOCK,
         );
         press(&mut taller, Key::Right);
+        press(&mut taller, Key::Right);
         press(&mut taller, INFO_KEY);
         assert_eq!(panel_item(&taller, PANEL_TEXT_ITEM).height(), 218.0);
         let words: Vec<String> = texts(&self::drawn(&taller))
@@ -3284,6 +3777,54 @@ mod tests {
         press(&mut screen, p);
         assert!(!screen.take_player_info_request(), "the prompt takes it");
         assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_from_the_shipyard_and_its_panel_not_its_prompt() {
+        let mut screen = screen();
+        assert_eq!(screen.take_map_request(), None);
+        screen.input(&key(MAP_KEY, true, true));
+        screen.input(&key(MAP_KEY, false, false));
+        assert_eq!(screen.take_map_request(), None, "a repeat or a release");
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), Some(PortScreen::Shipyard));
+        assert_eq!(screen.take_map_request(), None, "once");
+        assert!(!screen.closed());
+        press(&mut screen, INFO_KEY);
+        press(&mut screen, MAP_KEY);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortScreen::ShipDescription),
+            "the Info panel"
+        );
+        assert!(screen.info_panel().is_some(), "which stays open");
+        let mut screen = naming_by_key();
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "the prompt takes it");
+        assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_map_key_asks_nothing_from_a_shipyard_without_its_dialog_or_under_an_offer() {
+        let mut screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            Rc::clone(&art()) as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "without its dialog");
+        let mut screen = screen_with_offers();
+        screen.open_offer(crate::spaceport::offer::fixture::prompt());
+        press(&mut screen, MAP_KEY);
+        assert_eq!(screen.take_map_request(), None, "the offer's");
+        assert!(screen.take_offer_map_request().is_some());
+    }
+
+    fn screen_with_offers() -> ShipyardScreen {
+        screen().with_offers(crate::spaceport::offer::fixture::templates())
     }
 
     #[test]
@@ -3474,6 +4015,7 @@ mod tests {
             Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
             ButtonStyle::STOCK,
         );
+        press(&mut screen, Key::Right);
         assert!(enabled(&screen, INFO_LABEL));
         press(&mut screen, Key::Right);
         press(&mut screen, INFO_KEY);
@@ -3777,7 +4319,7 @@ mod tests {
                 ButtonStyle::STOCK,
             );
             assert!(!enabled(&screen, INFO_LABEL));
-            for _ in 0..select {
+            for _ in 0..=select {
                 press(&mut screen, Key::Right);
             }
             assert_eq!(screen.selected(), Some(select));
@@ -3785,6 +4327,30 @@ mod tests {
             click_item(&mut screen, INFO_ITEM);
             assert!(screen.info_panel().is_none(), "{select}");
         }
+    }
+
+    /// `_DrawShipyardButtons` @0x2a314/@0x2a335 labels item 1 Buy Ship and
+    /// item 7 Done; `_DoShipyardDialog` buys on 1 (@0x5e9b0) and exits on 7
+    /// (@0x5f6bd).
+    #[test]
+    fn buy_ship_is_item_1_and_done_is_item_7() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        let labels = texts(&drawn(&screen));
+        for (label, number) in [(BUY_SHIP_LABEL, 1), (DONE_LABEL, 7)] {
+            let bounds = item(&screen, number);
+            assert!(
+                labels
+                    .iter()
+                    .any(|(t, at, _)| t == label && bounds.contains(*at)),
+                "{label} in item {number}: {labels:?}"
+            );
+        }
+        click_item(&mut screen, 1);
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        assert!(!screen.closed());
+        click_item(&mut screen, 7);
+        assert!(screen.closed());
     }
 
     // Closing.
@@ -4130,7 +4696,16 @@ mod tests {
                     repeat: false,
                 });
             }
-            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+            let refused: &[Sound] = if k == BUY_KEY {
+                &[Sound::Ui(UiSound::BuyRefused)]
+            } else {
+                &[]
+            };
+            assert_eq!(
+                screen.take_sounds(),
+                refused,
+                "{k:?} makes no click; B on the class flown beeps"
+            );
         }
     }
 }

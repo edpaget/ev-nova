@@ -5390,6 +5390,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
     let tags = QuoteTags {
         person: "Bounty Hunter",
         pilot: "Stock",
+        nickname: "",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         ranks: nova_sim::rank::RankNames::none(),

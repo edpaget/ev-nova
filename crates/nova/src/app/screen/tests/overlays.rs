@@ -349,6 +349,7 @@ fn quiet() -> Prefs {
         quicktime_movies: true,
         smoke_trails: true,
         weapon_effects: true,
+        parallax_starfield: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
     }
@@ -644,6 +645,39 @@ fn a_smoke_trails_change_in_the_dialog_reaches_flight_already_built() {
     );
     click_at(&mut screen, point);
     assert!(flight_view(&screen).smoke_trails(), "back on");
+}
+
+#[test]
+fn flight_is_built_with_the_routers_parallax_starfield() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    assert!(flight_view(&screen).parallax_starfield(), "on by default");
+    let mut screen = with_dialogs(data()).with_prefs(Prefs {
+        parallax_starfield: false,
+        ..quiet()
+    });
+    fly(&mut screen);
+    assert!(!flight_view(&screen).parallax_starfield());
+}
+
+#[test]
+fn a_parallax_starfield_change_in_the_dialog_reaches_flight_already_built() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).parallax_starfield().rect().center();
+    click_at(&mut screen, point);
+    assert!(!flight_view(&screen).parallax_starfield());
+    assert_eq!(
+        screen.take_prefs(),
+        Some(Prefs {
+            parallax_starfield: false,
+            ..Prefs::default()
+        }),
+        "reported, to be saved"
+    );
+    click_at(&mut screen, point);
+    assert!(flight_view(&screen).parallax_starfield(), "back on");
 }
 
 #[test]
@@ -1011,6 +1045,7 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     let mut screen = landed_shipyard(&MemoryPilots::new());
     click_port_item(&mut screen, 9);
     check(&mut screen, "the shipyard");
+    select_first_ship(&mut screen);
     screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
     assert!(
         spaceport(&screen)

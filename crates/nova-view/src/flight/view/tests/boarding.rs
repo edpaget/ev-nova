@@ -358,7 +358,7 @@ fn use_as_my_ship_flies_and_draws_the_captured_ship() {
     );
     let drawn_player = sprites(&drawn(&view))
         .into_iter()
-        .filter(|&(_, center)| center == VIEW_CENTER)
+        .filter(|&(_, center)| center == PLAYER_AT)
         .map(|(image, _)| image)
         .collect::<Vec<_>>();
     assert_eq!(

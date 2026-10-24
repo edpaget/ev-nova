@@ -113,6 +113,10 @@
 //!   the mission computer @0x5ffc0-0x5ffd0 / @0x60084-0x60096. So a
 //!   landed `M` or `N` run inside one is undone as it closes. When the
 //!   restored nav shows is the flight view's.
+//! - The exchange's and the outfitter's maps
+//!   ([`Session::put_back_port_nav`]): each puts back that open-time save
+//!   after a map opened from it, keeping it (@0x5e004-0x5e01a,
+//!   @0x5be9e-0x5beba).
 //! - The bar's restore ([`Session::restore_bar_nav`]): the bar saves both
 //!   as it opens ([`Session::open_bar`], `_DoBarDialog` @0x48efe-0x48f11,
 //!   the raw selection) and puts them back after each map opened from it
@@ -312,6 +316,16 @@ impl Session {
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
         self.chart.restore_port_nav();
+    }
+
+    /// Puts back the nav saved as the port dialog opened
+    /// ([`Session::save_port_nav`]), mode and selection exactly as saved,
+    /// and keeps the save, as the exchange and the outfitter write +0x6a
+    /// and +0x6c back from it after a map opened from them
+    /// (@0x5e004-0x5e01a, @0x5be9e-0x5beba): the dialog's own close still
+    /// restores it once. With nothing saved it changes nothing.
+    pub fn put_back_port_nav(&mut self) {
+        self.chart.put_back_port_nav();
     }
 
     /// The nav as it stands, for a mission dialog to put back after the
@@ -665,6 +679,14 @@ impl Chart {
     /// save is restored once.
     fn restore_port_nav(&mut self) {
         if let Some(saved) = self.port_nav.take() {
+            self.set_nav(saved);
+        }
+    }
+
+    /// Puts back the nav saved as the port dialog opened, keeping the save
+    /// ([`Session::put_back_port_nav`]).
+    fn put_back_port_nav(&mut self) {
+        if let Some(saved) = self.port_nav {
             self.set_nav(saved);
         }
     }
@@ -1670,6 +1692,34 @@ mod tests {
             NavMode::Stellar(None),
             "the save was restored already"
         );
+    }
+
+    #[test]
+    fn a_port_nav_put_back_writes_the_save_back_and_keeps_it() {
+        for before in [stellar(128), hyperspace(131), NavMode::Off] {
+            let (_, mut session) = landed();
+            session.chart.nav = before;
+            session.save_port_nav();
+            session.chart.nav = hyperspace(129);
+            session.put_back_port_nav();
+            assert_eq!(session.nav_mode(), before, "put back {before:?}");
+
+            session.chart.nav = hyperspace(129);
+            session.put_back_port_nav();
+            assert_eq!(session.nav_mode(), before, "kept {before:?}");
+
+            session.chart.nav = hyperspace(129);
+            session.restore_port_nav();
+            assert_eq!(session.nav_mode(), before, "restored {before:?}");
+        }
+    }
+
+    #[test]
+    fn a_port_nav_put_back_without_a_save_changes_nothing() {
+        let (_, mut session) = landed();
+        session.chart.nav = hyperspace(131);
+        session.put_back_port_nav();
+        assert_eq!(session.nav_mode(), hyperspace(131));
     }
 
     // A mission dialog's map's save and restore.

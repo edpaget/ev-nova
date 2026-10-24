@@ -197,6 +197,12 @@ fn data(with_character: bool) -> Rc<GameData> {
 /// [`data`], with the ship's lights, 36 rotations of 3 x 3 in `rlëD`
 /// 2200, if `lights`.
 fn data_with(with_character: bool, lights: bool) -> Rc<GameData> {
+    data_of(with_character, lights, false)
+}
+
+/// [`data_with`], with the stars' `spïn` 700, one frame of 5 x 5 in
+/// `rlëD` 700, if `stars`.
+fn data_of(with_character: bool, lights: bool, stars: bool) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(lights))
@@ -232,6 +238,14 @@ fn data_with(with_character: bool, lights: bool) -> Rc<GameData> {
     }
     if lights {
         fork = fork.resource(RLED, 2200, None, &sheet(36, 3));
+    }
+    if stars {
+        fork = fork.resource(Spin::TYPE, 700, None, &spin(700)).resource(
+            RLED,
+            700,
+            None,
+            &sheet(1, 5),
+        );
     }
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
@@ -280,6 +294,11 @@ impl Harness {
     /// [`Harness::flying`], with the ship's lights.
     fn flying_with_lights(fps: u64) -> Self {
         Self::over(fps, data_with(true, true)).into_flight()
+    }
+
+    /// [`Harness::flying`], with the stars' sheet.
+    fn flying_with_stars(fps: u64) -> Self {
+        Self::over(fps, data_of(true, false, true)).into_flight()
     }
 
     /// Enters flight from the ship browser.
@@ -439,17 +458,15 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     assert_eq!(session.ship(), ShipId(128));
 
     let first = harness.frame();
-    // The stars; the two stellars, then their names; the ship; the title
-    // and help lines; then the HUD: the status bar's picture, the radar's
-    // two small ovals (4 pixels each) and the player's pixel, and three
-    // bars, then the nav area's "Nav System Off" (never the
-    // system's name), and the target and secondary weapon lines. This
-    // `ïntf` has no `CargoArea`, so no cargo lines.
+    // No stars, as the fixture has no `spïn` 700; the two stellars, then
+    // their names; the ship; the title and help lines; then the HUD: the
+    // status bar's picture, the radar's two small ovals (4 pixels each)
+    // and the player's pixel, and three bars, then the nav area's "Nav
+    // System Off" (never the system's name), and the target and secondary
+    // weapon lines. This `ïntf` has no `CargoArea`, so no cargo lines.
     let shape = shape(&first);
-    assert_eq!(shape[0].0, "solid");
-    assert!(shape[0].1 > 0, "stars");
     assert_eq!(
-        &shape[1..],
+        shape,
         [
             ("sprites", 2),
             ("text", 2),
@@ -461,9 +478,10 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
         ]
     );
     let start = quads(&first);
-    assert_eq!(start[0].dest, centred(512.0, -216.0, 8.0, 8.0));
-    assert_eq!(start[1].dest, centred(812.0, 184.0, 6.0, 6.0));
-    assert_eq!(start[2].dest, centred(512.0, 384.0, 1.0, 1.0), "the ship");
+    // The ship at the play area's centre, (415, 384).
+    assert_eq!(start[0].dest, centred(415.0, -216.0, 8.0, 8.0));
+    assert_eq!(start[1].dest, centred(715.0, 184.0, 6.0, 6.0));
+    assert_eq!(start[2].dest, centred(415.0, 384.0, 1.0, 1.0), "the ship");
     for expected in ["Alpha Prime", "Alpha Station", "Alpha (sÿst 128)"] {
         assert!(
             texts(&first).contains(&expected.to_owned()),
@@ -685,9 +703,42 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
 }
 
 #[test]
+fn the_stars_are_drawn_first_each_its_own_ored_sprite_over_the_play_area() {
+    let mut harness = Harness::flying_with_stars(60);
+    let first = harness.frame();
+    let stars: Vec<QuadInstance> = first
+        .batches
+        .iter()
+        .take(20)
+        .map(|batch| match batch {
+            Batch::Sprites {
+                blend: Blend::Or,
+                quads,
+                ..
+            } => {
+                assert_eq!(quads.len(), 1);
+                quads[0]
+            }
+            other => panic!("a star: {other:?}"),
+        })
+        .collect();
+    assert_eq!(stars.len(), 20);
+    for star in &stars {
+        assert_eq!((star.dest.w, star.dest.h), (5.0, 5.0));
+        assert!((0.0..=830.0).contains(&centre(star.dest).x), "{star:?}");
+        assert!((0.0..=768.0).contains(&centre(star.dest).y), "{star:?}");
+    }
+    assert_eq!(
+        sprite_batch(&first, 20),
+        Some((Blend::Normal, 2)),
+        "then the stellars"
+    );
+}
+
+#[test]
 fn holding_up_ors_the_engine_glow_over_the_ship_and_it_fades_out_after_release() {
     let mut harness = Harness::flying(60);
-    let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 3), sprite_batch(frame, 4));
+    let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 2), sprite_batch(frame, 3));
     let unlit = |frame: &Frame| {
         let (ship, next) = ship_and_glow(frame);
         ship == Some((Blend::Normal, 1)) && !matches!(next, Some((Blend::Or, _)))
@@ -724,7 +775,7 @@ fn holding_up_ors_the_engine_glow_over_the_ship_and_it_fades_out_after_release()
     harness.hold(&[]);
     let released = harness.run(0.1);
     assert_eq!(
-        sprite_batch(&released, 4),
+        sprite_batch(&released, 3),
         Some((Blend::Or, 1)),
         "still glowing: {:?}",
         shape(&released)
@@ -740,11 +791,11 @@ fn the_ships_lights_are_ored_over_it() {
     let frame = harness.frame();
 
     assert_eq!(
-        sprite_batch(&frame, 3),
+        sprite_batch(&frame, 2),
         Some((Blend::Normal, 1)),
         "the ship"
     );
-    assert_eq!(sprite_batch(&frame, 4), Some((Blend::Or, 1)), "its lights");
+    assert_eq!(sprite_batch(&frame, 3), Some((Blend::Or, 1)), "its lights");
     let drawn = quads(&frame);
     let (ship, lights) = (drawn[2].dest, drawn[3].dest);
     assert_eq!((ship.w, lights.w, lights.h), (1.0, 3.0, 3.0));
@@ -811,10 +862,11 @@ fn the_player_can_fly_to_every_stellar_in_the_system() {
         let ship = point(harness.ship().position);
         assert!(distance(ship, target) < 50.0, "{ship:?} from {target:?}");
         // The camera is on the ship, so the stellar is drawn near the
-        // middle of the screen (the ship is drawn up to a step behind).
+        // play area's centre, (415, 384) (the ship is drawn up to a step
+        // behind).
         let drawn = centre(quads(&arrived)[index].dest);
         assert!(
-            distance(drawn, Point::new(512.0, 384.0)) < 55.0,
+            distance(drawn, Point::new(415.0, 384.0)) < 55.0,
             "stellar {index} drawn at {drawn:?}"
         );
     }

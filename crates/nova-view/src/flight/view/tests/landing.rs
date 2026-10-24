@@ -421,13 +421,12 @@ fn the_refusal_is_drawn_until_its_ticks_have_passed() {
 }
 
 #[test]
-fn the_message_draws_over_the_starfield_and_under_the_ships() {
-    let mut view = flight();
+fn the_messages_box_draws_over_the_starfield_under_the_ships_and_its_text_over_them() {
+    let mut view = FlightView::new(starry());
     land_now(&mut view);
     let list = drawn(&view);
     let commands: Vec<&DrawCommand> = list.iter().collect();
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     let stars: Vec<&DrawCommand> = stars.iter().collect();
     assert!(!stars.is_empty());
     assert_eq!(commands[..stars.len()], stars[..], "the starfield first");
@@ -436,16 +435,19 @@ fn the_message_draws_over_the_starfield_and_under_the_ships() {
         &fill_command(hud::message_box(VIEW_SIZE), Color::BLACK),
         "then the message's box, black in a black system"
     );
-    assert_eq!(
-        commands[stars.len() + 1],
-        &message_drawn(TOO_FAR_PLANET),
-        "then the message"
-    );
     let sprite = commands
         .iter()
-        .position(|c| matches!(c, DrawCommand::Sprite { .. }))
+        .position(|c| matches!(c, DrawCommand::Sprite { .. }) && !is_star(c))
         .expect("the player's sprite");
-    assert!(stars.len() < sprite, "the ship over it");
+    let text = commands
+        .iter()
+        .position(|c| **c == message_drawn(TOO_FAR_PLANET))
+        .expect("the message");
+    // `_DisplayComm` draws into the background frame, under the sprites;
+    // `_FloaterDrawCallback` ORs its message rect over them
+    // (@0x38b52-0x38b90).
+    assert!(stars.len() < sprite, "the ship over the box");
+    assert!(sprite < text, "the text over the ship");
 }
 
 #[test]
@@ -455,11 +457,11 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
     let text = vec!["abcd"; 60].join(" ");
     view.say_for(text.clone(), MESSAGE_TICKS);
     let mut expected = DrawList::new();
-    hud::draw_message(
+    hud::draw_message_box(&mut expected, VIEW_SIZE, Color::BLACK);
+    hud::draw_message_text(
         &mut expected,
         &text,
         VIEW_SIZE,
-        Color::BLACK,
         Some(&crate::text::fixture::MonoMetrics),
     );
     let list = drawn(&view);
@@ -474,7 +476,8 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
         4,
         "the box, two whole lines and a clipped third"
     );
-    assert_eq!(commands[first - 1..first + 3], expected[..]);
+    assert!(commands[..first].contains(&expected[0]), "the box under");
+    assert_eq!(commands[first..first + 3], expected[1..]);
 }
 
 #[test]
@@ -492,13 +495,13 @@ fn the_message_box_is_filled_in_the_systems_background_at_rgb555() {
         .iter()
         .position(|c| **c == message_drawn(TOO_FAR_PLANET))
         .expect("the message");
-    assert_eq!(
-        commands[message - 1],
-        &fill_command(
-            hud::message_box(VIEW_SIZE),
-            Color::rgba(0x00, 0x08, 0x10, 255)
-        ),
-        "the box, just under the text"
+    let filled = fill_command(
+        hud::message_box(VIEW_SIZE),
+        Color::rgba(0x00, 0x08, 0x10, 255),
+    );
+    assert!(
+        commands[..message].contains(&&filled),
+        "the box, under the text"
     );
 }
 

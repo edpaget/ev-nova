@@ -318,7 +318,11 @@ pub struct BeamShown {
 /// ([`StepRolls::for_beam`]) by `rule`'s reading of
 /// [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag); a
 /// beam whose look was not read is a plain line in [`Color::ERROR`], over
-/// the ships.
+/// the ships. The world draws the beams under the ships just over the
+/// stellars, as the stellar layer's `_BeamDrawOffscreenCallback` does,
+/// and the others over every layer, the explosions included, as the
+/// target layer's `_BeamDrawCallback` does
+/// ([`WorldPass`](nova_sim::sprite_layer::WorldPass)).
 pub fn draw_beams(
     list: &mut DrawList,
     beams: &[BeamShown],
@@ -780,6 +784,7 @@ mod tests {
             asteroids: BTreeMap::new(),
             cursor: None,
             pod: None,
+            stars: None,
         }
     }
 

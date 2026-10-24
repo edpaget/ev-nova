@@ -245,6 +245,9 @@ impl<A: Audio> AudioCore<A> {
             SimSound::TargetCleared => {
                 self.play(self.table.target_cleared, at::TARGET_CLEARED);
             }
+            SimSound::SecondarySelected => {
+                self.play(self.table.secondary_selected, at::SECONDARY_SELECTED);
+            }
             SimSound::TutorialHint => {
                 self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
             }
@@ -336,6 +339,7 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.escort_group, at::ESCORT_GROUP);
             }
             UiSound::NoEscorts => self.play(self.table.no_escorts, at::NO_ESCORTS),
+            UiSound::BuyRefused => self.play(self.table.buy_refused, at::BUY_REFUSED),
             UiSound::EnterRefused => {
                 self.play(self.table.enter_refused, at::ENTER_REFUSED);
             }
@@ -677,7 +681,7 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
-/// entry, the saved pilots' list, a note and a question over the main
+/// entry and its ship's christening, the saved pilots' list, a note and a question over the main
 /// menu, and the plunder,
 /// assignment, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
@@ -687,6 +691,7 @@ fn is_overlay(showing: Showing) -> bool {
         Showing::About
             | Showing::Preferences
             | Showing::NewPilot
+            | Showing::Christening
             | Showing::OpenPilot
             | Showing::Note
             | Showing::Question
@@ -740,6 +745,7 @@ fn has_music(scene: Showing) -> bool {
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
+        | Showing::Christening
         | Showing::OpenPilot
         | Showing::Note
         | Showing::Question
@@ -902,6 +908,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one case for each of the sounds
     fn each_event_plays_at_its_priority() {
         use crate::priority as at;
         let script = |exclusive| {
@@ -952,6 +959,10 @@ mod tests {
             (Sound::Sim(SimSound::TargetSelected), at::TARGET_SELECTED),
             (Sound::Sim(SimSound::HyperSelected), at::HYPER_SELECTED),
             (Sound::Sim(SimSound::TargetCleared), at::TARGET_CLEARED),
+            (
+                Sound::Sim(SimSound::SecondarySelected),
+                at::SECONDARY_SELECTED,
+            ),
             (Sound::Sim(SimSound::TutorialHint), at::TUTORIAL_HINT),
             (Sound::Sim(SimSound::ShipDowned), at::SHIP_DOWNED),
             (
@@ -985,6 +996,7 @@ mod tests {
             (Sound::Ui(UiSound::EscortMenuToggled), at::ESCORT_MENU),
             (Sound::Ui(UiSound::EscortGroupSelected), at::ESCORT_GROUP),
             (Sound::Ui(UiSound::NoEscorts), at::NO_ESCORTS),
+            (Sound::Ui(UiSound::BuyRefused), at::BUY_REFUSED),
             (Sound::Ui(UiSound::EnterRefused), at::ENTER_REFUSED),
             (Sound::Ui(UiSound::NewsOpened), at::NEWS_OPEN),
             (Sound::Ui(UiSound::MissionInfoOpened), at::NEWS_OPEN),
@@ -1295,6 +1307,31 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_secondary_selected_or_let_go_beeps_152_and_one_refused_153() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::SecondarySelected),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            secondary_selected: Some(SoundId(160)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::SecondarySelected)],
+        );
+        assert_eq!(drain(&log), [play(160, EFFECTS)]);
     }
 
     #[test]
@@ -2490,6 +2527,7 @@ mod tests {
         for overlay in [
             Showing::About,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,
@@ -2598,6 +2636,7 @@ mod tests {
         for overlay in [
             Showing::Preferences,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,

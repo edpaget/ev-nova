@@ -667,7 +667,8 @@ mod tests {
         LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_PICTS,
         SLIDE_POSITIONS, main_screen_art,
     };
-    use crate::menu::pilot_panel::{PanelShip, ShipPicture};
+    use crate::menu::pilot_panel::PanelShip;
+    use crate::target_picture::ShipPicture;
     use crate::text::fixture::MonoMetrics;
 
     fn stand_in() -> MainMenu {

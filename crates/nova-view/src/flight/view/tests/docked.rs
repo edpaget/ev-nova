@@ -158,8 +158,8 @@ fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
 }
 
 /// Only the bar's own map puts back the bar's nav: a map opened in
-/// port some other way (as from the other port screens will be)
-/// leaves the nav its click cued, with the bar's save still held,
+/// port some other way (the port screens' have restores of their own,
+/// [`FlightView::open_port_screen_map`]) leaves the nav its click cued, with the bar's save still held,
 /// even after the bar's own map has opened and closed.
 #[test]
 fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {

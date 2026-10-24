@@ -19,6 +19,7 @@
 //! With a map for sale too, a map bought once greys Buy for the rest of
 //! that opening of the outfitter, and the next opening lifts it.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -352,6 +353,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 /// fourteen items, stock "Spaceport" (`DLOG` 1000) and its fifteen user
 /// items, and stock "Outfit" (`DLOG` 1002, 765 x 321, centred) and its
 /// thirteen user items.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -420,6 +423,8 @@ fn interface() -> InterfaceData {
         (Ditl::TYPE, 1002, ditl(&outfit)),
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -661,6 +666,8 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
@@ -784,6 +791,8 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     game.frame();

@@ -50,6 +50,7 @@ use crate::catalog::{
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::resource_name::trim_resource_name;
 use crate::voice::Voices;
 use crate::warp::SoundLength;
 
@@ -984,13 +985,11 @@ fn person_name(name: &str) -> String {
         .collect()
 }
 
-/// A resource name as the game shows a person's or a mission's: up to its
-/// last ';', trailing spaces and ';'s dropped (`_TrimResourceName`
-/// @0x717ac). A mission's is kept whole, as the original keeps 255
-/// characters.
+/// A resource name as the game shows a person's or a mission's: cut as
+/// [`trim_resource_name`] cuts it (`_TrimResourceName` @0x717ac). A
+/// mission's is kept whole, as the original keeps 255 characters.
 fn shown_resource_name(name: &str) -> &str {
-    let shown = name.rfind(';').map_or(name, |at| &name[..at]);
-    shown.trim_end_matches([' ', ';'])
+    trim_resource_name(name)
 }
 
 /// The most characters of a government's name the engine keeps (it
@@ -5281,7 +5280,7 @@ mod tests {
                     },
                     movies: TextMovies::default(),
                 },
-                MissionTexts::named(MissionId(131), "Plain run"),
+                MissionTexts::named(MissionId(131), "Plain run  "),
                 MissionTexts {
                     accept_button: " ok".to_owned(),
                     refuse_named: true,
@@ -5374,12 +5373,12 @@ mod tests {
     }
 
     #[test]
-    fn a_resource_name_is_shown_up_to_its_last_semicolon_trailing_spaces_and_semicolons_dropped() {
+    fn a_resource_name_is_shown_up_to_its_last_semicolon_spaces_and_semicolons_before_it_dropped() {
         assert_eq!(
             shown_resource_name("Delivery to <DST>; Vellos1 "),
             "Delivery to <DST>"
         );
-        assert_eq!(shown_resource_name("No cut  "), "No cut");
+        assert_eq!(shown_resource_name("No cut  "), "No cut  ");
         assert_eq!(shown_resource_name("a;b;c"), "a;b");
         assert_eq!(shown_resource_name("x;; ;"), "x");
     }

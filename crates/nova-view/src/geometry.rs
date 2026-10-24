@@ -97,6 +97,13 @@ impl Bounds {
         (self.min.x..=self.max.x).contains(&p.x) && (self.min.y..=self.max.y).contains(&p.y)
     }
 
+    /// Whether `p` is inside as QuickDraw's `PtInRect` counts it: the left
+    /// and top edges in, the right and bottom edges out.
+    #[must_use]
+    pub fn contains_half_open(&self, p: Point) -> bool {
+        (self.min.x..self.max.x).contains(&p.x) && (self.min.y..self.max.y).contains(&p.y)
+    }
+
     /// The rectangle grown by `margin` on every side.
     #[must_use]
     pub fn grown(&self, margin: f32) -> Self {
@@ -217,6 +224,28 @@ mod tests {
             at(0.0, 5.001),
         ] {
             assert!(!box_.contains(outside), "{outside:?}");
+        }
+    }
+
+    #[test]
+    fn half_open_containment_takes_the_left_and_top_edges_but_not_the_right_and_bottom() {
+        let box_ = bounds((-2.0, -1.0), (3.0, 5.0));
+        for inside in [
+            at(0.0, 0.0),
+            at(-2.0, -1.0),
+            at(-2.0, 4.999),
+            at(2.999, 2.0),
+        ] {
+            assert!(box_.contains_half_open(inside), "{inside:?}");
+        }
+        for outside in [
+            at(3.0, 0.0),
+            at(0.0, 5.0),
+            at(3.0, 5.0),
+            at(-2.001, 0.0),
+            at(0.0, -1.001),
+        ] {
+            assert!(!box_.contains_half_open(outside), "{outside:?}");
         }
     }
 

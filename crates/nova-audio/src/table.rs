@@ -45,6 +45,9 @@ pub struct SoundTable {
     pub escort_group: Option<SoundId>,
     /// Plays as the player asks for the escort menu with no escorts.
     pub no_escorts: Option<SoundId>,
+    /// Plays as the shipyard's B or the hire screen's H asks with no ship
+    /// selected, or one that cannot be bought or hired.
+    pub buy_refused: Option<SoundId>,
     /// Plays as the main menu's E finds no pilot to enter the game with.
     pub enter_refused: Option<SoundId>,
     /// Plays as a disabled former escort repairs itself and rejoins.
@@ -95,6 +98,9 @@ pub struct SoundTable {
     pub target_selected: Option<SoundId>,
     /// Plays as Option-backquote lets go of the ship target.
     pub target_cleared: Option<SoundId>,
+    /// Plays as Weapon Select picks a secondary, and as Weapon Safety lets
+    /// go of one.
+    pub secondary_selected: Option<SoundId>,
     /// Plays as a first-flight tutorial hint is shown.
     pub tutorial_hint: Option<SoundId>,
     /// Plays as the player's ship is newly disabled or newly starts to
@@ -219,6 +225,9 @@ impl SoundTable {
     ///   (`_HandlePlayer` @0x6e126-0x6e149).
     /// - `no_escorts`: 153, `_beepSnd[3]`, with "You don't have any
     ///   escorts." (`_HandlePlayer` @0x6de08-0x6de87).
+    /// - `buy_refused`: 153, `_beepSnd[3]`, which `_DoShipyardDialog`'s
+    ///   item 1 plays when it has no ship to buy or hire, or one it
+    ///   cannot (`PlaySound` @0x5f238-0x5f256).
     /// - `enter_refused`: 153, `_beepSnd[3]` again, which
     ///   `_MainScreenChoice(3)` plays as the main screen's E finds no game
     ///   in progress, or a dying pilot (`PlaySound` @0x1aa89-0x1aaac).
@@ -287,6 +296,9 @@ impl SoundTable {
     /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
     ///   of the ship target (@0x69a7d), or a click on the player's own
     ///   ship does (@0x6a585).
+    /// - `secondary_selected`: 152, `_beepSnd[2]`, as Weapon Select picks
+    ///   a secondary (@0x6acce-0x6acf1) and as Weapon Safety lets go of
+    ///   the selection (@0x6adf8-0x6ae1b).
     /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
     ///   first-flight tutorial hint (@0x70a1c, @0x70c12, @0x70dab,
     ///   @0x70e59).
@@ -403,6 +415,7 @@ impl SoundTable {
         escorts_commanded: Some(SoundId(151)),
         escort_group: Some(SoundId(152)),
         no_escorts: Some(SoundId(153)),
+        buy_refused: Some(SoundId(153)),
         enter_refused: Some(SoundId(153)),
         escort_repaired: Some(SoundId(154)),
         propulsion_repaired: Some(SoundId(154)),
@@ -426,6 +439,7 @@ impl SoundTable {
         hyper_selected: Some(SoundId(152)),
         target_selected: Some(SoundId(152)),
         target_cleared: Some(SoundId(150)),
+        secondary_selected: Some(SoundId(152)),
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
@@ -496,6 +510,7 @@ mod tests {
         assert_eq!(table.escorts_commanded, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.escort_group, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.buy_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.enter_refused, Some(SoundId(153)), "_beepSnd[3]");
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.propulsion_repaired, Some(SoundId(154)), "_beepSnd[4]");
@@ -519,6 +534,7 @@ mod tests {
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.secondary_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");

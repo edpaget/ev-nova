@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{CICN, PICT, decode_cicn};
+use nova_data::graphics::{CICN, decode_cicn};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -23,8 +23,8 @@ use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
-    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StatusBarLayout, StatusBars,
-    TargetCard, WeaponId, WeaponLook,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarSheet, StatusBarLayout,
+    StatusBars, TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
@@ -148,11 +148,9 @@ pub const FIRST_BOX_SPIN: i16 = 500;
 /// The mouse cursor's `spïn`, which `_InitSprites` loads with
 /// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
 pub const CURSOR_SPIN: i16 = 650;
-/// The first target picture, `PICT` 3000 for `shïp` 128
-/// (`_LoadSprites`).
-pub const FIRST_TARGET_PICTURE: i16 = 3000;
-/// The first `shïp`.
-const FIRST_SHIP: i16 = 128;
+/// The stars' `spïn`, which `_LoadSprites` makes the master star sprite
+/// from with `_GetSpriteInfo(0x2bc)` (@0x21037).
+pub const STAR_SPIN: i16 = 700;
 /// `FrameAdvance` per frame a tick (the double @0xdd098).
 pub const FRAME_ADVANCE_UNIT: f32 = 0.01;
 
@@ -223,10 +221,9 @@ impl CombatLooks for GameData {
         let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
             return TargetCard::default();
         };
-        let picture = FIRST_TARGET_PICTURE.saturating_add(ship.0 - FIRST_SHIP);
         TargetCard {
             subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: self.resource(PICT, picture).map(|_| picture),
+            picture: crate::target_picture::game_target_picture(self, ship).map(|p| p.picture),
         }
     }
 
@@ -257,6 +254,17 @@ impl CombatLooks for GameData {
             image_id: sheet.image_id,
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
+        })
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        let spin = self.spin_sheet(STAR_SPIN).map_err(|err| err.to_string())?;
+        // The decoder refuses a sheet without frames.
+        let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
+        Ok(StarSheet {
+            image_id: spin.image_id,
+            frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
+            size: (spin.sheet.frame_width(), spin.sheet.frame_height()),
         })
     }
 
@@ -354,8 +362,8 @@ mod tests {
     use std::path::Path;
 
     use nova_data::Record;
-    use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::{PICT, RLED};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
@@ -1090,6 +1098,23 @@ mod tests {
     }
 
     #[test]
+    fn the_stars_sheet_is_spin_700_with_its_frames_width_and_height() {
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, spin(701)),
+            (RLED, 701, None, sheet(16)),
+        ]);
+        assert_eq!(
+            data.star_sheet(),
+            Ok(StarSheet {
+                image_id: 701,
+                frames: NonZeroU16::new(16).expect("non-zero"),
+                size: (3, 2),
+            })
+        );
+        assert_eq!(named_store(&[]).star_sheet(), Err("no spïn 700".to_owned()));
+    }
+
+    #[test]
     fn a_cargo_boxs_sheet_is_spin_500_and_its_graphic() {
         let data = named_store(&[
             (Spin::TYPE, 500, None, spin(600)),
@@ -1186,6 +1211,8 @@ mod tests {
         let data = named_store(&[
             (Ship::TYPE, 128, None, subtitled("Light Transport")),
             (Ship::TYPE, 129, None, subtitled("Freighter")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1100, 1, 8)),
             (PICT, 3000, None, picture(2, 2)),
         ]);
         assert_eq!(
@@ -1204,6 +1231,32 @@ mod tests {
             "without a PICT 3001"
         );
         assert_eq!(data.target_card(ShipId(130)), TargetCard::default());
+    }
+
+    #[test]
+    fn a_target_card_falls_back_to_the_base_ships_picture() {
+        let data = named_store(&[
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Variant")),
+            (Ship::TYPE, 130, None, subtitled("Other Hull")),
+            (Ship::TYPE, 131, None, subtitled("No Anim")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 130, None, anim(1200, 1, 8)),
+            (PICT, 3000, None, picture(2, 2)),
+            (PICT, 3003, None, picture(2, 2)),
+        ]);
+        assert_eq!(
+            data.target_card(ShipId(129)).picture,
+            Some(3000),
+            "128's, the base sharing BaseImage 1000"
+        );
+        assert_eq!(data.target_card(ShipId(130)).picture, None, "no sharer");
+        assert_eq!(
+            data.target_card(ShipId(131)).picture,
+            None,
+            "no shän, though PICT 3003 exists (@0x23ef3)"
+        );
     }
 
     /// A `gövt` whose `TargetCode` is `code`.

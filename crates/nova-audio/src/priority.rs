@@ -57,6 +57,9 @@ pub const ESCORT_GROUP: Priority = Priority::new(1);
 /// "You don't have any escorts.", `_beepSnd[3]`: `_HandlePlayer`
 /// @0x6de82.
 pub const NO_ESCORTS: Priority = Priority::new(1);
+/// The shipyard's or the hire screen's buy refused, `_beepSnd[3]`:
+/// `_DoShipyardDialog` @0x5f238-0x5f256.
+pub const BUY_REFUSED: Priority = Priority::new(1);
 /// The main screen's E refused, `_beepSnd[3]`: `_MainScreenChoice`
 /// @0x1aaac.
 pub const ENTER_REFUSED: Priority = Priority::new(10);
@@ -116,6 +119,9 @@ pub const TARGET_SELECTED: Priority = Priority::new(1);
 /// The ship target let go, `_beepSnd[0]`: `_HandlePlayer` @0x69a7d,
 /// @0x6a585.
 pub const TARGET_CLEARED: Priority = Priority::new(1);
+/// Weapon Select picking a secondary, or Weapon Safety letting go of one,
+/// `_beepSnd[2]`: `_HandlePlayer` @0x6acf1, @0x6ae1b.
+pub const SECONDARY_SELECTED: Priority = Priority::new(1);
 /// A tutorial hint, `_beepSnd[4]`: `_HandlePlayer` @0x70a1c, @0x70c12,
 /// @0x70dab, @0x70e59.
 pub const TUTORIAL_HINT: Priority = Priority::new(1);
@@ -231,6 +237,7 @@ mod tests {
             (ESCORTS_COMMANDED, 1, "escorts commanded"),
             (ESCORT_GROUP, 1, "escort group"),
             (NO_ESCORTS, 1, "no escorts"),
+            (BUY_REFUSED, 1, "buy refused"),
             (ENTER_REFUSED, 10, "enter refused"),
             (ESCORT_REPAIRED, 8, "escort repaired"),
             (PROPULSION_REPAIRED, 1, "propulsion repaired"),
@@ -252,6 +259,7 @@ mod tests {
             (HYPER_SELECTED, 1, "hyper selected"),
             (TARGET_SELECTED, 1, "target selected"),
             (TARGET_CLEARED, 1, "target cleared"),
+            (SECONDARY_SELECTED, 1, "secondary selected"),
             (TUTORIAL_HINT, 1, "tutorial hint"),
             (SHIP_DOWNED, 1, "ship downed"),
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),

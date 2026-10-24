@@ -123,7 +123,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0080, Guided, Implemented),
     // Blast doesn't hurt the player.
     (Flags, 0x0100, Any, Implemented),
-    // Small smoke, big smoke, persistent smoke.
+    // Small smoke, big smoke, persistent smoke. The engine reads 0x0800
+    // for the let-go of a selected secondary that runs out too
+    // (`PERSISTENT_SMOKE`, `RuleKey::EmptySecondary`), which needs no
+    // report.
     (Flags, 0x0200, Any, Presentation),
     (Flags, 0x0400, Any, Presentation),
     (Flags, 0x0800, Any, Presentation),

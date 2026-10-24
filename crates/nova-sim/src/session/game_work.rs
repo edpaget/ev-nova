@@ -337,7 +337,9 @@ impl Session {
     /// `player_repair` module), its point defence (@0x68c74,
     /// [`Combat::defend_player`]), the sabotage clock's tick (@0x692e5;
     /// see the `sabotage` module), its trigger and its reloads' countdown
-    /// (@0x6ab55, @0x6ae25, [`Combat::fire_player`]); then its recoil set
+    /// (@0x6ab55, @0x6ae25, [`Combat::fire_player`]) and its secondary
+    /// block (@0x6abcc-0x6ae20; see the `secondary_select` module); then
+    /// its recoil set
     /// in its velocity (`_AdjustedAccel` @0x62f35) and the fighters its bays
     /// launched put in the system (`_LaunchFighter` @0x62c61), all before
     /// it moves. So it fires from where it stood, along the heading and at
@@ -356,6 +358,7 @@ impl Session {
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fire_player(fighters, arena, chance);
         });
+        self.secondary_block();
         self.take_shoves();
         let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
@@ -462,7 +465,7 @@ impl Session {
             trigger: if self.pod.is_some() {
                 Trigger::default()
             } else {
-                super::player_trigger(self.ship.trigger, self.mode.jump().is_some())
+                super::player_trigger(self.ship.held_trigger(), self.mode.jump().is_some())
             },
             target: self.chart.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,

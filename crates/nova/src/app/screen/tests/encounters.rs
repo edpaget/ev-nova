@@ -73,16 +73,19 @@ fn scripted_under_the_player() -> (Rc<RefCell<Script>>, SharedChance) {
     (script, SharedChance::new(shared))
 }
 
-/// The draws a new pilot's flight makes: the offers' roll table its
-/// beginning draws, each the last outcome, then the traffic's setup,
+/// The draws a new pilot makes: its name's and nickname's defaults and its
+/// christening's default, each the first, then its flight's: the offers' roll table its beginning draws, each
+/// the last outcome, then the traffic's setup,
 /// the trader under a new pilot's ship at (50, 50), where
 /// [`nova_sim::Session::begin`] puts it, facing up; then the last
 /// outcomes.
 fn under_a_new_pilot() -> SharedChance {
+    let christening = [0, 0, 0].into_iter();
     let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
     let setup = [6, 6, 0, 0, 800, 800, 0, 0];
-    let script: Rc<RefCell<dyn Chance>> =
-        Rc::new(RefCell::new(Script(table.chain(setup).collect())));
+    let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
+        christening.chain(table).chain(setup).collect(),
+    )));
     SharedChance::new(script)
 }
 

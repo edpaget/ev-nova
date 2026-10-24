@@ -331,10 +331,17 @@
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
 //! fires its primary weapons and the secondary selected
-//! ([`Session::hold_fire`], [`Session::select_secondary`]). No secondary
+//! ([`Session::hold_fire`]). In `_HandlePlayer`'s secondary block, after
+//! the fire, the Weapon Select key ([`Session::press_weapon_select`])
+//! steps the selection through the ship's secondaries in `wëap` ID order,
+//! the Weapon Safety key ([`Session::hold_weapon_safety`]) lets go of it,
+//! and a selection that runs out is let go as
+//! [`RuleKey::EmptySecondary`] says (see the `secondary_select` module).
+//! No secondary
 //! is selected to start with, as `_ResetPlayer` (@0x1d4dd) leaves it, a
-//! reload included; it is set by [`Session::select_secondary`] alone, and
-//! let go on a ship purchase (`_DoShipyardDialog` @0x5f01c), a capture as
+//! reload included; it is set by the Weapon Select key alone, and let go
+//! by the Weapon Safety key, by running out, on a ship purchase
+//! (`_DoShipyardDialog` @0x5f01c), a capture as
 //! the player's ship (`_DoShipCapture` @0x4173e) and the outfitter's sale
 //! of the last outfit mounting it (`_DoOutfitDialog` @0x5ce82), even
 //! while another outfit still mounts the weapon
@@ -545,6 +552,7 @@ mod rescue;
 mod sabotage;
 mod script_effects;
 mod script_move;
+mod secondary_select;
 mod self_destruct;
 mod self_repair;
 mod setup;
@@ -636,9 +644,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::ai_fire::PlayerRating;
-use crate::combat::armament::{
-    Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
-};
+use crate::combat::armament::{Armament, Arsenal, Trigger, fit_stock, outfit_rounds};
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, HullSpec};
@@ -2260,23 +2266,20 @@ impl Session {
     }
 
     /// Holds the player's fire keys: the `primary` trigger, and the
-    /// `secondary` one on the secondary weapon selected.
+    /// `secondary` one on the secondary weapon selected as each step finds
+    /// it, so a selection let go mid-frame fires no more (see the
+    /// `secondary_select` module).
     pub fn hold_fire(&mut self, primary: bool, secondary: bool) {
         self.ship.hold_fire(primary, secondary);
     }
 
-    /// Selects the next secondary weapon, or the one before it when
-    /// `backwards`, in the order they were mounted, wrapping (see
-    /// [`next_secondary`]).
-    pub fn select_secondary(&mut self, backwards: bool) {
-        self.ship
-            .select_secondary(&self.pilot, &self.statics, backwards);
-    }
-
     /// The secondary weapon selected, if any: none when the session
-    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
-    /// and let go on a ship purchase, a capture as the player's ship and
-    /// the sale of the last outfit mounting it (see the module docs). By
+    /// starts, set by the Weapon Select key alone
+    /// ([`Session::press_weapon_select`]), and let go by the Weapon Safety
+    /// key ([`Session::hold_weapon_safety`]), by running out (see the
+    /// `secondary_select` module), on a ship purchase, a capture as the
+    /// player's ship and the sale of the last outfit mounting it (see the
+    /// module docs). By
     /// the engine it may name a weapon the ship no longer carries, which
     /// fires nothing, as the original's `_DrawStatusWeap` still names it
     /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
@@ -2409,6 +2412,9 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
             combat.regenerate_player(fighters, arena);
         });
+        // `_HandlePlayer`'s secondary block, after its fire (see the
+        // `secondary_select` module).
+        self.secondary_block();
         self.player_display_step(pass, rules, start.player_head(), chance);
         // The traffic tick's work on the line, after `_HandlePlayer`'s
         // lines (the sabotage's, the eject's), as the AI loop's calls
@@ -4774,18 +4780,19 @@ impl Session {
     }
 
     /// The prompt for naming a ship of class `ship` before it is bought,
-    /// its default's digits drawn on `chance` ([`shipyard`]'s "Naming the
-    /// ship"). It is refused as [`buy_ship`](Self::buy_ship) would refuse
-    /// the purchase, and changes nothing about the pilot, so no save is
-    /// due. The shipyard's rolls not drawn yet are drawn on `chance`
+    /// its opening words read from `catalog` and its default's digits drawn
+    /// on `chance` ([`shipyard`]'s "Naming the ship"). It is refused as
+    /// [`buy_ship`](Self::buy_ship) would refuse the purchase, and changes
+    /// nothing about the pilot, so no save is due. The shipyard's rolls not drawn yet are drawn on `chance`
     /// first.
     pub fn ship_naming(
         &mut self,
         ship: ShipId,
+        catalog: &(impl crate::catalog::CommCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) -> Result<ShipNaming, ShipRefusal> {
         let (_, record) = self.buyable(ship, chance)?;
-        Ok(shipyard::naming(&record, chance))
+        Ok(shipyard::naming(catalog, &record, chance))
     }
 
     /// Declines to buy a ship of class `ship`, as cancelling its name
@@ -6168,46 +6175,10 @@ impl PlayerShip {
         }
     }
 
-    /// Holds `trigger`, the player's fire command, until another is held.
-    fn hold_trigger(&mut self, trigger: Trigger) {
-        self.trigger = trigger;
-    }
-
-    /// Holds the player's fire keys: the `primary` trigger, and the
-    /// `secondary` one on the secondary weapon selected.
-    fn hold_fire(&mut self, primary: bool, secondary: bool) {
-        self.hold_trigger(Trigger {
-            primary,
-            secondary: self.secondary.filter(|_| secondary),
-            ..Trigger::default()
-        });
-    }
-
-    /// The secondary after `current`, `backwards` or not (see
-    /// [`next_secondary`]), skipping one hidden while the pilot owns none
-    /// of its rounds.
-    fn next_secondary(
-        &self,
-        pilot: &Pilot,
-        statics: &Statics,
-        current: Option<WeaponId>,
-        backwards: bool,
-    ) -> Option<WeaponId> {
-        next_secondary(self.fit.armament.mounts(), current, backwards, |ammo| {
-            outfit_rounds(&pilot.outfits, &statics.ammo_outfits, ammo)
-        })
-    }
-
-    /// Selects the next secondary weapon, or the one before it when
-    /// `backwards`, in the order they were mounted, wrapping (see
-    /// [`next_secondary`]).
-    fn select_secondary(&mut self, pilot: &Pilot, statics: &Statics, backwards: bool) {
-        self.secondary = self.next_secondary(pilot, statics, self.secondary, backwards);
-    }
-
     /// The secondary weapon selected, if any: none when the session
-    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
-    /// and let go on a ship purchase, a capture as the player's ship and
+    /// starts, set by the Weapon Select key alone, and let go by the
+    /// Weapon Safety key, by running out (see the `secondary_select`
+    /// module), on a ship purchase, a capture as the player's ship and
     /// the sale of the last outfit mounting it (see the module docs). By
     /// the engine it may name a weapon the ship no longer carries, which
     /// fires nothing, as the original's `_DrawStatusWeap` still names it
@@ -14874,7 +14845,8 @@ pub(super) mod tests {
             Err(ShipRefusal::CannotAfford)
         );
         assert_eq!(
-            poor.ship_naming(NEW, &mut NeverFires).map(|_| ()),
+            poor.ship_naming(NEW, &NameLists, &mut NeverFires)
+                .map(|_| ()),
             Err(ShipRefusal::CannotAfford)
         );
         assert_eq!(poor, before);
@@ -14910,7 +14882,7 @@ pub(super) mod tests {
             Err(ShipRefusal::AlreadyFlown)
         );
         assert_eq!(
-            session.ship_naming(ShipId(128), &mut NeverFires),
+            session.ship_naming(ShipId(128), &NameLists, &mut NeverFires),
             Err(ShipRefusal::AlreadyFlown)
         );
         assert_eq!(session, before);
@@ -14925,7 +14897,9 @@ pub(super) mod tests {
             "the new class, under its new name"
         );
         assert!(
-            session.ship_naming(ShipId(128), &mut NeverFires).is_ok(),
+            session
+                .ship_naming(ShipId(128), &NameLists, &mut NeverFires)
+                .is_ok(),
             "the refusal follows the class flown now"
         );
     }
@@ -15310,25 +15284,25 @@ pub(super) mod tests {
         let catalog = shipbuying();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(
-            session.ship_naming(NEW, &mut NeverFires),
+            session.ship_naming(NEW, &NameLists, &mut NeverFires),
             Err(ShipRefusal::NoShipyard)
         );
         land_now(&mut session).expect("lands");
         session.take_save_due();
         assert_eq!(
-            session.ship_naming(ShipId(999), &mut NeverFires),
+            session.ship_naming(ShipId(999), &NameLists, &mut NeverFires),
             Err(ShipRefusal::NotListed)
         );
         let mut poor = session.clone();
         poor.pilot.cash = 14_999;
         assert_eq!(
-            poor.ship_naming(NEW, &mut NeverFires),
+            poor.ship_naming(NEW, &NameLists, &mut NeverFires),
             Err(ShipRefusal::CannotAfford)
         );
         let before = session.clone();
         let mut chance = Scripted::rolling(&[0, 0, 0]);
         assert_eq!(
-            session.ship_naming(NEW, &mut chance),
+            session.ship_naming(NEW, &NameLists, &mut chance),
             Ok(ShipNaming {
                 ship: NEW,
                 prompt: "Please name your new The Ship 129: ".to_owned(),
@@ -16015,7 +15989,7 @@ pub(super) mod tests {
         session.decline_ship(NEW);
         let mut missing = Scripted::answering(&[false]);
         assert!(
-            session.ship_naming(NEW, &mut missing).is_ok(),
+            session.ship_naming(NEW, &NameLists, &mut missing).is_ok(),
             "named again"
         );
         assert!(missing.asked.is_empty(), "the list's roll is kept");
@@ -16032,7 +16006,7 @@ pub(super) mod tests {
             .expect("bought");
         let mut missing = Scripted::answering(&[false]);
         assert_ne!(
-            session.ship_naming(NEW, &mut missing).err(),
+            session.ship_naming(NEW, &NameLists, &mut missing).err(),
             Some(ShipRefusal::NotListed),
             "still listed"
         );
@@ -21618,7 +21592,7 @@ pub(super) mod tests {
     use crate::combat::weapon::PASSES_SHIELDS;
 
     /// The weapons the player fired in `events`.
-    fn fired_by_the_player(events: &[CombatEvent]) -> Vec<WeaponId> {
+    pub(super) fn fired_by_the_player(events: &[CombatEvent]) -> Vec<WeaponId> {
         events
             .iter()
             .filter_map(|event| match event {
@@ -22004,9 +21978,9 @@ pub(super) mod tests {
 
     use crate::combat::weapon::SECONDARY;
 
-    const ROCKET: WeaponId = WeaponId(140);
-    const MISSILE: WeaponId = WeaponId(141);
-    const TORCH: WeaponId = WeaponId(142);
+    pub(super) const ROCKET: WeaponId = WeaponId(140);
+    pub(super) const MISSILE: WeaponId = WeaponId(141);
+    pub(super) const TORCH: WeaponId = WeaponId(142);
 
     /// Secondary weapon `id`, a [`blaster`] spending `ammo_type`.
     fn secondary(id: i16, ammo_type: i16) -> WeaponRecord {
@@ -22039,7 +22013,7 @@ pub(super) mod tests {
     /// ([`MISSILE`]), unlimited; and a torch ([`TORCH`]) burning fuel. Ship
     /// 129 carries a blaster, a torch and missiles. Outfits 311-314 hold
     /// the blaster and the three secondaries, in that order.
-    fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
+    pub(super) fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
         let mut outfits = catalog.outfits.clone();
         outfits.push(outfit(310, &[(MOD_AMMO, 140)]));
         outfits.extend(
@@ -27689,15 +27663,18 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_arrival_tells_the_system_changed() {
+    fn an_arrival_tells_the_system_changed_and_the_starfield_reset() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+        );
     }
 
     #[test]
-    fn a_gates_exit_tells_the_system_changed_even_into_the_system_gone_in() {
+    fn a_gates_exit_tells_the_system_changed_and_resets_the_stars_even_into_the_same() {
         let catalog = gated();
         let mut session = at_gate(&catalog);
         assert_eq!(
@@ -27709,7 +27686,10 @@ pub(super) mod tests {
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
             .expect("through");
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+        );
         let catalog = wormholes();
         for (roll, system) in [(0, 131), (1, 130)] {
             let mut session = at_wormhole(&catalog);
@@ -27719,7 +27699,7 @@ pub(super) mod tests {
             );
             assert_eq!(
                 session.take_events(),
-                [SessionEvent::SystemChanged],
+                [SessionEvent::SystemChanged, SessionEvent::StarfieldReset],
                 "{system}"
             );
         }
@@ -28250,6 +28230,22 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         }
         assert_eq!(flying_as(&session, 161), []);
+    }
+
+    /// The session's string lists for the ship name prompt: `STR#` 2002
+    /// with #120, and no other.
+    struct NameLists;
+
+    impl CommCatalog for NameLists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == shipyard::NAME_PROMPT_LIST {
+                let mut list = vec![String::new(); shipyard::NAME_PROMPT_INDEX - 1];
+                list.push("Please name your new".to_owned());
+                list
+            } else {
+                Vec::new()
+            }
+        }
     }
 
     /// The session's string lists for the arrival quotes: `STR#` 7600,

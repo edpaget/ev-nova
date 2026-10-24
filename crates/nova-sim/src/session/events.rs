@@ -34,6 +34,12 @@
 //!   told only on a change, as `GalaxyChanged` is, after the transition's
 //!   own events: the flight view draws each stellar of the scene shown
 //!   again, with no new layout (story-runtime phase 9).
+//! - [`SessionEvent::StarfieldReset`]: the player entered a system the way
+//!   the original's `_RandomizeStars` runs at, a jump's arrival, a
+//!   hypergate's or wormhole's exit or the escape pod's rescue, told after
+//!   that entry's `SystemChanged`: the flight view scatters its stars
+//!   afresh about the ship. An `M` or `N` move, a developer tools' move
+//!   and a take-off keep them.
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
@@ -55,6 +61,8 @@ pub enum SessionEvent {
     /// A rebuild point changed which stellars shown are dead since the
     /// last rebuild.
     StellarsRebuilt,
+    /// The flight's starfield is drawn afresh about the ship.
+    StarfieldReset,
 }
 
 impl Session {

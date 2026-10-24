@@ -15,7 +15,9 @@ use nova_view::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSou
 use nova_view::menu::{MainMenu, MainScreenArt, MainScreenSource, MenuChoice};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::note::VERSION_NOTE;
-use nova_view::ui::yes_no::{NEW_PILOT_QUESTION, QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
+use nova_view::ui::yes_no::{
+    NEW_PILOT_QUESTION, QUESTION_ITEM, QUIT_QUESTION, REPLACE_PILOT_QUESTION, YES_NO_DIALOG,
+};
 use nova_view::ui::{DescriptionSource, DialogResources, YesNoDialog};
 use nova_view::{
     DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, Sound, UiSound,
@@ -273,6 +275,14 @@ fn str_140_8_is_the_new_pilot_question() {
         return;
     };
     assert_eq!(list.strings[7].as_str(), NEW_PILOT_QUESTION);
+}
+
+#[test]
+fn str_140_9_is_the_replace_pilot_question() {
+    let Some(list) = str_140() else {
+        return;
+    };
+    assert_eq!(list.strings[8].as_str(), REPLACE_PILOT_QUESTION);
 }
 
 #[test]

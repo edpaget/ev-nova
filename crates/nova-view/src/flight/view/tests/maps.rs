@@ -725,8 +725,8 @@ fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1140, 0), at(812.0, 344.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1140, 0), at(715.0, 344.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ],
         "Proxima and the player, not the ship emerging"
     );
@@ -951,7 +951,7 @@ const FRAME_CENTRE: Point = Point::new(686.0, 278.0);
 /// stellar 128.
 const FRAME_MISS: Point = Point::new(700.0, 300.0);
 /// Where [`with_sites`] puts stellar 129, outside the frame.
-const OUTSIDE_FRAME: Point = Point::new(512.0, 284.0);
+const OUTSIDE_FRAME: Point = Point::new(415.0, 284.0);
 
 /// [`near`]'s flight with Sol's stellars 128 under [`FRAME_MISS`] and
 /// 129 under [`OUTSIDE_FRAME`], as the camera starts.
@@ -959,12 +959,12 @@ fn with_sites() -> View {
     let view = FlightView::new(FakeCatalog {
         near: true,
         sites: vec![
-            site(128, (188.0, -84.0), StellarFlags::CAN_LAND),
+            site(128, (285.0, -84.0), StellarFlags::CAN_LAND),
             site(129, (0.0, -100.0), StellarFlags::CAN_LAND),
         ],
         ..catalog()
     });
-    assert_eq!(on_screen(&view, (188.0, -84.0)), FRAME_MISS);
+    assert_eq!(on_screen(&view, (285.0, -84.0)), FRAME_MISS);
     assert_eq!(on_screen(&view, (0.0, -100.0)), OUTSIDE_FRAME);
     view
 }

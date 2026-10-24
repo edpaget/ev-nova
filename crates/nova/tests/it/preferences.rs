@@ -234,6 +234,7 @@ fn seeded() -> MemorySettings {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
         })
@@ -477,9 +478,9 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    // Past Weapon Effects, Smoke Trails, the display picker and the
-    // Scaling list to the music volume.
-    for _ in 0..10 {
+    // Past Weapon Effects, Smoke Trails, Parallax Starfield, the display
+    // picker and the Scaling list to the music volume.
+    for _ in 0..11 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -561,9 +562,9 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past Weapon Effects, Smoke Trails, the display picker and the
-    // Scaling list to the music volume.
-    for _ in 0..10 {
+    // Past Weapon Effects, Smoke Trails, Parallax Starfield, the display
+    // picker and the Scaling list to the music volume.
+    for _ in 0..11 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -758,6 +759,40 @@ fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
 }
 
 #[test]
+fn parallax_starfield_toggles_by_click_and_key_and_survives_a_restart() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('p'));
+    assert!(harness.dialog().parallax_starfield().on(), "on at first");
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == "Parallax Starfield")
+    );
+    let box_at = harness.dialog().parallax_starfield().rect().center();
+    harness.click(box_at);
+    assert!(!harness.dialog().parallax_starfield().on());
+    let json = saved(&store);
+    assert_eq!(json["parallax_starfield"], false);
+    assert_eq!(json["music"], true, "the seeded audio settings intact");
+    harness.press(Key::Enter);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('p'));
+    assert!(
+        !again.dialog().parallax_starfield().on(),
+        "off after a restart"
+    );
+    for _ in 0..7 {
+        again.press(Key::Tab);
+    }
+    again.press(Key::Space);
+    assert!(again.dialog().parallax_starfield().on());
+    assert_eq!(saved(&store)["parallax_starfield"], true);
+}
+
+#[test]
 fn quicktime_movies_toggle_by_click_and_key_and_survive_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
@@ -895,7 +930,7 @@ fn the_picker_lists_the_monitors_modes_and_ok_enters_the_one_picked_and_saves_it
     );
 
     // Down on the focused picker, then a click on its down arrow.
-    for _ in 0..7 {
+    for _ in 0..8 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -986,7 +1021,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..7 {
+        for _ in 0..8 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1120,7 +1155,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..8 {
+        for _ in 0..9 {
             self.press(Key::Tab);
         }
         for _ in 0..times {
@@ -1269,6 +1304,9 @@ fn choosing_super_xbr_in_flight_or_leaving_it_rebuilds_the_atlas_when_the_dialog
     assert_eq!(saved(&store)["frame_upscaler"], "native");
 
     harness.ok();
+    // The cursor sprite is in the world now: take it away from the OK
+    // button, where the click left it, so the world is as before.
+    harness.send(WindowEvent::PointerLeft);
     let after = harness.frame_calls();
     assert_eq!(after[0], GpuCall::ClearPages, "the next frame rebuilds");
     assert!(uploads_enlarged(&after), "{:?}", uploads(&after));

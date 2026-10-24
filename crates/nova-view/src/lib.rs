@@ -13,7 +13,7 @@
 //!   nebula and reads the game data through its
 //!   [`galaxy::GalaxyCatalog`] port.
 //! - [`system`]: the system view, which shows one system's stellars at
-//!   their positions over a parallax starfield, through a camera the
+//!   their positions over a procedural parallax starfield, through a camera the
 //!   keyboard moves, and reads the game data through its
 //!   [`system::SystemCatalog`] port.
 //! - [`navigator`]: the [`Navigator`], which shows the galaxy map and the
@@ -97,6 +97,7 @@ pub mod ships;
 pub mod sound;
 pub mod spaceport;
 pub mod system;
+pub mod target_picture;
 pub mod text;
 mod time;
 pub mod ui;

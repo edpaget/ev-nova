@@ -218,6 +218,13 @@ pub enum PlayerCommand {
     SelectSystem,
     /// Choosing a secondary weapon: `weapSelect` (slot 0x0).
     SelectWeapon,
+    /// Letting go of the secondary weapon: `weapSafe` (slot 0x2), Weapon
+    /// Safety, held. Flying, disabled and breaking-up players take it, as
+    /// `_HandlePlayer`'s secondary block reads no condition or jump state
+    /// (@0x6adc2-0x6ae1b); the dead branch and the pod's frames reach no
+    /// key handler, so the other rows refuse it
+    /// (`nova_sim::Session::hold_weapon_safety`).
+    DeselectWeapon,
     /// The escort menu, its acknowledgement and group keys, and the escort
     /// commands (slots 0x54, 0x60-0x66).
     Escort,
@@ -255,7 +262,7 @@ pub enum PlayerCommand {
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 16] = [
+    pub const ALL: [PlayerCommand; 17] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -267,6 +274,7 @@ impl PlayerCommand {
         Self::Nav,
         Self::SelectSystem,
         Self::SelectWeapon,
+        Self::DeselectWeapon,
         Self::Escort,
         Self::Eject,
         Self::PlayerInfo,
@@ -745,6 +753,32 @@ mod tests {
             assert!(!fate.row().input.takes(PlayerCommand::Cloak), "{fate:?}");
         }
         assert!(PlayerCommand::ALL.contains(&PlayerCommand::Cloak));
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_weapon_safety() {
+        // `_HandlePlayer`'s secondary block runs while disabled and while
+        // breaking up (@0x6adc2); the dead branch and the pod's frames
+        // return before it (@0x68853, @0x68ddd).
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(
+                fate.row().input.takes(PlayerCommand::DeselectWeapon),
+                "{fate:?}"
+            );
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(
+                !fate.row().input.takes(PlayerCommand::DeselectWeapon),
+                "{fate:?}"
+            );
+        }
+        assert!(PlayerCommand::ALL.contains(&PlayerCommand::DeselectWeapon));
     }
 
     #[test]

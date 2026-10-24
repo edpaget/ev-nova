@@ -19,8 +19,8 @@ use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
-    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
-    OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
+    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
+    NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
 };
 use nova_view::ui::note::{
     LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, OK_ITEM as NOTE_OK_ITEM,
@@ -441,6 +441,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         assert!(prefs.smoke_trails().enabled(), "{}", path.display());
         assert_eq!(prefs.weapon_effects().label(), "Weapon Effects");
         assert!(prefs.weapon_effects().enabled(), "{}", path.display());
+        assert_eq!(prefs.parallax_starfield().label(), "Parallax Starfield");
+        assert!(prefs.parallax_starfield().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -456,6 +458,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             prefs.quicktime_movies(),
             prefs.smoke_trails(),
             prefs.weapon_effects(),
+            prefs.parallax_starfield(),
         ]) {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
@@ -466,8 +469,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            5,
-            "{name}: QuickTime Movies, Smoke Trails and Weapon Effects work, Run in a \
+            4,
+            "{name}: QuickTime Movies, Smoke Trails, Weapon Effects and Parallax Starfield \
+             work, Run in a \
              window is the display picker and Share Processor Time the Scaling list"
         );
         assert!(
@@ -496,6 +500,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
@@ -557,6 +562,7 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -612,6 +618,7 @@ fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -706,7 +713,43 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Female,
+                strict_play: false,
+            }),
+            "{name}"
+        );
+    }
+}
+
+/// The stock dialog's Nickname field (item 9) is live: Tab focuses it,
+/// and OK creates the pilot with the nickname typed.
+#[test]
+fn the_new_pilot_dialogs_nickname_field_is_live() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        assert_eq!(
+            template.items[NICKNAME_ITEM - 1].kind,
+            ItemSpec::EditText("Edit Text".to_owned()),
+            "{name}"
+        );
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+            .with_defaults("Shane Merrol", "Hunter");
+        dialog.input(&key(Key::Tab));
+        for c in "Ace".chars() {
+            dialog.input(&Input::Text(c));
+        }
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Shane Merrol".to_owned(),
+                nickname: "Ace".to_owned(),
+                gender: nova_sim::Gender::Male,
                 strict_play: false,
             }),
             "{name}"
@@ -750,6 +793,7 @@ fn the_new_pilot_dialogs_strict_play_box_is_live() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Male,
                 strict_play: true,
             }),

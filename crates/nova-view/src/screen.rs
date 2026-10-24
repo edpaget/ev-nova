@@ -47,6 +47,9 @@ pub enum Showing {
     MainMenu,
     /// The new pilot's name entry, over the main menu.
     NewPilot,
+    /// The new pilot's ship christening, the Text Input dialog over the
+    /// main menu.
+    Christening,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
     /// A note over the main menu, such as the warning that an opened

@@ -89,6 +89,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod appear;
+mod christening;
 mod death;
 mod dialog_maps;
 mod encounters;
@@ -100,6 +101,7 @@ mod map_find;
 mod menu;
 mod menu_commands;
 mod missions;
+mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
@@ -366,6 +368,9 @@ fn game_data_fork(
     }
     let ship = if shipbuying {
         stellar[0x09] |= 0x08;
+        let mut prompts = vec![""; 119];
+        prompts.push("Please name your new");
+        fork = fork.resource(StrList::TYPE, 2002, None, &str_list(&prompts));
         second_ship(buy_random)
     } else {
         vec![0; Ship::SIZE.expect("fixed")]
@@ -1018,7 +1023,8 @@ const MAP: Key = Key::Char('m');
 /// Dialog templates by ID: "Desc Dialog" (3003), 200 x 100 at (0, 0),
 /// with Done (1) and a 100 x 36 text box (3): three lines of the About
 /// text show; the note alert (3000), 200 x 100, with OK (1) and a
-/// text box (3); and "Spaceport" (1000), [`spaceport_template`].
+/// text box (3); "Spaceport" (1000), [`spaceport_template`]; and "Text
+/// Input" (3001), [`text_input_template`].
 struct Dialogs;
 
 impl DialogResources for Dialogs {
@@ -1036,6 +1042,9 @@ impl DialogResources for Dialogs {
         }
         if id == NEW_PILOT_DIALOG {
             return Ok(new_pilot_template());
+        }
+        if id == TEXT_INPUT_DIALOG {
+            return Ok(text_input_template());
         }
         if id == PLAYER_INFO_DIALOG {
             return Ok(player_info_template());
@@ -1446,6 +1455,15 @@ pub(crate) fn create_held(screen: &mut AppScreen, name: &str) {
     assert_eq!(screen.showing(), Showing::NewPilot);
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
+}
+
+/// Confirms the new pilot's ship christening with its default, Return,
+/// when it is open.
+pub(crate) fn christen(screen: &mut AppScreen) {
+    if screen.showing() == Showing::Christening {
+        screen.input(&key(Key::Enter, true));
+    }
 }
 
 /// Opens the first saved pilot from the main menu's list, which then
@@ -1531,6 +1549,7 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
     }
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
     if screen.showing() == Showing::MainMenu {
         enter_ship(screen);
     }
@@ -1539,8 +1558,8 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
 // The note on a load that fell back.
 
 /// "Create a new pilot:", smaller: 326 x 213 at (0, 0), with OK (1),
-/// Cancel (2), Strict Play (4) and the Full Name field (8); the rest
-/// parked.
+/// Cancel (2), Strict Play (4) and the Full Name and Nickname fields (8,
+/// 9); the rest parked.
 fn new_pilot_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1562,6 +1581,13 @@ fn new_pilot_template() -> DialogTemplate {
     items[7] = item(
         140.0,
         30.0,
+        170.0,
+        16.0,
+        ItemSpec::EditText("Edit Text".into()),
+    );
+    items[8] = item(
+        140.0,
+        53.0,
         170.0,
         16.0,
         ItemSpec::EditText("Edit Text".into()),
@@ -1828,6 +1854,15 @@ impl DialogResources for ShipyardDialogs {
 /// pilots in `store`, flying a new pilot named Ada, landed.
 fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
     landed_shipyard_of(shipbuying_data(), store)
+}
+
+/// Selects the open shipyard's first cell, as Right picks it from none:
+/// by the engine the shipyard opens with nothing selected
+/// (`_DoShipyardDialog` @0x5e6d8-0x5e705, `_ShipyardFilter`
+/// @0x60734-0x607b7).
+fn select_first_ship(screen: &mut AppScreen) {
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Right, false));
 }
 
 /// [`landed_shipyard`], on `data`.

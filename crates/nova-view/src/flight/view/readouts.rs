@@ -76,10 +76,10 @@ impl<C> FlightView<C> {
     ///
     /// The shipyard's name prompt redraws the same way as it closes
     /// ([`FlightView::buy_ship`], [`FlightView::decline_ship`], @0x5eb73),
-    /// and so does the bar's map in port ([`FlightView::close_map`],
+    /// and so does every map in port, the bar's and the port screens'
+    /// ([`FlightView::close_map`], [`FlightView::open_port_screen_map`],
     /// @0x13bc9). The closings the original redraws at that ours can't
-    /// reach (the bar's Gamble text, the map from the other port screens,
-    /// Preferences' menu command, the shops' faded text dialogs, an OS
+    /// reach (the bar's Gamble text, Preferences' menu command, the shops' faded text dialogs, an OS
     /// update event) are recorded, with their addresses, in the
     /// spaceport's module docs
     /// ([`crate::spaceport::view`]).

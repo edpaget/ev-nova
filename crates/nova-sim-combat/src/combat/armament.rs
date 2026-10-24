@@ -132,6 +132,7 @@ mod idle_bays;
 #[cfg(test)]
 mod rating_stretch;
 mod reloading;
+mod secondary_select;
 
 use std::collections::BTreeMap;
 
@@ -155,6 +156,8 @@ use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 use crate::trig;
 use nova_sim_catalog::warp::MAC_TICKS_PER_TICK;
+
+pub use secondary_select::{empty_lets_go, select_secondary, selectable_guidance};
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -1454,37 +1457,6 @@ impl Armament {
     }
 }
 
-/// The secondary among `mounts` that selecting one after `current` picks,
-/// `backwards` or not: the next in mount order, wrapping, from the first
-/// (or the last, `backwards`) when `current` is none or not among them.
-/// A weapon hidden when out of ammo ([`WeaponSpec::hides_when_empty`]) is
-/// skipped while `rounds_of` its ammunition is none; none when no
-/// secondary is left to pick.
-pub fn next_secondary(
-    mounts: &[Mount],
-    current: Option<WeaponId>,
-    backwards: bool,
-    rounds_of: impl Fn(WeaponId) -> u32,
-) -> Option<WeaponId> {
-    let secondaries: Vec<&WeaponSpec> = secondaries(mounts).collect();
-    let count = secondaries.len();
-    let at = current.and_then(|id| secondaries.iter().position(|spec| spec.id == id));
-    let pickable = |spec: &WeaponSpec| match spec.ammo {
-        Ammo::Rounds(ammo) if spec.hides_when_empty() => rounds_of(ammo) > 0,
-        _ => true,
-    };
-    (1..=count)
-        .map(|step| match (at, backwards) {
-            (Some(at), false) => (at + step) % count,
-            (Some(at), true) => (at + count - step) % count,
-            (None, false) => step - 1,
-            (None, true) => count - step,
-        })
-        .map(|index| secondaries[index])
-        .find(|spec| pickable(spec))
-        .map(|spec| spec.id)
-}
-
 /// The secondary weapons among `mounts`, in order.
 fn secondaries(mounts: &[Mount]) -> impl Iterator<Item = &WeaponSpec> {
     mounts
@@ -2123,76 +2095,6 @@ mod tests {
         let secondaries: Vec<WeaponId> = armed().secondaries().map(|spec| spec.id).collect();
         assert_eq!(secondaries, ids(&[140, 141, 142]));
         assert_eq!(mounted(blaster(128, 0), 1).secondaries().count(), 0);
-    }
-
-    /// The secondaries selected in turn from `start`, `backwards` or not,
-    /// `rounds` rounds of 150 held.
-    fn cycle(start: Option<i16>, backwards: bool, rounds: u32, turns: usize) -> Vec<WeaponId> {
-        let armament = armed();
-        let mut current = start.map(WeaponId);
-        let mut picked = Vec::new();
-        for _ in 0..turns {
-            current = next_secondary(armament.mounts(), current, backwards, |ammo| {
-                if ammo == WeaponId(150) { rounds } else { 0 }
-            });
-            picked.extend(current);
-        }
-        picked
-    }
-
-    #[test]
-    fn the_next_secondary_is_in_mount_order_and_wraps() {
-        assert_eq!(cycle(None, false, 5, 4), ids(&[140, 141, 142, 140]));
-        assert_eq!(cycle(Some(141), false, 5, 2), ids(&[142, 140]));
-    }
-
-    #[test]
-    fn backwards_the_secondary_goes_the_other_way_and_wraps() {
-        assert_eq!(cycle(None, true, 5, 4), ids(&[142, 141, 140, 142]));
-        assert_eq!(cycle(Some(140), true, 5, 1), ids(&[142]));
-    }
-
-    #[test]
-    fn a_secondary_that_hides_when_empty_is_skipped_without_rounds() {
-        assert_eq!(cycle(None, false, 0, 3), ids(&[140, 142, 140]));
-        assert_eq!(cycle(Some(141), false, 0, 1), ids(&[142]), "from it");
-        assert_eq!(cycle(None, true, 0, 2), ids(&[142, 140]));
-        assert_eq!(cycle(None, false, 1, 2), ids(&[140, 141]), "a round");
-    }
-
-    #[test]
-    fn a_secondary_out_of_rounds_that_does_not_hide_is_still_selected() {
-        let armament = Armament::new([(secondary(140, -1, 0), 1), (secondary(141, 22, 0), 1)]);
-        assert_eq!(
-            next_secondary(armament.mounts(), Some(WeaponId(140)), false, |_| 0),
-            Some(WeaponId(141))
-        );
-    }
-
-    #[test]
-    fn a_secondary_no_longer_carried_starts_the_cycle_again() {
-        assert_eq!(cycle(Some(199), false, 5, 1), ids(&[140]));
-        assert_eq!(cycle(Some(128), true, 5, 1), ids(&[142]));
-    }
-
-    #[test]
-    fn without_secondaries_there_is_none() {
-        let primaries = mounted(blaster(128, 0), 1);
-        assert_eq!(next_secondary(primaries.mounts(), None, false, |_| 0), None);
-        assert_eq!(
-            next_secondary(primaries.mounts(), Some(WeaponId(140)), true, |_| 0),
-            None
-        );
-        let only_empty = Armament::new([(secondary(141, 22, HIDE_WHEN_EMPTY), 1)]);
-        assert_eq!(
-            next_secondary(only_empty.mounts(), None, false, |_| 0),
-            None
-        );
-        let only_one = Armament::new([(secondary(140, -1, 0), 1)]);
-        assert_eq!(
-            next_secondary(only_one.mounts(), Some(WeaponId(140)), false, |_| 0),
-            Some(WeaponId(140))
-        );
     }
 
     #[test]
