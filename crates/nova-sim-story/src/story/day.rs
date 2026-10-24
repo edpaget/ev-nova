@@ -87,10 +87,9 @@ pub struct Stay {
     pub outfit_traded: bool,
     /// A ship was bought: the flag `_DoShipyardDialog` sets (@0x5ebce).
     pub ship_bought: bool,
-    /// The escorts sold or upgraded (`_DoEscortLand` @0x4031f-0x405b5).
-    /// Nothing raises it yet: the escort dialog's Sell and Upgrade (rdm
-    /// task escorts-follow-up) will add one for each escort sold or
-    /// upgraded.
+    /// The escorts sold or upgraded (`_DoEscortLand` @0x4031f-0x405b5):
+    /// leaving a shipyard adds one for each escort its marks sold or
+    /// upgraded (`nova_sim::Session::land_escorts`).
     pub escorts_changed: u32,
 }
 

@@ -465,6 +465,7 @@ mod escort_carriers;
 mod escort_dialog;
 #[cfg(test)]
 mod escort_hits;
+mod escort_land;
 #[cfg(test)]
 mod escort_loss;
 mod escorts;
@@ -4086,6 +4087,11 @@ impl Session {
         // A docked move's entry still owed comes before the take-off's
         // window opens (see the `operator_moves` module).
         self.settle_pending_move(catalog, catalog, chance);
+        // The escorts' marks, settled on the leave before the stay's days
+        // (`_DoPortDialog` @0x601a0; see the `escort_land` module). The
+        // router settles them first, to show the report over the
+        // spaceport; this settles them on every other leave.
+        self.land_escorts(&mut &mut *chance);
         let stellar = self.mode.take_landed()?;
         // `_playerIsLanded` stays set to @0x6358e: the moves until then
         // are landed ones (see the `take_off_moves` module).
