@@ -89,7 +89,7 @@
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; `nova_sim::Outfitter::check_at`) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; `nova_sim::Session`) | the ordered outfit and the pass index are kept††††† |
 //! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; `nova_sim::Session`) | the selected cell is kept and the outfitter stays open§§§§§ |
-//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`); the shipyard's and the hire screen's selection is `_ShipyardFilter`'s ship (`*0xdece4`), which can be none: they open with nothing selected (`_DoShipyardDialog` @0x5e6d8-0x5e705), a press on an empty cell selects nothing (@0x60a5d-0x60a73), and a scroll arrow that scrolls selects nothing (@0x5f580-0x5f5be, @0x5f60b-0x5f670), greying Buy Ship (Hire Escort) and Info and blanking the picture, info box and description (nova-view's `ShipyardScreen` and `HireScreen`) | the selection is the highlighted cell: the first cell is selected on opening, a press on an empty cell is ignored, a scroll keeps the selection, and the outfitter's description follows the cell¶¶¶¶¶ |
+//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6); the outfitter opens with nothing selected (`_DoOutfitDialog` @0x5bb19-0x5bb54, description emptied @0x5bd0f-0x5bd1c), and a scroll arrow that scrolls keeps the highlighted cell while it stays in view, re-reading its description (@0x5d384-0x5d3b4, @0x5d70c-0x5d737), and otherwise selects nothing, ending a reset (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759) (nova-view's `OutfitterScreen`); the shipyard's and the hire screen's selection is `_ShipyardFilter`'s ship (`*0xdece4`), which can be none: they open with nothing selected (`_DoShipyardDialog` @0x5e6d8-0x5e705), a press on an empty cell selects nothing (@0x60a5d-0x60a73), and a scroll arrow that scrolls selects nothing (@0x5f580-0x5f5be, @0x5f60b-0x5f670), greying Buy Ship (Hire Escort) and Info and blanking the picture, info box and description (nova-view's `ShipyardScreen` and `HireScreen`) | the selection is the highlighted cell: the first cell is selected on opening, a press on an empty cell is ignored, a scroll keeps the selection, and the outfitter's description follows the cell¶¶¶¶¶ |
 //! | [`GridArrows`](RuleKey::GridArrows) | `grid_arrows` | an arrow moves the highlighted cell as `_OutfitFilter` and `_ShipyardFilter` do (@0x58203-0x583b8, @0x6057a-0x6072f): Up on the list's first row stays, Down moves only onto a listed cell, and Down from the bottom row scrolls and steps back to the last listed; Page Up and Page Down move as Up and Down (@0x581b0-0x581dd) (nova-view's `CellGrid`, for the outfitter, the shipyard and the hire screen) | the port's earlier moves: Up on the first row selects the first cell, and Down past the end the last listed; Page Up and Page Down move as Up and Down |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; `nova_sim::outfitter::unit_price`) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; `nova_sim::outfitter::unit_mass`) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
@@ -480,8 +480,11 @@
 //! press on a cell within 15 Mac ticks opens Shipyard Info by both
 //! readings (`_ShipyardFilter` @0x60cd7-0x60d12): the port had no
 //! double-click, not a reading of its own. The outfitter's opening and
-//! scroll arrows are not covered by this key yet
-//! (rdm:phase/shop-fidelity-followups/phase-8-outfitter-opens-and-scrolls-off-unselected).
+//! scroll arrows read it as the shipyard's do: by the engine it opens
+//! with nothing selected, and a scroll keeps the highlighted cell only
+//! while it stays in view, re-reading its description; by the other, the
+//! port's earlier behaviour, it opens on the first cell and a scroll
+//! keeps the selection, off screen too.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -1576,10 +1579,22 @@ rule_keys! {
     /// within 15 Mac ticks opens Shipyard Info (@0x60cd7-0x60d12), the
     /// position counted on screen, not by ship, so a press across a
     /// scroll opens the ship now there; an empty press between forgets
-    /// the last. The outfitter's opening and scroll arrows are not
-    /// covered yet: that is
-    /// rdm:phase/shop-fidelity-followups/phase-8-outfitter-opens-and-scrolls-off-unselected,
-    /// which joins this key when it is built.
+    /// the last.
+    ///
+    /// The outfitter's opening and scroll arrows read it too. By the
+    /// engine, `_DoOutfitDialog` opens with `*0xded58` and `*0xded5c` at
+    /// -1, the scroll at 0 and Buy and Sell cleared (@0x5bb19-0x5bb54),
+    /// and the description emptied (@0x5bd0f-0x5bd1c): no cell is
+    /// highlighted, Buy and Sell are grey, and the picture, info box and
+    /// description are blank. A scroll arrow that scrolls (items 10 and
+    /// 11) keeps the highlighted cell while it stays in view (Up from
+    /// visible positions 0-15, Down from 4-19), reading its description
+    /// again (@0x5d384-0x5d3b4, @0x5d70c-0x5d737); otherwise, from any
+    /// other cell or none, it sets both to -1 and empties the description
+    /// (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759), ending a reset. One that
+    /// cannot scroll changes nothing. By the other reading, the first cell
+    /// is selected on opening and a scroll keeps the selection, off screen
+    /// too, reading nothing.
     GridSelection => "grid_selection",
     /// Where an arrow key moves the outfitter's, the shipyard's and the
     /// hire screen's highlighted cell. By the engine, `_OutfitFilter`

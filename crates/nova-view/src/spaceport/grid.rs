@@ -10,9 +10,11 @@
 //! listed cell is framed in the `cölr` `GridDim` colour and the selected one
 //! framed again, last, in `GridBright` ([`GridColors`]); no cell is filled. A
 //! press is hit-tested on the frame's size, not the pitch. One cell is
-//! selected, or none once cleared (the shipyard's and the hire screen's,
-//! by the engine); the grid scrolls a row at a time, never past either
-//! end, and always shows the selected cell when the selection moves. The
+//! selected, or none once cleared (the outfitter's, the shipyard's and
+//! the hire screen's, by the engine); the grid scrolls a row at a time,
+//! never past either end, dropping a selection it scrolls out of view
+//! when asked ([`CellGrid::scroll_dropping_hidden`]), and always shows
+//! the selected cell when the selection moves. The
 //! arrow keys move the selection as
 //! [`grid_arrows`](super::grid_arrows) decides, by
 //! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows).
@@ -311,6 +313,19 @@ pub fn cell_bounds(grid: Bounds, index: usize) -> Bounds {
     Bounds::at(min, CELL_WIDTH, CELL_HEIGHT)
 }
 
+/// What [`CellGrid::scroll_dropping_hidden`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scrolled {
+    /// The grid could not scroll that way: nothing changed.
+    Stayed,
+    /// The grid scrolled and the highlighted cell is still shown.
+    Kept,
+    /// The grid scrolled and no cell is highlighted: the one that was is
+    /// out of view, or there was none, and the caller lets go of any item
+    /// it held unhighlighted.
+    Dropped,
+}
+
 /// The grid's selection and scrolling, over a number of cells.
 ///
 /// By default cell 0 is selected; [`CellGrid::clear`] leaves no cell
@@ -446,6 +461,25 @@ impl CellGrid {
             self.top_row.saturating_sub(1)
         };
         self.top_row != before
+    }
+
+    /// Scrolls the grid of `count` cells a row down, or up, as
+    /// [`CellGrid::scroll`] does, and when it moved, drops the highlight
+    /// unless the selected cell is still among the cells shown, as the
+    /// outfitter's scroll arrows do (`_DoOutfitDialog` item 10
+    /// @0x5d351-0x5d3d6, item 11 @0x5d6b0-0x5d759): Up keeps visible
+    /// positions 0-15 and Down 4-19, and either clears the cell from any
+    /// other, or from none.
+    pub fn scroll_dropping_hidden(&mut self, down: bool, count: usize) -> Scrolled {
+        if !self.scroll(down, count) {
+            return Scrolled::Stayed;
+        }
+        if self.highlighted && self.shown_range(count).contains(&self.selected) {
+            Scrolled::Kept
+        } else {
+            self.clear();
+            Scrolled::Dropped
+        }
     }
 
     /// Whether the grid can scroll up, and down, with `count` cells.
@@ -1258,6 +1292,93 @@ mod tests {
         grid.select(19, 30);
         assert!(grid.arrow(Key::Right, 30, ArrowMoves::Filter));
         assert_eq!((grid.selected(30), grid.top_row()), (Some(20), 1));
+    }
+
+    /// A grid of `count` cells scrolled to `top_row`, with `index`
+    /// selected, or none.
+    fn scrolled_to(top_row: usize, index: Option<usize>, count: usize) -> CellGrid {
+        let mut grid = CellGrid::default();
+        for _ in 0..top_row {
+            grid.scroll(true, count);
+        }
+        match index {
+            Some(index) => {
+                grid.select(index, count);
+                assert_eq!(grid.top_row(), top_row, "index {index} is shown");
+            }
+            None => grid.clear(),
+        }
+        grid
+    }
+
+    #[test]
+    fn a_scroll_dropping_hidden_keeps_a_cell_still_shown() {
+        // Earth's 26: 7 rows, the last first row 2.
+        for (top_row, index, down, after) in [
+            (0, 9, true, 1),
+            (1, 9, true, 2),
+            (2, 9, false, 1),
+            (1, 19, false, 0),
+            (1, 8, true, 2),
+        ] {
+            let mut grid = scrolled_to(top_row, Some(index), 26);
+            assert_eq!(
+                grid.scroll_dropping_hidden(down, 26),
+                Scrolled::Kept,
+                "{index} from top row {top_row}, down {down}"
+            );
+            assert_eq!(
+                (grid.selected(26), grid.top_row()),
+                (Some(index), after),
+                "{index} from top row {top_row}, down {down}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_dropping_hidden_drops_a_cell_scrolled_out_of_view() {
+        for (top_row, index, down, after) in [(0, 3, true, 1), (1, 20, false, 0), (1, 4, true, 2)] {
+            let mut grid = scrolled_to(top_row, Some(index), 26);
+            assert_eq!(
+                grid.scroll_dropping_hidden(down, 26),
+                Scrolled::Dropped,
+                "{index} from top row {top_row}, down {down}"
+            );
+            assert!(!grid.highlighted());
+            assert_eq!((grid.selected(26), grid.top_row()), (None, after));
+        }
+    }
+
+    #[test]
+    fn a_scroll_dropping_hidden_from_no_highlight_drops_whenever_it_moves() {
+        for (top_row, down, after) in [(0, true, 1), (2, false, 1)] {
+            let mut grid = scrolled_to(top_row, None, 26);
+            assert_eq!(
+                grid.scroll_dropping_hidden(down, 26),
+                Scrolled::Dropped,
+                "from top row {top_row}, down {down}"
+            );
+            assert_eq!((grid.highlighted(), grid.top_row()), (false, after));
+        }
+    }
+
+    #[test]
+    fn a_scroll_dropping_hidden_that_cannot_move_stays() {
+        for (top_row, index, down, count) in [
+            (2, Some(9), true, 26),
+            (0, Some(3), false, 26),
+            (0, None, true, 20),
+            (0, None, false, 26),
+        ] {
+            let mut grid = scrolled_to(top_row, index, count);
+            let before = grid;
+            assert_eq!(
+                grid.scroll_dropping_hidden(down, count),
+                Scrolled::Stayed,
+                "{index:?} from top row {top_row} of {count}, down {down}"
+            );
+            assert_eq!(grid, before, "unchanged, the highlight included");
+        }
     }
 
     #[test]

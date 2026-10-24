@@ -448,6 +448,10 @@ fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
         let store = MemoryPilots::new();
         let mut screen = landed_outfitter_by(&store, &rulebook);
         click_port_item(&mut screen, 8);
+        if !kept {
+            // It opens with nothing selected by the engine.
+            screen.input(&key(Key::Right, true));
+        }
         let open = spaceport(&screen).open_outfitter().expect("outfitting");
         let first = open.selected_outfit();
         assert!(first.is_some(), "the first cell");
@@ -461,6 +465,23 @@ fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
             open.selected_outfit(),
             first.filter(|_| kept),
             "kept: {kept}"
+        );
+    }
+}
+
+#[test]
+fn the_outfitter_opens_by_the_grid_selection_rule() {
+    let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+    for (rulebook, engine) in [(Rulebook::default(), true), (other, false)] {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_by(&store, &rulebook);
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let first = open.outfitter().rows[0].id;
+        assert_eq!(
+            open.selected_outfit(),
+            (!engine).then_some(first),
+            "engine: {engine}"
         );
     }
 }
@@ -537,6 +558,7 @@ fn an_outfit_purchase_that_relists_resets_the_outfitters_selection() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, licensing_data());
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().row(LICENSED), None, "hidden");
     screen.input(&key(Key::Right, true));
@@ -559,6 +581,7 @@ fn an_outfit_purchase_that_leaves_nothing_listed_closes_the_outfitter() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, self_hiding_data());
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().rows.len(), 1);
     screen.input(&key(Key::Char('b'), true));
@@ -595,6 +618,7 @@ fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
@@ -604,6 +628,7 @@ fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).held(FOOD), 12);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('s'), true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
     assert!(spaceport(&screen).open_outfitter().is_some());
@@ -676,6 +701,7 @@ fn past_the_holds(store: &MemoryPilots) -> AppScreen {
     screen.input(&key(Key::Enter, true));
     assert_eq!(active(&screen), [MissionId(130)]);
     assert_eq!(pilot(&screen).total_cargo(), i64::from(MISSION_TONS));
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
@@ -684,6 +710,7 @@ fn past_the_holds(store: &MemoryPilots) -> AppScreen {
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).held(FOOD), 10);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     assert!(
         spaceport(&screen)
             .open_outfitter()
@@ -1008,6 +1035,7 @@ fn the_outfitters_map_puts_back_the_nav_the_outfitter_opened_with() {
     // back.
     let mut screen = landed_planning(b"M129", b"");
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     assert!(spaceport(&screen).open_outfitter().is_some(), "outfitting");
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Char('b'), false));
@@ -1105,6 +1133,7 @@ fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter(&store);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let speed = flight(&screen)
         .session()
         .expect("flying")
@@ -1159,6 +1188,7 @@ fn a_sale_refused_in_the_loop_opens_its_words_over_the_outfitter() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, pod_data());
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Right, true));
     screen.input(&key(Key::Char('b'), true));
@@ -1191,6 +1221,7 @@ fn a_counted_sale_refused_part_way_keeps_its_sales_and_opens_its_words() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, two_pod_data());
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Right, true));
@@ -1228,6 +1259,7 @@ fn alt_on_buy_asks_for_a_count_and_buys_the_count_typed() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter(&store);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let writes = store.writes();
     screen.input(&key(Key::Alt, true));
     let buy = spaceport(&screen)
@@ -1264,6 +1296,7 @@ fn a_move_by_a_purchase_hook_keeps_the_spaceport_open_and_saves_the_pilot_moved(
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"M129"));
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let writes = store.writes();
     screen.input(&key(Key::Char('b'), true));
     assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
@@ -1291,6 +1324,7 @@ fn a_q_by_a_purchase_hook_closes_the_spaceport_takes_off_and_saves() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"Q25048"));
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let writes = store.writes();
     screen.input(&key(Key::Char('b'), true));
     assert_eq!(screen.showing(), Showing::Flight);
@@ -1326,6 +1360,7 @@ fn a_sound_by_a_purchase_hook_plays_after_the_take_off() {
     let store = MemoryPilots::new();
     let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"P300"));
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.tick(Duration::from_millis(100));
     let mission = Sound::Sim(SimSound::Script {
@@ -1397,6 +1432,7 @@ fn an_order_in_one_refreshes_the_other_for_when_it_opens() {
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 7);
@@ -1406,6 +1442,7 @@ fn an_order_in_one_refreshes_the_other_for_when_it_opens() {
     assert_eq!(pilot(&screen).held(FOOD), 6, "500 at 75");
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().cash, 50, "the food was paid for");
 }
@@ -1704,6 +1741,7 @@ fn a_ship_declined_draws_its_roll_again_when_the_list_is_next_built() {
     // An order builds the list again.
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the outfit was bought");
     assert_eq!(rolls.borrow().asked, 2, "drawn again");

@@ -1865,6 +1865,14 @@ fn select_first_ship(screen: &mut AppScreen) {
     screen.input(&key(Key::Right, false));
 }
 
+/// Selects the open outfitter's first cell, as Right picks it from none:
+/// by the engine the outfitter opens with nothing selected
+/// (`_DoOutfitDialog` @0x5bb19-0x5bb54, `_OutfitFilter` @0x583bd-0x58440).
+fn select_first_outfit(screen: &mut AppScreen) {
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Right, false));
+}
+
 /// [`landed_shipyard`], on `data`.
 fn landed_shipyard_of(data: Rc<GameData>, store: &MemoryPilots) -> AppScreen {
     let mut screen = AppScreen::new(data)

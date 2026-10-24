@@ -637,13 +637,21 @@ impl Harness {
     }
 }
 
-/// What the Outfitter first shows the new pilot: the outfits listed, the
-/// booster's description and info box, and the buttons.
-const FIRST_LOOK: [&str; 16] = [
+/// What the Outfitter first shows the new pilot: the outfits listed and
+/// the buttons, with nothing selected.
+const FIRST_LOOK: [&str; 7] = [
     "Speed",
     "Booster",
     "Fuel Tank",
     "Fuel Scoop",
+    "Buy",
+    "Sell",
+    "Done",
+];
+
+/// What the Outfitter adds once the booster's cell is clicked: its
+/// description and info box.
+const BOOSTER_LOOK: [&str; 9] = [
     "Bolted-on thrusters.",
     "Item Price:",
     "5,000 cr",
@@ -653,10 +661,32 @@ const FIRST_LOOK: [&str; 16] = [
     "25,000 cr",
     "Available:",
     "8 tons",
-    "Buy",
-    "Sell",
-    "Done",
 ];
+
+/// Opens the Outfitter for the new pilot and checks its first look: what
+/// tech level 2 allows, heaviest weight first, with nothing selected, so
+/// B buys nothing.
+fn first_look(game: &mut Harness) {
+    game.open_outfitter();
+    let ids: Vec<_> = game
+        .outfitter()
+        .outfitter()
+        .rows
+        .iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(ids, [BOOSTER, TANK, OutfitId(130)], "no warp core");
+    let shown = texts(&game.frame());
+    for text in FIRST_LOOK {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    for text in BOOSTER_LOOK {
+        assert!(!shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    assert!(!shown.contains(&"Warp Core".to_owned()));
+    game.press(KeyCode::KeyB);
+    assert_eq!(game.pilot().owned(BOOSTER), 0, "Buy is grey");
+}
 
 #[test]
 fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart() {
@@ -676,26 +706,16 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
-    // The Outfitter lists what tech level 2 allows, heaviest weight first.
-    game.open_outfitter();
-    let ids: Vec<_> = game
-        .outfitter()
-        .outfitter()
-        .rows
-        .iter()
-        .map(|row| row.id)
-        .collect();
-    assert_eq!(ids, [BOOSTER, TANK, OutfitId(130)], "no warp core");
-    let shown = texts(&game.frame());
-    for text in FIRST_LOOK {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    assert!(!shown.contains(&"Warp Core".to_owned()));
+    first_look(&mut game);
 
     // Select the booster by its cell and buy one with B: the pilot pays
     // and is saved.
     let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
     game.click(cell);
+    let shown = texts(&game.frame());
+    for text in BOOSTER_LOOK.into_iter().chain(FIRST_LOOK) {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
     let writes = store.writes();
     game.press(KeyCode::KeyB);
     assert_eq!(game.pilot().owned(BOOSTER), 1);
@@ -766,6 +786,8 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let fuel = game.pilot().reserves().fuel;
     assert!((fuel.max - 400.0).abs() < 1e-3, "{fuel:?}");
     game.open_outfitter();
+    let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
+    game.click(cell);
     let shown = texts(&game.frame());
     assert!(shown.contains(&"13,000 cr".to_owned()), "{shown:?}");
     assert!(shown.contains(&"1 ton".to_owned()), "{shown:?}");

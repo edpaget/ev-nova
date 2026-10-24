@@ -3583,6 +3583,18 @@ pub(in crate::spaceport) mod tests {
             .center()
     }
 
+    /// Clicks the open outfitter's cell `index`, as a player picks an
+    /// outfit: it opens with none selected.
+    fn click_outfit_cell(view: &mut SpaceportView, index: usize) {
+        let at = view
+            .open_outfitter()
+            .expect("outfitting")
+            .cell_bounds(index)
+            .expect("a cell")
+            .center();
+        click(view, at);
+    }
+
     #[test]
     fn with_an_outfitter_its_button_opens_it_over_the_spaceport() {
         let mut view = outfitting(Ok(outfit_template()));
@@ -3686,6 +3698,7 @@ pub(in crate::spaceport) mod tests {
             Some(4),
             "it opens on the latest"
         );
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Char('b')));
         assert_eq!(
             view.take_outfit(),
@@ -3719,6 +3732,7 @@ pub(in crate::spaceport) mod tests {
     fn the_outfitters_quantity_dialog_is_laid_out_by_its_template() {
         let mut view = outfitting(Ok(outfit_template()));
         click_item(&mut view, 8);
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Alt));
         let buy = outfit_item(&view, 7);
         click(&mut view, buy);
@@ -5316,8 +5330,9 @@ pub(in crate::spaceport) mod tests {
             let mut view = venues();
             assert_eq!(view.take_description_request(), Some(140), "the port's");
             click_item(&mut view, item);
-            if item == 9 {
-                // The shipyard opens with nothing selected by the engine.
+            if item == 8 || item == 9 {
+                // The outfitter and the shipyard open with nothing
+                // selected by the engine.
                 view.input(&key(Key::Right));
             }
             let id = view.take_description_request().expect("asked");
@@ -6725,6 +6740,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.holds_leave(), "the alert");
         view.input(&key(Key::Escape));
         assert!(!view.holds_leave());
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Alt));
         let buy = outfit_item(&view, 7);
         click(&mut view, buy);
