@@ -262,6 +262,50 @@ fn replacing_a_pilot_saved_in_another_case_leaves_one_listed() {
 }
 
 #[test]
+fn a_replacing_save_that_fails_leaves_the_pilot_saved_in_another_case() {
+    let store = MemoryPilots::new();
+    let data = named_data();
+    save_pilot(&store, &data, "shane", "Old");
+    let shane = store.text("shane").expect("saved");
+    let mut screen = new_pilot_menu(data, &store, 0);
+    store.fail_writes(true);
+    confirm_new_pilot(&mut screen, "Shane", "New");
+    screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
+    assert_eq!(
+        store.text("shane"),
+        Some(shane),
+        "the old save is unchanged"
+    );
+    assert_eq!(store.keys(), ["shane"], "and still listed");
+    assert_eq!(store.deleted(), Vec::<String>::new());
+    let warnings = screen.take_warnings();
+    assert!(
+        warnings
+            .contains(&"nova: cannot save the pilot Shane in memory (the disk is full)".to_owned()),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_replaced_pilot_that_cannot_be_deleted_is_a_warning() {
+    let store = MemoryPilots::new();
+    let data = named_data();
+    save_pilot(&store, &data, "shane", "Old");
+    let mut screen = new_pilot_menu(data, &store, 0);
+    store.fail_deletes(true);
+    confirm_new_pilot(&mut screen, "Shane", "New");
+    screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
+    assert_eq!(saved(&store, "Shane").nickname(), "New");
+    assert_eq!(store.keys(), ["Shane", "shane"]);
+    assert_eq!(
+        screen.take_warnings(),
+        ["nova: cannot delete the pilot shane in memory (the disk is locked)"]
+    );
+}
+
+#[test]
 fn by_the_other_reading_a_name_already_saved_is_refused_in_the_dialog() {
     let store = MemoryPilots::new();
     let data = named_data();
