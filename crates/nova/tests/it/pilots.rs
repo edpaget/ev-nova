@@ -280,6 +280,28 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 ///
 /// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
+    interface_with(&[])
+}
+
+/// [`interface`], with the stock Yes/No dialog (`DLOG` 3002, 355 x 109, centred)
+/// and its five items too, for the questions over the main menu.
+fn asking_interface() -> InterfaceData {
+    let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
+    let yes_no = [
+        ditl_item((263, 75, 333, 95), BUTTON, b"OK"),
+        ditl_item((277, 131, 345, 161), PICTURE | DISABLED, &be(&[129])),
+        text((52, 5, 347, 55), ""),
+        ditl_item((7, 5, 39, 37), PICTURE | DISABLED, &be(&[130])),
+        ditl_item((181, 75, 251, 95), BUTTON, b"Cancel"),
+    ];
+    interface_with(&[
+        (Dlog::TYPE, 3002, dlog((100, 100, 209, 455), 3002)),
+        (Ditl::TYPE, 3002, ditl(&yes_no)),
+    ])
+}
+
+/// [`interface`]'s dialogs, and the resources of `extra`.
+fn interface_with(extra: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
     let new_pilot = [
@@ -321,14 +343,16 @@ fn interface() -> InterfaceData {
         ditl_item((x, y, x + w, y + h), byte, &[])
     })
     .collect();
-    let file = fork(&[
+    let mut resources = vec![
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
         (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
         (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
-    ]);
+    ];
+    resources.extend_from_slice(extra);
+    let file = fork(&resources);
     InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
@@ -366,6 +390,19 @@ impl Harness {
         Self::built_on(game_data(), store, settings, launch)
     }
 
+    /// [`Harness::opening`], its interface file holding the Yes/No dialog
+    /// too ([`asking_interface`]), so the main menu's questions are asked.
+    fn asking(store: &MemoryPilots) -> Self {
+        Self::assembled_from(
+            game_data(),
+            asking_interface(),
+            store,
+            AudioSettings::default(),
+            false,
+            true,
+        )
+    }
+
     /// [`Harness::built`] over `data`.
     pub(crate) fn built_on(
         data: Rc<GameData>,
@@ -390,11 +427,23 @@ impl Harness {
         launch: bool,
         appeared: bool,
     ) -> Self {
+        Self::assembled_from(data, interface(), store, settings, launch, appeared)
+    }
+
+    /// [`Harness::assembled`], its dialogs from `ui`.
+    fn assembled_from(
+        data: Rc<GameData>,
+        ui: InterfaceData,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+        appeared: bool,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let mut screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
-            .with_dialogs(Rc::new(interface()), metrics);
+            .with_dialogs(Rc::new(ui), metrics);
         if launch {
             screen = screen.open_last_pilot();
         }
@@ -738,6 +787,51 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
 /// How many 16 ms frames it takes to reach `delay`.
 fn frames_to(delay: Duration) -> u64 {
     u64::try_from(delay.as_millis().div_ceil(16)).expect("short")
+}
+
+/// A New Pilot named as a pilot saved already asks to replace it; Yes and
+/// the christening replace it with the new pilot, its nickname kept
+/// through the save and a reopen.
+#[test]
+fn a_new_pilot_with_a_nickname_replaces_the_saved_pilot_of_its_name() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::asking(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    assert_eq!(store.keys(), ["Ada"]);
+
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    // STR# 140 #8, over the game held: yes.
+    assert_eq!(game.showing(), Showing::Question);
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::NewPilot);
+    game.type_name("ada");
+    game.press(KeyCode::Tab);
+    game.type_name("Pal");
+    game.press(KeyCode::Enter);
+    // STR# 140 #9: yes, then the christening.
+    assert_eq!(game.showing(), Showing::Question);
+    assert_eq!(store.keys(), ["Ada"], "nothing replaced yet");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::Christening);
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    assert_eq!(store.keys(), ["ada"], "replaced");
+    assert_eq!(saved(&store, "ada").nickname(), "Pal");
+
+    let mut game = Harness::opening(&store);
+    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
+    game.click(open_pilot);
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    assert_eq!(game.pilot().name(), "ada");
+    assert_eq!(game.pilot().nickname(), "Pal");
 }
 
 const DOWN: SoundId = SoundId(600);

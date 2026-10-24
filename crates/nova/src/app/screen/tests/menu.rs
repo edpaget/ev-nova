@@ -969,7 +969,7 @@ fn cancelling_new_pilot_goes_back_to_the_menu() {
 }
 
 #[test]
-fn a_name_already_saved_is_refused_whatever_its_case() {
+fn without_the_yes_no_dialog_a_name_already_saved_is_refused_whatever_its_case() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");

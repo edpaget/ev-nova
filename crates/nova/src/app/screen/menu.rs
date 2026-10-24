@@ -3,7 +3,8 @@
 
 use std::rc::Rc;
 
-use nova_sim::{OpenError, Pilot, pilot_key};
+use nova_sim::new_pilot::{kept_name, name_defaults};
+use nova_sim::{OpenError, Pilot, RuleKey, RuleSource, pilot_key};
 #[cfg(doc)]
 use nova_view::flight::FlightView;
 use nova_view::menu::{Chosen, ChosenBy, MenuChoice, PilotList, PilotListOutcome};
@@ -207,8 +208,12 @@ impl AppScreen {
     }
 
     /// Opens the New Pilot dialog: the interface file's, or the built-in
-    /// one without it (with a warning when the interface file has none).
+    /// one without it (with a warning when the interface file has none),
+    /// its fields holding the defaults drawn on the router's chance each
+    /// time it opens, as `_DoNewPilot` draws them before the dialog
+    /// (@0x18b44-0x18ba7; `nova_sim::new_pilot`).
     pub(super) fn open_new_pilot(&mut self) {
+        let defaults = name_defaults(self.data.as_ref(), &mut self.chance);
         let style = self.data.button_style();
         let built = self.dialogs.as_ref().map(|dialogs| {
             dialogs
@@ -232,7 +237,7 @@ impl AppScreen {
         };
         // Chosen by a click let go of on its button, the menu below holds
         // no press and no keys to let go of.
-        self.new_pilot = Some(dialog);
+        self.new_pilot = Some(dialog.with_defaults(&defaults.name, &defaults.nickname));
     }
 
     /// Opens the saved pilots' list; when they cannot be listed, it shows
@@ -252,15 +257,28 @@ impl AppScreen {
         self.open_pilot = Some(list);
     }
 
-    /// The New Pilot dialog's input. A name already saved, or one no file
-    /// can be saved under, is refused, as `_DoNewPilot` checks the name
-    /// (@0x18c0b) before it christens the ship; any other creates the
-    /// pilot with the gender and Strict Play chosen and asks to christen
-    /// its ship ([`AppScreen::open_christening`]). Once christened, its
-    /// game begins (the `chär`'s `OnStart`, [`FlightView::begin`]), it is
-    /// saved at once, with what that did (so Open Pilot lists it), as
-    /// `_DoNewPilot` runs `OnStart` before the first save, and it is held
-    /// on the main menu, not flying, in place of any game held
+    /// The New Pilot dialog's input. The name and nickname confirmed are
+    /// kept culled, then trimmed (`kept_name`, @0x18bd6-0x18c03), and the
+    /// pilot is built with them, the gender and Strict Play chosen. A name
+    /// no file can be saved under (one culled or trimmed to nothing among
+    /// them) is refused.
+    ///
+    /// A name already saved, ignoring case, is checked next, as
+    /// `_DoNewPilot` checks it (`_DoesPilotExist` @0x18c0b) before it
+    /// christens the ship. By the engine's reading of
+    /// [`RuleKey::NewPilotNameTaken`], the New Pilot dialog closes and
+    /// `STR#` 140 #9 is asked in the Yes/No dialog (@0x18c08-0x18c63; see
+    /// `quit_question`): Yes goes on to the christening and the new pilot
+    /// replaces the saved one, No returns to the main menu. By the other
+    /// reading, or with no Yes/No dialog to ask in, the name is refused
+    /// with [`NAME_TAKEN`] and the dialog stays open.
+    ///
+    /// Any other name asks to christen the ship
+    /// ([`AppScreen::open_christening`]). Once christened, its game begins
+    /// (the `chär`'s `OnStart`, [`FlightView::begin`]), it is saved at
+    /// once, with what that did (so Open Pilot lists it), as `_DoNewPilot`
+    /// runs `OnStart` before the first save, and it is held on the main
+    /// menu, not flying, in place of any game held
     /// ([`AppScreen::hold_new_pilot`]).
     pub(super) fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
@@ -270,40 +288,69 @@ impl AppScreen {
             Some(NewPilotOutcome::Cancel) => self.close_new_pilot(),
             Some(NewPilotOutcome::Create {
                 name,
+                nickname,
                 gender,
                 strict_play,
             }) => {
-                let keeper = self.keeper();
-                let refusal = if pilot_key(&name).is_none() {
-                    Some(UNUSABLE_NAME.to_owned())
-                } else if keeper.as_ref().is_some_and(|keeper| keeper.exists(&name)) {
-                    Some(NAME_TAKEN.to_owned())
-                } else {
-                    None
-                };
-                if let Some(refusal) = refusal {
-                    self.new_pilot.as_mut().expect("open").refuse(&refusal);
+                let name = kept_name(&name);
+                if pilot_key(&name).is_none() {
+                    self.refuse_new_pilot(UNUSABLE_NAME);
                     return ScreenAction::None;
                 }
-                match Pilot::new(self.data.as_ref(), &name) {
-                    Ok(pilot) => {
-                        self.close_new_pilot();
-                        self.open_christening(
-                            pilot.with_gender(gender).with_strict_play(strict_play),
-                            matches!(input, Input::Key { .. }),
-                        );
-                    }
+                let pilot = match Pilot::new(self.data.as_ref(), &name) {
+                    Ok(pilot) => pilot
+                        .with_nickname(kept_name(&nickname))
+                        .with_gender(gender)
+                        .with_strict_play(strict_play),
                     Err(error) => {
                         let why = error.to_string();
-                        self.new_pilot.as_mut().expect("open").refuse(&why);
+                        self.refuse_new_pilot(&why);
                         self.warnings
                             .push(format!("nova: cannot create a pilot: {why}"));
+                        return ScreenAction::None;
                     }
+                };
+                let by_key = matches!(input, Input::Key { .. });
+                if let Some(saved) = self.keeper().and_then(|keeper| keeper.saved_key(&name)) {
+                    self.ask_to_replace(pilot, saved);
+                } else {
+                    self.close_new_pilot();
+                    self.open_christening(pilot, by_key, None);
                 }
             }
             None => {}
         }
         ScreenAction::None
+    }
+
+    /// Refuses the New Pilot dialog's name, saying `why` under it; the
+    /// dialog stays open.
+    fn refuse_new_pilot(&mut self, why: &str) {
+        self.new_pilot.as_mut().expect("open").refuse(why);
+    }
+
+    /// A new `pilot` named as the pilot saved under `saved`: by the
+    /// engine's reading of [`RuleKey::NewPilotNameTaken`], the New Pilot
+    /// dialog closes, keeping its sounds, and `STR#` 140 #9 is asked
+    /// ([`Question::ReplacePilot`]); by the other reading, or with no
+    /// Yes/No dialog to ask in, the name is refused and the dialog stays
+    /// open.
+    fn ask_to_replace(&mut self, pilot: Pilot, saved: String) {
+        // Out of the way while the question opens, so the menu under it is
+        // the screen whose pointer and keys are let go of.
+        let mut dialog = self.new_pilot.take().expect("open");
+        let asks = self.rules.source_for(RuleKey::NewPilotNameTaken) == RuleSource::Engine;
+        if asks
+            && self.ask(Question::ReplacePilot {
+                pilot: Box::new(pilot),
+                saved,
+            })
+        {
+            self.sounds.extend(dialog.take_sounds());
+            return;
+        }
+        dialog.refuse(NAME_TAKEN);
+        self.new_pilot = Some(dialog);
     }
 
     /// Closes the New Pilot dialog, keeping its sounds.

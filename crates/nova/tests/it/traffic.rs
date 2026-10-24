@@ -279,11 +279,12 @@ fn placing_the_trader() -> SharedChance {
     SharedChance::new(script)
 }
 
-/// [`placing_the_trader`] for a new pilot: its christening's default,
-/// the first, then the offers' roll table its beginning draws, each the
-/// last outcome, then the setup.
+/// [`placing_the_trader`] for a new pilot: its name's and nickname's
+/// defaults and its christening's default, each the first, then the
+/// offers' roll table its beginning draws, each the last outcome, then the
+/// setup.
 fn begun_placing_the_trader() -> SharedChance {
-    let christening = std::iter::once(0);
+    let christening = [0, 0, 0].into_iter();
     let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
     let setup = [6, 6, 0, 0, 850, 650, 0];
     let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(

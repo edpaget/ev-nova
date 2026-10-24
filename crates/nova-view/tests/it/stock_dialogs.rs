@@ -19,8 +19,8 @@ use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
-    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
-    OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
+    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
+    NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
 };
 use nova_view::ui::note::{
     LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, OK_ITEM as NOTE_OK_ITEM,
@@ -713,7 +713,43 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Female,
+                strict_play: false,
+            }),
+            "{name}"
+        );
+    }
+}
+
+/// The stock dialog's Nickname field (item 9) is live: Tab focuses it,
+/// and OK creates the pilot with the nickname typed.
+#[test]
+fn the_new_pilot_dialogs_nickname_field_is_live() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        assert_eq!(
+            template.items[NICKNAME_ITEM - 1].kind,
+            ItemSpec::EditText("Edit Text".to_owned()),
+            "{name}"
+        );
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+            .with_defaults("Shane Merrol", "Hunter");
+        dialog.input(&key(Key::Tab));
+        for c in "Ace".chars() {
+            dialog.input(&Input::Text(c));
+        }
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Shane Merrol".to_owned(),
+                nickname: "Ace".to_owned(),
+                gender: nova_sim::Gender::Male,
                 strict_play: false,
             }),
             "{name}"
@@ -757,6 +793,7 @@ fn the_new_pilot_dialogs_strict_play_box_is_live() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Male,
                 strict_play: true,
             }),

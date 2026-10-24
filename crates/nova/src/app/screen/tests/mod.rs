@@ -101,6 +101,7 @@ mod map_find;
 mod menu;
 mod menu_commands;
 mod missions;
+mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
@@ -1554,8 +1555,8 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
 // The note on a load that fell back.
 
 /// "Create a new pilot:", smaller: 326 x 213 at (0, 0), with OK (1),
-/// Cancel (2), Strict Play (4) and the Full Name field (8); the rest
-/// parked.
+/// Cancel (2), Strict Play (4) and the Full Name and Nickname fields (8,
+/// 9); the rest parked.
 fn new_pilot_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1577,6 +1578,13 @@ fn new_pilot_template() -> DialogTemplate {
     items[7] = item(
         140.0,
         30.0,
+        170.0,
+        16.0,
+        ItemSpec::EditText("Edit Text".into()),
+    );
+    items[8] = item(
+        140.0,
+        53.0,
         170.0,
         16.0,
         ItemSpec::EditText("Edit Text".into()),
