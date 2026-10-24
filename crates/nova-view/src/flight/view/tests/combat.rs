@@ -649,6 +649,75 @@ fn each_ship_types_sheet_is_read_once() {
     );
 }
 
+/// [`trafficked`] in 130 and 131, with 131's traffic düde 129 flying
+/// ships 129 and 130 where 130's flies only 129.
+fn trafficked_with_new_types_in_131() -> FakeCatalog {
+    let mut catalog = trafficked(&[130, 131], 2, 129, 1);
+    let mut dude_types = [(-1, 0); 8];
+    dude_types[0] = (129, 100);
+    catalog.traffic[1].1.dude_types = dude_types;
+    catalog.dudes.push((
+        nova_sim::DudeId(129),
+        nova_sim::DudeRecord {
+            ai_type: 1,
+            govt: None,
+            ships: vec![(ShipId(129), 1), (ShipId(130), 1)],
+            booty: 0,
+            info_types: 0,
+        },
+    ));
+    catalog
+}
+
+#[test]
+fn the_first_step_reads_its_traffic_types_cards_in_one_batch() {
+    let mut view = FlightView::new(trafficked_with_new_types_in_131());
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty());
+    assert_eq!(*view.catalog().cards_asked.borrow(), [vec![ShipId(129)]]);
+    jump_to_alpha(&mut view);
+    assert_eq!(
+        *view.catalog().cards_asked.borrow(),
+        [vec![ShipId(129)], vec![ShipId(130)]],
+        "only the type new to 131"
+    );
+}
+
+#[test]
+fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_reads_none() {
+    let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    view.warm_up_traffic();
+    assert_eq!(npc_ids(&view), [], "nothing populated");
+    let sheets = view.catalog().sheets_asked.borrow().clone();
+    let cards = view.catalog().cards_asked.borrow().clone();
+    assert_eq!(sheets, [ShipId(128), ShipId(129)]);
+    assert_eq!(cards, [vec![ShipId(129)]]);
+    ticks(&mut view, 5);
+    assert_eq!(npc_ids(&view).len(), 3, "populated by the first step");
+    assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
+    assert_eq!(*view.catalog().cards_asked.borrow(), cards);
+}
+
+#[test]
+fn a_take_off_after_the_first_step_reads_no_sheet_or_card() {
+    let catalog = FakeCatalog {
+        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+        ..trafficked(&[130], 2, 129, 1)
+    };
+    let mut view = FlightView::new(catalog);
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty(), "the traffic spawned");
+    let sheets = view.catalog().sheets_asked.borrow().clone();
+    let cards = view.catalog().cards_asked.borrow().clone();
+    assert_eq!(cards, [vec![ShipId(129)]]);
+    land_now(&mut view);
+    view.take_off().expect("took off");
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty(), "the traffic spawned again");
+    assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
+    assert_eq!(*view.catalog().cards_asked.borrow(), cards);
+}
+
 #[test]
 fn arriving_repopulates_from_the_new_system() {
     let mut view = FlightView::new(trafficked(&[131], 2, 129, 1));

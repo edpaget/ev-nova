@@ -358,6 +358,12 @@ pub trait CombatLooks {
     /// What the target panel shows of ship type `ship`; empty when it
     /// cannot be read.
     fn target_card(&self, ship: ShipId) -> TargetCard;
+    /// [`CombatLooks::target_card`] of each of `ships`, in order: one ask
+    /// for a batch, which a catalog may answer more cheaply than one at a
+    /// time.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        ships.iter().map(|&ship| self.target_card(ship)).collect()
+    }
     /// Govt `govt`'s `TargetCode`, if it has one.
     fn target_code(&self, govt: GovtId) -> Option<String>;
     /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
@@ -396,6 +402,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
         (**self).target_card(ship)
+    }
+
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        (**self).target_cards(ships)
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
@@ -439,6 +449,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
         (**self).target_card(ship)
+    }
+
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        (**self).target_cards(ships)
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {

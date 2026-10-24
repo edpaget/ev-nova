@@ -146,6 +146,8 @@ struct FakeCatalog {
     ships: Vec<ShipRecord>,
     /// The ships whose sheets were asked for.
     sheets_asked: RefCell<Vec<ShipId>>,
+    /// Each batch of ships whose target cards were asked for.
+    cards_asked: RefCell<Vec<Vec<ShipId>>>,
     /// Each system's traffic: none, by default.
     traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
     /// The düdes: none, by default.
@@ -343,6 +345,7 @@ fn catalog() -> FakeCatalog {
         junk: Vec::new(),
         ships: Vec::new(),
         sheets_asked: RefCell::default(),
+        cards_asked: RefCell::default(),
         traffic: Vec::new(),
         dudes: Vec::new(),
         weapons: Vec::new(),
@@ -907,6 +910,13 @@ impl CombatLooks for FakeCatalog {
             .find(|(id, _)| *id == ship.0)
             .map(|(_, card)| card.clone())
             .unwrap_or_default()
+    }
+
+    /// Each card as [`FakeCatalog::target_card`] gives it, the batch
+    /// recorded.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        self.cards_asked.borrow_mut().push(ships.to_vec());
+        ships.iter().map(|&ship| self.target_card(ship)).collect()
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {

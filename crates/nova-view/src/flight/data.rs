@@ -15,7 +15,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite, shot_spin_id};
+use nova_data::{GameData, LayerError, LayerSprite, SheetScan, shot_spin_id};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -31,19 +31,21 @@ use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 
-/// Decodes the sheet and its layers on every call; the flight screen asks
-/// once, when it opens and when a ship is bought.
+/// Scans the sheet and its layers on every call, reading their sizes,
+/// frame counts and runs without decoding a pixel; the flight screen asks
+/// once for each ship type, when it opens, when a ship is bought and when
+/// traffic brings a new type.
 impl ShipSprites for GameData {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
-        let sprite = self.ship_sprite(id).map_err(|err| err.to_string())?;
+        let sprite = self.ship_sprite_info(id).map_err(|err| err.to_string())?;
         let sheet = &sprite.sheet;
         // The sheet's layout is the `shän`'s frames per rotation as columns.
-        let rotations = NonZeroU16::new(sheet.layout().columns())
+        let rotations = NonZeroU16::new(sheet.layout.columns())
             .expect("a sheet layout has at least one column");
         // A layer that cannot be resolved is drawn as no layer; the ship
         // browser is where its error is shown.
         let [glow, lights, weapon, alt, shield] =
-            self.ship_layers(id).map_or([None; 5], |layers| {
+            self.ship_layer_infos(id).map_or([None; 5], |layers| {
                 [
                     layers.glow,
                     layers.lights,
@@ -58,8 +60,8 @@ impl ShipSprites for GameData {
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
-            frame_width: sheet.frame_width(),
-            frame_height: sheet.frame_height(),
+            frame_width: sheet.info.frame_width,
+            frame_height: sheet.info.frame_height,
             glow,
             lights,
             weapon,
@@ -67,23 +69,23 @@ impl ShipSprites for GameData {
             alt,
             shield,
             base_transp: field(|anim| anim.base_transp),
-            solid: sheet.solid_frames().is_some(),
+            solid: sheet.info.has_runs,
         })
     }
 }
 
 /// A resolved layer's ID, frame count and whether it holds solid runs;
 /// `None` for one that failed.
-fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
+fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
-    // An `rlëD` header counts its frames in a u16, and the decoder rejects
-    // a sheet with none (`GraphicsError::NoFrames`).
-    let frames = NonZeroU16::new(layer.sheet.frames().len() as u16)
-        .expect("a decoded rlëD has at least one frame");
+    // The scan, like the decoder, rejects a sheet with no frames
+    // (`GraphicsError::NoFrames`).
+    let frames =
+        NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
-        solid: layer.sheet.solid_frames().is_some(),
+        solid: layer.sheet.info.has_runs,
     })
 }
 
@@ -218,13 +220,26 @@ impl CombatLooks for GameData {
     }
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
-        let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
-            return TargetCard::default();
-        };
-        TargetCard {
-            subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: crate::target_picture::game_target_picture(self, ship).map(|p| p.picture),
-        }
+        self.target_cards(&[ship]).pop().unwrap_or_default()
+    }
+
+    /// Reads every `shïp`'s base image once for the batch, rather than
+    /// once per ship.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        let bases = crate::target_picture::game_ship_bases(self);
+        ships
+            .iter()
+            .map(|&ship| {
+                let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
+                    return TargetCard::default();
+                };
+                TargetCard {
+                    subtitle: entry.record.subtitle.as_str().to_owned(),
+                    picture: crate::target_picture::game_target_picture_among(self, &bases, ship)
+                        .map(|p| p.picture),
+                }
+            })
+            .collect()
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
@@ -1257,6 +1272,29 @@ mod tests {
             None,
             "no shän, though PICT 3003 exists (@0x23ef3)"
         );
+    }
+
+    #[test]
+    fn a_batch_of_target_cards_is_each_ships_card_in_order() {
+        let data = named_store(&[
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Variant")),
+            (Ship::TYPE, 130, None, subtitled("Other Hull")),
+            (Ship::TYPE, 131, None, subtitled("No Anim")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 130, None, anim(1200, 1, 8)),
+            (PICT, 3000, None, picture(2, 2)),
+            (PICT, 3002, None, picture(2, 2)),
+        ]);
+        let ships = [131, 129, 140, 128, 130, 129].map(ShipId);
+        let one_by_one: Vec<TargetCard> = ships.iter().map(|&s| data.target_card(s)).collect();
+        assert_eq!(data.target_cards(&ships), one_by_one);
+        assert_eq!(one_by_one[0].subtitle, "No Anim");
+        assert_eq!(one_by_one[1].picture, Some(3000), "the base ship's");
+        assert_eq!(one_by_one[2], TargetCard::default(), "no shïp 140");
+        assert_eq!(one_by_one[4].picture, Some(3002), "its own");
+        assert_eq!(data.target_cards(&[]), []);
     }
 
     /// A `gövt` whose `TargetCode` is `code`.

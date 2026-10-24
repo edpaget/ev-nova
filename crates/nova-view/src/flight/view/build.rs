@@ -752,27 +752,59 @@ impl<
     /// not been read yet, and of each type a ship here is boxed by
     /// ([`Session::framed_types`]), such as the stale frames of a hidden
     /// ship's slot.
+    ///
+    /// The traffic types' target cards not read yet are asked for in one
+    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
     pub(super) fn read_npc_sheets(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        for ship in session.traffic_ships() {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-            self.cards
-                .entry(ship)
-                .or_insert_with(|| self.catalog.target_card(ship));
-        }
-        for ship in session.framed_types() {
+        let traffic = session.traffic_ships();
+        let framed: Vec<_> = session.framed_types().collect();
+        let govts: Vec<_> = session.npcs().iter().filter_map(|npc| npc.govt).collect();
+        self.read_traffic_sheets(traffic);
+        for ship in framed {
             self.npc_sheets
                 .entry(ship)
                 .or_insert_with(|| self.catalog.ship_sheet(ship));
         }
-        for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
+        for govt in govts {
             self.codes
                 .entry(govt)
                 .or_insert_with(|| self.catalog.target_code(govt));
+        }
+    }
+
+    /// Reads, in the warm-up frame of entering play, the sheets and target
+    /// cards of the ship types the system's traffic will bring
+    /// ([`Session::coming_traffic_ships`]), so the first step, which fills
+    /// the system, reads none: their reading is the one-time cost of a
+    /// run's first stepped frame, and the warm-up frame is drawn under
+    /// black. A session that failed reads nothing.
+    pub fn warm_up_traffic(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let coming = session.coming_traffic_ships(&self.catalog);
+        self.read_traffic_sheets(coming);
+    }
+
+    /// Reads the sheet of each of `traffic` not read yet, and their target
+    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
+    /// none when all are read.
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+        for &ship in &traffic {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        let unread: Vec<_> = traffic
+            .into_iter()
+            .filter(|ship| !self.cards.contains_key(ship))
+            .collect();
+        if !unread.is_empty() {
+            let cards = self.catalog.target_cards(&unread);
+            self.cards.extend(unread.into_iter().zip(cards));
         }
     }
 

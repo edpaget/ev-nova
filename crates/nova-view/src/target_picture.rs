@@ -8,7 +8,9 @@
 //! (@0x23f28-0x23f3b): the first lower-ID `shïp` whose `shän` has the same
 //! `BaseImage` (`_LoadExtendedShipSprites` @0x22704, @0x227d6-0x22849). A
 //! `shïp` with no `shän` skips the fill (@0x23ef3). [`target_picture`] is
-//! the pure decision; [`game_target_picture`] feeds it from [`GameData`].
+//! the pure decision; [`game_target_picture`] feeds it from [`GameData`],
+//! and [`game_ship_bases`] with [`game_target_picture_among`] do so for
+//! many ships, reading the bases once.
 
 use nova_data::GameData;
 use nova_data::records::ship::Ship;
@@ -88,9 +90,27 @@ pub fn target_picture(
 /// each decodable `shïp`'s `shän` `BaseImage` and the `PICT` sizes.
 #[must_use]
 pub fn game_target_picture(data: &GameData, ship: ShipId) -> Option<ShipPicture> {
+    game_target_picture_among(data, &game_ship_bases(data), ship)
+}
+
+/// Each decodable `shïp`'s `shän` `BaseImage` in `data`: the `bases`
+/// [`target_picture`] takes.
+#[must_use]
+pub fn game_ship_bases(data: &GameData) -> Vec<(ShipId, i16)> {
     let mut bases = data.ship_base_images();
     bases.retain(|(id, _)| matches!(data.get::<Ship>(id.0), Some(Ok(_))));
-    target_picture(ship, &bases, |id| {
+    bases
+}
+
+/// Ship type `ship`'s target picture in `data` ([`target_picture`]), from
+/// `bases` as [`game_ship_bases`] reads them and the `PICT` sizes.
+#[must_use]
+pub fn game_target_picture_among(
+    data: &GameData,
+    bases: &[(ShipId, i16)],
+    ship: ShipId,
+) -> Option<ShipPicture> {
+    target_picture(ship, bases, |id| {
         crate::ui::PictureSizes::picture_size(data, id)
     })
 }

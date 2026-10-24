@@ -4,7 +4,8 @@
 //! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
 //! type, every cargo box graphic, the cursor and a ship's target card read, and
-//! every looped weapon sound's length; a boarding grant's message reads
+//! every looped weapon sound's length; every ship's sheet scans as it
+//! decodes, and its target card reads the same in a batch; a boarding grant's message reads
 //! the strings it is built from; the cargo area's strings and area read; and the radar draws the
 //! stock stations, hypergates and wormholes as squares. Skips, passing,
 //! when `NOVA_DATA` is unset.
@@ -21,7 +22,9 @@ use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
 use nova_sim::{BoomId, Pilot, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
-use nova_view::flight::{CombatLooks, FlightView, Looks, StatusBars};
+use nova_view::flight::{
+    CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars,
+};
 use nova_view::geometry::Bounds;
 use nova_view::system::catalog::{SystemCatalog, SystemId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen};
@@ -250,6 +253,60 @@ fn every_stock_ships_target_card_matches_the_pilot_panel() {
         }
     }
     assert_ne!(borrowed, Vec::<i16>::new(), "some ship borrows its base's");
+    let ships: Vec<ShipId> = data.ids(Ship::TYPE).iter().map(|&id| ShipId(id)).collect();
+    let one_by_one: Vec<_> = ships.iter().map(|&ship| data.target_card(ship)).collect();
+    assert_eq!(data.target_cards(&ships), one_by_one, "in one batch");
+}
+
+/// A ship's sheet as the flight read it before scanning: from the
+/// decoded base and layer sheets.
+fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> {
+    use nova_data::records::ship_anim::ShipAnim;
+    use std::num::NonZeroU16;
+    let sprite = data.ship_sprite(id).map_err(|err| err.to_string())?;
+    let layer = |layer: Option<Result<nova_data::LayerSprite<'_>, nova_data::LayerError>>| {
+        let layer = layer?.ok()?;
+        Some(LayerSheet {
+            image_id: layer.image_id,
+            frames: NonZeroU16::new(layer.sheet.frames().len() as u16)?,
+            solid: layer.sheet.solid_frames().is_some(),
+        })
+    };
+    let [glow, lights, weapon, alt, shield] = data.ship_layers(id).map_or([None; 5], |l| {
+        [l.glow, l.lights, l.weapon, l.alt, l.shield].map(layer)
+    });
+    let anim = data.get::<ShipAnim>(id.0).and_then(Result::ok);
+    let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
+    Ok(ShipSheet {
+        image_id: sprite.image_id,
+        rotations: NonZeroU16::new(sprite.sheet.layout().columns()).expect("a column"),
+        frame_width: sprite.sheet.frame_width(),
+        frame_height: sprite.sheet.frame_height(),
+        glow,
+        lights,
+        weapon,
+        weap_decay: field(|anim| anim.weap_decay),
+        alt,
+        shield,
+        base_transp: field(|anim| anim.base_transp),
+        solid: sprite.sheet.solid_frames().is_some(),
+    })
+}
+
+/// Every stock ship's sheet, read by scanning, is what decoding gave.
+#[test]
+fn every_stock_ships_scanned_sheet_matches_its_decoded_one() {
+    use nova_data::records::ship::Ship;
+    let Some(data) = open() else {
+        return;
+    };
+    let mut solid = 0;
+    for &id in data.ids(Ship::TYPE) {
+        let scanned = data.ship_sheet(ShipId(id));
+        assert_eq!(scanned, decoded_ship_sheet(&data, ShipId(id)), "shïp {id}");
+        solid += usize::from(scanned.is_ok_and(|sheet| sheet.weapon.is_some_and(|w| w.solid)));
+    }
+    assert_eq!(solid, 1, "only the Thunderforge's weapon glow has runs");
 }
 
 /// A grant's message is built from `STR#` 2002 #106, #108, #393 and
