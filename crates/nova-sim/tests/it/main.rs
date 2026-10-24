@@ -30,6 +30,7 @@ mod stock_comm_calls;
 mod stock_conditional_text;
 mod stock_crons;
 mod stock_escape_pod;
+mod stock_escort_dialog;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
 mod stock_hail_advice;

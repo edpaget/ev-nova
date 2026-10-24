@@ -181,6 +181,10 @@ impl PilotCatalog for GameData {
                     combat_govt: combat_govt(record.inherent_govt),
                     escort_type: record.escort_type,
                     skill_var: record.skill_var,
+                    subtitle: record.subtitle.as_str().to_owned(),
+                    upgrade_to: record.upgrade_to.filter(|ship| ship.0 >= 128),
+                    esc_upgrd_cost: i64::from(record.esc_upgrd_cost.max(0)),
+                    esc_sell_value: escort_sell_value(record.esc_sell_value, record.cost),
                 })
             })
             .collect()
@@ -1252,6 +1256,18 @@ fn con_slots(con: [Option<SystemId>; 16]) -> Vec<SystemId> {
         .collect()
 }
 
+/// A `shïp`'s `EscSellValue` as `_LoadObjectData` reads it
+/// (@0x7a42e-0x7a442): as it is when above 0, else its `Cost` x 0.1 (the
+/// double at 0xdd110), truncated. The double 0.1 is a hair above a tenth,
+/// so the truncated product is the integer tenth for every `Cost`.
+fn escort_sell_value(raw: i32, cost: i32) -> i64 {
+    if raw > 0 {
+        i64::from(raw)
+    } else {
+        i64::from(cost) / 10
+    }
+}
+
 /// A `shïp`'s `InherentGovt` as the government whose attributes it takes
 /// on: a `gövt` ID as it is, or less [`ATTRIBUTES_ONLY`] when it is in
 /// that range; none for -1, or a government it fights as only (+2000),
@@ -1878,6 +1894,9 @@ mod tests {
         bytes[0x26A..0x26E].copy_from_slice(b"b300");
         bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
         bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
+        bytes[0x6E6..0x6F5].copy_from_slice(b"Light Freighter");
+        put_i16s(&mut bytes, 0x728, &[129]);
+        bytes[0x72A..0x72E].copy_from_slice(&6_000_i32.to_be_bytes());
         bytes
     }
 
@@ -1936,6 +1955,10 @@ mod tests {
             combat_govt: None,
             escort_type: 2,
             skill_var: 15,
+            subtitle: "Light Freighter".to_owned(),
+            upgrade_to: Some(ShipId(129)),
+            esc_upgrd_cost: 6_000,
+            esc_sell_value: 1_750,
             on_capture: Script::parse("^b301"),
             on_purchase: Script::parse("b300"),
             on_retire: Script::parse("!b30"),
@@ -2001,6 +2024,31 @@ mod tests {
                 "InherentGovt {raw}"
             );
         }
+    }
+
+    #[test]
+    fn a_shïps_escort_upgrade_and_sale_read_as_load_object_data_reads_them() {
+        let escort = |upgrade_to: i16, cost: i32, sell: i32, price: i32| {
+            let mut bytes = for_sale();
+            bytes[0x30..0x34].copy_from_slice(&price.to_be_bytes());
+            put_i16s(&mut bytes, 0x728, &[upgrade_to]);
+            bytes[0x72A..0x72E].copy_from_slice(&cost.to_be_bytes());
+            bytes[0x72E..0x732].copy_from_slice(&sell.to_be_bytes());
+            let ship = store(&[(Ship::TYPE, 128, bytes)]).ships().remove(0);
+            (ship.upgrade_to, ship.esc_upgrd_cost, ship.esc_sell_value)
+        };
+        assert_eq!(
+            escort(127, 10, 750, 4_995),
+            (None, 10, 750),
+            "an UpgradeTo below 128 is none"
+        );
+        assert_eq!(
+            escort(128, -5, 0, 4_995),
+            (Some(ShipId(128)), 0, 499),
+            "a negative cost is 0; a sale of 0 is the Cost x 0.1, truncated"
+        );
+        assert_eq!(escort(-1, 0, -1, 4_999), (None, 0, 499), "UpgradeTo -1");
+        assert_eq!(escort(0, 0, 1, 4_999), (None, 0, 1), "UpgradeTo 0");
     }
 
     #[test]

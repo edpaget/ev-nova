@@ -518,6 +518,21 @@ pub struct ShipRecord {
     /// strays from 1.0, in hundredths (class +0x9f8, `_RandomSkillLevel`
     /// @0x6922; see `nova_sim::skill`).
     pub skill_var: i16,
+    /// Its `Subtitle` (class +0xac, `_LoadObjectData` @0x7b0f1): the
+    /// escort dialog's third title line, under the `CommName`.
+    pub subtitle: String,
+    /// The class an escort of it is upgraded to: its `UpgradeTo` when the
+    /// raw ID is 128 or more, none otherwise (`_LoadObjectData`
+    /// @0x7a3de-0x7a3f7, class +0xa22).
+    pub upgrade_to: Option<ShipId>,
+    /// What upgrading an escort of it costs: its `EscUpgrdCost`, a
+    /// negative one read as 0 (`_LoadObjectData` @0x7a410-0x7a417, class
+    /// +0x64).
+    pub esc_upgrd_cost: i64,
+    /// What selling a captured escort of it pays: its `EscSellValue`, or
+    /// `Cost` x 0.1 truncated when that is 0 or less (`_LoadObjectData`
+    /// @0x7a42e-0x7a442, the double at 0xdd110, class +0x68).
+    pub esc_sell_value: i64,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
