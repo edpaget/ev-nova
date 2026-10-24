@@ -2265,7 +2265,7 @@ use crate::flight::brackets::{self, Standing};
 use crate::flight::catalog::EffectSheet;
 use crate::flight::effects::{DEBRIS_COLOR, Effects};
 use crate::flight::target::{self, NO_SECONDARY, NO_TARGET};
-use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
+use crate::flight::weapons::BEAM_UNDER_SHIPS;
 use crate::sound::CombatSound;
 
 const BLASTER: WeaponId = WeaponId(128);

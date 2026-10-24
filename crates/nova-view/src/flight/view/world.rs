@@ -40,7 +40,7 @@
 //!   (rdm:phase/play-feel-followups/phase-2-flight-world-clipped-to-play-area).
 
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
-use nova_sim::{RuleKey, RuleSource, Session};
+use nova_sim::{RuleKey, RuleSource, Session, Vec2};
 
 use crate::flight::alert;
 use crate::flight::asteroids;
@@ -86,9 +86,7 @@ impl<C> FlightView<C> {
                     self.effects.draw_pods(list, camera, &self.looks);
                 }
                 WorldPass::Layer(SpriteLayer::Smoke) => self.draw_smoke(list, camera),
-                WorldPass::Layer(SpriteLayer::Explosions) => {
-                    self.effects.draw_explosions(list, camera, &self.looks);
-                }
+                WorldPass::Layer(SpriteLayer::Explosions) => self.draw_explosions(list, camera),
                 WorldPass::Layer(SpriteLayer::Targets) => self.draw_targets(list, scene, camera),
                 WorldPass::Floaters => self.draw_floaters(list),
                 WorldPass::BeamsOverShips => {
@@ -189,6 +187,20 @@ impl<C> FlightView<C> {
             let murk = session.effective_murk();
             self.shot_looks.draw_smoke(list, camera, viewer, murk);
         }
+    }
+
+    /// Draws the explosions, murked as the player sees them; unmurked, as
+    /// seen from the camera's centre, without a session.
+    fn draw_explosions(&self, list: &mut DrawList, camera: &Camera) {
+        let (viewer, murk) = self.session.as_ref().map_or_else(
+            |_| {
+                let centre = camera.center();
+                (Vec2::new(centre.x, centre.y), 0)
+            },
+            |session| (session.player().position, session.effective_murk()),
+        );
+        self.effects
+            .draw_explosions(list, camera, &self.looks, viewer, murk);
     }
 }
 

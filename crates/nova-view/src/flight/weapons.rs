@@ -54,10 +54,6 @@ pub const BEAM_UNDER_SHIPS: u16 = 0x2000;
 /// `Flags3`: the shot is translucent, added to what is under it (see
 /// [`shot_fade`](super::shot_fade)).
 pub const TRANSLUCENT: u16 = 0x0002;
-/// The alpha every explosion is drawn at ([`effects`](super::effects)): a
-/// placeholder for the original's additive blend of a translucent
-/// explosion.
-pub const TRANSLUCENT_ALPHA: f32 = 0.75;
 /// The side of the crossed box drawn for a shot whose look cannot be
 /// read, in the placeholder colour.
 pub const SHOT_PLACEHOLDER_SIZE: f32 = 8.0;
@@ -290,12 +286,6 @@ pub fn see_through(t: u8) -> Color {
 
 /// The steps of a shot's translucency.
 const FADE_STEPS: u8 = 32;
-
-/// White at [`TRANSLUCENT_ALPHA`].
-#[must_use]
-pub fn translucent() -> Color {
-    Color::rgba(255, 255, 255, (TRANSLUCENT_ALPHA * 255.0) as u8)
-}
 
 /// A beam to draw: from where to where on screen, its weapon, and how
 /// far it has faded.

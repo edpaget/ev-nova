@@ -1306,11 +1306,45 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
         stellar, under, shot, npc, ship, explosion, brackets, over, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-    let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
+    let DrawCommand::Sprite { tint, blend, .. } =
+        list.iter().nth(explosion).cloned().expect("drawn")
     else {
         panic!("a sprite")
     };
-    assert_eq!(tint, translucent());
+    // The default catalog's system is clear (`sol_murk` 0): added at full,
+    // unmurked (`_HandleExplods` @0x2f7b0-0x2f7e2).
+    assert_eq!((blend, tint), (Blend::Or, lights_tint(32)));
+}
+
+#[test]
+fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
+    let mut catalog = armed(1, &[BLASTER, UNDER, OVER]);
+    catalog.sol_murk = 100;
+    let view = firing_at_an_npc_in(catalog);
+    let session = view.session().expect("flying");
+    let murk = session.effective_murk();
+    assert_eq!(murk, 100);
+    let boom = view.effects().explosions()[0].at;
+    let level = crate::flight::murk::sprite_murk(
+        nova_sim::Vec2::new(boom.x, boom.y),
+        session.player().position,
+        murk,
+    );
+    assert!(level > 0, "murked where it went off: {boom:?}");
+    let list = drawn(&view);
+    let explosion = first(&list, sprite_of(400));
+    let DrawCommand::Sprite { tint, blend, .. } =
+        list.iter().nth(explosion).cloned().expect("drawn")
+    else {
+        panic!("a sprite")
+    };
+    assert_eq!(
+        (blend, tint),
+        (
+            Blend::Or,
+            crate::flight::murk::murk_tint(lights_tint(32), level)
+        )
+    );
 }
 
 #[test]
