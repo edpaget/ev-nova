@@ -134,7 +134,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::catalog::ShipId;
@@ -152,7 +152,7 @@ mod tests {
     /// [`hailable`] with the Cruiser (129) upgrading to class 130 for
     /// 6,000 and selling for 499, its subtitle "Heavy Warship"; class 130
     /// is always available.
-    fn upgradable() -> FakePilotCatalog {
+    pub(in crate::session) fn upgradable() -> FakePilotCatalog {
         let mut catalog = hailable();
         let cruiser = &mut catalog.ship_records[0];
         cruiser.upgrade_to = Some(ShipId(130));
@@ -166,7 +166,7 @@ mod tests {
     }
 
     /// `catalog`'s Cruiser (NPC 0) captured into the fleet, and targeted.
-    fn escorting(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn escorting(catalog: &FakePilotCatalog) -> Session {
         let mut session = targeting(catalog);
         session.join_fleet(NpcId(0), &mut NeverFires);
         session.chart.target = Some(NpcId(0));
@@ -184,7 +184,10 @@ mod tests {
         (hailed, chance.asked)
     }
 
-    fn opened(session: &mut Session, catalog: &FakePilotCatalog) -> EscortDialogView {
+    pub(in crate::session) fn opened(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+    ) -> EscortDialogView {
         match hail_key(session, catalog).0 {
             Hailed::Escort(view) => view,
             other => panic!("{other:?}"),
@@ -362,5 +365,70 @@ mod tests {
         session.dock(crate::catalog::StellarId(128));
         assert!(session.mode.landed().is_some());
         assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Upgrade));
+    }
+
+    /// `catalog`'s escort with its dialog open, unmarked.
+    pub(in crate::session) fn dialog_open(catalog: &FakePilotCatalog) -> Session {
+        let mut session = escorting(catalog);
+        opened(&mut session, catalog);
+        assert!(session.escort_dialog().is_some());
+        session
+    }
+
+    /// The escort dialog is closed: nothing shows, and Upgrade, pressed,
+    /// marks nobody.
+    pub(in crate::session) fn assert_closed(session: &mut Session) {
+        assert_eq!(session.space.escorts.dialog, None, "closed");
+        assert_eq!(session.escort_dialog(), None);
+        let marks: Vec<_> = session
+            .pilot
+            .escorts
+            .iter()
+            .map(|escort| escort.mark)
+            .collect();
+        assert_eq!(session.press_escort(EscortButton::Upgrade), None);
+        let after: Vec<_> = session
+            .pilot
+            .escorts
+            .iter()
+            .map(|escort| escort.mark)
+            .collect();
+        assert_eq!(after, marks, "no mark changed");
+    }
+
+    #[test]
+    fn a_landing_closes_the_escort_dialog() {
+        let catalog = upgradable();
+        let mut session = dialog_open(&catalog);
+        session.dock(crate::catalog::StellarId(128));
+        assert_closed(&mut session);
+    }
+
+    #[test]
+    fn setting_up_a_system_closes_the_escort_dialog() {
+        let catalog = upgradable();
+        let mut session = dialog_open(&catalog);
+        session.populate(&catalog, &mut NeverFires);
+        assert_closed(&mut session);
+    }
+
+    #[test]
+    fn a_hail_closes_the_escort_dialog() {
+        let catalog = upgradable();
+        let mut session = dialog_open(&catalog);
+        session.chart.target = None;
+        let hailed = session.hail(&catalog, &HailOptions::default(), &mut NeverFires);
+        assert!(hailed.is_err(), "no target answers");
+        assert_closed(&mut session);
+    }
+
+    #[test]
+    fn the_comm_key_closes_the_escort_dialog() {
+        let catalog = upgradable();
+        let mut session = dialog_open(&catalog);
+        session.chart.target = None;
+        let hailed = session.hail_key(&catalog, &HailOptions::default(), false, &mut NeverFires);
+        assert!(hailed.is_err(), "no target answers");
+        assert_closed(&mut session);
     }
 }

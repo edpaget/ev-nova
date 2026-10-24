@@ -1744,4 +1744,18 @@ mod tests {
         placed(&mut session, ShipPlacement::Keep, false);
         assert!(session.port.hold_position, "kept");
     }
+
+    #[test]
+    fn the_hail_reset_closes_the_escort_dialog() {
+        use crate::session::escort_dialog::tests::{assert_closed, dialog_open, upgradable};
+        let catalog = upgradable();
+        let mut session = dialog_open(&catalog);
+        session.leave_behind(&Resets::of(
+            &[Reset::Hail],
+            CourseStep::Keep,
+            NavStep::Keep,
+            TrafficStep::None,
+        ));
+        assert_closed(&mut session);
+    }
 }
