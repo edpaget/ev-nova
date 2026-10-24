@@ -4,7 +4,12 @@
 //! mode (`_DoShipyardDialog` with `_shipBuyMode` 1).
 //!
 //! It is the shipyard screen's twin, built from the same pieces: the grid
-//! of ships ([`grid`](super::grid)), each cell its `ShortName`'s lines; the
+//! of ships ([`grid`](super::grid)), each cell drawn as the shipyard's:
+//! the ship's picture in its icon slot ([`grid::draw_cell_picture`],
+//! `_RetrieveMenuIcon` @0x58bc0-0x58bf3) and its `ShortName` split in two
+//! lines and centred under it ([`grid::draw_cell_name`], @0x58d11-0x58f33),
+//! since `_ShipyardDialogUpdate`'s cell loop (@0x58b30-0x58f91) never reads
+//! `_shipBuyMode`; the
 //! selected ship's picture ([`ship_picture`]); its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
@@ -50,7 +55,7 @@ use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
 use nova_sim::{HireList, HireRow, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
-use super::grid::{self, GridColors, INSET, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text};
+use super::grid::{self, GridColors, Shown};
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
@@ -142,8 +147,8 @@ pub struct HireScreen {
     catalog: CatalogHandle,
     /// The grid's frame colours, read from the catalog once.
     colors: GridColors,
-    /// Each ship's base image, read once.
-    bases: Vec<(ShipId, i16)>,
+    /// Each listed ship's cell picture, read once when there is a dialog.
+    pictures: Vec<Option<i16>>,
     style: ButtonStyle,
     /// The grid, its selection as `_ShipyardFilter` keeps it.
     grid: ShipyardGrid,
@@ -162,8 +167,8 @@ impl HireScreen {
     /// dialog's template and the metrics its text is measured by, or why
     /// there are none; the info panel by `info`, "Shipyard Info" (Info is
     /// greyed without it). Its buttons are labelled in `style`, and each
-    /// ship's picture and description read from `catalog`, which gives
-    /// the ships' base images once, now. By the engine nothing is
+    /// ship's picture and description read from `catalog`, each listed
+    /// ship's cell picture once, now. By the engine nothing is
     /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
     /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection), read from `list`'s rules,
     /// the first cell is.
@@ -204,8 +209,12 @@ impl HireScreen {
                 info,
             }
         });
-        let bases = if laid.is_ok() {
-            catalog.ship_base_images()
+        let pictures = if laid.is_ok() {
+            let bases = catalog.ship_base_images();
+            list.rows
+                .iter()
+                .map(|row| ship_picture(row.id, &bases, |id| catalog.picture_exists(id)))
+                .collect()
         } else {
             Vec::new()
         };
@@ -215,7 +224,7 @@ impl HireScreen {
             list,
             colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
-            bases,
+            pictures,
             style,
             grid,
             panel: None,
@@ -329,6 +338,9 @@ impl HireScreen {
     /// (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
     fn selected_changed(&mut self) {
         let hires = self.selected_row().is_some_and(|row| row.hire.is_ok());
+        let picture = self
+            .selected()
+            .and_then(|index| self.pictures.get(index).copied().flatten());
         let ship = self.selected_row().map(|row| row.id);
         let catalog = Rc::clone(&self.catalog.0);
         let Ok(laid) = &mut self.laid else {
@@ -348,7 +360,6 @@ impl HireScreen {
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let picture = ship_picture(ship, &self.bases, |id| catalog.picture_exists(id));
         let description = Some(pilot_desc_id(ship));
         self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
@@ -439,12 +450,15 @@ impl HireScreen {
         self.grid.cells().cell_under(grid, at)
     }
 
-    /// The shown cells, each its name's lines, then its frame in `GridDim`;
+    /// The shown cells, each drawn as the shipyard's: the ship's picture in
+    /// its icon slot ([`grid::draw_cell_picture`]) and its two-line
+    /// `ShortName` centred under it ([`grid::draw_cell_name`]), then its
+    /// frame in `GridDim`;
     /// then, last, the selected cell framed again in `GridBright`. No cell
     /// is filled (`_ShipyardDialogUpdate` @0x58f44-0x58f69,
     /// @0x58f9d-0x58fbf, which draws hire mode's grid as the shipyard's).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
+        let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
@@ -458,11 +472,8 @@ impl HireScreen {
             self.colors,
             |list, index, cell| {
                 let row = &self.list.rows[index];
-                let mut y = cell.min.y + INSET;
-                for (line, color) in name_lines(&row.short_name) {
-                    text(list, line, Point::new(cell.min.x + INSET, y), color);
-                    y += line_height;
-                }
+                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                grid::draw_cell_name(list, metrics, cell, &row.short_name);
             },
         );
     }
@@ -1255,22 +1266,26 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_shows_each_ships_lines_in_its_cell_and_highlights_the_selected() {
-        let screen = screen();
+    fn the_grid_draws_each_cell_as_the_shipyard_does_and_highlights_the_selected() {
+        let art = art();
+        let screen = screen_of(&art, list());
         let commands = drawn(&screen);
-        let cell = |index: usize, dy: f32| {
-            let bounds = screen.cell_bounds(index).expect("a cell");
-            Point::new(bounds.min.x + INSET, bounds.min.y + dy)
-        };
-        let line = MonoMetrics.line_height(TEXT_FONT, TEXT_SIZE);
-        let shown = texts(&screen);
-        for expected in [
-            ("Ship".to_owned(), cell(0, INSET), TEXT_COLOR),
-            ("128".to_owned(), cell(0, INSET + line), TEXT_COLOR),
-            ("Ship".to_owned(), cell(1, INSET), TEXT_COLOR),
-            ("140".to_owned(), cell(1, INSET + line), TEXT_COLOR),
-        ] {
-            assert!(shown.contains(&expected), "{expected:?}: {shown:?}");
+        for index in [0, 1] {
+            let row = &screen.list.rows[index];
+            let cell = screen.cell_bounds(index).expect("a cell");
+            let mut expected = DrawList::new();
+            let picture = ship_picture(row.id, &[], |id| art.picture_exists(id));
+            grid::draw_cell_picture(&mut expected, cell, picture);
+            grid::draw_cell_name(&mut expected, &MonoMetrics, cell, &row.short_name);
+            let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+            assert!(contains(&commands, &expected), "cell {index}: {commands:?}");
+            let top_left = Point::new(cell.min.x + grid::INSET, cell.min.y + grid::INSET);
+            assert!(
+                !texts(&screen)
+                    .iter()
+                    .any(|(_, origin, _)| *origin == top_left),
+                "cell {index} names at its top-left"
+            );
         }
         assert!(contains(&commands, &bright_frame(&screen, 0)));
         assert!(!contains(&commands, &bright_frame(&screen, 1)), "one");
