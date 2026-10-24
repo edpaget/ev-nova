@@ -23,7 +23,9 @@
 //! nothing, and S marks it, "Will be sold off at next shipyard" and
 //! "Cancel Sale". Landed there, Leave sells it and shows "One escort was
 //! sold for a profit of 1,000 credits." over the spaceport, holding the
-//! leave; closing the report takes off.
+//! leave; closing the report takes off. A run's `Q` on landing there
+//! leaves the same way: the report shows over the spaceport, holding the
+//! `Q`'s leave until it closes.
 //!
 //! Defection: a pilot with 50 credits and a hired escort of wage 100
 //! jumps to Beta; "Due to lack of pay, one of your escorts has defected."
@@ -59,10 +61,12 @@ use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::interface::Interface;
+use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, InterfaceData, Record};
@@ -274,6 +278,15 @@ fn game_data_with(pictured: bool) -> Rc<GameData> {
 
 /// [`game_data_with`] `pictured`, the pad of `pad_flags`.
 fn game_data_of(pictured: bool, pad_flags: u32) -> Rc<GameData> {
+    game_data_around(pictured, pad_flags, |fork| fork)
+}
+
+/// [`game_data_of`] with `more` resources added.
+fn game_data_around(
+    pictured: bool,
+    pad_flags: u32,
+    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
+) -> Rc<GameData> {
     let mut hireling = ship(10_000, 100);
     let mut pilot = desc("A steady hand.");
     if pictured {
@@ -324,7 +337,7 @@ fn game_data_of(pictured: bool, pad_flags: u32) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(more(fork)).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -1039,6 +1052,98 @@ fn a_captured_escort_marked_for_sale_is_sold_on_leaving_a_shipyard_and_the_repor
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight, "the leave goes on");
     assert!(game.app.screen().spaceport_view().is_none());
+    assert!(saved(&store).escorts().is_empty());
+}
+
+/// A run, `mïsn` 128, to the pad and no further, its `OnSuccess` a `Q`
+/// of `STR#` 25048, "Off you go."; no texts of its own.
+fn leaving_run(fork: ForkBuilder) -> ForkBuilder {
+    let mut run = vec![0; Mission::SIZE.expect("fixed")];
+    put_i16s(&mut run, 0x00, &[128, 0, 0, 0, 0, 100, 128, -1, -1, -1]);
+    run[0x1C..0x20].copy_from_slice(&1000_i32.to_be_bytes());
+    put_i16s(&mut run, 0x20, &[0, 0, -1, -1, 0, -1, 0, -1, 0]);
+    put_i16s(&mut run, 0x32, &[-1, -1, -1, -1, -1, -1, -1, 0, 1, -1]);
+    put_i16s(&mut run, 0x58, &[-1]);
+    let leave = b"Q25048\0";
+    run[0x359..0x359 + leave.len()].copy_from_slice(leave);
+    let mut strings = 1_i16.to_be_bytes().to_vec();
+    let off = "Off you go.";
+    strings.push(u8::try_from(off.len()).expect("short"));
+    strings.extend(off.as_bytes());
+    fork.resource(Mission::TYPE, 128, Some(b"Run"), &run)
+        .resource(StrList::TYPE, 25048, None, &strings)
+}
+
+/// `pilot` holding the [`leaving_run`] in slot 0, to the pad and back, with its
+/// one escort marked for sale.
+fn running_with_a_sale(pilot: &Pilot) -> Pilot {
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
+    save["escorts"][0]["mark"] = serde_json::json!("sell");
+    let pad = serde_json::json!({"stellar": 128, "system": 128});
+    save["missions"] = serde_json::json!([{
+        "slot": 0,
+        "mission": 128,
+        "destination": pad,
+        "return": pad,
+        "cargo_type": null,
+        "cargo_tons": 0,
+        "pay": 1000,
+        "days_left": null,
+        "deadline": null,
+        "reached": false,
+        "goals_met": false,
+        "aboard": false,
+        "failed": null,
+        "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
+        "aux": {"countdown": 0, "arrived": 0, "left": 0},
+    }]);
+    nova_sim::save::decode(&save.to_string()).expect("a pilot")
+}
+
+#[test]
+fn a_q_leaving_a_shipyard_shows_the_escort_report_over_the_spaceport_before_the_take_off() {
+    let store = MemoryPilots::new();
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&running_with_a_sale(&with_captive(&ada(), 2_000)))
+        .expect("saved");
+    let data = game_data_around(false, PAD_FLAGS | SHIPYARD, leaving_run);
+    let mut game = Game::opening_over(&store, data, |screen| screen);
+    game.open_pilot(Showing::Flight);
+    game.frame();
+
+    // Landing at the shipyard completes the run, whose Q leaves: the
+    // report shows over the spaceport, the escort already sold, and holds
+    // the leave.
+    game.tap(Key::Char('l'));
+    game.approach();
+    game.tap(Key::Char('l'));
+    assert_eq!(game.showing(), Showing::Spaceport, "held");
+    assert!(game.session().landed().is_some(), "still landed");
+    assert!(
+        game.app.screen().flight_view().expect("flying").leave_due(),
+        "the Q's leave waits"
+    );
+    assert!(
+        game.app
+            .screen()
+            .spaceport_view()
+            .and_then(|spaceport| spaceport.mission_text())
+            .is_some(),
+        "the report over the spaceport"
+    );
+    let shown = texts(&game.frame());
+    assert!(
+        shown.contains(&"One escort was sold for a profit of 1,000 credits.".to_owned()),
+        "{shown:?}"
+    );
+    assert!(game.pilot().escorts().is_empty());
+
+    // Closing it takes off.
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight, "the leave goes on");
+    assert!(game.app.screen().spaceport_view().is_none());
+    assert_eq!(game.session().landed(), None);
     assert!(saved(&store).escorts().is_empty());
 }
 
