@@ -96,7 +96,7 @@
 // `nova-sim-base`, `nova-sim-catalog`, `nova-sim-state`,
 // `nova-sim-combat`, `nova-sim-ai` and `nova-sim-story`.
 #[allow(unused_imports)]
-use nova_sim_ai::{ai, escort, gate, traffic};
+use nova_sim_ai::{ai, escort, gate, hail, traffic};
 #[allow(unused_imports)]
 use nova_sim_base::{
     RuleKey, chance, flight, fuel, geometry, handling, ionization, reserves, rulebook, rules,

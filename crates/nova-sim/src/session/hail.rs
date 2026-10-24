@@ -329,7 +329,7 @@ impl Session {
             .position(|&placed| placed == Some(npc.id))
             .and_then(|index| self.pilot.escorts.get(index))
             .filter(|escort| escort.hired())
-            .map(|escort| self.setup.paid_wage(&self.statics, escort));
+            .map(|escort| self.setup.shown_wage(&self.statics, escort));
         Some(EscortStatus { wage })
     }
 
@@ -2891,7 +2891,9 @@ pub(super) mod tests {
         let view = hail(&mut session, &catalog);
         assert_eq!(
             view.escort,
-            Some(crate::hail::EscortStatus { wage: Some(100) })
+            Some(crate::hail::EscortStatus {
+                wage: Some(crate::hail::ShownWage::kept(100))
+            })
         );
         assert_eq!(labels(&view), [("Release", Some('R'))]);
     }

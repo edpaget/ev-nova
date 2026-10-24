@@ -14,7 +14,7 @@
 //! value. For a ship the player leads it is "Hired Escort" (#166) or
 //! "Escort" (#168) in bright green, 35 pixels right of the item's left,
 //! and a hired escort's daily pay, "Pay: <wage> credits per day" (#297,
-//! #267), a line below (the original's escort dialog's line, shown here,
+//! #267) as `_EscortDialogUpdate` draws it ([`pay_text`]), a line below (the original's escort dialog's line, shown here,
 //! as the help says the comm window shows a hired escort's cost per day).
 //! For a hostile ship it is "Hostile" (#174) in red, after the label and
 //! two spaces, bold as QuickDraw smears it: drawn twice, a pixel apart.
@@ -47,7 +47,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{ESCORT, HIRED_ESCORT, PAY_LABEL, PER_DAY};
-use nova_sim::{Haggle, HailView, ShipId};
+use nova_sim::{CreditUnit, Haggle, HailView, ShipId, ShownWage};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -56,6 +56,7 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -197,12 +198,25 @@ pub fn class_text(view: &HailView) -> String {
     }
 }
 
-/// A hired escort's pay line for `wage` a day: "Pay: <wage> credits per
-/// day" (`STR#` 2002 #297 and #267), "credit" for a wage of 1.
+/// `_creditString` (pointer 0x3b5690 -> 0x184460), `STR#` 2002 #32.
+pub const CREDIT: &str = "credit";
+/// `_creditsString` (pointer 0x3b55cc -> 0x184580), `STR#` 2002 #33.
+pub const CREDITS: &str = "credits";
+
+/// A hired escort's pay line for `wage` a day as `_EscortDialogUpdate`
+/// draws it (@0x94f54-0x9502d): "Pay: <amount> <unit> per day" (`STR#`
+/// 2002 #297 and #267), the amount by `_DrawCommaNumber`
+/// ([`comma_number`]) and the unit the core chose.
 #[must_use]
-pub fn pay_text(wage: i64) -> String {
-    let unit = if wage == 1 { "credit" } else { "credits" };
-    format!("{PAY_LABEL} {} {unit} {PER_DAY}", grouped(wage))
+pub fn pay_text(wage: ShownWage) -> String {
+    let unit = match wage.unit {
+        CreditUnit::Credit => CREDIT,
+        CreditUnit::Credits => CREDITS,
+    };
+    format!(
+        "{PAY_LABEL} {} {unit} {PER_DAY}",
+        comma_number(wage.credits)
+    )
 }
 
 /// Where a status line's value stands on its baseline.
@@ -849,7 +863,7 @@ impl Screen for HaggleDialog {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{EscortStatus, HailButton, NpcId};
+    use nova_sim::{CreditUnit, EscortStatus, HailButton, NpcId, ShownWage};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
@@ -1357,7 +1371,9 @@ mod tests {
     #[test]
     fn a_hired_escort_shows_a_grey_label_hired_escort_at_35_and_its_pay_below() {
         let hired = HailView {
-            escort: Some(EscortStatus { wage: Some(1000) }),
+            escort: Some(EscortStatus {
+                wage: Some(ShownWage::kept(1000)),
+            }),
             ..view()
         };
         let below = 104.0 + MonoMetrics.line_height(Font::Geneva, TEXT_SIZE);
@@ -1483,7 +1499,7 @@ mod tests {
             ..view()
         };
         assert_eq!(
-            status_line(&escort(Some(5))),
+            status_line(&escort(Some(ShownWage::kept(5)))),
             Some(StatusLine {
                 value: HIRED_ESCORT,
                 color: ESCORT_COLOR,
@@ -1506,12 +1522,22 @@ mod tests {
     }
 
     #[test]
-    fn a_days_pay_of_one_credit_is_singular() {
-        assert_eq!(pay_text(1), "Pay: 1 credit per day");
-        assert_eq!(pay_text(0), "Pay: 0 credits per day");
-        assert_eq!(pay_text(2), "Pay: 2 credits per day");
-        assert_eq!(pay_text(175), "Pay: 175 credits per day");
-        assert_eq!(pay_text(12_000), "Pay: 12,000 credits per day");
+    fn the_pay_line_draws_as_escort_dialog_update_does() {
+        use CreditUnit::{Credit, Credits};
+        for (credits, unit, text) in [
+            (1, Credit, "Pay: 1 credit per day"),
+            (1, Credits, "Pay: 1 credits per day"),
+            (0, Credits, "Pay: 0 credits per day"),
+            (-1, Credits, "Pay: -1 credits per day"),
+            (12_000, Credits, "Pay: 12,000 credits per day"),
+            (999_999, Credits, "Pay: 999,999 credits per day"),
+            (1_000_000, Credits, "Pay: 1.00M credits per day"),
+            (1_234_567, Credits, "Pay: 1.23M credits per day"),
+        ] {
+            assert_eq!(pay_text(ShownWage { credits, unit }), text);
+        }
+        assert_eq!(CREDIT, "credit");
+        assert_eq!(CREDITS, "credits");
     }
 
     #[test]

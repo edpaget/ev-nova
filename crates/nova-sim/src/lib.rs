@@ -534,8 +534,9 @@ pub use glow::{GLOW_AFTERBURNER, GLOW_CRUISE, glow_level, ramp_afterburner_glow,
 pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
-    Answer, Ask, Attitude, CommNote, Conversation, Deed, EscortStatus, Haggle, Hail, HailButton,
-    HailOption, HailOptions, HailRefusal, HailView, Help, JoinFleet, Release, Reply,
+    Answer, Ask, Attitude, CommNote, Conversation, CreditUnit, Deed, EscortStatus, Haggle, Hail,
+    HailButton, HailOption, HailOptions, HailRefusal, HailView, Help, JoinFleet, Release, Reply,
+    ShownWage,
 };
 pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};

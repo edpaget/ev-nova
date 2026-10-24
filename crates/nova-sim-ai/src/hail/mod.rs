@@ -526,10 +526,49 @@ pub struct HailView {
 /// a launched fighter, a mission escort).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
-    /// The wage a hired escort is paid a day, as
-    /// `nova_sim::Session::with_rules`
-    /// says; none for one not hired.
-    pub wage: Option<i64>,
+    /// The daily pay a hired escort's line shows, as
+    /// `nova_sim::Session::with_rules` says (`RuleKey::EscortWage`): by
+    /// the engine, worked out from its ship type's `Cost` as
+    /// `_EscortDialogUpdate` draws it (`nova_sim::hire::shown_wage`);
+    /// otherwise the wage kept ([`ShownWage::kept`]). None for one not
+    /// hired.
+    pub wage: Option<ShownWage>,
+}
+
+/// The word after a pay amount: `_creditString` ("credit") or
+/// `_creditsString` ("credits").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditUnit {
+    /// "credit", the singular.
+    Credit,
+    /// "credits", every other amount.
+    Credits,
+}
+
+/// A hired escort's daily pay as its pay line shows it: the whole
+/// credits drawn and the unit after them, which the core decides
+/// (`_EscortDialogUpdate` @0x94f9c-0x9500d).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShownWage {
+    /// The amount drawn, which may be negative.
+    pub credits: i64,
+    /// "credit" or "credits".
+    pub unit: CreditUnit,
+}
+
+impl ShownWage {
+    /// A kept whole-credit `wage` shown as itself: "credit" at exactly 1.
+    #[must_use]
+    pub fn kept(wage: i64) -> Self {
+        Self {
+            credits: wage,
+            unit: if wage == 1 {
+                CreditUnit::Credit
+            } else {
+                CreditUnit::Credits
+            },
+        }
+    }
 }
 
 /// How long an assisting ship's comm note shows: 240 (`_HighLevelAIHandler`
@@ -707,6 +746,15 @@ mod tests {
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_catalog::fixture::govt;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_kept_wage_shows_as_itself_singular_only_at_one() {
+        let shown = |credits, unit| ShownWage { credits, unit };
+        assert_eq!(ShownWage::kept(1), shown(1, CreditUnit::Credit));
+        assert_eq!(ShownWage::kept(0), shown(0, CreditUnit::Credits));
+        assert_eq!(ShownWage::kept(2), shown(2, CreditUnit::Credits));
+        assert_eq!(ShownWage::kept(175), shown(175, CreditUnit::Credits));
+    }
 
     #[test]
     fn a_comm_note_shows_for_240_ticks_whatever_the_help() {

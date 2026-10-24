@@ -36,7 +36,7 @@
 //! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see `nova_sim::story`) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see `nova_sim::landing`) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
-//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
+//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now, and its pay line shows a hundredth of that `Cost` unclamped, "credit" only at exactly 1.0 (`_EscortDialogUpdate` @0x94f9c-0x9500d; `nova_sim::Session`) | the wage kept on its record when hired, shown as itself\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
 //! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance (`nova_sim::NovaPersons`) | always |
 //! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 (`nova_sim::NovaPersons`) | that system only |
@@ -920,9 +920,13 @@ rule_keys! {
     /// by the engine, the wage its ship type's record gives now, worked
     /// out from its `Cost` on every pay day as `_DoEscortPayment` does;
     /// otherwise the wage kept on its record when it was hired, as the
-    /// phase has it. The Bible is silent here, so the other reading is
-    /// the intended behaviour, not anything the Bible says (see
-    /// `nova_sim::Session::with_rules`).
+    /// phase has it. The pay line hailing shows follows the same
+    /// reading: by the engine, worked out from the `Cost` as
+    /// `_EscortDialogUpdate` draws it (`nova_sim::hire::shown_wage`):
+    /// a hundredth, not clamped, and "credit" only when `Cost` x 0.01 is
+    /// exactly 1.0; otherwise the wage kept, "credit" at 1. The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see `nova_sim::Session::with_rules`).
     EscortWage => "escort_wage",
     /// How often a person (`përs`) takes an ordinary ship's place, and
     /// which: by the engine, a draw of `Rand(7)` of 0, then `Rand(1022)`
