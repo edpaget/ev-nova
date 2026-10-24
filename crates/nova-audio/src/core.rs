@@ -229,6 +229,12 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.reinforcements, at::REINFORCEMENTS);
             }
             SimSound::HailOffer => self.play(self.table.hail_offer, at::HAIL_OFFER),
+            SimSound::EscortDialogOpened => {
+                self.play(self.table.escort_dialog_opened, at::ESCORT_DIALOG_OPENED);
+            }
+            SimSound::EscortDialogClosed => {
+                self.play(self.table.escort_dialog_closed, at::ESCORT_DIALOG_CLOSED);
+            }
             SimSound::HailQuote => self.play(self.table.hail_quote, at::HAIL_QUOTE),
             SimSound::PersonOfferBoarded | SimSound::Boarded => {
                 self.play(self.table.airlock, at::AIRLOCK);
@@ -952,6 +958,14 @@ mod tests {
             (Sound::Sim(SimSound::EscortRepaired), at::ESCORT_REPAIRED),
             (Sound::Sim(SimSound::FleetArrivalQuote), at::FLEET_QUOTE),
             (Sound::Sim(SimSound::HailOffer), at::HAIL_OFFER),
+            (
+                Sound::Sim(SimSound::EscortDialogOpened),
+                at::ESCORT_DIALOG_OPENED,
+            ),
+            (
+                Sound::Sim(SimSound::EscortDialogClosed),
+                at::ESCORT_DIALOG_CLOSED,
+            ),
             (Sound::Sim(SimSound::HailQuote), at::HAIL_QUOTE),
             (Sound::Sim(SimSound::PersonOfferBoarded), at::AIRLOCK),
             (Sound::Sim(SimSound::Boarded), at::AIRLOCK),

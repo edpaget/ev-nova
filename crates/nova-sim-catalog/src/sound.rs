@@ -145,6 +145,13 @@ pub enum SimSound {
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).
     HailOffer,
+    /// The escort dialog opened for a fleet escort hailed: `_beepSnd[4]`,
+    /// `snd ` 154, at priority 1 (`_DoEscortDialog` @0x95228-0x9524b).
+    EscortDialogOpened,
+    /// The escort dialog closed, by any button, Release's included:
+    /// `_beepSnd[2]`, `snd ` 152, at priority 1 (`_DoEscortDialog`
+    /// @0x955d9-0x955fc).
+    EscortDialogClosed,
     /// A person's hail quote was said in flight, by its own filters
     /// (`_HandleShip` @0x33f9e) or as it turned on the player
     /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154

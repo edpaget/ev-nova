@@ -107,6 +107,10 @@ pub const HAIL_OFFER: Priority = Priority::new(1);
 /// A person's hail quote, `_beepSnd[4]`: `_ShowPersonHailQuote`
 /// @0x445ad.
 pub const HAIL_QUOTE: Priority = Priority::new(1);
+/// The escort dialog opened, `_beepSnd[4]`: `_DoEscortDialog` @0x9524b.
+pub const ESCORT_DIALOG_OPENED: Priority = Priority::new(1);
+/// The escort dialog closed, `_beepSnd[2]`: `_DoEscortDialog` @0x955fc.
+pub const ESCORT_DIALOG_CLOSED: Priority = Priority::new(1);
 /// A nav key, `_beepSnd[0]`: `_HandlePlayer` @0x69b19, @0x69ebc,
 /// @0x6a6c1.
 pub const NAV_SELECTED: Priority = Priority::new(1);
@@ -254,6 +258,8 @@ mod tests {
             (SCAN_HAIL, 1, "scan hail"),
             (REINFORCEMENTS, 1, "reinforcements"),
             (HAIL_OFFER, 1, "hail offer"),
+            (ESCORT_DIALOG_OPENED, 1, "escort dialog opened"),
+            (ESCORT_DIALOG_CLOSED, 1, "escort dialog closed"),
             (HAIL_QUOTE, 1, "hail quote"),
             (NAV_SELECTED, 1, "nav selected"),
             (HYPER_SELECTED, 1, "hyper selected"),

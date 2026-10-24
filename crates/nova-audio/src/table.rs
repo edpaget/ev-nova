@@ -86,6 +86,10 @@ pub struct SoundTable {
     pub reinforcements: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
     pub hail_offer: Option<SoundId>,
+    /// Plays as the escort dialog opens.
+    pub escort_dialog_opened: Option<SoundId>,
+    /// Plays as the escort dialog closes.
+    pub escort_dialog_closed: Option<SoundId>,
     /// Plays as a person says its hail quote in flight.
     pub hail_quote: Option<SoundId>,
     /// Plays as a nav key is taken: Nav Off, Hyperspace Mode, a stellar
@@ -282,6 +286,10 @@ impl SoundTable {
     /// - `hail_offer`: 154, `_beepSnd[4]`, which
     ///   `_HandlePlayerCommunication` plays as a person offers its mission
     ///   on its hail (@0x62232-0x6223d).
+    /// - `escort_dialog_opened`: 154, `_beepSnd[4]`, which
+    ///   `_DoEscortDialog` plays as it opens (@0x95228-0x9524b).
+    /// - `escort_dialog_closed`: 152, `_beepSnd[2]`, which
+    ///   `_DoEscortDialog` plays as it closes (@0x955d9-0x955fc).
     /// - `hail_quote`: 154, `_beepSnd[4]`, which `_ShowPersonHailQuote`
     ///   plays with every person's hail quote (@0x44586-0x445ad).
     /// - `nav_selected`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays
@@ -435,6 +443,8 @@ impl SoundTable {
         wait_for_me: Some(SoundId(154)),
         reinforcements: Some(SoundId(154)),
         hail_offer: Some(SoundId(154)),
+        escort_dialog_opened: Some(SoundId(154)),
+        escort_dialog_closed: Some(SoundId(152)),
         hail_quote: Some(SoundId(154)),
         nav_selected: Some(SoundId(150)),
         hyper_selected: Some(SoundId(152)),
@@ -530,6 +540,16 @@ mod tests {
         assert_eq!(table.wait_for_me, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.reinforcements, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(
+            table.escort_dialog_opened,
+            Some(SoundId(154)),
+            "_beepSnd[4]"
+        );
+        assert_eq!(
+            table.escort_dialog_closed,
+            Some(SoundId(152)),
+            "_beepSnd[2]"
+        );
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
