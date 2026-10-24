@@ -898,7 +898,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
         game.app.screen().flight_view().expect("flying").message(),
         Some(
             format!(
-                "Jumping into the Beta system on January 2, 0. No stellar objects present.  \
+                "Jumping into the Beta system on January 2nd, 0. No stellar objects present.  \
                  {DEFECTED_ONE}"
             )
             .as_str()

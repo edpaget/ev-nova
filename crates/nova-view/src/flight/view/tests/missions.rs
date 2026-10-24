@@ -1117,7 +1117,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     jump_to_alpha(&mut view);
     let said = format!(
         "{}  {DEFECTED_ONE}",
-        "Jumping into the Alpha Centauri system on June 24, 1177 NC."
+        "Jumping into the Alpha Centauri system on June 24th, 1177 NC."
     );
     assert_eq!(view.message(), Some(said.as_str()), "after the arrival");
     assert_eq!(view.pilot().expect("flying").escorts(), []);
@@ -1125,7 +1125,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     jump_to_alpha(&mut paid);
     assert_eq!(
         paid.message(),
-        Some("Jumping into the Alpha Centauri system on June 24, 1177 NC."),
+        Some("Jumping into the Alpha Centauri system on June 24th, 1177 NC."),
         "the arrival alone"
     );
     assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
@@ -1133,7 +1133,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
 
 /// The greeting from Earth on the take-off of a docked [`paying`]
 /// flight, its lead the one the fixture's scripted draws leave.
-const PAYING_GREETING: &str = "Departing Earth on June 24, 1177 NC.";
+const PAYING_GREETING: &str = "Departing Earth on June 24th, 1177 NC.";
 
 #[test]
 fn by_the_engine_an_escort_left_unpaid_at_take_off_defects_and_the_flight_says_so() {
@@ -1176,7 +1176,7 @@ fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
     assert_eq!(
         view.message(),
         Some(
-            "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)  Due to lack of pay, one of your escorts has defected."
+            "Jumping into the Alpha Centauri system on June 24th, 1177 NC.  (Two fighters abandoned)  Due to lack of pay, one of your escorts has defected."
         )
     );
     assert_eq!(view.pilot().expect("flying").escorts(), []);
@@ -1610,7 +1610,7 @@ fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
 
 /// The greeting from Earth on the day after the fixture's start, its
 /// lead the first, as the flight's chance rolls.
-const EARTH_GREETING: &str = "Launching from Earth on June 24, 1177 NC.";
+const EARTH_GREETING: &str = "Launching from Earth on June 24th, 1177 NC.";
 
 #[test]
 fn take_off_says_the_greeting_for_240() {
@@ -1619,8 +1619,8 @@ fn take_off_says_the_greeting_for_240() {
     assert_eq!(message(&view), Some(message_drawn(EARTH_GREETING)));
     assert_lasts(&mut view, EARTH_GREETING, 240);
     assert_eq!(
-        take_off_greeting(2, "Earth", "June 24, 1177 NC"),
-        "Taking off from Earth on June 24, 1177 NC."
+        take_off_greeting(2, "Earth", "June 24th, 1177 NC"),
+        "Taking off from Earth on June 24th, 1177 NC."
     );
     let leads: Vec<String> = (0..5)
         .map(|lead| take_off_greeting(lead, "X", "D"))

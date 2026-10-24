@@ -141,7 +141,7 @@ fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arri
     jump_to_alpha(&mut plain);
     assert_eq!(
         plain.message(),
-        Some("Jumping into the Alpha Centauri system on June 24, 1177 NC.")
+        Some("Jumping into the Alpha Centauri system on June 24th, 1177 NC.")
     );
     // The arrival's 240 ticks, less those the jump's end took.
     let arrival = shown_for(&mut plain);
@@ -178,7 +178,7 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     assert_eq!(
         view.message(),
         Some(
-            "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)"
+            "Jumping into the Alpha Centauri system on June 24th, 1177 NC.  (Two fighters abandoned)"
         )
     );
     assert_eq!(view.pilot().expect("flying").escorts(), []);

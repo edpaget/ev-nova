@@ -619,7 +619,7 @@ fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
     assert_eq!(player(&view).position, Vec2::new(-300.0, 40.0));
     assert_eq!(
         view.message(),
-        Some("Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.")
+        Some("Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.")
     );
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),
@@ -632,7 +632,7 @@ fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
         Some(JumpPhase::Flash(0.0)),
         "whatever the preference"
     );
-    let passed = "Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.";
+    let passed = "Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.";
     assert_lasts(&mut plain, passed, 240);
 }
 
@@ -643,7 +643,7 @@ fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
     let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
-    let exited = "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.";
+    let exited = "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.";
     assert_lasts(&mut view, exited, 360);
 }
 

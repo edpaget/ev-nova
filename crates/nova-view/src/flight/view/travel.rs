@@ -854,7 +854,7 @@ impl<
         };
         let notes = session.take_fighter_notes();
         let pay = session.take_pay_notes();
-        let date = session.date_text();
+        let date = session.long_date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
         let scene = self.scene.as_ref();

@@ -982,7 +982,7 @@ fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
     assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
     assert_eq!(
         view.message(),
-        Some("Jumping into the Barnard system on June 24, 1177 NC. No stellar objects present."),
+        Some("Jumping into the Barnard system on June 24th, 1177 NC. No stellar objects present."),
         "names the final system"
     );
     assert!(view.jump_effect().is_some(), "fading in");
@@ -1512,7 +1512,7 @@ fn arriving_shows_the_jump_message_on_the_message_line() {
         }
         view.tick(TICK);
     }
-    let date = view.session().expect("flying").date_text();
+    let date = view.session().expect("flying").long_date_text();
     let name = view.scene().expect("arrived").name().to_owned();
     let text = arrival_message(&name, &date, true);
     assert!(text.contains("Alpha Centauri"), "{text}");
@@ -1687,11 +1687,11 @@ fn hyper_select_with_the_map_open_changes_nothing() {
 fn the_gate_messages_read_as_the_original() {
     assert_eq!(
         arrival_message_with(EXITING_HYPERGATE, "Alpha Centauri", DATE, true),
-        "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC."
+        "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC."
     );
     assert_eq!(
         arrival_message_with(PASSING_WORMHOLE, "Barnard", DATE, false),
-        "Passing through a wormhole into the Barnard system on June 23, 1177 NC. \
+        "Passing through a wormhole into the Barnard system on June 23rd, 1177 NC. \
          No stellar objects present."
     );
     assert_eq!(
@@ -1901,7 +1901,7 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
     assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Centauri"));
     assert_eq!(
         view.message(),
-        Some("Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.")
+        Some("Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.")
     );
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),

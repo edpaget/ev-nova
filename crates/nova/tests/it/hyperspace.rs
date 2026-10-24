@@ -951,7 +951,7 @@ fn a_jump_into_a_system_with_a_message_buoy_shows_the_buoy_in_place_of_the_arriv
     plain.jump_to_beta();
     assert_eq!(
         plain.flight().message(),
-        Some("Jumping into the Beta system on June 24, 1177."),
+        Some("Jumping into the Beta system on June 24th, 1177."),
         "no buoy at -1"
     );
 }
@@ -965,7 +965,7 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
     plain.jump_to_beta();
     assert_eq!(
         plain.flight().message(),
-        Some("Jumping into the Beta system on June 24, 1177. No stellar objects present."),
+        Some("Jumping into the Beta system on June 24th, 1177. No stellar objects present."),
         "no buoy at -1: the suffix shows"
     );
 }
@@ -1575,7 +1575,7 @@ fn a_hypergate_picked_on_the_map_brings_the_ship_out_of_its_linked_gate() {
     assert!(
         shows(
             &frame,
-            "Exiting hypergate in the Gamma system on June 23, 1177."
+            "Exiting hypergate in the Gamma system on June 23rd, 1177."
         ),
         "{:?}",
         texts(&frame)

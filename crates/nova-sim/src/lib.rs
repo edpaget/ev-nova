@@ -103,8 +103,8 @@
 //!   `MemoryPilots`, a pilot store in memory, and `StoryWalker`, which
 //!   walks a session through a mission chain from a script.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
-//!   a day for each day a jump takes, and [`date::date_text`], how it is
-//!   displayed.
+//!   a day for each day a jump takes, and [`date::long_date_text`], how
+//!   the messages show it.
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.

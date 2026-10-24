@@ -615,7 +615,9 @@ pub fn key_label(key: Key) -> Option<String> {
 /// What the message line says as the ship takes off past the tutorial
 /// from the stellar named `stellar` on `date`, led by
 /// [`TAKE_OFF_LEADS`]`[lead]`, as `_PlayerLandOnStellar` builds it
-/// (@0x635f7-0x63732): "Taking off from Earth on 23 June 1177."
+/// (@0x635f7-0x63732): "Taking off from Earth on June 23rd, 1177 NC.".
+/// `date` is the long date, which the original writes with
+/// `_DateToLongString` (@0x8ef8, called @0x636d7).
 #[must_use]
 pub fn take_off_greeting(lead: u16, stellar: &str, date: &str) -> String {
     let lead = TAKE_OFF_LEADS[usize::from(lead) % TAKE_OFF_LEADS.len()];
@@ -682,7 +684,7 @@ pub(super) fn message_text(
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
             stellar_name(scene, *stellar),
-            &session.date_text(),
+            &session.long_date_text(),
         )),
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
@@ -722,7 +724,9 @@ pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
 /// [`EXITING_HYPERGATE`] or [`PASSING_WORMHOLE`] through a gate, as
 /// `_PlayerEnterHypergate` (@0x63c45-0x63dbe) and `_PlayerEnterWormhole`
 /// (@0x6444c-0x6457d) build it; [`NO_STELLARS`] follows when the system
-/// has no stellars.
+/// has no stellars. `date` is the long date, which the original writes
+/// with `_DateToLongString` (@0x8ef8, called @0x6c34b for a jump,
+/// @0x63d35 for a hypergate and @0x6450c for a wormhole).
 #[must_use]
 pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool) -> String {
     let mut text = format!("{lead} {system} {SYSTEM_ON} {date}.");
@@ -1832,16 +1836,16 @@ mod tests {
     #[test]
     fn arrival_message_reads_as_the_original() {
         assert_eq!(
-            arrival_message("Sol", "June 23, 1177 NC", true),
-            "Jumping into the Sol system on June 23, 1177 NC."
+            arrival_message("Sol", "June 23rd, 1177 NC", true),
+            "Jumping into the Sol system on June 23rd, 1177 NC."
         );
     }
 
     #[test]
     fn arrival_message_in_a_system_without_stellars_says_so() {
         assert_eq!(
-            arrival_message("Sol", "June 23, 1177 NC", false),
-            "Jumping into the Sol system on June 23, 1177 NC. No stellar objects present."
+            arrival_message("Sol", "June 23rd, 1177 NC", false),
+            "Jumping into the Sol system on June 23rd, 1177 NC. No stellar objects present."
         );
     }
 

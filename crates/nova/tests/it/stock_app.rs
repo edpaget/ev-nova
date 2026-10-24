@@ -552,7 +552,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!((today.day(), today.month(), today.year()), (23, 6, 1177));
     assert_eq!(
         flight.message(),
-        Some("Exiting hypergate in the Tichel system on June 23, 1177 NC.")
+        Some("Exiting hypergate in the Tichel system on June 23rd, 1177 NC.")
     );
 }
 

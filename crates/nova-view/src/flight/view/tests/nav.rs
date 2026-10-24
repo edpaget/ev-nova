@@ -457,13 +457,16 @@ fn a_cargo_area_with_room_below_the_credits_draws_no_date() {
     };
     let mut view = FlightView::new(taller);
     let no_date = |view: &View| {
-        let date = view.session().expect("flying").date_text();
+        let session = view.session().expect("flying");
+        let date = [session.date_text(), session.long_date_text()];
         let dates: Vec<_> = drawn(view)
             .iter()
-            .filter(|command| matches!(command, DrawCommand::Text { text, .. } if *text == date))
+            .filter(
+                |command| matches!(command, DrawCommand::Text { text, .. } if date.contains(text)),
+            )
             .cloned()
             .collect();
-        assert_eq!(dates, [], "no date drawn for {date}");
+        assert_eq!(dates, [], "no date drawn for {date:?}");
         assert!(
             cargo(view).iter().any(|(text, _)| text == "Credits:"),
             "the cargo lines are still drawn"

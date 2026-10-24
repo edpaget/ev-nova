@@ -20,7 +20,7 @@
 //!   `Contribute` bits count ([`cron::contributes`]).
 //! - [`date`]: the in-game [`GameDate`](date::GameDate), a Gregorian day
 //!   that advances a day for each day a jump takes, and
-//!   [`date::date_text`], how it is displayed.
+//!   [`date::long_date_text`], how the messages show it.
 //! - [`govt`]: the [`Governments`](govt::Governments) and their
 //!   relations: allies, enemies, xenophobes and the flags that say how
 //!   their ships behave.

@@ -3449,6 +3449,16 @@ impl Session {
         date::date_text(self.pilot.date, &self.statics.date_affixes)
     }
 
+    /// Today's date as the original's `_DateToLongString` (@0x8ef8) writes
+    /// it, with the first `chär`'s prefix and suffix
+    /// ([`date::long_date_text`]): for example "June 23rd, 1177 NC". The
+    /// arrival messages of a jump (@0x6c34b), a hypergate (@0x63d35) and a
+    /// wormhole (@0x6450c), and the take-off greeting (@0x636d7), show it.
+    #[must_use]
+    pub fn long_date_text(&self) -> String {
+        date::long_date_text(self.pilot.date, &self.statics.date_affixes)
+    }
+
     /// Today's date as the mission screens show it, the original's medium
     /// date with the first `chär`'s prefix and suffix
     /// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
@@ -8140,6 +8150,23 @@ pub(super) mod tests {
         jump(&mut session, &catalog, 132);
         assert_eq!(session.date_text(), "Year June 25, 1177 NC");
         assert_eq!(*catalog.date_affix_reads.borrow(), 1);
+    }
+
+    #[test]
+    fn the_long_date_reads_with_its_ordinal_and_the_chärs_affixes() {
+        let catalog = FakePilotCatalog {
+            date_affixes: DateAffixes {
+                prefix: "Year ".to_owned(),
+                suffix: " NC".to_owned(),
+            },
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.long_date_text(), "Year June 23rd, 1177 NC");
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.long_date_text(), "Year June 24th, 1177 NC");
+        jump(&mut session, &catalog, 132);
+        assert_eq!(session.long_date_text(), "Year June 25th, 1177 NC");
     }
 
     #[test]

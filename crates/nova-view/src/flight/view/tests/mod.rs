@@ -66,6 +66,7 @@ mod cloak;
 mod combat;
 mod comm_line;
 mod controls;
+mod dates;
 mod dialog_map;
 mod docked;
 mod escorts;
@@ -421,7 +422,7 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
 }
 
 /// The start's date, with stock's affixes.
-const DATE: &str = "June 23, 1177 NC";
+const DATE: &str = "June 23rd, 1177 NC";
 
 /// Stock `ïntf` 128's areas, with background `PICT` 700.
 fn layout() -> StatusBarLayout {
