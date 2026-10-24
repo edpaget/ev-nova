@@ -678,7 +678,8 @@ mod tests {
     }
 
     /// Ship 128's picture (`PICT` 5000) exists; every description is
-    /// "dësc n.". Records what it is asked.
+    /// "dësc n.". Ship 141 shares 128's base image, so its own missing
+    /// picture falls back to 5000. Records what it is asked.
     struct FakeArt {
         /// Each `dësc` with a `Graphic`, and it.
         graphics: Vec<(i16, i16)>,
@@ -714,7 +715,7 @@ mod tests {
 
     impl ShipBaseImages for FakeArt {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            Vec::new()
+            vec![(ShipId(128), 128), (ShipId(141), 128)]
         }
     }
 
@@ -1279,7 +1280,8 @@ mod tests {
             let row = &screen.list.rows[index];
             let cell = screen.cell_bounds(index).expect("a cell");
             let mut expected = DrawList::new();
-            let picture = ship_picture(row.id, &[], |id| art.picture_exists(id));
+            let picture =
+                ship_picture(row.id, &art.ship_base_images(), |id| art.picture_exists(id));
             grid::draw_cell_picture(&mut expected, cell, picture);
             grid::draw_cell_name(&mut expected, &MonoMetrics, cell, &row.short_name);
             let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
@@ -1295,6 +1297,40 @@ mod tests {
         assert!(contains(&commands, &bright_frame(&screen, 0)));
         assert!(!contains(&commands, &bright_frame(&screen, 1)), "one");
         assert!(contains(&commands, &frame(&screen, 1)));
+    }
+
+    #[test]
+    fn a_ship_without_its_own_picture_shows_its_bases_in_the_grid_and_the_picture_item() {
+        let art = art();
+        let mut hires = list();
+        hires.rows.push(row(141, 900, 1, Ok(())));
+        let mut screen = screen_of(&art, hires);
+        let bases = art.ship_base_images();
+        assert!(!art.picture_exists(5013), "141's own picture is missing");
+        assert_eq!(
+            ship_picture(ShipId(141), &bases, |id| art.picture_exists(id)),
+            Some(5000)
+        );
+        let cell = screen.cell_bounds(2).expect("a cell");
+        let mut expected = DrawList::new();
+        grid::draw_cell_picture(&mut expected, cell, Some(5000));
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert!(
+            contains(&drawn(&screen), &expected),
+            "the grid cell shows PICT 5000"
+        );
+        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::Right, false));
+        assert_eq!(screen.selected(), Some(2));
+        let picture = item(&screen, PICTURE_ITEM).min;
+        assert!(
+            drawn(&screen).iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { image, top_left, .. }
+                    if image.id == 5000 && *top_left == picture
+            )),
+            "the picture item shows the base's PICT 5000"
+        );
     }
 
     /// Shown cell `index`'s frame in `color`.
