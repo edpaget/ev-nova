@@ -1357,6 +1357,14 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
             tap(&mut view, k);
         }
         command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+        // The slot block's frame, still in the jump, takes nothing.
+        view.tick(TICK);
+        assert!(view.jump_under_way(), "{stage}: still jumping");
+        assert_eq!(nav_target(&view), None, "{stage}: no slot pick");
+        command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+        view.tick(TICK);
+        assert!(view.jump_under_way(), "{stage}: still jumping");
+        assert_eq!(nav_target(&view), None, "{stage}: Command-5 picks nothing");
         let earth = on_screen(&view, (0.0, -600.0));
         click(&mut view, earth);
         assert!(!view.map_open(), "{stage}");
