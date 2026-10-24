@@ -1909,8 +1909,10 @@ impl SpaceportView {
     /// and player info screens (`_DoMissionInfoDialog`,
     /// `_DoPlayerInfoDialog`), the exchange's and the outfitter's
     /// quantity (`_DoQuantityDialog` @0x5e25a, @0x5c1aa), the shipyard's
-    /// naming prompt (`_EVTextInputDialog` @0x5eb6c) and the bar's news
-    /// (`_DoNewsDialog` @0x491d7). The spaceport itself and the screens
+    /// naming prompt (`_EVTextInputDialog` @0x5eb6c), the shipyard's and
+    /// the hire screen's Info panel (`_DoShipyardDescription`, whose
+    /// `_ShipDescFilter` @0x510e5 never reads the string) and the bar's
+    /// news (`_DoNewsDialog` @0x491d7). The spaceport itself and the screens
     /// over it close at once instead, their filters reading the string
     /// first: `_PortFilter` @0x4f047, `_BarFilter` @0x47a51,
     /// `_TradeFilter` @0x4e0b5, `_OutfitFilter` @0x58042, and
@@ -1929,8 +1931,15 @@ impl SpaceportView {
             Some(Open::Outfitter(screen)) => {
                 screen.quantity().is_some() || screen.alert_dialog().is_some()
             }
-            Some(Open::Shipyard(screen)) => screen.naming().is_some(),
-            Some(Open::Bar(screen)) => screen.news_screen().is_some(),
+            Some(Open::Shipyard(screen)) => {
+                screen.naming().is_some() || screen.info_panel().is_some()
+            }
+            Some(Open::Bar(screen)) => {
+                screen.news_screen().is_some()
+                    || screen
+                        .hire_screen()
+                        .is_some_and(|hire| hire.info_panel().is_some())
+            }
             Some(Open::Service(_) | Open::Computer(_)) | None => false,
         }
     }
@@ -6766,6 +6775,26 @@ pub(in crate::spaceport) mod tests {
         view.open_hire(hirelings(1, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
         assert!(!view.holds_leave(), "the hire screen (`_ShipyardFilter`)");
+    }
+
+    #[test]
+    fn the_shipyards_info_panel_holds_a_leave() {
+        let mut view = in_the_shipyards_panel();
+        assert!(view.holds_leave(), "`_ShipDescFilter` never reads it");
+        view.input(&key(Key::Enter));
+        let shipyard = view.open_shipyard().expect("still open");
+        assert!(shipyard.info_panel().is_none());
+        assert!(!view.holds_leave(), "`_ShipyardFilter` answers it");
+    }
+
+    #[test]
+    fn the_hire_screens_info_panel_holds_a_leave() {
+        let mut view = in_the_hire_panel();
+        assert!(view.holds_leave(), "`_ShipDescFilter` never reads it");
+        view.input(&key(Key::Enter));
+        let hire = view.open_bar().and_then(BarScreen::hire_screen);
+        assert!(hire.is_some_and(|hire| hire.info_panel().is_none()));
+        assert!(!view.holds_leave(), "`_ShipyardFilter` answers it");
     }
 
     #[test]
