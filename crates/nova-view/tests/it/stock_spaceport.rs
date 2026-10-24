@@ -15,6 +15,7 @@ use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
 use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::image::ImageKey;
 use nova_view::sound::{Sound, SoundId, UiSound};
 use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
@@ -24,6 +25,7 @@ use nova_view::spaceport::{ListColors, ListLooks, SpaceportView, StellarId, Trad
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::DialogResources;
+use nova_view::ui::button::ButtonSkin;
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::{DrawCommand, DrawList, Screen};
 
@@ -38,8 +40,8 @@ fn builds() -> Vec<(PathBuf, PathBuf)> {
 }
 
 /// Port Kane's spaceport: its landscape, name and description over the
-/// 618 x 517 "Spaceport" background, centred, with Leave bottom right and a
-/// button for each service its flags offer; its ambient sound, "Federation
+/// 618 x 517 "Spaceport" background, centred, with Leave bottom right and
+/// the services its flags offer; its ambient sound, "Federation
 /// Station.SFIL" (`snd ` 10032), plays on its first frame.
 #[test]
 fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
@@ -101,6 +103,80 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
                 until_stopped: false,
             })]
         );
+    }
+}
+
+/// The left cap `view` draws for button `item` and whether the label
+/// `label` sits inside the item.
+fn button(view: &SpaceportView, item: usize, label: &str) -> (Option<ImageKey>, bool) {
+    let bounds = view
+        .dialog()
+        .expect("laid out")
+        .item_bounds(item)
+        .expect("an item");
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    let cap = list.iter().find_map(|command| match command {
+        DrawCommand::StretchedPicture {
+            image, top_left, ..
+        } if *top_left == bounds.min => Some(*image),
+        _ => None,
+    });
+    let placed = list.iter().any(|command| {
+        matches!(command, DrawCommand::Text { text, origin, .. }
+            if text == label && bounds.contains(*origin))
+    });
+    (cap, placed)
+}
+
+/// Every stock spaceport draws all seven buttons, as `_DrawPlanetButtons`
+/// does (@0x29873-0x2995e): Port Kane (137) the Mission BBS at item 10
+/// and the Bar at item 11, and its Shipyard, which it lacks, disabled;
+/// Reflex-ion (129, uninhabited, `Flags` 0x21) all six disabled but
+/// Leave.
+#[test]
+fn stock_spaceports_draw_every_button_greying_what_they_lack() {
+    let normal = Some(ButtonSkin::NOVA.normal.left);
+    let disabled = Some(ButtonSkin::NOVA.disabled.left);
+    let labels = [
+        (12, "Leave"),
+        (4, "Recharge"),
+        (7, "Trade Center"),
+        (8, "Outfitter"),
+        (9, "Shipyard"),
+        (10, "Mission BBS"),
+        (11, "Bar"),
+    ];
+    for (dir, ui) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let view = |stellar| {
+            let template = ui.dialog_template(SPACEPORT_DIALOG).expect("Spaceport");
+            SpaceportView::new(
+                &data,
+                StellarId(stellar),
+                Ok((template, Rc::new(MonoMetrics))),
+            )
+        };
+        let kane = view(137);
+        for (item, label) in labels {
+            let cap = if item == 9 { disabled } else { normal };
+            assert_eq!(
+                button(&kane, item, label),
+                (cap, true),
+                "Port Kane: {label}"
+            );
+        }
+        let reflexion = view(129);
+        assert_eq!(reflexion.offered(), []);
+        for (item, label) in labels {
+            let cap = if item == LEAVE_ITEM { normal } else { disabled };
+            assert_eq!(
+                button(&reflexion, item, label),
+                (cap, true),
+                "Reflex-ion: {label}"
+            );
+        }
     }
 }
 
