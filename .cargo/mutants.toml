@@ -595,4 +595,7 @@ exclude_re = [
     # (@0x5835a-0x583b8) returns to the last listed, the cell it left, so
     # the filter's own check (@0x5823c-0x5824a) changes nothing seen.
     "nova-view/src/spaceport/grid_arrows\\.rs:154:37: replace \\+ with \\* in filter$",
+    # A good-price stellar may land or trade, `Flags` 0x1 | 0x2 (@0x9148a):
+    # the two bits are disjoint, so `^` makes the same 0x3.
+    "nova-sim-ai/src/hail/advice\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in AdvicePort::qualifies$",
 ]
