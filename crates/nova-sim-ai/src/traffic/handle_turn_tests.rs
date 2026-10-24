@@ -14,10 +14,12 @@ use crate::ai::Goal;
 use crate::ai::fire::Manoeuvre;
 use crate::ai::pursuit::{Body, Frame};
 use crate::combat::ShipRef;
+use crate::combat::aim::bearing;
 use crate::flight::{FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::stats::{INERTIALESS_HULL, ShipStats};
+use crate::trig;
 use nova_sim_base::fixture::{Draws, FAST};
 use std::collections::BTreeMap;
 
@@ -151,5 +153,70 @@ fn a_fighter_measures_its_gap_to_its_bodys_heading_in_whole_degrees() {
                 fields.flags2
             );
         }
+    }
+}
+
+// Sub 8, a fighter docking inside its dock window.
+
+/// A fighter of [`FAST`] turning `rate` degrees a tick, docking with the
+/// player at the centre from `position`, facing `heading`, its dock
+/// window 100 and the player's sprite 40 across.
+fn docking(position: Vec2, heading: f32, rate: f32) -> Npc {
+    let mut fighter = ship(
+        FAST,
+        Goal::Dock(ShipRef::Player),
+        at(position.x, position.y, 0.0, 0.0, heading),
+        0.0,
+    );
+    fighter.stats.handling.turn_rate = rate;
+    fighter.carrier = Some(crate::bay::Carrier {
+        ship: ShipRef::Player,
+        window: 100.0,
+        reach: 40.0,
+    });
+    fighter
+}
+
+#[test]
+fn a_docking_fighter_within_its_turn_of_the_tables_bearing_is_put_on_it() {
+    // The table puts the carrier at 134 from (-60, -60), where the float
+    // bearing is 135 (`_CalcInterceptAngle` @0x87e81-0x87e9d).
+    let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+    let from = Vec2::new(-60.0, -60.0);
+    assert_eq!(trig::intercept_angle(from, carrier.position), 134);
+    assert_eq!(bearing(from, carrier.position), 135.0);
+    for heading in [135.4, 131.9] {
+        let mut fighter = docking(from, heading, 3.0);
+        assert_eq!(fly(&mut fighter, Some(&carrier)), Outcome::Flying);
+        assert_eq!(fighter.state.heading, 134.0, "from {heading}");
+    }
+}
+
+#[test]
+fn a_docking_fighter_measures_its_gap_to_the_bearing_in_whole_degrees() {
+    // 178.1 is 1.9 off 180, within 1.95, but 178 is 2 whole degrees off.
+    let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+    let mut fighter = docking(Vec2::new(0.0, -60.0), 178.1, 1.95);
+    fly(&mut fighter, Some(&carrier));
+    let heading = fighter.state.heading;
+    assert!((heading - 180.05).abs() < 1e-4, "{heading}");
+}
+
+#[test]
+fn a_docking_fighter_thrusts_strictly_within_its_turn_and_one_whole_degree() {
+    // 1 degree a tick: 2 whole degrees off the bearing (180) is not less
+    // than 2 (@0x87ea9-0x87ee4), 1 is; read before the turn.
+    let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+    let thrusts = |heading: f32| {
+        let mut fighter = docking(Vec2::new(0.0, -60.0), heading, 1.0);
+        fly(&mut fighter, Some(&carrier));
+        fighter.state.velocity != Vec2::ZERO
+    };
+    // 178.9 is 178 in whole degrees, where its float 1.1 would thrust.
+    for heading in [178.0, 178.9, 182.0, 182.9, 177.5] {
+        assert!(!thrusts(heading), "{heading}");
+    }
+    for heading in [179.0, 179.5, 180.0, 181.9] {
+        assert!(thrusts(heading), "{heading}");
     }
 }

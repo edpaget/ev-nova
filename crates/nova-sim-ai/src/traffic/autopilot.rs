@@ -78,8 +78,10 @@
 //!   (`_LowLevelAIHandler` sub 8 and 0xb, see [`bay`](crate::bay)).
 //!   Outside its dock window on either axis it closes on the carrier as
 //!   an escort on its slot, at full speed beyond [`APPROACH_FORMATION`];
-//!   inside, it turns at the carrier, thrusting within its turn rate and
-//!   [`DOCK_TURN_SLACK`] of it, and each axis more than
+//!   inside, it turns to the carrier's table bearing
+//!   (`_CalcInterceptAngle`, as `_HandleShip` turns it,
+//!   [`flight::turn_to`]), thrusting while off it by less than its turn
+//!   rate and [`DOCK_TURN_SLACK`], whole degrees, strictly, and each axis more than
 //!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
 //!   towards it. Within the carrier's reach on both axes it docks, and
 //!   leaves the system ([`Outcome::Docked`]).
@@ -238,7 +240,6 @@ use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::combat::aim::bearing;
 use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
@@ -264,6 +265,7 @@ use crate::traffic::pod_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
+use crate::trig;
 use nova_sim_combat::asteroid::Asteroid;
 use std::collections::BTreeMap;
 
@@ -742,8 +744,10 @@ fn rejoin(
 }
 
 /// One tick of `npc` docking with a carrier at `carrier`, inside its dock
-/// window (see the module docs): it turns at the carrier, thrusting
-/// within its turn rate and [`DOCK_TURN_SLACK`] of it, flies, and is
+/// window (see the module docs): it turns to the carrier's table bearing
+/// as `_HandleShip` turns it ([`flight::turn_to`]), thrusting while off
+/// it by less than its turn rate and [`DOCK_TURN_SLACK`], whole degrees,
+/// strictly, by its heading before the turn, flies, and is
 /// pulled towards it on each axis farther off than
 /// [`FORMATION_NUDGE`] ticks' acceleration, under `flight`, as `inertia`
 /// says.
@@ -754,11 +758,14 @@ fn dock_in(
     flight: FlightRules,
     inertia: Inertia,
 ) {
-    let wanted = bearing(npc.state.position, carrier.position);
+    // +0x68, the table's bearing of the carrier (@0x87e81-0x87e9d).
+    let wanted = trig::intercept_angle(npc.state.position, carrier.position);
+    // Off it by less than a turn and the slack, strictly, by its heading
+    // before `_HandleShip` turns it (@0x87ea9-0x87ee4).
+    let thrust = fire::off_by(npc.state.heading, wanted) < handling.turn_rate + DOCK_TURN_SLACK;
     let controls = Controls {
-        thrust: shortest_turn(npc.state.heading, wanted).abs()
-            <= handling.turn_rate + DOCK_TURN_SLACK,
-        turn: steer(npc.state.heading, wanted, handling),
+        thrust,
+        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
         reverse: false,
         ..Controls::default()
     };
@@ -4209,13 +4216,14 @@ mod tests {
         fly(&mut away, &[], Some(&carrier));
         assert_ne!(away.state.heading, 0.0, "turning");
         assert_eq!(away.state.velocity, Vec2::ZERO, "no thrust");
-        // A turn (1) and 1.0 off the bearing (180): it thrusts.
-        for heading in [178.0, 182.0, 180.0] {
+        // Less than a turn (1) and 1.0 off the bearing (180), in whole
+        // degrees, strictly: it thrusts.
+        for heading in [179.0, 181.0, 180.0] {
             let mut aimed = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
             fly(&mut aimed, &[], Some(&carrier));
             assert!(aimed.state.velocity.length() > 0.0, "{heading}");
         }
-        for heading in [177.0, 183.0] {
+        for heading in [178.0, 182.0, 177.0, 183.0] {
             let mut aside = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
             fly(&mut aside, &[], Some(&carrier));
             assert_eq!(aside.state.velocity, Vec2::ZERO, "{heading}");
