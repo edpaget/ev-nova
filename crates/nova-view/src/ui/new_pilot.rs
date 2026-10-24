@@ -988,9 +988,12 @@ mod tests {
             .with_defaults("Ada", "Hunter");
         assert_eq!(dialog.nickname_field(), None);
         assert_eq!(dialog.nickname(), "");
+        let name = center(&dialog, NAME_ITEM);
+        click(&mut dialog, name);
+        assert!(!dialog.field().selected(), "a click leaves the caret");
         dialog.input(&key(Key::Tab));
         assert_eq!(dialog.focus(), Focus::Name);
-        assert!(dialog.field().selected());
+        assert!(dialog.field().selected(), "Tab selects the name again");
         let at = center(&dialog, NICKNAME_ITEM);
         click(&mut dialog, at);
         assert_eq!(dialog.focus(), Focus::Name);

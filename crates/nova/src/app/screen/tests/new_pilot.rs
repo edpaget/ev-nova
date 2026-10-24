@@ -307,3 +307,99 @@ fn without_the_yes_no_dialog_a_name_already_saved_is_refused() {
         Some(NAME_TAKEN)
     );
 }
+
+/// A store whose keys ignore case, as the Mac's file names do: one file
+/// for "shane" and "Shane". A write keeps the spelling already saved
+/// when `keeps_spelling`, or renames it to the key written.
+#[derive(Clone, Default)]
+struct CaseBlind {
+    keeps_spelling: bool,
+    saves: Rc<RefCell<Vec<(String, String)>>>,
+}
+
+impl CaseBlind {
+    fn find(&self, key: &str) -> Option<usize> {
+        let key = key.to_lowercase();
+        self.saves
+            .borrow()
+            .iter()
+            .position(|(saved, _)| saved.to_lowercase() == key)
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.saves
+            .borrow()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+}
+
+impl PilotStore for CaseBlind {
+    fn list(&self) -> io::Result<Vec<String>> {
+        Ok(self.keys())
+    }
+
+    fn read(&self, key: &str) -> io::Result<Option<String>> {
+        Ok(self.find(key).map(|at| self.saves.borrow()[at].1.clone()))
+    }
+
+    fn write(&self, key: &str, text: &str) -> io::Result<()> {
+        let at = self.find(key);
+        let mut saves = self.saves.borrow_mut();
+        match at {
+            Some(at) if self.keeps_spelling => saves[at].1 = text.to_owned(),
+            Some(at) => saves[at] = (key.to_owned(), text.to_owned()),
+            None => saves.push((key.to_owned(), text.to_owned())),
+        }
+        Ok(())
+    }
+
+    fn delete(&self, key: &str) -> io::Result<()> {
+        if let Some(at) = self.find(key) {
+            self.saves.borrow_mut().remove(at);
+        }
+        Ok(())
+    }
+
+    fn last_pilot(&self) -> io::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn set_last_pilot(&self, _key: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        "a case-blind disk".to_owned()
+    }
+}
+
+#[test]
+fn on_a_store_that_ignores_case_the_replacing_save_is_never_deleted() {
+    for keeps_spelling in [false, true] {
+        let store = CaseBlind {
+            keeps_spelling,
+            ..CaseBlind::default()
+        };
+        let data = named_data();
+        let old = nova_sim::Pilot::new(data.as_ref(), "shane").expect("starts");
+        PilotKeeper::new(store.clone()).save(&old).expect("saves");
+        let mut screen = with_dialogs(data)
+            .with_chance(SharedChance::new(Rc::new(RefCell::new(Rolls(0)))))
+            .with_pilots(
+                Some(PilotKeeper::new(
+                    Box::new(store.clone()) as Box<dyn PilotStore>
+                )),
+                Rc::new(MonoMetrics),
+            )
+            .appeared();
+        confirm_new_pilot(&mut screen, "Shane", "New");
+        screen.input(&key(Key::Enter, true));
+        christen(&mut screen);
+        assert_eq!(store.keys().len(), 1, "{keeps_spelling}");
+        let text = store.read("Shane").expect("reads").expect("still saved");
+        let saved = nova_sim::save::decode(&text).expect("a pilot");
+        assert_eq!(saved.nickname(), "New", "{keeps_spelling}");
+    }
+}
