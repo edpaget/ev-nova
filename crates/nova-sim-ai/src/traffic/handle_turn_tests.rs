@@ -17,6 +17,7 @@ use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
 use crate::flight::{FlightRules, ShipState};
 use crate::geometry::Vec2;
+use crate::hail::Help;
 use crate::handling::ShipFields;
 use crate::stats::{INERTIALESS_HULL, ShipStats};
 use crate::trig;
@@ -218,5 +219,20 @@ fn a_docking_fighter_thrusts_strictly_within_its_turn_and_one_whole_degree() {
     }
     for heading in [179.0, 179.5, 180.0, 181.9] {
         assert!(thrusts(heading), "{heading}");
+    }
+}
+
+// The flights that want no heading.
+
+#[test]
+fn a_ship_holding_or_assisting_with_no_docking_has_its_heading_truncated() {
+    // State 0 has no handler (@0x851f1) and sub 0xb with no target does
+    // nothing (@0x87345-0x87351): +0x68 stays the low level's default.
+    for goal in [Goal::Hold, Goal::Assist(Help::Refuel), Goal::Drift] {
+        for fields in [FAST, RAVEN] {
+            let mut coasting = ship(fields, goal, at(0.0, 0.0, 1.0, 0.0, 37.6), 1.0);
+            assert_eq!(fly(&mut coasting, None), Outcome::Flying);
+            assert_eq!(coasting.state.heading, 37.0, "{goal:?}");
+        }
     }
 }

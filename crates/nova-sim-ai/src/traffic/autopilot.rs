@@ -54,7 +54,8 @@
 //!   ([`repair_dock`](crate::traffic::repair_dock),
 //!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
 //!   target), it coasts, as sub 0xb with no target does nothing
-//!   (@0x87345-0x87351).
+//!   (@0x87345-0x87351), its heading truncated as the low level's default
+//!   +0x68 has `_HandleShip` put it (@0x8522d).
 //! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
 //!   keeps its slot beside the player ([`Npc::formation`],
 //!   [`slot_position`](crate::escort::slot_position)); with no leader or
@@ -139,8 +140,9 @@
 //!   [`Readings::jump_fuel`]) it leaves as a leaving ship does; otherwise
 //!   it runs out (state 3's far branch, @0x8e0e1-0x8e21a;
 //!   [`leave::flee_leg`](crate::ai::leave::flee_leg)).
-//! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
-//!   the thrust @0x851f1, and has no handler for state 0): it coasts on
+//! - [`Goal::Hold`]: no thrust, and no heading but its own truncated
+//!   (`_LowLevelAIHandler` zeroes the thrust @0x851f1, defaults +0x68
+//!   @0x8522d, and has no handler for state 0): it coasts on
 //!   the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
 //!   its top speed).
@@ -593,8 +595,12 @@ fn fly_mobile(
         }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
-        // does nothing (@0x87345-0x87351).
-        Goal::Hold | Goal::Drift | Goal::Assist(_) => Controls::default().into(),
+        // does nothing (@0x87345-0x87351). +0x68 is the low level's
+        // default, so its heading is truncated (@0x8522d).
+        Goal::Hold | Goal::Drift | Goal::Assist(_) => {
+            flight::turn_to_own(&mut npc.state);
+            Controls::default().into()
+        }
     };
     held_burst::step(npc, &handling, controls, flight, inertia, word);
     Outcome::Flying
