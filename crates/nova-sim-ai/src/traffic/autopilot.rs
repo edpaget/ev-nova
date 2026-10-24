@@ -1341,13 +1341,13 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
 /// turns to it as `_HandleShip` turns it ([`flight::turn_to`]); it thrusts
 /// once that turn puts it on the heading, this tick. At rest it wants
 /// none, its heading truncated ([`flight::turn_to_own`]). An inertialess
-/// ship brakes as substate 1 does ([`inertialess::brake`]), which wants
-/// no heading either.
+/// ship brakes as substate 1 does ([`inertialess::brake`]), turned to
+/// the heading it hands back, its own truncated.
 pub(crate) fn brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Controls {
     if let Inertia::Inertialess { .. } = inertia {
-        let controls = inertialess::brake(state);
-        flight::turn_to_own(state);
-        return controls;
+        let (controls, wanted) = inertialess::brake(state);
+        let turn = flight::turn_to(state, wanted, handling.turn_rate);
+        return Controls { turn, ..controls };
     }
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {

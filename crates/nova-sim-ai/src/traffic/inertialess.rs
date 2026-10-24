@@ -18,8 +18,8 @@
 //!   either axis, a thrust of -0.5 x `_ShipAccelRate` (@0x853f6), and no
 //!   heading wanted, where an inertial ship turns against its motion: the
 //!   low level's default +0x68 (@0x8522d) has `_HandleShip` truncate its
-//!   heading, which its callers do
-//!   ([`flight::turn_to_own`](crate::flight::turn_to_own)).
+//!   heading: [`brake`] hands back that whole heading for its caller to
+//!   turn to ([`flight::turn_to`](crate::flight::turn_to)).
 //! - **The engine's own planning** (the autopilot's stopping distance,
 //!   braking speed and velocity match, which no port of the original's
 //!   reaches yet) gains an inertialess arm: it turns to the velocity it
@@ -106,15 +106,20 @@ pub fn moving(velocity: Vec2) -> bool {
 
 /// Substate 1's brake for an inertialess ship at `state`: reverse, which
 /// an inertialess ship's step takes as [`BRAKE`], while it is
-/// [`moving`]; nothing once it isn't. It wants no heading: the caller
-/// truncates the heading, as `_HandleShip` turns a ship to the low
-/// level's default (@0x8522d).
+/// [`moving`], nothing once it isn't; and the heading it wants (+0x68).
+/// It writes none (@0x853d7-0x85403), so that is the low level's default,
+/// its own heading truncated (@0x8522d), which the caller turns it to as
+/// `_HandleShip` does ([`flight::turn_to`]). It hands the heading back
+/// rather than turning the ship itself, as a refuel's stop works the
+/// substate out before its AI-wait check, which skips the turn
+/// ([`leave_flight::stop_wanting`](crate::traffic::leave_flight::stop_wanting)).
 #[must_use]
-pub fn brake(state: &ShipState) -> Controls {
-    Controls {
+pub fn brake(state: &ShipState) -> (Controls, i16) {
+    let controls = Controls {
         reverse: moving(state.velocity),
         ..Controls::default()
-    }
+    };
+    (controls, trig::whole(state.heading))
 }
 
 /// How far an inertialess ship at `speed` travels while it brakes to a
@@ -934,6 +939,18 @@ mod tests {
             let controls = super::match_speed(&mut resting, speed, &handling, Vec2::ZERO);
             assert_eq!((controls.turn, resting.heading), (Turn::None, 37.0));
         }
+    }
+
+    #[test]
+    fn substate_1s_brake_reverses_while_moving_and_wants_its_own_whole_heading() {
+        // Sub 1's inertialess branch writes no +0x68 (@0x853d7-0x85403):
+        // the low level's default, its heading truncated (@0x8522d).
+        let (controls, wanted) = brake(&at(0.0, 0.0, 0.0, -0.5, 37.6));
+        assert!(controls.reverse);
+        assert_eq!(wanted, 37);
+        let (controls, wanted) = brake(&at(0.0, 0.0, 0.35, 0.35, 359.9));
+        assert!(!controls.reverse, "not moving");
+        assert_eq!(wanted, 359);
     }
 
     /// A ship at `heading` turning `rate` degrees a tick, holding 1.0,

@@ -183,17 +183,19 @@ pub(crate) fn stop_wanting(
     inertia: Inertia,
     refuelling: bool,
 ) -> (Controls, Handling, i16) {
-    let own = trig::whole(state.heading);
     if !inertialess::moving(state.velocity) {
         // Doubles, back to floats.
         #[allow(clippy::cast_possible_truncation)]
         let settle = |axis: f32| (f64::from(axis) * SETTLE) as f32;
         state.velocity = Vec2::new(settle(state.velocity.x), settle(state.velocity.y));
-        return (Controls::default(), *handling, own);
+        return (Controls::default(), *handling, trig::whole(state.heading));
     }
     match inertia {
         Inertia::Inertial => brake(state, handling, refuelling),
-        Inertia::Inertialess { .. } => (inertialess::brake(state), *handling, own),
+        Inertia::Inertialess { .. } => {
+            let (controls, wanted) = inertialess::brake(state);
+            (controls, *handling, wanted)
+        }
     }
 }
 
@@ -430,7 +432,7 @@ mod tests {
         let mut fast = braking(0.0, -0.5, 0.0);
         let inertia = Inertia::Inertialess { speed: 0.5 };
         let (controls, by) = stop(&mut fast, &HANDLING, inertia, true);
-        assert_eq!(controls, inertialess::brake(&braking(0.0, -0.5, 0.0)));
+        assert_eq!(controls, inertialess::brake(&braking(0.0, -0.5, 0.0)).0);
         assert_eq!(by, HANDLING);
         assert_eq!(fast.velocity, Vec2::new(0.0, -0.5));
     }
