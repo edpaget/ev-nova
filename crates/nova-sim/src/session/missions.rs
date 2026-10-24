@@ -1253,6 +1253,7 @@ impl Session {
     ) -> TagContext<'_> {
         TagContext {
             pilot: &self.pilot.name,
+            nickname: &self.pilot.nickname,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             person: match self.setup.rules.source_for(RuleKey::OfferingShipName) {
@@ -4895,6 +4896,15 @@ mod tests {
             other.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
             "Stock of the Kestrel, a Ship 128, captain: <DST> <PAY> [Error]"
         );
+    }
+
+    #[test]
+    fn a_mission_texts_pnn_reads_the_pilots_nickname_or_its_name_with_none() {
+        let catalog = briefed();
+        let mut session = stocks(&catalog);
+        assert_eq!(session.mission_text(3, "<PN> <PNN>"), "Stock Stock");
+        session.pilot.nickname = "Hunter".to_owned();
+        assert_eq!(session.mission_text(3, "<PN> <PNN>"), "Stock Hunter");
     }
 
     #[test]

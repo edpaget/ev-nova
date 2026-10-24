@@ -385,6 +385,7 @@ impl Session {
                 .person(person)
                 .map_or("", |person| &person.record.name),
             pilot: &self.pilot.name,
+            nickname: &self.pilot.nickname,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             ranks: self.run.rank_names(&self.pilot, &self.statics, &self.setup),

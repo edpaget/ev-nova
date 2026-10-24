@@ -167,6 +167,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
     };
     let context = |cargo: i16| TagContext {
         pilot: "Stock",
+        nickname: "",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         person: Some("Bounty Hunter"),

@@ -225,8 +225,10 @@ pub const QUOTE_GAP_TICKS: u64 = 1350;
 pub struct QuoteTags<'a> {
     /// The person's name: `<OSN>`.
     pub person: &'a str,
-    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname yet.
+    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname.
     pub pilot: &'a str,
+    /// The pilot's nickname: `<PNN>`; empty for none.
+    pub nickname: &'a str,
     /// The player's ship type's name: `<PST>`.
     pub ship_type: &'a str,
     /// The player's ship's name, as the player named it: `<PSN>`.
@@ -252,6 +254,7 @@ pub struct QuoteTags<'a> {
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
     let context = TagContext {
         pilot: tags.pilot,
+        nickname: tags.nickname,
         ship_type: tags.ship_type,
         ship_name: tags.ship_name,
         person: Some(tags.person),
@@ -955,6 +958,7 @@ mod tests {
         let tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
@@ -967,6 +971,11 @@ mod tests {
             "Bounty Hunter: Prepare to die, Stock!"
         );
         assert_eq!(expand_tags("Hey <PNN>.", &tags), "Hey Stock.");
+        let nicknamed = QuoteTags {
+            nickname: "Hunter",
+            ..tags.clone()
+        };
+        assert_eq!(expand_tags("Hey <PNN>.", &nicknamed), "Hey Hunter.");
         assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Kestrel or Shuttle?");
         assert_eq!(
             expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
@@ -981,6 +990,7 @@ mod tests {
         let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
@@ -1020,6 +1030,7 @@ mod tests {
         let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames {
