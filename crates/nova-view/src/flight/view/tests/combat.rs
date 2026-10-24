@@ -686,7 +686,10 @@ fn the_first_step_reads_its_traffic_types_cards_in_one_batch() {
 #[test]
 fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_reads_none() {
     let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    assert!(!view.has_read_traffic(ShipId(129)), "nothing read yet");
     view.warm_up_traffic();
+    assert!(view.has_read_traffic(ShipId(129)), "its sheet and card");
+    assert!(!view.has_read_traffic(ShipId(130)), "not coming");
     assert_eq!(npc_ids(&view), [], "nothing populated");
     let sheets = view.catalog().sheets_asked.borrow().clone();
     let cards = view.catalog().cards_asked.borrow().clone();

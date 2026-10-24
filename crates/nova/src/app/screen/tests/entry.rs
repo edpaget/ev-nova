@@ -221,6 +221,40 @@ fn flight_shows_once_the_fade_ends_under_a_black_that_clears_over_a_second_untic
 }
 
 #[test]
+fn the_handovers_warm_up_frame_reads_the_coming_traffics_sheet_and_card_before_any_step() {
+    let store = MemoryPilots::new();
+    let mut screen = with_dialogs(super::encounters::boarding_data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create_held(&mut screen, "Ada");
+    let trader = nova_sim::ShipId(129);
+    let held = screen.game_in_progress().expect("held");
+    assert!(!held.has_read_traffic(trader), "not read on the menu");
+    choose(&mut screen, MenuChoice::EnterShip);
+    // Through the fade out and the intro, up to the handover.
+    for _ in 0..1000 {
+        match screen.showing() {
+            Showing::Flight => break,
+            Showing::Intro => tap(&mut screen, SKIP_KEY),
+            Showing::IntroText => tap(&mut screen, Key::Enter),
+            _ => {}
+        }
+        screen.tick(Duration::from_millis(100));
+    }
+    assert_eq!(screen.showing(), Showing::Flight, "handed over");
+    assert!(screen.entering(), "fading in, before any step");
+    let flight = flight(&screen);
+    assert!(
+        flight.session().expect("flying").npcs().is_empty(),
+        "no traffic yet"
+    );
+    assert!(
+        flight.has_read_traffic(trader),
+        "the trader's sheet and card, read under the black"
+    );
+}
+
+#[test]
 fn keys_held_as_play_starts_do_nothing_until_their_next_repeat() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);

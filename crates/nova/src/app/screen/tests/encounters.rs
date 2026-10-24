@@ -90,7 +90,7 @@ fn under_a_new_pilot() -> SharedChance {
 }
 
 /// [`boarding_data_with`] no cash.
-fn boarding_data() -> Rc<GameData> {
+pub(super) fn boarding_data() -> Rc<GameData> {
     boarding_data_with(0)
 }
 

@@ -789,6 +789,13 @@ impl<
         self.read_traffic_sheets(coming);
     }
 
+    /// Whether the sheet and the target card of ship type `ship` are read
+    /// already, so a step that brings one reads neither.
+    #[must_use]
+    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
+    }
+
     /// Reads the sheet of each of `traffic` not read yet, and their target
     /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
     /// none when all are read.
