@@ -808,15 +808,19 @@ pub enum Service {
     MissionBbs,
 }
 
-/// The services a stellar with `flags` offers, in [`Service`] order. The
-/// trade center, outfitter, shipyard and bar each have their flag; there
-/// is no flag for the mission BBS, which the original offers on every
-/// inhabited stellar. An uninhabited stellar offers nothing.
+/// The services a stellar with `flags` offers, in [`Service`] order.
+///
+/// The trade center, outfitter, shipyard and bar each follow their own
+/// flag alone, uninhabited or not, as `_DrawPlanetButtons` enables them
+/// (@0x29802-0x29821) and `_DoPortDialog` answers them (@0x5fe71,
+/// @0x5feb5, @0x5ff2c, @0x60115). There is no flag for the mission BBS:
+/// the original offers it wherever `_canDoMissions` holds, which is "not
+/// uninhabited" (@0x5fab6, @0x4f069). No stock stellar that is
+/// uninhabited carries a service flag, so the difference shows only in a
+/// plug-in.
 #[must_use]
 pub fn services(flags: u32) -> Vec<Service> {
-    if flags & StellarFlags::UNINHABITED != 0 {
-        return Vec::new();
-    }
+    let missions = (flags & StellarFlags::UNINHABITED == 0).then_some(Service::MissionBbs);
     [
         (StellarFlags::TRADE_CENTER, Service::TradeCenter),
         (StellarFlags::OUTFITTER, Service::Outfitter),
@@ -826,7 +830,7 @@ pub fn services(flags: u32) -> Vec<Service> {
     .into_iter()
     .filter(|(flag, _)| flags & flag != 0)
     .map(|(_, service)| service)
-    .chain([Service::MissionBbs])
+    .chain(missions)
     .collect()
 }
 
@@ -2353,9 +2357,15 @@ mod tests {
     }
 
     #[test]
-    fn an_uninhabited_stellar_offers_nothing() {
-        assert_eq!(services(StellarFlags::UNINHABITED), []);
-        assert_eq!(services(0xFF), []);
+    fn an_uninhabited_stellar_offers_its_flagged_services_but_no_bbs() {
+        use Service::{Bar, Outfitter, Shipyard, TradeCenter};
+        let uninhabited = StellarFlags::UNINHABITED;
+        assert_eq!(services(uninhabited), []);
+        assert_eq!(
+            services(uninhabited | StellarFlags::TRADE_CENTER | StellarFlags::BAR),
+            [TradeCenter, Bar]
+        );
+        assert_eq!(services(0xFF), [TradeCenter, Outfitter, Shipyard, Bar]);
     }
 
     #[test]
