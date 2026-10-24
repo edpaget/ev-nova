@@ -104,9 +104,13 @@ impl AppScreen {
     }
 
     /// Saves the game held, as [`AppScreen::save_pilot`] saves the
-    /// flight shown.
-    fn save_game(&mut self) {
-        if let Some(warning) = self.game.as_ref().and_then(|game| self.save_warning(game)) {
+    /// flight shown, in place of the pilot saved under `replaces`, if any.
+    fn save_game(&mut self, replaces: Option<&str>) {
+        if let Some(warning) = self
+            .game
+            .as_ref()
+            .and_then(|game| self.save_warning(game, replaces))
+        {
             self.warnings.push(warning);
         }
     }
@@ -117,10 +121,16 @@ impl AppScreen {
     /// (`_SavePilotFile` @0x1935f) and returns to the main screen with the
     /// pilot loaded; choice 0 runs no sweep after it (@0x1a795-0x1a7d2).
     /// What the settling then makes due is saved too, as after any input.
+    /// Each save is in place of the pilot saved under `replaces`, if any
+    /// (`nova_sim::saves::PilotKeeper::save_replacing`).
     /// Its intro is remembered for the entry
     /// ([`AppScreen::remember_new_pilot_intro`]). Its neighbour pass
     /// reads the run's last refresh ([`AppScreen::run_refresh`]).
-    pub(super) fn hold_new_pilot(&mut self, flight: FlightView<Rc<GameData>>) {
+    pub(super) fn hold_new_pilot(
+        &mut self,
+        flight: FlightView<Rc<GameData>>,
+        replaces: Option<&str>,
+    ) {
         let mut flight = match self.run_refresh() {
             Some(carried) => flight.with_last_refresh(carried),
             None => flight,
@@ -129,9 +139,9 @@ impl AppScreen {
         flight.begin();
         flight.take_save_due();
         self.hold_game(flight);
-        self.save_game();
+        self.save_game(replaces);
         if self.settle_game() {
-            self.save_game();
+            self.save_game(replaces);
         }
     }
 }

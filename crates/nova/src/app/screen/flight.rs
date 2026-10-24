@@ -336,22 +336,31 @@ impl AppScreen {
         if let Some(warning) = self
             .flight
             .as_ref()
-            .and_then(|flight| self.save_warning(flight))
+            .and_then(|flight| self.save_warning(flight, None))
         {
             self.warnings.push(warning);
         }
     }
 
-    /// Saves `flight`'s pilot as [`AppScreen::save_pilot`] says, and the
-    /// warning a failure gives.
-    pub(super) fn save_warning(&self, flight: &FlightView<Rc<GameData>>) -> Option<String> {
+    /// Saves `flight`'s pilot as [`AppScreen::save_pilot`] says, in place
+    /// of the pilot saved under `replaces` when there is one
+    /// (`nova_sim::saves::PilotKeeper::save_replacing`), and the warning a
+    /// failure gives.
+    pub(super) fn save_warning(
+        &self,
+        flight: &FlightView<Rc<GameData>>,
+        replaces: Option<&str>,
+    ) -> Option<String> {
         let keeper = self.keeper()?;
         if !flight.may_save() {
             return None;
         }
         let pilot = flight.pilot()?;
         pilot_key(pilot.name())?;
-        keeper.save(pilot).err()
+        match replaces {
+            Some(replaces) => keeper.save_replacing(pilot, replaces).err(),
+            None => keeper.save(pilot).err(),
+        }
     }
 
     /// Settles what the set expressions run in flight or in the spaceport

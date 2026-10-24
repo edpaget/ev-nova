@@ -10,18 +10,17 @@
 //! nothing is saved, and any game held before stays held.
 //!
 //! A new pilot that replaces one already saved (its name matched ignoring
-//! case; see `menu`'s replace question) replaces it only once it is saved:
-//! the old save is deleted then, when the store lists both it and the new
-//! save under different spellings, so one pilot is listed, as the Mac's
-//! file system keeps one file. A store that ignores case lists one, which
-//! the save already replaced, and a failed save deletes nothing. Cancel leaves the old save as it was, as `_DoNewPilot`
-//! writes the file only at `_SavePilotFile` (@0x1935f).
+//! case; see `menu`'s replace question) is saved in its place
+//! (`nova_sim::saves::PilotKeeper::save_replacing`, which decides what
+//! becomes of the old save), and a failed delete of the old save is a
+//! warning. Cancel leaves the old save as it was, as `_DoNewPilot` writes
+//! the file only at `_SavePilotFile` (@0x1935f).
 
 use std::rc::Rc;
 
+use nova_sim::Pilot;
 use nova_sim::christening::{christen, christening};
 use nova_sim::shipyard::SHIP_NAME_CHARS;
-use nova_sim::{Pilot, pilot_key};
 use nova_view::ui::text_input::{TEXT_INPUT_DIALOG, TextInputDialog, TextInputOutcome};
 use nova_view::ui::{DescriptionSource, DialogResources};
 use nova_view::{Input, Screen, ScreenAction};
@@ -105,28 +104,10 @@ impl AppScreen {
         });
     }
 
-    /// Deletes the save under `old` that a new pilot saved under `new`
-    /// replaces, when the store lists both under different spellings (see
-    /// the module docs); a failed delete is a warning.
-    fn drop_replaced(&mut self, old: &str, new: Option<&str>) {
-        let Some(keeper) = self.keeper() else {
-            return;
-        };
-        let Some(new) = new.filter(|&new| new != old) else {
-            return;
-        };
-        let both = keeper.list().is_ok_and(|keys| {
-            keys.iter().any(|key| key == old) && keys.iter().any(|key| key == new)
-        });
-        if both && let Err(warning) = keeper.delete(old) {
-            self.warnings.push(warning);
-        }
-    }
-
     /// The christening's input. OK christens the ship with the name
     /// confirmed, culled, and holds the new pilot, its game begun and
-    /// saved ([`AppScreen::hold_new_pilot`]), the pilot it replaces deleted
-    /// when it is saved under another spelling; Cancel abandons it. Either
+    /// saved in place of the pilot it replaces ([`AppScreen::hold_new_pilot`]);
+    /// Cancel abandons it. Either
     /// keeps the dialog's sounds.
     pub(super) fn christening_input(&mut self, input: &Input) -> ScreenAction {
         let open = self.christening.as_mut().expect("open");
@@ -141,12 +122,8 @@ impl AppScreen {
         } = self.christening.take().expect("open");
         self.sounds.extend(dialog.take_sounds());
         if let TextInputOutcome::Confirm(typed) = outcome {
-            let key = pilot_key(pilot.name());
             let flight = self.pilot_flight(christen(pilot, &typed), false);
-            self.hold_new_pilot(flight);
-            if let Some(old) = replaces {
-                self.drop_replaced(&old, key.as_deref());
-            }
+            self.hold_new_pilot(flight, replaces.as_deref());
         }
         ScreenAction::None
     }

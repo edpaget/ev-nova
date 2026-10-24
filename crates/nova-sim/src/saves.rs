@@ -6,7 +6,8 @@
 //! - [`pilot_key`]: the key a pilot is saved under, from its name.
 //! - [`PilotKeeper`]: the rules. It saves a pilot in the
 //!   [`save`](crate::save) schema under its key, lists the pilots saved,
-//!   opens one and deletes one, and reports each problem as a message naming where
+//!   opens one, deletes one and saves one in place of another, and
+//!   reports each problem as a message naming where
 //!   the pilots are. Each save and open records the pilot as the last
 //!   pilot, which [`PilotKeeper::open_last`] opens at launch.
 
@@ -285,6 +286,36 @@ impl<S: PilotStore> PilotKeeper<S> {
         })?;
         self.record(&key);
         Ok(())
+    }
+
+    /// Saves `pilot` as [`save`](Self::save) does, in place of the pilot
+    /// saved under `replaces` (the key [`saved_key`](Self::saved_key) found
+    /// for its name), so one pilot is listed, as the Mac's file system
+    /// keeps one file whatever the case of its name.
+    ///
+    /// The save under `replaces` is deleted only once `pilot` is saved,
+    /// and only when the store still lists it beside the new key under
+    /// another spelling. A store that ignores case lists one of the two,
+    /// which the save has already replaced, so it deletes nothing; nor
+    /// does a save under the same key, or a store whose pilots cannot be
+    /// listed.
+    ///
+    /// # Errors
+    ///
+    /// The message [`save`](Self::save) gives when `pilot` is not saved,
+    /// which leaves the save under `replaces` as it was; or the message
+    /// [`delete`](Self::delete) gives when `pilot` is saved but the save
+    /// under `replaces` cannot be removed, for the caller to warn of.
+    pub fn save_replacing(&self, pilot: &Pilot, replaces: &str) -> Result<(), String> {
+        self.save(pilot)?;
+        let Some(key) = pilot_key(pilot.name()).filter(|key| key != replaces) else {
+            return Ok(());
+        };
+        let both = self
+            .store
+            .list()
+            .is_ok_and(|keys| keys.iter().any(|saved| saved == replaces) && keys.contains(&key));
+        if both { self.delete(replaces) } else { Ok(()) }
     }
 
     /// Deletes the pilot named `name`: what is saved under its key. A name
@@ -614,6 +645,132 @@ mod tests {
             Err("nova: cannot delete the pilot Ada in memory (the disk is locked)".to_owned())
         );
         assert_eq!(store.keys(), ["Ada"]);
+    }
+
+    /// A pilot named `name` with nickname `nickname`, to tell saves apart.
+    fn nicknamed(name: &str, nickname: &str) -> Pilot {
+        Pilot::new(&catalog(), name)
+            .expect("starts")
+            .with_nickname(nickname.to_owned())
+    }
+
+    /// The nickname of the pilot `keeper` opens under `key`.
+    fn nickname_saved(keeper: &PilotKeeper<MemoryPilots>, key: &str) -> Result<String, OpenError> {
+        keeper.open(key).map(|pilot| pilot.nickname().to_owned())
+    }
+
+    #[test]
+    fn a_replacing_save_deletes_the_old_spelling_its_store_still_lists() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper.save(&nicknamed("shane", "Old")).expect("saves");
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+            Ok(())
+        );
+        assert_eq!(keeper.list(), Ok(vec!["Shane".to_owned()]));
+        assert_eq!(store.deleted(), ["shane"]);
+        assert_eq!(nickname_saved(&keeper, "Shane"), Ok("New".to_owned()));
+    }
+
+    #[test]
+    fn a_replacing_save_under_the_same_key_deletes_nothing() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper.save(&nicknamed("Ada", "Old")).expect("saves");
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Ada", "New"), "Ada"),
+            Ok(())
+        );
+        assert_eq!(keeper.list(), Ok(vec!["Ada".to_owned()]));
+        assert_eq!(store.deleted(), Vec::<String>::new());
+        assert_eq!(nickname_saved(&keeper, "Ada"), Ok("New".to_owned()));
+    }
+
+    #[test]
+    fn a_replacing_save_on_a_store_that_ignores_case_deletes_nothing() {
+        for keeps_spelling in [false, true] {
+            let store = MemoryPilots::ignoring_case(keeps_spelling);
+            let keeper = keeper(&store);
+            keeper.save(&nicknamed("shane", "Old")).expect("saves");
+            assert_eq!(
+                keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+                Ok(()),
+                "{keeps_spelling}"
+            );
+            let spelling = if keeps_spelling { "shane" } else { "Shane" };
+            assert_eq!(
+                keeper.list(),
+                Ok(vec![spelling.to_owned()]),
+                "{keeps_spelling}"
+            );
+            assert_eq!(store.deleted(), Vec::<String>::new(), "{keeps_spelling}");
+            assert_eq!(
+                nickname_saved(&keeper, "Shane"),
+                Ok("New".to_owned()),
+                "{keeps_spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_replacing_save_keeps_the_old_save() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper.save(&nicknamed("shane", "Old")).expect("saves");
+        let old = store.text("shane");
+        store.fail_writes(true);
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+            Err("nova: cannot save the pilot Shane in memory (the disk is full)".to_owned())
+        );
+        assert_eq!(store.keys(), ["shane"]);
+        assert_eq!(store.text("shane"), old);
+        assert_eq!(store.deleted(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_delete_after_a_replacing_save_says_so_and_keeps_both() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper.save(&nicknamed("shane", "Old")).expect("saves");
+        store.fail_deletes(true);
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+            Err("nova: cannot delete the pilot shane in memory (the disk is locked)".to_owned())
+        );
+        assert_eq!(store.keys(), ["Shane", "shane"]);
+        assert_eq!(nickname_saved(&keeper, "Shane"), Ok("New".to_owned()));
+    }
+
+    #[test]
+    fn a_replacing_save_deletes_nothing_it_cannot_see_listed() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+            Ok(())
+        );
+        assert_eq!(store.deleted(), Vec::<String>::new(), "nothing saved there");
+        store.put("shane", "old");
+        store.fail_reads(true);
+        assert_eq!(
+            keeper.save_replacing(&nicknamed("Shane", "New"), "shane"),
+            Ok(())
+        );
+        assert_eq!(store.deleted(), Vec::<String>::new(), "none listed");
+        assert_eq!(store.text("shane").as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn an_unnamed_replacing_save_deletes_nothing() {
+        let store = MemoryPilots::new();
+        store.put("shane", "old");
+        assert_eq!(
+            keeper(&store).save_replacing(&nicknamed(" ", "New"), "shane"),
+            Err("nova: a pilot without a name is not saved".to_owned())
+        );
+        assert_eq!(store.keys(), ["shane"]);
     }
 
     #[test]
