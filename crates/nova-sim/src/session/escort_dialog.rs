@@ -219,6 +219,19 @@ mod tests {
     }
 
     #[test]
+    fn the_dialog_shows_the_escort_hailed_whatever_its_place_in_the_fleet() {
+        let catalog = upgradable();
+        let mut session = escorting(&catalog);
+        let first = crate::pilot::Escort {
+            ship: ShipId(130),
+            ..session.pilot.escorts[0]
+        };
+        session.pilot.escorts.insert(0, first);
+        session.space.escorts.fleet.insert(0, None);
+        assert_eq!(opened(&mut session, &catalog).ship, ShipId(129));
+    }
+
+    #[test]
     fn a_hired_escort_shows_its_pay_and_can_not_be_sold() {
         let catalog = upgradable();
         let mut session = escorting(&catalog);

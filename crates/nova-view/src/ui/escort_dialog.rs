@@ -745,6 +745,45 @@ mod tests {
     }
 
     #[test]
+    fn its_buttons_take_clicks_even_from_a_template_that_disables_them() {
+        let mut disabled = stock();
+        for item in &mut disabled.items[..SELL_ITEM] {
+            item.enabled = false;
+        }
+        let mut open = EscortDialog::new(
+            &disabled,
+            &captured(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        click(&mut open, CLOSE_ITEM);
+        assert_eq!(open.take_press(), Some(EscortButton::Close));
+        click(&mut open, SELL_ITEM);
+        assert_eq!(open.take_press(), Some(EscortButton::Sell));
+    }
+
+    #[test]
+    fn a_click_let_go_of_presses_nothing() {
+        let mut open = dialog(&hired());
+        let at = open
+            .dialog()
+            .item_bounds(CLOSE_ITEM)
+            .expect("Close")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        open.input(&button(true));
+        open.cancel_pointer();
+        open.input(&button(false));
+        assert_eq!(open.take_press(), None);
+        assert!(format!("{open:?}").starts_with("EscortDialog"));
+    }
+
+    #[test]
     fn the_fallback_lays_out_the_same_items_over_a_backdrop() {
         let fallback = EscortDialog::fallback(&hired(), ButtonStyle::STOCK, Rc::new(MonoMetrics));
         assert_eq!(fallback.dialog().bounds().width(), 424.0);

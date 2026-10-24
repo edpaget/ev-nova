@@ -883,3 +883,54 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
     assert_eq!(broken.news(), None);
     assert_eq!(broken.news_picture(), None);
 }
+
+// The escort dialog and leaving a shipyard.
+
+#[test]
+fn y_on_a_fleet_escort_opens_the_escort_dialog_once_and_its_presses_go_to_the_session() {
+    let mut view = escorted();
+    option(&mut view, TARGET_KEY);
+    assert_eq!(
+        view.session().expect("flying").target().map(|npc| npc.id),
+        Some(NpcId(1))
+    );
+    assert_eq!(view.take_escort_dialog(), None);
+    tap(&mut view, HAIL_KEY);
+    let opened = view.take_escort_dialog().expect("the escort dialog");
+    assert_eq!(opened.ship, ShipId(130));
+    assert_eq!(view.take_escort_dialog(), None, "once");
+    assert_eq!(view.take_hail(), None, "no comm dialog");
+    let marked = view
+        .press_escort(nova_sim::escort_dialog::EscortButton::Sell)
+        .expect("still open");
+    assert_eq!(marked.mark, Some(nova_sim::fleet::EscortMark::Sell));
+    assert_eq!(
+        view.press_escort(nova_sim::escort_dialog::EscortButton::Close),
+        None
+    );
+    assert_eq!(
+        view.press_escort(nova_sim::escort_dialog::EscortButton::Sell),
+        None,
+        "closed"
+    );
+}
+
+#[test]
+fn leaving_a_shipyard_settles_the_marks_through_the_session() {
+    let catalog = shipbuying();
+    let pilot = with_escorts(&Pilot::new(&catalog, "Seller").expect("starts"), &[129]);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["escorts"][0]["mark"] = serde_json::json!("sell");
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+    view.tick(TICK);
+    assert_eq!(view.land_escorts(), None, "in flight");
+    land_now(&mut view);
+    assert_eq!(
+        view.land_escorts().as_deref(),
+        Some("One escort was sold for a profit of 0 credit.")
+    );
+    assert_eq!(view.pilot().map(|pilot| pilot.escorts().len()), Some(0));
+    assert_eq!(view.land_escorts(), None, "nothing left");
+}

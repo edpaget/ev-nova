@@ -361,6 +361,17 @@ mod tests {
     }
 
     #[test]
+    fn an_escort_sold_with_no_npc_placed_leaves_the_fleet_all_the_same() {
+        let catalog = yards();
+        let mut session = landed_with(&catalog, &[131], &[], 0);
+        session.space.escorts.fleet.clear();
+        mark(&mut session, 0, EscortMark::Sell);
+        session.land_escorts(&mut NeverFires).expect("sold");
+        assert!(session.pilot.escorts.is_empty());
+        assert!(session.space.escorts.fleet.is_empty());
+    }
+
+    #[test]
     fn an_upgraded_escort_flies_its_new_class_after_the_take_off() {
         let catalog = yards();
         let mut session = landed_with(&catalog, &[129], &[], 6_000);

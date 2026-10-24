@@ -988,6 +988,7 @@ fn a_captured_escort_marked_for_sale_is_sold_on_leaving_a_shipyard_and_the_repor
     game.key(Key::Alt, false);
     game.tap(Key::Char('y'));
     assert_eq!(game.showing(), Showing::EscortDialog);
+    assert!(game.app.screen().escort_dialog().is_some());
     let shown = texts(&game.frame());
     for text in [
         "Captured Escort:",
