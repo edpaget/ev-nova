@@ -2509,6 +2509,21 @@ mod tests {
     }
 
     #[test]
+    fn a_hail_quote_reads_pnn_as_the_pilots_nickname_or_name_without_one() {
+        for (nickname, want) in [("Hunter", "Hi Hunter!"), ("", "Hi Stock!")] {
+            let (mut catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+            catalog.string_patches = vec![(
+                5000,
+                crate::catalog::StringPatch::Text("Hi <PNN>!".to_owned()),
+            )];
+            session.pilot.nickname = nickname.to_owned();
+            turn_ace(&mut session);
+            let (said, _) = quote_tick(&catalog, &mut session, &[1]);
+            assert_eq!(said, [want], "nickname {nickname:?}");
+        }
+    }
+
+    #[test]
     fn every_hail_quote_said_beeps_snd_154() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
         session.take_sounds();
