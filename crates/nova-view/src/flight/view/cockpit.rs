@@ -549,10 +549,7 @@ impl<C> FlightView<C> {
     /// ([`NAV_OFF_KEY`]).
     pub(super) fn nav_key(&mut self, key: Key) {
         // The 5 alone goes too: the block picks nothing with it.
-        let slot_key = STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key))
-            || key == NEAREST_STELLAR_KEY
-            || key == NEAREST_STELLAR_COMMAND_KEY;
-        if slot_key {
+        if slot_block::is_block_key(key) {
             let menu_open = self.escort_menu.is_open();
             self.slot_block.press(key, &self.held, menu_open);
         } else if key == NAV_OFF_KEY {
