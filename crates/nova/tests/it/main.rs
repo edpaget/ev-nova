@@ -38,6 +38,7 @@ mod ship_browser;
 mod shipyard;
 mod startup;
 mod stock_app;
+mod stock_take_off_cost;
 mod system_view;
 mod trade;
 mod traffic;
