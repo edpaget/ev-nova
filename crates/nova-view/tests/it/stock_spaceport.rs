@@ -280,8 +280,8 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         );
         for (item, x, w) in [
             (INFO_ITEM, 253.0, 89.0),
-            (SHIPYARD_DONE, 365.0, 109.0),
-            (BUY_SHIP_ITEM, 480.0, 109.0),
+            (SHIPYARD_DONE, 480.0, 109.0),
+            (BUY_SHIP_ITEM, 365.0, 109.0),
         ] {
             assert_eq!(
                 dialog.item_bounds(item),

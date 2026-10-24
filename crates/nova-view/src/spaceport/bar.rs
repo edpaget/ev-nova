@@ -1572,7 +1572,7 @@ mod tests {
         let hire = screen
             .hire_screen()
             .and_then(HireScreen::dialog)
-            .and_then(|dialog| dialog.item_bounds(7))
+            .and_then(|dialog| dialog.item_bounds(1))
             .expect("Hire Escort")
             .center();
         let button = |pressed| Input::PointerButton {

@@ -201,14 +201,17 @@ pub const INFO_BACKGROUND: ImageKey = ImageKey::picture(8506);
 /// (`_DoShipyardDescription` @0x5b758-0x5b77e).
 pub const PICTURE_INFO_BACKGROUND: ImageKey = ImageKey::picture(8507);
 
-/// Done's item.
-pub const DONE_ITEM: usize = 1;
+/// Done's item: `_DrawShipyardButtons` labels item 7 Done (@0x2a314) and
+/// `_DoShipyardDialog` exits on it (@0x5f6bd).
+pub const DONE_ITEM: usize = 7;
 /// The grid's item.
 pub const GRID_ITEM: usize = 5;
 /// The description's item.
 pub const DESCRIPTION_ITEM: usize = 6;
-/// Buy Ship's item.
-pub const BUY_ITEM: usize = 7;
+/// Buy Ship's item: `_DrawShipyardButtons` labels item 1 Buy Ship, or Hire
+/// Escort on the hire screen (@0x2a335, @0x2a3bf-0x2a3dc), and
+/// `_DoShipyardDialog` buys or hires on it (@0x5e9b0).
+pub const BUY_ITEM: usize = 1;
 /// The picture's item.
 pub const PICTURE_ITEM: usize = 8;
 /// The info box's item.
@@ -2121,7 +2124,7 @@ mod tests {
                 SCROLL_UP_ITEM,
                 SCROLL_DOWN_ITEM
             ],
-            [1, 5, 6, 7, 8, 9, 10, 12, 13]
+            [7, 5, 6, 1, 8, 9, 10, 12, 13]
         );
         assert_eq!(
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
@@ -4324,6 +4327,30 @@ mod tests {
             click_item(&mut screen, INFO_ITEM);
             assert!(screen.info_panel().is_none(), "{select}");
         }
+    }
+
+    /// `_DrawShipyardButtons` @0x2a314/@0x2a335 labels item 1 Buy Ship and
+    /// item 7 Done; `_DoShipyardDialog` buys on 1 (@0x5e9b0) and exits on 7
+    /// (@0x5f6bd).
+    #[test]
+    fn buy_ship_is_item_1_and_done_is_item_7() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        let labels = texts(&drawn(&screen));
+        for (label, number) in [(BUY_SHIP_LABEL, 1), (DONE_LABEL, 7)] {
+            let bounds = item(&screen, number);
+            assert!(
+                labels
+                    .iter()
+                    .any(|(t, at, _)| t == label && bounds.contains(*at)),
+                "{label} in item {number}: {labels:?}"
+            );
+        }
+        click_item(&mut screen, 1);
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        assert!(!screen.closed());
+        click_item(&mut screen, 7);
+        assert!(screen.closed());
     }
 
     // Closing.

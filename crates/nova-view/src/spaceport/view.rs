@@ -4332,7 +4332,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
         view.input(&key(Key::Right));
-        let buy = shipyard_item(&view, 7);
+        let buy = shipyard_item(&view, 1);
         click(&mut view, buy);
         assert_eq!(view.take_ship_request(), Some(ShipId(129)));
         view.open_ship_naming(&naming());
@@ -4354,7 +4354,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
         assert_eq!(view.take_sounds(), []);
-        let buy = shipyard_item(&view, 7);
+        let buy = shipyard_item(&view, 1);
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
             pressed,
@@ -4365,7 +4365,7 @@ pub(in crate::spaceport) mod tests {
         view.input(&button(false));
         assert_eq!(view.take_ship_request(), None, "the click was abandoned");
         assert_eq!(view.take_sounds(), []);
-        let done = shipyard_item(&view, 1);
+        let done = shipyard_item(&view, 7);
         click(&mut view, done);
         assert!(view.open_shipyard().is_none(), "closed");
         assert_eq!(view.take_sounds(), []);
@@ -6880,7 +6880,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
         view.input(&key(Key::Right));
-        let buy = shipyard_item(&view, 7);
+        let buy = shipyard_item(&view, 1);
         click(&mut view, buy);
         view.open_ship_naming(&naming());
         assert!(view.holds_leave());

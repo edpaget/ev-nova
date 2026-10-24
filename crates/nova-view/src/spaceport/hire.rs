@@ -36,7 +36,7 @@
 //! empty cell stay, and Page Up and Page Down move as Up and Down. By both, a second press on a cell within 15 Mac ticks opens Info,
 //! as `_ShipyardFilter` does in hire mode too (@0x60cd7-0x60d12).
 //!
-//! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
+//! Hire Escort (item 1, `STR#` 150 #13), clicked or with H, asks for the
 //! selected ship, and is greyed when it cannot be hired; H with no ship
 //! selected, or one that cannot be hired, beeps
 //! ([`UiSound::BuyRefused`], @0x5f22a-0x5f256). H acts on a
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn the_named_values() {
-        assert_eq!((HIRE_ITEM, HIRE_KEY), (7, Key::Char('h')));
+        assert_eq!((HIRE_ITEM, HIRE_KEY), (1, Key::Char('h')));
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
@@ -1107,6 +1107,31 @@ mod tests {
             assert!(words.contains(&line.to_owned()), "{line}: {words:?}");
         }
         assert!(!words.contains(&"(current)".to_owned()));
+    }
+
+    /// `_DrawShipyardButtons` @0x2a3bf-0x2a3dc labels item 1 Hire Escort in
+    /// hire mode and item 7 Done; `_DoShipyardDialog` hires on 1 (@0x5e9b0)
+    /// and exits on 7 (@0x5f6bd).
+    #[test]
+    fn hire_escort_is_item_1_and_done_is_item_7() {
+        let mut screen = screen();
+        let labels = texts(&screen);
+        for (label, number) in [(HIRE_ESCORT, 1), ("Done", 7)] {
+            let bounds = item(&screen, number);
+            assert!(
+                labels
+                    .iter()
+                    .any(|(t, at, _)| t == label && bounds.contains(*at)),
+                "{label} in item {number}: {labels:?}"
+            );
+        }
+        let hire = item(&screen, 1).center();
+        click(&mut screen, hire);
+        assert_eq!(screen.take_order(), Some(ShipId(128)));
+        assert!(!screen.closed());
+        let done = item(&screen, 7).center();
+        click(&mut screen, done);
+        assert!(screen.closed());
     }
 
     #[test]
