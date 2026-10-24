@@ -82,7 +82,7 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
         solids: Vec::with_capacity(usize::from(header.count)),
         solid: None,
     };
-    walk(&mut r, &header, data.len(), &mut painter)?;
+    walk(data, r.pos(), &header, &mut painter)?;
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
     let sheet = SpriteSheet::new(width, height, painter.frames, layout);
     Ok(sheet.with_solid(solid_frames(painter.solids, width, height)))
@@ -97,7 +97,7 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
     let mut scanner = Scanner { has_runs: false };
-    walk(&mut r, &header, data.len(), &mut scanner)?;
+    walk(data, r.pos(), &header, &mut scanner)?;
     Ok(RledInfo {
         frame_width: header.width,
         frame_height: header.height,
@@ -156,23 +156,32 @@ trait Sink {
     fn frame_end(&mut self);
 }
 
-/// Walks the tokens after the header of an `input_len`-byte sheet,
+/// Walks the tokens of `data` from `start` (just past the header),
 /// checking each, until `header.count` frames have ended.
+///
+/// It reads the bytes directly rather than through a [`Reader`], as this
+/// loop runs once per token of every sheet the flight reads; each failed
+/// read is an [`GraphicsError::UnexpectedEnd`] at the read's start, as a
+/// [`Reader`]'s is.
 fn walk(
-    r: &mut Reader<'_>,
+    data: &[u8],
+    start: usize,
     header: &Header,
-    input_len: usize,
     sink: &mut impl Sink,
 ) -> Result<(), GraphicsError> {
     let (width, height) = (header.width, header.height);
+    let mut pos = start;
     let mut ended: u32 = 0;
     let mut lines = 0;
     let mut x = 0;
     // Every token is four bytes, so the data runs out first.
-    for _ in 0..input_len {
-        let offset = r.pos();
-        let token = r.u32()?;
-        let op = (token >> 24) as u8;
+    for _ in 0..data.len() {
+        let offset = pos;
+        let Some(&[op, count_high, count_mid, count_low]) = data.get(pos..pos + 4) else {
+            return Err(GraphicsError::UnexpectedEnd { offset });
+        };
+        pos += 4;
+        let token = u32::from_be_bytes([op, count_high, count_mid, count_low]);
         let len = (token & COUNT_MASK) / 2;
         match op {
             FRAME_END => {
@@ -209,13 +218,27 @@ fn walk(
                 }
                 match op {
                     PIXELS => {
-                        let bytes = r.bytes(2 * len as usize)?;
-                        r.skip(bytes.len() % 4)?;
-                        sink.pixels(x, y, bytes);
+                        // `len` is within the width, so this cannot
+                        // overflow.
+                        let count = 2 * len as usize;
+                        let Some(pixels) = data.get(pos..pos + count) else {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        };
+                        pos += count;
+                        // Padded to four bytes.
+                        let padded = pos + count % 4;
+                        if padded > data.len() {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        }
+                        pos = padded;
+                        sink.pixels(x, y, pixels);
                     }
                     RUN => {
-                        let colour = (r.u32()? >> 16) as u16;
-                        sink.run(x, y, len, colour);
+                        let Some(&[high, low, _, _]) = data.get(pos..pos + 4) else {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        };
+                        pos += 4;
+                        sink.run(x, y, len, u16::from_be_bytes([high, low]));
                     }
                     _ => {}
                 }
@@ -224,7 +247,7 @@ fn walk(
             token => return Err(GraphicsError::UnsupportedToken { token, offset }),
         }
     }
-    Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
+    Err(GraphicsError::UnexpectedEnd { offset: pos })
 }
 
 /// A sink that paints each frame, and each frame's runs alone.
