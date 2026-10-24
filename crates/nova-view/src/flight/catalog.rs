@@ -836,11 +836,16 @@ mod tests {
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
     /// govt 131, cargo box graphic 2, asteroid type 3, smoke set 1 and the
-    /// stars.
+    /// stars, and ships 132 and 133's cards in a batch.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
+            catalog
+                .target_cards(&[ShipId(132), ShipId(133)])
+                .into_iter()
+                .map(|card| card.subtitle)
+                .collect::<Vec<_>>(),
             catalog
                 .boom_look(BoomId(129))
                 .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image_id))),
@@ -971,7 +976,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803) Some(1008) Ok(700)"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803) Some(1008) Ok(700)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);

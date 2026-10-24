@@ -607,6 +607,11 @@ mod tests {
             decode(&bytes[..31]),
             Err(GraphicsError::UnexpectedEnd { offset: 30 })
         );
+        // Cut just past the padding: the next token is what is missing.
+        assert_eq!(
+            decode(&bytes[..32]),
+            Err(GraphicsError::UnexpectedEnd { offset: 32 })
+        );
     }
 
     #[test]
