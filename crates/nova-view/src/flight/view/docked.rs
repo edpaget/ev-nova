@@ -501,6 +501,14 @@ impl<C> FlightView<C> {
         Ok(paid)
     }
 
+    /// Whether the spaceport's Recharge button is enabled, as
+    /// [`Session::recharge_enabled`] says; a session that failed sells no
+    /// fuel.
+    #[must_use]
+    pub fn recharge_enabled(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::recharge_enabled)
+    }
+
     /// The ships for hire in the bar of the stellar landed on, as
     /// [`Session::escorts_for_hire`] gives them, the day's rolls drawn on
     /// the flight's chance; none for a session that failed.

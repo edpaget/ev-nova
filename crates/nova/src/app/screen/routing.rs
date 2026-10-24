@@ -133,12 +133,10 @@ impl AppScreen {
                 spaceport.show_mission_texts(flight.take_mission_texts());
                 spaceport.set_mission_computer(flight.open_mission_computer());
             }
-            // A refused refill says why in the spaceport.
+            // The refill says nothing, as `_DoPortDialog` says nothing;
+            // Recharge's button follows below.
             if recharge {
-                match flight.recharge() {
-                    Ok(_) => spaceport.recharged(),
-                    Err(refusal) => spaceport.refuse_recharge(refusal),
-                }
+                let _ = flight.recharge();
             }
             // Each changes the cash; an outfit the cargo space and the
             // trade-in; and a ship the cargo space, the free mass and the
@@ -157,6 +155,9 @@ impl AppScreen {
         self.serve_player_info();
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             refresh_status_bar(spaceport, flight);
+            // After every input, before the next frame is drawn, so the
+            // button lags no frame behind the cash and the tank.
+            spaceport.set_recharge_enabled(flight.recharge_enabled());
         }
         ScreenAction::None
     }

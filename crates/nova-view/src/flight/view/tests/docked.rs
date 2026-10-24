@@ -262,13 +262,18 @@ fn a_landed_m_in_the_outfitter_exchange_or_computer_is_undone_and_shown_at_once(
 #[test]
 fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_draw_status() {
     type Step = fn(&mut View);
-    let draws: [(&str, Step); 10] = [
+    let draws: [(&str, Step); 11] = [
         ("a trade", |view| {
             assert_eq!(view.trade(BUY_FOOD), Ok(10));
         }),
         ("a recharge", |view| {
             desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
             assert!(view.recharge().is_ok());
+        }),
+        // `_DoPortDialog` marks and draws the status whatever the fill
+        // (@0x5fdf1-0x5fe05).
+        ("a full tank's recharge", |view| {
+            assert_eq!(view.recharge(), Ok(0));
         }),
         ("an outfitter order", |view| {
             assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
@@ -296,16 +301,13 @@ fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_dr
         }),
         ("a shop closing", FlightView::refresh_status),
     ];
-    let refused: [(&str, Step); 8] = [
+    let refused: [(&str, Step); 7] = [
         ("a refused trade", |view| {
             let order = Order {
                 row: 99,
                 ..BUY_FOOD
             };
             assert!(view.trade(order).is_err());
-        }),
-        ("a refused recharge", |view| {
-            assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
         }),
         ("a refused outfitter order", |view| {
             assert!(view.outfit(UNKNOWN_OUTFIT).is_err());
@@ -1192,11 +1194,11 @@ fn a_recharge_redraws_the_fuel_gauge_alone() {
     desk_reserve(&mut view, Reserve::Fuel, 100.0);
     let mut desk = view.pilot_desk().expect("flying");
     desk.edit(PilotEdit::Credits(0)).expect("set");
-    assert!(view.recharge().is_err(), "nothing to pay with");
+    assert_eq!(view.recharge(), Ok(0), "nothing to pay with");
     assert_eq!(
         view.reserves_shown().fuel.now,
-        250.0,
-        "a refusal redraws nothing"
+        100.0,
+        "redrawn, as `_DoPortDialog` draws whatever the fill"
     );
 }
 

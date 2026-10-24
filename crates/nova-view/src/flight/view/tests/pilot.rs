@@ -557,13 +557,30 @@ fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
 }
 
 #[test]
+fn recharge_is_enabled_as_the_session_says() {
+    let mut view = FlightView::new(outfitting());
+    assert!(!view.recharge_enabled(), "in flight");
+    land_now(&mut view);
+    assert!(!view.recharge_enabled(), "a full tank");
+    let mut desk = view.pilot_desk().expect("flying");
+    desk.edit(PilotEdit::Reserve(nova_sim::Reserve::Fuel, 100.0))
+        .expect("set");
+    assert!(view.recharge_enabled(), "room in the tank");
+    let broken = FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..outfitting()
+    };
+    assert!(!FlightView::new(broken).recharge_enabled());
+}
+
+#[test]
 fn recharging_goes_through_the_session() {
     use nova_sim::RechargeRefusal;
     let mut view = FlightView::new(outfitting());
     assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
     land_now(&mut view);
     view.take_save_due();
-    assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
+    assert_eq!(view.recharge(), Ok(0), "a full tank");
     assert!(!view.take_save_due());
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),

@@ -117,6 +117,11 @@ impl AppScreen {
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
+        // Recharge is enabled by the cash and the tank, which only flight
+        // knows; it is told again after each input.
+        if let Some(flight) = &self.flight {
+            spaceport.set_recharge_enabled(flight.recharge_enabled());
+        }
         self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.serve_descriptions();

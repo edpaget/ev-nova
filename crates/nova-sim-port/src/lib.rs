@@ -70,8 +70,10 @@
 //! - [`player_info`]: what the player info screen shows
 //!   ([`PlayerInfo`](player_info::PlayerInfo)).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
-//!   fuel ([`sells_fuel`](recharge::sells_fuel)), what filling the tank
-//!   costs, and each [`RechargeRefusal`](recharge::RechargeRefusal).
+//!   fuel ([`sells_fuel`](recharge::sells_fuel)), when the Recharge
+//!   button is enabled ([`enabled`](recharge::enabled)), the refill
+//!   ([`fill`](recharge::fill)), and the
+//!   [`RechargeRefusal`](recharge::RechargeRefusal).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells

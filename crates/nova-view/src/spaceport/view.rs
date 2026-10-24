@@ -103,10 +103,11 @@
 //! screen beneath lets go of its keys.
 //!
 //! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
-//! taken through the spaceport ([`SpaceportView::take_recharge`]). A
-//! refusal ([`SpaceportView::refuse_recharge`]) shows in the description
-//! box in place of the description until the next button is activated, or
-//! the ship is recharged ([`SpaceportView::recharged`]).
+//! taken through the spaceport ([`SpaceportView::take_recharge`]). Its
+//! button is enabled as whoever flies the ship says
+//! ([`SpaceportView::set_recharge_enabled`]), while R and F ask whatever
+//! the button shows, as `_PortFilter` skips `_TrackPlanetButtons`. Nothing
+//! is said of the refill, as `_DoPortDialog` says nothing (@0x5fd5d-0x5fe25).
 //!
 //! The stellar's ambient sound (its `CustSndID`, 128 and up) plays while
 //! nothing covers the spaceport, as `_PortFilter` @0x4f041 plays it, and
@@ -171,8 +172,8 @@ use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENT
 use nova_sim::{
     ComputerRefusal, ComputerRow, DescMovie, HireList, Market, MissionComputer, MissionId,
     MissionInfo, MissionShown, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo,
-    RechargeRefusal, Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard,
-    sells_fuel, services,
+    Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
+    services,
 };
 
 use super::ambient::Ambient;
@@ -219,16 +220,6 @@ pub const PROBLEM_AT: Point = Point::new(16.0, 32.0);
 /// The reason's size.
 pub const PROBLEM_SIZE: f32 = 20.0;
 
-/// Why recharging was refused for want of credits. No stock `STR#` has
-/// one, so it is built the way the original builds its fee refusals from
-/// `STR#` 2002: #61 "You don't have enough" + #33 "credits" + a tail like
-/// #63's "to pay the docking fee.".
-pub const CANNOT_AFFORD_RECHARGE: &str = "You don't have enough credits to recharge.";
-
-/// Why recharging was refused with the tank full. No stock `STR#` has
-/// one, so these are our own words.
-pub const ALREADY_RECHARGED: &str = "Your ship is already fully recharged.";
-
 /// The spaceport, laid out.
 #[derive(Clone, Debug)]
 struct Port {
@@ -237,31 +228,12 @@ struct Port {
     /// The landscape `PICT`, or the missing one's ID.
     landscape: Result<i16, i16>,
     offered: Vec<Service>,
-    /// Whether the stellar sells fuel, so Recharge is a button.
+    /// Whether the stellar sells fuel, so Recharge can be enabled.
     sells_fuel: bool,
-    /// The stellar's description, to show again after a refusal.
-    description: String,
-    /// Whether a refusal shows in the description box.
-    refused: bool,
     /// Why there is no description, if there is none.
     description_problem: Option<String>,
     style: ButtonStyle,
     metrics: MetricsHandle,
-}
-
-impl Port {
-    /// Shows `message` in the description box in its place.
-    fn refuse(&mut self, message: &str) {
-        self.dialog.set_text(TEXT_ITEM, message);
-        self.refused = true;
-    }
-
-    /// Shows the description again, if a refusal shows in its place.
-    fn show_description(&mut self) {
-        if std::mem::take(&mut self.refused) {
-            self.dialog.set_text(TEXT_ITEM, &self.description);
-        }
-    }
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -584,7 +556,7 @@ impl SpaceportView {
                 // (`RectInRgn` @0x4ef08), which `Dialog` models as the
                 // item being inside the dialog.
                 Role::ScrollText {
-                    text: text.clone(),
+                    text,
                     font: Font::Geneva,
                     size: BODY_SIZE,
                     color: BODY_COLOR,
@@ -610,8 +582,6 @@ impl SpaceportView {
                 },
                 offered,
                 sells_fuel,
-                description: text,
-                refused: false,
                 description_problem,
                 style,
                 metrics: MetricsHandle(metrics),
@@ -755,15 +725,12 @@ impl SpaceportView {
     }
 
     /// Shows `text`, `dësc` `id` loaded, where it is shown: as the
-    /// spaceport's description when `id` is the stellar's (in the box
-    /// once a refusal there is over), and otherwise in the screen open.
+    /// spaceport's description when `id` is the stellar's, and otherwise
+    /// in the screen open.
     pub fn show_description(&mut self, id: i16, text: &str) {
         if id == self.stellar.0 {
             if let Ok(port) = &mut self.port {
-                text.clone_into(&mut port.description);
-                if !port.refused {
-                    port.dialog.set_text(TEXT_ITEM, text);
-                }
+                port.dialog.set_text(TEXT_ITEM, text);
             }
             return;
         }
@@ -799,31 +766,26 @@ impl SpaceportView {
         !self.texts_queued() && std::mem::take(&mut self.status_refresh)
     }
 
-    /// Whether Recharge has been clicked since this was last asked:
-    /// whoever flies the ship refills it, then says how it went with
-    /// [`SpaceportView::recharged`] or [`SpaceportView::refuse_recharge`].
+    /// Whether Recharge has been clicked, or R or F pressed, since this
+    /// was last asked: whoever flies the ship refills it, then tells the
+    /// spaceport whether Recharge is still enabled
+    /// ([`SpaceportView::set_recharge_enabled`]).
     pub fn take_recharge(&mut self) -> bool {
         std::mem::take(&mut self.recharge)
     }
 
-    /// Says why recharging was refused, in the description box in place of
-    /// the description, until the next button is activated. With no fuel
-    /// sold, which Recharge is never offered for, the description stays.
-    pub fn refuse_recharge(&mut self, refusal: RechargeRefusal) {
-        let Ok(port) = &mut self.port else {
-            return;
-        };
-        match refusal {
-            RechargeRefusal::CannotAfford => port.refuse(CANNOT_AFFORD_RECHARGE),
-            RechargeRefusal::Full => port.refuse(ALREADY_RECHARGED),
-            RechargeRefusal::NoFuel => port.show_description(),
-        }
-    }
-
-    /// Says the ship has been recharged: the description shows again.
-    pub fn recharged(&mut self) {
+    /// Enables or disables the Recharge button, as whoever flies the ship
+    /// decides from the cash and the tank (`_DrawPlanetButtons`
+    /// @0x297a3-0x297f4; `nova_sim::Session::recharge_enabled`). Until
+    /// told it is enabled where fuel is sold; where none is, it stays
+    /// disabled whatever it is told. A disabled Recharge takes no click,
+    /// as `_TrackPlanetButtons` takes none (@0x29ae2-0x29b28), but R and F
+    /// still ask. Whoever flies the ship tells it as the spaceport is
+    /// shown and after each input, before the next frame is drawn.
+    pub fn set_recharge_enabled(&mut self, enabled: bool) {
         if let Ok(port) = &mut self.port {
-            port.show_description();
+            port.dialog
+                .set_greyed(RECHARGE_ITEM, !(enabled && port.sells_fuel));
         }
     }
 
@@ -1989,9 +1951,8 @@ impl SpaceportView {
     }
 
     /// Activates dialog item `item`: Leave leaves, Recharge (where fuel is
-    /// sold) asks for a refill, and an offered service's button opens it,
-    /// each showing the description again in place of a refusal. Anything
-    /// else does nothing.
+    /// sold) asks for a refill, and an offered service's button opens it.
+    /// Anything else does nothing.
     /// Opens the bar, laid out with `metrics` and its buttons in `style`,
     /// when it is given, and true; false, opening nothing, without it.
     fn open_bar_screen(&mut self, metrics: Rc<dyn TextMetrics>, style: ButtonStyle) -> bool {
@@ -2027,14 +1988,12 @@ impl SpaceportView {
             return;
         };
         if item == RECHARGE_ITEM && port.sells_fuel {
-            port.show_description();
             self.recharge = true;
             return;
         }
         let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) else {
             return;
         };
-        port.show_description();
         if let (Some(missioning), Service::MissionBbs) = (&mut self.missioning, service) {
             missioning.requested = true;
             return;
@@ -3100,11 +3059,9 @@ pub(in crate::spaceport) mod tests {
             view.input(&key(Key::Char(letter)));
             assert!(view.take_recharge(), "{letter}");
             assert!(!view.take_recharge(), "once");
-            view.refuse_recharge(RechargeRefusal::Full);
-            assert_eq!(box_lines(&view), [ALREADY_RECHARGED]);
             view.input(&key(Key::Char(letter)));
-            assert_eq!(box_lines(&view), DESCRIPTION, "{letter}: recharge again");
-            assert!(view.take_recharge(), "{letter}");
+            assert!(view.take_recharge(), "{letter}: again");
+            assert_eq!(box_lines(&view), DESCRIPTION, "{letter}: nothing said");
             assert!(view.open_service().is_none());
             assert!(!view.left());
             assert_eq!(view.take_sounds(), [], "{letter}");
@@ -3118,11 +3075,10 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn a_letter_for_a_service_not_offered_does_nothing() {
         let mut bare = view_of(&flagged(StellarFlags::CAN_LAND));
-        bare.refuse_recharge(RechargeRefusal::Full);
         for letter in ['o', 's', 'b', 'c', 't'] {
             bare.input(&key(Key::Char(letter)));
             assert!(bare.open_service().is_none(), "{letter}");
-            assert_eq!(box_lines(&bare), [ALREADY_RECHARGED], "{letter}");
+            assert_eq!(box_lines(&bare), DESCRIPTION, "{letter}");
         }
         assert_eq!(bare.take_sounds(), []);
         let uninhabited = || flagged(StellarFlags::CAN_LAND | StellarFlags::UNINHABITED);
@@ -3215,8 +3171,6 @@ pub(in crate::spaceport) mod tests {
 
     // Recharging.
 
-    use nova_sim::RechargeRefusal;
-
     use crate::spaceport::layout::RECHARGE_ITEM;
 
     /// The lines in the description box.
@@ -3241,15 +3195,6 @@ pub(in crate::spaceport) mod tests {
     const DESCRIPTION: [&str; 2] = ["Blue and green.", "Home."];
 
     #[test]
-    fn the_refusals_say_why_in_the_originals_words_or_ours() {
-        assert_eq!(
-            CANNOT_AFFORD_RECHARGE,
-            "You don't have enough credits to recharge."
-        );
-        assert_eq!(ALREADY_RECHARGED, "Your ship is already fully recharged.");
-    }
-
-    #[test]
     fn recharge_is_asked_for_once_per_click() {
         let mut view = earth();
         assert!(!view.take_recharge(), "nothing clicked");
@@ -3262,65 +3207,21 @@ pub(in crate::spaceport) mod tests {
     }
 
     #[test]
-    fn a_refusal_shows_in_the_description_box_until_recharged() {
-        for (refusal, message) in [
-            (RechargeRefusal::CannotAfford, CANNOT_AFFORD_RECHARGE),
-            (RechargeRefusal::Full, ALREADY_RECHARGED),
-        ] {
-            let mut view = earth();
-            click_item(&mut view, RECHARGE_ITEM);
-            view.refuse_recharge(refusal);
-            assert_eq!(box_lines(&view), [message], "{refusal:?}");
-            let labels = texts(&drawn(&view));
-            assert!(labels.contains(&message.to_owned()), "{labels:?}");
-            assert!(!labels.contains(&DESCRIPTION[0].to_owned()), "{labels:?}");
-            view.recharged();
-            assert_eq!(box_lines(&view), DESCRIPTION);
-        }
-    }
-
-    #[test]
-    fn the_description_is_asked_to_load_and_shows_loaded_after_a_refusal() {
+    fn the_description_is_asked_to_load_and_shows_loaded() {
         let mut view = earth();
         assert_eq!(view.take_description_request(), Some(140));
         assert_eq!(view.take_description_request(), None, "once");
         view.show_description(140, "Loaded port.");
         assert_eq!(box_lines(&view), ["Loaded port."]);
         click_item(&mut view, RECHARGE_ITEM);
-        view.refuse_recharge(RechargeRefusal::Full);
         view.show_description(140, "Loaded again.");
-        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "the refusal stays");
-        view.recharged();
         assert_eq!(box_lines(&view), ["Loaded again."]);
         view.show_description(141, "Another.");
         assert_eq!(box_lines(&view), ["Loaded again."], "not the port's");
     }
 
     #[test]
-    fn with_no_fuel_sold_the_description_stays() {
-        let mut view = earth();
-        view.refuse_recharge(RechargeRefusal::NoFuel);
-        assert_eq!(box_lines(&view), DESCRIPTION);
-    }
-
-    #[test]
-    fn a_refusal_shows_until_the_next_button_is_activated() {
-        let mut view = earth();
-        view.refuse_recharge(RechargeRefusal::Full);
-        click_item(&mut view, 13);
-        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "a blank item");
-        click_item(&mut view, RECHARGE_ITEM);
-        assert_eq!(box_lines(&view), DESCRIPTION, "recharge again");
-        assert!(view.take_recharge());
-        view.refuse_recharge(RechargeRefusal::Full);
-        click_item(&mut view, 7);
-        view.input(&key(Key::Escape));
-        assert!(view.open_service().is_none());
-        assert_eq!(box_lines(&view), DESCRIPTION, "a service");
-    }
-
-    #[test]
-    fn recharged_without_a_refusal_keeps_the_description_where_it_is() {
+    fn recharge_keeps_the_description_where_it_is() {
         let catalog = FakePort {
             description: Ok((0..40)
                 .map(|n| format!("l{n}"))
@@ -3330,15 +3231,17 @@ pub(in crate::spaceport) mod tests {
         };
         let mut view = view_of(&catalog);
         view.input(&key(Key::Down));
-        view.recharged();
+        click_item(&mut view, RECHARGE_ITEM);
+        view.set_recharge_enabled(false);
+        assert!(view.take_recharge());
         assert_eq!(view_first_line(&view), 1, "not scrolled back");
     }
 
     #[test]
     fn a_spaceport_that_cannot_be_shown_takes_recharge_news_quietly() {
         let mut broken = SpaceportView::new(&catalog(), StellarId(140), Err("no".to_owned()));
-        broken.refuse_recharge(RechargeRefusal::Full);
-        broken.recharged();
+        broken.set_recharge_enabled(true);
+        broken.set_recharge_enabled(false);
         assert!(!broken.take_recharge());
         assert_eq!(broken.problem(), Some("no"));
     }

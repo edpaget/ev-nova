@@ -235,6 +235,35 @@ mod view_tests {
         assert!(view.open_service().is_some(), "the trade center");
     }
 
+    #[test]
+    fn a_disabled_recharge_takes_no_click_but_r_and_f_still_ask() {
+        let mut view = view_of(&flagged(LAND | StellarFlags::TRADE_CENTER));
+        enabled(&view, 4);
+        view.set_recharge_enabled(false);
+        disabled(&view, 4);
+        click_item(&mut view, 4);
+        untouched(&mut view, "a click");
+        for letter in ['r', 'f'] {
+            view.input(&key(Key::Char(letter)));
+            assert!(view.take_recharge(), "{letter}");
+            assert_eq!(view.take_sounds(), [], "{letter}");
+        }
+        view.set_recharge_enabled(true);
+        enabled(&view, 4);
+        click_item(&mut view, 4);
+        assert!(view.take_recharge(), "enabled again");
+    }
+
+    #[test]
+    fn where_no_fuel_is_sold_recharge_stays_disabled() {
+        let mut view = view_of(&flagged(LAND | StellarFlags::UNINHABITED));
+        view.set_recharge_enabled(true);
+        disabled(&view, 4);
+        click_item(&mut view, 4);
+        view.input(&key(Key::Char('r')));
+        assert!(!view.take_recharge());
+    }
+
     fn press(view: &mut SpaceportView, pressed: bool, at: Point) {
         view.input(&Input::PointerButton {
             button: MouseButton::Left,

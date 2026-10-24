@@ -47,8 +47,8 @@ use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     ALERT_CICN, AbortError, AcceptError, Assigned, Assignment, AsteroidCatalog, CombatCatalog,
     ComputerRefusal, Controls, FighterNote, MissionId, MissionShown, NotOffered, Pilot,
-    PilotCatalog, PlayerCommand, RechargeRefusal, Rulebook, Rules, StellarIff, StellarPick, Take,
-    Taken, TrafficCatalog, Turn, VenueOffer, lights_level,
+    PilotCatalog, PlayerCommand, Rulebook, Rules, StellarIff, StellarPick, Take, Taken,
+    TrafficCatalog, Turn, VenueOffer, lights_level,
 };
 
 use crate::system::catalog::{

@@ -274,8 +274,9 @@
 //! - [`rating`]: the player's combat rating: what a kill adds
 //!   ([`rating::credit`]) and which kills count ([`rating::counts`]).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
-//!   fuel ([`sells_fuel`]), what filling the tank costs, and each
-//!   [`RechargeRefusal`].
+//!   fuel ([`sells_fuel`]), when the Recharge button is enabled
+//!   ([`recharge::enabled`]), the refill `_DoPortDialog` makes
+//!   ([`recharge::fill`]), and the [`RechargeRefusal`].
 //! - [`red_alert`]: the Red Alert: when a threat to the player sounds it
 //!   ([`RedAlert::check`], every [`ALERT_CHECK_FRAMES`]) and the icon's
 //!   blink ([`AlertIcon`]).

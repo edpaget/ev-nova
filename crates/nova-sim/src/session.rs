@@ -134,8 +134,10 @@
 //!
 //! Landed where fuel is sold, the player recharges
 //! ([`Session::recharge`]), filling the tank as the
-//! [`recharge`](crate::recharge) rules say. A refill makes a save due; a
-//! refused one changes nothing.
+//! [`recharge`](crate::recharge) rules say, and the spaceport's Recharge
+//! button is enabled by [`Session::recharge_enabled`] (the `recharge`
+//! module). A refill that changes anything makes a save due; one that
+//! changes nothing, or a refused one, makes none.
 //!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing at an uninhabited stellar, taking off, a jump beginning and ending, and a set
@@ -545,6 +547,7 @@ mod radar;
 mod ranks;
 #[cfg(test)]
 mod rating_stretch;
+mod recharge;
 mod red_alert;
 mod refuel_dock;
 mod reinforcements;
@@ -696,7 +699,6 @@ use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
-use crate::recharge::{self, RechargeRefusal};
 use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -4914,22 +4916,6 @@ impl Session {
         Ok(report)
     }
 
-    /// Fills the tank at the stellar the ship is docked at, as the
-    /// [`recharge`] rules say, and gives the price paid: a change made in
-    /// the spaceport, so a save is due. When the ship is not landed where
-    /// fuel is sold, or the refill is refused, nothing changes and the
-    /// refusal says why.
-    pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
-        let stellar = self.mode.landed().ok_or(RechargeRefusal::NoFuel)?;
-        let site = self.chart.sites.iter().find(|site| site.id == stellar);
-        if !site.is_some_and(|site| recharge::sells_fuel(site.flags)) {
-            return Err(RechargeRefusal::NoFuel);
-        }
-        let price = recharge::quote(self.pilot.reserves.fuel, self.pilot.cash)?;
-        self.transact(|pilot| recharge::settle(pilot, price));
-        Ok(price)
-    }
-
     /// The fleet's cargo space, in tons (`_TotalFleetHolds`): the ship's
     /// own, with its cargo outfits, plus the `Holds` of each trader escort
     /// ([`market::fleet_holds`]). The exchange and the jünk step measure
@@ -7386,6 +7372,7 @@ pub(super) mod tests {
     use crate::landing::{LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::pre_jump::slow_enough;
+    use crate::recharge::RechargeRefusal;
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::{
         FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE, MULTI_JUMP,
@@ -10244,7 +10231,7 @@ pub(super) mod tests {
     /// The catalog with planet 128 at the centre, which the ship starts
     /// over, a trade center trading food (75) and metal (160), and the
     /// first `chär` holding 1000 credits; ship 128 holds 20 tons.
-    fn exchange() -> FakePilotCatalog {
+    pub(super) fn exchange() -> FakePilotCatalog {
         FakePilotCatalog {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
@@ -16173,7 +16160,7 @@ pub(super) mod tests {
 
     /// A session landed at the exchange's inhabited planet 128 with 1000
     /// credits and half a tank (150 of 300), no save due.
-    fn half_empty_at_port() -> Session {
+    pub(super) fn half_empty_at_port() -> Session {
         let mut session = Session::start(&exchange()).expect("starts");
         land_now(&mut session).expect("lands");
         session.pilot.reserves.fuel.now = 150.0;
@@ -16197,20 +16184,6 @@ pub(super) mod tests {
         assert_eq!(session.recharge(), Err(refusal));
         assert_eq!(session, before, "nothing changes");
         assert!(!session.take_save_due());
-    }
-
-    #[test]
-    fn a_full_tank_is_not_recharged() {
-        let mut session = half_empty_at_port();
-        session.pilot.reserves.fuel.now = 300.0;
-        assert_refused(session, RechargeRefusal::Full);
-    }
-
-    #[test]
-    fn a_refill_the_pilot_cannot_pay_for_is_refused() {
-        let mut session = half_empty_at_port();
-        session.pilot.cash = 149;
-        assert_refused(session, RechargeRefusal::CannotAfford);
     }
 
     #[test]
@@ -29035,17 +29008,13 @@ pub(super) mod tests {
     fn a_landed_player_moved_off_a_hidden_system_keeps_its_spaceport_until_the_take_off() {
         let catalog = alternates();
         let mut session = docked_at_140(&catalog);
-        assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
+        assert_eq!(session.recharge(), Ok(0));
         hide(&mut session, &catalog, &[131]);
         session
             .chart
             .assert_docked_among_shown(session.mode.landed());
         assert_eq!(session.landed(), Some(StellarId(140)));
-        assert_eq!(
-            session.recharge(),
-            Err(RechargeRefusal::Full),
-            "fuel is still sold here"
-        );
+        assert_eq!(session.recharge(), Ok(0), "fuel is still sold here");
         assert!(session.transact(|_| {}), "still in the spaceport");
         takes_off_into_134(&mut session);
     }
@@ -29590,7 +29559,7 @@ pub(super) mod tests {
             [planet(140, 0.0, 0.0)],
             "its spaceport's"
         );
-        assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
+        assert_eq!(session.recharge(), Ok(0));
         assert!(on_the_map(&session));
         takes_off_into_134(&mut session);
     }
