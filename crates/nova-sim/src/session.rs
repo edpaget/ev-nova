@@ -2881,7 +2881,29 @@ impl Session {
     /// ascending ID, so a view can read their sprites up front.
     #[must_use]
     pub fn traffic_ships(&self) -> Vec<ShipId> {
-        let mut ships = self.space.traffic.ship_types();
+        self.with_escorts_and_fighters(self.space.traffic.ship_types())
+    }
+
+    /// The ship types [`Session::traffic_ships`] lists once the system's
+    /// traffic is in: while its population is still due (the first step
+    /// after the start or a load fills it), those of the table it will be
+    /// filled from, read from `catalog` as the population reads it; else
+    /// those of the table it was filled from. A view reads their sprites
+    /// in the warm-up frame, so the first step reads none.
+    #[must_use]
+    pub fn coming_traffic_ships(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> Vec<ShipId> {
+        if !self.space.traffic_due {
+            return self.traffic_ships();
+        }
+        let table = self
+            .chart
+            .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
+        self.with_escorts_and_fighters(table.ship_types())
+    }
+
+    /// `ships`, the escorts' ships and the fighters the player's bays and
+    /// theirs launch, by ascending ID.
+    fn with_escorts_and_fighters(&self, mut ships: Vec<ShipId>) -> Vec<ShipId> {
         ships.extend(self.pilot.escorts.iter().map(|escort| escort.ship));
         let mut armaments: Vec<Armament> = ships
             .iter()
@@ -16278,6 +16300,20 @@ pub(super) mod tests {
         session.populate(&catalog, &mut NeverFires);
         assert_eq!(session.npcs().len(), 2);
         assert_eq!(session.traffic_ships(), [ShipId(129)]);
+    }
+
+    #[test]
+    fn the_traffic_ships_to_come_are_those_the_due_population_will_list() {
+        let trafficked = trafficked(130, 2, 1);
+        let mut session = Session::start(&trafficked).expect("starts");
+        assert_eq!(session.coming_traffic_ships(&trafficked), [ShipId(129)]);
+        assert_eq!(session.npcs(), [], "nothing populated");
+        assert_eq!(session.traffic_ships(), []);
+        session.populate(&trafficked, &mut NeverFires);
+        assert_eq!(session.traffic_ships(), [ShipId(129)]);
+        // Once populated, the table is the one the system was filled
+        // from, not one read afresh.
+        assert_eq!(session.coming_traffic_ships(&catalog()), [ShipId(129)]);
     }
 
     #[test]
