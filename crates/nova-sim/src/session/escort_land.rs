@@ -473,6 +473,37 @@ mod tests {
     }
 
     #[test]
+    fn upgrades_are_paid_in_berth_order_not_fleet_order() {
+        let catalog = yards();
+        let mut session = landed_with(&catalog, &[131, 129, 131], &[], 10_000_000);
+        // The first leaves the fleet, and a new hire takes its berth at the
+        // fleet's end.
+        let first = ids(&session)[0].expect("placed");
+        let first_berth = session.space.npc(first).expect("placed").berth;
+        session.pilot.escorts.remove(0);
+        session.space.escorts.fleet.remove(0);
+        session.space.traffic.remove(first);
+        session.hire(ShipId(129), &mut NeverFires).expect("hires");
+        session.pilot.escorts[2].wage = None;
+        let berths = session.space.fleet_berths(&session.pilot);
+        assert_eq!(berths[2], first_berth, "the lowest berth, at the end");
+        assert!(berths[0] > berths[2], "{berths:?}");
+        mark(&mut session, 0, EscortMark::Upgrade);
+        mark(&mut session, 2, EscortMark::Upgrade);
+        session.pilot.cash = 6_000;
+        session.land_escorts(&mut NeverFires).expect("upgraded one");
+        assert_eq!(
+            session.pilot.escorts[2].ship,
+            ShipId(130),
+            "the lower berth"
+        );
+        assert_eq!(session.pilot.escorts[2].mark, None);
+        assert_eq!(session.pilot.escorts[0].ship, ShipId(129));
+        assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Upgrade));
+        assert_eq!(session.pilot.cash, 0);
+    }
+
+    #[test]
     fn an_upgrade_above_a_sale_keeps_its_new_npc_as_the_fleet_shifts() {
         let catalog = yards();
         let mut session = landed_with(&catalog, &[131, 129], &[], 6_000);
