@@ -54,7 +54,8 @@
 //! (@0x88114-0x88136) and `_HandleShip` runs the negative-speed path
 //! (@0x34bc0-0x34d32). It is the glide of a ship arriving by hyperspace
 //! (`_HyperShipSpawn` sets the same -999.0 @0x4257f), which the traffic
-//! models as `Mode::JumpingIn` ([`glide`](crate::traffic::autopilot::glide),
+//! models as [`Mode::JumpingIn`](crate::traffic::npc::Mode::JumpingIn)
+//! (the [`autopilot`](crate::traffic::autopilot)'s glide,
 //! [`glide_speed`](crate::traffic::spawn::glide_speed)): 50, then 1.165
 //! slower a tick, to the lower of its own top speed and its lead's, the
 //! player's. The escort then goes back to formation. No escort-specific
