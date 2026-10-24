@@ -6,23 +6,40 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). [`Session::game_work`] and [`Session::tick_combat`] run
-//! it after the fight, landed or jumping, so it steps the field through a
-//! jump's lead-in, and [`Session::tick_again`] runs it after the second
-//! pass's fight. The
-//! original spawns and steps the field after the collision passes, which
-//! test the shots' last moves, as the fight's hit pass does here (see
+//! (@0x444f5). [`Session::game_work`] runs it after the ship loop and
+//! before the beams (`_HandleBeams` @0x4453d), jumping too, so it steps
+//! the field through a jump's lead-in, and [`Session::tick_again`]
+//! runs it in the same place of the second pass without the spawn:
+//! `_DoPlayGameWork(0)` jumps past it with the AI (@0x4402a to
+//! @0x44350), and `_HandleAsteroids` runs on both passes. The original
+//! spawns and steps the field after the collision passes, which test the
+//! shots' last moves, as the fight's hit pass does here (see
 //! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where
 //! the last pass's step left it, where the frame before drew it, and a
-//! hit's push moves the asteroid in this pass's step. The spawn comes
+//! hit's push moves the asteroid in this pass's step. The beams come
+//! after the step, so a beam meets an asteroid where this pass's step
+//! has just moved it (see the `asteroid_beams` module). The spawn comes
 //! before the AI and the ships' fire in the original and after them
 //! here; a new asteroid is met by no shot until the next pass either way,
-//! so that crosses no boundary the player sees.
+//! so that crosses no boundary the player sees. The separate parts'
+//! [`Session::tick_combat`], no game path, runs it after the whole fight
+//! (see the `game_work` module).
+//!
+//! *The refill against the spawn.* The collision passes
+//! (@0x43e70-0x44015, `_CheckShotProximities` @0x44015) break asteroids
+//! before `_SpawnAsteroid` (@0x44243) fills the first free slot, and
+//! `_HandleAsteroids` refills slot 0 for the miners (@0x361b5) after both,
+//! as the spawn comes before the refill here. So on the advance pass a
+//! slot 0 a shot broke takes the edge spawn, while the field is below its
+//! count, and the refill finds it live; on the second pass, which spawns
+//! nothing, the refill moves the first live asteroid of slots 1-15 into
+//! it.
 //!
 //! **The shots** (see [`asteroid_hit`](crate::combat::asteroid_hit)).
-//! The fight hands its tick the field's asteroids
-//! ([`Space::asteroid_targets`]), keeps what the shots leave of them,
-//! and destroys those they broke ([`Space::settle_asteroid_hits`]).
+//! The collision passes are lent the field whole and destroy each
+//! asteroid a hit leaves below 0 at once, as `_HandleAsteroidHit` does;
+//! the session spawns the boxes after them (see the `asteroid_hits`
+//! module).
 //!
 //! **The kill.** Every way into a system but the escape pod's rescue kills
 //! the field: a jump's arrival (@0x6c4fc), a hypergate (@0x63f47), a
@@ -38,6 +55,32 @@
 //! frame spawns after its kill. A move settled inside a frame kills the
 //! rest of that frame's passes.
 //!
+//! **The count.** A system's field holds its `Asteroids` as
+//! `_LoadObjectData` stores it at runtime +0x94 (@0x77c72-0x77ce7): times
+//! the game window's width / 640, truncated, at most 16
+//! ([`FieldSpec::stored`]), as [`RuleKey::AsteroidCountByWidth`] reads;
+//! the galaxy map's hazard words read the same count (see the
+//! `map_panel` module). The view says the width
+//! ([`Session::set_window_width`]); until it does, the session takes the
+//! original's smallest screen,
+//! [`DEFAULT_WINDOW_WIDTH`](crate::asteroid::DEFAULT_WINDOW_WIDTH).
+//!
+//! *The width read now, not at load.* The original stores the count
+//! only at load: `_InitEVNova` (@0x47280, after its one `_SetupWind`
+//! @0x471ac) and `_DoNewPilot` (@0x190f0). Its window never changes size
+//! after `_SetupWind` (`_SizeWindow` is called only on dialogs'
+//! windows), so every load reads the one width the player plays in, and
+//! the stored count always matches the window on screen. Ours can be
+//! resized in play, so the count is read from the width the view gives
+//! now, at each spawn, placing and panel: the count then matches the
+//! window on screen, as the original's always does. Holding the width
+//! from the session's start instead would, after a resize, pair a count
+//! for one width with a play area of another, which the original never
+//! shows. A resize applies from the next spawn or the next panel; the
+//! asteroids a narrower window leaves above its count stay until they
+//! are culled or broken, which has no counterpart in the original, where
+//! no resize happens.
+//!
 //! **The placed field.** By the other reading of
 //! [`RuleKey::AsteroidEntryField`] a jump's arrival places the field
 //! `_CreateAsteroids` places (@0x6c51a) and keeps it, emptied of the
@@ -52,10 +95,11 @@
 use std::collections::BTreeMap;
 
 use super::{Session, Setup, Space, Statics};
-use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
+use crate::asteroid::{Asteroid, FieldSpec, Origin, Ring, SLOTS};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
-use crate::combat::asteroid_hit::AsteroidTarget;
+use crate::combat::GamePass;
+use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// Each system's field, by system, from `records`.
@@ -81,12 +125,26 @@ impl Session {
         self.space.asteroids()
     }
 
-    /// Runs one game-work pass's asteroid work, drawing on `chance`: an
+    /// Runs one advance pass's asteroid work, drawing on `chance`: an
     /// asteroid spawned at the field's edge, on the ring
-    /// [`RuleKey::AsteroidRespawnRing`] says, and every asteroid stepped
-    /// and culled in the play area (see the module docs). Nothing while
+    /// [`RuleKey::AsteroidRespawnRing`] says, slot 0 refilled while miners
+    /// are active (`_HandleAsteroids` @0x361b5-0x3624b, see the `mining`
+    /// module), and every asteroid stepped and culled in the play area
+    /// (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
     pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.asteroid_pass(
+            GamePass::Advance {
+                double_time: self.ship.warp.double_time,
+            },
+            chance,
+        );
+    }
+
+    /// Runs `pass`'s asteroid work, drawing on `chance`, as
+    /// [`Session::tick_asteroids`] does the advance pass's; double
+    /// time's second pass spawns none (see the module docs).
+    pub(super) fn asteroid_pass(&mut self, pass: GamePass, chance: &mut (impl Chance + ?Sized)) {
         if self.mode.landed().is_some() {
             // The landing's kill is spent: the field stays empty until the
             // take-off, and a later frame's counter can't match it.
@@ -104,14 +162,19 @@ impl Session {
             RuleSource::Bible => Ring::Outside,
         };
         let player = self.ship.player.position;
-        self.space.asteroids.spawn(
-            Origin::Edge(ring),
-            self.field_spec(),
-            &self.statics.asteroid_types,
-            player,
-            self.space.play_area,
-            chance,
-        );
+        if matches!(pass, GamePass::Advance { .. }) {
+            self.space.asteroids.spawn(
+                Origin::Edge(ring),
+                self.field_spec(),
+                &self.statics.asteroid_types,
+                player,
+                self.space.play_area,
+                chance,
+            );
+        }
+        if self.space.miners_active() {
+            self.space.asteroids.refill_slot_0();
+        }
         self.space
             .asteroids
             .step(&self.statics.asteroid_types, player, self.space.play_area);
@@ -148,14 +211,45 @@ impl Session {
         );
     }
 
-    /// The player's system's field: none for one the catalog doesn't
-    /// list.
+    /// Says how wide the view's game window is, `width` logical units,
+    /// which each system's `Asteroids` is stored by (see the module
+    /// docs); [`DEFAULT_WINDOW_WIDTH`](crate::asteroid::DEFAULT_WINDOW_WIDTH)
+    /// until the view says.
+    pub fn set_window_width(&mut self, width: u32) {
+        self.space.window_width = width;
+    }
+
+    /// The player's system's field, as stored for the window (see the
+    /// module docs): none for one the catalog doesn't list.
     fn field_spec(&self) -> FieldSpec {
-        self.statics
+        self.statics.stored_field(
+            self.pilot.system,
+            self.space.window_width,
+            self.setup.rules.source_for(RuleKey::AsteroidCountByWidth),
+        )
+    }
+}
+
+impl Statics {
+    /// `system`'s field as stored for a game window `window_width` wide,
+    /// as [`RuleKey::AsteroidCountByWidth`] reads (`source`): by the
+    /// engine scaled ([`FieldSpec::stored`]), by the Bible raw. None for
+    /// a system the catalog doesn't list.
+    pub(super) fn stored_field(
+        &self,
+        system: SystemId,
+        window_width: u32,
+        source: RuleSource,
+    ) -> FieldSpec {
+        let raw = self
             .asteroid_fields
-            .get(&self.pilot.system)
+            .get(&system)
             .copied()
-            .unwrap_or(FieldSpec::NONE)
+            .unwrap_or(FieldSpec::NONE);
+        match source {
+            RuleSource::Engine => raw.stored(window_width),
+            RuleSource::Bible => raw,
+        }
     }
 }
 
@@ -174,82 +268,24 @@ impl Space {
         self.asteroids.iter()
     }
 
+    /// Where each of the field's slots has its asteroid, none for a free
+    /// slot: what the shots' guidance reads at `_HandleShot`
+    /// ([`Combat::fly_shots_in`](crate::combat::Combat::fly_shots_in)), the
+    /// field as the collision passes left it and before `_HandleAsteroids`
+    /// moves it (see the `game_work` module).
+    pub(super) fn asteroid_spots(&self) -> [Option<Vec2>; SLOTS] {
+        let mut spots = [None; SLOTS];
+        for (slot, asteroid) in self.asteroids.indexed() {
+            spots[slot] = Some(asteroid.position);
+        }
+        spots
+    }
+
     /// Kills the field, through the rest of the pass frame, as
     /// `_killAsteroids` kills it (see the module docs).
     pub(super) fn kill_asteroids(&mut self) {
         self.asteroids.clear();
         self.asteroid_kill = Some(self.pass_frame);
-    }
-
-    /// The asteroids shots may hit this tick, slot by slot, each with its
-    /// type's radius and `Mass` (see
-    /// [`asteroid_hit`](crate::combat::asteroid_hit)).
-    pub(super) fn asteroid_targets(&self, statics: &Statics) -> Vec<AsteroidTarget> {
-        self.asteroids
-            .indexed()
-            .map(|(slot, asteroid)| {
-                let kind_type = statics
-                    .asteroid_types
-                    .get(usize::from(asteroid.kind))
-                    .copied()
-                    .unwrap_or(AsteroidType::MISSING);
-                AsteroidTarget {
-                    slot,
-                    position: asteroid.position,
-                    velocity: asteroid.velocity,
-                    radius: kind_type.radius(),
-                    strength: asteroid.strength,
-                    mass: kind_type.mass,
-                }
-            })
-            .collect()
-    }
-
-    /// Keeps the strength and velocity each of `targets` is left with
-    /// after the fight's tick, then destroys each asteroid the shots
-    /// broke, in the order they broke, drawing on `chance`
-    /// ([`Asteroids::destroy`](crate::asteroid::Asteroids::destroy)): its
-    /// particles and explosion go off, and its scoopable boxes are
-    /// spawned where it was
-    /// ([`CargoBoxes::spawn_scoopable`](crate::cargo_box::CargoBoxes::spawn_scoopable)).
-    ///
-    /// The original destroys an asteroid inside the hit
-    /// (`_HandleAsteroidHit` @0x3691a), so its booms and particles come
-    /// before the rest of the frame's collisions, and a fragment is in the
-    /// field for the shots after it. Here they come after the fight's own
-    /// events, and its fragments are hit from the next pass on. Both
-    /// settle before the frame is drawn, which is no boundary the player
-    /// sees.
-    pub(super) fn settle_asteroid_hits(
-        &mut self,
-        statics: &Statics,
-        targets: &[AsteroidTarget],
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        for target in targets {
-            if let Some(asteroid) = self.asteroids.get_mut(target.slot) {
-                asteroid.strength = target.strength;
-                asteroid.velocity = target.velocity;
-            }
-        }
-        for slot in self.combat.take_broken_asteroids() {
-            let Some(remains) = self
-                .asteroids
-                .destroy(slot, &statics.asteroid_types, chance)
-            else {
-                continue;
-            };
-            for _ in 0..remains.boxes {
-                self.boxes
-                    .spawn_scoopable(remains.at, remains.contents, remains.graphic, chance);
-            }
-            if let Some(particles) = remains.particles {
-                self.combat.particles(particles);
-            }
-            if let Some(explosion) = remains.explosion {
-                self.combat.explode(remains.at, explosion);
-            }
-        }
     }
 }
 
@@ -319,10 +355,20 @@ mod tests {
         }
     }
 
-    /// `catalog`'s session in flight at system 130's centre.
+    /// `catalog`'s session in flight at system 130's centre, in a window
+    /// 640 wide, which stores each system's `Asteroids` unscaled.
     fn flying(catalog: &FakePilotCatalog) -> Session {
-        let session = Session::start(catalog).expect("starts");
+        let session = unscaled(Session::start(catalog).expect("starts"));
         assert_eq!(session.landed(), None);
+        session
+    }
+
+    /// `session` in a window 640 wide, which stores each system's
+    /// `Asteroids` unscaled
+    /// ([`ASTEROID_WIDTH_BASE`](crate::asteroid::ASTEROID_WIDTH_BASE)), so a test's counts
+    /// are its catalog's.
+    fn unscaled(mut session: Session) -> Session {
+        session.set_window_width(640);
         session
     }
 
@@ -349,6 +395,70 @@ mod tests {
 
     fn kinds(session: &Session) -> Vec<u8> {
         session.asteroids().map(|asteroid| asteroid.kind).collect()
+    }
+
+    /// How many asteroids `session`'s field fills to, the passes run
+    /// past any count.
+    fn filled(session: &mut Session) -> usize {
+        for _ in 0..2 * SLOTS {
+            pass(session, &mut NeverFires);
+        }
+        session.asteroids().count()
+    }
+
+    /// `catalog`'s session in flight, under `rules`, in a window `width`
+    /// wide.
+    fn sized(catalog: &FakePilotCatalog, rules: Rulebook, width: u32) -> Session {
+        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
+        session.set_window_width(width);
+        session
+    }
+
+    #[test]
+    fn the_field_fills_to_its_count_scaled_by_the_window_width_by_the_engine_only() {
+        let rocks = rocky(catalog());
+        let bible = other(RuleKey::AsteroidCountByWidth);
+        assert_eq!(filled(&mut sized(&rocks, Rulebook::default(), 1024)), 6);
+        assert_eq!(filled(&mut sized(&rocks, bible, 1024)), 4, "raw");
+        assert_eq!(filled(&mut sized(&rocks, Rulebook::default(), 640)), 4);
+        let dense = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 12, 0x0001)],
+            ..rocky(catalog())
+        };
+        assert_eq!(filled(&mut sized(&dense, Rulebook::default(), 1024)), 16);
+        assert_eq!(filled(&mut sized(&dense, bible, 1024)), 12, "raw");
+        let none = FakePilotCatalog {
+            asteroid_fields: vec![field(130, -1, 0x0001)],
+            ..rocky(catalog())
+        };
+        assert_eq!(filled(&mut sized(&none, Rulebook::default(), 1024)), 0);
+    }
+
+    #[test]
+    fn a_session_no_view_has_sized_scales_by_800() {
+        let catalog = rocky(catalog());
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(filled(&mut session), 5, "4 × 800 / 640");
+    }
+
+    #[test]
+    fn a_placed_field_holds_the_scaled_count() {
+        let catalog = rocky(catalog());
+        let placed = other(RuleKey::AsteroidEntryField);
+        let mut session = sized(&catalog, placed, 1024);
+        session.settle_asteroid_field(&mut NeverFires);
+        assert_eq!(kinds(&session), [0; 6]);
+    }
+
+    #[test]
+    fn a_new_width_applies_from_the_next_spawn() {
+        let catalog = rocky(catalog());
+        let mut session = sized(&catalog, Rulebook::default(), 640);
+        assert_eq!(filled(&mut session), 4);
+        session.set_window_width(1024);
+        pass(&mut session, &mut NeverFires);
+        assert_eq!(session.asteroids().count(), 5, "one more spawned");
+        assert_eq!(filled(&mut session), 6);
     }
 
     #[test]
@@ -498,19 +608,23 @@ mod tests {
     }
 
     #[test]
-    fn double_times_second_pass_spawns_and_steps_again() {
+    fn double_times_second_pass_steps_again_and_spawns_nothing() {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.set_double_time_key(true);
         pass(&mut session, &mut NeverFires);
-        assert_eq!(session.asteroids().count(), 1);
+        let first = *session.asteroids().next().expect("spawned");
         session.tick_again(
             Controls::default(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(session.asteroids().count(), 2, "the second pass's spawn");
+        let stepped: Vec<_> = session.asteroids().copied().collect();
+        assert_eq!(stepped.len(), 1, "`_DoPlayGameWork(0)` spawns none");
+        assert_eq!(stepped[0].position, first.position + first.velocity);
+        pass(&mut session, &mut NeverFires);
+        assert_eq!(session.asteroids().count(), 2, "the next advance pass's");
     }
 
     #[test]
@@ -533,7 +647,7 @@ mod tests {
     #[test]
     fn a_hypergate_empties_the_field() {
         let catalog = rocky(gated());
-        let mut session = at_gate(&catalog);
+        let mut session = unscaled(at_gate(&catalog));
         grown(&mut session, 2);
         session.open_hypergate(&catalog).expect("opens");
         session
@@ -545,7 +659,7 @@ mod tests {
     #[test]
     fn a_wormhole_empties_the_field() {
         let catalog = rocky(wormholes());
-        let mut session = at_wormhole(&catalog);
+        let mut session = unscaled(at_wormhole(&catalog));
         grown(&mut session, 2);
         session
             .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
@@ -682,7 +796,7 @@ mod tests {
     fn placed_a_gate_or_a_move_still_empties_the_field() {
         let placed = other(RuleKey::AsteroidEntryField);
         let gates = rocky(gated());
-        let mut session = at_gate(&gates).with_rules(placed);
+        let mut session = unscaled(at_gate(&gates)).with_rules(placed);
         grown(&mut session, 2);
         session.open_hypergate(&gates).expect("opens");
         session
@@ -726,8 +840,7 @@ mod tests {
         let catalog = rocky(catalog());
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.stellar = Some(StellarId(128));
-        let mut session = Session::fly(&catalog, pilot)
-            .expect("flies")
+        let mut session = unscaled(Session::fly(&catalog, pilot).expect("flies"))
             .with_rules(other(RuleKey::AsteroidEntryField));
         assert!(session.landed().is_none());
         session.settle_asteroid_field(&mut NeverFires);
@@ -750,11 +863,15 @@ mod tests {
 
     // Shots at asteroids.
 
+    use crate::ai::miner::MINES;
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::{CombatEvent, ParticleBurst, Rules};
     use crate::reserves::Reserves;
     use crate::session::tests::{Attacking, arming, blaster, homing_missile, with_an_npc_at};
+    use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
+    use crate::testkit::{FAST, npc};
+    use crate::traffic::npc::Npc;
 
     /// Asteroid type `kind` of `Strength` `strength` and `Mass` 20, its
     /// frames `size` across: a hit radius of half of it.
@@ -1312,6 +1429,65 @@ mod tests {
             95,
             "met where the step left it"
         );
+    }
+
+    /// A still shot of the player's in flight at its centre, then a field
+    /// of system 130's count of 2 (`Asteroids` 2): a rock of `Strength`
+    /// 4 at the centre in slot 0, which the shot breaks, and one at rest
+    /// at (200, 20) in slot 1; and a leaderless miner far off. The
+    /// session and slot 1's rock.
+    fn mining_a_full_field() -> (Session, Asteroid) {
+        let catalog = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 2, 0x0001)],
+            ..rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)])
+        };
+        let mut session = flying(&catalog);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        assert_eq!(session.shots().len(), 1, "one still shot");
+        session.space.asteroids.clear();
+        let mut miner = Npc {
+            miner: MINES,
+            ..npc(9, ShipStats::new(FAST, &[]))
+        };
+        miner.state.position = Vec2::new(-250.0, 250.0);
+        session.space.traffic.add_npc(miner);
+        assert_eq!(put(&mut session, 0, 4, 0.0, 0.0), 0);
+        assert_eq!(put(&mut session, 0, 100, 200.0, 20.0), 1);
+        assert!(session.space.miners_active());
+        let other = slot(&session, 1);
+        (session, other)
+    }
+
+    #[test]
+    fn on_the_advance_pass_a_slot_0_shot_away_takes_the_edge_spawn() {
+        // The collision passes (@0x43e70-0x44015) break slot 0 before
+        // `_SpawnAsteroid` (@0x44243) fills the first free slot, so
+        // `_HandleAsteroids`' refill (@0x361b5) finds slot 0 live.
+        let (mut session, other) = mining_a_full_field();
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let spawned = slot(&session, 0);
+        let off = spawned.position - session.player().position;
+        assert!(off.x.abs() >= R - 2.0 && off.y.abs() >= R - 2.0, "{off:?}");
+        assert_eq!(slot(&session, 1), other, "left where it was");
+        assert_eq!(session.asteroids().count(), 2);
+    }
+
+    #[test]
+    fn on_the_second_pass_a_slot_0_shot_away_is_refilled_and_nothing_spawns() {
+        // `_DoPlayGameWork(0)` jumps past `_SpawnAsteroid` (@0x4402a to
+        // @0x44350), and `_HandleAsteroids` (@0x444f5) refills slot 0.
+        let (mut session, other) = mining_a_full_field();
+        session.set_double_time_key(true);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(slot(&session, 0), other, "slot 1's rock, at rest");
+        assert_eq!(session.asteroids().count(), 1, "no spawn");
     }
 
     #[test]

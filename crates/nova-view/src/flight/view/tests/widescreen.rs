@@ -269,3 +269,71 @@ fn a_classic_size_draws_flight_exactly_as_before() {
     sized.set_view_size(VIEW_SIZE);
     assert_eq!(drawn(&sized), before);
 }
+
+/// `base` with asteroid type 0 and system 130 holding `count` of it.
+fn rocky(base: FakeCatalog, count: i16) -> FakeCatalog {
+    FakeCatalog {
+        asteroid_types: vec![nova_sim::AsteroidTypeRecord {
+            kind: 0,
+            strength: 50,
+            spin_rate: 100,
+            frames: 36,
+            frame_size: Some((40, 40)),
+            ..nova_sim::AsteroidTypeRecord::default()
+        }],
+        asteroid_fields: vec![nova_sim::AsteroidFieldRecord {
+            system: SystemId(130),
+            count,
+            types: 0x0001,
+        }],
+        ..base
+    }
+}
+
+/// The asteroids of `view`'s field placed before any step, by the
+/// reading of [`RuleKey::AsteroidEntryField`] that places one.
+fn placed_before_any_step(mut view: View) -> usize {
+    view.tick(Duration::ZERO);
+    view.session().expect("flying").asteroids().count()
+}
+
+#[test]
+fn a_widened_views_session_stores_its_asteroids_by_the_widened_width() {
+    let placed = || {
+        FlightView::new(rocky(catalog(), 3)).with_rules(
+            Rulebook::default().with_override(RuleKey::AsteroidEntryField, RuleSource::Bible),
+        )
+    };
+    assert_eq!(placed_before_any_step(placed()), 4, "3 × 1024 / 640");
+    assert_eq!(
+        placed_before_any_step(widened(placed())),
+        6,
+        "3 × 1365 / 640"
+    );
+}
+
+/// The hazards of the course map's panel, opened on Sol before any step.
+fn hazards_on_opening(mut view: View) -> String {
+    tap(&mut view, MAP);
+    match view.course_map().panel().map(|panel| &panel.strip) {
+        Some(nova_sim::map_panel::Strip::Info { hazards, .. }) => hazards.clone(),
+        strip => panic!("{strip:?}"),
+    }
+}
+
+#[test]
+fn a_map_opened_before_any_step_reads_the_asteroids_stored_by_the_views_width() {
+    // 2 × 1024 / 640 is 3, "sparse" (#313); 2 × 1365 / 640 is 4,
+    // "moderate" (#314).
+    let words = FakeCatalog {
+        strings: vec![(
+            nova_sim::news::MISC_STRINGS,
+            (1..=400).map(|n| format!("#{n}")).collect(),
+        )],
+        ..catalog()
+    };
+    let words: Rc<dyn nova_sim::CommCatalog> = Rc::new(words);
+    let view = || FlightView::new(rocky(catalog(), 2)).with_strings(Rc::clone(&words));
+    assert_eq!(hazards_on_opening(view()), "#313 #316");
+    assert_eq!(hazards_on_opening(widened(view())), "#314 #316");
+}

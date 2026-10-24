@@ -5,7 +5,6 @@
 //! earlier hits left.
 
 use super::*;
-use crate::combat::asteroid_hit::AsteroidTarget;
 
 #[test]
 fn a_fighter_is_disabled_now_as_is_disabled_reads_it() {
@@ -38,14 +37,14 @@ const X: ShipRef = ShipRef::Npc(NpcId(5));
 /// stellars, by the default rules: the strikes they made, as (ship hit,
 /// by).
 pub(super) fn walk(combat: &mut Combat, ships: &mut [Ship]) -> Vec<(ShipRef, Option<ShipRef>)> {
-    walk_amid(combat, ships, &mut [], &Arsenal::default())
+    walk_amid(combat, ships, &mut Rocks::of([]), &Arsenal::default())
 }
 
 /// [`walk`] among `rocks` too, sub-munitions read from `arsenal`.
 pub(super) fn walk_amid(
     combat: &mut Combat,
     ships: &mut [Ship],
-    rocks: &mut [AsteroidTarget],
+    rocks: &mut Rocks,
     arsenal: &Arsenal,
 ) -> Vec<(ShipRef, Option<ShipRef>)> {
     let govts = Governments::default();
@@ -58,7 +57,7 @@ pub(super) fn walk_amid(
         field: Field::default(),
     };
     let scenery = Scenery {
-        asteroids: rocks,
+        asteroids: Some(rocks.lend()),
         ..Scenery::default()
     };
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
@@ -365,14 +364,7 @@ fn a_missile_meets_the_ship_it_touched_before_an_asteroid_on_its_move() {
     // (@0x43ef1-0x43f62), and the shot layer's asteroid pass before
     // both.
     let mut ships = three();
-    let mut rocks = [AsteroidTarget {
-        slot: 0,
-        position: Vec2::new(0.0, -82.0),
-        velocity: Vec2::ZERO,
-        radius: 10.0,
-        strength: 10,
-        mass: 20,
-    }];
+    let mut rocks = Rocks::of([rock(0, 0.0, -82.0)]);
     let mut combat = Combat::default();
     fly(&mut combat, (missile(), A, ShotLayer::Homing), INTO_C, None);
     combat.shots[0].target = Some(C);
@@ -381,7 +373,7 @@ fn a_missile_meets_the_ship_it_touched_before_an_asteroid_on_its_move() {
         walk_amid(&mut combat, &mut ships, &mut rocks, &arsenal),
         [(C, Some(A))]
     );
-    assert_eq!(rocks[0].strength, 10, "the asteroid untouched");
+    assert_eq!(rocks.at(0).strength, 10, "the asteroid untouched");
 }
 
 #[test]
@@ -481,14 +473,7 @@ fn a_turret_shot_hits_a_fighter_an_asteroids_blast_disabled_this_pass() {
         fleet: ShipRef::Player,
         ..Ship::at(0, -300.0, 0.0)
     };
-    let mut rocks = [AsteroidTarget {
-        slot: 0,
-        position: Vec2::new(0.0, -130.0),
-        velocity: Vec2::ZERO,
-        radius: 10.0,
-        strength: 10,
-        mass: 20,
-    }];
+    let mut rocks = Rocks::of([rock(0, 0.0, -130.0)]);
     let shell = WeaponRecord {
         blast_radius: 50,
         ..blaster()
@@ -526,7 +511,7 @@ fn a_fused_shells_sub_munitions_read_their_owners_plunder_as_it_hits() {
             BESIDE_C,
             None,
         );
-        let struck = walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+        let struck = walk_amid(&mut combat, &mut ships, &mut Rocks::of([]), &arsenal);
         assert_eq!(struck, [(C, Some(A))]);
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2);

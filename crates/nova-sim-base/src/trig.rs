@@ -208,6 +208,27 @@ pub fn lead_angle(
     table_arctan(from.x - aim_x, from.y - aim_y)
 }
 
+/// `_CalcObjectLeadAngle(ship, object, velocity, weap, &from)`
+/// (@0x2b18e-0x2b2ef): [`lead_angle`] at a point object, its position
+/// and velocity `object`, from `from`, relative to the firer's
+/// `firer_velocity`, with `shot` the shot its weapon's gate leads with
+/// (guidance -1, 4, 7, 8 and 9, which the caller applies). Its rocket
+/// branch (@0x2b248-0x2b28c) is dead, as guidance 6 fails that gate, so
+/// any shot is led as a plain one. With no shot it is the table bearing.
+#[must_use]
+pub fn object_lead_angle(
+    from: Vec2,
+    firer_velocity: Vec2,
+    object: (Vec2, Vec2),
+    shot: Option<LeadShot>,
+) -> i16 {
+    let plain = shot.map(|shot| LeadShot {
+        rocket: false,
+        ..shot
+    });
+    lead_angle(from, firer_velocity, object, plain)
+}
+
 /// `_CalcInterceptAngle(from, to)` (@0x2af60-0x2af90): the heading from
 /// `from` toward `to`, [`table_arctan`] of `from` − `to` in `f32`.
 #[must_use]
@@ -446,6 +467,46 @@ mod tests {
         assert_eq!(
             lead_angle(Vec2::ZERO, Vec2::ZERO, target, rocket),
             table_arctan(-195.0, -t)
+        );
+    }
+
+    #[test]
+    fn an_object_is_led_relative_to_the_firers_velocity() {
+        let from = Vec2::new(30.0, 40.0);
+        let firer = Vec2::new(2.0, 1.0);
+        let object = (Vec2::new(130.0, -60.0), Vec2::new(-3.0, 4.0));
+        assert_eq!(object_lead_angle(from, firer, object, PLAIN), 26);
+        let along = Vec2::new(0.0, 5.0);
+        let crossing = (Vec2::new(100.0, 0.0), Vec2::new(0.0, 5.0));
+        assert_eq!(
+            object_lead_angle(Vec2::ZERO, along, crossing, PLAIN),
+            90,
+            "moving with it"
+        );
+        assert_ne!(
+            object_lead_angle(Vec2::ZERO, Vec2::ZERO, crossing, PLAIN),
+            90,
+            "moving across it"
+        );
+    }
+
+    #[test]
+    fn an_object_with_no_shot_to_lead_with_is_its_table_bearing() {
+        let object = (Vec2::new(100.0, 0.0), Vec2::new(0.0, 5.0));
+        assert_eq!(object_lead_angle(Vec2::ZERO, Vec2::ZERO, object, None), 90);
+    }
+
+    #[test]
+    fn an_object_is_never_led_as_a_rocket() {
+        // `_CalcObjectLeadAngle`'s rocket branch is dead (@0x2b248).
+        let rocket = Some(LeadShot {
+            speed: 10.0,
+            rocket: true,
+        });
+        let far = (Vec2::new(300.0, 0.0), Vec2::new(0.0, 10.0));
+        assert_eq!(
+            object_lead_angle(Vec2::ZERO, Vec2::ZERO, far, rocket),
+            lead_angle(Vec2::ZERO, Vec2::ZERO, far, PLAIN)
         );
     }
 

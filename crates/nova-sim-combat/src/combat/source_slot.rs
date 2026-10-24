@@ -20,7 +20,9 @@
 //! `_HandleShip` @0x3359a, @0x335c1): its class, goal and target stay, so
 //! a sub-munition whose source slot is empty reads the slot's last ship.
 //! The fight keeps that record by [`Slot`](crate::ship_layer::Slot) ([`SlotShip`]), written from
-//! the fighters at the start of each phase ([`Combat::note_slots`]).
+//! the fighters at the start of each phase ([`Combat::note_slots`]). It
+//! keeps the slot's position too, which the beams' asteroid pass reads
+//! (see [`asteroid_beam`](super::asteroid_beam)).
 //!
 //! [`RuleKey::SubmunitionSourceSlot`](crate::RuleKey::SubmunitionSourceSlot)
 //! chooses: by the engine, the slot's ship as above; by the other reading,
@@ -38,16 +40,21 @@ use super::plunder::Plunderer;
 use super::projectile::{Shot, Source};
 use super::{Combat, Fighter};
 use crate::catalog::ShipId;
+use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 
 /// What a ship slot's record keeps of the last ship in it, which a
-/// sub-munition reads (see the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// sub-munition reads (see the module docs), and where it was, which the
+/// beams' asteroid pass reads by the engine's nearest (see
+/// [`asteroid_beam`](super::asteroid_beam)).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SlotShip {
     /// Its class (+0x76).
     pub class: ShipId,
     /// Its plunder: its goal and its target (+0x70).
     pub plunderer: Plunderer,
+    /// Its position (+0x18), as the fight last noted it.
+    pub position: Vec2,
 }
 
 impl Combat {
@@ -58,6 +65,7 @@ impl Combat {
             let ship = SlotShip {
                 class: fighter.ship_type,
                 plunderer: Plunderer::of(fighter),
+                position: fighter.state.position,
             };
             self.slot_ships.insert(fighter.slot, ship);
         }
@@ -91,6 +99,7 @@ impl Combat {
                 .map(|firer| SlotShip {
                     class: firer.ship_type,
                     plunderer: Plunderer::of(firer),
+                    position: firer.state.position,
                 }),
         };
         ship.map_or(fallback, |ship| {

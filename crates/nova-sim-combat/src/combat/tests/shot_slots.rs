@@ -118,7 +118,7 @@ fn a_spent_shots_slot_is_held_through_the_npcs_point_defence_and_freed_by_handle
 fn a_shot_spent_on_a_stellar_holds_its_slot_through_the_npcs_point_defence() {
     // A planet-type shot of C's whose last move, from 10 to the left,
     // ended inside the stellar at (0, 500): the hit pass spends it
-    // (`Combat::strike_stellars`) and its slot is held until `_HandleShot`
+    // (`Combat::proximity_pass`) and its slot is held until `_HandleShot`
     // visits it (@0x36195 → @0x3617c), as a shot spent on a ship's is.
     let at = Vec2::new(0.0, 500.0);
     let on_the_stellar = Shot {

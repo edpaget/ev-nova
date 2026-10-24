@@ -34,7 +34,7 @@ use super::{
     arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
     gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
     landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area, point, refusal_message,
-    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name,
+    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
@@ -600,6 +600,7 @@ impl<
         let anchor = self.anchor();
         if let Ok(session) = &mut self.session {
             session.set_play_area(play_area(self.view, anchor));
+            session.set_window_width(window_width(self.view));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.hold_self_destruct(self_destruct);

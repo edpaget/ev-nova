@@ -293,6 +293,8 @@ fn a_system_holding_asteroids_fills_one_a_pass_from_the_edge() {
         scoop: false,
     })
     .expect("starts");
+    // A window 640 wide stores the system's 4 unscaled.
+    session.set_window_width(640);
     assert_eq!(session.landed(), None);
     assert_eq!(session.asteroids().count(), 0);
     let mut chance = NeverFires;

@@ -757,4 +757,110 @@ mod tests {
             NpcHold::default()
         );
     }
+
+    /// A scooping NPC, a miner in state 17, at `at`, its disc 10 across
+    /// its centre, its hold empty.
+    fn scooping_npc(at: Vec2) -> Npc {
+        let mut npc = npc(1, ShipStats::default());
+        npc.goal = crate::ai::Goal::Scoop;
+        npc.state.position = at;
+        npc.hull.hit_radius = 10.0;
+        npc
+    }
+
+    /// [`scoopable`] with box graphic 1 40 by 40, so a disc reaches 20
+    /// past its radius along an axis.
+    fn framed() -> FakePilotCatalog {
+        let mut catalog = scoopable();
+        catalog.box_frames[1] = Some((40, 40));
+        catalog
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_a_box_by_its_own_disc_into_its_own_hold() {
+        let catalog = framed();
+        let mut session = flying(&catalog, 0);
+        let at = Vec2::new(300.0, 0.0);
+        let id = session.space.traffic.add_npc(scooping_npc(at));
+        let boxes = &mut session.space.boxes;
+        // 25 off on x: within 10 and 20, the box's half frame.
+        boxes.spawn_scoopable(at + Vec2::new(25.0, 0.0), Some(2), 1, &mut NeverFires);
+        // 35 off on x: beyond them.
+        boxes.spawn_scoopable(at - Vec2::new(35.0, 0.0), Some(3), 1, &mut NeverFires);
+        // On the player, which owns no scoop: no NPC's.
+        boxes.spawn_scoopable(Vec2::ZERO, Some(4), 1, &mut NeverFires);
+        session.tick(Controls::default());
+        let hold = session.space.npc(id).expect("here").cargo;
+        assert_eq!((hold.tons(2), hold.total()), (1, 1));
+        let left: Vec<_> = session
+            .cargo_boxes()
+            .iter()
+            .map(|left| left.contents)
+            .collect();
+        assert_eq!(left, [Some(3), Some(4)]);
+        assert_eq!(held(&session), [], "the player's hold is untouched");
+    }
+
+    #[test]
+    fn a_disabled_npc_or_the_players_escort_or_fighter_scoops_nothing() {
+        let duty = crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        };
+        let at = Vec2::new(300.0, 0.0);
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..scooping_npc(at)
+        };
+        let escort = Npc {
+            escort: Some(duty),
+            ..scooping_npc(at)
+        };
+        // A fighter launched by the player: its carrier the player, on
+        // escort duty as the player's fighters fly.
+        let fighter = Npc {
+            escort: Some(duty),
+            carrier: Some(crate::bay::Carrier {
+                ship: crate::combat::ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..scooping_npc(at)
+        };
+        for (npc, who) in [
+            (disabled, "a disabled NPC"),
+            (escort, "the player's escort"),
+            (fighter, "the player's fighter"),
+        ] {
+            let catalog = framed();
+            let mut session = flying(&catalog, 0);
+            let id = session.space.traffic.add_npc(npc);
+            session
+                .space
+                .boxes
+                .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+            session.tick(Controls::default());
+            assert_eq!(session.cargo_boxes().len(), 1, "the box is left: {who}");
+            assert_eq!(
+                session.space.npc(id).expect("here").cargo,
+                NpcHold::default(),
+                "{who}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_player_takes_a_box_before_a_scooping_npc_on_it() {
+        let catalog = framed();
+        let mut session = scooper(&catalog, 0);
+        let id = session.space.traffic.add_npc(scooping_npc(Vec2::ZERO));
+        drop_on_ship(&mut session, Some(2));
+        session.tick(Controls::default());
+        assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
+        assert_eq!(
+            session.space.npc(id).expect("here").cargo,
+            NpcHold::default()
+        );
+        assert!(session.cargo_boxes().is_empty());
+    }
 }

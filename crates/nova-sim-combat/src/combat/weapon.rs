@@ -459,6 +459,10 @@ pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
 /// `Interference` (`_SpawnShot` @0x3eac5; see
 /// [`projectile`](super::projectile)).
 pub const SENSOR_INTERFERENCE: u16 = 0x0008;
+/// `Seeker`: a homing shot of it seeks asteroids: one ahead and near may
+/// lock it (`_HandleShotGuidance` @0x32546; see
+/// [`asteroid_seek`](super::asteroid_seek)).
+pub const SEEKS_ASTEROIDS: u16 = 0x0002;
 /// `Seeker`: a homing shot of it jammed turns away from its target
 /// (`_HandleShotGuidance` @0x3221d), where any other stops turning.
 pub const TURNS_AWAY_JAMMED: u16 = 0x0010;
@@ -692,6 +696,27 @@ impl WeaponSpec {
         .then_some(LeadShot {
             speed: self.speed,
             rocket: self.guidance == Guidance::Rocket,
+        })
+    }
+
+    /// The shot `_CalcObjectLeadAngle` leads with for it at a point
+    /// object, such as asteroid slot 0: its speed, by its guidance's gate
+    /// of -1, 4, 7, 8 and 9 (@0x2b1c3-0x2b207), never a rocket, as 6 fails
+    /// the gate; none for any other, which gets the table bearing
+    /// ([`object_lead_angle`](crate::trig::object_lead_angle)).
+    #[must_use]
+    pub fn object_lead_shot(&self) -> Option<LeadShot> {
+        matches!(
+            self.guidance,
+            Guidance::Unguided
+                | Guidance::Turret
+                | Guidance::FrontTurret
+                | Guidance::RearTurret
+                | Guidance::PointDefence
+        )
+        .then_some(LeadShot {
+            speed: self.speed,
+            rocket: false,
         })
     }
 
@@ -1001,6 +1026,28 @@ mod tests {
             })
         );
         for guidance in [0, 1, 3, 5, 10, 99] {
+            assert_eq!(lead(guidance), None, "{guidance}");
+        }
+    }
+
+    #[test]
+    fn only_guidance_minus_1_4_7_8_and_9_leads_at_an_object() {
+        let lead = |guidance: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                guidance,
+                speed: 1500,
+                ..weapon(128)
+            })
+            .object_lead_shot()
+        };
+        let plain = Some(LeadShot {
+            speed: 15.0,
+            rocket: false,
+        });
+        for guidance in [-1, 4, 7, 8, 9] {
+            assert_eq!(lead(guidance), plain, "{guidance}");
+        }
+        for guidance in [0, 1, 3, 5, 6, 10, 99] {
             assert_eq!(lead(guidance), None, "{guidance}");
         }
     }

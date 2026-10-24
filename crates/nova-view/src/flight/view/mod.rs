@@ -1716,6 +1716,17 @@ fn play_area(view: (f32, f32), anchor: Anchor) -> nova_sim::cloak::Area {
     }
 }
 
+/// The game window's width, in a view `view` in size, whole, that each
+/// system's `Asteroids` is stored by
+/// (`nova_sim::asteroid::FieldSpec::stored`): the view's whole width, the
+/// original's window drawing flight one pixel to a logical unit. Our
+/// window can be resized in play, where the original's can't; the session
+/// reads the width it is told last (see `nova_sim::Session::set_window_width`).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // a view's width, positive and far below u32::MAX
+fn window_width(view: (f32, f32)) -> u32 {
+    view.0 as u32
+}
+
 /// The run of an outfitter order a session that failed gives: no
 /// outfitter, refused at the first pass with no alert, its button
 /// failing.
