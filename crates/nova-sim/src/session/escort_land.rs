@@ -80,12 +80,7 @@ impl Session {
             self.upgrade_escort(index, ship, chance);
         }
         for &index in settled.sold.iter().rev() {
-            self.pilot.escorts.remove(index);
-            if index < self.space.escorts.fleet.len()
-                && let Some(id) = self.space.escorts.fleet.remove(index)
-            {
-                self.space.traffic.remove(id);
-            }
+            self.drop_fleet_escort(index);
         }
         let changed = settled.landing.sold + settled.landing.upgraded;
         self.port.stay.escorts_changed = self.port.stay.escorts_changed.saturating_add(changed);

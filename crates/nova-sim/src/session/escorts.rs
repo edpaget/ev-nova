@@ -648,6 +648,20 @@ impl Session {
         true
     }
 
+    /// Escort `index` leaves the fleet and the system: its record, its
+    /// place in the fleet and its NPC, if any, go together, keeping the
+    /// fleet and the pilot's escorts in step. Unlike
+    /// [`Session::unfleet`], its NPC goes too, and the fleet is not
+    /// re-formed: the caller re-forms it once it has dropped all it drops.
+    pub(super) fn drop_fleet_escort(&mut self, index: usize) {
+        self.pilot.escorts.remove(index);
+        if index < self.space.escorts.fleet.len()
+            && let Some(id) = self.space.escorts.fleet.remove(index)
+        {
+            self.space.traffic.remove(id);
+        }
+    }
+
     /// Escort NPC `id` is released (see [`hail`](super::hail)): it takes
     /// its share of the fleet's cargo while still in the fleet, its own
     /// `Holds` among the fleet's when it is a trader

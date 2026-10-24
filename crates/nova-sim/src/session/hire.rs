@@ -153,12 +153,7 @@ impl Session {
                 if let Some(holds) = self.statics.trader_holds(escort.ship) {
                     self.destroy_cargo_share(holds, false);
                 }
-                self.pilot.escorts.remove(index);
-                if index < self.space.escorts.fleet.len()
-                    && let Some(id) = self.space.escorts.fleet.remove(index)
-                {
-                    self.space.traffic.remove(id);
-                }
+                self.drop_fleet_escort(index);
                 defected = defected.saturating_add(1);
             }
         }

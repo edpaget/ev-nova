@@ -375,12 +375,7 @@ impl Session {
             if !escort.carried || kept(self, &escort, npc) {
                 continue;
             }
-            self.pilot.escorts.remove(index);
-            if index < self.space.escorts.fleet.len()
-                && let Some(id) = self.space.escorts.fleet.remove(index)
-            {
-                self.space.traffic.remove(id);
-            }
+            self.drop_fleet_escort(index);
             dropped.push(escort);
         }
         dropped.reverse();
