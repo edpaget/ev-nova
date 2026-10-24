@@ -129,8 +129,8 @@
 //!   `_LoadPilotData` @0x75d1a-0x75d37). Every older pilot was made with
 //!   the New Pilot dialog's Nickname field inert, so the upgrade gives `""`.
 //! - Version 34: adds each escort's mark for the next shipyard (`mark`,
-//!   `upgrade`, `sell` or `null`), the original's pilot +0xe82e[i] and
-//!   +0xe8ae[i] (`_LoadPilotData` @0x75a75-0x75ad3), set in the escort
+//!   `upgrade`, `sell` or `null`), the original's pilot `+0xe82e[i]` and
+//!   `+0xe8ae[i]` (`_LoadPilotData` @0x75a75-0x75ad3), set in the escort
 //!   dialog (see [`escort_dialog`](crate::escort_dialog)). No older
 //!   save could mark one, so the upgrade gives `null`.
 //!
