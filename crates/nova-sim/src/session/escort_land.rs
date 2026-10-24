@@ -414,6 +414,65 @@ mod tests {
     }
 
     #[test]
+    fn an_upgraded_escort_keeps_its_afterburner_aux_voice_cloak_and_state() {
+        use crate::cloak::Cloak;
+        use crate::geometry::Vec2;
+        use crate::voice::VoiceVariant;
+        let catalog = yards();
+        let mut session = landed_with(&catalog, &[129], &[], 6_000);
+        let old = ids(&session)[0].expect("placed");
+        let state = crate::ShipState {
+            position: Vec2::new(123.0, -45.0),
+            velocity: Vec2::new(1.5, -0.5),
+            heading: 77.0,
+        };
+        let cloak = Cloak {
+            fade: 3.0,
+            direction: 1,
+        };
+        {
+            let npc = session.space.npc_mut(old).expect("in the system");
+            npc.afterburner = true;
+            npc.aux = Some(4);
+            npc.voice = Some(VoiceVariant::Odd);
+            npc.cloak = cloak;
+            npc.state = state;
+        }
+        mark(&mut session, 0, EscortMark::Upgrade);
+        session.land_escorts(&mut NeverFires).expect("upgraded");
+        let id = ids(&session)[0].expect("placed");
+        assert_ne!(id, old, "a new NPC");
+        let npc = session.space.npc(id).expect("in the system");
+        assert_eq!(npc.ship, ShipId(130));
+        assert!(npc.afterburner, "afterburner");
+        assert_eq!(npc.aux, Some(4), "aux");
+        assert_eq!(npc.voice, Some(VoiceVariant::Odd), "voice");
+        assert_eq!(npc.cloak, cloak, "cloak");
+        assert_eq!(npc.state, state, "state");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        // The take-off places its escorts afresh around the ship, so the
+        // state is the take-off's own, and the cloak has faded on; the
+        // rest carries over.
+        let id = ids(&session)[0].expect("placed");
+        let npc = session.space.npc(id).expect("in the system");
+        assert_eq!(npc.ship, ShipId(130));
+        assert!(npc.afterburner, "afterburner after the take-off");
+        assert_eq!(npc.aux, Some(4), "aux after the take-off");
+        assert_eq!(
+            npc.voice,
+            Some(VoiceVariant::Odd),
+            "voice after the take-off"
+        );
+        assert_eq!(
+            npc.cloak.direction, cloak.direction,
+            "still fading in after the take-off"
+        );
+        assert!(npc.cloak.fade >= cloak.fade, "cloak after the take-off");
+    }
+
+    #[test]
     fn an_upgrade_above_a_sale_keeps_its_new_npc_as_the_fleet_shifts() {
         let catalog = yards();
         let mut session = landed_with(&catalog, &[131, 129], &[], 6_000);
