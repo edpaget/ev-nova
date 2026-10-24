@@ -4,12 +4,13 @@
 //! beyond its attacker's reach), flown as `_LowLevelAIHandler` flies the
 //! sub-goal (addresses in the `EV Nova` executable).
 //!
-//! - [`Leg::RunOut`] (sub 3, @0x857bd-0x8585b): it turns to the
+//! - [`Leg::RunOut`] (sub 3, @0x857bd-0x8585b): it wants the
 //!   whole-degree bearing out from the centre, `_CalcInterceptAngle((0,0),
 //!   position)` ([`trig::intercept_angle`]; 0, straight up, at the centre
-//!   itself), and thrusts while it is off that bearing by less than its
-//!   turn rate and [`RUN_OUT_THRUST`], in whole degrees, strictly
-//!   ([`fire::off_by`]). It flies at its top speed (+0x34 = 0).
+//!   itself), which `_HandleShip` turns it to ([`flight::turn_to`]), and
+//!   thrusts while it is off that bearing by less than its turn rate and
+//!   [`RUN_OUT_THRUST`], in whole degrees, strictly ([`fire::off_by`]). It
+//!   flies at its top speed (+0x34 = 0).
 //! - [`Leg::Brake`] (sub 1, @0x8536d-0x85633): an inertial ship brakes as
 //!   substate 1's inertial branch does (@0x85408-0x855e1, [`brake`]). It
 //!   wants its retro heading, the table angle of its velocity + 180
@@ -64,7 +65,7 @@ use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
-use crate::traffic::autopilot::{Outcome, steer};
+use crate::traffic::autopilot::Outcome;
 use crate::traffic::held_burst::{self, Flight};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
@@ -105,7 +106,7 @@ pub fn fly(
             npc.begin_own_jump();
             return Outcome::Flying;
         }
-        Leg::RunOut => (*handling, Flight::from(run_out(&npc.state, handling))),
+        Leg::RunOut => (*handling, Flight::from(run_out(&mut npc.state, handling))),
         // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
         Leg::Brake => {
             let (controls, flown) = stop(&mut npc.state, handling, inertia, false);
@@ -234,14 +235,17 @@ fn brake(
     (controls, soft, retro)
 }
 
-/// Sub 3's controls for a ship at `state` on `handling`: turned to the
-/// bearing out from the centre, thrusting within its turn rate and
-/// [`RUN_OUT_THRUST`] of it.
-fn run_out(state: &ShipState, handling: &Handling) -> Controls {
+/// Sub 3's controls for a ship at `state` on `handling`: thrusting
+/// within its turn rate and [`RUN_OUT_THRUST`] of the bearing out from
+/// the centre, then turned to it as `_HandleShip` turns it
+/// ([`flight::turn_to`]).
+fn run_out(state: &mut ShipState, handling: &Handling) -> Controls {
     let out = trig::intercept_angle(Vec2::ZERO, state.position);
+    let thrust = fire::off_by(state.heading, out).abs() < handling.turn_rate + RUN_OUT_THRUST;
+    let turn = flight::turn_to(state, out, handling.turn_rate);
     Controls {
-        thrust: fire::off_by(state.heading, out).abs() < handling.turn_rate + RUN_OUT_THRUST,
-        turn: steer(state.heading, f32::from(out), handling),
+        thrust,
+        turn,
         ..Controls::default()
     }
 }
@@ -267,7 +271,7 @@ mod tests {
     }
 
     fn run_out(state: &ShipState) -> Controls {
-        super::run_out(state, &HANDLING)
+        super::run_out(&mut state.clone(), &HANDLING)
     }
 
     #[test]
@@ -298,6 +302,36 @@ mod tests {
         let right = run_out(&at(0.0, -500.0, 360.0 - off));
         assert_eq!(right.turn, Turn::Right);
         assert!(!run_out(&at(0.0, -500.0, 180.0)).thrust, "facing in");
+    }
+
+    /// A ship at `start` flown one tick of sub 3 on `handling`.
+    fn ran_out(start: ShipState, handling: &Handling) -> ShipState {
+        let mut runner = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        let rules = FlightRules::default();
+        fly(&mut runner, Leg::RunOut, handling, rules, Inertia::Inertial);
+        runner.state
+    }
+
+    #[test]
+    fn running_out_within_its_turn_of_the_bearing_it_is_put_on_it() {
+        // Out from (500, 0) is 90: 88.6 is 2 whole degrees off, within 3.
+        let turning = Handling {
+            turn_rate: 3.0,
+            ..HANDLING
+        };
+        assert_eq!(ran_out(at(500.0, 0.0, 88.6), &turning).heading, 90.0);
+        assert_eq!(ran_out(at(-500.0, 0.0, 271.9), &turning).heading, 270.0);
+    }
+
+    #[test]
+    fn running_out_it_measures_its_gap_to_the_bearing_in_whole_degrees() {
+        // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off.
+        let turning = Handling {
+            turn_rate: 1.95,
+            ..HANDLING
+        };
+        let heading = ran_out(at(500.0, 0.0, 88.1), &turning).heading;
+        assert!((heading - 90.05).abs() < 1e-4, "{heading}");
     }
 
     #[test]
