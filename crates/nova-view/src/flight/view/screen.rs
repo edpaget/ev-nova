@@ -111,7 +111,7 @@ impl<
             }
             Some(HAIL_KEY) => {
                 self.hail();
-                if self.pending_hail.is_some() {
+                if self.pending_hail.is_some() || self.pending_escort_dialog.is_some() {
                     return ScreenAction::None;
                 }
             }

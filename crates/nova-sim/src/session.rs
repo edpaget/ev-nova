@@ -462,6 +462,7 @@ mod eject;
 mod entry;
 #[cfg(test)]
 mod escort_carriers;
+mod escort_dialog;
 #[cfg(test)]
 mod escort_hits;
 #[cfg(test)]
@@ -1913,6 +1914,7 @@ impl Session {
         self.space.strikes.clear();
         self.space.escorts.aboard = None;
         self.space.escorts.talk = None;
+        self.space.escorts.dialog = None;
         self.let_go_of_gone_target();
     }
 
@@ -3966,6 +3968,7 @@ impl Session {
         self.space.kill_asteroids();
         self.chart.target = None;
         self.space.escorts.talk = None;
+        self.space.escorts.dialog = None;
         self.leave_with_fighters(true);
         self.port.land_day_rolls(&self.setup);
         self.port.open_outfit_visit(&self.pilot);

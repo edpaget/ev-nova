@@ -666,6 +666,16 @@ impl Session {
     /// ship type by the engine reading of [`RuleKey::ReleaseCargoShare`]
     /// and only a trader by the other; then it leaves the fleet and the
     /// system (`_AIMakeShipLeave`), jumping out whatever its fuel.
+    ///
+    /// Both the comm dialog's close (@0x96848-0x968c1) and the escort
+    /// dialog's Release (@0x95485-0x9550f) reset it as it goes: it can
+    /// never be boarded (+0xb9 1), it is no former escort (+0xc8de -1),
+    /// its AI type is its class's `InherentAI` (+0x88, which an escort's
+    /// already is in the engine), and `_AISetup` (@0x7f3e2) clears its
+    /// order word (+0xc90a, [`Npc::order_word`]). `_AISetup`'s goal and
+    /// sub 0 and its goal targets +0x90 and +0x92 (-2) give way to the
+    /// leave's goal and its target cleared, which follow at once; the
+    /// engine has no field for its +0xc906 or +0xc92e.
     pub(super) fn release(&mut self, id: NpcId) {
         if !self.is_escort(id) {
             return;
@@ -678,6 +688,9 @@ impl Session {
         }
         self.dismiss(id);
         if let Some(npc) = self.space.npc_mut(id) {
+            npc.boarded = true;
+            npc.former = None;
+            npc.order_word = crate::fleet::OrderWord::NONE;
             super::hail::make_leave(npc);
         }
     }

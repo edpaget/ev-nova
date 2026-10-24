@@ -102,14 +102,28 @@ pub fn can_upgrade<'a>(
 }
 
 /// The mark after `pressed` (Upgrade or Sell) on an escort marked `mark`
-/// (@0x95517-0x95589): none when the press is not `allowed`, changing
-/// nothing; else the press's mark toggled, a mark set clearing the other.
+/// (@0x95517-0x95589): `mark` as it is when the press is not `allowed`;
+/// else the press's mark toggled, a mark set clearing the other.
 #[must_use]
 pub fn toggle(mark: Option<EscortMark>, pressed: EscortMark, allowed: bool) -> Option<EscortMark> {
     if !allowed {
         return mark;
     }
     (mark != Some(pressed)).then_some(pressed)
+}
+
+/// A button of the escort dialog, its item (`_EscortFilter` @0x950e9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscortButton {
+    /// Item 1, "Close Channel": the dialog closes.
+    Close,
+    /// Item 2, "Release": the escort is released at once, and the dialog
+    /// closes.
+    Release,
+    /// Item 3, "Upgrade Escort" or "Cancel Upgrade".
+    Upgrade,
+    /// Item 4, "Sell Escort" or "Cancel Sale".
+    Sell,
 }
 
 /// The escort dialog's upgrade line (@0x94d0d-0x94e0e).

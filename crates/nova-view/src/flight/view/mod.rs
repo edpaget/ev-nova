@@ -1095,6 +1095,9 @@ pub struct FlightView<C> {
     pending_boarding: bool,
     /// The hail just answered, for the router.
     pending_hail: Option<HailView>,
+    /// The escort dialog a fleet escort hailed just opened, for the
+    /// router.
+    pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
     /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,

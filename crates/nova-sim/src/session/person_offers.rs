@@ -55,6 +55,7 @@ use super::hail::{HailTarget, make_leave};
 use super::{Chart, MissionRun, Session, Setup, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
+use crate::escort_dialog::EscortDialogView;
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
 use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
@@ -104,6 +105,9 @@ pub(super) struct OfferingShip {
 pub enum Hailed {
     /// The comm dialog, as [`Session::hail`] opens it.
     Comm(HailView),
+    /// The escort dialog, opened in place of the comm dialog for one of
+    /// the fleet's escorts (see the `escort_dialog` module).
+    Escort(EscortDialogView),
     /// The person's mission, offered in place of the comm dialog
     /// (`_OfferOneMission` @0x62293): the offer dialog, or the mission
     /// accepted at once.
@@ -186,7 +190,9 @@ impl Session {
     /// drawing nothing and making no sound. Otherwise it hails the ship
     /// target: a person whose mission is offered on its hail offers it,
     /// drawing on `chance`, in place of the comm dialog, and no
-    /// conversation opens; any other target opens the comm dialog
+    /// conversation opens; one of the fleet's escorts opens the escort
+    /// dialog in its place (see the `escort_dialog` module), rolling
+    /// nothing; any other target opens the comm dialog
     /// ([`Session::hail`]), with `options` listed and the replies read
     /// from `catalog`. A person who may join opens the comm dialog when
     /// `options` list a way to join for it ([`HailOptions::lists_join`]).
@@ -211,6 +217,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
         self.space.escorts.talk = None;
+        self.space.escorts.dialog = None;
         // Beeps here once: once answering, it answers in `hail` too.
         if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
             return Ok(Hailed::Stellar(stellar));
@@ -219,6 +226,13 @@ impl Session {
         // The hail names a linked person's ship before it checks the
         // mission, and keeps it after the dialog (@0x621de, @0x625a4).
         self.reach_linked(linked);
+        let npc = self.answering()?;
+        if super::escort_dialog::gets_escort_dialog(npc) {
+            let id = npc.id;
+            if let Some(view) = self.open_escort_dialog(id) {
+                return Ok(Hailed::Escort(view));
+            }
+        }
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)

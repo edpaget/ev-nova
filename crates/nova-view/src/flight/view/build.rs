@@ -245,6 +245,7 @@ impl<
             overlays: FlightOverlays::default(),
             pending_boarding: false,
             pending_hail: None,
+            pending_escort_dialog: None,
             pending_mission_info: None,
             pending_player_info: false,
             pending_offer: None,
@@ -559,8 +560,10 @@ impl<
 
     /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
     /// or says why not: a hail answered is held for the router
-    /// ([`FlightView::take_hail`]), and a mission offered in its place
-    /// too ([`FlightView::take_offer`]), each letting go of the flight
+    /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
+    /// in its place ([`FlightView::take_escort_dialog`]) and a mission
+    /// offered in its place ([`FlightView::take_offer`]), each letting go
+    /// of the flight
     /// keys; one accepted at once shows nothing, and so does a navigation
     /// stellar that answers, as its comm dialog is not built.
     pub(super) fn hail(&mut self) {
@@ -571,6 +574,10 @@ impl<
         match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
+                self.held.clear();
+            }
+            Ok(Hailed::Escort(view)) => {
+                self.pending_escort_dialog = Some(view);
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
@@ -589,6 +596,28 @@ impl<
     /// dialog.
     pub fn take_hail(&mut self) -> Option<HailView> {
         self.pending_hail.take()
+    }
+
+    /// The escort dialog just opened, once: the router takes it to show
+    /// the dialog.
+    pub fn take_escort_dialog(&mut self) -> Option<nova_sim::escort_dialog::EscortDialogView> {
+        self.pending_escort_dialog.take()
+    }
+
+    /// Presses `button` in the escort dialog, through the session
+    /// ([`Session::press_escort`]): what it shows after, or none once it
+    /// closes. A close refreshes the HUD, as a hail's does
+    /// ([`FlightView::hang_up`]).
+    pub fn press_escort(
+        &mut self,
+        button: nova_sim::escort_dialog::EscortButton,
+    ) -> Option<nova_sim::escort_dialog::EscortDialogView> {
+        let session = self.session.as_mut().ok()?;
+        let view = session.press_escort(button);
+        if view.is_none() {
+            self.redraw_status();
+        }
+        view
     }
 
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since

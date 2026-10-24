@@ -1013,6 +1013,7 @@ impl Session {
         }
         if resets.has(Reset::Hail) {
             self.space.escorts.talk = None;
+            self.space.escorts.dialog = None;
         }
         if resets.has(Reset::FightersOut) {
             self.leave_with_fighters(false);

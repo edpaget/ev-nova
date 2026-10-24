@@ -190,6 +190,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
         self.space.escorts.talk = None;
+        self.space.escorts.dialog = None;
         self.out
             .beep_unanswered(self.answering().map(|npc| npc.id))?;
         let npc = self.answering()?;
