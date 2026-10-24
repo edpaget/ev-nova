@@ -86,8 +86,11 @@
 //! - [`Goal::Attack`], [`Goal::Snipe`] and [`Goal::Flee`]: it flies the
 //!   last body of its frame ([`pursuit::frame_of`]), reading whether its
 //!   target is disabled, as that body's thrust, cap and heading win
-//!   (see [`pursuit`]). It turns to the heading the body wants;
-//!   approaching, it thrusts while off it by less than
+//!   (see [`pursuit`]). It turns to the heading the body wants as
+//!   `_HandleShip` turns every substate ([`flight::turn_to`], by its turn
+//!   while more than that off in whole degrees, onto it otherwise), and
+//!   thrusts by its heading before the turn: approaching, while off it
+//!   by less than
 //!   [`APPROACH_THRUST`] turns; dogfighting, by less than a turn and
 //!   [`DOGFIGHT_THRUST`], an inertialess one up to the speed its frame
 //!   matches ([`pursuit::Frame::speed_cap`]); fleeing close (sub 5, @0x85c62-0x85d72), turned
@@ -801,7 +804,8 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// `handling` by its frame's last `body` and its `speed_cap`, whose writes to the thrust
 /// (+0x30), the cap (+0x34) and the heading (+0x68) win (see
 /// [`pursuit`](crate::ai::pursuit)): it turns to the heading the body
-/// wants, and thrusts approaching (7) while off it by less than
+/// wants as `_HandleShip` turns it ([`flight::turn_to`]), and, by its
+/// heading before the turn, thrusts approaching (7) while off it by less than
 /// [`APPROACH_THRUST`] turns, dogfighting (6) by less than a turn and
 /// [`DOGFIGHT_THRUST`], fleeing close or backing away (5) by less than a
 /// turn and [`FLEE_THRUST`], each in whole degrees, strictly
@@ -888,9 +892,11 @@ fn fight(
         },
         _ => *handling,
     };
+    // By its heading before `_HandleShip` turns it to the body's +0x68.
+    let thrust = fire::off_by(npc.state.heading, body.heading) < window;
     let controls = Controls {
-        thrust: fire::off_by(npc.state.heading, body.heading) < window,
-        turn: steer(npc.state.heading, f32::from(body.heading), handling),
+        thrust,
+        turn: flight::turn_to(&mut npc.state, body.heading, handling.turn_rate),
         reverse: false,
         ..Controls::default()
     };

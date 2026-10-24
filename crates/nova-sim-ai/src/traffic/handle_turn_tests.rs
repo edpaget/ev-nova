@@ -11,6 +11,8 @@
 use super::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
 use super::npc::Npc;
 use crate::ai::Goal;
+use crate::ai::fire::Manoeuvre;
+use crate::ai::pursuit::{Body, Frame};
 use crate::combat::ShipRef;
 use crate::flight::{FlightRules, ShipState};
 use crate::geometry::Vec2;
@@ -80,5 +82,74 @@ fn a_moving_inertialess_sniper_braking_or_bursting_has_its_heading_truncated() {
         sniper.owed_burst = owed;
         assert_eq!(fly(&mut sniper, Some(&target)), Outcome::Flying);
         assert_eq!(sniper.state.heading, 40.0, "owing {owed:?}");
+    }
+}
+
+// The fight's bodies (subs 5, 6, 7, 0x10, 0x11 and 0x12), each writing
+// +0x68 to its body's heading.
+
+/// Every manoeuvre the fight flies by `autopilot::fight`'s own turn.
+const BODIES: [Manoeuvre; 6] = [
+    Manoeuvre::Approach,
+    Manoeuvre::Dogfight,
+    Manoeuvre::Flee,
+    Manoeuvre::Swarm,
+    Manoeuvre::BreakOff,
+    Manoeuvre::Rush,
+];
+
+/// A ship of `fields` attacking the player far above it, facing
+/// `heading` and turning `rate` degrees a tick, its frame's last body
+/// `manoeuvre` wanting heading 90: its heading after one tick.
+fn fought(fields: ShipFields, manoeuvre: Manoeuvre, heading: f32, rate: f32) -> f32 {
+    let target = at(0.0, -3000.0, 0.0, 0.0, 0.0);
+    let goal = Goal::Attack(ShipRef::Player);
+    let mut fighter = ship(fields, goal, at(0.0, 0.0, 0.0, 0.0, heading), 0.0);
+    fighter.stats.handling.turn_rate = rate;
+    fighter.pursuit.frame = Some(Frame {
+        goal,
+        bodies: [
+            Some(Body {
+                manoeuvre,
+                heading: 90,
+            }),
+            None,
+        ],
+        speed_cap: None,
+    });
+    assert_eq!(fly(&mut fighter, Some(&target)), Outcome::Flying);
+    fighter.state.heading
+}
+
+#[test]
+fn a_fighter_within_its_turn_of_its_bodys_heading_is_put_on_it() {
+    // 88.6 is 2 whole degrees off 90, within 3 (@0x34581-0x3458e).
+    for fields in [FAST, RAVEN] {
+        for manoeuvre in BODIES {
+            for heading in [88.6, 92.9] {
+                assert_eq!(
+                    fought(fields, manoeuvre, heading, 3.0),
+                    90.0,
+                    "{manoeuvre:?} from {heading}, flags2 {:#x}",
+                    fields.flags2
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_fighter_measures_its_gap_to_its_bodys_heading_in_whole_degrees() {
+    // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off: it
+    // turns by its rate.
+    for fields in [FAST, RAVEN] {
+        for manoeuvre in BODIES {
+            let heading = fought(fields, manoeuvre, 88.1, 1.95);
+            assert!(
+                (heading - 90.05).abs() < 1e-4,
+                "{manoeuvre:?}, flags2 {:#x}: {heading}",
+                fields.flags2
+            );
+        }
     }
 }
