@@ -44,6 +44,11 @@
 //! paint is saved, as the original's pilot file keeps it
 //! (`_WritePilotData` @0x727f2); drawing it is not done yet.
 //!
+//! It keeps its nickname, the original's `_playerNickname` (0x3b5290),
+//! which the New Pilot dialog sets (`_DoNewPilot` @0x191ca-0x191dc) and the
+//! pilot file keeps (+0x5d98, `_WritePilotData` @0x727cc-0x727e9): empty
+//! for none, as a pilot built without the dialog has.
+//!
 //! It keeps its ship's name, the original's `_shipName`: a new pilot's
 //! ship is named after its class (the `shïp`'s name) until the New Pilot
 //! flow christens it ([`Pilot::with_ship_name`], `nova_sim::christening`,
@@ -128,6 +133,9 @@ pub enum ExploredLevel {
 pub struct Pilot {
     /// The pilot's name; empty for a pilot that is never saved.
     pub name: String,
+    /// The pilot's nickname (`_playerNickname`, 0x3b5290); empty for none,
+    /// which `<PNN>` reads as the name.
+    pub nickname: String,
     /// The ship class flown.
     pub ship: ShipId,
     /// The ship's name. `None` for a ship never named: a save from
@@ -255,6 +263,7 @@ impl Pilot {
         let stats = ShipStats::new(fields, &outfit_mods(&outfits, &records));
         Ok(Self {
             name: name.to_owned(),
+            nickname: String::new(),
             ship,
             ship_name: Some(class_name(&catalog.ships(), ship)),
             system,
@@ -306,6 +315,19 @@ impl Pilot {
             ship_name: Some(name),
             ..self
         }
+    }
+
+    /// The pilot with nickname `nickname`, everything else unchanged: the
+    /// nickname the New Pilot dialog keeps (`_DoNewPilot` @0x191ca-0x191dc).
+    #[must_use]
+    pub fn with_nickname(self, nickname: String) -> Self {
+        Self { nickname, ..self }
+    }
+
+    /// The pilot's nickname; empty for none.
+    #[must_use]
+    pub fn nickname(&self) -> &str {
+        &self.nickname
     }
 
     /// The player's gender.
@@ -811,6 +833,21 @@ mod tests {
             Pilot {
                 ship_name: pilot.ship_name.clone(),
                 ..named
+            },
+            pilot
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_has_no_nickname_until_given_one() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.nickname(), "");
+        let nicknamed = pilot.clone().with_nickname("Hunter".to_owned());
+        assert_eq!(nicknamed.nickname(), "Hunter");
+        assert_eq!(
+            Pilot {
+                nickname: String::new(),
+                ..nicknamed
             },
             pilot
         );
