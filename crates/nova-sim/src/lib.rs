@@ -226,6 +226,10 @@
 //!   ([`mission::select_stellar`]), each [`mission::Offer`]'s resolved
 //!   values ([`mission::resolve`]), and the per-visit [`mission::Offers`]
 //!   with the roll table `AvailRandom` reads.
+//! - [`new_pilot`]: the New Pilot dialog's name and nickname: the
+//!   defaults `_DoNewPilot` opens it with
+//!   ([`name_defaults`](new_pilot::name_defaults)) and the names kept
+//!   ([`kept_name`](new_pilot::kept_name)).
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
@@ -423,6 +427,7 @@ pub use nova_sim_port::grant;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
 pub use nova_sim_port::murk;
+pub use nova_sim_port::new_pilot;
 pub use nova_sim_port::order_loop;
 pub use nova_sim_port::outfitter;
 pub use nova_sim_port::player_info;
