@@ -343,3 +343,76 @@ fn an_inspector_matching_its_leads_velocity_has_its_heading_truncated() {
     fly(&mut closing, Some(&far));
     assert_eq!(closing.state.heading, 0.0);
 }
+
+// The AI wait.
+
+/// A ship of [`FAST`] on `goal` at `start`, waiting `wait` ticks, flown
+/// one tick among `sites` beside `other`: its heading after.
+fn waited(
+    goal: Goal,
+    start: ShipState,
+    wait: u32,
+    sites: &[LandingSite],
+    other: Option<&ShipState>,
+) -> f32 {
+    let mut npc = match goal {
+        Goal::Dock(_) => docking(start.position, start.heading, 3.0),
+        _ => ship(FAST, goal, start, start.velocity.length()),
+    };
+    npc.state.velocity = start.velocity;
+    npc.ai_wait = wait;
+    if let Goal::Attack(_) = goal {
+        npc.pursuit.frame = Some(Frame {
+            goal,
+            bodies: [
+                Some(Body {
+                    manoeuvre: Manoeuvre::Dogfight,
+                    heading: 90,
+                }),
+                None,
+            ],
+            speed_cap: None,
+        });
+    }
+    assert_eq!(fly_among(&mut npc, sites, other), Outcome::Flying);
+    npc.state.heading
+}
+
+#[test]
+fn while_its_ai_wait_runs_no_flight_turns_the_ship() {
+    // Each would put a ship facing 88.6 on 90, or on 88: `_HandleShip`
+    // skips the turn block while +0x4c runs (@0x3443f-0x34454).
+    let east = at(5000.0, 0.0, 0.0, 0.0, 0.0);
+    let sites = [planet(140, 5000.0, 0.0)];
+    let still = at(0.0, 0.0, 0.0, 0.0, 88.6);
+    let player = Goal::Attack(ShipRef::Player);
+    let cases: [(Goal, ShipState, Option<&ShipState>); 8] = [
+        (Goal::Land(StellarId(140)), still, None),
+        (Goal::JumpOut, at(500.0, 0.0, 0.0, 0.0, 88.6), None),
+        (player, still, Some(&east)),
+        (Goal::Snipe(ShipRef::Player), still, Some(&east)),
+        (
+            Goal::Dock(ShipRef::Player),
+            at(-60.0, 0.0, 0.0, 0.0, 88.6),
+            Some(&ShipState::default()),
+        ),
+        (Goal::Inspect(ShipRef::Player), still, Some(&east)),
+        (Goal::Idle, at(0.0, 0.0, -3.0, 0.0, 88.6), None),
+        (Goal::Hold, still, None),
+    ];
+    for (goal, start, other) in cases {
+        let turned = waited(goal, start, 0, &sites, other);
+        assert!([88.0, 90.0].contains(&turned), "{goal:?} turns: {turned}");
+        assert_eq!(waited(goal, start, 5, &sites, other), 88.6, "{goal:?}");
+    }
+}
+
+#[test]
+fn a_count_wait_is_exempt_and_brakes_turning_as_ever() {
+    // Goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3444d-0x34454):
+    // it brakes as sub 1 does.
+    let moving = at(0.0, 0.0, -3.0, 0.0, 88.6);
+    assert_eq!(waited(Goal::CountWait, moving, 5, &[], None), 90.0);
+    let still = at(0.0, 0.0, 0.0, 0.0, 88.6);
+    assert_eq!(waited(Goal::CountWait, still, 5, &[], None), 88.0);
+}
