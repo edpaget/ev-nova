@@ -275,7 +275,6 @@ use crate::catalog::{
     CommCatalog, CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId, ShipRecord,
 };
 use crate::chance::{Chance, NeverFires};
-use crate::christening::entry;
 use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
 use crate::combat::weapon::Guidance;
 use crate::control::Gate;
@@ -291,6 +290,7 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::stats::ShipStats;
+use crate::string_entry::entry;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll, ShownTons};
 
 /// The `shïp` `Flags3` bits the shipyard reads (the Bible): not the same

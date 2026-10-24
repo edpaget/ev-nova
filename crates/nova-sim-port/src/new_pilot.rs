@@ -32,8 +32,8 @@
 
 use crate::catalog::CommCatalog;
 use crate::chance::Chance;
-use crate::christening::entry;
 use crate::shipyard::cull_name;
+use crate::string_entry::entry;
 use nova_sim_catalog::trim_resource_name;
 
 /// The `STR#` the default name and nickname come from.

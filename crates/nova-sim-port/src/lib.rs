@@ -124,4 +124,5 @@ pub mod player_info;
 pub mod recharge;
 pub mod ship_change;
 pub mod shipyard;
+pub(crate) mod string_entry;
 pub mod wares;

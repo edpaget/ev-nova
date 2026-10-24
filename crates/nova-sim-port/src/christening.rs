@@ -36,6 +36,7 @@ use crate::catalog::{CommCatalog, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::pilot::Pilot;
 use crate::shipyard::cull_name;
+use crate::string_entry::entry;
 
 /// The `STR#` the prompt's opening words come from.
 pub const PROMPT_LIST: i16 = 2002;
@@ -88,15 +89,6 @@ pub fn christening(
 #[must_use]
 pub fn christen(pilot: Pilot, typed: &str) -> Pilot {
     pilot.with_ship_name(cull_name(typed))
-}
-
-/// Entry `index` (1-based) of `STR#` `list`; empty when either is missing.
-pub(crate) fn entry(strings: &(impl CommCatalog + ?Sized), list: i16, index: usize) -> String {
-    strings
-        .string_list(list)
-        .into_iter()
-        .nth(index - 1)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
