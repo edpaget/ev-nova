@@ -33,6 +33,7 @@
 //! place of the comm dialog. Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
+use nova_sim::escort_arrival::push_distance;
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -4134,8 +4135,8 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     assert_eq!(arrived.len(), 1, "the trader came along");
     assert_eq!(arrived[0].ship, class);
     assert!(session.is_escort(arrived[0].id));
-    let off = arrived[0].state.position - session.player().position;
-    assert!(off.length() < 100.0, "beside the player: {off:?}");
+    let back = (arrived[0].state.position - session.player().position).length() - push_distance();
+    assert!(back.abs() < 100.0, "pushed back to glide in: {back}");
 }
 
 /// The stock ships' escort classes: the Shuttle (`shïp` 128) a freighter,

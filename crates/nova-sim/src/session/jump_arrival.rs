@@ -13,9 +13,10 @@
 //! whole-degree heading (@0x6bcfa-0x6bd1b); an inertialess one arrives
 //! still, its speed along its heading at its top speed (@0x6bce7-0x6bcf5),
 //! which its velocity follows from the next tick (see the `inertialess`
-//! module). The escorts it leads come in at its velocity and heading (see
-//! the `escorts` module), as `_RespawnEscort` copies them
-//! (@0x3d69e-0x3d6d1).
+//! module). The escorts it leads take its velocity and heading, as
+//! `_RespawnEscort` copies them (@0x3d69e-0x3d6d1), then are pushed back
+//! from their slots and come 50 faster to glide in (see the
+//! `escort_arrival` module).
 //!
 //! **By the other reading** it is the port's earlier at-rest arrival
 //! ([`hyperspace::arrival`](crate::hyperspace::arrival)): just outside the

@@ -460,6 +460,7 @@ mod dying_player_escorts;
 mod edit;
 mod eject;
 mod entry;
+mod escort_arrival;
 #[cfg(test)]
 mod escort_carriers;
 mod escort_dialog;
@@ -1837,9 +1838,11 @@ impl Session {
     /// hook is still to run ([`Entry::hook_pending`]; see the
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
-    /// order. A system filled by no way in that names an entrance
-    /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue) puts
-    /// its mission escorts beside the player.
+    /// order. The escorts are then placed as `entry` brings them in
+    /// ([`Session::place_entering_escorts`]): on a jump's arrival pushed
+    /// back to glide in, and by a way in that names no entrance
+    /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue)
+    /// re-snapped, mission escorts too, beside the player.
     ///
     /// The ships dropped give their aux ships back, but the fleet's
     /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
@@ -1908,9 +1911,7 @@ impl Session {
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
         self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
-        if entry.and_then(Entry::entrance).is_none() {
-            self.snap_mission_escorts();
-        }
+        self.place_entering_escorts(entry);
         self.space.hold_derelicts(&self.statics);
         self.space.strikes.clear();
         self.space.escorts.aboard = None;

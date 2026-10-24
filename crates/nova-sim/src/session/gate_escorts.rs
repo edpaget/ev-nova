@@ -17,9 +17,11 @@
 //! followers included. Neither makes a sound.
 //!
 //! `_SetupShipsInSystem` has snapped the hired escorts and fighters into
-//! formation before (@0x42c94-0x42ca1); loop C moves them to the gate.
-//! Only a take-off reaches the snap of every led ship
-//! (`_SetupShipsInSystem(sys, 1)` @0x674ad-0x674c2).
+//! a formation counted without the mission escorts before
+//! (@0x42c94-0x42ca1; [`Session::snap_kept_escorts`]), and pushed none, as
+//! only a jump's arrival does (see the `escort_arrival` module); loop C
+//! moves them to the gate. Only a take-off reaches the snap of every led
+//! ship (`_SetupShipsInSystem(sys, 1)` @0x674ad-0x674c2).
 //!
 //! The goal is left as it is: [`Goal::Formation`](crate::ai::Goal)
 //! resumes after the burst, as `_EscortAI` does once goal 21 ends;
@@ -608,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn a_take_off_and_a_jump_still_place_the_escorts_on_their_slots() {
+    fn a_take_off_places_the_escorts_on_their_slots_and_a_jump_pushes_them_back() {
         let catalog = catalog();
         let session = flying(&catalog, Rulebook::default());
         let led = led(&session);
@@ -622,7 +624,21 @@ mod tests {
         assert_eq!(session.pilot.system, SystemId(131));
         let hired = session.space.escorts.fleet[0].expect("placed");
         let npc = session.space.npc(hired).expect("here").clone();
-        assert!(on_slot(&session, &npc), "jump: {:?}", npc.state);
+        // Pushed back from its slot to glide in (the `escort_arrival`
+        // module), not out of a gate. The two mission escorts are not
+        // counted in the provisional snap, so the hired escort's is slot 2
+        // of 2, all three of one width.
+        let slot = crate::escort::FormationSlot {
+            slot: 2,
+            ships: 2,
+            ..npc.formation().expect("a slot")
+        };
+        let snapped = ShipState {
+            position: slot.position(&session.ship.player),
+            ..session.ship.player
+        };
+        assert_eq!(npc.state, crate::escort_arrival::pushed(snapped), "jump");
+        assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 });
         assert!(!npc.emerging());
     }
 }

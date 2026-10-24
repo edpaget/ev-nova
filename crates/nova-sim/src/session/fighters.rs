@@ -3156,10 +3156,16 @@ pub(super) mod tests {
         assert_eq!(npcs.len(), 1);
         let viper = &npcs[0];
         let duty = viper.escort.expect("an escort");
+        // Pushed back from its slot beside the player to glide in (the
+        // `escort_arrival` module).
+        let slot = crate::flight::ShipState {
+            position: duty.formation.position(session.player()),
+            ..*session.player()
+        };
         assert_eq!(
-            viper.state.position,
-            duty.formation.position(session.player()),
-            "beside the player on its slot"
+            viper.state,
+            crate::escort_arrival::pushed(slot),
+            "pushed back from its slot beside the player"
         );
         assert_eq!(viper.reserves.shield.now, 10.0, "as it was");
         assert_eq!(session.npcs().len(), 1, "no Dart");

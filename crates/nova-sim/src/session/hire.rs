@@ -1175,10 +1175,13 @@ mod tests {
             Some(2),
             "through the jump"
         );
-        assert_eq!(
-            npc.state.position,
-            slot_position(session.player(), 2, 2, duty.formation.spacing)
-        );
+        // Pushed back from its slot to glide in (the `escort_arrival`
+        // module).
+        let slot = crate::flight::ShipState {
+            position: slot_position(session.player(), 2, 2, duty.formation.spacing),
+            ..*session.player()
+        };
+        assert_eq!(npc.state, crate::escort_arrival::pushed(slot));
 
         let quarry = pirate(&mut session, 0.0, -400.0);
         assert_eq!(session.select_target(TargetPick::Nearest), Some(quarry));

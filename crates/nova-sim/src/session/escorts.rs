@@ -8,7 +8,10 @@
 //! ship type has a record is placed on its formation slot (2, 3, … in
 //! fleet order, the mission escorts after them in one formation, see
 //! [`mission_escorts`](super::mission_escorts)), with the player's
-//! heading and velocity, of no
+//! heading and velocity: by the engine first on a slot counted without
+//! the mission escorts, then on a jump's arrival pushed back to glide in,
+//! and after a take-off or a pilot flown moved onto its final slot (see
+//! [`escort_arrival`](super::escort_arrival)). It is of no
 //! government, its AI type its `InherentAI`, carrying its class's stock
 //! weapons and rounds, with its record's shield, armour and fuel and its
 //! standing order. Its record follows its reserves as it fights. Every
@@ -181,7 +184,8 @@ pub(super) struct KeptEscort {
 
 impl Session {
     /// The escorts enter the system (see the module docs): by the
-    /// engine their standing orders are reset, and each is placed on its
+    /// engine their standing orders are reset, and each is placed beside
+    /// the player, for [`Session::place_entering_escorts`] to put on its
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its voice, its cloak, and its
@@ -250,10 +254,6 @@ impl Session {
             .collect();
         self.space.traffic.reserve(BTreeSet::new());
         self.space.escorts.restock_persons = false;
-        self.reform();
-        for id in self.space.escorts.fleet.clone().into_iter().flatten() {
-            self.snap(id);
-        }
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
@@ -1418,6 +1418,16 @@ mod tests {
         duty.formation.position(session.player())
     }
 
+    /// Where escort `npc` arrives from a jump: pushed back from its slot
+    /// beside the player, with the player's state, to glide in (the
+    /// `escort_arrival` module).
+    fn pushed_from_slot(session: &Session, npc: &Npc) -> ShipState {
+        crate::escort_arrival::pushed(ShipState {
+            position: slot_of(session, npc),
+            ..*session.player()
+        })
+    }
+
     #[test]
     fn the_first_traffic_tick_places_each_escort_on_its_slot_beside_the_player() {
         let catalog = fleeted();
@@ -1579,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn escorts_follow_the_player_through_a_jump_on_their_slots_with_their_shield() {
+    fn escorts_follow_the_player_through_a_jump_back_from_their_slots_with_their_shield() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.space.escorts.fleet[0].expect("placed");
@@ -1600,9 +1610,12 @@ mod tests {
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2, "both came along");
         for npc in &escorts {
-            assert_eq!(npc.state.position, slot_of(&session, npc), "on its slot");
-            assert_eq!(npc.state.velocity, session.player().velocity);
-            assert_eq!(npc.state.heading, session.player().heading);
+            assert_eq!(
+                npc.state,
+                pushed_from_slot(&session, npc),
+                "pushed back from its slot"
+            );
+            assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 }, "to glide in");
         }
         assert_eq!(
             escorts[0].reserves.shield.now, 4.0,
@@ -1614,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn escorts_arrive_at_the_players_top_speed_velocity() {
+    fn escorts_arrive_50_faster_than_the_players_top_speed_velocity() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
@@ -1625,8 +1638,13 @@ mod tests {
         );
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
+        let heading = crate::trig::whole(player.heading);
         for npc in &escorts {
-            assert_eq!(npc.state.velocity, player.velocity);
+            assert_eq!(
+                npc.state.velocity,
+                player.velocity + crate::trig::accel(heading, 50.0),
+                "50 faster along its heading"
+            );
             assert_eq!(npc.state.heading, player.heading);
         }
     }
@@ -2133,7 +2151,7 @@ mod tests {
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
         for npc in &escorts {
-            assert_eq!(npc.state.position, slot_of(&session, npc));
+            assert_eq!(npc.state, pushed_from_slot(&session, npc));
         }
         assert!(straying(&mut session, &catalog, 300) <= escort::KEEP_FORMATION);
     }
