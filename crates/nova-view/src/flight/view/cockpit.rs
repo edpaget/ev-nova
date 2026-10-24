@@ -561,7 +561,7 @@ impl<C> FlightView<C> {
     }
 
     /// One frame of the stellar slot keys' block, with the keys held and
-    /// pressed since the last ([`slot_block`](super::slot_block)): skipped
+    /// pressed since the last ([`slot_block`]): skipped
     /// while a jump is under way (@0x69d2b-0x69d32) or the session refuses
     /// the nav keys, otherwise at most one stellar picked
     /// ([`FlightView::select_stellar`]).
