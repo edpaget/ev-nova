@@ -348,6 +348,7 @@ mod appear;
 mod build;
 mod christening;
 mod entry;
+mod escort_dialog;
 mod flight;
 mod game;
 mod launch;
@@ -613,6 +614,12 @@ pub struct AppScreen {
     control_bits: Rc<dyn ControlBits>,
     /// The comm dialog, while a hail is under way.
     comm: Option<CommDialog>,
+    /// The escort dialog, while a fleet escort hailed is talked to.
+    escort_dialog: Option<nova_view::ui::escort_dialog::EscortDialog>,
+    /// Whether the port's Leave waits for the report of the escorts sold
+    /// and upgraded, shown over the spaceport, to close (see the
+    /// `escort_dialog` module).
+    leave_held: bool,
     /// The haggle dialog, over the comm dialog, while a price is asked.
     haggle: Option<HaggleDialog>,
     /// The offer dialog of a person hailed or boarded, over flight, until

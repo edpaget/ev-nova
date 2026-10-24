@@ -59,6 +59,9 @@
 //!   ([`AssignmentDialog`]).
 //! - [`comm`]: the comm dialog ([`CommDialog`]), talking to a ship
 //!   hailed, and the haggle dialog ([`HaggleDialog`]) over its price.
+//! - [`escort_dialog`]: the escort dialog
+//!   ([`EscortDialog`](escort_dialog::EscortDialog)) a fleet escort
+//!   hailed opens, with its Upgrade, Sell and Release.
 //! - [`catalog`]: the ports the widgets read: [`DialogResources`] and
 //!   [`DescriptionSource`].
 //! - [`data`]: the ports' adapters over `nova_data`'s `InterfaceData` and
@@ -71,6 +74,7 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod escort_dialog;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;

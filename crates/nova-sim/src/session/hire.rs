@@ -347,7 +347,7 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::control::{PilotFacts, Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
-    use crate::hail::{CreditUnit, EscortStatus, HailOptions, ShownWage};
+    use crate::hail::{CreditUnit, HailOptions, ShownWage};
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
@@ -1604,23 +1604,26 @@ mod tests {
         (session, id)
     }
 
-    /// What hailing NPC `id` says of it as an escort.
+    /// The pay line the escort dialog shows for NPC `id`, hailed.
     fn status(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         id: crate::NpcId,
-    ) -> Option<EscortStatus> {
+    ) -> Option<ShownWage> {
         session.chart.target = Some(id);
-        session
-            .hail(catalog, &HailOptions::default(), &mut NeverFires)
+        match session
+            .hail_key(catalog, &HailOptions::default(), false, &mut NeverFires)
             .expect("answered")
-            .escort
+        {
+            crate::session::Hailed::Escort(view) => view.pay,
+            other => panic!("{other:?}"),
+        }
     }
 
     /// What one jump day pays, and the hail shows, for a hired escort
     /// whose ship type's `Cost` is now `cost` (none: no record), by
     /// `rule`; and its record's wage.
-    fn wage_paid(cost: Option<i32>, rule: RuleSource) -> (i64, Option<EscortStatus>, Option<i64>) {
+    fn wage_paid(cost: Option<i32>, rule: RuleSource) -> (i64, Option<ShownWage>, Option<i64>) {
         let mut catalog = barred(vec![hireable(129, 100)]);
         match cost {
             Some(cost) => catalog.ship_records[1].cost = cost,
@@ -1630,7 +1633,7 @@ mod tests {
         }
         let (mut session, id) = rehired(&catalog, rule);
         let shown = id.and_then(|id| status(&mut session, &catalog, id));
-        session.hang_up();
+        session.press_escort(crate::escort_dialog::EscortButton::Close);
         jump(&mut session, &catalog, 131).expect("arrives");
         let wage = session.pilot().escorts()[0].wage;
         assert_eq!(
@@ -1646,13 +1649,7 @@ mod tests {
     fn by_the_engine_a_hired_escort_is_paid_the_wage_its_type_gives_now() {
         assert_eq!(
             wage_paid(Some(30_000), RuleSource::Engine),
-            (
-                300,
-                Some(EscortStatus {
-                    wage: Some(ShownWage::kept(300))
-                }),
-                Some(100)
-            )
+            (300, Some(ShownWage::kept(300)), Some(100))
         );
         assert_eq!(
             wage_paid(None, RuleSource::Engine).0,
@@ -1673,13 +1670,7 @@ mod tests {
     fn by_the_other_reading_a_hired_escort_is_paid_the_wage_it_was_hired_at() {
         assert_eq!(
             wage_paid(Some(30_000), RuleSource::Bible),
-            (
-                100,
-                Some(EscortStatus {
-                    wage: Some(ShownWage::kept(100))
-                }),
-                Some(100)
-            )
+            (100, Some(ShownWage::kept(100)), Some(100))
         );
     }
 
@@ -1688,13 +1679,7 @@ mod tests {
         for rule in RuleSource::ALL {
             assert_eq!(
                 wage_paid(Some(10_000), rule),
-                (
-                    100,
-                    Some(EscortStatus {
-                        wage: Some(ShownWage::kept(100))
-                    }),
-                    Some(100)
-                ),
+                (100, Some(ShownWage::kept(100)), Some(100)),
                 "{rule:?}"
             );
         }
@@ -1710,9 +1695,8 @@ mod tests {
         session.pilot.escorts[0].wage = Some(kept);
         let shown = id
             .and_then(|id| status(&mut session, &catalog, id))
-            .and_then(|status| status.wage)
             .expect("hired");
-        session.hang_up();
+        session.press_escort(crate::escort_dialog::EscortButton::Close);
         let cash = session.pilot().cash();
         jump(&mut session, &catalog, 131).expect("arrives");
         (shown, cash - session.pilot().cash())

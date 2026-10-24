@@ -314,24 +314,19 @@ impl Session {
     /// status block reads it (@0x90688-0x906ff): none for a ship it does
     /// not lead (+0x9a not 0) or once Release is pressed in this hail
     /// (`releasing`, the flag at 0xdef2c); else "Escort", or "Hired
-    /// Escort" with its wage for a hired fleet escort (+0xbb). Whether it
+    /// Escort" for a hired fleet escort (+0xbb). Whether it
     /// is led is [`Npc::escorts_player`], the relation
     /// [`Session::player_led`] filters on, asked of the ship in hand; a
-    /// mission escort is not of the fleet, so it has no wage.
+    /// mission escort is not of the fleet, so it is not hired.
     fn escort_status(&self, npc: &Npc, releasing: bool) -> Option<EscortStatus> {
         if releasing || !npc.escorts_player() {
             return None;
         }
-        let wage = self
-            .space
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(npc.id))
+        let hired = self
+            .fleet_index(npc.id)
             .and_then(|index| self.pilot.escorts.get(index))
-            .filter(|escort| escort.hired())
-            .map(|escort| self.setup.shown_wage(&self.statics, escort));
-        Some(EscortStatus { wage })
+            .is_some_and(crate::pilot::Escort::hired);
+        Some(EscortStatus { hired })
     }
 
     /// The mission of `npc`, when it is a mission ship: its slot's
@@ -2885,26 +2880,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn hailing_a_hired_escort_shows_its_daily_pay() {
+    fn hailing_a_hired_escort_shows_it_is_hired() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         session.pilot.escorts[0].wage = Some(100);
         let view = hail(&mut session, &catalog);
-        assert_eq!(
-            view.escort,
-            Some(crate::hail::EscortStatus {
-                wage: Some(crate::hail::ShownWage::kept(100))
-            })
-        );
+        assert_eq!(view.escort, Some(crate::hail::EscortStatus { hired: true }));
         assert_eq!(labels(&view), [("Release", Some('R'))]);
     }
 
     #[test]
-    fn hailing_a_captured_escort_shows_it_is_an_escort_with_no_pay() {
+    fn hailing_a_captured_escort_shows_it_is_an_escort_not_hired() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         let view = hail(&mut session, &catalog);
-        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { hired: false })
+        );
         assert_eq!(labels(&view), [("Release", Some('R'))]);
     }
 
@@ -2933,13 +2926,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn hailing_a_mission_escort_shows_it_is_an_escort_with_no_pay() {
+    fn hailing_a_mission_escort_shows_it_is_an_escort_not_hired() {
         let catalog = hailable();
         let mut session = mission_escort(&catalog, Some(crate::escort::FormationSlot::default()));
         assert_eq!(npc(&mut session).escort, None, "not of the fleet");
         assert!(session.player_led().any(|led| led.id == NpcId(0)));
         let view = hail(&mut session, &catalog);
-        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { hired: false })
+        );
     }
 
     #[test]
@@ -2964,7 +2960,7 @@ pub(super) mod tests {
         let view = hail(&mut session, &catalog);
         assert_eq!(
             view.escort,
-            Some(crate::hail::EscortStatus { wage: None }),
+            Some(crate::hail::EscortStatus { hired: false }),
             "the flag is cleared as the dialog opens"
         );
     }
@@ -2984,7 +2980,10 @@ pub(super) mod tests {
         let view = hail(&mut session, &catalog);
         assert_eq!(view.reply, "What can I do for you?");
         assert_eq!(labels(&view), []);
-        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { hired: false })
+        );
     }
 
     #[test]

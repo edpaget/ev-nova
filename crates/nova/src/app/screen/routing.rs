@@ -387,6 +387,7 @@ impl AppScreen {
             (self.player_info.is_some(), Overlay::PlayerInfo),
             (self.haggle.is_some(), Overlay::Haggle),
             (self.comm.is_some(), Overlay::Comm),
+            (self.escort_dialog.is_some(), Overlay::EscortDialog),
             (self.flight_dialog_map_open(), Overlay::DialogMap),
             (self.missions.is_some(), Overlay::Missions),
             (self.offer.is_some(), Overlay::Offer),
@@ -446,6 +447,7 @@ impl AppScreen {
             Overlay::PlayerInfo => self.player_info_input(moved),
             Overlay::Haggle => self.haggle_input(moved),
             Overlay::Comm => self.comm_input(moved),
+            Overlay::EscortDialog => self.escort_dialog_input(moved),
             Overlay::DialogMap => self.flight_dialog_map_input(input),
             Overlay::Missions => self.missions_input(moved),
             Overlay::Offer => self.offer_input(moved),
@@ -587,6 +589,7 @@ pub(super) enum Overlay {
     PlayerInfo,
     Haggle,
     Comm,
+    EscortDialog,
     /// A mission dialog's map over flight.
     DialogMap,
     Missions,

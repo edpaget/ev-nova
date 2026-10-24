@@ -64,6 +64,8 @@ pub enum Showing {
     Assignment,
     /// The comm dialog, over flight, which it pauses.
     Comm,
+    /// The escort dialog, over flight, which it pauses.
+    EscortDialog,
     /// The haggle dialog, over the comm dialog.
     Haggle,
     /// The offer dialog of a person hailed or boarded, over flight, which

@@ -239,6 +239,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.comm {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.escort_dialog {
+            return Some(dialog);
+        }
         if let Some(dialogs) = &mut self.missions {
             return Some(dialogs);
         }
@@ -329,6 +332,13 @@ impl AppScreen {
         }
         if let Some(view) = self.flight.as_mut().and_then(FlightView::take_hail) {
             self.open_comm(&view);
+        }
+        if let Some(view) = self
+            .flight
+            .as_mut()
+            .and_then(FlightView::take_escort_dialog)
+        {
+            self.open_escort_dialog(&view);
         }
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);

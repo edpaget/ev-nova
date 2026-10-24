@@ -1134,7 +1134,7 @@ mod tests {
         assert!(!labels(&view).contains(&RELEASE), "{:?}", labels(&view));
         assert_eq!(
             view.escort,
-            Some(crate::hail::EscortStatus { wage: None }),
+            Some(crate::hail::EscortStatus { hired: false }),
             "\"Status: Escort\" with no pay, as _CommDialogUpdate shows any ship the player leads"
         );
         assert!(!view.hostile);

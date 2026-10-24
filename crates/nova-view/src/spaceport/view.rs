@@ -1823,8 +1823,10 @@ impl SpaceportView {
     }
 
     /// Queues `text` to show in "Desc Dialog", with no picture or movie,
-    /// over the spaceport, when it has the mission dialogs.
-    fn show_text(&mut self, text: &str) {
+    /// over the spaceport, when it has the mission dialogs: a text no
+    /// mission is behind, such as the report of the escorts sold and
+    /// upgraded on leaving.
+    pub fn show_text(&mut self, text: &str) {
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.show_descs(vec![DescShown {
                 text: text.to_owned(),

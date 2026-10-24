@@ -216,6 +216,9 @@ impl Screen for AppScreen {
             self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
             self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.escort_dialog
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
             self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
             self.player_info
                 .as_ref()
@@ -365,6 +368,9 @@ impl Screen for AppScreen {
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
+            self.escort_dialog
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.offer.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.missions

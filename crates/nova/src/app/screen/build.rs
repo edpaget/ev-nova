@@ -94,6 +94,8 @@ impl AppScreen {
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             comm: None,
+            escort_dialog: None,
+            leave_held: false,
             haggle: None,
             offer: None,
             missions: None,
@@ -267,6 +269,12 @@ impl AppScreen {
     #[must_use]
     pub fn comm(&self) -> Option<&CommDialog> {
         self.comm.as_ref()
+    }
+
+    /// The escort dialog, while a fleet escort hailed is talked to.
+    #[must_use]
+    pub fn escort_dialog(&self) -> Option<&nova_view::ui::escort_dialog::EscortDialog> {
+        self.escort_dialog.as_ref()
     }
 
     /// The haggle dialog, while a price is asked.
@@ -627,6 +635,9 @@ impl AppScreen {
         }
         if self.comm.is_some() {
             return Showing::Comm;
+        }
+        if self.escort_dialog.is_some() {
+            return Showing::EscortDialog;
         }
         if self.flight_dialog_map_open() {
             return Showing::FlightMap;

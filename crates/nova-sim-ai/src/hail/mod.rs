@@ -521,18 +521,15 @@ pub struct HailView {
 }
 
 /// What the comm dialog shows of a ship the player leads hailed
-/// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" with its daily
-/// pay for a hired escort, or "Escort" for any other (a captured escort,
-/// a launched fighter, a mission escort).
+/// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" for a hired
+/// escort, or "Escort" for any other (a captured escort, a launched
+/// fighter, a mission escort). A fleet escort hailed opens the escort
+/// dialog instead (`nova_sim::escort_dialog`), which shows a hired
+/// escort's pay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
-    /// The daily pay a hired escort's line shows, as
-    /// `nova_sim::Session::with_rules` says (`RuleKey::EscortWage`): by
-    /// the engine, worked out from its ship type's `Cost` as
-    /// `_EscortDialogUpdate` draws it (`nova_sim::hire::shown_wage`);
-    /// otherwise the wage kept ([`ShownWage::kept`]). None for one not
-    /// hired.
-    pub wage: Option<ShownWage>,
+    /// Whether it is a hired fleet escort (+0xbb).
+    pub hired: bool,
 }
 
 /// The word after a pay amount: `_creditString` ("credit") or

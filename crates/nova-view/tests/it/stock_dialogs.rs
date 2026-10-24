@@ -893,6 +893,34 @@ fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
 }
 
 #[test]
+fn the_escort_dialog_lays_out_with_its_items_where_recorded() {
+    use nova_view::ui::escort_dialog::{
+        CLOSE_ITEM, ESCORT_DIALOG, INFO_ITEM, PICTURE_ITEM, RELEASE_ITEM, SELL_ITEM, TITLE_ITEM,
+        UPGRADE_ITEM,
+    };
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(ESCORT_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (424.0, 259.0)
+        );
+        for (item, bounds) in [
+            (CLOSE_ITEM, rect(29.0, 225.0, 146.0, 26.0)),
+            (RELEASE_ITEM, rect(29.0, 197.0, 146.0, 26.0)),
+            (UPGRADE_ITEM, rect(29.0, 141.0, 146.0, 26.0)),
+            (SELL_ITEM, rect(29.0, 169.0, 146.0, 26.0)),
+            (INFO_ITEM, rect(14.0, 9.0, 192.0, 58.0)),
+            (PICTURE_ITEM, rect(217.0, 30.0, 200.0, 200.0)),
+            (TITLE_ITEM, rect(14.0, 79.0, 192.0, 52.0)),
+        ] {
+            assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
+    }
+}
+
+#[test]
 fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled() {
     use nova_sim::mission::OfferLabels;
     use nova_sim::{MissionId, OfferPrompt};
@@ -1278,7 +1306,8 @@ fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
 /// widened flight view each lands where the original's `_CenterWindow`
 /// puts it once its 1024x768 frame is centred: none keeps its `DLOG`
 /// bounds. Comm 1007, haggle 1008, plunder 1011, mission info 1012, the
-/// offers 1016 and 1020, player info 1017, assignment 1018, the map 2000,
+/// offers 1016 and 1020, player info 1017, assignment 1018, the escort
+/// dialog 1022, the map 2000,
 /// yes/no 3002, the texts 3003 and 3004, Find 3005 and the preferences
 /// 4003.
 #[test]
@@ -1286,7 +1315,8 @@ fn every_dialog_opened_over_flight_is_centred() {
     for (_, path) in builds() {
         let ui = interface(&path);
         for id in [
-            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 2000, 3002, 3003, 3004, 3005, 4003,
+            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 1022, 2000, 3002, 3003, 3004, 3005,
+            4003,
         ] {
             let template = ui.dialog_template(id).expect("converts");
             assert_eq!(

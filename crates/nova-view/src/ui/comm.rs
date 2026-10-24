@@ -12,11 +12,11 @@
 //! item 12's top, the status line (`_CommDialogUpdate` @0x905f5-0x90704)
 //! is two runs: "Status:" (#196) in grey at the item's left, then the
 //! value. For a ship the player leads it is "Hired Escort" (#166) or
-//! "Escort" (#168) in bright green, 35 pixels right of the item's left,
-//! and a hired escort's daily pay, "Pay: <wage> credits per day" (#297,
-//! #267) as `_EscortDialogUpdate` draws it ([`pay_text`]), a line below (the original's escort dialog's line, shown here,
-//! as the help says the comm window shows a hired escort's cost per day).
-//! For a hostile ship it is "Hostile" (#174) in red, after the label and
+//! "Escort" (#168) in bright green, 35 pixels right of the item's left.
+//! A fleet escort hailed opens the escort dialog instead
+//! ([`escort_dialog`](super::escort_dialog)), which shows a hired
+//! escort's pay; so "Hired Escort" shows here only for a ship the
+//! session reports so. For a hostile ship it is "Hostile" (#174) in red, after the label and
 //! two spaces, bold as QuickDraw smears it: drawn twice, a pixel apart.
 //! Other ships show no status. Its buttons
 //! stand in a column, [`BUTTON_STEP`] apart, at item 3's left, width and
@@ -46,8 +46,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{ESCORT, HIRED_ESCORT, PAY_LABEL, PER_DAY};
-use nova_sim::{CreditUnit, Haggle, HailView, ShipId, ShownWage};
+use nova_sim::hire::{ESCORT, HIRED_ESCORT};
+use nova_sim::{Haggle, HailView, ShipId};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -56,7 +56,6 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -198,27 +197,6 @@ pub fn class_text(view: &HailView) -> String {
     }
 }
 
-/// `_creditString` (pointer 0x3b5690 -> 0x184460), `STR#` 2002 #32.
-pub const CREDIT: &str = "credit";
-/// `_creditsString` (pointer 0x3b55cc -> 0x184580), `STR#` 2002 #33.
-pub const CREDITS: &str = "credits";
-
-/// A hired escort's pay line for `wage` a day as `_EscortDialogUpdate`
-/// draws it (@0x94f54-0x9502d): "Pay: <amount> <unit> per day" (`STR#`
-/// 2002 #297 and #267), the amount by `_DrawCommaNumber`
-/// ([`comma_number`]) and the unit the core chose.
-#[must_use]
-pub fn pay_text(wage: ShownWage) -> String {
-    let unit = match wage.unit {
-        CreditUnit::Credit => CREDIT,
-        CreditUnit::Credits => CREDITS,
-    };
-    format!(
-        "{PAY_LABEL} {} {unit} {PER_DAY}",
-        comma_number(wage.credits)
-    )
-}
-
 /// Where a status line's value stands on its baseline.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ValuePlace {
@@ -256,11 +234,7 @@ pub struct StatusLine {
 pub fn status_line(view: &HailView) -> Option<StatusLine> {
     match view.escort {
         Some(status) => Some(StatusLine {
-            value: if status.wage.is_some() {
-                HIRED_ESCORT
-            } else {
-                ESCORT
-            },
+            value: if status.hired { HIRED_ESCORT } else { ESCORT },
             color: ESCORT_COLOR,
             place: ValuePlace::Column(VALUE_COLUMN),
             bold: false,
@@ -283,7 +257,7 @@ pub fn ship_picture(ship: ShipId) -> ImageKey {
 
 /// Draws `picture` over `bounds`, or without one a dark backdrop with an
 /// outline.
-fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
+pub(super) fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
     if let Some(image) = picture {
         list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
     } else {
@@ -584,7 +558,7 @@ impl CommDialog {
     /// #196) in grey at its left, then the value, unwrapped, in its
     /// colour: an escort's at [`VALUE_COLUMN`], "Hostile" where the pen
     /// stops after the label and two spaces, smeared bold
-    /// ([`smeared`]). Below it, a line on, a hired escort's pay.
+    /// ([`smeared`]).
     fn draw_status(&self, list: &mut DrawList, at: Bounds) {
         let Some(line) = status_line(&self.view) else {
             return;
@@ -609,16 +583,6 @@ impl CommDialog {
             smeared(list, line.value, origin, line.color);
         } else {
             list.text(line.value, origin, TEXT_SIZE, None, line.color);
-        }
-        if let Some(wage) = self.view.escort.and_then(|status| status.wage) {
-            let below = top + self.metrics.line_height(Font::Geneva, TEXT_SIZE);
-            list.text(
-                pay_text(wage),
-                Point::new(at.min.x, below),
-                TEXT_SIZE,
-                Some(at.width()),
-                ESCORT_COLOR,
-            );
         }
     }
 }
@@ -863,7 +827,7 @@ impl Screen for HaggleDialog {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{CreditUnit, EscortStatus, HailButton, NpcId, ShownWage};
+    use nova_sim::{EscortStatus, HailButton, NpcId};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
@@ -1321,7 +1285,7 @@ mod tests {
     /// A status run: its text, origin, colour, size and wrap width.
     type Run = (String, Point, Color, f32, Option<f32>);
 
-    /// The status runs and the pay line `dialog` draws in item 12.
+    /// The status runs `dialog` draws in item 12.
     fn status_runs(dialog: &CommDialog) -> Vec<Run> {
         drawn(dialog)
             .into_iter()
@@ -1333,9 +1297,7 @@ mod tests {
                     size,
                     wrap_width,
                     ..
-                } if [STATUS_LABEL, HOSTILE, HIRED_ESCORT, ESCORT].contains(&text.as_str())
-                    || text.starts_with(PAY_LABEL) =>
-                {
+                } if [STATUS_LABEL, HOSTILE, HIRED_ESCORT, ESCORT].contains(&text.as_str()) => {
                     Some((text, origin, color, size, wrap_width))
                 }
                 _ => None,
@@ -1369,29 +1331,18 @@ mod tests {
     }
 
     #[test]
-    fn a_hired_escort_shows_a_grey_label_hired_escort_at_35_and_its_pay_below() {
+    fn a_hired_escort_shows_a_grey_label_and_hired_escort_at_35() {
         let hired = HailView {
-            escort: Some(EscortStatus {
-                wage: Some(ShownWage::kept(1000)),
-            }),
+            escort: Some(EscortStatus { hired: true }),
             ..view()
         };
-        let below = 104.0 + MonoMetrics.line_height(Font::Geneva, TEXT_SIZE);
-        let pay = (
-            "Pay: 1,000 credits per day".to_owned(),
-            Point::new(40.0, below),
-            ESCORT_COLOR,
-            9.0,
-            Some(134.0),
-        );
         assert_eq!(
             status_runs(&dialog(&hired)),
             [
                 run(STATUS_LABEL, 40.0, 104.0, LABEL_COLOR),
                 run(HIRED_ESCORT, 75.0, 104.0, ESCORT_COLOR),
-                pay,
             ],
-            "drawn once, not bold"
+            "drawn once, not bold, with no pay line: the escort dialog shows that"
         );
         assert_eq!(ESCORT_COLOR, Color::rgba(0x00, 0xFF, 0x00, 255));
     }
@@ -1399,14 +1350,14 @@ mod tests {
     #[test]
     fn an_escort_not_hired_shows_its_status_alone() {
         let captured = HailView {
-            escort: Some(EscortStatus { wage: None }),
+            escort: Some(EscortStatus { hired: false }),
             ..view()
         };
         let expected = [
             run(STATUS_LABEL, 40.0, 104.0, LABEL_COLOR),
             run(ESCORT, 75.0, 104.0, ESCORT_COLOR),
         ];
-        assert_eq!(status_runs(&dialog(&captured)), expected, "no pay line");
+        assert_eq!(status_runs(&dialog(&captured)), expected);
         let hostile = HailView {
             hostile: true,
             ..captured
@@ -1424,7 +1375,7 @@ mod tests {
         let mut moved = stock();
         moved.items[CLASS_ITEM - 1].bounds = Bounds::at(Point::new(60.0, 90.0), 134.0, 46.0);
         let escort = HailView {
-            escort: Some(EscortStatus { wage: None }),
+            escort: Some(EscortStatus { hired: false }),
             ..view()
         };
         let dialog = CommDialog::new(&moved, &escort, ButtonStyle::STOCK, Rc::new(MonoMetrics))
@@ -1493,13 +1444,13 @@ mod tests {
             })
         );
         assert_eq!(HOSTILE_GAP, "  ");
-        let escort = |wage| HailView {
-            escort: Some(EscortStatus { wage }),
+        let escort = |hired| HailView {
+            escort: Some(EscortStatus { hired }),
             hostile: true,
             ..view()
         };
         assert_eq!(
-            status_line(&escort(Some(ShownWage::kept(5)))),
+            status_line(&escort(true)),
             Some(StatusLine {
                 value: HIRED_ESCORT,
                 color: ESCORT_COLOR,
@@ -1508,7 +1459,7 @@ mod tests {
             })
         );
         assert_eq!(
-            status_line(&escort(None)),
+            status_line(&escort(false)),
             Some(StatusLine {
                 value: ESCORT,
                 color: ESCORT_COLOR,
@@ -1519,25 +1470,6 @@ mod tests {
         assert_eq!(VALUE_COLUMN, 35.0);
         assert_eq!(STATUS_BASELINE, 40.0);
         assert_eq!(status_line(&view()), None);
-    }
-
-    #[test]
-    fn the_pay_line_draws_as_escort_dialog_update_does() {
-        use CreditUnit::{Credit, Credits};
-        for (credits, unit, text) in [
-            (1, Credit, "Pay: 1 credit per day"),
-            (1, Credits, "Pay: 1 credits per day"),
-            (0, Credits, "Pay: 0 credits per day"),
-            (-1, Credits, "Pay: -1 credits per day"),
-            (12_000, Credits, "Pay: 12,000 credits per day"),
-            (999_999, Credits, "Pay: 999,999 credits per day"),
-            (1_000_000, Credits, "Pay: 1.00M credits per day"),
-            (1_234_567, Credits, "Pay: 1.23M credits per day"),
-        ] {
-            assert_eq!(pay_text(ShownWage { credits, unit }), text);
-        }
-        assert_eq!(CREDIT, "credit");
-        assert_eq!(CREDITS, "credits");
     }
 
     #[test]

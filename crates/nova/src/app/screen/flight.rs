@@ -156,6 +156,7 @@ impl AppScreen {
         self.plunder = None;
         self.assignment = None;
         self.comm = None;
+        self.escort_dialog = None;
         self.haggle = None;
         self.offer = None;
         self.missions = None;
@@ -402,22 +403,43 @@ impl AppScreen {
     /// this runs after every input and tick, the input that closes the
     /// last of them leaves before a frame draws the spaceport bare. With
     /// no spaceport open, the ship leaves at once.
+    ///
+    /// Either leave first settles the escorts' marks: a report of what
+    /// they sold and upgraded shows over the spaceport and holds the
+    /// leave until it closes ([`AppScreen::report_escorts_landed`]).
     fn leave_if_due(&mut self) {
+        let holds = self
+            .spaceport
+            .as_ref()
+            .is_some_and(SpaceportView::holds_leave);
+        if self.leave_held {
+            if !holds {
+                self.leave_held = false;
+                self.leave_port_by(FlightView::take_off);
+            }
+            return;
+        }
         if !self.flight.as_ref().is_some_and(FlightView::leave_due) {
             return;
         }
-        if self
-            .spaceport
-            .as_ref()
-            .is_some_and(SpaceportView::holds_leave)
-        {
+        if holds || self.report_escorts_landed() {
             return;
         }
         self.leave_port_by(FlightView::leave_if_due);
     }
 
-    /// Leaves the spaceport by its Leave ([`FlightView::take_off`]).
+    /// Leaves the spaceport by its Leave ([`FlightView::take_off`]), once
+    /// the report of the escorts sold and upgraded, if any, has closed.
     pub(super) fn leave_port(&mut self) {
+        // The spaceport stays left under the report: the held leave goes
+        // on once it closes (`AppScreen::leave_if_due`).
+        if self.leave_held {
+            return;
+        }
+        if self.report_escorts_landed() {
+            self.leave_held = true;
+            return;
+        }
         self.leave_port_by(FlightView::take_off);
     }
 
@@ -536,6 +558,7 @@ impl AppScreen {
     /// (@0x601d2-0x601eb). A move while landed keeps the spaceport open,
     /// and its sound with it.
     fn drop_spaceport(&mut self) {
+        self.leave_held = false;
         if let Some(mut spaceport) = self.spaceport.take() {
             self.sounds.extend(spaceport.close_sounds());
         }

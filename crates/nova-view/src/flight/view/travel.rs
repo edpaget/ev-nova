@@ -1118,6 +1118,16 @@ impl<
         Some(self.departed(departure))
     }
 
+    /// Settles the escorts' marks as the ship leaves the stellar it is
+    /// landed at ([`Session::land_escorts`]), drawing on the flight's
+    /// chance, and gives the report to show over the spaceport; none when
+    /// nothing was sold or upgraded. The router calls it before either
+    /// leave.
+    pub fn land_escorts(&mut self) -> Option<String> {
+        let session = self.session.as_mut().ok()?;
+        session.land_escorts(&mut self.chance)
+    }
+
     /// Catches the screen up with `departure`: the take-off's line, then
     /// what settling it did; gives the stellar left.
     fn departed(&mut self, departure: Departure) -> StellarId {

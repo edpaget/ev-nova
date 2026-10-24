@@ -148,6 +148,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::Plunder
                     | Showing::Assignment
                     | Showing::Comm
+                    | Showing::EscortDialog
                     | Showing::Haggle
                     | Showing::Offer
                     | Showing::MissionText
@@ -704,6 +705,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Plunder
             | Showing::Assignment
             | Showing::Comm
+            | Showing::EscortDialog
             | Showing::Haggle
             | Showing::Offer
             | Showing::MissionText
@@ -758,6 +760,7 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Plunder
         | Showing::Assignment
         | Showing::Comm
+        | Showing::EscortDialog
         | Showing::Haggle
         | Showing::Offer
         | Showing::MissionText
@@ -2888,6 +2891,7 @@ mod tests {
             Showing::Plunder,
             Showing::Assignment,
             Showing::Comm,
+            Showing::EscortDialog,
             Showing::Haggle,
             Showing::Offer,
             Showing::MissionText,
