@@ -221,6 +221,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Digit2) => Key::Char('2'),
         PhysicalKey::Code(KeyCode::Digit3) => Key::Char('3'),
         PhysicalKey::Code(KeyCode::Digit4) => Key::Char('4'),
+        // The top-row 5: the escort menu's Freighters key, and with
+        // Command flight's second nearest-stellar key. 6-0 stay unmapped.
+        PhysicalKey::Code(KeyCode::Digit5) => Key::Char('5'),
         // F1-F4, flight's other stellar slot keys, and F5, its nearest
         // stellar key.
         PhysicalKey::Code(KeyCode::F1) => Key::Function(1),
@@ -331,6 +334,7 @@ mod tests {
             (KeyCode::Digit2, Key::Char('2')),
             (KeyCode::Digit3, Key::Char('3')),
             (KeyCode::Digit4, Key::Char('4')),
+            (KeyCode::Digit5, Key::Char('5')),
             (KeyCode::F1, Key::Function(1)),
             (KeyCode::F2, Key::Function(2)),
             (KeyCode::F3, Key::Function(3)),
@@ -338,7 +342,7 @@ mod tests {
             (KeyCode::F5, Key::Function(5)),
             (KeyCode::F11, Key::Function(11)),
             (KeyCode::KeyQ, Key::Other),
-            (KeyCode::Digit5, Key::Other),
+            (KeyCode::Digit6, Key::Other),
             (KeyCode::F6, Key::Other),
         ];
         for (code, key) in cases {
@@ -352,7 +356,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 45] = [
+    const GAME_CHARACTER_KEYS: [Key; 46] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -388,6 +392,7 @@ mod tests {
         nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
         nova_view::flight::escorts::MENU_KEY,
+        nova_view::flight::escorts::GROUP_KEYS[4],
         nova_view::flight::view::ESCORT_RECALL_KEY,
         nova_view::spaceport::bar::NEWS_KEYS[0],
         nova_view::spaceport::PORT_KEYS[0].0,
@@ -427,6 +432,7 @@ mod tests {
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,
             '4' => KeyCode::Digit4,
+            '5' => KeyCode::Digit5,
             '=' => KeyCode::Equal,
             '+' => KeyCode::NumpadAdd,
             '-' => KeyCode::Minus,
