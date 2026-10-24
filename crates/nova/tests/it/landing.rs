@@ -681,11 +681,12 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
         [play(151, nova_audio::priority::TRAFFIC_CONTROL)],
         "traffic control"
     );
-    // The landing beep, then, on the spaceport's first frame, the
-    // planet's own ambient sound.
+    // An inhabited planet's touchdown is silent (`_PlayerLandOnStellar`
+    // beeps only at an uninhabited stellar, @0x632be-0x632ef); on the
+    // spaceport's first frame, the planet's own ambient sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [play(151, nova_audio::priority::LANDING)]);
+    assert_eq!(drain(&log), [], "the touchdown is silent");
     harness.frame();
     assert_eq!(
         drain(&log),

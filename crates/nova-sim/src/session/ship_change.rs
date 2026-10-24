@@ -25,7 +25,9 @@
 //! (`_PlayerLandOnStellar` @0x63421) and loading a pilot
 //! (`_LoadPilotData` @0x754dc) fill the shield and armour. So a shield or
 //! armour above the new class's most lasts, in flight, until damage
-//! takes it: [`RuleKey::ShipChangeReserves`].
+//! takes it: [`RuleKey::ShipChangeReserves`]. Both fills are built (see
+//! the `land_on_stellar` module): a take-off or a load sets the shield
+//! and armour to the new most, the surplus gone.
 //! The block never calls `_DestroyPartialFleetCargo`, but each
 //! `_SystemInfoToShipStats` ends in `_ResetPlayerPrecalcedValues`
 //! (@0xcae9), whose trim (@0xc7d8-0xc887) cuts the commodities to the
@@ -69,10 +71,11 @@
 //! after, or a boarding grant, keeps it by the engine reading of
 //! [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), as the
 //! original's `_SystemInfoToShipStats` clamps no reserve, and holds it by
-//! the other. The outfitter and flying the pilot again from a save
-//! ([`Session::fly`]; the save itself keeps the surplus) hold it either
-//! way, as the original's outfitter does when it closes (@0x5da4b-0x5dad4)
-//! and its `_LoadPilotData` fills the shield and armour (@0x754dc).
+//! the other. The outfitter holds it either way, as the original's does
+//! when it closes (@0x5da4b-0x5dad4). The save itself keeps the surplus,
+//! and flying the pilot again from it ([`Session::fly`]) fills the shield
+//! and armour to their most, as `_LoadPilotData` does (@0x754d1-0x754f4),
+//! and so does a take-off (`_PlayerLandOnStellar` @0x6341e-0x6343d).
 //!
 //! - `Cxxx` keeps every outfit and adds no default.
 //! - `Exxx` keeps every outfit and adds the new class's default items; by
@@ -1968,7 +1971,14 @@ mod tests {
                 "{op}"
             );
             assert_eq!(reloaded.stats(), session.stats(), "{op}");
-            assert_eq!(reloaded.reserves(), session.reserves(), "{op}");
+            // The load fills the shield and armour (@0x754d1-0x754f4).
+            let (stats, reserves) = (reloaded.stats(), reloaded.reserves());
+            assert_eq!(reserves.fuel, session.reserves().fuel, "{op}");
+            assert_eq!(
+                (reserves.shield.now, reserves.armor.now),
+                (stats.shield, stats.armor),
+                "{op}"
+            );
             assert_eq!(reloaded.pilot.cargo, session.pilot.cargo, "{op}");
             assert_eq!(reloaded.pilot().ship_name(), Some("Kestrel"), "{op}");
             assert_eq!(

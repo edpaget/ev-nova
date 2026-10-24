@@ -177,8 +177,9 @@ impl SoundTable {
     /// - `engine`: none. No stock `snd ` is an engine sound, and the guide
     ///   reserves no ID for one: the original thrusts in silence.
     /// - `landing`: 151, "Beep2". The guide: "151 Beep 2: ... request/grant
-    ///   landing clearance". L lands at once here, so the clearance beep
-    ///   marks the landing. The stellar's own sound (its `CustSndID`, 128
+    ///   landing clearance". It plays as an uninhabited stellar's
+    ///   touchdown beep (`_PlayerLandOnStellar` @0x632ef); the clearance
+    ///   beeps are traffic control's. The stellar's own sound (its `CustSndID`, 128
     ///   and up) is not the table's: the spaceport plays it as its ambient
     ///   sound once it is frontmost
     ///   ([`UiSound::PortAmbient`](nova_view::sound::UiSound::PortAmbient)).

@@ -578,12 +578,13 @@ fn landing_in_a_flight_that_never_started_does_nothing() {
     assert_eq!(view.take_off(), None);
 }
 
-/// Only the landing beep sounds at touchdown: the stellar's own sound
-/// is its spaceport's ambient sound, which plays once the spaceport is
+/// Nothing sounds at an inhabited stellar's touchdown (only an
+/// uninhabited one beeps, `_PlayerLandOnStellar` @0x632be-0x632ef): the
+/// stellar's own sound is its spaceport's ambient sound, which plays once the spaceport is
 /// frontmost (see the spaceport's
 /// `the_ambient_sound_plays_on_the_first_frame_then_after_each_wait`).
 #[test]
-fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
+fn l_over_an_inhabited_stellar_is_silent_at_touchdown() {
     let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
     assert_eq!(view.take_sounds(), []);
     tap(&mut view, LAND);
@@ -595,8 +596,8 @@ fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
         "the greeting"
     );
     tap(&mut view, LAND);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Landed)]);
-    assert_eq!(view.take_sounds(), [], "taken");
+    assert_eq!(view.take_landing(), Some(StellarId(140)), "landed");
+    assert_eq!(view.take_sounds(), [], "the touchdown is silent");
     view.take_off();
     assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
 }

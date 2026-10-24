@@ -13,10 +13,10 @@
 
 use crate::port::Priority;
 
-/// The landing beep, `_beepSnd[1]`: the dock request's clearance beep
-/// (`_HandlePlayerDockRequest` @0x67a69, and its family @0x676aa,
-/// @0x676fe, @0x67e8f, @0x67ec6), and `_PlayerLandOnStellar`'s
-/// (@0x632ef), all at 1.
+/// The landing beep, `_beepSnd[1]` at 1: `_PlayerLandOnStellar`'s at an
+/// uninhabited stellar (@0x632ef) alone. The dock request's @0x67a69 and
+/// @0x67ec6 are [`TRAFFIC_CONTROL`]'s, and @0x676aa, @0x676fe and
+/// @0x67e8f are [`REFUSED`]'s.
 pub const LANDING: Priority = Priority::new(1);
 /// A take-off sound. The original takes off in silence, so no site gives
 /// one: the lowest.

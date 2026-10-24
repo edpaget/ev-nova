@@ -138,7 +138,7 @@
 //! refused one changes nothing.
 //!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
-//! stopping, landing, taking off, a jump beginning and ending, and a set
+//! stopping, landing at an uninhabited stellar, taking off, a jump beginning and ending, and a set
 //! operator's message and sound), which the audio side drains with
 //! [`Session::take_sounds`]. A refused landing beeps
 //! [`SimSound::Refused`] where the original's dock request does (see
@@ -497,6 +497,7 @@ mod jump_moves;
 mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
+mod land_on_stellar;
 mod last_refresh;
 mod launch_frame;
 mod lost_lead;
@@ -994,7 +995,9 @@ impl Session {
     /// them from its records with each government
     /// ([`legal::systems_from_govts`]); one saved with a crön running
     /// or a rank active that the data no longer has forgets it; and the
-    /// reserves hold no more than the stats allow. No secondary is
+    /// shield and armour are filled to their most, the fuel held to no
+    /// more than the stats allow (`_LoadPilotData` @0x754d1-0x754f4). No
+    /// secondary is
     /// selected, as the original's `_ResetPlayer` leaves it before
     /// `_LoadPilotData` (@0x76502,
     /// @0x7673e), which never sets one.
@@ -1232,6 +1235,10 @@ impl Session {
             false,
             ReservePolicy::Hold,
         );
+        // `_LoadPilotData` fills the shield and armour after its outfit
+        // loop, the fuel read from the save (@0x754d1-0x754f4; see the
+        // `land_on_stellar` module).
+        session.ship.fill_shield_and_armour(&mut session.pilot);
         session
             .space
             .restock_fleet(&mut session.pilot, &session.statics, &session.setup);
@@ -3888,10 +3895,14 @@ impl Session {
 
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'
     /// price multipliers as the spaceport opens (see the `ranks` module),
-    /// and last raises [`StoryEvent::Landed`].
+    /// and last raises [`StoryEvent::Landed`]. It beeps
+    /// ([`SimSound::Landed`]) only at an uninhabited stellar, and fills
+    /// nothing: the shield and armour stay as landed until the take-off
+    /// (see the `land_on_stellar` module).
     fn dock(&mut self, stellar: StellarId) {
         self.port.touchdown = self.ship.player.position;
         let site = self.chart.sites.iter().find(|site| site.id == stellar);
+        let beeps = land_on_stellar::landing_beeps(site);
         if let Some(site) = site {
             self.ship.player.position = site.position;
         }
@@ -3927,7 +3938,12 @@ impl Session {
         self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
-        self.out.sounds.push(SimSound::Landed);
+        // Only an uninhabited stellar beeps, `_beepSnd[1]`
+        // (`_PlayerLandOnStellar` @0x632be-0x632ef; see the
+        // `land_on_stellar` module).
+        if beeps {
+            self.out.sounds.push(SimSound::Landed);
+        }
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
@@ -3983,6 +3999,11 @@ impl Session {
     /// on to the hyperspace hint (see the [`tutorial`](crate::tutorial)
     /// module). A held `Q`'s take-off with a message greets no one
     /// ([`Session::take_leave_message`]).
+    ///
+    /// After the placement and before the take-off's day, the shield and
+    /// armour are filled to their most, the fuel untouched
+    /// (`_PlayerLandOnStellar` @0x6341e-0x6343d; see the `land_on_stellar`
+    /// module).
     ///
     /// The take-off starts the take-off grace: for
     /// [`TAKEOFF_GRACE_TICKS`] the map, mission info and player info keys
@@ -4065,6 +4086,10 @@ impl Session {
             self.ship.player.position = self.port.touchdown;
         }
         self.chart.mark_take_off_placed();
+        // The shield and armour filled, after the placement and before
+        // the take-off's day (@0x6341e-0x6343d; see the `land_on_stellar`
+        // module).
+        self.ship.fill_shield_and_armour(&mut self.pilot);
         // The take-off's own day, after the placement (@0x63440).
         if stay_days {
             self.pass_days(Stay::TAKE_OFF_DAYS, chance);
@@ -7805,7 +7830,11 @@ pub(super) mod tests {
             "landing writes neither nav word"
         );
         assert!(session.take_save_due());
-        assert_eq!(session.take_sounds(), [SimSound::Landed]);
+        assert_eq!(
+            session.take_sounds(),
+            [],
+            "an inhabited stellar's touchdown is silent (@0x632be)"
+        );
         // Once off again, L requests clearance afresh.
         session.take_off(&catalog(), &mut NeverFires);
         assert!(matches!(
@@ -9301,10 +9330,11 @@ pub(super) mod tests {
         );
         assert_eq!(session.landed(), Some(StellarId(128)));
         assert!(
-            session
+            !session
                 .take_sounds()
                 .iter()
-                .any(|sound| matches!(sound, SimSound::Landed))
+                .any(|sound| matches!(sound, SimSound::Landed)),
+            "an inhabited stellar's touchdown is silent (@0x632be)"
         );
     }
 
@@ -9838,8 +9868,9 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn landing_emits_landed() {
+    fn landing_at_an_uninhabited_stellar_emits_landed() {
         let mut session = Session::start(&catalog()).expect("starts");
+        session.chart.sites[0].flags |= StellarFlags::UNINHABITED;
         land_now(&mut session).expect("lands");
         assert_eq!(session.take_sounds(), [SimSound::Landed]);
     }
@@ -9855,7 +9886,8 @@ pub(super) mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
-            [SimSound::ThrustStopped, SimSound::Landed]
+            [SimSound::ThrustStopped],
+            "an inhabited stellar's touchdown is silent"
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
@@ -14474,8 +14506,9 @@ pub(super) mod tests {
                     now: 30.0,
                     max: 30.0
                 },
+                // `_LoadPilotData` fills the armour (@0x754d1-0x754f4).
                 armor: Gauge {
-                    now: 20.0,
+                    now: 45.0,
                     max: 45.0
                 },
                 fuel: Gauge {

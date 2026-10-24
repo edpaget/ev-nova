@@ -498,16 +498,12 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     assert_eq!(
         harness.played(),
         [
-            // Traffic control's greeting, then the landing's beep.
+            // Traffic control's greeting; an inhabited stellar's
+            // touchdown is silent (`_PlayerLandOnStellar` @0x632be).
             AudioCommand::Play {
                 sound: SoundId(LANDING_BEEP),
                 volume: five,
                 priority: nova_audio::priority::TRAFFIC_CONTROL,
-            },
-            AudioCommand::Play {
-                sound: SoundId(LANDING_BEEP),
-                volume: five,
-                priority: nova_audio::priority::LANDING,
             },
         ]
     );
