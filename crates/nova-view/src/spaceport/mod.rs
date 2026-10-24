@@ -45,6 +45,7 @@
 
 pub mod ambient;
 pub mod bar;
+pub mod buttons;
 pub mod catalog;
 pub mod credits;
 pub mod data;

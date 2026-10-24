@@ -485,7 +485,7 @@ fn rect(bounds: Bounds) -> Rect {
 }
 
 #[test]
-fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
+fn l_over_the_planet_shows_its_spaceport_with_every_button() {
     let mut harness = Harness::flying(0);
     harness.frame();
     harness.press_physical(KeyCode::KeyL);
@@ -524,11 +524,11 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
         "Bar",
         "Mission BBS",
         "Leave",
+        // Not offered, so drawn disabled.
+        "Shipyard",
+        "Outfitter",
     ] {
         assert!(texts.iter().any(|t| t == shown), "{shown}: {texts:?}");
-    }
-    for hidden in ["Shipyard", "Outfitter"] {
-        assert!(!texts.iter().any(|t| t == hidden), "{hidden}: {texts:?}");
     }
 }
 

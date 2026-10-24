@@ -33,8 +33,8 @@ pub const TEXT_ITEM: usize = 6;
 /// The Leave button's item: bottom right, as in the original.
 pub const LEAVE_ITEM: usize = 12;
 
-/// The Recharge button's item, shown only where fuel is sold: right
-/// column, third down, as in the original.
+/// The Recharge button's item: right column, third down, as in the
+/// original.
 pub const RECHARGE_ITEM: usize = 4;
 
 /// The button each service gets, as `_DrawPlanetButtons` labels them

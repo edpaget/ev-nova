@@ -6,9 +6,10 @@
 //! description (`dësc` = `spöb` ID) and the button style through
 //! [`DescriptionSource`]. It draws the background, then the landscape
 //! stretched into its item, then the stellar's name centred in the name
-//! bar, then the dialog: the description scrolling in its box, Leave, and
-//! a button for each service the stellar's flags offer. The other service
-//! items stay blank, and clicks on them do nothing.
+//! bar, then the dialog: the description scrolling in its box and the
+//! seven buttons of [`buttons`](super::buttons), as `_DrawPlanetButtons`
+//! draws them. A service the stellar's flags don't offer is drawn
+//! disabled, and a click on it does nothing.
 //!
 //! Leave, Return and Escape leave: the router takes off. Each of the
 //! [`PORT_KEYS`](super::layout::PORT_KEYS) presses its button, as
@@ -176,12 +177,12 @@ use nova_sim::{
 
 use super::ambient::Ambient;
 use super::bar::{BarScreen, BarTemplates, Hiring};
+use super::buttons;
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::hire::HireScreen;
 use super::layout::{
-    BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
-    RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, port_key_item,
-    service_item,
+    BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, NAME_FONT, NAME_ITEM, NAME_SIZE, RECHARGE_ITEM,
+    TEXT_ITEM, item_service, landscape_id, port_key_item,
 };
 use super::missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -574,38 +575,30 @@ impl SpaceportView {
                 Ok(text) => (text, None),
                 Err(reason) => (String::new(), Some(reason)),
             };
-            let mut roles = vec![
-                (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
-                (
-                    TEXT_ITEM,
-                    // White on a black box: `_PortDialogUpdate` sets it with
-                    // `TETextBox` (@0x4ef64) and inverts the item
-                    // (`InvertRect` @0x4ef72) when it is visible
-                    // (`RectInRgn` @0x4ef08), which `Dialog` models as the
-                    // item being inside the dialog.
-                    Role::ScrollText {
-                        text: text.clone(),
-                        font: Font::Geneva,
-                        size: BODY_SIZE,
-                        color: BODY_COLOR,
-                        backing: Some(TextBacking::BLACK_BOX),
-                    },
-                ),
-            ];
-            roles.extend(offered.iter().map(|&service| {
-                (
-                    service_item(service),
-                    Role::Button(label(service).to_owned()),
-                )
-            }));
-            if sells_fuel {
-                roles.push((RECHARGE_ITEM, Role::Button(RECHARGE_LABEL.to_owned())));
-            }
+            let mut roles = buttons::roles();
+            roles.push((
+                TEXT_ITEM,
+                // White on a black box: `_PortDialogUpdate` sets it with
+                // `TETextBox` (@0x4ef64) and inverts the item
+                // (`InvertRect` @0x4ef72) when it is visible
+                // (`RectInRgn` @0x4ef08), which `Dialog` models as the
+                // item being inside the dialog.
+                Role::ScrollText {
+                    text: text.clone(),
+                    font: Font::Geneva,
+                    size: BODY_SIZE,
+                    color: BODY_COLOR,
+                    backing: Some(TextBacking::BLACK_BOX),
+                },
+            ));
             let style = catalog.button_style();
-            let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
+            let mut dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
+            for item in buttons::greyed(&offered, sells_fuel) {
+                dialog.set_greyed(item, true);
+            }
             let landscape = landscape_id(record.cust_pic_id, record.graphic_type);
             Ok(Port {
                 dialog,
@@ -2417,14 +2410,14 @@ pub(in crate::spaceport) mod tests {
     use crate::input::MouseButton;
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
-    use crate::spaceport::layout::SERVICE_ITEMS;
+    use crate::spaceport::layout::{SERVICE_ITEMS, service_item};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     /// Stellar 140, Earth: a planet with a trade center and a bar, of
     /// `Type` 3 with no custom picture, so its landscape is `PICT` 10003.
-    struct FakePort {
+    pub(in crate::spaceport) struct FakePort {
         port: Result<PortRecord, String>,
         pictures: Vec<i16>,
         description: Result<String, String>,
@@ -2528,7 +2521,7 @@ pub(in crate::spaceport) mod tests {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn view_of(catalog: &FakePort) -> SpaceportView {
+    pub(in crate::spaceport) fn view_of(catalog: &FakePort) -> SpaceportView {
         SpaceportView::new(catalog, StellarId(140), Ok(layout()))
     }
 
@@ -2541,7 +2534,7 @@ pub(in crate::spaceport) mod tests {
         view_of(&catalog())
     }
 
-    fn drawn(view: &impl Screen) -> Vec<DrawCommand> {
+    pub(in crate::spaceport) fn drawn(view: &impl Screen) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
         view.draw(&mut list);
         list.iter().cloned().collect()
@@ -2565,7 +2558,7 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    fn click(view: &mut SpaceportView, at: Point) {
+    pub(in crate::spaceport) fn click(view: &mut SpaceportView, at: Point) {
         for pressed in [true, false] {
             view.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -2580,7 +2573,7 @@ pub(in crate::spaceport) mod tests {
         click(view, at);
     }
 
-    fn item(view: &SpaceportView, item: usize) -> Bounds {
+    pub(in crate::spaceport) fn item(view: &SpaceportView, item: usize) -> Bounds {
         view.dialog()
             .expect("laid out")
             .item_bounds(item)
@@ -2645,16 +2638,10 @@ pub(in crate::spaceport) mod tests {
     }
 
     #[test]
-    fn only_the_offered_services_recharge_and_leave_are_buttons() {
+    fn every_button_is_drawn_in_its_item_in_the_style_asked_for() {
         let view = earth();
         let commands = drawn(&view);
-        let labels = texts(&commands);
-        for shown in ["Trade Center", "Bar", "Mission BBS", "Recharge", "Leave"] {
-            assert!(labels.contains(&shown.to_owned()), "{shown}: {labels:?}");
-        }
-        for hidden in ["Shipyard", "Outfitter", "Done"] {
-            assert!(!labels.contains(&hidden.to_owned()), "{hidden}: {labels:?}");
-        }
+        assert!(!texts(&commands).contains(&"Done".to_owned()));
         // Each in its own item, with the button style asked for.
         let label_at = |text: &str| {
             commands.iter().find_map(|command| match command {
@@ -2677,6 +2664,12 @@ pub(in crate::spaceport) mod tests {
             let (origin, color) = label_at(text).expect(text);
             assert!(item(&view, item_number).contains(origin), "{text}");
             assert_eq!(color, Color::BLACK, "{text}");
+        }
+        // Those Earth doesn't offer, greyed.
+        for (text, item_number) in [("Outfitter", 8), ("Shipyard", 9)] {
+            let (origin, color) = label_at(text).expect(text);
+            assert!(item(&view, item_number).contains(origin), "{text}");
+            assert_eq!(color, ButtonStyle::STOCK.grey, "{text}");
         }
         assert_eq!(item(&view, 12), on_screen(471.0, 456.0, 145.0, 25.0));
     }
@@ -2758,8 +2751,8 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn clicks_elsewhere_do_nothing() {
         let mut view = earth();
-        // The shipyard's and outfitter's places, the blank button, the
-        // landscape and the description.
+        // The shipyard's and outfitter's greyed buttons, the blank item,
+        // the landscape and the description.
         for number in [9, 8, 13, 5, 6, 3] {
             click_item(&mut view, number);
         }
@@ -2898,27 +2891,6 @@ pub(in crate::spaceport) mod tests {
         assert!(!texts(&drawn(&view)).iter().any(|t| t.contains("dësc")));
     }
 
-    #[test]
-    fn an_uninhabited_stellar_offers_only_leave() {
-        let catalog = FakePort {
-            port: Ok(PortRecord {
-                flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-                ..catalog().port.expect("a record")
-            }),
-            ..catalog()
-        };
-        let view = view_of(&catalog);
-        assert_eq!(view.offered(), []);
-        let labels = texts(&drawn(&view));
-        assert!(labels.contains(&"Leave".to_owned()));
-        assert!(!labels.contains(&"Mission BBS".to_owned()));
-        assert!(!labels.contains(&"Recharge".to_owned()), "no fuel sold");
-        let mut view = view;
-        click_item(&mut view, RECHARGE_ITEM);
-        assert!(!view.take_recharge());
-        assert_eq!(view.take_sounds(), [], "a blank item is silent");
-    }
-
     fn problem(reason: &str) -> DrawCommand {
         DrawCommand::Text {
             text: format!(
@@ -3020,7 +2992,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     #[test]
-    fn keys_blank_items_and_a_spaceport_that_cannot_be_shown_are_silent() {
+    fn keys_greyed_buttons_and_a_spaceport_that_cannot_be_shown_are_silent() {
         let mut view = earth();
         click_item(&mut view, 9);
         view.input(&key(Key::Enter));
@@ -3062,7 +3034,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     /// A stellar with `flags`, otherwise Earth.
-    fn flagged(flags: u32) -> FakePort {
+    pub(in crate::spaceport) fn flagged(flags: u32) -> FakePort {
         FakePort {
             port: Ok(PortRecord {
                 flags,
@@ -3142,7 +3114,7 @@ pub(in crate::spaceport) mod tests {
     /// `_DoPortDialog`'s answers gate each item on the stellar's flags
     /// (@0x5fd6c, @0x5fe71, @0x5feb5, @0x5ff2c, @0x5ffb7, @0x60115), and
     /// a key meets no other gate, so a letter for a service the stellar
-    /// doesn't offer does nothing, as a click on a blank button does.
+    /// doesn't offer does nothing, as a click on its greyed button does.
     #[test]
     fn a_letter_for_a_service_not_offered_does_nothing() {
         let mut bare = view_of(&flagged(StellarFlags::CAN_LAND));
