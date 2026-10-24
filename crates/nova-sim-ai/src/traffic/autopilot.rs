@@ -8,6 +8,18 @@
 //! [`flight::inertialess_step`] instead, its brake and planning as the
 //! [`inertialess`] module says.
 //!
+//! Every steered flight below turns as `_HandleShip` turns every NPC
+//! (@0x34424-0x3458e), whichever substate, or engine stand-in, works out
+//! the whole-degree heading it wants (+0x68): by its turn rate while more
+//! than that off in whole degrees, onto the heading otherwise
+//! ([`flight::turn_to`]). A flight that wants none has its heading
+//! truncated, the low level's default (@0x8522d,
+//! [`flight::turn_to_own`]). Each reads its thrust on the heading before
+//! the turn, as the low level runs before `_HandleShip`. The glide in and
+//! the burst out of a gate, below, aren't turned yet, where the original
+//! truncates their heading through sub 0xa:
+//! rdm:phase/play-feel-2-followups/phase-10-glide-burst-heading-truncates.
+//!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
 //!   any sideways drift, and brakes (turning to its retro heading and
 //!   thrusting, [`brake`]) once its stopping
