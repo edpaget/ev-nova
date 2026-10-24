@@ -188,13 +188,21 @@ impl<S: PilotStore> PilotKeeper<S> {
     /// is not saved, and when the pilots cannot be listed none is.
     #[must_use]
     pub fn exists(&self, name: &str) -> bool {
-        let Some(key) = pilot_key(name) else {
-            return false;
-        };
-        let key = key.to_lowercase();
+        self.saved_key(name).is_some()
+    }
+
+    /// The key of the saved pilot a pilot named `name` would replace, as it
+    /// is saved: its key matched ignoring case, as the Mac's file names
+    /// are (see [`exists`](Self::exists)). `None` for a name with no key,
+    /// none saved, or pilots that cannot be listed.
+    #[must_use]
+    pub fn saved_key(&self, name: &str) -> Option<String> {
+        let key = pilot_key(name)?.to_lowercase();
         self.store
             .list()
-            .is_ok_and(|keys| keys.iter().any(|saved| saved.to_lowercase() == key))
+            .ok()?
+            .into_iter()
+            .find(|saved| saved.to_lowercase() == key)
     }
 
     /// The pilot saved under `key`.
@@ -428,6 +436,22 @@ mod tests {
         assert!(keeper.exists(" ada "), "file names ignore case on a Mac");
         assert!(!keeper.exists("Bob"));
         assert!(!keeper.exists(""));
+    }
+
+    #[test]
+    fn the_saved_key_a_name_would_replace_is_found_whatever_its_case() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        assert_eq!(keeper.saved_key("Ada"), None);
+        keeper
+            .save(&Pilot::new(&catalog(), "shane").expect("starts"))
+            .expect("saves");
+        assert_eq!(keeper.saved_key("Shane"), Some("shane".to_owned()));
+        assert_eq!(keeper.saved_key(" SHANE "), Some("shane".to_owned()));
+        assert_eq!(keeper.saved_key("Bob"), None);
+        assert_eq!(keeper.saved_key(""), None);
+        store.fail_reads(true);
+        assert_eq!(keeper.saved_key("shane"), None, "unknown is not there");
     }
 
     #[test]

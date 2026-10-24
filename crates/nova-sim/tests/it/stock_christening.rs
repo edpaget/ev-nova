@@ -1,7 +1,8 @@
 //! A new stock pilot's ship christening (rdm play-feel phase 10): the
 //! prompt `_DoNewPilot` builds from `STR#` 2002 #121 and the first
 //! `chär`'s ship's `LongName`, and the three `STR#` 128 defaults its roll
-//! picks among. Skips, passing, when `NOVA_DATA` is unset.
+//! picks among; and the New Pilot dialog's `STR#` 128 name and nickname
+//! defaults (phase 19). Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -48,5 +49,24 @@ fn a_new_stock_pilot_is_asked_to_christen_its_ship_with_a_stock_default() {
         assert!(asked.prompt.ends_with(": "), "{asked:?}");
         assert!(asked.prompt.len() > "Now, please christen your brand-new : ".len());
         assert_eq!(asked.default, name, "roll {roll}");
+    }
+}
+
+/// The New Pilot dialog's stock defaults (rdm play-feel phase 19):
+/// `STR#` 128 #1-#3 for the name and #4-#6 for the nickname, each its
+/// own roll of three.
+#[test]
+fn a_new_stock_pilot_opens_with_a_stock_name_and_nickname() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    for (roll, name, nickname) in [
+        (0, "Shane Merrol", "Hunter"),
+        (1, "Cade Connelly", "Hawkeye"),
+        (2, "Goroth Obarskyr", "Maverick"),
+    ] {
+        let defaults = nova_sim::new_pilot::name_defaults(&data, &mut Rolls(roll));
+        assert_eq!(defaults.name, name, "roll {roll}");
+        assert_eq!(defaults.nickname, nickname, "roll {roll}");
     }
 }
