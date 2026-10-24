@@ -1698,16 +1698,11 @@ mod tests {
     }
 
     /// The pay line hailing shows for a hired escort that keeps a wage
-    /// of `kept` and whose ship type's `Cost` is now `cost` (none: no
-    /// record), by `rule`; and what one jump day pays it.
-    fn line_and_pay(kept: i64, cost: Option<i32>, rule: RuleSource) -> (ShownWage, i64) {
+    /// of `kept` and whose ship type's `Cost` is now `cost`, by `rule`;
+    /// and what one jump day pays it.
+    fn line_and_pay(kept: i64, cost: i32, rule: RuleSource) -> (ShownWage, i64) {
         let mut catalog = barred(vec![hireable(129, 100)]);
-        match cost {
-            Some(cost) => catalog.ship_records[1].cost = cost,
-            None => {
-                catalog.ship_records.pop();
-            }
-        }
+        catalog.ship_records[1].cost = cost;
         let (mut session, id) = rehired(&catalog, rule);
         session.pilot.escorts[0].wage = Some(kept);
         let shown = id
@@ -1728,15 +1723,15 @@ mod tests {
     fn by_the_engine_the_pay_line_is_worked_out_from_the_cost_now() {
         let engine = RuleSource::Engine;
         assert_eq!(
-            line_and_pay(100, Some(100), engine),
+            line_and_pay(100, 100, engine),
             (shown(1, CreditUnit::Credit), 1)
         );
         assert_eq!(
-            line_and_pay(100, Some(150), engine),
+            line_and_pay(100, 150, engine),
             (shown(1, CreditUnit::Credits), 1)
         );
         assert_eq!(
-            line_and_pay(100, Some(-150), engine),
+            line_and_pay(100, -150, engine),
             (shown(-1, CreditUnit::Credits), 0),
             "the line is not clamped, the pay is"
         );
@@ -1746,11 +1741,11 @@ mod tests {
     fn by_the_other_reading_the_pay_line_shows_the_wage_kept() {
         let bible = RuleSource::Bible;
         assert_eq!(
-            line_and_pay(100, Some(30_000), bible),
+            line_and_pay(100, 30_000, bible),
             (shown(100, CreditUnit::Credits), 100)
         );
         assert_eq!(
-            line_and_pay(1, Some(150), bible),
+            line_and_pay(1, 150, bible),
             (shown(1, CreditUnit::Credit), 1)
         );
     }
