@@ -116,6 +116,8 @@
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`escort_arrival`]: where the escorts arrive with the player from a
+//!   jump: pushed back along its heading to glide in.
 //! - [`escort_voice`]: who among the player's escorts speaks, and when:
 //!   a command's acknowledgement, the 1-in-3 call on a new target and the
 //!   victory.
@@ -391,6 +393,7 @@ pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;
 pub use nova_sim_ai::escort;
+pub use nova_sim_ai::escort_arrival;
 pub use nova_sim_ai::escort_voice;
 pub use nova_sim_catalog::data;
 pub use nova_sim_port::escape;
