@@ -56,7 +56,7 @@ impl Session {
     /// beeping as it opens; none, opening nothing, when it is not in the
     /// fleet or its class has no record.
     pub(super) fn open_escort_dialog(&mut self, id: NpcId) -> Option<EscortDialogView> {
-        let index = self.fleet_index(id)?;
+        let index = self.space.fleet_index(id)?;
         let escort = self.pilot.escorts.get(index)?;
         let record = self.statics.ship_record(escort.ship)?;
         let facts = Facts {
@@ -82,7 +82,10 @@ impl Session {
     #[must_use]
     pub fn escort_dialog(&self) -> Option<EscortDialogView> {
         let dialog = self.space.escorts.dialog?;
-        let escort = self.pilot.escorts.get(self.fleet_index(dialog.npc)?)?;
+        let escort = self
+            .pilot
+            .escorts
+            .get(self.space.fleet_index(dialog.npc)?)?;
         let record = self.statics.ship_record(escort.ship)?;
         let pay = escort
             .hired()
@@ -113,7 +116,7 @@ impl Session {
             EscortButton::Upgrade => EscortMark::Upgrade,
             EscortButton::Sell => EscortMark::Sell,
         };
-        let index = self.fleet_index(dialog.npc)?;
+        let index = self.space.fleet_index(dialog.npc)?;
         let escort = self.pilot.escorts.get_mut(index)?;
         let allowed = match pressed {
             EscortMark::Upgrade => dialog.can_upgrade,
@@ -127,15 +130,6 @@ impl Session {
     fn close_escort_dialog(&mut self) {
         self.space.escorts.dialog = None;
         self.out.sounds.push(SimSound::EscortDialogClosed);
-    }
-
-    /// The fleet index of escort NPC `id`, if it is in the fleet.
-    pub(super) fn fleet_index(&self, id: NpcId) -> Option<usize> {
-        self.space
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))
     }
 }
 

@@ -559,12 +559,7 @@ impl Session {
             })
             .collect();
         for id in lost {
-            let index = self
-                .space
-                .escorts
-                .fleet
-                .iter()
-                .position(|&placed| placed == Some(id));
+            let index = self.space.fleet_index(id);
             let record = index
                 .and_then(|index| self.pilot.escorts.get(index))
                 .copied();
@@ -636,13 +631,7 @@ impl Session {
     /// its type. Without it, a disabled holding escort the fleet lost and
     /// later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
-        let Some(index) = self
-            .space
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))
-        else {
+        let Some(index) = self.space.fleet_index(id) else {
             return false;
         };
         self.space.escorts.fleet.remove(index);
@@ -842,6 +831,14 @@ impl Statics {
 }
 
 impl Space {
+    /// The fleet index of escort NPC `id`, if it is in the fleet.
+    pub(super) fn fleet_index(&self, id: NpcId) -> Option<usize> {
+        self.escorts
+            .fleet
+            .iter()
+            .position(|&placed| placed == Some(id))
+    }
+
     /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
     /// takes as the system is set up, by its index. As
     /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
@@ -964,11 +961,7 @@ impl Space {
         setup: &Setup,
         id: NpcId,
     ) -> Option<i16> {
-        let index = self
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))?;
+        let index = self.fleet_index(id)?;
         let ship = pilot.escorts.get(index)?.ship;
         match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
             RuleSource::Engine => statics.ship_record(ship).map(|record| record.fields.holds),

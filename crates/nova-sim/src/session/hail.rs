@@ -323,6 +323,7 @@ impl Session {
             return None;
         }
         let hired = self
+            .space
             .fleet_index(npc.id)
             .and_then(|index| self.pilot.escorts.get(index))
             .is_some_and(crate::pilot::Escort::hired);
