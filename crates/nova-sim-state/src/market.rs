@@ -722,6 +722,8 @@ pub struct Goods {
     pub disasters: Vec<DisasterRecord>,
     /// The stellars a `Stellar` -1 event may be placed at, by ascending ID.
     stellars: Vec<StellarId>,
+    /// Every `spöb`'s `Flags`, by ID, as [`Goods::with_stellars`] got them.
+    stellar_flags: BTreeMap<StellarId, u32>,
 }
 
 impl Goods {
@@ -761,6 +763,7 @@ impl Goods {
             junk,
             disasters,
             stellars: Vec::new(),
+            stellar_flags: BTreeMap::new(),
         }
     }
 
@@ -769,7 +772,15 @@ impl Goods {
     #[must_use]
     pub fn with_stellars(mut self, stellars: &[(StellarId, u32)]) -> Self {
         self.stellars = event_stellars(stellars);
+        self.stellar_flags = stellars.iter().copied().collect();
         self
+    }
+
+    /// `stellar`'s `Flags`, listed or not: 0 for a `spöb` with no
+    /// record.
+    #[must_use]
+    pub fn stellar_flags(&self, stellar: StellarId) -> u32 {
+        self.stellar_flags.get(&stellar).copied().unwrap_or(0)
     }
 
     /// `jünk` `id`'s `Abbrev`, as the status bar's cargo area names it;
@@ -2872,6 +2883,22 @@ mod tests {
             Goods::read(&Trading(stellars.clone())),
             Goods::new(&stock(), junk(), disasters()).with_stellars(&stellars)
         );
+    }
+
+    #[test]
+    fn goods_keep_every_stellars_flags_listed_or_not() {
+        let goods = Goods::read(&Trading(vec![
+            (StellarId(141), 0),
+            (StellarId(140), StellarFlags::UNINHABITED),
+            (StellarId(128), 0x11),
+        ]));
+        assert_eq!(goods.stellar_flags(StellarId(128)), 0x11);
+        assert_eq!(
+            goods.stellar_flags(StellarId(140)),
+            StellarFlags::UNINHABITED
+        );
+        assert_eq!(goods.stellar_flags(StellarId(141)), 0);
+        assert_eq!(goods.stellar_flags(StellarId(999)), 0);
     }
 
     /// A pilot at the exchange: the [`Trader`] port's fake.

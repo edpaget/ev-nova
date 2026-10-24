@@ -1165,7 +1165,6 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
-        let stellar_flags = catalog.stellar_flags();
         let statics = Statics {
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
@@ -1174,14 +1173,7 @@ impl Session {
                 .map(warp::sound_duration),
             warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
             voices: catalog.voices(),
-            // Read as `Goods::read` reads them, the stellars' `Flags` once.
-            goods: Goods::new(
-                &catalog.commodity_strings(),
-                catalog.junk(),
-                catalog.disasters(),
-            )
-            .with_stellars(&stellar_flags),
-            stellar_flags: stellar_flags.into_iter().collect(),
+            goods: Goods::read(catalog),
             date_affixes: catalog.date_affixes(),
             arsenal,
             govts,

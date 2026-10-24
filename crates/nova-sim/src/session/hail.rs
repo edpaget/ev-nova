@@ -203,8 +203,7 @@ impl Session {
             &AdviceFacts {
                 ports: &self.chart.advice_ports(&self.pilot, &self.statics),
                 events: &self.pilot.events,
-                disasters: &self.statics.goods.disasters,
-                stellar_flags: &self.statics.stellar_flags,
+                goods: &self.statics.goods,
                 words: &AdviceWords::read(catalog),
                 names: self,
             },

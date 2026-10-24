@@ -24,13 +24,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalog::{DisasterId, DisasterRecord, StellarId};
+use crate::catalog::DisasterId;
 use crate::chance::Chance;
 use crate::hail::advice::{
     self, AdvicePort, AdviceWords, DISASTERS, GOOD_PRICES, disaster_line, good_price_line,
 };
 use crate::landing::StellarFlags;
-use crate::market::{self, ActiveEvent};
+use crate::market::{self, ActiveEvent, Goods};
 use crate::pilot::Pilot;
 use crate::text_tags::TagNames;
 
@@ -67,10 +67,8 @@ pub(super) struct AdviceFacts<'a> {
     pub(super) ports: &'a [AdvicePort],
     /// The pilot's events under way.
     pub(super) events: &'a BTreeMap<DisasterId, ActiveEvent>,
-    /// Every `öops` record.
-    pub(super) disasters: &'a [DisasterRecord],
-    /// Every `spöb`'s `Flags`, by ID.
-    pub(super) stellar_flags: &'a BTreeMap<StellarId, u32>,
+    /// Every `öops` record and every `spöb`'s `Flags`.
+    pub(super) goods: &'a Goods,
     /// The words the lines are built from.
     pub(super) words: &'a AdviceWords,
     /// The stellars' and cargo's names.
@@ -100,15 +98,16 @@ pub(super) fn rolled_line(
         DISASTERS => {
             let id = advice::disaster(facts.events, chance)?;
             let active = *facts.events.get(&id)?;
-            let record = facts.disasters.iter().find(|record| record.id == id)?;
+            let record = facts
+                .goods
+                .disasters
+                .iter()
+                .find(|record| record.id == id)?;
             let stellar = market::place(active, record)?;
             let cargo = market::event_commodity(record.commodity)
                 .and_then(|cargo| names.cargo_name(cargo))
                 .unwrap_or_default();
-            let station = facts
-                .stellar_flags
-                .get(&stellar)
-                .is_some_and(|flags| flags & StellarFlags::STATION != 0);
+            let station = facts.goods.stellar_flags(stellar) & StellarFlags::STATION != 0;
             Some(disaster_line(
                 &names.stellar_name(stellar).unwrap_or_default(),
                 station,

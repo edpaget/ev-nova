@@ -43,10 +43,6 @@ pub(super) struct Statics {
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     pub(super) goods: Goods,
-    /// Every `spöb`'s `Flags`, by ID, read when the session starts with
-    /// the goods: what a disaster's advice line reads of its stellar,
-    /// listed or not (see the `hail_advice` module).
-    pub(super) stellar_flags: BTreeMap<StellarId, u32>,
     /// What the date is wrapped in when it is displayed, read when the
     /// session starts.
     pub(super) date_affixes: DateAffixes,
