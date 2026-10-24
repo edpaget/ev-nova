@@ -127,7 +127,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::catalog::{
-        CommCatalog, DisasterId, DisasterRecord, GovtId, PersonId, StellarId, StringPatch,
+        CommCatalog, DisasterId, DisasterRecord, GovtId, PersonId, StellarId, StringPatch, SystemId,
     };
     use crate::hail::{HailOptions, HailRefusal, HailView};
     use crate::landing::StellarFlags;
@@ -275,13 +275,39 @@ mod tests {
     }
 
     #[test]
-    fn a_stellar_not_shown_gives_no_good_price() {
+    fn a_stellar_no_system_lists_gives_no_good_price() {
         let mut catalog = advising();
         catalog.sites[0].1[0].flags = StellarFlags::CAN_LAND;
         catalog.sites[1].1[0].flags = StellarFlags::CAN_LAND | FOOD_LOW;
         catalog.systems.retain(|&system| system.0 != 131);
         let mut session = advised(&catalog, 0x1000);
         assert_eq!(greeted(&mut session, &catalog, &[]), "Greetings.");
+    }
+
+    #[test]
+    fn a_listed_stellar_the_galaxy_hides_gives_no_good_price() {
+        let mut catalog = advising();
+        catalog.sites[0].1[0].flags = StellarFlags::CAN_LAND;
+        catalog.sites[1].1[0].flags = StellarFlags::CAN_LAND | FOOD_LOW;
+        let mut shown = advised(&catalog, 0x1000);
+        assert_eq!(
+            greeted(&mut shown, &catalog, &[]),
+            "Port is a good place to buy food.",
+            "active while 131 is shown"
+        );
+        let mut hidden = advised(&catalog, 0x1000);
+        assert!(hidden.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        assert!(
+            hidden
+                .statics
+                .listed_stellars
+                .iter()
+                .any(|listed| listed.id == StellarId(140)),
+            "still listed"
+        );
+        assert_eq!(greeted(&mut hidden, &catalog, &[]), "Greetings.");
     }
 
     #[test]
