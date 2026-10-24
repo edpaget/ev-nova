@@ -370,7 +370,7 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
         .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
-    click_port_item(&mut screen, 11);
+    click_port_item(&mut screen, 10);
     assert!(
         spaceport(&screen).mission_text().is_some(),
         "nothing available here"
@@ -653,7 +653,7 @@ fn the_bar_offers_again_after_its_hire_screen_restarts_its_wait() {
         .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
-    click_port_item(&mut screen, 10);
+    click_port_item(&mut screen, 11);
     let offered = |screen: &AppScreen| {
         offered_mission(
             spaceport(screen)
@@ -968,7 +968,7 @@ fn a_bar_desc_whose_graphic_is_above_127_and_whose_pict_exists_opens_in_1021() {
         .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
-    click_port_item(&mut screen, 10);
+    click_port_item(&mut screen, 11);
     let bar = spaceport(&screen).open_bar().expect("in the bar");
     assert_eq!(bar.problem(), None);
     assert_eq!(

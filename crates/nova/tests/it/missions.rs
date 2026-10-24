@@ -1232,10 +1232,10 @@ fn due(pilot: &Pilot) -> Pilot {
 }
 
 /// Mission BBS's item.
-const MISSION_BBS: usize = 11;
+const MISSION_BBS: usize = 10;
 
 /// The Bar's item.
-const BAR: usize = 10;
+const BAR: usize = 11;
 
 #[test]
 fn the_mission_computers_selected_text_is_loaded_through_flight() {

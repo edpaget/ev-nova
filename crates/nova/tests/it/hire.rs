@@ -628,7 +628,7 @@ impl Game {
             .expect("landed")
             .dialog()
             .expect("laid out")
-            .item_bounds(10)
+            .item_bounds(11)
             .expect("the Bar")
             .center();
         self.click(bar);

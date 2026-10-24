@@ -536,7 +536,7 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
 fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
     let mut harness = Harness::flying(0);
     harness.land();
-    let bar = harness.item(10).center();
+    let bar = harness.item(11).center();
     harness.click(bar);
     let frame = harness.frame();
     let texts = texts(&frame);
@@ -562,7 +562,7 @@ fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
 fn mission_bbs_with_nothing_offered_says_so_and_done_returns() {
     let mut harness = Harness::flying(0);
     harness.land();
-    let bbs = harness.item(11).center();
+    let bbs = harness.item(10).center();
     harness.click(bbs);
     let frame = harness.frame();
     let texts = texts(&frame);

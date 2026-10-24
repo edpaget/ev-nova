@@ -2669,8 +2669,8 @@ pub(in crate::spaceport) mod tests {
         };
         for (text, item_number) in [
             ("Trade Center", 7),
-            ("Bar", 10),
-            ("Mission BBS", 11),
+            ("Mission BBS", 10),
+            ("Bar", 11),
             ("Recharge", 4),
             ("Leave", 12),
         ] {
@@ -2790,7 +2790,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.open_service().is_none());
         assert!(!view.left());
         // Done, clicked.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -3013,7 +3013,7 @@ pub(in crate::spaceport) mod tests {
         click(&mut view, super::super::service::DONE_BUTTON.center());
         assert!(view.open_service().is_none(), "closed");
         assert_eq!(view.take_sounds(), []);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(view.open_service().is_none());
         assert_eq!(view.take_sounds(), [], "Escape is silent");
@@ -3496,7 +3496,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.open_trade().is_none());
         assert!(!view.left());
         // The other services still open their placeholders.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -3728,7 +3728,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.open_outfitter().is_none());
         assert!(!view.left());
         // The other services keep their placeholders.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -3745,7 +3745,7 @@ pub(in crate::spaceport) mod tests {
         assert!(!view.take_outfitter_opened(), "once");
         view.input(&key(Key::Escape));
         assert!(!view.take_outfitter_opened(), "closing is not opening");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.take_outfitter_opened(), "the bar is not it");
         view.input(&key(Key::Escape));
         click_item(&mut view, 8);
@@ -3765,7 +3765,7 @@ pub(in crate::spaceport) mod tests {
         view.input(&key(Key::Escape));
         assert!(view.take_outfitter_closed());
         assert!(!view.take_outfitter_closed(), "once");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(!view.take_outfitter_closed(), "the bar is not it");
         click_item(&mut view, 8);
@@ -3993,12 +3993,12 @@ pub(in crate::spaceport) mod tests {
         );
         // The mission computer is one; the bar and a placeholder are not.
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(view.open_bar().is_none());
         assert_eq!(view.take_port_dialog_closed(), None, "the bar");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.input(&key(Key::Escape));
         assert!(view.mission_computer().is_none());
@@ -4040,7 +4040,7 @@ pub(in crate::spaceport) mod tests {
             assert_eq!(view.take_port_dialog_opened(), None, "closing");
         }
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
         view.open_mission_computer(Ok(offers()));
         assert_eq!(
@@ -4049,7 +4049,7 @@ pub(in crate::spaceport) mod tests {
         );
         assert_eq!(view.take_port_dialog_opened(), None, "once");
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_port_dialog_opened(), None, "the bar");
         let mut view = earth();
         click_item(&mut view, 7);
@@ -4230,7 +4230,7 @@ pub(in crate::spaceport) mod tests {
         view.input(&key(Key::Escape));
         assert!(view.open_shipyard().is_none());
         assert!(!view.left());
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -4425,15 +4425,15 @@ pub(in crate::spaceport) mod tests {
     fn opening_the_bar_is_told_once() {
         let mut view = drinking(true);
         assert!(!view.take_bar_opened(), "nothing open");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.take_bar_opened());
         assert!(!view.take_bar_opened(), "once");
         view.input(&key(Key::Escape));
         assert!(!view.take_bar_opened(), "leaving is not opening");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.take_bar_opened(), "each time it opens");
         let mut view = earth();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.take_bar_opened(), "the placeholder is not the bar");
     }
 
@@ -4442,7 +4442,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = drinking(true);
         assert!(!view.take_news_request(), "nothing open");
         view.open_news(&the_news(), 9000);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(
             view.open_bar().and_then(BarScreen::news_screen).is_none(),
             "only an answer opens it"
@@ -4526,7 +4526,7 @@ pub(in crate::spaceport) mod tests {
     fn with_a_bar_its_button_opens_it_over_the_spaceport() {
         let mut view = drinking(true);
         assert!(view.open_bar().is_none());
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let bar = view.open_bar().expect("in the bar");
         assert!(view.open_service().is_none());
         assert_eq!(
@@ -4552,7 +4552,7 @@ pub(in crate::spaceport) mod tests {
         assert!(!view.take_hire_request(), "nothing open");
         view.open_hire(hirelings(1, true));
         assert_eq!(view.take_hire(), None);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         assert!(!view.take_hire_request(), "once");
@@ -4575,7 +4575,7 @@ pub(in crate::spaceport) mod tests {
         click(&mut view, hire_label);
         assert!(!view.take_hire_request(), "the fleet is full");
         view.input(&key(Key::Escape));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('e')));
         assert!(
             !view.take_hire_request(),
@@ -4587,7 +4587,7 @@ pub(in crate::spaceport) mod tests {
     fn the_hire_screen_closing_is_reported_once_after_a_hire_a_cancel_or_nothing_for_hire() {
         let mut view = drinking(true);
         assert!(!view.take_hire_closed(), "nothing open");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
@@ -4622,7 +4622,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn with_nothing_for_hire_a_text_says_so() {
         let mut view = drinking_with_info();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let _ = view.take_offer_request();
         let _ = view.take_status_refresh();
         view.input(&key(Key::Char('h')));
@@ -4646,7 +4646,7 @@ pub(in crate::spaceport) mod tests {
             Some(PortMap::Screen(PortScreen::Spaceport)),
             "no bar open: the spaceport's own"
         );
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(MAP_KEY));
         assert_eq!(view.take_map_request(), Some(PortMap::Bar));
         assert_eq!(view.take_map_request(), None, "once");
@@ -4661,7 +4661,7 @@ pub(in crate::spaceport) mod tests {
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             if venue != SPACEPORT {
                 let item = match venue {
-                    BAR => 10,
+                    BAR => 11,
                     TRADE_CENTER => 7,
                     OUTFITTER => 8,
                     _ => 9,
@@ -4756,7 +4756,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn a_full_fleet_greys_hire_escort_when_the_bar_opens() {
         let mut view = drinking(false);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(!view.take_hire_request());
         let debug = format!("{view:?}");
@@ -4900,7 +4900,7 @@ pub(in crate::spaceport) mod tests {
     fn mission_bbs_asks_for_the_mission_computer() {
         let mut view = missioned();
         assert!(!view.take_mission_computer_request());
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert!(view.open_service().is_none(), "no placeholder");
         assert!(view.take_mission_computer_request());
         assert!(!view.take_mission_computer_request(), "once");
@@ -4921,7 +4921,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn without_mission_screens_mission_bbs_opens_its_placeholder() {
         let mut view = earth();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::MissionBbs)
@@ -4932,7 +4932,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn a_refused_computer_says_why_over_the_spaceport() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert!(view.mission_computer().is_none());
         assert_eq!(
@@ -4945,7 +4945,7 @@ pub(in crate::spaceport) mod tests {
         dialog.draw(&mut over);
         expected.extend(over.iter().cloned());
         assert_eq!(drawn(&view), expected);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(
             view.open_bar().is_none() && view.open_service().is_none(),
             "it takes every input"
@@ -4959,7 +4959,7 @@ pub(in crate::spaceport) mod tests {
     fn an_accept_is_taken_through_the_spaceport_and_the_computer_handed_back() {
         let mut view = missioned();
         assert_eq!(view.take_mission_accept(), None, "nothing open");
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         let at = view
             .mission_computer()
@@ -4987,7 +4987,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn the_mission_computer_closing_waits_for_the_texts_queued() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.show_mission_texts(vec![MissionText {
             kind: MissionTextKind::Brief,
@@ -5040,7 +5040,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn a_refused_mission_computer_opens_and_closes_once_its_refusal_closes() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert_eq!(
             view.take_port_dialog_opened(),
@@ -5059,7 +5059,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn mission_texts_show_one_after_another_over_whatever_is_open() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         let text = |mission, text: &str| MissionText {
             graphic: None,
@@ -5275,7 +5275,7 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_offer_choice(), None);
         view.input(&key(Key::Escape));
         assert!(!view.left(), "the offer took the Escape");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_bar().is_none() && view.open_service().is_none());
         view.input(&key(Key::Enter));
         assert!(view.offer_dialog().is_none(), "answered, it closes");
@@ -5437,7 +5437,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn each_open_screens_description_is_asked_through_the_spaceport() {
-        for item in [8, 9, 10] {
+        for item in [8, 9, 11] {
             let mut view = venues();
             assert_eq!(view.take_description_request(), Some(140), "the port's");
             click_item(&mut view, item);
@@ -5499,7 +5499,7 @@ pub(in crate::spaceport) mod tests {
     fn the_bar_asks_as_its_venue_a_quarter_second_after_it_opens() {
         let mut view = drinking_with_offers();
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_offer_request(), None);
         view.tick(ms(249));
         assert_eq!(view.take_offer_request(), None);
@@ -5543,7 +5543,7 @@ pub(in crate::spaceport) mod tests {
         );
         view.input(&key(Key::Char('n')));
         let _ = view.take_offer_choice();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(ms(250));
         assert_eq!(view.take_offer_request(), Some(BAR));
         view.open_offer(pictured());
@@ -5588,7 +5588,7 @@ pub(in crate::spaceport) mod tests {
     fn the_mission_computer_and_placeholder_services_ask_nothing() {
         let mut view = missioned();
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None, "the computer");
@@ -5615,7 +5615,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn a_mission_text_shown_holds_the_bars_wait() {
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.show_mission_texts(vec![MissionText {
             kind: MissionTextKind::Refuse,
             mission: MissionId(141),
@@ -5634,7 +5634,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn without_mission_screens_the_bar_asks_for_no_offer() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None);
         view.open_offer(offered());
@@ -5696,11 +5696,11 @@ pub(in crate::spaceport) mod tests {
         assert!(view.take_mission_info_request(), "the spaceport");
         assert!(!view.take_mission_info_request(), "once");
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(MISSION_INFO_KEY));
         assert!(view.take_mission_info_request(), "the bar");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.input(&key(MISSION_INFO_KEY));
         assert!(view.take_mission_info_request(), "the computer");
@@ -5786,7 +5786,7 @@ pub(in crate::spaceport) mod tests {
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             if venue != SPACEPORT {
                 let item = match venue {
-                    BAR => 10,
+                    BAR => 11,
                     TRADE_CENTER => 7,
                     OUTFITTER => 8,
                     _ => 9,
@@ -5831,7 +5831,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = missioned();
         assert_eq!(view.take_computer_text_request(), None, "nothing open");
         assert_eq!(view.take_info_text_request(), None);
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert_eq!(view.take_computer_text_request(), Some(MissionId(130)));
         assert_eq!(view.take_computer_text_request(), None, "once");
@@ -5871,7 +5871,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn mission_info_opens_over_whatever_is_open_only_with_missions_to_show() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.open_mission_info(actives(0));
         assert!(view.mission_info().is_none(), "nothing to show");
@@ -5988,7 +5988,7 @@ pub(in crate::spaceport) mod tests {
         assert!(asks_player_info(&mut view), "the spaceport");
         assert!(!view.take_player_info_request(), "once");
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(asks_player_info(&mut view), "the bar");
         view.open_hire(hirelings(1, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
@@ -6002,7 +6002,7 @@ pub(in crate::spaceport) mod tests {
         view.open_ship_naming(&naming());
         assert!(!asks_player_info(&mut view), "its name prompt");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert!(asks_player_info(&mut view), "the mission computer");
         let mut view = missioned();
@@ -6021,7 +6021,7 @@ pub(in crate::spaceport) mod tests {
             let mut view = venues();
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             let item = match venue {
-                BAR => 10,
+                BAR => 11,
                 TRADE_CENTER => 7,
                 OUTFITTER => 8,
                 _ => 9,
@@ -6142,7 +6142,7 @@ pub(in crate::spaceport) mod tests {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut view = venues().with_movies(movies_of(&player));
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), Some(BAR));
         view.open_offer(filmed_offer(0));
@@ -6327,7 +6327,7 @@ pub(in crate::spaceport) mod tests {
             let mut view = venues().with_movies(movies_of(&player));
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             let item = match venue {
-                BAR => 10,
+                BAR => 11,
                 TRADE_CENTER => 7,
                 OUTFITTER => 8,
                 _ => 9,
@@ -6427,7 +6427,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn the_player_info_opens_over_whatever_is_open_and_closes_back_to_it() {
         let mut view = informed(missioned());
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.open_player_info(pilot_info());
         let screen = view.player_info().expect("open");
@@ -6524,7 +6524,7 @@ pub(in crate::spaceport) mod tests {
     fn the_screen_below_waits_while_it_is_open() {
         let mut view = informed(drinking_with_offers());
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.open_player_info(pilot_info());
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None, "the bar's wait held");
@@ -6565,7 +6565,7 @@ pub(in crate::spaceport) mod tests {
     /// The spaceport button that opens `venue`.
     fn venue_item(venue: i16) -> usize {
         match venue {
-            BAR => 10,
+            BAR => 11,
             TRADE_CENTER => 7,
             OUTFITTER => 8,
             _ => 9,
@@ -6752,7 +6752,7 @@ pub(in crate::spaceport) mod tests {
     fn the_spaceport_and_the_screens_whose_filters_leave_hold_no_leave() {
         assert!(!earth().holds_leave());
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert!(view.mission_computer().is_some());
         assert!(!view.holds_leave(), "the computer (`_MissionFilter`)");
@@ -6769,7 +6769,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.open_shipyard().is_some());
         assert!(!view.holds_leave(), "the shipyard (`_ShipyardFilter`)");
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.holds_leave(), "the bar (`_BarFilter`)");
         view.input(&key(Key::Char('h')));
         view.open_hire(hirelings(1, true));
@@ -6897,7 +6897,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn the_bars_news_holds_a_leave() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let at = bar_item(&view, 3);
         click(&mut view, at);
         view.open_news(&the_news(), 9000);
@@ -7021,7 +7021,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = kane();
         assert_eq!(frame(&mut view), ambient(false));
         view.tick(mac_ticks(900));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_service().is_some());
         view.tick(Duration::from_secs(60));
         assert_eq!(view.take_sounds(), [], "under the bar");
@@ -7114,7 +7114,7 @@ pub(in crate::spaceport) mod tests {
 
     /// `view` in its bar, with the hire screen open over two ships.
     pub(in crate::spaceport) fn hiring(mut view: SpaceportView) -> SpaceportView {
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
@@ -7174,7 +7174,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = view_of(&sounding(LOOPS));
         assert_eq!(frame(&mut view), ambient(true));
         assert_eq!(frame(&mut view), ambient(true));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(frame(&mut view), [], "covered");
         view.input(&key(Key::Escape));
         assert_eq!(frame(&mut view), ambient(true));
@@ -7215,7 +7215,7 @@ pub(in crate::spaceport) mod tests {
     fn a_press_on_the_landscape_under_something_open_is_not_the_ports() {
         let mut view = kane();
         frame(&mut view);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let landscape = item(&view, LANDSCAPE_ITEM).center();
         click(&mut view, landscape);
         assert_eq!(view.take_sounds(), []);
@@ -7263,7 +7263,7 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn the_hire_screen_is_a_port_dialog() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_port_dialog_opened(), None, "the bar");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
@@ -7318,7 +7318,7 @@ pub(in crate::spaceport) mod tests {
     /// [`drinking_with_info`] in its bar.
     fn in_the_bar() -> SpaceportView {
         let mut view = drinking_with_info();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view
     }
 
@@ -7516,7 +7516,7 @@ pub(in crate::spaceport) mod tests {
             |info| {
                 let mut view = with_info(venues(), info);
                 assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-                click_item(&mut view, 10);
+                click_item(&mut view, 11);
                 view.tick(FIRST_OFFER_DELAY);
                 assert_eq!(view.take_offer_request(), Some(BAR));
                 view.open_offer(offered());
@@ -7619,7 +7619,7 @@ pub(in crate::spaceport) mod tests {
             Rc::clone(&art),
             true,
         );
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_bar().and_then(BarScreen::problem).is_some());
         view.input(&key(Key::Escape));
         assert!(view.open_bar().is_none());
@@ -7632,7 +7632,7 @@ pub(in crate::spaceport) mod tests {
             art,
             true,
         );
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let at = bar_item(&view, 3);
         click(&mut view, at);
         assert!(view.take_news_request());

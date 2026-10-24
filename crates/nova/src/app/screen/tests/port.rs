@@ -519,7 +519,7 @@ fn the_hire_screen_opens_by_the_grid_selection_rule() {
             .with_rules(rulebook)
             .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
         land(&mut screen);
-        click_port_item(&mut screen, 10);
+        click_port_item(&mut screen, 11);
         screen.input(&key(Key::Char('h'), true));
         let hire = spaceport(&screen)
             .open_bar()
@@ -728,7 +728,7 @@ fn p_over_the_trade_center_resets_and_shows_the_cargo_trimmed() {
 #[test]
 fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
     let mut screen = past_the_holds(&MemoryPilots::new());
-    click_port_item(&mut screen, 10);
+    click_port_item(&mut screen, 11);
     assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
     screen.input(&key(Key::Char('h'), true));
     assert!(
@@ -768,7 +768,7 @@ pub(super) fn in_the_bar_by(rules: Rulebook) -> AppScreen {
         .with_rules(rules)
         .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
     land(&mut screen);
-    click_port_item(&mut screen, 10);
+    click_port_item(&mut screen, 11);
     assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
     screen
 }
@@ -2262,7 +2262,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
     (
         "the hire screen",
         |screen| {
-            click_port_item(screen, 10);
+            click_port_item(screen, 11);
             screen.input(&key(Key::Char('h'), true));
         },
         |port| port.open_bar().and_then(BarScreen::hire_screen).is_some(),
@@ -2270,7 +2270,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
     (
         "the hire screen's description",
         |screen| {
-            click_port_item(screen, 10);
+            click_port_item(screen, 11);
             screen.input(&key(Key::Char('h'), true));
             select_first_ship(screen);
             screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
@@ -2285,7 +2285,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
     (
         "an offer over the bar",
         |screen| {
-            click_port_item(screen, 10);
+            click_port_item(screen, 11);
             screen.tick(Duration::from_millis(300));
             screen.tick(Duration::from_millis(300));
             assert_eq!(

@@ -37,11 +37,13 @@ pub const LEAVE_ITEM: usize = 12;
 /// column, third down, as in the original.
 pub const RECHARGE_ITEM: usize = 4;
 
-/// The button each service gets. The data does not record this; it is
-/// chosen to match the original's screen, and kept in this one table.
+/// The button each service gets, as `_DrawPlanetButtons` labels them
+/// (@0x2982a-0x29852) and `_DoPortDialog` answers them: the Mission BBS
+/// at item 10 (`STR#` 150 #16, `_DoMissionDialog` @0x5ffa8) and the Bar
+/// at item 11 (`STR#` 150 #10, `_DoBarDialog` @0x600b0).
 pub const SERVICE_ITEMS: [(Service, usize); 5] = [
-    (Service::MissionBbs, 11),
-    (Service::Bar, 10),
+    (Service::MissionBbs, 10),
+    (Service::Bar, 11),
     (Service::TradeCenter, 7),
     (Service::Shipyard, 9),
     (Service::Outfitter, 8),
@@ -213,8 +215,8 @@ mod tests {
         assert_eq!(
             SERVICE_ITEMS,
             [
-                (MissionBbs, 11),
-                (Bar, 10),
+                (MissionBbs, 10),
+                (Bar, 11),
                 (TradeCenter, 7),
                 (Shipyard, 9),
                 (Outfitter, 8),
