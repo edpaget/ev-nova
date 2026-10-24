@@ -239,6 +239,7 @@ impl<
             held: HashSet::new(),
             nav_latch: false,
             select_latch: false,
+            slot_block: super::slot_block::SlotBlock::default(),
             jump_latch: false,
             pending_landing: None,
             message: None,

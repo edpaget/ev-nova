@@ -48,6 +48,13 @@ fn each_key_asks_the_session_for_its_command() {
     assert!(!view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Nav));
     assert_eq!(view.command_of(GROUP_KEYS[4]), None, "5 is no stellar slot");
+    view.input(&key(Key::Command, true));
+    assert_eq!(
+        view.command_of(NEAREST_STELLAR_COMMAND_KEY),
+        Some(PlayerCommand::Nav),
+        "Command-5"
+    );
+    view.input(&key(Key::Command, false));
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
@@ -476,15 +483,51 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
     let mut view = escorted();
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
-    tap(&mut view, Key::Char('2'));
+    tap_slot(&mut view, Key::Char('2'));
     assert_eq!(nav_target(&view), None, "the menu took it");
-    tap(&mut view, Key::Function(2));
+    tap_slot(&mut view, Key::Function(2));
     assert_eq!(nav_target(&view), Some(StellarId(129)), "F2 never does");
     tap(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
-    tap(&mut view, Key::Char('1'));
+    tap_slot(&mut view, Key::Char('1'));
     assert_eq!(nav_target(&view), Some(StellarId(128)), "shut: a stellar");
     assert_eq!(view.escort_menu().group(), EscortGroup::All);
+}
+
+#[test]
+fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
+    let mut catalog = boardable();
+    for record in &mut catalog.ships {
+        if record.id == ShipId(130) {
+            record.escort_type = 3;
+            record.inherent_ai = 3;
+        }
+    }
+    let pilot = with_escorts(&Pilot::new(&catalog, "Freighted").expect("starts"), &[130]);
+    let (_, chance) = scripted(&placed(750, 650, 0));
+    let mut view = FlightView::with_pilot(catalog, pilot)
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still));
+    view.tick(TICK);
+    tap(&mut view, MENU_KEY);
+    assert!(view.escort_menu().is_open());
+    view.take_sounds();
+    command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+    ticks(&mut view, 1);
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Freighter)
+    );
+    assert_eq!(nav_target(&view), None, "no stellar");
+    assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+    tap(&mut view, MENU_CLOSE_KEY);
+    command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+    ticks(&mut view, 1);
+    let nearest = nav_target(&view);
+    assert!(nearest.is_some(), "shut: the nearest");
+    tap(&mut view, NAV_OFF_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(nav_target(&view), nearest, "as F5's");
 }
 
 #[test]

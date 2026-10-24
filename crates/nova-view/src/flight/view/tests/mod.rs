@@ -1426,6 +1426,13 @@ fn tap(view: &mut View, k: Key) {
     view.input(&key(k, false));
 }
 
+/// Taps `k`, one of the stellar slot keys, then runs the frame whose slot
+/// block takes it.
+fn tap_slot(view: &mut View, k: Key) {
+    tap(view, k);
+    ticks(view, 1);
+}
+
 /// Taps `k`, then runs the step whose secondary block takes it (see
 /// `nova_sim::session`'s `secondary_select`).
 fn tap_and_step(view: &mut View, k: Key) {

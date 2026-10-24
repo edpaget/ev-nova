@@ -2244,3 +2244,57 @@ fn a_shift_click_writing_a_hop_enables_clear_route() {
     assert!(clear_route_enabled(&view));
     assert_eq!(view.course_map().route(), [SystemId(131)], "shown");
 }
+
+/// Whether a zoom key's press zooms the floating map, shown by H, with
+/// `k` held and the escort menu opened first when `menu`.
+fn zooms_holding(mut view: View, k: Key, menu: bool) -> bool {
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    if menu {
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+    }
+    view.input(&key(k, true));
+    let zoom = view.floating.zoom();
+    tap(&mut view, ZOOM_OUT_KEY);
+    view.floating.zoom() != zoom
+}
+
+#[test]
+fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
+    for k in [
+        STELLAR_SLOT_KEYS[1][0],
+        STELLAR_SLOT_KEYS[2][1],
+        NEAREST_STELLAR_KEY,
+    ] {
+        assert!(!zooms_holding(near(), k, false), "{k:?}");
+    }
+    assert!(
+        zooms_holding(near(), NEAREST_STELLAR_COMMAND_KEY, false),
+        "5 without Command is not polled"
+    );
+    assert!(
+        !zooms_holding(escorted(), STELLAR_SLOT_KEYS[1][0], true),
+        "the escort loop polls 2 with the menu open"
+    );
+    assert!(
+        !zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, true),
+        "and 5"
+    );
+    assert!(
+        zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, false),
+        "5 with the menu shut"
+    );
+}
+
+#[test]
+fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
+    for mut view in through_a_jump(near) {
+        let stage = stage(&view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        view.tick(TICK);
+        view.input(&key(HYPER_SELECT_KEY, false));
+        view.input(&key(STELLAR_SLOT_KEYS[2][1], true));
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(view.floating.zoom(), 4, "{stage}: F3 is not polled");
+    }
+}

@@ -44,14 +44,15 @@ use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Input, Key, Point, UiSound};
 use nova_sim::RuleSource;
 
+use super::slot_block;
 use super::{
     AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY,
     ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY,
     FLIGHT_KEYS, FlightView, HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
     JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY,
-    NEAREST_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY,
-    STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
-    drawn_size, npc_tint, shown_heading, shown_position, window_width,
+    NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY,
+    SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
+    ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading, shown_position, window_width,
 };
 
 impl<C> FlightView<C> {
@@ -119,14 +120,20 @@ impl<C> FlightView<C> {
     /// last step, or a flight key held, fades it; the weapon safety key
     /// ([`DESELECT_KEY`]) only by its press, as `_HandlePlayer` sets
     /// *0x3b5550 for it only on the pass it lets go of a secondary
-    /// (@0x6ade1), which its press has faded already.
+    /// (@0x6ade1), which its press has faded already; a stellar slot key
+    /// only while the slot block polls it, as the block sets *0x3b5550 on
+    /// every frame it finds one down (@0x69e0d-0x69e12), and the escort
+    /// menu's loop never does ([`FlightView::slot_key_polled`]).
     pub(super) fn step_cursor(&mut self, steps: u32) {
         if steps == 0 {
             return;
         }
         let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
         let hovering = self.hovering();
-        let held = self.held.iter().any(|&key| key != DESELECT_KEY);
+        let held = self.held.iter().any(|&key| {
+            self.slot_key_polled(key, false)
+                .unwrap_or(key != DESELECT_KEY)
+        });
         for _ in 0..steps {
             self.cursor.step(hovering, frames, held);
         }
@@ -519,6 +526,7 @@ impl<C> FlightView<C> {
             MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
             | ESCORT_RECALL_KEY => PlayerCommand::Escort,
             _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
+            NEAREST_STELLAR_COMMAND_KEY if self.held.contains(&Key::Command) => PlayerCommand::Nav,
             SELECT_KEY => PlayerCommand::SelectWeapon,
             DESELECT_KEY => PlayerCommand::DeselectWeapon,
             NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
@@ -534,18 +542,34 @@ impl<C> FlightView<C> {
     /// like F1-F4, select the stellar in their slot
     /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
     /// its groups instead and never reach here ([`FlightView::escort_key`]).
-    /// F5 selects the nearest ([`NEAREST_STELLAR_KEY`]); Nav Off turns the
-    /// nav system off, or with Option held lets go of the ship target
+    /// F5 and Command-5 select the nearest ([`NEAREST_STELLAR_KEY`],
+    /// [`NEAREST_STELLAR_COMMAND_KEY`]); each of these goes to the slot
+    /// block's next frame ([`FlightView::slot_keys_frame`]). Nav Off turns
+    /// the nav system off, or with Option held lets go of the ship target
     /// ([`NAV_OFF_KEY`]).
     pub(super) fn nav_key(&mut self, key: Key) {
-        let slot = STELLAR_SLOT_KEYS
-            .iter()
-            .position(|keys| keys.contains(&key));
-        match slot {
-            Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
-            _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
-            _ if key == NAV_OFF_KEY => self.press_nav_block(key),
-            _ => {}
+        // The 5 alone goes too: the block picks nothing with it.
+        let slot_key = STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key))
+            || key == NEAREST_STELLAR_KEY
+            || key == NEAREST_STELLAR_COMMAND_KEY;
+        if slot_key {
+            let menu_open = self.escort_menu.is_open();
+            self.slot_block.press(key, &self.held, menu_open);
+        } else if key == NAV_OFF_KEY {
+            self.press_nav_block(key);
+        }
+    }
+
+    /// One frame of the stellar slot keys' block, with the keys held and
+    /// pressed since the last ([`slot_block`](super::slot_block)): skipped
+    /// while a jump is under way (@0x69d2b-0x69d32) or the session refuses
+    /// the nav keys, otherwise at most one stellar picked
+    /// ([`FlightView::select_stellar`]).
+    pub(super) fn slot_keys_frame(&mut self) {
+        let polled = !self.jump_under_way() && self.takes(PlayerCommand::Nav);
+        let menu_open = self.escort_menu.is_open();
+        if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
+            self.select_stellar(pick);
         }
     }
 
@@ -813,7 +837,10 @@ impl<C> FlightView<C> {
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        let holds = self.held.iter().any(|&held| held != SELF_DESTRUCT_KEY);
+        let holds = self.held.iter().any(|&held| {
+            self.slot_key_polled(held, true)
+                .unwrap_or(held != SELF_DESTRUCT_KEY)
+        });
         if !self.floating.is_up() || holds {
             return;
         }
@@ -826,6 +853,25 @@ impl<C> FlightView<C> {
             self.show_floating_map();
             self.ui_sounds.push(UiSound::FloatingMapZoomed);
         }
+    }
+
+    /// For a held stellar slot key `key` (1-4, F1-F5 or the 5), whether
+    /// `_HandlePlayer` polls it this frame and so finds it down; `None` for
+    /// any other key. The slot block polls F1-F5 always, 1-4 with the
+    /// escort menu shut and the 5 with the menu shut, Command down and F5
+    /// up (@0x69d38-0x69dda, the menu's mask @0xa106-0xa124), and none of
+    /// them during a jump (@0x69d2b-0x69d32). With `escort_loop`, the
+    /// escort menu's loop counts too: it polls 1-5 while the menu shows,
+    /// during a jump too (@0x6df4a-0x6e186), setting
+    /// `_quickKeyCheckResult` (@0xa18a-0xa191) but not the cursor's fade.
+    fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
+        if !slot_block::is_block_key(key) {
+            return None;
+        }
+        let menu_open = self.escort_menu.is_open();
+        let block = !self.jump_under_way()
+            && slot_block::block_polls(key, |down| self.held.contains(&down), menu_open);
+        Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
     }
 
     /// Draws the floating map while it is up: centred on the current
@@ -936,9 +982,11 @@ impl<C> FlightView<C> {
     ///   @0x70f4e-0x71110).
     ///
     /// Every other key is ignored, as the original gates it on +0x50 ≤ 0:
-    /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 with the
-    /// menu shut, F1-F4 and F5 (@0x69d2e), M (@0x6a7a2), L (@0x6a8df),
-    /// I (@0x70424), and J, which changes nothing during a jump
+    /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 and
+    /// Command-5 with the menu shut, F1-F4 and F5 (@0x69d2e; held through
+    /// the jump's end, one pressed during it acts after it, see
+    /// [`FlightView::slot_keys_frame`]), M (@0x6a7a2), L (@0x6a8df), I
+    /// (@0x70424), and J, which changes nothing during a jump
     /// (@0x6b0da-0x6b10d). P is refused apart
     /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
     /// as held whatever this says, so H, \` and `\` dropped here act after

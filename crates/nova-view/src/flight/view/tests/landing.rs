@@ -235,7 +235,7 @@ fn each_refusal_says_why_in_the_originals_words() {
     // Only a selected stellar reaches the dock request's not-landable
     // line (@0x6a945-0x6a94c, @0x66977-0x669ae).
     let mut view = flight_among(vec![centre(0, 0)]);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     tap(&mut view, LAND);
     assert_eq!(nav_target(&view), Some(StellarId(140)), "kept");
     assert_eq!(
@@ -398,7 +398,7 @@ fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
         // Selected: only a selected stellar reaches the dock request
         // (@0x6a945-0x6a94c).
         let mut view = flight_among(vec![site(128, (0.0, 0.0), flags)]);
-        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut view, LAND);
         assert_lasts(&mut view, text, LANDING_TICKS);
     }

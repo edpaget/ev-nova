@@ -23,7 +23,7 @@ fn a_slot_key_retargets_and_l_lands_on_the_new_target() {
         let mut view = a_and_b();
         tap(&mut view, LAND);
         assert_eq!(nav_target(&view), Some(StellarId(128)), "{slot_key:?}");
-        tap(&mut view, slot_key);
+        tap_slot(&mut view, slot_key);
         assert_eq!(nav_target(&view), Some(StellarId(129)), "{slot_key:?}");
         land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(129)), "{slot_key:?}");
@@ -44,15 +44,15 @@ fn the_slot_keys_are_1_to_4_and_f1_to_f4_in_nav_order() {
     for (slot, keys) in STELLAR_SLOT_KEYS.iter().enumerate().take(3) {
         for &slot_key in keys {
             let mut view = a_and_b();
-            tap(&mut view, slot_key);
+            tap_slot(&mut view, slot_key);
             let expected = [128, 129, 130][slot];
             assert_eq!(nav_target(&view), Some(StellarId(expected)), "{slot_key:?}");
         }
     }
     let mut view = a_and_b();
-    tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     for &empty in &STELLAR_SLOT_KEYS[3] {
-        tap(&mut view, empty);
+        tap_slot(&mut view, empty);
         assert_eq!(nav_target(&view), Some(StellarId(129)), "empty slot keeps");
     }
 }
@@ -143,8 +143,8 @@ fn a_click_on_the_status_panel_keeps_the_target_even_over_a_stellar() {
 #[test]
 fn f5_selects_the_nearest_stellar() {
     let mut view = a_and_b();
-    tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    tap(&mut view, NEAREST_STELLAR_KEY);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert_eq!(nav_target(&view), Some(StellarId(128)));
     assert_eq!(NEAREST_STELLAR_KEY, Key::Function(5));
 }
@@ -152,7 +152,7 @@ fn f5_selects_the_nearest_stellar() {
 #[test]
 fn nav_off_clears_the_target_and_the_next_l_selects_the_nearest() {
     let mut view = a_and_b();
-    tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     tap(&mut view, NAV_OFF_KEY);
     assert_eq!(nav_target(&view), None);
     tap(&mut view, LAND);
@@ -294,15 +294,15 @@ fn nav_icons(view: &View) -> Vec<(i16, Point)> {
 fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
     let mut view = flight();
     assert_eq!(nav_icons(&view), []);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     // Earth (128), 20 x 20: half 10.
     let earth = on_screen(&view, (0.0, -600.0));
     assert_eq!(
         nav_icons(&view),
         corners_at(10000, earth, 10.0 + 196.0),
-        "a frame drawn before the next tick"
+        "the frame of the pick"
     );
-    for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
+    for expand in [136.0, 76.0, 16.0, 0.0, 0.0] {
         view.tick(TICK);
         let earth = on_screen(&view, (0.0, -600.0));
         assert_eq!(
@@ -316,13 +316,13 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
 #[test]
 fn no_nav_brackets_without_a_nav_target_or_after_hyper_select() {
     let mut view = flight();
-    tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     assert_eq!(nav_icons(&view).len(), 4);
     tap(&mut view, NAV_OFF_KEY);
     assert_eq!(nav_icons(&view), [], "Nav Off");
     view.tick(TICK);
     assert_eq!(nav_icons(&view), []);
-    tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     let moon = on_screen(&view, (300.0, -200.0));
     assert_eq!(
         nav_icons(&view),
@@ -347,7 +347,7 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
         sol_more: vec![unreadable],
         ..catalog()
     });
-    tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[2][0]);
     ticks(&mut view, 5);
     let broken = on_screen(&view, (100.0, 0.0));
     assert_eq!(nav_icons(&view), corners_at(10000, broken, 64.0));
@@ -358,7 +358,7 @@ fn an_always_dominated_stellar_is_bracketed_green() {
     let mut sites = catalog().sites;
     sites[0].flags2 = nova_sim::market::DOMINATED;
     let mut view = flight_among(sites);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     ticks(&mut view, 5);
     let earth = on_screen(&view, (0.0, -600.0));
     assert_eq!(nav_icons(&view), corners_at(10004, earth, 10.0));
@@ -967,7 +967,7 @@ fn a_plotted_course_hides_the_arrow_until_a_stellar_is_selected() {
         view.radar_shown().hyperspace_mode,
         "redrawn as the map closes"
     );
-    tap(&mut view, NEAREST_STELLAR_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert!(view.session().expect("flying").nav_target().is_some());
     assert!(!view.radar_now().hyperspace_mode, "a stellar selected");
 }
@@ -1219,4 +1219,101 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
     assert!(blinked, "the session blinked it");
     assert_eq!(told(&mut view), 0, "once");
     assert_eq!(told(&mut flight()), 0, "the default catalog has it");
+}
+
+/// Holds Command, taps `k`, lets Command go, and runs the next frame.
+fn command_tap_slot(view: &mut View, k: Key) {
+    command_tap(view, k, false);
+    ticks(view, 1);
+}
+
+#[test]
+fn command_5_selects_the_stellar_f5_does_with_the_nav_sound() {
+    let mut view = a_and_b();
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    view.take_sounds();
+    command_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    assert_eq!(nav_target(&view), Some(StellarId(128)), "the nearest");
+    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+    assert_eq!(NEAREST_STELLAR_COMMAND_KEY, Key::Char('5'));
+}
+
+#[test]
+fn five_without_command_selects_nothing() {
+    let mut view = a_and_b();
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    view.take_sounds();
+    tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    assert_eq!(nav_target(&view), Some(StellarId(129)), "kept");
+    assert_eq!(view.take_sounds(), [], "silent");
+}
+
+#[test]
+fn command_5_held_then_let_go_of_with_5_still_down_selects_once() {
+    let mut view = a_and_b();
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    view.input(&key(Key::Command, true));
+    view.input(&key(NEAREST_STELLAR_COMMAND_KEY, true));
+    ticks(&mut view, 3);
+    assert_eq!(nav_target(&view), Some(StellarId(128)));
+    view.input(&key(Key::Command, false));
+    ticks(&mut view, 1);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][1]);
+    assert_eq!(
+        nav_target(&view),
+        Some(StellarId(129)),
+        "5 alone holds nothing"
+    );
+}
+
+#[test]
+fn a_slot_key_pressed_while_another_is_held_does_nothing() {
+    let mut view = a_and_b();
+    view.input(&key(Key::Function(1), true));
+    ticks(&mut view, 1);
+    assert_eq!(nav_target(&view), Some(StellarId(128)));
+    view.take_sounds();
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(
+        nav_target(&view),
+        Some(StellarId(128)),
+        "F1 holds the latch"
+    );
+    assert_eq!(view.take_sounds(), [], "silent");
+    view.input(&key(Key::Function(1), false));
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    assert_eq!(nav_target(&view), Some(StellarId(129)), "let go, 2 acts");
+}
+
+#[test]
+fn a_slot_key_held_selects_once() {
+    let mut view = a_and_b();
+    view.input(&key(STELLAR_SLOT_KEYS[1][0], true));
+    ticks(&mut view, 1);
+    view.take_sounds();
+    ticks(&mut view, 5);
+    assert_eq!(nav_target(&view), Some(StellarId(129)));
+    assert_eq!(view.take_sounds(), [], "one beep a hold");
+}
+
+#[test]
+fn slot_keys_pressed_in_one_frame_make_one_pick_and_one_beep() {
+    let mut view = a_and_b();
+    view.take_sounds();
+    tap(&mut view, STELLAR_SLOT_KEYS[1][1]);
+    tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+    ticks(&mut view, 1);
+    assert_eq!(nav_target(&view), Some(StellarId(129)), "F2 over 3");
+    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+    ticks(&mut view, 1);
+    assert_eq!(nav_target(&view), Some(StellarId(130)), "3 over 1");
+    view.take_sounds();
+    tap(&mut view, STELLAR_SLOT_KEYS[2][1]);
+    tap(&mut view, NEAREST_STELLAR_KEY);
+    ticks(&mut view, 1);
+    assert_eq!(nav_target(&view), Some(StellarId(128)), "F5 over F3");
+    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
 }

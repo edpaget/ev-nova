@@ -73,11 +73,14 @@ impl Session {
     /// @0x6a6c1), its brackets flying in and the dock request dropped
     /// (@0x6a6c6-0x6a6fc). A click on none is silent.
     ///
+    /// The walk skips a hidden stellar (spob +0x44, @0x6a632) by walking
+    /// the chart's sites, which hold only the active stellars, as
+    /// `_HandleStellarSystemVisibility` clears and sets +0x44 (@0x32c42,
+    /// @0x32cdf) and hands out slots only to active ones (@0x32ee4).
+    ///
     /// Left out: the floating map's clicks (@0x6a130-0x6a342,
     /// @0x6a719-0x6a762, hud-fidelity phase 24, as the engine draws no
-    /// floating map), the hidden-stellar skip (spob +0x44, @0x6a632,
-    /// task nav-selection-follow-up) and the box's shape (stellar-fidelity
-    /// phase 9).
+    /// floating map) and the box's shape (stellar-fidelity phase 9).
     pub fn click_in_space(&mut self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
         if self.mode.landed().is_some() {
             return None;

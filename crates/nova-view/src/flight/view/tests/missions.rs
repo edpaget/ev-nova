@@ -2047,7 +2047,7 @@ fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> Vi
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
-    tap(&mut view, NEAREST_STELLAR_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
     tap(&mut view, TARGET_KEY);
     tap(&mut view, HAIL_KEY);
     view.take_offer().expect("offered");

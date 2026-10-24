@@ -534,7 +534,7 @@ fn a_hail_refused_beeps_through_the_view() {
 #[test]
 fn y_with_a_stellar_selected_and_no_ship_target_opens_nothing_and_says_nothing() {
     let mut view = flight();
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     assert_eq!(nav_target(&view), Some(StellarId(128)));
     view.take_sounds();
     tap(&mut view, HAIL_KEY);
@@ -551,7 +551,7 @@ fn y_with_an_uninhabited_stellar_selected_says_no_response() {
         (0.0, -600.0),
         StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
     )]);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     tap(&mut view, HAIL_KEY);
     assert_eq!(view.take_hail(), None);
     assert_lasts(&mut view, NO_RESPONSE, 240);
@@ -560,7 +560,7 @@ fn y_with_an_uninhabited_stellar_selected_says_no_response() {
 #[test]
 fn alt_y_hails_the_selected_stellar_over_the_ship_target() {
     let mut view = hailable(true);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     assert_eq!(nav_target(&view), Some(StellarId(128)));
     alt_tap(&mut view, HAIL_KEY);
     assert_eq!(view.take_hail(), None, "no comm dialog for the ship");

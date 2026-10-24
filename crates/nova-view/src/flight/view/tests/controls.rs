@@ -1177,3 +1177,56 @@ fn j_held_through_a_jump_does_nothing_after_arrival() {
     assert!(!view.preparing_jump());
     assert_eq!(view.session().expect("flying").jumping(), None);
 }
+
+/// The cursor's alpha two ticks after `k` is pressed and held in `view`.
+fn cursor_alpha_holding(mut view: View, k: Key) -> Option<u8> {
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.input(&key(k, true));
+    ticks(&mut view, 2);
+    drawn(&view)
+        .iter()
+        .find_map(|command| match *unclipped(command) {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+            _ => None,
+        })
+}
+
+#[test]
+fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
+    let pressed_only = cursor_alpha_holding(flight(), Key::Char('q'));
+    assert_ne!(pressed_only, Some(239));
+    for k in [
+        STELLAR_SLOT_KEYS[1][0],
+        STELLAR_SLOT_KEYS[1][1],
+        NEAREST_STELLAR_KEY,
+    ] {
+        assert_eq!(cursor_alpha_holding(flight(), k), Some(239), "{k:?}");
+    }
+    assert_eq!(
+        cursor_alpha_holding(flight(), NEAREST_STELLAR_COMMAND_KEY),
+        pressed_only,
+        "5 without Command"
+    );
+    let mut menu = escorted();
+    tap(&mut menu, MENU_KEY);
+    assert_eq!(
+        cursor_alpha_holding(menu, STELLAR_SLOT_KEYS[1][0]),
+        pressed_only,
+        "the menu's 2: its loop sets no fade"
+    );
+}
+
+#[test]
+fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
+    for (view, other) in through_a_jump(flight)
+        .into_iter()
+        .zip(through_a_jump(flight))
+    {
+        let stage = stage(&view);
+        assert_eq!(
+            cursor_alpha_holding(*view, STELLAR_SLOT_KEYS[1][1]),
+            cursor_alpha_holding(*other, Key::Char('q')),
+            "{stage}"
+        );
+    }
+}

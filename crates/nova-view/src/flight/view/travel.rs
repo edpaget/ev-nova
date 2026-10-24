@@ -764,7 +764,8 @@ impl<
     /// The keys `_HandlePlayer` polls with a latch, once a frame, with
     /// those held down, in its order: Option-\` and the Nav Off /
     /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
-    /// Select ([`FlightView::select_frame`]), then the jump key
+    /// Select ([`FlightView::select_frame`]), the stellar slot keys
+    /// ([`FlightView::slot_keys_frame`]), then the jump key
     /// ([`FlightView::jump_frame`]), each while the session takes its
     /// command. A key held across a jump's end, a release of Option or a
     /// repair acts here, as a press would, on the first frame its latch
@@ -787,6 +788,7 @@ impl<
         if self.takes(PlayerCommand::SelectSystem) {
             self.select_frame(select);
         }
+        self.slot_keys_frame();
         if self.takes(PlayerCommand::Jump) {
             self.jump_frame(jump);
         }

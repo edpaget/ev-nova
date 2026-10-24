@@ -328,10 +328,13 @@
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
-//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
+//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`]) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
-//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest stellar,
-//!   as L does with none. A left click in space
+//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) and, with the menu shut,
+//!   Command-5 ([`NEAREST_STELLAR_COMMAND_KEY`]) the nearest stellar, as L
+//!   does with none. They share one latch and are polled once a frame, as
+//!   the original's block is (the `slot_block` module): one pick a frame, by
+//!   the block's order, and none while another of them is held. A left click in space
 //!   ([`Session::click_in_space`]) picks a ship first: one under it
 //!   becomes the target, a click on the player's own ship lets go of the
 //!   target, and only a click that leaves the target as it was selects
@@ -672,6 +675,7 @@ mod port_screen_map;
 mod readouts;
 mod screen;
 mod shots;
+mod slot_block;
 mod sprites;
 mod stars;
 mod travel;
@@ -717,8 +721,12 @@ pub struct FlightOverlays {
 /// held across a jump's end, a release of Option or a repair, as the
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
-/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 21] = [
+/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read. The
+/// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
+/// latch and frame (see the `slot_block` module); they fade the cursor and
+/// hold the zoom back only while `_HandlePlayer` polls them
+/// ([`FlightView::slot_key_polled`]).
+const FLIGHT_KEYS: [Key; 31] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -740,6 +748,16 @@ const FLIGHT_KEYS: [Key; 21] = [
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
     JUMP_KEY,
+    STELLAR_SLOT_KEYS[0][0],
+    STELLAR_SLOT_KEYS[1][0],
+    STELLAR_SLOT_KEYS[2][0],
+    STELLAR_SLOT_KEYS[3][0],
+    NEAREST_STELLAR_COMMAND_KEY,
+    STELLAR_SLOT_KEYS[0][1],
+    STELLAR_SLOT_KEYS[1][1],
+    STELLAR_SLOT_KEYS[2][1],
+    STELLAR_SLOT_KEYS[3][1],
+    NEAREST_STELLAR_KEY,
 ];
 
 /// The face-target key: the original's default A for its `autopilot`
@@ -836,8 +854,12 @@ pub const MENU_CLOSE_KEY: Key = Key::Enter;
 /// the system's navigation defaults, from the first. The original reads
 /// keys 1-4 (Mac keycodes 0x12-0x15) and F1-F4 (`_loadKeys` @0xce6c8
 /// hard-codes 0x7a, 0x78, 0x63, 0x76 at +0x34..+0x3a) in `_HandlePlayer`
-/// @0x69cf6-0x69f17. While the escort menu is open, 1-4 pick its groups
-/// instead ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a stellar.
+/// @0x69d2b-0x69f17, with F5 and Command-5, as one block with one latch
+/// (the `slot_block` module). While the escort menu shows,
+/// `_QuickKeyCheck` hides 1-4 from the block (@0xa106-0xa124) and they
+/// pick its groups instead
+/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a
+/// stellar.
 pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
     [Key::Char('1'), Key::Function(1)],
     [Key::Char('2'), Key::Function(2)],
@@ -846,9 +868,17 @@ pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
 ];
 /// The nearest stellar key: F5 (Mac keycode 0x60), which the original
 /// reads beside the slot keys (@0x69cf6-0x69f17) and which selects the
-/// stellar its land key would with nothing selected. Its Cmd-5 twin has
-/// no key here.
+/// stellar its land key would with nothing selected. Command-5
+/// ([`NEAREST_STELLAR_COMMAND_KEY`]) is its twin.
 pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
+/// The other nearest stellar key: the top-row 5 (Mac keycode 0x17), held
+/// together with Command (0x37), which `_HandlePlayer` polls only while F5
+/// is up (@0x69dbc-0x69dda) and picks with as F5 does. Both are
+/// hard-coded, not key preferences. While the escort menu shows,
+/// `_QuickKeyCheck` hides the 5 from this block (@0xa106-0xa124), so
+/// Command-5 then picks the menu's Freighters instead
+/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); 5 alone picks nothing.
+pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Char('5');
 /// The Nav Off key, which turns the nav system off, the course kept: the
 /// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 /// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
@@ -1073,6 +1103,9 @@ pub struct FlightView<C> {
     /// acts, cleared on a frame it is up, and left as it is during a jump
     /// ([`FlightView::select_frame`]).
     select_latch: bool,
+    /// The stellar slot keys' block: its latch (0xdede0) and the presses
+    /// its next frame takes ([`FlightView::slot_keys_frame`]).
+    slot_block: slot_block::SlotBlock,
     /// The jump key's latch (0xdee44): set on every frame J runs its
     /// block, a jump's included; cleared on a frame J is up, or down while
     /// the player is not intact ([`FlightView::jump_frame`]).

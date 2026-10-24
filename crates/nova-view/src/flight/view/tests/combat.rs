@@ -2753,7 +2753,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
 #[test]
 fn the_nav_brackets_draw_under_the_ship_brackets() {
     let mut view = firing_at_an_npc();
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     let list = drawn(&view);
     let nav = first(&list, icon_in(10000..=10007));
     let ship = first(&list, icon_in(10008..=10023));

@@ -1356,6 +1356,7 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
         ] {
             tap(&mut view, k);
         }
+        command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
         let earth = on_screen(&view, (0.0, -600.0));
         click(&mut view, earth);
         assert!(!view.map_open(), "{stage}");
@@ -1369,6 +1370,39 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
         assert_eq!(view.preparing_jump(), braking, "{stage}");
         assert_eq!(view.jump_effect().is_some(), !braking, "{stage}");
     }
+}
+
+#[test]
+fn a_slot_key_pressed_in_a_jump_and_held_selects_after_it() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    view.tick(ms(300));
+    view.input(&key(STELLAR_SLOT_KEYS[0][0], true));
+    tick_to_arrival(&mut view);
+    assert_eq!(nav_target(&view), None, "the arrival frame is the jump's");
+    view.tick(TICK);
+    assert_eq!(
+        nav_target(&view),
+        Some(StellarId(140)),
+        "the first after it"
+    );
+}
+
+#[test]
+fn a_slot_key_held_from_before_a_jump_does_nothing_after_it() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    view.input(&key(STELLAR_SLOT_KEYS[0][0], true));
+    view.tick(TICK);
+    assert!(nav_target(&view).is_some(), "selected before the jump");
+    plot(&mut view, 131);
+    jump_now(&mut view);
+    tick_to_arrival(&mut view);
+    ticks(&mut view, 3);
+    assert_eq!(nav_target(&view), None, "latched through it");
 }
 
 #[test]
@@ -1822,13 +1856,13 @@ fn an_offline_gate_is_refused_in_its_own_words() {
             flags2,
             ..site(300, (0.0, 0.0), StellarFlags::STATION)
         }]);
-        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut view, LAND);
         let refusal = gate_refusal_message(kind);
         assert_lasts(&mut view, &refusal, 250);
     }
     let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
-    tap(&mut planet, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut planet, STELLAR_SLOT_KEYS[0][0]);
     tap(&mut planet, LAND);
     let line = "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
     assert_lasts(&mut planet, line, 250);
