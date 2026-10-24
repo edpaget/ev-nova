@@ -1069,10 +1069,15 @@ mod tests {
         let art = art();
         let screen = screen_of(&art, list());
         assert_eq!(*art.asked.borrow(), ["dësc 14000"]);
-        assert!(drawn(&screen).iter().any(|command| matches!(
-            command,
-            DrawCommand::StretchedPicture { image, .. } if image.id == 5000
-        )));
+        let picture = item(&screen, PICTURE_ITEM).min;
+        assert!(
+            drawn(&screen).iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { image, top_left, .. }
+                    if image.id == 5000 && *top_left == picture
+            )),
+            "the picture item, not just the grid cell, shows PICT 5000"
+        );
         let mut screen = screen;
         screen.input(&key(Key::Right, false));
         assert_eq!(*art.asked.borrow(), ["dësc 14000", "dësc 14012"]);
