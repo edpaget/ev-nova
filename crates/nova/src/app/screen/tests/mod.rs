@@ -368,6 +368,9 @@ fn game_data_fork(
     }
     let ship = if shipbuying {
         stellar[0x09] |= 0x08;
+        let mut prompts = vec![""; 119];
+        prompts.push("Please name your new");
+        fork = fork.resource(StrList::TYPE, 2002, None, &str_list(&prompts));
         second_ship(buy_random)
     } else {
         vec![0; Ship::SIZE.expect("fixed")]

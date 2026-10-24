@@ -492,7 +492,7 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         let mut session = fly(&data, &save);
         session.shipyard(&mut Fires).expect("a shipyard");
         let naming = session
-            .ship_naming(nova_sim::ShipId(128), &mut Highest)
+            .ship_naming(nova_sim::ShipId(128), &data, &mut Highest)
             .expect("the Shuttle can be bought");
         assert_eq!(
             naming.prompt,

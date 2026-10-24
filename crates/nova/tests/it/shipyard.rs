@@ -42,6 +42,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, InterfaceData, Record};
@@ -294,6 +295,15 @@ fn game_data_with(heavy_desc: Vec<u8>) -> Rc<GameData> {
         (PICT, 8507, pict(7, 6, [30, 30, 30])),
         (PICT, 20_129, pict(3, 2, [0, 0, 90])),
     ];
+    // `STR#` 2002 #120, the name prompt's opening words.
+    let mut prompts = vec![0; 119];
+    prompts.extend([20]);
+    prompts.extend(b"Please name your new");
+    resources.push((
+        StrList::TYPE,
+        2002,
+        [120_u16.to_be_bytes().to_vec(), prompts].concat(),
+    ));
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
         resources.push((PICT, state + 1, pict(2, 25, [0, 200, 0])));

@@ -8,7 +8,8 @@ use crate::common;
 
 use nova_sim::christening::christening;
 use nova_sim::pilot::Pilot;
-use nova_sim::{Chance, PilotCatalog};
+use nova_sim::shipyard;
+use nova_sim::{Chance, PilotCatalog, ShipId};
 
 /// Every roll is `.0`; nothing fires.
 struct Rolls(u16);
@@ -50,6 +51,25 @@ fn a_new_stock_pilot_is_asked_to_christen_its_ship_with_a_stock_default() {
         assert!(asked.prompt.len() > "Now, please christen your brand-new : ".len());
         assert_eq!(asked.default, name, "roll {roll}");
     }
+}
+
+/// The shipyard's name prompt (rdm play-feel phase 20) opens with the
+/// stock `STR#` 2002 #120.
+#[test]
+fn the_stock_shipyard_asks_to_name_your_new_ship() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let ships = data.ships();
+    let shuttle = ships
+        .iter()
+        .find(|record| record.id == ShipId(128))
+        .expect("the stock Shuttle");
+    let naming = shipyard::naming(&data, shuttle, &mut Rolls(0));
+    assert_eq!(
+        naming.prompt,
+        format!("Please name your new {}: ", shuttle.long_name)
+    );
 }
 
 /// The New Pilot dialog's stock defaults (rdm play-feel phase 19):

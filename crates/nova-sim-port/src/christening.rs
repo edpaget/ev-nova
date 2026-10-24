@@ -91,7 +91,7 @@ pub fn christen(pilot: Pilot, typed: &str) -> Pilot {
 }
 
 /// Entry `index` (1-based) of `STR#` `list`; empty when either is missing.
-pub(crate) fn entry(strings: &impl CommCatalog, list: i16, index: usize) -> String {
+pub(crate) fn entry(strings: &(impl CommCatalog + ?Sized), list: i16, index: usize) -> String {
     strings
         .string_list(list)
         .into_iter()

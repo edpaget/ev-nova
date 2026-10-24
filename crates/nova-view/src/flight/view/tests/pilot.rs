@@ -754,14 +754,23 @@ fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
 fn the_naming_is_the_sessions_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(shipbuying()).with_chance(SharedChance::new(shared));
+    let mut prompts = vec![String::new(); 119];
+    prompts.push("Christen thy".to_owned());
+    let catalog = FakeCatalog {
+        strings: vec![(2002, prompts)],
+        ..shipbuying()
+    };
+    let mut view = FlightView::new(catalog).with_chance(SharedChance::new(shared));
     assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
     land_now(&mut view);
     view.take_save_due();
     assert_eq!(view.ship_naming(ShipId(999)), Err(ShipRefusal::NotListed));
     let naming = view.ship_naming(ShipId(129)).expect("a naming");
     assert_eq!(naming.ship, ShipId(129));
-    assert_eq!(naming.prompt, "Please name your new : ");
+    assert_eq!(
+        naming.prompt, "Christen thy : ",
+        "#120, read from the catalog"
+    );
     assert_eq!(naming.default, "Fast 999", "each digit the last of nine");
     assert!(!view.take_save_due());
     let mut broken = FlightView::new(FakeCatalog {

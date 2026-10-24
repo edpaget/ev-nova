@@ -4771,18 +4771,19 @@ impl Session {
     }
 
     /// The prompt for naming a ship of class `ship` before it is bought,
-    /// its default's digits drawn on `chance` ([`shipyard`]'s "Naming the
-    /// ship"). It is refused as [`buy_ship`](Self::buy_ship) would refuse
-    /// the purchase, and changes nothing about the pilot, so no save is
-    /// due. The shipyard's rolls not drawn yet are drawn on `chance`
+    /// its opening words read from `catalog` and its default's digits drawn
+    /// on `chance` ([`shipyard`]'s "Naming the ship"). It is refused as
+    /// [`buy_ship`](Self::buy_ship) would refuse the purchase, and changes
+    /// nothing about the pilot, so no save is due. The shipyard's rolls not drawn yet are drawn on `chance`
     /// first.
     pub fn ship_naming(
         &mut self,
         ship: ShipId,
+        catalog: &(impl crate::catalog::CommCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) -> Result<ShipNaming, ShipRefusal> {
         let (_, record) = self.buyable(ship, chance)?;
-        Ok(shipyard::naming(&record, chance))
+        Ok(shipyard::naming(catalog, &record, chance))
     }
 
     /// Declines to buy a ship of class `ship`, as cancelling its name
@@ -14835,7 +14836,8 @@ pub(super) mod tests {
             Err(ShipRefusal::CannotAfford)
         );
         assert_eq!(
-            poor.ship_naming(NEW, &mut NeverFires).map(|_| ()),
+            poor.ship_naming(NEW, &NameLists, &mut NeverFires)
+                .map(|_| ()),
             Err(ShipRefusal::CannotAfford)
         );
         assert_eq!(poor, before);
@@ -14871,7 +14873,7 @@ pub(super) mod tests {
             Err(ShipRefusal::AlreadyFlown)
         );
         assert_eq!(
-            session.ship_naming(ShipId(128), &mut NeverFires),
+            session.ship_naming(ShipId(128), &NameLists, &mut NeverFires),
             Err(ShipRefusal::AlreadyFlown)
         );
         assert_eq!(session, before);
@@ -14886,7 +14888,9 @@ pub(super) mod tests {
             "the new class, under its new name"
         );
         assert!(
-            session.ship_naming(ShipId(128), &mut NeverFires).is_ok(),
+            session
+                .ship_naming(ShipId(128), &NameLists, &mut NeverFires)
+                .is_ok(),
             "the refusal follows the class flown now"
         );
     }
@@ -15271,25 +15275,25 @@ pub(super) mod tests {
         let catalog = shipbuying();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(
-            session.ship_naming(NEW, &mut NeverFires),
+            session.ship_naming(NEW, &NameLists, &mut NeverFires),
             Err(ShipRefusal::NoShipyard)
         );
         land_now(&mut session).expect("lands");
         session.take_save_due();
         assert_eq!(
-            session.ship_naming(ShipId(999), &mut NeverFires),
+            session.ship_naming(ShipId(999), &NameLists, &mut NeverFires),
             Err(ShipRefusal::NotListed)
         );
         let mut poor = session.clone();
         poor.pilot.cash = 14_999;
         assert_eq!(
-            poor.ship_naming(NEW, &mut NeverFires),
+            poor.ship_naming(NEW, &NameLists, &mut NeverFires),
             Err(ShipRefusal::CannotAfford)
         );
         let before = session.clone();
         let mut chance = Scripted::rolling(&[0, 0, 0]);
         assert_eq!(
-            session.ship_naming(NEW, &mut chance),
+            session.ship_naming(NEW, &NameLists, &mut chance),
             Ok(ShipNaming {
                 ship: NEW,
                 prompt: "Please name your new The Ship 129: ".to_owned(),
@@ -15976,7 +15980,7 @@ pub(super) mod tests {
         session.decline_ship(NEW);
         let mut missing = Scripted::answering(&[false]);
         assert!(
-            session.ship_naming(NEW, &mut missing).is_ok(),
+            session.ship_naming(NEW, &NameLists, &mut missing).is_ok(),
             "named again"
         );
         assert!(missing.asked.is_empty(), "the list's roll is kept");
@@ -15993,7 +15997,7 @@ pub(super) mod tests {
             .expect("bought");
         let mut missing = Scripted::answering(&[false]);
         assert_ne!(
-            session.ship_naming(NEW, &mut missing).err(),
+            session.ship_naming(NEW, &NameLists, &mut missing).err(),
             Some(ShipRefusal::NotListed),
             "still listed"
         );
@@ -28217,6 +28221,22 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         }
         assert_eq!(flying_as(&session, 161), []);
+    }
+
+    /// The session's string lists for the ship name prompt: `STR#` 2002
+    /// with #120, and no other.
+    struct NameLists;
+
+    impl CommCatalog for NameLists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == shipyard::NAME_PROMPT_LIST {
+                let mut list = vec![String::new(); shipyard::NAME_PROMPT_INDEX - 1];
+                list.push("Please name your new".to_owned());
+                list
+            } else {
+                Vec::new()
+            }
+        }
     }
 
     /// The session's string lists for the arrival quotes: `STR#` 7600,
