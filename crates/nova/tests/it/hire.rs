@@ -14,7 +14,8 @@
 //! by `take_off_pay`'s engine reading, a day's wage, and the hired escort
 //! is drawn beside the player. Landed again the pilot is saved; reopened
 //! in a new app, the escort is still hired, and Option-Tab and Y show
-//! "Status: Hired Escort" and "Pay: 100 credits per day".
+//! "Status:" and "Hired Escort", drawn apart, and "Pay: 100 credits per
+//! day".
 //!
 //! Defection: a pilot with 50 credits and a hired escort of wage 100
 //! jumps to Beta; "Due to lack of pay, one of your escorts has defected."
@@ -880,7 +881,7 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     game.tap(Key::Char('y'));
     assert_eq!(game.showing(), Showing::Comm);
     let shown = texts(&game.frame());
-    for text in ["Status: Hired Escort", "Pay: 100 credits per day"] {
+    for text in ["Status:", "Hired Escort", "Pay: 100 credits per day"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
 }
