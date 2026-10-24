@@ -107,8 +107,7 @@ impl Word {
 
 /// Whether `controls` write the thrust word +0x30, as `inertia` says: an
 /// inertial ship's thrust; an inertialess one's thrust or its brake,
-/// reverse ([`flight::inertialess_step`]). An inertial reverse turns
-/// alone.
+/// reverse ([`flight::inertialess_step`]). No inertial NPC reverses.
 pub(crate) fn writes_thrust(controls: Controls, inertia: Inertia) -> bool {
     controls.thrust || (matches!(inertia, Inertia::Inertialess { .. }) && controls.reverse)
 }
@@ -184,13 +183,8 @@ fn burst(
     inertia: Inertia,
     (speed, thrust): (f32, f32),
 ) {
-    ship_display::record(npc, handling, controls, flight, inertia);
-    npc.state.heading = match inertia {
-        Inertia::Inertial => flight::npc_turn(&npc.state, handling, controls, flight),
-        Inertia::Inertialess { .. } => {
-            flight::turned(npc.state.heading, controls.turn, handling.turn_rate)
-        }
-    };
+    ship_display::record(npc, handling, controls, flight);
+    npc.state.heading = flight::turned(npc.state.heading, controls.turn, handling.turn_rate);
     autopilot::burst_motion(npc, speed, handling, inertia);
     npc.owed_burst = Some(speed - thrust);
 }
@@ -303,27 +297,6 @@ mod tests {
             Thrust::Plain,
             "its drive recorded"
         );
-        // Reverse with no turn key turns it toward its retro heading, as
-        // the inertial step does.
-        let mut braking = owing(Some(30.0));
-        braking.state.heading = 0.0;
-        let controls = Controls {
-            reverse: true,
-            ..Controls::default()
-        };
-        step(
-            &mut braking,
-            &flown,
-            controls,
-            FlightRules::default(),
-            Inertia::Inertial,
-            Word::Keeps { thrust: 0.25 },
-        );
-        assert_eq!(braking.state.heading, 360.0 - flown.turn_rate);
-        assert!(close(
-            braking.state.velocity,
-            facing(braking.state.heading) * 30.0
-        ));
     }
 
     #[test]
@@ -448,9 +421,9 @@ mod tests {
             assert_eq!(npc.owed_burst, None, "{inertia:?} {controls:?}");
             assert_eq!(npc.state, plain.state, "{inertia:?} {controls:?}");
         }
-        // No thrust writes nothing: an inertial reverse turns alone.
+        // No thrust writes nothing.
         for (inertia, controls) in [
-            (Inertia::Inertial, reverse),
+            (Inertia::Inertial, Controls::default()),
             (INERTIALESS, Controls::default()),
         ] {
             let mut npc = owing(Some(30.0));

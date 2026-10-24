@@ -619,7 +619,7 @@ pub(crate) fn plain_step(
     flight: FlightRules,
     inertia: Inertia,
 ) {
-    ship_display::record(npc, handling, controls, flight, inertia);
+    ship_display::record(npc, handling, controls, flight);
     match inertia {
         Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
         Inertia::Inertialess { .. } => {

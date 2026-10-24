@@ -402,7 +402,6 @@ mod tests {
     #[test]
     fn a_held_npcs_rush_is_measured_against_its_held_thrust() {
         use crate::flight::{Controls, FlightRules};
-        use crate::traffic::inertialess::Inertia;
         use crate::traffic::ship_display::{Thrust, record};
         let flight = FlightRules::default();
         let mut ship = holding(Some(ShipRef::Player));
@@ -416,9 +415,9 @@ mod tests {
             thrust: true,
             ..Controls::default()
         };
-        record(&mut ship, &rush, thrust, flight, Inertia::Inertial);
+        record(&mut ship, &rush, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Rush);
-        record(&mut ship, &own, thrust, flight, Inertia::Inertial);
+        record(&mut ship, &own, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Plain);
     }
 }
