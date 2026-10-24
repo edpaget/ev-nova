@@ -7,10 +7,15 @@
 //!   Return, closes it.
 //! - While it is open, keys 1-5 ([`GROUP_KEYS`]) select All Ships,
 //!   Fighters, Medium Ships, Warships or Freighters; a class the player
-//!   has no escort of is not selected. While it is shut, 1-4 are the
-//!   flight's stellar slot keys instead.
+//!   has no escort of is not selected, though its press, silent, still
+//!   restarts the timeout (@0x6e14e-0x6e159). No modifier is read, so
+//!   Command-5 picks Freighters too. While the menu shows, the original's
+//!   `_QuickKeyCheck` hides 1-5 from every other key block
+//!   (@0xa106-0xa124), so they never reach the stellar slot keys or
+//!   Command-5; while it is shut, 1-4 are the flight's stellar slot keys
+//!   and Command-5 its second nearest-stellar key.
 //! - It closes [`MENU_TIMEOUT`] after it opened, or after the last
-//!   selection or command it took ([`EscortMenu::touch`]), and as soon as
+//!   press or command it took ([`EscortMenu::touch`]), and as soon as
 //!   the fleet is empty. The original then fades it out over 32 frames;
 //!   here it closes at once.
 //! - A command goes to the group selected, or to every escort while the
@@ -189,7 +194,11 @@ impl EscortMenu {
 
     /// Key `n` of [`GROUP_KEYS`] (from 0), at `now`: while the menu is
     /// open, selects its group when the player has an escort of it (All
-    /// Ships always), and says whether it did.
+    /// Ships always), and says whether it did. A press of a class the
+    /// player has none of selects nothing but still restarts the
+    /// [`MENU_TIMEOUT`] from `now`, as `_HandlePlayer` stamps the open time
+    /// on every press the menu takes (`_TickCount` into *0x3b5658,
+    /// @0x6e14e-0x6e159).
     pub fn select(&mut self, n: usize, now: Duration, rows: &[ClassRow; 4]) -> bool {
         let Some(group) = EscortGroup::ALL.get(n).copied() else {
             return false;
@@ -198,13 +207,14 @@ impl EscortMenu {
             EscortGroup::All => true,
             EscortGroup::Class(class) => rows.iter().any(|row| row.class == class && row.present),
         };
-        match &mut self.open {
-            Some(open) if present => {
-                *open = (group, now);
-                true
-            }
-            _ => false,
+        let Some(open) = &mut self.open else {
+            return false;
+        };
+        open.1 = now;
+        if present {
+            open.0 = group;
         }
+        present
     }
 
     /// A command the menu took at `now`: it stays open
@@ -506,6 +516,20 @@ mod tests {
         let mut shut = EscortMenu::default();
         shut.touch(AT);
         assert!(!shut.is_open(), "a command does not open it");
+    }
+
+    #[test]
+    fn a_press_of_an_absent_class_restarts_the_timeout_from_it() {
+        let mut menu = EscortMenu::default();
+        menu.toggle(AT, &rows());
+        let press = AT + Duration::from_secs(5);
+        assert!(!menu.select(1, press, &rows()), "2: no fighters");
+        assert_eq!(menu.group(), EscortGroup::All, "the group kept");
+        let just_before = MENU_TIMEOUT.saturating_sub(Duration::from_millis(1));
+        menu.update(press + just_before, &rows(), true);
+        assert!(menu.is_open(), "restarted by the press");
+        menu.update(press + MENU_TIMEOUT, &rows(), true);
+        assert!(!menu.is_open());
     }
 
     #[test]

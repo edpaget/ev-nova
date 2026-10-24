@@ -349,6 +349,28 @@ fn the_escort_menus_keys_beep_as_the_original_does() {
 }
 
 #[test]
+fn a_press_of_an_absent_class_keeps_the_menu_open_another_8_seconds_in_silence() {
+    let mut view = escorted();
+    tap(&mut view, MENU_KEY);
+    let rows = view.session().expect("flying").escort_menu();
+    let absent = (1..5)
+        .find(|&n| match EscortGroup::ALL[n] {
+            EscortGroup::All => false,
+            EscortGroup::Class(class) => !rows.iter().any(|row| row.class == class && row.present),
+        })
+        .expect("an absent class");
+    view.tick(Duration::from_secs(5));
+    view.take_sounds();
+    tap(&mut view, GROUP_KEYS[absent]);
+    assert_eq!(view.take_sounds(), [], "silent");
+    assert_eq!(view.escort_menu().group(), EscortGroup::All, "kept");
+    view.tick(Duration::from_secs(7));
+    assert!(view.escort_menu().is_open(), "12 s after it opened");
+    view.tick(Duration::from_secs(1) + TICK);
+    assert!(!view.escort_menu().is_open(), "8 s after the press");
+}
+
+#[test]
 fn a_click_in_the_open_escort_menu_over_a_ship_does_nothing() {
     let menu = Point::new(MENU_AT.x + MENU_WIDTH / 2.0, MENU_AT.y + MENU_HEIGHT / 2.0);
     let under = escorted().camera().screen_to_world(menu);
