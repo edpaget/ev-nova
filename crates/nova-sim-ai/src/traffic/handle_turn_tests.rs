@@ -9,14 +9,15 @@
 #![allow(clippy::float_cmp)]
 
 use super::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
-use super::npc::Npc;
+use super::npc::{Npc, NpcId};
 use crate::ai::Goal;
 use crate::ai::fire::Manoeuvre;
+use crate::ai::lost_sight::SearchTimer;
 use crate::ai::pursuit::{Body, Frame};
 use crate::catalog::{LandingSite, StellarId};
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
-use crate::flight::{AT_REST_SPEED, FlightRules, ShipState};
+use crate::flight::{AT_REST_SPEED, FlightRules, FormationFlight, NpcFormation, ShipState};
 use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::ShipFields;
@@ -59,6 +60,17 @@ fn fly(npc: &mut Npc, other: Option<&ShipState>) -> Outcome {
 
 /// [`fly`] among `sites`.
 fn fly_among(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
+    fly_by(npc, sites, (other, false), FlightRules::default())
+}
+
+/// [`fly_among`] beside `other`, disabled as `other_disabled` says, under
+/// `rules`.
+fn fly_by(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    (other, other_disabled): (Option<&ShipState>, bool),
+    rules: FlightRules,
+) -> Outcome {
     let speeds = TopSpeeds::own_of(npc);
     let weapons = crate::ai::fixture::records_of([&*npc]);
     autopilot::fly(
@@ -66,10 +78,10 @@ fn fly_among(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) ->
         sites,
         &BTreeMap::new(),
         other,
-        false,
+        other_disabled,
         Beside::default(),
         speeds,
-        FlightRules::default(),
+        rules,
         Readings::default(),
         &weapons,
         &mut Draws::of(&[]),
@@ -415,4 +427,87 @@ fn a_count_wait_is_exempt_and_brakes_turning_as_ever() {
     assert_eq!(waited(Goal::CountWait, moving, 5, &[], None), 90.0);
     let still = at(0.0, 0.0, 0.0, 0.0, 88.6);
     assert_eq!(waited(Goal::CountWait, still, 5, &[], None), 88.0);
+}
+
+/// A flight's name, its goal, its start, the stellars about it, the ship
+/// its goal is about and whether that ship is disabled, its rules and the
+/// heading it ends on.
+type Case<'a> = (
+    &'a str,
+    Goal,
+    ShipState,
+    &'a [LandingSite],
+    (Option<&'a ShipState>, bool),
+    FlightRules,
+    f32,
+);
+
+#[test]
+fn every_flight_of_the_autopilot_turns_as_handle_ship_does() {
+    // A ship facing 88.6, 2 whole degrees off 90, is put on 90 by every
+    // flight that wants 90 (a brake moving west, a match of a velocity
+    // east), and on 88 by one that wants no heading.
+    let original = FlightRules::default();
+    let earlier_follow = FlightRules {
+        npc_formation: NpcFormation::Earlier,
+        ..original
+    };
+    let earlier = FlightRules {
+        formation_flight: FormationFlight::Earlier,
+        ..original
+    };
+    let east = at(3000.0, 0.0, 0.0, 0.0, 0.0);
+    let gate = LandingSite {
+        flags2: crate::gate::HYPERGATE,
+        ..planet(300, 3000.0, 0.0)
+    };
+    let braking = at(0.0, 0.0, -3.0, 0.0, 88.6);
+    let still = at(0.0, 0.0, 0.0, 0.0, 88.6);
+    let player = ShipRef::Player;
+    let lead = NpcId(9);
+    let formation = Goal::Formation { guard: None };
+    let follow = Goal::Follow { lead, guard: None };
+    let plunder = Goal::Plunder {
+        ship: player,
+        hopeless: false,
+    };
+    #[rustfmt::skip]
+    let cases: [Case; 18] = [
+        ("landing, its stellar gone", Goal::Land(StellarId(140)), braking, &[], (None, false), original, 90.0),
+        ("entering a gate", Goal::EnterGate(StellarId(300)), still, &[gate], (None, false), original, 90.0),
+        ("entering a gate gone", Goal::EnterGate(StellarId(300)), braking, &[], (None, false), original, 90.0),
+        ("inspecting", Goal::Inspect(player), still, &[], (Some(&east), false), original, 90.0),
+        ("inspecting nothing", Goal::Inspect(player), braking, &[], (None, false), original, 90.0),
+        ("following by the earlier follow", follow, still, &[], (Some(&east), false), earlier_follow, 90.0),
+        ("following nothing by the earlier follow", follow, braking, &[], (None, false), earlier_follow, 90.0),
+        ("attacking nothing", Goal::Attack(player), braking, &[], (None, false), original, 90.0),
+        ("plundering a disabled ship", plunder, braking, &[], (Some(&east), true), original, 90.0),
+        ("sniping nothing", Goal::Snipe(player), braking, &[], (None, false), original, 88.0),
+        ("mining with no rock", Goal::Mine, braking, &[], (None, false), original, 90.0),
+        ("in formation with no leader", formation, braking, &[], (None, false), original, 90.0),
+        ("in formation with no leader by the earlier", formation, braking, &[], (None, false), earlier, 90.0),
+        ("docking with no carrier", Goal::Dock(player), braking, &[], (None, false), original, 90.0),
+        ("docking from afar", Goal::Dock(player), still, &[], (Some(&east), false), original, 90.0),
+        ("waiting", Goal::Wait, braking, &[], (None, false), original, 90.0),
+        ("count waiting", Goal::CountWait, braking, &[], (None, false), original, 90.0),
+        ("idle at rest", Goal::Idle, still, &[], (None, false), original, 88.0),
+    ];
+    for (name, goal, start, sites, other, rules, wanted) in cases {
+        let mut npc = match goal {
+            Goal::Dock(_) => docking(start.position, start.heading, 3.0),
+            _ => ship(FAST, goal, start, 0.0),
+        };
+        npc.state.velocity = start.velocity;
+        assert_eq!(
+            fly_by(&mut npc, sites, other, rules),
+            Outcome::Flying,
+            "{name}"
+        );
+        assert_eq!(npc.state.heading, wanted, "{name}");
+    }
+    // Searching for a target out of sight it stops as sub 1 does.
+    let mut searching = ship(FAST, Goal::Attack(player), braking, 0.0);
+    searching.lost_sight = SearchTimer::Searching(5);
+    fly(&mut searching, Some(&east));
+    assert_eq!(searching.state.heading, 90.0);
 }
