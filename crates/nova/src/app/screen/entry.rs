@@ -36,7 +36,10 @@
 //! (`_DoPlayGameWork(1)` under `_ignoreKeys` and `_gameFrozen`
 //! @0x1a37d-0x1a397, and `_PlayGame` @0x457f3-0x45819), which settles
 //! the asteroid field and catches up with the session's events but runs
-//! no step. The load or New Pilot already ran the rebuilds the original
+//! no step. Under the black of that frame, flight also reads the sheets
+//! and target cards of the ship types the system's traffic will bring
+//! ([`FlightView::warm_up_traffic`]), so the first step, which fills the
+//! system, doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
 //! makes at entry (`_PropagateMissionBitEffects`,
 //! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`,
 //! `_HandleStellarSprites`), and nothing changes the game on the main
@@ -370,6 +373,7 @@ impl AppScreen {
             flight.release_keys();
             flight.shut_escort_menu();
             flight.tick(Duration::ZERO);
+            flight.warm_up_traffic();
         }
         let held = self
             .entry

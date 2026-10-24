@@ -1,7 +1,8 @@
 //! How long the first flight steps and take-offs of a run take over the
-//! stock data: the entry's first stepped frame (which reads the first
-//! system's traffic ships' sheets and target cards), and each of three
-//! take-offs' Leave click plus its next six frames.
+//! stock data: the entry's slowest frame (the handover's warm-up, which
+//! reads the first system's traffic ships' sheets and target cards under
+//! black), flight's first stepped frame, and each of three take-offs'
+//! Leave click plus its next six frames.
 //!
 //! The tests here are `#[ignore]`d, so CI never runs them; they only read
 //! the clock and print, asserting the flow but no timing. Run them by
@@ -128,6 +129,8 @@ struct Driver<G> {
     gpu: TimedGpu<G>,
     clock: Duration,
     stats: Rc<RefCell<Stats>>,
+    /// The slowest frame since it was last cleared.
+    slowest: Duration,
 }
 
 impl<G: Gpu> Driver<G> {
@@ -153,9 +156,11 @@ impl<G: Gpu> Driver<G> {
     /// A 60 Hz frame, and how long it took.
     fn redraw(&mut self) -> Duration {
         self.clock += Duration::from_millis(16);
-        self.send(WindowEvent::Redraw {
+        let took = self.send(WindowEvent::Redraw {
             elapsed: self.clock,
-        })
+        });
+        self.slowest = self.slowest.max(took);
+        took
     }
 
     fn frames(&mut self, n: usize) {
@@ -321,6 +326,7 @@ fn run(gpu: impl Gpu, name: &str) {
         },
         clock: Duration::ZERO,
         stats,
+        slowest: Duration::ZERO,
     };
     driver.frames(5);
     let open = driver
@@ -331,8 +337,11 @@ fn run(gpu: impl Gpu, name: &str) {
         .press_point(MenuChoice::OpenPilot);
     driver.click_point(open);
     driver.press(Key::Enter);
+    driver.slowest = Duration::ZERO;
     driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "entered play");
+    let entry = driver.slowest;
+    println!("{:<32} {:>8.1} ms", "entry: slowest frame", ms(entry));
     // Flight's first frames hold the pilot still; the first that steps
     // populates the system's traffic.
     let mut first_step = Duration::ZERO;
@@ -352,8 +361,9 @@ fn run(gpu: impl Gpu, name: &str) {
     driver.land();
     driver.take_off("3rd take-off");
     println!(
-        "SUMMARY {name}: first stepped frame {:.1} ms; 1st take-off {:.1} ms vs 2nd {:.1} ms \
-         (difference {:.1} ms)",
+        "SUMMARY {name}: entry's slowest frame {:.1} ms; first stepped frame {:.1} ms; 1st \
+         take-off {:.1} ms vs 2nd {:.1} ms (difference {:.1} ms)",
+        ms(entry),
         ms(first_step),
         ms(first),
         ms(second),
