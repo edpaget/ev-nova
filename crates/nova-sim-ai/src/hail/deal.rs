@@ -28,7 +28,11 @@
 //!    ship's `düde` `InfoTypes` bits ([`ADVICE_BITS`]) Greetings' advice
 //!    follows. The original draws 4 until it hits a bit that is set; here
 //!    one draw picks among those set, in that order, and only when there
-//!    are two or more. With none, there is no advice.
+//!    are two or more. With none, there is no advice. A ship flying a
+//!    person has no `düde`, so none; but a person of `përs` `Flags`
+//!    0x8000 quoting nothing gives disaster advice whatever was rolled
+//!    (@0x9143d-0x91466), which the session applies as the hail opens
+//!    ([`advice::kind`](super::advice::kind)).
 //!
 //! **Haggling** (`_DoShipCommPayment` @0x920f3, `_DoHaggleDialog`
 //! @0x91e67). Each time the ship asks a price ([`Conversation::ask`]),

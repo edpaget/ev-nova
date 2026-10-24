@@ -4302,6 +4302,7 @@ fn the_three_stock_42_character_advice_lines_follow_long_advice() {
                 list,
                 index,
                 greet_if_blank: false,
+                patch: None,
                 long_advice,
             };
             assert_eq!(

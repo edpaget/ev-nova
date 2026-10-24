@@ -45,6 +45,7 @@
 //! disagreement: 0x0010's "always … for free" means for free, and the
 //! ship must still like the player and be free.
 
+pub mod advice;
 pub mod assist;
 pub mod battle;
 pub mod deal;
@@ -1553,6 +1554,7 @@ mod tests {
                 list: reply::GREETINGS.0,
                 index: reply::GREETINGS.1,
                 greet_if_blank: false,
+                patch: None,
                 long_advice,
             })
         };

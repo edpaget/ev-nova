@@ -32,14 +32,19 @@
 //! does (@0x95cb5).
 //!
 //! **Advice lines** ([`Reply::Advice`]). Greetings to a friendly ship
-//! reads one string of a list. A blank one, when the option says so,
-//! reads "Greetings." (`STR#` 2002 #175, [`GREETINGS`]) instead; a
-//! specific advice line that is not blank is parsed, its conditional text
-//! resolved, as the press picks it (`_LoadAdvice` @0x919ca,
-//! [`Reply::say_parsed`]). Then the
-//! check at @0x91aa9-0x91ae2 ([`advice_fallback`]) replaces a line that
-//! is blank or starts with `*` with group 9, "Nice to meet you."
-//! ([`NICE_TO_MEET_YOU`]). The original holds the line as a Pascal string
+//! reads one string of a list, or first a plug-in's `'STR '` that patches
+//! it (a government's hail, see [`advice`](super::advice)): a patch's
+//! text stands, an empty one leaves "Greetings." and an unreadable one
+//! reads "". A blank string, when the option says so, reads "Greetings."
+//! (`STR#` 2002 #175, [`GREETINGS`]) instead; a specific advice line that
+//! is not blank is parsed, its conditional text resolved, as the press
+//! picks it (`_LoadAdvice` @0x919ca, [`Reply::say_parsed`]). A good-price
+//! or disaster line ([`Reply::Rolled`]) is rolled as the hail opens, and
+//! the session keeps it. Then the check at @0x91aa9-0x91ae2
+//! ([`advice_fallback`], [`checked`]) replaces a line that is blank or
+//! starts with `*` with group 9, "Nice to meet you."
+//! ([`NICE_TO_MEET_YOU`]). A person's comm quote ([`Reply::Quote`]) comes
+//! after the check, so it is shown as written. The original holds the line as a Pascal string
 //! but tests it as a C string, so it also replaces a line exactly
 //! [`LONG_ADVICE`] characters long, whose length byte is a `*`. Stock has
 //! three such lines (`STR#` 7009 #8, 7018 #4 and 7041 #1). The
@@ -47,9 +52,11 @@
 //! the engine, those are replaced too; otherwise they are shown as
 //! written.
 
+use super::advice::comm_quote_patch;
 use super::like::Attitude;
-use crate::catalog::CommCatalog;
+use crate::catalog::{CommCatalog, StringPatch};
 use crate::rulebook::RuleSource;
+use crate::traffic::COMM_QUOTES;
 use crate::traffic::ShipBehav;
 use crate::traffic::ShipGoal;
 
@@ -162,9 +169,10 @@ pub enum Reply {
         /// The string, from 1.
         index: u16,
     },
-    /// An advice line: string `index` of `STR#` `list`, or "Greetings."
-    /// ([`GREETINGS`]) when that is blank and `greet_if_blank`, then
-    /// checked as [`advice_fallback`] says, by `long_advice`.
+    /// An advice line: the `'STR '` `patch` when there is one, else string
+    /// `index` of `STR#` `list`, or "Greetings." ([`GREETINGS`]) when that
+    /// is blank and `greet_if_blank`, then checked as [`advice_fallback`]
+    /// says, by `long_advice`.
     Advice {
         /// The `STR#`.
         list: i16,
@@ -172,6 +180,34 @@ pub enum Reply {
         index: u16,
         /// Whether a blank line reads "Greetings." before the check.
         greet_if_blank: bool,
+        /// The `'STR '` read before the `STR#`, a government hail's
+        /// ([`govt_hail_patch`](super::advice::govt_hail_patch)): its text
+        /// stands, an empty one reads "Greetings." (the buffer kept) and an
+        /// unreadable one "", each then checked (see the module docs).
+        patch: Option<i16>,
+        /// Which reading of a line [`LONG_ADVICE`] long the check follows.
+        long_advice: RuleSource,
+    },
+    /// A person's comm quote `index`, as written, with no check: its
+    /// `'STR '` ([`comm_quote_patch`](super::advice::comm_quote_patch))
+    /// when there is one, else `STR#` [`COMM_QUOTES`] string `index`. An
+    /// unreadable patch reads "", and an empty one reads "Greetings." when
+    /// `empty_reads_greetings` (the advice buffer kept, as Greetings says
+    /// it), else "".
+    Quote {
+        /// The `CommQuote`, from 1.
+        index: u16,
+        /// Whether an empty patch leaves "Greetings.": Greetings' quote
+        /// does (@0x91ae7-0x91b55), the opening line of
+        /// [`RuleKey::CommQuote`](crate::RuleKey::CommQuote)'s other
+        /// reading, which has no buffer, does not.
+        empty_reads_greetings: bool,
+    },
+    /// The good-price or disaster line the hail rolled as it opened, which
+    /// the session keeps (see [`advice`](super::advice)), checked as
+    /// [`checked`] says by `long_advice`. On its own, with nothing rolled,
+    /// it reads "Greetings.".
+    Rolled {
         /// Which reading of a line [`LONG_ADVICE`] long the check follows.
         long_advice: RuleSource,
     },
@@ -232,21 +268,59 @@ impl Reply {
                 list,
                 index,
                 greet_if_blank,
+                patch,
                 long_advice,
             } => {
-                let mut text = line((list, index));
-                if text.is_empty() && greet_if_blank {
-                    text = line(GREETINGS);
-                } else if greet_if_blank {
-                    text = parse(&text);
-                }
-                if advice_fallback(&text, long_advice) {
-                    line(Self::locate(NICE_TO_MEET_YOU, variant))
-                } else {
-                    text
+                let patch = patch.map_or(StringPatch::Absent, |id| catalog.plugin_string(id));
+                let text = match patch {
+                    StringPatch::Text(text) => text,
+                    StringPatch::Empty => line(GREETINGS),
+                    StringPatch::Unreadable => String::new(),
+                    StringPatch::Absent => {
+                        let text = line((list, index));
+                        if text.is_empty() && greet_if_blank {
+                            line(GREETINGS)
+                        } else if greet_if_blank {
+                            parse(&text)
+                        } else {
+                            text
+                        }
+                    }
+                };
+                checked(text, long_advice, variant, catalog)
+            }
+            Self::Quote {
+                index,
+                empty_reads_greetings,
+            } => {
+                let patch = comm_quote_patch(index)
+                    .map_or(StringPatch::Absent, |id| catalog.plugin_string(id));
+                match patch {
+                    StringPatch::Text(text) => text,
+                    StringPatch::Empty if empty_reads_greetings => line(GREETINGS),
+                    StringPatch::Empty | StringPatch::Unreadable => String::new(),
+                    StringPatch::Absent => line((COMM_QUOTES, index)),
                 }
             }
+            Self::Rolled { .. } => line(GREETINGS),
         }
+    }
+}
+
+/// `line`, an advice line, as the check leaves it (@0x91aa9-0x91ae2):
+/// "Nice to meet you." in `variant`, read from `catalog`, when
+/// [`advice_fallback`] holds by `long_advice`, else `line`.
+#[must_use]
+pub fn checked(
+    line: String,
+    long_advice: RuleSource,
+    variant: u8,
+    catalog: &(impl CommCatalog + ?Sized),
+) -> String {
+    if advice_fallback(&line, long_advice) {
+        Reply::Comm(NICE_TO_MEET_YOU).say(variant, catalog, "")
+    } else {
+        line
     }
 }
 
@@ -304,12 +378,21 @@ mod tests {
 
     /// `STR#` 3000 is "c<n>" for each string n up to 200, and 3001 "d<n>"
     /// up to 20; 2002 #175 is "Greetings."; 7000 holds `line` as #1, a
-    /// blank #2 and "Hi" as #3; 7001 is empty.
+    /// blank #2 and "Hi" as #3; 7001 is empty; 7100 is "q<n>" up to 30.
+    /// Its `'STR '`s are `patches`.
     struct Strings {
         line: String,
+        patches: Vec<(i16, StringPatch)>,
     }
 
     impl CommCatalog for Strings {
+        fn plugin_string(&self, id: i16) -> StringPatch {
+            self.patches
+                .iter()
+                .find(|(at, _)| *at == id)
+                .map_or(StringPatch::Absent, |(_, patch)| patch.clone())
+        }
+
         fn string_list(&self, id: i16) -> Vec<String> {
             match id {
                 3000 => (1..=200).map(|n| format!("c{n}")).collect(),
@@ -324,6 +407,7 @@ mod tests {
                     })
                     .collect(),
                 7000 => vec![self.line.clone(), String::new(), "Hi".to_owned()],
+                7100 => (1..=30).map(|n| format!("q{n}")).collect(),
                 _ => Vec::new(),
             }
         }
@@ -332,6 +416,15 @@ mod tests {
     fn strings(line: &str) -> Strings {
         Strings {
             line: line.to_owned(),
+            patches: Vec::new(),
+        }
+    }
+
+    /// [`strings`] with `'STR '` `id` `patch`.
+    fn patched(line: &str, id: i16, patch: StringPatch) -> Strings {
+        Strings {
+            patches: vec![(id, patch)],
+            ..strings(line)
         }
     }
 
@@ -340,8 +433,121 @@ mod tests {
             list,
             index,
             greet_if_blank,
+            patch: None,
             long_advice,
         }
+    }
+
+    /// A government's hail, `STR#` 7000 #1, patched by `'STR '` 10010.
+    fn govt_hail(long_advice: RuleSource) -> Reply {
+        Reply::Advice {
+            list: 7000,
+            index: 1,
+            greet_if_blank: false,
+            patch: Some(10_010),
+            long_advice,
+        }
+    }
+
+    fn text(line: &str) -> StringPatch {
+        StringPatch::Text(line.to_owned())
+    }
+
+    #[test]
+    fn a_patched_advice_line_reads_its_patch_and_is_then_checked() {
+        let said =
+            |patch| govt_hail(RuleSource::Engine).say(0, &patched("Hail.", 10_010, patch), "");
+        assert_eq!(said(text("Welcome.")), "Welcome.", "the patch stands");
+        assert_eq!(said(text("*Hidden")), "c46", "then the check");
+        assert_eq!(said(text(&"x".repeat(42))), "c46", "the long line too");
+        assert_eq!(said(StringPatch::Empty), "Greetings.", "the buffer kept");
+        assert_eq!(
+            said(StringPatch::Unreadable),
+            "c46",
+            "read empty, then checked"
+        );
+        assert_eq!(said(StringPatch::Absent), "Hail.", "the STR# line");
+        let other_id =
+            govt_hail(RuleSource::Engine).say(0, &patched("Hail.", 10_011, text("No.")), "");
+        assert_eq!(other_id, "Hail.", "another 'STR ' patches nothing");
+        let long = "x".repeat(42);
+        assert_eq!(
+            govt_hail(RuleSource::Bible).say(0, &patched("", 10_010, text(&long)), ""),
+            long,
+            "by the other reading"
+        );
+    }
+
+    #[test]
+    fn an_unpatched_advice_line_reads_no_str() {
+        let catalog = patched("Hail.", 10_010, text("Welcome."));
+        assert_eq!(
+            advice(7000, 1, false, RuleSource::Engine).say(0, &catalog, ""),
+            "Hail."
+        );
+    }
+
+    fn quote(index: u16, empty_reads_greetings: bool) -> Reply {
+        Reply::Quote {
+            index,
+            empty_reads_greetings,
+        }
+    }
+
+    #[test]
+    fn a_comm_quote_reads_its_patch_as_written() {
+        for greets in [true, false] {
+            let said = |patch| quote(24, greets).say(0, &patched("", 15_024, patch), "");
+            assert_eq!(said(text("*Well met.")), "*Well met.", "no check");
+            assert_eq!(said(StringPatch::Unreadable), "", "{greets}");
+            assert_eq!(said(StringPatch::Absent), "q24", "STR# 7100 #24");
+            assert_eq!(
+                quote(24, greets).say(0, &patched("", 15_023, text("No.")), ""),
+                "q24"
+            );
+            assert_eq!(
+                quote(31, greets).say(0, &strings(""), ""),
+                "",
+                "past the end"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_comm_quote_patch_greets_only_from_greetings() {
+        let catalog = patched("", 15_024, StringPatch::Empty);
+        assert_eq!(quote(24, true).say(0, &catalog, ""), "Greetings.");
+        assert_eq!(quote(24, false).say(0, &catalog, ""), "", "the opening's");
+    }
+
+    #[test]
+    fn a_comm_quote_past_the_patch_ids_reads_its_str_list() {
+        let catalog = patched("", 14_999, text("No."));
+        assert_eq!(quote(u16::MAX, true).say(0, &catalog, ""), "");
+    }
+
+    #[test]
+    fn a_rolled_line_on_its_own_greets() {
+        for long_advice in RuleSource::ALL {
+            assert_eq!(
+                Reply::Rolled { long_advice }.say(2, &strings(""), ""),
+                "Greetings."
+            );
+        }
+    }
+
+    #[test]
+    fn a_rolled_line_is_checked_in_the_variant_by_its_reading() {
+        let catalog = strings("");
+        let long = "x".repeat(42);
+        let checked = |line: &str, long_advice| checked(line.to_owned(), long_advice, 3, &catalog);
+        assert_eq!(
+            checked("Earth is fine.", RuleSource::Engine),
+            "Earth is fine."
+        );
+        assert_eq!(checked("*Earth is fine.", RuleSource::Bible), "c49");
+        assert_eq!(checked(&long, RuleSource::Engine), "c49");
+        assert_eq!(checked(&long, RuleSource::Bible), long);
     }
 
     #[test]

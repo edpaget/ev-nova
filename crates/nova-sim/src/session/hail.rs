@@ -23,7 +23,10 @@
 //! conversation's variant, read from the caller's [`CommCatalog`], and
 //! filled with no mission as the dialog shows it (`_CommDialogUpdate`
 //! @0x907f7-0x9080b); a specific advice line is parsed as the press picks
-//! it (`_LoadAdvice` @0x919ca).
+//! it (`_LoadAdvice` @0x919ca). A good-price or disaster line is rolled
+//! once as the hail opens, as `_DoCommDialog` calls `_LoadAdvice` then
+//! (@0x95b83), and each Greetings press says the line kept (see the
+//! `hail_advice` module).
 //!
 //! The deeds:
 //!
@@ -87,6 +90,7 @@
 //!   the paused flight, as the original's modal dialog does, so it is
 //!   still in the system when the deed is done.
 
+use super::hail_advice::{AdviceFacts, rolled_line};
 use super::missions::TextSource;
 use super::{Jump, Outbox, PlayerShip, Session, Space, Statics};
 use crate::ai::Goal;
@@ -95,15 +99,16 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
+use crate::hail::advice::AdviceWords;
 use crate::hail::{
     Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
-    HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, assist,
-    attitude, reply,
+    HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, advice,
+    assist, attitude, reply,
 };
 use crate::landing;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
-use crate::person::{COMM_QUOTES, offers_to_join};
+use crate::person::offers_to_join;
 use crate::pilot::Pilot;
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -129,8 +134,13 @@ pub(super) struct Talk {
     first: Option<Reply>,
     reply: Reply,
     /// The words of `reply` when it is a specific advice line, parsed as
-    /// it was said (`_LoadAdvice` @0x919ca; [`Reply::say_parsed`]).
+    /// it was said (`_LoadAdvice` @0x919ca; [`Reply::say_parsed`]), or the
+    /// line rolled, checked as it was said ([`Reply::Rolled`]).
     said: Option<String>,
+    /// The good-price or disaster line rolled as the hail opened, unchecked,
+    /// which Greetings says ([`Reply::Rolled`]; see the `hail_advice`
+    /// module); none when it rolled none.
+    rolled: Option<String>,
     ask: Option<Ask>,
     /// Whether the escort hailed is to be released once the channel
     /// closes.
@@ -149,6 +159,7 @@ impl Talk {
             first: None,
             reply: Reply::Comm(1),
             said: None,
+            rolled: None,
             ask: None,
             release: false,
         }
@@ -184,8 +195,21 @@ impl Session {
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
         let escort = npc.escort.is_some();
-        let conversation =
+        let mut conversation =
             Conversation::open(self.pilot.cash, dispositions.greedy, npc.info_types, chance);
+        conversation.advice = advice::kind(conversation.advice, npc.person.as_ref());
+        let rolled = rolled_line(
+            conversation.advice,
+            &AdviceFacts {
+                ports: &self.chart.advice_ports(&self.pilot, &self.statics),
+                events: &self.pilot.events,
+                disasters: &self.statics.goods.disasters,
+                stellar_flags: &self.statics.stellar_flags,
+                words: &AdviceWords::read(catalog),
+                names: self,
+            },
+            chance,
+        );
         let opening = if escort {
             Reply::Comm(reply::ESCORT_OPENING)
         } else {
@@ -201,9 +225,9 @@ impl Session {
         };
         let opening = match Self::quote_of(npc) {
             Some(index) if self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
-                Reply::Line {
-                    list: COMM_QUOTES,
+                Reply::Quote {
                     index,
+                    empty_reads_greetings: false,
                 }
             }
             _ => opening,
@@ -214,6 +238,7 @@ impl Session {
             first: None,
             reply: opening,
             said: None,
+            rolled,
             ask: None,
             release: false,
         });
@@ -474,8 +499,15 @@ impl Session {
         };
         talk.first = answer.first;
         if let Some(said) = answer.reply {
+            let variant = talk.conversation.variant;
             talk.reply = said;
-            talk.said = self.take_advice(said, talk.conversation.variant, catalog, chance);
+            talk.said = match said {
+                Reply::Rolled { long_advice } => talk
+                    .rolled
+                    .clone()
+                    .map(|line| reply::checked(line, long_advice, variant, catalog)),
+                _ => self.take_advice(said, variant, catalog, chance),
+            };
         }
         if let Some(ask) = answer.ask {
             talk.conversation.ask(chance);
@@ -814,7 +846,7 @@ pub(super) mod tests {
     /// xenophobes who take none; 139 says nothing; 150 answers no hail.
     /// `STR#` 3000 holds the replies, 2002 #175 "Greetings.", 7000 the
     /// Federation's hail lines and 7505 specific advice.
-    fn hailable() -> FakePilotCatalog {
+    pub(in crate::session) fn hailable() -> FakePilotCatalog {
         let mut dude_types = [(-1, 0); 8];
         dude_types[0] = (128, 100);
         let mut catalog = FakePilotCatalog {
@@ -909,7 +941,7 @@ pub(super) mod tests {
 
     /// `catalog`'s session with its ship (NPC 0) 300 above the player at
     /// the centre, at rest, targeted; the pilot holds 100,000 credits.
-    fn targeting(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn targeting(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut placed(0, -300));
         // Setup starts it at its top speed: brought to rest.
@@ -920,17 +952,17 @@ pub(super) mod tests {
     }
 
     /// NPC 0 of `session`.
-    fn npc(session: &mut Session) -> &mut Npc {
+    pub(in crate::session) fn npc(session: &mut Session) -> &mut Npc {
         &mut session.space.traffic.npcs_mut()[0]
     }
 
     /// A conversation's opening draws: variant `variant`, an even mood,
     /// the price's one draw of none.
-    fn opening(variant: u32) -> Vec<u32> {
+    pub(in crate::session) fn opening(variant: u32) -> Vec<u32> {
         vec![variant, 20, 1, 1, 0]
     }
 
-    fn hail_with(
+    pub(in crate::session) fn hail_with(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         draws: &[u32],

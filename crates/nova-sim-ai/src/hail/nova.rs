@@ -17,26 +17,36 @@
 //!
 //! - An untalkative ship, and by the Bible a quiet one: "No response."
 //! - A hostile or unfriendly ship: "Stop wasting my time."
-//! - A friendly ship gives its advice ([`Reply::Advice`]), as the
-//!   conversation picked it (see [`deal`](super::deal)):
-//!   - its government's hail (`InfoTypes` 0x8000, @0x91a03-0x91aa4):
-//!     `STR#` 7000 + (govt - 128), string r + 1 for a trader and r + 6
-//!     otherwise, r the variant. An independent ship reads `STR#` 6999,
-//!     which does not exist, so its line is blank;
-//!   - specific advice (0x4000): `STR#` 7500 + (`InfoTypes` & 0x0FFF),
-//!     string #1, or "Greetings." when that is blank. The original picks
-//!     the string with `Rand((adviceRandom mod count) + 1) + 1`, and
-//!     `adviceRandom` is 0 until a planet is hailed, so for ships it is
-//!     always #1 and nothing is drawn;
-//!   - good prices and disasters (0x1000 and 0x2000), placeholders, and
-//!     no advice at all: "Greetings.".
+//! - A friendly ship gives its advice, as the conversation picked it (see
+//!   [`deal`](super::deal); a person's override is
+//!   [`advice::kind`](super::advice::kind)), as `_LoadAdvice` builds it
+//!   (see [`advice`](super::advice)):
+//!   - its government's hail (`InfoTypes` 0x8000, @0x91a03-0x91aa4,
+//!     [`Reply::Advice`]): a plug-in's `'STR '` 10010 + 10g + r for a
+//!     trader and 10015 + 10g + r otherwise
+//!     ([`govt_hail_patch`](super::advice::govt_hail_patch)) when one
+//!     exists, else `STR#` 7000 + g, string r + 1 for a trader and r + 6
+//!     otherwise, g the government's index (ID - 128) and r the variant.
+//!     An independent ship reads `'STR '` 10000 + r or 10005 + r, then
+//!     `STR#` 6999, which does not exist, so its line is blank;
+//!   - specific advice (0x4000, [`Reply::Advice`]): `STR#` 7500 +
+//!     (`InfoTypes` & 0x0FFF), string #1, or "Greetings." when that is
+//!     blank. The original picks the string with `Rand((adviceRandom mod
+//!     count) + 1) + 1`, and `adviceRandom` is 0 until a planet is hailed,
+//!     so for ships it is always #1 and nothing is drawn;
+//!   - good prices and disasters (0x1000 and 0x2000, [`Reply::Rolled`]):
+//!     the line the hail rolled as it opened, which the session keeps, or
+//!     "Greetings." when it rolled none;
+//!   - no advice at all: "Greetings.".
 //!
 //!   The line is then checked as [`reply`](super::reply) says, by the
 //!   rulebook's [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) entry.
 //! - A friendly person with a comm quote ([`Hail::quote`], by the
 //!   engine's reading of [`RuleKey::CommQuote`](crate::RuleKey::CommQuote))
-//!   says it instead, `STR#` 7100 string `CommQuote`, as written with no
-//!   check (`_LoadAdvice` @0x91ae7-0x91b55).
+//!   says it instead ([`Reply::Quote`]): a plug-in's `'STR '` 15000 +
+//!   `CommQuote` when one exists, else `STR#` 7100 string `CommQuote`, as
+//!   written with no check (`_LoadAdvice` @0x91ae7-0x91b55); an empty
+//!   `'STR '` leaves "Greetings.".
 //!
 //! **Request Assistance** (item 2, @0x9625d-0x96643, key R), listed for a
 //! talkative ship that is not hostile. In order:
@@ -140,6 +150,7 @@
 //! dialog in place of the person's mission offer
 //! ([`HailOption::joins`]).
 
+use super::advice::{DISASTERS, GOOD_PRICES, govt_hail_patch};
 use super::reply::{
     self, BAD_MOOD, BUSY, CANT_DO_THAT, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU,
     IN_YOUR_DREAMS, JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST,
@@ -149,7 +160,6 @@ use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply, battle};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::traffic::COMM_QUOTES;
 use crate::traffic::ShipBehav;
 
 /// Greetings' label, `STR#` 150 #22.
@@ -220,25 +230,29 @@ impl Greetings {
     fn advice(self, hail: &Hail) -> Reply {
         let variant = u16::from(hail.variant);
         let npc = hail.npc;
-        let (list, index, greet_if_blank) = match hail.advice {
+        let (list, index, greet_if_blank, patch) = match hail.advice {
             Some(GOVT_HAIL) => {
-                let first = if npc.ai_type.trades() {
-                    TRADER_HAIL
-                } else {
-                    OTHER_HAIL
-                };
-                (govt_hails(npc.govt), variant + first, false)
+                let trader = npc.ai_type.trades();
+                let first = if trader { TRADER_HAIL } else { OTHER_HAIL };
+                let patch = govt_hail_patch(npc.govt, trader, hail.variant);
+                (govt_hails(npc.govt), variant + first, false, patch)
             }
             Some(SPECIFIC_ADVICE) => {
                 let offset = (npc.info_types & ADVICE_LIST_BITS) as i16;
-                (ADVICE_LISTS + offset, 1, true)
+                (ADVICE_LISTS + offset, 1, true, None)
             }
-            _ => (reply::GREETINGS.0, reply::GREETINGS.1, false),
+            Some(GOOD_PRICES | DISASTERS) => {
+                return Reply::Rolled {
+                    long_advice: self.long_advice,
+                };
+            }
+            _ => (reply::GREETINGS.0, reply::GREETINGS.1, false, None),
         };
         Reply::Advice {
             list,
             index,
             greet_if_blank,
+            patch,
             long_advice: self.long_advice,
         }
     }
@@ -271,9 +285,9 @@ impl HailOption for Greetings {
         } else if hail.attitude != Attitude::Friendly {
             Reply::Comm(WASTING_TIME)
         } else if let Some(index) = hail.quote {
-            Reply::Line {
-                list: COMM_QUOTES,
+            Reply::Quote {
                 index,
+                empty_reads_greetings: true,
             }
         } else {
             self.advice(hail)
@@ -554,12 +568,24 @@ mod tests {
     }
 
     fn advice(list: i16, index: u16, greet_if_blank: bool) -> Answer {
+        patched_advice(list, index, greet_if_blank, None)
+    }
+
+    /// [`advice`], its `'STR '` `patch`.
+    fn patched_advice(list: i16, index: u16, greet_if_blank: bool, patch: Option<i16>) -> Answer {
         Answer::say(Reply::Advice {
             list,
             index,
             greet_if_blank,
+            patch,
             long_advice: RuleSource::Engine,
         })
+    }
+
+    /// A government's hail: `STR#` `list` string `index`, patched by
+    /// `'STR '` `patch`.
+    fn govt_hail(list: i16, index: u16, patch: i16) -> Answer {
+        patched_advice(list, index, false, Some(patch))
     }
 
     fn untalkative() -> Dispositions {
@@ -726,14 +752,14 @@ mod tests {
                 &advising(npc, variant, Some(GOVT_HAIL)),
             )
         };
-        assert_eq!(greet(&trader, 2), advice(7002, 3, false));
-        assert_eq!(greet(&brave, 2), advice(7002, 3, false));
-        assert_eq!(greet(&warship, 2), advice(7002, 8, false));
-        assert_eq!(greet(&interceptor, 2), advice(7002, 8, false));
-        assert_eq!(greet(&trader, 0), advice(7002, 1, false));
-        assert_eq!(greet(&warship, 4), advice(7002, 10, false));
+        assert_eq!(greet(&trader, 2), govt_hail(7002, 3, 10_032));
+        assert_eq!(greet(&brave, 2), govt_hail(7002, 3, 10_032));
+        assert_eq!(greet(&warship, 2), govt_hail(7002, 8, 10_037));
+        assert_eq!(greet(&interceptor, 2), govt_hail(7002, 8, 10_037));
+        assert_eq!(greet(&trader, 0), govt_hail(7002, 1, 10_030));
+        assert_eq!(greet(&warship, 4), govt_hail(7002, 10, 10_039));
         let fed = of(AiType::Warship, Some(128), 0x8000);
-        assert_eq!(greet(&fed, 0), advice(7000, 6, false));
+        assert_eq!(greet(&fed, 0), govt_hail(7000, 6, 10_015));
     }
 
     #[test]
@@ -748,8 +774,9 @@ mod tests {
                 )
             };
             let r = u16::from(variant);
-            assert_eq!(greet(&trader), advice(6999, r + 1, false));
-            assert_eq!(greet(&warship), advice(6999, r + 6, false));
+            let patch = i16::from(variant);
+            assert_eq!(greet(&trader), govt_hail(6999, r + 1, 10_000 + patch));
+            assert_eq!(greet(&warship), govt_hail(6999, r + 6, 10_005 + patch));
         }
     }
 
@@ -766,15 +793,47 @@ mod tests {
     }
 
     #[test]
-    fn no_advice_and_the_placeholder_kinds_greet_with_greetings() {
+    fn no_advice_greets_with_greetings() {
         let npc = of(AiType::Warship, Some(130), 0xF000);
-        for kind in [None, Some(0x1000), Some(0x2000)] {
-            let hail = advising(&npc, 3, kind);
-            assert_eq!(
-                press(&Greetings::default(), &hail),
-                advice(2002, 175, false),
-                "{kind:?}"
-            );
+        let hail = advising(&npc, 3, None);
+        assert_eq!(
+            press(&Greetings::default(), &hail),
+            advice(2002, 175, false)
+        );
+    }
+
+    #[test]
+    fn good_prices_and_disasters_say_the_line_rolled_as_the_hail_opened() {
+        let npc = of(AiType::WimpyTrader, Some(130), 0x3000);
+        for kind in [GOOD_PRICES, DISASTERS] {
+            for long_advice in RuleSource::ALL {
+                let greetings = Greetings {
+                    long_advice,
+                    ..Greetings::default()
+                };
+                assert_eq!(
+                    press(&greetings, &advising(&npc, 3, Some(kind))),
+                    Answer::say(Reply::Rolled { long_advice }),
+                    "{kind:#x} {long_advice:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_that_is_not_friendly_rolled_advice_or_not_keeps_its_reply() {
+        let npc = of(AiType::WimpyTrader, Some(130), 0x1000);
+        for kind in [GOOD_PRICES, DISASTERS] {
+            let hostile = Hail {
+                attitude: Attitude::Hostile,
+                ..advising(&npc, 0, Some(kind))
+            };
+            assert_eq!(press(&Greetings::default(), &hostile), says(WASTING_TIME));
+            let silent = Hail {
+                dispositions: untalkative(),
+                ..advising(&npc, 0, Some(kind))
+            };
+            assert_eq!(press(&Greetings::default(), &silent), says(NO_RESPONSE));
         }
     }
 
@@ -787,9 +846,9 @@ mod tests {
         };
         assert_eq!(
             press(&Greetings::default(), &quoted),
-            Answer::say(Reply::Line {
-                list: 7100,
+            Answer::say(Reply::Quote {
                 index: 24,
+                empty_reads_greetings: true,
             }),
             "in place of its advice"
         );
@@ -802,7 +861,7 @@ mod tests {
             ..quoted
         };
         assert_eq!(press(&Greetings::default(), &hail), says(NO_RESPONSE));
-        assert_eq!(COMM_QUOTES, 7100);
+        assert_eq!(crate::traffic::COMM_QUOTES, 7100);
     }
 
     #[test]
@@ -818,6 +877,7 @@ mod tests {
                 list: 7002,
                 index: 6,
                 greet_if_blank: false,
+                patch: Some(10_035),
                 long_advice: RuleSource::Bible,
             })
         );
