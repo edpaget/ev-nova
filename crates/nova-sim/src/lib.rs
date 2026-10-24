@@ -394,6 +394,7 @@ pub use nova_sim_ai::escort;
 pub use nova_sim_ai::escort_voice;
 pub use nova_sim_catalog::data;
 pub use nova_sim_port::escape;
+pub use nova_sim_port::escort_dialog;
 pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;

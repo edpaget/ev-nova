@@ -31,6 +31,12 @@
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
+//! - [`escort_dialog`]: the escort dialog a fleet escort hailed opens:
+//!   what it shows ([`EscortDialogView`](escort_dialog::EscortDialogView)),
+//!   when an escort can be upgraded or sold, its Upgrade and Sell marks
+//!   ([`toggle`](escort_dialog::toggle)), and what leaving a shipyard
+//!   does with them ([`settle_marks`](escort_dialog::settle_marks),
+//!   [`escort_land_text`](escort_dialog::escort_land_text)).
 //! - [`npc_escape`]: what a dying NPC leaves behind: when its crew's
 //!   escape pods and its person's pod come out, and when it rolls for an
 //!   escape ship.
@@ -113,6 +119,7 @@ use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags
 pub mod board;
 pub mod christening;
 pub mod escape;
+pub mod escort_dialog;
 pub mod gate_sprite;
 pub mod grant;
 pub mod hire;
