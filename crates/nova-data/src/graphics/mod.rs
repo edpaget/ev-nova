@@ -111,5 +111,5 @@ pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
-pub use rled::{RLED, decode_rled};
+pub use rled::{RLED, RledInfo, decode_rled, scan_rled};
 pub use sheet::{SheetLayout, SpriteSheet};

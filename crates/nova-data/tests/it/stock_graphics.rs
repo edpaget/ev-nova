@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use nova_data::decode_all;
-use nova_data::graphics::{Image, decode_cicn, decode_pict, decode_ppat, decode_rled};
+use nova_data::graphics::{
+    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, scan_rled,
+};
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_rsrc::{ResType, ResourceFile};
@@ -111,6 +113,24 @@ fn every_stock_rled_decodes_its_frames_at_the_header_size() {
                     problems.push(format!("a frame is not {width}x{height}"));
                 }
             }
+        }
+    });
+}
+
+/// A scan reads what the decode gives, for every stock sheet: its frame
+/// size, frame count and whether it has runs, or the same error.
+#[test]
+fn every_stock_rled_scans_as_it_decodes() {
+    check_all("rlëD", 282, |data, problems| {
+        let decoded = decode_rled(data, None).map(|sheet| RledInfo {
+            frame_width: sheet.frame_width(),
+            frame_height: sheet.frame_height(),
+            frames: sheet.frames().len() as u16,
+            has_runs: sheet.solid_frames().is_some(),
+        });
+        let scanned = scan_rled(data);
+        if scanned != decoded {
+            problems.push(format!("scanned {scanned:?}, decoded {decoded:?}"));
         }
     });
 }

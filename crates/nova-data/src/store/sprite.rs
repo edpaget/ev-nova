@@ -4,18 +4,24 @@ use std::fmt;
 
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
-use crate::graphics::{GraphicsError, RLED, SpriteSheet, decode_rled};
+use crate::graphics::{
+    GraphicsError, RLED, RledInfo, SheetLayout, SpriteSheet, decode_rled, scan_rled,
+};
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::wire::id::ShipId;
 
 /// A ship's base sprite sheet and the files each step came from.
+///
+/// `S` is the sheet: decoded ([`SpriteSheet`]) by
+/// [`GameData::ship_sprite`], or only scanned ([`SheetScan`]) by
+/// [`GameData::ship_sprite_info`].
 #[derive(Debug)]
-pub struct ShipSprite<'a> {
+pub struct ShipSprite<'a, S = SpriteSheet> {
     /// The base image's `rlëD` ID (the `shän`'s `BaseImageID`).
     pub image_id: i16,
-    /// The decoded sheet, laid out with the `shän`'s frames per rotation.
-    pub sheet: SpriteSheet,
+    /// The sheet, laid out with the `shän`'s frames per rotation.
+    pub sheet: S,
     /// The file the `shïp` came from.
     pub ship: &'a SourceFile,
     /// The file the `shän` came from.
@@ -84,14 +90,39 @@ impl fmt::Display for ShipLayer {
     }
 }
 
-/// One layer's sprite sheet and the file it came from.
+/// A ship's base sheet as [`GameData::ship_sprite_info`] reads it: its
+/// metadata without its pixels.
+pub type ShipSpriteInfo<'a> = ShipSprite<'a, SheetScan>;
+
+/// What a sheet would hold once decoded, read without decoding it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SheetScan {
+    /// The frame size, frame count and whether it has runs.
+    pub info: RledInfo,
+    /// The layout the decoded sheet would have: the `shän`'s, or
+    /// [`SheetLayout::DEFAULT`].
+    pub layout: SheetLayout,
+}
+
+impl SheetScan {
+    /// Scans `data` as [`decode_rled`] would decode it with `layout`.
+    fn read(data: &[u8], layout: Option<SheetLayout>) -> Result<Self, GraphicsError> {
+        Ok(Self {
+            info: scan_rled(data)?,
+            layout: layout.unwrap_or(SheetLayout::DEFAULT),
+        })
+    }
+}
+
+/// One layer's sprite sheet and the file it came from; `S` as for
+/// [`ShipSprite`].
 #[derive(Debug)]
-pub struct LayerSprite<'a> {
+pub struct LayerSprite<'a, S = SpriteSheet> {
     /// The layer's `rlëD` ID.
     pub image_id: i16,
-    /// The decoded sheet, laid out like the base (the `shän`'s frames per
+    /// The sheet, laid out like the base (the `shän`'s frames per
     /// rotation as columns).
-    pub sheet: SpriteSheet,
+    pub sheet: S,
     /// The file the `rlëD` came from.
     pub source: &'a SourceFile,
 }
@@ -124,20 +155,29 @@ pub enum LayerError {
 /// A ship's glow, lights, weapon, alt and shield layers. Each is `None` when the `shän` does not
 /// define it (an image ID of 0 or less), and otherwise resolves or fails on
 /// its own, so one broken layer never hides the other.
+///
+/// `S` is the sheet, as for [`ShipSprite`].
 #[derive(Debug)]
-pub struct ShipLayers<'a> {
+pub struct ShipLayers<'a, S = SpriteSheet> {
     /// The engine glow.
-    pub glow: Option<Result<LayerSprite<'a>, LayerError>>,
+    pub glow: Option<Result<LayerSprite<'a, S>, LayerError>>,
     /// The running lights.
-    pub lights: Option<Result<LayerSprite<'a>, LayerError>>,
+    pub lights: Option<Result<LayerSprite<'a, S>, LayerError>>,
     /// The weapon glow.
-    pub weapon: Option<Result<LayerSprite<'a>, LayerError>>,
+    pub weapon: Option<Result<LayerSprite<'a, S>, LayerError>>,
     /// The alt layer: defined only with an `AltSetCount` above 0 too, as
     /// `_LoadExtendedShipSprites` loads it (@0x22aec-0x22b1e).
-    pub alt: Option<Result<LayerSprite<'a>, LayerError>>,
+    pub alt: Option<Result<LayerSprite<'a, S>, LayerError>>,
     /// The shield.
-    pub shield: Option<Result<LayerSprite<'a>, LayerError>>,
+    pub shield: Option<Result<LayerSprite<'a, S>, LayerError>>,
 }
+
+/// A ship's layers as [`GameData::ship_layer_infos`] reads them: their
+/// metadata without their pixels.
+pub type ShipLayerInfos<'a> = ShipLayers<'a, SheetScan>;
+
+/// Reads one `rlëD` as a sheet `S`, given the `shän`'s layout.
+type ReadSheet<S> = fn(&[u8], Option<SheetLayout>) -> Result<S, GraphicsError>;
 
 impl GameData {
     /// Resolves `ship`'s glow, lights, weapon, alt and shield layers through its `shän` (as
@@ -148,9 +188,24 @@ impl GameData {
     /// layer's own failure is that layer's [`LayerError`]. The sheets are
     /// decoded on every call and not cached.
     pub fn ship_layers(&self, ship: ShipId) -> Result<ShipLayers<'_>, SpriteError> {
+        self.resolve_layers(ship, decode_rled)
+    }
+
+    /// What [`GameData::ship_layers`] resolves, with each sheet only
+    /// scanned: its frame size, frame count, runs and layout, but no
+    /// pixels. It fails exactly where and as that does.
+    pub fn ship_layer_infos(&self, ship: ShipId) -> Result<ShipLayerInfos<'_>, SpriteError> {
+        self.resolve_layers(ship, SheetScan::read)
+    }
+
+    fn resolve_layers<S>(
+        &self,
+        ship: ShipId,
+        read: ReadSheet<S>,
+    ) -> Result<ShipLayers<'_, S>, SpriteError> {
         let (_, anim) = self.ship_and_anim(ship)?;
         let layer = |layer, image_id: i16| {
-            (image_id > 0).then(|| self.layer_sprite(ship.0, layer, image_id, anim.record))
+            (image_id > 0).then(|| self.layer_sprite(ship.0, layer, image_id, anim.record, read))
         };
         Ok(ShipLayers {
             glow: layer(ShipLayer::Glow, anim.record.glow_image_id),
@@ -163,19 +218,20 @@ impl GameData {
         })
     }
 
-    fn layer_sprite(
+    fn layer_sprite<S>(
         &self,
         ship: i16,
         layer: ShipLayer,
         image_id: i16,
         anim: &ShipAnim,
-    ) -> Result<LayerSprite<'_>, LayerError> {
+        read: ReadSheet<S>,
+    ) -> Result<LayerSprite<'_, S>, LayerError> {
         let found = self.resource(RLED, image_id).ok_or(LayerError::NoSheet {
             ship,
             layer,
             image_id,
         })?;
-        let sheet = decode_rled(found.resource.data(), anim.sheet_layout()).map_err(|source| {
+        let sheet = read(found.resource.data(), anim.sheet_layout()).map_err(|source| {
             LayerError::Graphics {
                 layer,
                 image_id,
@@ -196,13 +252,28 @@ impl GameData {
     ///
     /// The sheet is decoded on every call and not cached.
     pub fn ship_sprite(&self, ship: ShipId) -> Result<ShipSprite<'_>, SpriteError> {
+        self.resolve_sprite(ship, decode_rled)
+    }
+
+    /// What [`GameData::ship_sprite`] resolves, with the sheet only
+    /// scanned: its frame size, frame count, runs and layout, but no
+    /// pixels. It fails exactly where and as that does.
+    pub fn ship_sprite_info(&self, ship: ShipId) -> Result<ShipSpriteInfo<'_>, SpriteError> {
+        self.resolve_sprite(ship, SheetScan::read)
+    }
+
+    fn resolve_sprite<S>(
+        &self,
+        ship: ShipId,
+        read: ReadSheet<S>,
+    ) -> Result<ShipSprite<'_, S>, SpriteError> {
         let id = ship.0;
         let (ship, anim) = self.ship_and_anim(ship)?;
         let image_id = anim.record.base_image_id;
         let found = self
             .resource(RLED, image_id)
             .ok_or(SpriteError::NoSheet { ship: id, image_id })?;
-        let sheet = decode_rled(found.resource.data(), anim.record.sheet_layout())
+        let sheet = read(found.resource.data(), anim.record.sheet_layout())
             .map_err(|source| SpriteError::Graphics { image_id, source })?;
         Ok(ShipSprite {
             image_id,
@@ -565,6 +636,137 @@ mod tests {
         assert_eq!(
             data.ship_layers(ShipId(129)).expect_err("no shän"),
             SpriteError::NoShipAnim(129)
+        );
+    }
+
+    /// What a scan should read from a decoded sheet.
+    fn info_of(sheet: &SpriteSheet) -> SheetScan {
+        SheetScan {
+            info: RledInfo {
+                frame_width: sheet.frame_width(),
+                frame_height: sheet.frame_height(),
+                frames: sheet.frames().len() as u16,
+                has_runs: sheet.solid_frames().is_some(),
+            },
+            layout: sheet.layout(),
+        }
+    }
+
+    /// `ship_sprite_info` gives what `ship_sprite` decodes, minus pixels.
+    fn assert_sprite_infos_agree(data: &GameData, ship: ShipId) {
+        let decoded = data.ship_sprite(ship).map(|s| ShipSprite {
+            image_id: s.image_id,
+            sheet: info_of(&s.sheet),
+            ship: s.ship,
+            anim: s.anim,
+            sheet_source: s.sheet_source,
+        });
+        let scanned = data.ship_sprite_info(ship);
+        assert_eq!(
+            format!("{scanned:?}"),
+            format!("{decoded:?}"),
+            "ship {ship:?}"
+        );
+    }
+
+    /// `ship_layer_infos` gives what `ship_layers` decodes, minus pixels.
+    fn assert_layer_infos_agree(data: &GameData, ship: ShipId) {
+        fn info(
+            layer: Option<Result<LayerSprite<'_>, LayerError>>,
+        ) -> Option<Result<LayerSprite<'_, SheetScan>, LayerError>> {
+            layer.map(|l| {
+                l.map(|l| LayerSprite {
+                    image_id: l.image_id,
+                    sheet: info_of(&l.sheet),
+                    source: l.source,
+                })
+            })
+        }
+        let decoded = data.ship_layers(ship).map(|l| ShipLayers {
+            glow: info(l.glow),
+            lights: info(l.lights),
+            weapon: info(l.weapon),
+            alt: info(l.alt),
+            shield: info(l.shield),
+        });
+        let scanned = data.ship_layer_infos(ship);
+        assert_eq!(
+            format!("{scanned:?}"),
+            format!("{decoded:?}"),
+            "ship {ship:?}"
+        );
+    }
+
+    /// Every layer defined, the glow with runs, as one plug-in.
+    fn every_layer(alt_sets: i16) -> (&'static str, Vec<u8>) {
+        let mut bytes = layered_anim(1100, 1200);
+        bytes[0x26..0x28].copy_from_slice(&1300_i16.to_be_bytes());
+        bytes[0x0C..0x0E].copy_from_slice(&1400_i16.to_be_bytes());
+        bytes[0x10..0x12].copy_from_slice(&alt_sets.to_be_bytes());
+        bytes[0x40..0x42].copy_from_slice(&1500_i16.to_be_bytes());
+        let glow = RledBuilder::new(3, 1)
+            .frame(|f| f.line().run(2, 0x7FFF, 0x7FFF))
+            .build();
+        let resources = vec![
+            (ShipAnim::TYPE, 128, bytes),
+            (RLED, 1100, glow),
+            (RLED, 1200, sheet(12, 0x001F)),
+            (RLED, 1300, sheet(8, 0x7C00)),
+            (RLED, 1400, sheet(6, 0x7C00)),
+            (RLED, 1500, sheet(4, 0x001F)),
+        ];
+        ("Layers", fork(&resources))
+    }
+
+    #[test]
+    fn a_ships_infos_agree_with_its_decoded_sheets() {
+        let cases = [
+            ("every layer", store(&[every_layer(2)])),
+            ("no alt sets", store(&[every_layer(0)])),
+            ("no layers", store(&[])),
+            ("no layer sheet", store(&[layered(1100, 1200, &[])])),
+            (
+                "broken layer sheet",
+                store(&[layered(
+                    1100,
+                    1200,
+                    &[(1100, RledBuilder::new(2, 1).depth(8).build())],
+                )]),
+            ),
+            (
+                "broken base sheet",
+                store(&[(
+                    "Bad Paint",
+                    fork(&[(RLED, 1000, RledBuilder::new(2, 1).depth(8).build())]),
+                )]),
+            ),
+            (
+                "no base sheet",
+                store(&[("Other", fork(&[(ShipAnim::TYPE, 128, anim(1001, 3, 4))]))]),
+            ),
+            (
+                "no shän",
+                store(&[("Ship 129", fork(&[(Ship::TYPE, 129, ship())]))]),
+            ),
+        ];
+        for (_, data) in &cases {
+            for ship in [ShipId(128), ShipId(129), ShipId(130)] {
+                assert_sprite_infos_agree(data, ship);
+                assert_layer_infos_agree(data, ship);
+            }
+        }
+        let layers = cases[0].1.ship_layer_infos(ShipId(128)).expect("resolves");
+        let glow = layers.glow.expect("defined").expect("resolves");
+        assert!(glow.sheet.info.has_runs);
+        assert_eq!(glow.sheet.layout.columns(), 4);
+        assert!(layers.alt.is_some());
+        assert!(
+            cases[1]
+                .1
+                .ship_layer_infos(ShipId(128))
+                .unwrap()
+                .alt
+                .is_none()
         );
     }
 
