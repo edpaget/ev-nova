@@ -66,12 +66,11 @@
 //!     (@0x86fa4-0x8700a): the victim boarded, its AI wait [`DOCK_WAIT`] +
 //!     `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the victim's
 //!     ([`DockOutcome::Started`]).
-//! - **The turn**: subs 9, 0xb and 0xf set only the heading they want
-//!   (+0x68), and `_HandleShip` turns the ship to it
-//!   ([`flight::turn_to`], @0x34460-0x3458e): by its turn while it is off
-//!   by more than that, whole degrees, and onto it otherwise. Sub 1's stop
-//!   still turns by [`autopilot::steer`](crate::traffic::autopilot::steer)'s reading, which isn't
-//!   `_HandleShip`'s (see its docs).
+//! - **The turn**: subs 9, 0xb, 0xf and 1 set only the heading they want
+//!   (+0x68; sub 1's is [`leave_flight::stop_wanting`]'s), and
+//!   `_HandleShip` turns the ship to it ([`flight::turn_to`],
+//!   @0x34460-0x3458e): by its turn while it is off by more than that,
+//!   whole degrees, and onto it otherwise.
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
 //!   (@0x3443f-0x34454, @0x34a54-0x34a72): it moves on at the velocity
 //!   the substate left it, its heading where it was.
@@ -166,7 +165,7 @@ pub enum DockSub {
     /// Sub 0xf: it matches the victim's velocity and docks.
     Dock,
     /// Sub 1: it stops, with goal 9's damping off its retro heading
-    /// ([`leave_flight::stop`]). A refuel's alone
+    /// ([`leave_flight::stop_wanting`]). A refuel's alone
     /// ([`refuel_dock`](crate::traffic::refuel_dock)).
     Stop,
 }
@@ -263,13 +262,14 @@ pub fn fly(
     let inertia = Inertia::of(npc, Some(victim), true, flight);
     let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
-            let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, true);
-            (controls, flown, None, DockOutcome::Flying)
+            let (controls, flown, wanted) =
+                leave_flight::stop_wanting(&mut npc.state, handling, inertia, true);
+            (controls, flown, wanted, DockOutcome::Flying)
         }
         DockSub::Dock => {
             let (controls, wanted, outcome) =
                 dock(npc, (docking.ship, victim), handling, inertia, chance);
-            (controls, *handling, Some(wanted), outcome)
+            (controls, *handling, wanted, outcome)
         }
         sub => {
             let close = sub == DockSub::Close;
@@ -277,7 +277,7 @@ pub fn fly(
                 swarm_branch(npc, swarm, None, handling);
             }
             let (controls, flown, wanted) = approach(npc, victim, handling, close);
-            (controls, flown, Some(wanted), DockOutcome::Flying)
+            (controls, flown, wanted, DockOutcome::Flying)
         }
     };
     if npc.ai_wait > 0 {
@@ -286,9 +286,7 @@ pub fn fly(
             Inertia::Inertialess { .. } => inertialess::drift(npc, &flown),
         }
     } else {
-        let turn = wanted.map_or(controls.turn, |wanted| {
-            flight::turn_to(&mut npc.state, wanted, handling.turn_rate)
-        });
+        let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
         let controls = Controls { turn, ..controls };
         // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
         // bursts an owed burst out.
@@ -885,6 +883,15 @@ mod tests {
         ship.ai_wait = 150;
         let (ship, _) = flown(ship, &victim, &[]);
         assert_eq!(ship.state.heading, 0.5);
+        // Stopping (sub 1) within its turn of its retro heading, 0: put on
+        // it with no wait, and left where it was while the wait runs.
+        let stopping = || pirate(at(500.0, 0.0, 0.0, 2.0, 1.5), DockSub::Stop);
+        let (ship, _) = flown(stopping(), &victim, &[]);
+        assert_eq!(ship.state.heading, 0.0);
+        let mut waiting = stopping();
+        waiting.ai_wait = 150;
+        let (ship, _) = flown(waiting, &victim, &[]);
+        assert_eq!(ship.state.heading, 1.5);
     }
 
     #[test]

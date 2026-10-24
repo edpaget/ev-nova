@@ -37,9 +37,8 @@
 //!   turns it to the heading it wants as in close formation
 //!   ([`flight::turn_to`]).
 //! - **Stop** (sub 1, @0x8536d-0x85633): [`leave_flight::stop`], which
-//!   brakes a moving escort and settles a slow one. Its turn is still the
-//!   port's ([`autopilot::steer`]):
-//!   rdm:phase/escort-fleet-fidelity-followups/phase-3-substates-turn-as-handle-ship-does.
+//!   brakes a moving escort and settles a slow one, turned as
+//!   `_HandleShip` turns every substate ([`flight::turn_to`]).
 //! - **Close formation** (sub 0xc, @0x878fc-0x87e01, [`keep`]): Δv is its
 //!   velocity less its leader's. Its own `_ShipIsInertialess` test
 //!   (@0x87962) runs with the substate at 0 (@0x8792b), so it reads the
