@@ -572,6 +572,18 @@ pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
     Turn::None
 }
 
+/// [`turn_to`] for a substate that wants no heading of its own:
+/// `_LowLevelAIHandler` sets +0x68 to the ship's heading truncated every
+/// frame before its substate runs (`cvttss2si(+0x44)`, @0x85228-0x8522d),
+/// so `_HandleShip` puts the ship on its own whole degree, which is
+/// always within its turn: `state`'s heading is truncated, and the ship
+/// shows no turn.
+///
+/// The caller skips it while the ship's AI wait runs, as for [`turn_to`].
+pub fn turn_to_own(state: &mut ShipState) {
+    state.heading = f32::from(trig::whole(state.heading));
+}
+
 /// The unit vector a ship heading `heading` degrees faces.
 #[must_use]
 pub fn facing(heading: f32) -> Vec2 {
@@ -795,6 +807,20 @@ mod tests {
             (Turn::None, 90.0),
             "its own whole heading: truncated"
         );
+    }
+
+    #[test]
+    fn a_ship_wanting_its_own_heading_is_put_on_its_whole_degree() {
+        for heading in [37.6, 37.0, 359.9, 0.4] {
+            let mut state = ShipState {
+                velocity: Vec2::new(1.0, -2.0),
+                heading,
+                ..ShipState::default()
+            };
+            turn_to_own(&mut state);
+            assert_eq!(state.heading, heading.trunc(), "{heading}");
+            assert_eq!(state.velocity, Vec2::new(1.0, -2.0), "{heading}");
+        }
     }
 
     #[test]
