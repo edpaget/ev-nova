@@ -2,7 +2,8 @@ use super::*;
 use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::update::MapUpdate;
 use nova_sim::MapClicked;
-use nova_sim::galaxy_map::MapDrawing;
+use nova_sim::flight_frame::FloatingLinks;
+use nova_sim::galaxy_map::{MapDrawing, MapLink};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::{
     Column, ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip,
@@ -964,35 +965,18 @@ fn a_fully_cloaked_escort_is_drawn_at_its_full_fades_translucency() {
 
 // The floating map.
 
-/// The floating map's frame's centre, where Sol is drawn.
+/// The floating map's frame's centre, where the current system is drawn.
 const FRAME_CENTRE: Point = Point::new(686.0, 278.0);
-/// A point in the frame that is in no box, where [`with_sites`] puts
-/// stellar 128.
+/// A point in the frame that is in no box.
 const FRAME_MISS: Point = Point::new(700.0, 300.0);
-/// Where [`with_sites`] puts stellar 129, outside the frame.
+/// A point outside the frame.
 const OUTSIDE_FRAME: Point = Point::new(415.0, 284.0);
 
-/// [`near`]'s flight with Sol's stellars 128 under [`FRAME_MISS`] and
-/// 129 under [`OUTSIDE_FRAME`], as the camera starts.
-fn with_sites() -> View {
-    let view = FlightView::new(FakeCatalog {
-        near: true,
-        sites: vec![
-            site(128, (285.0, -84.0), StellarFlags::CAN_LAND),
-            site(129, (0.0, -100.0), StellarFlags::CAN_LAND),
-        ],
-        ..catalog()
-    });
-    assert_eq!(on_screen(&view, (285.0, -84.0)), FRAME_MISS);
-    assert_eq!(on_screen(&view, (0.0, -100.0)), OUTSIDE_FRAME);
-    view
-}
-
-/// Where the floating map draws systems' ovals, in draw order: the
-/// centre of each run of 1-pixel rows in a colour code's colour, each
-/// row the one after the last, inside the frame. Its black fills cover
-/// but draw nothing.
-fn floating_dots(view: &View) -> Vec<Point> {
+/// Where the floating map in `commands` draws systems' ovals, in draw order:
+/// the centre of each run of 1-pixel rows in a colour code's colour,
+/// each row the one after the last, inside the frame. Its black fills
+/// cover but draw nothing.
+fn floating_dots(commands: &DrawList) -> Vec<Point> {
     let codes = [
         DARK_GREY,
         LIGHT_GREY,
@@ -1003,7 +987,7 @@ fn floating_dots(view: &View) -> Vec<Point> {
     ];
     let frame = floating::frame(VIEW_SIZE);
     let mut ovals: Vec<(Color, f32, Bounds)> = Vec::new();
-    for command in &drawn(view) {
+    for command in commands {
         let DrawCommand::Line {
             from,
             to,
@@ -1051,13 +1035,127 @@ fn near_at(scale: f32) -> Point {
     )
 }
 
+/// The course map's drawing in Sol over [`FakeCatalog::near`]'s galaxy,
+/// as a session there draws it: [`sol_drawing`] with Proxima Near (134,
+/// at (40, 30)), unexplored, linked from Sol too.
+fn near_drawing() -> MapDrawing {
+    let mut drawing = sol_drawing();
+    drawing.current_links.push((SystemId(130), SystemId(134)));
+    drawing.links.push(MapLink {
+        from: SystemId(130),
+        to: SystemId(134),
+        selected: false,
+    });
+    drawing
+        .systems
+        .push(drawn_system(134, SystemColorCode::Unexplored));
+    drawing
+}
+
+/// The floating map's places in Sol: Sol at the galaxy's origin, and
+/// each of `links` at its place.
+fn sol_places(links: &[(i16, (f32, f32))]) -> FloatingLinks {
+    FloatingLinks {
+        current: Vec2::ZERO,
+        links: links
+            .iter()
+            .map(|&(id, (x, y))| (SystemId(id), Vec2::new(x, y)))
+            .collect(),
+    }
+}
+
+/// A view over a scripted flight in `frame`, drawing the map as
+/// [`sol_drawing`], with Sol's floating map places: its link to Alpha
+/// Centauri (131) at (600, 0).
+fn floating_in(frame: FlightFrame) -> Faked {
+    let mut view = faked_sol(frame);
+    view.sim.map_mut().floating = sol_places(&[(131, (600.0, 0.0))]);
+    view
+}
+
+/// [`floating_in`] over [`FakeCatalog::near`]'s galaxy, drawing it as
+/// [`near_drawing`], Proxima Near (134) linked at (40, 30) too.
+fn floating_near(frame: FlightFrame) -> Faked {
+    let catalog = FakeCatalog {
+        near: true,
+        ..catalog()
+    };
+    let mut view = faked_in(catalog, frame);
+    let map = view.sim.map_mut();
+    map.drawing = Some(near_drawing());
+    map.map_preselection = Some(SystemId(130));
+    map.floating = sol_places(&[(131, (600.0, 0.0)), (134, (40.0, 30.0))]);
+    view
+}
+
+/// Presses `k` or lets it go, as flight's input does for the floating
+/// map's keys: a press of H or `\` runs its key
+/// ([`FlightView::hyperspace_key`]) and a zoom key's zooms
+/// ([`FlightView::zoom_floating_map`]), and a flight key is tracked as
+/// held either way.
+fn floating_key(view: &mut Faked, k: Key, pressed: bool) {
+    if pressed {
+        match k {
+            HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY => view.hyperspace_key(k),
+            ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => view.zoom_floating_map(k),
+            _ => {}
+        }
+    }
+    view.track_held(&key(k, pressed));
+}
+
+/// Presses and lets go of `k`, as [`floating_key`] does.
+fn floating_tap(view: &mut Faked, k: Key) {
+    floating_key(view, k, true);
+    floating_key(view, k, false);
+}
+
+/// Holds `k` down without pressing it, as flight's input tracks a key it
+/// takes no press of.
+fn hold(view: &mut Faked, k: Key) {
+    view.track_held(&key(k, true));
+}
+
+/// One frame of `dt` as flight's tick runs the floating map's: the clock
+/// moved on, the nav keys held polled, then the map shown while its keys
+/// are held, or hidden once it has expired.
+fn floating_frame_of(view: &mut Faked, dt: Duration) {
+    view.elapsed += dt;
+    view.nav_held_frame();
+    view.floating_frame();
+}
+
+/// What the floating map draws now.
+fn floating_drawn(view: &Faked) -> DrawList {
+    let mut list = DrawList::new();
+    view.draw_floating_map(&mut list);
+    list
+}
+
+/// The alpha the floating map's border is drawn at, if it is drawn.
+fn alpha_of(view: &Faked) -> Option<u8> {
+    floating_border(&floating_drawn(view))
+        .first()
+        .map(|command| match command {
+            DrawCommand::Line { color, .. } => color.a,
+            _ => unreachable!(),
+        })
+}
+
 #[test]
-fn holding_h_shows_the_floating_map_bordered_and_centred_on_sol() {
-    let mut view = flight();
-    assert_eq!(floating_border(&drawn(&view)), [], "down at first");
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    let list = drawn(&view);
+fn holding_h_shows_the_floating_map_bordered_and_centred_on_the_current_system() {
+    let mut view = floating_in(in_sol());
+    assert_eq!(floating_border(&floating_drawn(&view)), [], "down at first");
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::NavModeKeys {
+            nav_off: false,
+            h: true
+        }]
+    );
+    let list = floating_drawn(&view);
     let edge = |from: (f32, f32), to: (f32, f32)| DrawCommand::Line {
         from: at(from.0, from.1),
         to: at(to.0, to.1),
@@ -1073,7 +1171,7 @@ fn holding_h_shows_the_floating_map_bordered_and_centred_on_sol() {
             edge((558.0, 406.0), (558.0, 150.0)),
         ]
     );
-    assert_eq!(floating_dots(&view), [FRAME_CENTRE], "Sol, at the centre");
+    assert_eq!(floating_dots(&list), [FRAME_CENTRE], "Sol, at the centre");
     assert!(
         list.iter().any(|command| matches!(command,
             DrawCommand::Line { color, .. } if *color == CYAN)),
@@ -1083,30 +1181,30 @@ fn holding_h_shows_the_floating_map_bordered_and_centred_on_sol() {
 
 #[test]
 fn holding_h_keeps_it_full_and_letting_go_starts_the_fade() {
-    let mut view = flight();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.input(&held(HYPERSPACE_MODE_KEY));
+    let mut view = floating_in(in_sol());
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    view.track_held(&held(HYPERSPACE_MODE_KEY));
     for _ in 0..100 {
-        view.tick(TICK);
+        floating_frame_of(&mut view, TICK);
     }
-    view.input(&key(HYPERSPACE_MODE_KEY, false));
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255), "shown again each frame");
-    view.tick(mac_ticks(1));
-    assert_eq!(floating_alpha(&view), Some(247), "31 of 32 at 119");
-    view.tick(mac_ticks(31));
-    assert_eq!(floating_alpha(&view), None, "faded out at 150");
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, false);
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255), "shown again each frame");
+    floating_frame_of(&mut view, mac_ticks(1));
+    assert_eq!(alpha_of(&view), Some(247), "31 of 32 at 119");
+    floating_frame_of(&mut view, mac_ticks(31));
+    assert_eq!(alpha_of(&view), None, "faded out at 150");
 }
 
 #[test]
 fn a_tap_of_h_shows_it_before_the_next_frame() {
-    let mut view = flight();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(floating_alpha(&view), Some(255));
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255));
-    view.tick(mac_ticks(1));
-    assert_eq!(floating_alpha(&view), Some(247), "not shown again");
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(alpha_of(&view), Some(255));
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255));
+    floating_frame_of(&mut view, mac_ticks(1));
+    assert_eq!(alpha_of(&view), Some(247), "not shown again");
 }
 
 #[test]
@@ -1121,87 +1219,108 @@ fn in_double_time_the_fade_keeps_its_ticks() {
     assert_eq!(floating_alpha(&view), None);
 }
 
+/// A flight in Sol with a jump under way, Alpha Centauri (131)
+/// selected in mode 3.
+fn jumping_to_alpha() -> FlightFrame {
+    FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        jump_under_way: true,
+        ..in_sol()
+    }
+}
+
 #[test]
 fn h_held_through_a_jump_doesnt_show_it() {
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        view.input(&key(HYPERSPACE_MODE_KEY, true));
-        view.tick(TICK);
-        assert_eq!(floating_alpha(&view), None, "{stage}");
-    }
+    // Flight's input takes no press of H during a jump.
+    let mut view = floating_in(jumping_to_alpha());
+    hold(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), None);
 }
 
 #[test]
 fn backslash_held_in_mode_3_shows_it_through_a_jump() {
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        assert!(matches!(nav_mode(&view), NavMode::Hyperspace(_)), "{stage}");
-        view.input(&key(HYPER_SELECT_KEY, true));
-        assert_eq!(floating_alpha(&view), None, "{stage}: no press");
-        view.tick(mac_ticks(1));
-        assert_eq!(floating_alpha(&view), Some(255), "{stage}");
-    }
+    // Flight's input takes no press of `\` during a jump.
+    let mut view = floating_in(jumping_to_alpha());
+    hold(&mut view, HYPER_SELECT_KEY);
+    assert_eq!(alpha_of(&view), None, "no press");
+    floating_frame_of(&mut view, mac_ticks(1));
+    assert_eq!(alpha_of(&view), Some(255));
+    assert_eq!(sent(&view), [], "no selection during the jump");
 }
 
 #[test]
 fn backslash_held_out_of_mode_3_doesnt_show_it() {
-    let mut view = FlightView::new(FakeCatalog {
-        onward: true,
-        ..catalog()
+    // In Barnard (132), which lists no links: Hyper Select leaves the
+    // nav off.
+    let mut view = floating_in(FlightFrame {
+        system: SystemId(132),
+        ..in_sol()
     });
-    run_set(&mut view, "M132");
-    view.settle_script();
-    assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
-    view.input(&key(HYPER_SELECT_KEY, true));
-    assert_eq!(nav_mode(&view), NavMode::Off);
-    view.tick(TICK);
-    assert_eq!(floating_alpha(&view), None);
+    floating_key(&mut view, HYPER_SELECT_KEY, true);
+    assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), None);
 }
 
 #[test]
 fn h_held_in_the_take_off_grace_shows_it() {
-    let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
-    land_now(&mut view);
-    view.take_off().expect("takes off");
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    ticks(&mut view, 14);
-    assert!(!view.takes(PlayerCommand::Map), "still in the grace");
-    view.input(&key(HYPERSPACE_MODE_KEY, false));
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255), "held through the grace");
+    // The grace refuses the map key, and only it of these.
+    let mut view = floating_in(in_sol());
+    view.sim.refuse(PlayerCommand::Map);
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    for _ in 0..14 {
+        floating_frame_of(&mut view, TICK);
+    }
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, false);
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255), "held through the grace");
+}
+
+/// [`floating_in`] `frame` once the player has exploded: the flight takes
+/// no command.
+fn exploded_in(frame: FlightFrame) -> Faked {
+    let mut view = floating_in(frame);
+    for gate in [PlayerCommand::Nav, PlayerCommand::SelectSystem] {
+        view.sim.refuse(gate);
+    }
+    view
 }
 
 #[test]
 fn h_held_once_exploded_doesnt_show_it() {
-    let mut view = exploded();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    assert_eq!(floating_alpha(&view), None);
+    // Flight's input takes no press the flight refuses.
+    let mut view = exploded_in(in_sol());
+    hold(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), None);
 }
 
 #[test]
 fn backslash_held_in_mode_3_once_exploded_doesnt_show_it() {
-    let mut view = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    tap(&mut view, MENU_CLOSE_KEY);
-    until_the_player_explodes(&mut view, |_| {});
-    view.tick(TICK);
-    assert!(matches!(nav_mode(&view), NavMode::Hyperspace(_)), "kept");
-    view.input(&key(HYPER_SELECT_KEY, true));
-    view.tick(TICK);
-    assert_eq!(floating_alpha(&view), None);
+    let mut view = exploded_in(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        ..in_sol()
+    });
+    hold(&mut view, HYPER_SELECT_KEY);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), None);
 }
 
 #[test]
 fn it_hides_once_more_than_500_ticks_have_passed() {
-    let mut view = with_sites();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.tick(mac_ticks(500));
-    click(&mut view, FRAME_MISS);
-    assert_eq!(nav_target(&view), None, "still up at 500: swallowed");
-    view.tick(mac_ticks(1));
-    click(&mut view, FRAME_MISS);
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "hidden at 501");
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, mac_ticks(500));
+    assert!(
+        view.click_floating_map(FRAME_MISS),
+        "still up at 500: swallowed"
+    );
+    floating_frame_of(&mut view, mac_ticks(1));
+    assert!(
+        !view.click_floating_map(FRAME_MISS),
+        "hidden at 501: passed on to space"
+    );
 }
 
 #[test]
@@ -1223,142 +1342,161 @@ fn return_hides_it_through_a_jump_too() {
 }
 
 #[test]
-fn a_click_on_the_centre_selects_mode_3_with_nothing_and_beeps() {
-    let mut view = near();
-    plot(&mut view, 131);
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    view.take_sounds();
-    click(&mut view, FRAME_CENTRE);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
-    view.tick(TICK);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
-    assert_eq!(course(&view), [SystemId(131)], "the course kept");
+fn a_click_on_the_centre_sends_mode_3_with_nothing_and_shows_it_again() {
+    let mut view = floating_in(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    });
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let pressed = sent(&view).len();
+    view.sim.queue_answer(Answer::Done);
+    assert!(view.click_floating_map(FRAME_CENTRE));
+    assert_eq!(
+        sent(&view)[pressed..],
+        [FlightCommand::SelectOnFloatingMap(None)]
+    );
 }
 
 #[test]
-fn a_click_in_a_links_box_selects_it_in_mode_3_and_beeps() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    view.take_sounds();
+fn a_click_in_a_links_box_sends_it_in_mode_3() {
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.sim.queue_answer(Answer::Done);
     // Proxima Near, 40 right and 30 down at 16/9: (757.1, 331.3).
-    click(&mut view, at(757.0, 331.0));
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
-    assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    assert!(view.click_floating_map(at(757.0, 331.0)));
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SelectOnFloatingMap(Some(SystemId(134))))
+    );
 }
 
 #[test]
 fn away_from_the_origin_the_map_centres_on_the_current_system_and_clicks_follow() {
-    let mut view = near();
-    run_set(&mut view, "M134");
-    view.settle_script();
-    assert_eq!(system_of(&view), SystemId(134), "Proxima Near, at (40, 30)");
-    tap(&mut view, HYPERSPACE_MODE_KEY);
+    let mut view = floating_near(FlightFrame {
+        system: SystemId(134),
+        ..in_sol()
+    });
+    let mut drawing = near_drawing();
+    drawing.current = SystemId(134);
+    let map = view.sim.map_mut();
+    map.drawing = Some(drawing);
+    map.floating = FloatingLinks {
+        current: Vec2::new(40.0, 30.0),
+        links: vec![(SystemId(130), Vec2::ZERO)],
+    };
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
     let sol = Point::new(
         (686.0 - 40.0 * (16.0_f32 / 9.0)).trunc(),
         (278.0 - 30.0 * (16.0_f32 / 9.0)).trunc(),
     );
     assert_eq!(
-        floating_dots(&view),
+        floating_dots(&floating_drawn(&view)),
         [sol, FRAME_CENTRE],
         "Sol, then Proxima Near at the centre, by ascending ID"
     );
-    view.take_sounds();
-    click(&mut view, at(614.0, 224.0));
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(130))));
-    assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    view.sim.queue_answer(Answer::Done);
+    assert!(view.click_floating_map(at(614.0, 224.0)));
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SelectOnFloatingMap(Some(SystemId(130))))
+    );
 }
 
 #[test]
-fn a_miss_in_the_frame_picks_nothing_and_plays_nothing() {
-    let mut view = with_sites();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.take_sounds();
-    click(&mut view, FRAME_MISS);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(view.take_sounds(), []);
-    click(&mut view, OUTSIDE_FRAME);
-    assert_eq!(
-        nav_target(&view),
-        Some(StellarId(129)),
-        "outside: a stellar"
+fn a_miss_in_the_frame_sends_nothing_and_plays_nothing() {
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let pressed = sent(&view).len();
+    assert!(view.click_floating_map(FRAME_MISS), "swallowed");
+    assert_eq!(sent(&view).len(), pressed);
+    assert_eq!(view.ui_sounds, []);
+    assert!(
+        !view.click_floating_map(OUTSIDE_FRAME),
+        "outside: passed on to space"
     );
-    let mut view = with_sites();
-    click(&mut view, FRAME_MISS);
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "the map down");
+    let mut view = floating_in(in_sol());
+    assert!(!view.click_floating_map(FRAME_MISS), "the map down");
 }
 
 #[test]
 fn a_click_is_taken_while_the_map_is_faded_out() {
-    let mut view = with_sites();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.tick(mac_ticks(200));
-    assert_eq!(floating_alpha(&view), None, "faded out");
-    click(&mut view, FRAME_MISS);
-    assert_eq!(nav_target(&view), None, "swallowed");
-    view.take_sounds();
-    click(&mut view, FRAME_CENTRE);
-    assert_eq!(sims(&mut view), [SimSound::HyperSelected]);
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, mac_ticks(200));
+    assert_eq!(alpha_of(&view), None, "faded out");
+    assert!(view.click_floating_map(FRAME_MISS), "swallowed");
+    view.sim.queue_answer(Answer::Done);
+    assert!(view.click_floating_map(FRAME_CENTRE));
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SelectOnFloatingMap(None))
+    );
 }
 
 #[test]
-fn a_hit_shows_the_map_again() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.tick(mac_ticks(100));
-    click(&mut view, FRAME_CENTRE);
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255));
-    view.tick(mac_ticks(1));
-    assert_eq!(floating_alpha(&view), Some(247));
+fn a_hit_the_flight_takes_shows_the_map_again() {
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, mac_ticks(100));
+    view.sim.queue_answer(Answer::Done);
+    view.click_floating_map(FRAME_CENTRE);
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255));
+    floating_frame_of(&mut view, mac_ticks(1));
+    assert_eq!(alpha_of(&view), Some(247));
 }
 
 #[test]
-fn a_click_in_the_frame_during_a_jump_selects_nothing() {
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        view.input(&key(HYPER_SELECT_KEY, true));
-        view.tick(TICK);
-        assert_eq!(floating_alpha(&view), Some(255), "{stage}");
-        let mode = nav_mode(&view);
-        view.take_sounds();
-        click(&mut view, FRAME_CENTRE);
-        assert_eq!(nav_mode(&view), mode, "{stage}");
-        assert!(
-            !sims(&mut view).contains(&SimSound::HyperSelected),
-            "{stage}"
-        );
-    }
+fn a_hit_the_flight_refuses_during_a_jump_doesnt_show_the_map_again() {
+    let mut view = floating_in(jumping_to_alpha());
+    hold(&mut view, HYPER_SELECT_KEY);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), Some(255));
+    view.track_held(&key(HYPER_SELECT_KEY, false));
+    floating_frame_of(&mut view, mac_ticks(100));
+    assert!(view.click_floating_map(FRAME_CENTRE), "taken");
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::SelectOnFloatingMap(None)],
+        "and refused"
+    );
+    floating_frame_of(&mut view, mac_ticks(19));
+    assert_eq!(alpha_of(&view), Some(247), "not shown again");
 }
 
 #[test]
 fn minus_zooms_out_a_step_with_snd_150() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.take_sounds();
-    assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(16.0 / 9.0)]);
-    tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(floating_dots(&view), [FRAME_CENTRE, near_at(4.0 / 3.0)]);
-    assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        floating_dots(&floating_drawn(&view)),
+        [FRAME_CENTRE, near_at(16.0 / 9.0)]
+    );
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(
+        floating_dots(&floating_drawn(&view)),
+        [FRAME_CENTRE, near_at(4.0 / 3.0)]
+    );
+    assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed]);
     assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
+}
+
+/// Where the floating map draws Proxima Near now.
+fn near_dot(view: &Faked) -> Point {
+    floating_dots(&floating_drawn(view))[1]
 }
 
 #[test]
 fn command_and_minus_the_self_destruct_chord_do_not_zoom() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.input(&key(Key::Command, true));
-    view.take_sounds();
-    tap(&mut view, SELF_DESTRUCT_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
-    assert!(
-        !view
-            .take_sounds()
-            .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
-    );
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    hold(&mut view, Key::Command);
+    floating_tap(&mut view, SELF_DESTRUCT_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+    assert!(!view.ui_sounds.contains(&UiSound::FloatingMapZoomed));
 }
 
 #[test]
@@ -1366,30 +1504,25 @@ fn minus_held_alone_does_not_hold_the_zoom_in_back() {
     // `_HandlePlayer` checks `-` only with Command down (@0x6fdc8), so
     // `-` alone never sets `_quickKeyCheckResult`, which the zoom reads
     // (@0x70f5d).
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     // The press zooms out a step.
-    view.input(&key(SELF_DESTRUCT_KEY, true));
-    assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0));
-    view.take_sounds();
-    tap(&mut view, ZOOM_IN_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
-    assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
+    floating_key(&mut view, SELF_DESTRUCT_KEY, true);
+    assert_eq!(near_dot(&view), near_at(4.0 / 3.0));
+    view.ui_sounds.clear();
+    floating_tap(&mut view, ZOOM_IN_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+    assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed]);
 }
 
 #[test]
 fn equals_and_keypad_plus_zoom_in_a_step() {
     for k in [ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY] {
-        let mut view = near();
-        tap(&mut view, HYPERSPACE_MODE_KEY);
-        view.take_sounds();
-        tap(&mut view, k);
-        assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0), "{k:?}");
-        assert_eq!(
-            view.take_sounds(),
-            [Sound::Ui(UiSound::FloatingMapZoomed)],
-            "{k:?}"
-        );
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        floating_tap(&mut view, k);
+        assert_eq!(near_dot(&view), near_at(64.0 / 27.0), "{k:?}");
+        assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed], "{k:?}");
     }
     assert_eq!(ZOOM_IN_KEY, Key::Char('='));
     assert_eq!(ZOOM_IN_KEYPAD_KEY, Key::Char('+'));
@@ -1397,21 +1530,21 @@ fn equals_and_keypad_plus_zoom_in_a_step() {
 
 #[test]
 fn a_zoom_at_its_limit_changes_nothing_and_says_nothing() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    tap(&mut view, ZOOM_IN_KEY);
-    view.take_sounds();
-    tap(&mut view, ZOOM_IN_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(64.0 / 27.0));
-    assert_eq!(view.take_sounds(), []);
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_tap(&mut view, ZOOM_IN_KEY);
+    view.ui_sounds.clear();
+    floating_tap(&mut view, ZOOM_IN_KEY);
+    assert_eq!(near_dot(&view), near_at(64.0 / 27.0));
+    assert_eq!(view.ui_sounds, []);
     for _ in 0..6 {
-        tap(&mut view, ZOOM_OUT_KEY);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
     }
-    assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
-    view.take_sounds();
-    tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(27.0 / 64.0));
-    assert_eq!(view.take_sounds(), []);
+    assert_eq!(near_dot(&view), near_at(27.0 / 64.0));
+    view.ui_sounds.clear();
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(near_dot(&view), near_at(27.0 / 64.0));
+    assert_eq!(view.ui_sounds, []);
 }
 
 #[test]
@@ -1427,16 +1560,15 @@ fn a_zoom_key_does_nothing_while_another_key_is_held() {
         JUMP_KEY,
         Key::Up,
     ] {
-        let mut view = near();
-        tap(&mut view, HYPERSPACE_MODE_KEY);
-        view.input(&key(k, true));
-        view.take_sounds();
-        tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0), "{k:?}");
-        assert_eq!(view.take_sounds(), [], "{k:?}");
-        view.input(&key(k, false));
-        tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "{k:?} let go");
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        hold(&mut view, k);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(16.0 / 9.0), "{k:?}");
+        assert_eq!(view.ui_sounds, [], "{k:?}");
+        view.track_held(&key(k, false));
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(4.0 / 3.0), "{k:?} let go");
     }
 }
 
@@ -1444,36 +1576,35 @@ fn a_zoom_key_does_nothing_while_another_key_is_held() {
 fn a_zoom_key_does_nothing_while_b_is_held() {
     // B's `_QuickKeyCheck` (@0x6a98b) sets `_quickKeyCheckResult`, which
     // the zoom reads (@0x70f5d).
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.input(&key(BOARD_KEY, true));
-    view.take_sounds();
-    tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
-    assert_eq!(view.take_sounds(), []);
-    view.input(&key(BOARD_KEY, false));
-    tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "let go");
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    hold(&mut view, BOARD_KEY);
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+    assert_eq!(view.ui_sounds, []);
+    view.track_held(&key(BOARD_KEY, false));
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(near_dot(&view), near_at(4.0 / 3.0), "let go");
 }
 
 #[test]
 fn a_zoom_key_does_nothing_with_the_map_down() {
-    let mut view = near();
-    tap(&mut view, ZOOM_OUT_KEY);
-    tap(&mut view, ZOOM_IN_KEY);
-    assert_eq!(view.take_sounds(), []);
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    floating_tap(&mut view, ZOOM_IN_KEY);
+    assert_eq!(view.ui_sounds, []);
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
 }
 
 #[test]
 fn a_zoom_shows_the_map_again() {
-    let mut view = near();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.tick(mac_ticks(140));
-    tap(&mut view, ZOOM_OUT_KEY);
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255));
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_frame_of(&mut view, mac_ticks(140));
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255));
 }
 
 #[test]
@@ -1551,13 +1682,38 @@ fn rects_of(list: &DrawList, of: Color) -> Vec<(f32, f32, f32, f32)> {
         .collect()
 }
 
+/// [`sol_drawing`] with the link to Alpha Centauri (131) selected in mode
+/// 3, and the course to it if `course`, as a session draws them.
+fn drawn_to_alpha(course: bool) -> MapDrawing {
+    let (sol, alpha) = (SystemId(130), SystemId(131));
+    MapDrawing {
+        course: if course {
+            vec![(sol, alpha)]
+        } else {
+            Vec::new()
+        },
+        links: vec![MapLink {
+            from: sol,
+            to: alpha,
+            selected: true,
+        }],
+        mode3_link: Some((sol, alpha)),
+        ..sol_drawing()
+    }
+}
+
 #[test]
-fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
-    let mut view = flight();
-    tap(&mut view, HYPER_SELECT_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(view.course_map().hyper_selection(), None, "never opened");
-    let list = drawn(&view);
+fn the_floating_map_draws_the_flights_selection_clipped_to_the_frame() {
+    let mut view = floating_in(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        ..in_sol()
+    });
+    view.sim.map_mut().drawing = Some(drawn_to_alpha(false));
+    view.sim.queue_answer(Answer::System(Some(SystemId(131))));
+    floating_tap(&mut view, HYPER_SELECT_KEY);
+    assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
+    assert_eq!(view.map.hyper_selection(), None, "never opened");
+    let list = floating_drawn(&view);
     assert_eq!(
         rects_of(&list, DIM_GREEN),
         [(690.0, 278.0, 814.0, 279.0)],
@@ -1572,20 +1728,17 @@ fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
 
 #[test]
 fn the_floating_map_draws_the_course_as_its_show_took_it() {
-    let mut view = flight();
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .plot_course(SystemId(131))
-        .expect("a route");
-    assert_eq!(
-        view.course_map().route(),
-        [],
-        "the course map never shown it"
-    );
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    let course = rects_of(&drawn(&view), BRIGHT_GREEN);
+    let mut view = floating_in(in_sol());
+    view.sim.set_frame(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    });
+    view.sim.map_mut().drawing = Some(drawn_to_alpha(true));
+    assert_eq!(view.map.route(), [], "the course map never shown it");
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let course = rects_of(&floating_drawn(&view), BRIGHT_GREEN);
     assert_eq!(
         course,
         [(690.0, 279.0, 814.0, 280.0)],
@@ -1593,26 +1746,23 @@ fn the_floating_map_draws_the_course_as_its_show_took_it() {
          row under Sol's link"
     );
     assert_eq!(
-        rects_of(&drawn(&view), DIM_GREEN),
+        rects_of(&floating_drawn(&view), DIM_GREEN),
         [(690.0, 278.0, 814.0, 279.0)],
         "the link to 131, the hop the plot cued, drawn after the course \
          over it, and over its own grey"
     );
-    assert_eq!(rects_of(&drawn(&view), LESS_DARK_GREY), []);
-    let session = view.sim.session.as_mut().expect("flying");
-    let _ = session.plot_course(SystemId(130));
-    assert_ne!(session.course(), [SystemId(131)], "the course changed");
+    assert_eq!(rects_of(&floating_drawn(&view), LESS_DARK_GREY), []);
+    view.sim.map_mut().drawing = Some(sol_drawing());
     assert_eq!(
-        rects_of(&drawn(&view), BRIGHT_GREEN),
+        rects_of(&floating_drawn(&view), BRIGHT_GREEN),
         course,
         "until the next show"
     );
 }
 
-/// The names the floating map draws, clipped to its frame.
-fn floating_names(view: &View) -> Vec<String> {
-    drawn(view)
-        .iter()
+/// The names the floating map in `list` draws, clipped to its frame.
+fn floating_names(list: &DrawList) -> Vec<String> {
+    list.iter()
         .filter_map(|command| match command {
             DrawCommand::Clipped { command, .. } => match command.as_ref() {
                 DrawCommand::Text { text, .. } => Some(text.clone()),
@@ -1625,35 +1775,43 @@ fn floating_names(view: &View) -> Vec<String> {
 
 #[test]
 fn above_a_zoom_of_1_1_the_floating_map_names_only_the_system_its_show_selected() {
-    let mut view = near();
-    run_set(&mut view, "X134");
-    tap(&mut view, HYPER_SELECT_KEY);
-    tap(&mut view, HYPER_SELECT_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(134))));
+    let mut view = floating_near(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(134))),
+        ..in_sol()
+    });
+    let mut drawing = near_drawing();
+    drawing.named.push(SystemId(134));
+    let map = view.sim.map_mut();
+    map.drawing = Some(drawing);
+    map.floating_preselection = Some(SystemId(134));
+    floating_tap(&mut view, HYPER_SELECT_KEY);
     assert_eq!(
-        floating_names(&view),
+        floating_names(&floating_drawn(&view)),
         ["Sol", "Proxima Near"],
-        "every explored system in the frame at 16/9"
+        "every system named in the frame at 16/9"
     );
     for _ in 0..3 {
-        tap(&mut view, ZOOM_OUT_KEY);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
     }
-    assert_eq!(floating_names(&view), ["Proxima Near"], "at 3/4");
-    tap(&mut view, NAV_OFF_KEY);
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(floating_names(&view), [] as [&str; 0], "shown with none");
+    assert_eq!(
+        floating_names(&floating_drawn(&view)),
+        ["Proxima Near"],
+        "at 3/4"
+    );
+    view.sim.map_mut().floating_preselection = None;
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        floating_names(&floating_drawn(&view)),
+        [] as [&str; 0],
+        "shown with none"
+    );
 }
 
 #[test]
 fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
-    let mut catalog = catalog();
-    catalog.missions = vec![MissionRecord {
-        travel_stel: 140,
-        ..errand(130)
-    }];
-    let mut view = FlightView::new(catalog);
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    let red = |view: &View| {
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let red = |view: &Faked| {
         view.floating_picture
             .as_ref()
             .expect("shown")
@@ -1661,12 +1819,26 @@ fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
             .iter()
             .any(|system| system.id == SystemId(131) && system.red_arrow)
     };
+    let asked = |missions: Vec<SystemId>| MapAsk::Drawing {
+        hypergate: None,
+        missions,
+        marks: nova_sim::MapMarks::NONE,
+    };
+    assert_eq!(view.sim.asked().last(), Some(&asked(Vec::new())));
     assert!(!red(&view), "no mission");
-    run_set(&mut view, "S130");
-    view.settle_script();
+    let mut arrowed = sol_drawing();
+    arrowed.systems[1].red_arrow = true;
+    let map = view.sim.map_mut();
+    map.mission_systems = vec![SystemId(131)];
+    map.drawing = Some(arrowed);
     assert!(!red(&view), "not until the next show");
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert!(red(&view), "Alpha Centauri, 140's system, arrowed");
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        view.sim.asked().last(),
+        Some(&asked(vec![SystemId(131)])),
+        "the mission systems taken as it shows"
+    );
+    assert!(red(&view), "Alpha Centauri, the mission's system, arrowed");
 }
 
 /// The systems the course map draws ovals for, by ascending ID.
@@ -2126,11 +2298,12 @@ fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
 /// Where system `id` is in the galaxy, as the course map's scroll holds
 /// it.
 fn scroll_of(view: &View, id: i16) -> (i32, i32) {
-    let at = view
-        .course_map()
-        .model()
-        .position(SystemId(id))
-        .expect("on the map");
+    scroll_on(view.course_map(), id)
+}
+
+/// Where system `id` is in `map`'s galaxy, as its scroll holds it.
+fn scroll_on(map: &GalaxyMap, id: i16) -> (i32, i32) {
+    let at = map.model().position(SystemId(id)).expect("on the map");
     (at.x as i32, at.y as i32)
 }
 
@@ -2229,13 +2402,13 @@ fn the_escape_pods_rescue_puts_the_scroll_back_on_the_current_system() {
 
 #[test]
 fn a_floating_map_show_puts_the_scroll_back_on_the_current_system() {
-    let mut view = flight();
+    let mut view = floating_in(in_sol());
     view.map.centre_on_system(SystemId(131));
-    assert_eq!(map_place(&view).1, (600, 0));
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    assert_eq!(floating_alpha(&view), Some(255), "the floating map up");
-    assert_eq!(map_place(&view).1, scroll_of(&view, 130));
+    assert_eq!(place_of(&view.map).1, (600, 0));
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    floating_frame_of(&mut view, TICK);
+    assert_eq!(alpha_of(&view), Some(255), "the floating map up");
+    assert_eq!(place_of(&view.map).1, scroll_on(&view.map, 130));
 }
 
 #[test]
@@ -2494,6 +2667,16 @@ fn zooms_holding(mut view: View, k: Key, menu: bool) -> bool {
     view.floating.zoom() != zoom
 }
 
+/// Whether a zoom key's press zooms `view`'s floating map, shown by H,
+/// with `k` held.
+fn faked_zooms_holding(mut view: Faked, k: Key) -> bool {
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    hold(&mut view, k);
+    let zoom = view.floating.zoom();
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    view.floating.zoom() != zoom
+}
+
 #[test]
 fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
     for k in [
@@ -2501,12 +2684,16 @@ fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
         STELLAR_SLOT_KEYS[2][1],
         NEAREST_STELLAR_KEY,
     ] {
-        assert!(!zooms_holding(near(), k, false), "{k:?}");
+        assert!(!faked_zooms_holding(floating_near(in_sol()), k), "{k:?}");
     }
     assert!(
-        zooms_holding(near(), NEAREST_STELLAR_COMMAND_KEY, false),
+        faked_zooms_holding(floating_near(in_sol()), NEAREST_STELLAR_COMMAND_KEY),
         "5 without Command is not polled"
     );
+}
+
+#[test]
+fn a_slot_key_held_holds_the_zoom_back_while_the_escort_menus_loop_polls_it() {
     assert!(
         !zooms_holding(escorted(), STELLAR_SLOT_KEYS[1][0], true),
         "the escort loop polls 2 with the menu open"
@@ -2523,13 +2710,11 @@ fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
 
 #[test]
 fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
-    for mut view in through_a_jump(near) {
-        let stage = stage(&view);
-        view.input(&key(HYPER_SELECT_KEY, true));
-        view.tick(TICK);
-        view.input(&key(HYPER_SELECT_KEY, false));
-        view.input(&key(STELLAR_SLOT_KEYS[2][1], true));
-        tap(&mut view, ZOOM_OUT_KEY);
-        assert_eq!(view.floating.zoom(), 4, "{stage}: F3 is not polled");
-    }
+    let mut view = floating_near(jumping_to_alpha());
+    hold(&mut view, HYPER_SELECT_KEY);
+    floating_frame_of(&mut view, TICK);
+    view.track_held(&key(HYPER_SELECT_KEY, false));
+    hold(&mut view, STELLAR_SLOT_KEYS[2][1]);
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
 }

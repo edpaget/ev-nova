@@ -337,6 +337,19 @@ mod tests {
     }
 
     #[test]
+    fn the_players_breakup_and_explosion_leave_the_nav_mode() {
+        let mut catalog = shooting(vec![], 1);
+        catalog.hulls[0].death_delay = 0;
+        let mut session = under_fire(&catalog, 0.5, Condition::Disabled);
+        let mode_3 = crate::NavMode::Hyperspace(Some(crate::SystemId(131)));
+        session.chart.nav = mode_3;
+        hit(&mut session, &catalog, 10.0);
+        tick(&mut session, &catalog, 10.0);
+        assert_eq!(session.ship.condition, Condition::Destroyed);
+        assert_eq!(session.chart.nav, mode_3);
+    }
+
+    #[test]
     fn the_newly_disabled_players_armour_is_truncated_toward_zero() {
         let catalog = shooting(vec![], 1);
         let mut session = under_fire(&catalog, 10.6, Condition::Intact);

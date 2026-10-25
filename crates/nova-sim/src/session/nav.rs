@@ -1348,6 +1348,15 @@ mod tests {
     }
 
     #[test]
+    fn hyper_select_with_no_links_leaves_the_nav_system_off_in_silence() {
+        let mut session = linkless();
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.select_next_system(), None);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
     fn hyper_select_by_the_one_jump_course_reading_beeps_and_selects_too() {
         let mut session = quiet(
             Session::start(&hub())
