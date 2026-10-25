@@ -369,6 +369,20 @@ mod tests {
     }
 
     #[test]
+    fn a_repair_of_a_ship_held_disabled_rejoins_disabled() {
+        // Decided again as a self-repair decides it: `_IsDisabled` holds a
+        // Derelict government's ship whatever its armour.
+        let mut catalog = boardable();
+        catalog.govts[0].flags |= crate::govt::DERELICT;
+        let mut session = former_alongside(&catalog);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::EscortRepaired))
+        );
+        assert_eq!(session.npcs()[0].condition, Condition::Disabled);
+    }
+
+    #[test]
     fn a_person_flown_former_escort_takes_the_person_path() {
         // The person test (@0x65847) comes first.
         let catalog = boardable();
