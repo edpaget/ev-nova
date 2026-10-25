@@ -12,8 +12,11 @@
 //!
 //! **Boarding** ([`check_board`]): with no target nothing happens. The
 //! first refusal that applies, in this order, is said: the player cannot
-//! board a ship that is not disabled or has been boarded before, nor
-//! while its own ship is dying (`_IsDying` @0x650c9, its only test of
+//! board a ship that is not disabled or has been boarded before (but for
+//! a former escort or fighter of the player's with no mission mark,
+//! which may be boarded again, @0x65064-0x6507a, so that it can be
+//! repaired or docked once there is room), nor one the [`NAG_SHIP`]
+//! flies (@0x650b7), nor while its own ship is dying (`_IsDying` @0x650c9, its only test of
 //! the player: a disabled player boards) (`STR#` 2002 #130); not moving
 //! more than [`MAX_RELATIVE_SPEED`] against it on either axis (#132),
 //! then not off its centre by more than its board reach on either axis
@@ -24,8 +27,13 @@
 //! special ship is boarded whatever its crew. By the other reading of
 //! [`RuleKey::CrewlessMissionShip`], every ship of no crew is refused up
 //! front, among the first #130 tests. Each refusal said beeps, and no
-//! target and facing it do not ([`BoardRefusal::silent`]). Once the boarding's
-//! crime is convicted, a person of `Flags` 0x0200 whose `LinkMission` is
+//! target and facing it do not ([`BoardRefusal::silent`]). Every outcome
+//! but no target and cloaked sets the board latch, so a held Board key
+//! tries again only once it is released ([`BoardRefusal::latches`],
+//! `*0xdee18` @0x6504c). Once the boarding's
+//! crime is convicted (never for a ship the [`BOUNTY_HUNTER`] or the
+//! [`NAG_SHIP`] flies, which goes straight to the Good Samaritans and the
+//! plunder, [`boards_uncharged`]), a person of `Flags` 0x0200 whose `LinkMission` is
 //! available from a ship offers it in place of the plunder
 //! ([`Boarding::Offered`], @0x65867-0x65936): nothing is rolled or
 //! granted, and the ship is marked boarded only once the mission is
@@ -131,7 +139,7 @@
 
 use std::fmt::Debug;
 
-use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::catalog::{OutfitId, PersonId, ShipId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
@@ -165,6 +173,8 @@ pub enum BoardRefusal {
 }
 
 /// The ship the player tries to board, as the boarding checks see it.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoardTarget {
     /// Where it is and how it moves.
@@ -178,6 +188,13 @@ pub struct BoardTarget {
     /// Whether it carries a mission's mark (+0xc8d2 not -1), whether its
     /// mission stands, has failed or has left its slot.
     pub mission: bool,
+    /// Whether it remembers being the player's escort or fighter
+    /// ([`FormerEscort`](crate::self_repair::FormerEscort), the original's
+    /// +0xc8de 0 or more): boarded before, it may be boarded again while
+    /// it carries no mission's mark (@0x65064-0x6507a).
+    pub former: bool,
+    /// Whether [`NAG_SHIP`] flies it: it can't be boarded (@0x650b7).
+    pub nag_ship: bool,
     /// How far off its centre the player may be: `x` on the x axis and
     /// `y` on the y axis (see
     /// [`HullSpec::board_reach`](crate::combat::hull::HullSpec::board_reach)).
@@ -198,6 +215,33 @@ impl BoardRefusal {
     pub fn silent(self) -> bool {
         matches!(self, Self::NoTarget | Self::Misaligned | Self::Cloaked)
     }
+
+    /// Whether the refusal sets the board latch, so that holding the
+    /// Board key tries no more until it is released: every refusal but no
+    /// target and cloaked, as `_HandlePlayerBoardAttempt` sets `*0xdee18`
+    /// (@0x6504c) only after those two returns (@0x65031, @0x6503f). A
+    /// board that passes the checks latches too.
+    #[must_use]
+    pub fn latches(self) -> bool {
+        !matches!(self, Self::NoTarget | Self::Cloaked)
+    }
+}
+
+/// The `përs` of the bounty hunter `_SpawnBountyHunter` sends
+/// (@0x446f2, +0xc8d0 0x3fe): boarded uncharged, with no person or
+/// own-ship path ([`boards_uncharged`]).
+pub const BOUNTY_HUNTER: PersonId = PersonId(1150);
+/// The `përs` of the nag ship `_SpawnNagShip` sends (@0x61b5, +0xc8d0
+/// 0x3ff): it can't be boarded ([`BoardTarget::nag_ship`]).
+pub const NAG_SHIP: PersonId = PersonId(1151);
+
+/// Whether a ship `person` flies is boarded with no crime, no offer and
+/// no own-ship path, straight to the Good Samaritans, the airlock and the
+/// plunder: [`BOUNTY_HUNTER`] and [`NAG_SHIP`] (@0x657e9-0x657fe →
+/// @0x65ece-0x65ed9).
+#[must_use]
+pub fn boards_uncharged(person: PersonId) -> bool {
+    person == BOUNTY_HUNTER || person == NAG_SHIP
 }
 
 /// The `Booty` bit for credits.
@@ -843,9 +887,13 @@ pub fn check_board(
     // `_IsDying` (@0x650c9) reads the armour at or below none, so a
     // player destroyed reads dying too; a disabled one boards.
     let dying = matches!(condition, Condition::Dying { .. } | Condition::Destroyed);
+    // A boarded ship passes only with no mission's mark and a former
+    // escort's memory (@0x65064-0x6507a).
+    let boarded = target.boarded && (target.mission || !target.former);
     if dying
         || target.condition != Condition::Disabled
-        || target.boarded
+        || boarded
+        || target.nag_ship
         || (crewless == RuleSource::Bible && no_crew)
     {
         return Err(BoardRefusal::CantBoard);
@@ -898,6 +946,8 @@ mod tests {
             boarded: false,
             crew: 3,
             mission: false,
+            former: false,
+            nag_ship: false,
             reach: Vec2::new(20.0, 20.0),
         }
     }
@@ -983,6 +1033,96 @@ mod tests {
             ..quarry()
         };
         assert_eq!(board(over(), target), Err(BoardRefusal::CantBoard));
+    }
+
+    #[test]
+    fn a_boarded_former_escort_of_no_mark_passes_the_boarded_test() {
+        // +0xb9 set, +0xc8d2 -1 and +0xc8de ≥ 0 (@0x65064-0x6507a).
+        let target = BoardTarget {
+            boarded: true,
+            former: true,
+            ..quarry()
+        };
+        assert_eq!(board(over(), target), Ok(()));
+        let unboarded = BoardTarget {
+            former: true,
+            ..quarry()
+        };
+        assert_eq!(board(over(), unboarded), Ok(()), "never boarded");
+    }
+
+    #[test]
+    fn a_boarded_ship_marked_or_never_an_escort_is_refused() {
+        for (why, target) in [
+            (
+                "marked",
+                BoardTarget {
+                    boarded: true,
+                    former: true,
+                    mission: true,
+                    ..quarry()
+                },
+            ),
+            (
+                "never an escort",
+                BoardTarget {
+                    boarded: true,
+                    ..quarry()
+                },
+            ),
+        ] {
+            assert_eq!(board(over(), target), Err(BoardRefusal::CantBoard), "{why}");
+        }
+        let intact = BoardTarget {
+            boarded: true,
+            former: true,
+            condition: Condition::Intact,
+            ..quarry()
+        };
+        assert_eq!(
+            board(over(), intact),
+            Err(BoardRefusal::CantBoard),
+            "the exception passes only the boarded test"
+        );
+    }
+
+    #[test]
+    fn a_nag_ship_is_refused_among_the_first_tests() {
+        // +0xc8d0 0x3ff (@0x650b7-0x650c0), before the speed test.
+        let nag = BoardTarget {
+            nag_ship: true,
+            ..quarry()
+        };
+        assert_eq!(board(over(), nag), Err(BoardRefusal::CantBoard));
+        let moving = player((0.0, 0.0), (5.0, 0.0), 0.0);
+        assert_eq!(board(moving, nag), Err(BoardRefusal::CantBoard), "first");
+    }
+
+    #[test]
+    fn the_bounty_hunter_and_the_nag_ship_board_uncharged() {
+        // +0xc8d0 0x3fe or 0x3ff (@0x657e9-0x657fe).
+        assert_eq!((BOUNTY_HUNTER, NAG_SHIP), (PersonId(1150), PersonId(1151)));
+        assert!(boards_uncharged(BOUNTY_HUNTER));
+        assert!(boards_uncharged(NAG_SHIP));
+        assert!(!boards_uncharged(PersonId(1149)));
+        assert!(!boards_uncharged(PersonId(1152)));
+        assert!(!boards_uncharged(PersonId(128)));
+    }
+
+    #[test]
+    fn only_no_target_and_cloaked_leave_the_board_latch_clear() {
+        // The latch is set @0x6504c, after the no-target (@0x65031) and
+        // cloak (@0x6503f) returns.
+        assert!(!BoardRefusal::NoTarget.latches());
+        assert!(!BoardRefusal::Cloaked.latches());
+        for refusal in [
+            BoardRefusal::CantBoard,
+            BoardRefusal::TooFast,
+            BoardRefusal::TooFar,
+            BoardRefusal::Misaligned,
+        ] {
+            assert!(refusal.latches(), "{refusal:?}");
+        }
     }
 
     #[test]

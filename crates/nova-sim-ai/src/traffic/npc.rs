@@ -469,8 +469,10 @@ pub struct Npc {
     pub class_fuel: i16,
     /// What it was, while it is a former escort of the player's: disabled
     /// or breaking up as one, it left the fleet with this record (the
-    /// original's +0xc8de). It forgets once intact, boarded or taken into
-    /// the fleet again (see [`self_repair`](crate::self_repair)).
+    /// original's +0xc8de). It forgets once intact, taken into the fleet
+    /// again (see [`self_repair`](crate::self_repair)), or boarded back
+    /// into it or its bay; boarded and plundered, it remembers, and can be
+    /// boarded again (see `nova_sim::board_repair`).
     pub former: Option<FormerEscort>,
     /// Its tractor lock, if a tractor beam holds it or it holds itself
     /// along its own (the original's +0xc8dc and +0xb4, see

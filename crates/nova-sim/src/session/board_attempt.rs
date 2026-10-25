@@ -49,7 +49,7 @@
 //! no wait.
 
 use super::{Outbox, Session, Space, Statics};
-use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
+use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine, NAG_SHIP};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
@@ -102,8 +102,10 @@ impl Outbox {
 
 impl Statics {
     /// `npc` as the boarding checks see it: its class's `Crew` (none
-    /// without a record) and whether it carries a mission's mark, failed,
-    /// standing or stale.
+    /// without a record), whether it carries a mission's mark, failed,
+    /// standing or stale, whether it remembers being the player's escort
+    /// ([`Npc::former`]) and whether the
+    /// [`NAG_SHIP`] flies it.
     pub(super) fn board_target(&self, npc: &Npc) -> BoardTarget {
         BoardTarget {
             state: npc.state,
@@ -111,6 +113,8 @@ impl Statics {
             boarded: npc.boarded,
             crew: self.crew(npc.ship),
             mission: npc.mission.is_some(),
+            former: npc.former.is_some(),
+            nag_ship: npc.person.is_some_and(|person| person.id == NAG_SHIP),
             reach: npc.hull.board_reach,
         }
     }
@@ -343,6 +347,29 @@ mod tests {
             Err(BoardRefusal::CantBoard)
         );
         assert_eq!(session.take_sounds(), [SimSound::Refused], "no crew");
+    }
+
+    #[test]
+    fn the_nag_ship_cannot_be_boarded() {
+        // +0xc8d0 0x3ff (@0x650b7-0x650c0 → #130).
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.space.traffic.npcs_mut()[0].person =
+            Some(crate::session::tests::flown_by(crate::board::NAG_SHIP.0));
+        let _ = session.take_sounds();
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::CantBoard)
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+        assert!(!session.npcs()[0].boarded);
+        session.space.traffic.npcs_mut()[0].person = Some(crate::session::tests::flown_by(
+            crate::board::BOUNTY_HUNTER.0,
+        ));
+        assert!(
+            board_by(&mut session, &NovaLaw::default()).is_ok(),
+            "the bounty hunter boards"
+        );
     }
 
     #[test]

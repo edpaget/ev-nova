@@ -436,6 +436,7 @@ mod asteroid_seekers;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
+mod board_repair;
 mod brackets;
 mod buoys;
 mod capture;
@@ -5265,15 +5266,13 @@ impl Session {
 
     /// NPC `id` is marked boarded, raising [`Fate::Boarded`], and every
     /// other NPC after it lets it go and decides again
-    /// (`_AIShipBoardedByPlayer`). A former escort forgets what it was
-    /// ([`Npc::former`]), as each of the original's ways of boarding one's
-    /// own former escort ends (`_HandlePlayerBoardAttempt` @0x65b2f,
-    /// @0x65be8, @0x65e62; that boarding repair is the boarding
-    /// follow-up's).
-    fn mark_boarded(&mut self, id: NpcId) {
+    /// (`_AIShipBoardedByPlayer`). A former escort keeps what it was
+    /// ([`Npc::former`]): only the own-ship paths clear it
+    /// (`_HandlePlayerBoardAttempt` @0x65b2f, @0x65be8, @0x65e62; see the
+    /// `board_repair` module), so one plundered can be boarded again.
+    pub(super) fn mark_boarded(&mut self, id: NpcId) {
         if let Some(npc) = self.space.npc_mut(id) {
             npc.boarded = true;
-            npc.former = None;
         }
         self.run.raise(StoryEvent::ShipFate {
             ship: id,
@@ -25642,24 +25641,6 @@ pub(super) mod tests {
                 ..trader_escort()
             },
         }
-    }
-
-    #[test]
-    fn a_former_escort_boarded_forgets_what_it_was() {
-        let catalog = boardable();
-        let mut session = alongside(&catalog);
-        session.space.traffic.npcs_mut()[0].former = Some(former_trader());
-        session.space.traffic.npcs_mut()[1].former = Some(former_trader());
-        assert_eq!(
-            board_by(&mut session, &NovaLaw::default()),
-            Ok(Boarding::Opened(ON_BOARD))
-        );
-        assert_eq!(session.npcs()[0].former, None);
-        assert_eq!(
-            session.npcs()[1].former,
-            Some(former_trader()),
-            "not boarded"
-        );
     }
 
     #[test]
