@@ -38,6 +38,8 @@
 //!   assigning a ship captured ([`Assignment`]); the [`BoardingRule`]
 //!   port with Nova's [`NovaBoarding`]: who repels boarders, the capture
 //!   odds and the capture roll, a person's credits and its grant.
+//! - [`board_repair`]: boarding the player's own disabled escorts and
+//!   fighters back: which own-ship path a board takes.
 //! - [`blink`]: how bright a ship's running lights are at a tick,
 //!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
 //!   mode rolling on the [`BlinkChance`] port.
@@ -389,6 +391,7 @@ pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
 pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::board;
+pub use nova_sim_port::board_repair;
 pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;

@@ -497,6 +497,19 @@ fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
     }
 }
 
+#[test]
+fn fighter_captured_says_the_originals_words() {
+    // `STR#` 2002 #129.
+    assert_eq!(FIGHTER_CAPTURED, "Fighter captured.");
+    let view = flight();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        sim_message_text(&SimMessage::FighterCaptured, session).as_deref(),
+        Some(FIGHTER_CAPTURED)
+    );
+    assert_eq!(arrival_lead(&SimMessage::FighterCaptured), None);
+}
+
 /// A flight whose one outfit is called "bomb", "bombs".
 fn with_a_bomb() -> FlightView<FakeCatalog> {
     FlightView::new(FakeCatalog {

@@ -189,7 +189,7 @@ pub struct BoardTarget {
     /// mission stands, has failed or has left its slot.
     pub mission: bool,
     /// Whether it remembers being the player's escort or fighter
-    /// ([`FormerEscort`](crate::self_repair::FormerEscort), the original's
+    /// ([`FormerEscort`](nova_sim_combat::self_repair::FormerEscort), the original's
     /// +0xc8de 0 or more): boarded before, it may be boarded again while
     /// it carries no mission's mark (@0x65064-0x6507a).
     pub former: bool,

@@ -20,6 +20,9 @@
 //!   [`BoardingRule`](board::BoardingRule) port with Nova's
 //!   [`NovaBoarding`](board::NovaBoarding): who repels boarders, the
 //!   capture odds and the capture roll, a person's credits and its grant.
+//! - [`board_repair`]: boarding the player's own disabled escorts and
+//!   fighters back: which own-ship path a board takes
+//!   ([`recovery`](board_repair::recovery)).
 //! - [`christening`]: christening a new pilot's ship: the prompt and
 //!   default `_DoNewPilot` asks with
 //!   ([`Christening`](christening::Christening)) and the name kept
@@ -117,6 +120,7 @@ use nova_sim_state::{clearance, cron, landing, market, outfit_effects, stats};
 use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags};
 
 pub mod board;
+pub mod board_repair;
 pub mod christening;
 pub mod escape;
 pub mod escort_dialog;
