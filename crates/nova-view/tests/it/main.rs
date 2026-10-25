@@ -6,6 +6,7 @@
 
 mod common;
 
+mod flight_seam;
 mod hyperlink_graphs;
 mod stock_combat_effects;
 mod stock_dialogs;
