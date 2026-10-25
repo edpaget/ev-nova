@@ -240,7 +240,7 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
     };
     let session = SessionBuilder::flying(&catalog).build();
     assert!(!session.galaxy().visible(SystemId(132)));
-    let view = FlightView::from_session(catalog, session);
+    let view = FlightView::from_session(catalog, session.into());
     assert!(!on_the_course_map(&view, 132));
     assert!(on_the_course_map(&view, 131));
 }
@@ -260,7 +260,7 @@ fn the_course_map_shows_the_course_as_it_is_flown() {
     let session = SessionBuilder::flying(&catalog)
         .with_course([SystemId(131)])
         .build();
-    let mut view = FlightView::from_session(catalog, session);
+    let mut view = FlightView::from_session(catalog, session.into());
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     change_galaxy(&mut view, hiding(131));
     view.tick(TICK);
@@ -281,7 +281,7 @@ fn bound_for_alpha_with_reborn_explored() -> View {
         .build();
     let explore = nova_sim::SetExpr::parse("X133").expect("parses");
     session.run_set(&explore, &mut NeverFires);
-    let mut view = FlightView::from_session(catalog, session);
+    let mut view = FlightView::from_session(catalog, session.into());
     // A pilot flies with the nav system off: H cues the course.
     tap(&mut view, HYPERSPACE_MODE_KEY);
     view

@@ -78,13 +78,15 @@ impl<
         Self::flying(catalog, session)
     }
 
-    /// The flight of `session`, read from `catalog` as a loaded session
-    /// is read, but reached without the load: for a test whose session a
+    /// The flight of `sim`, read from `catalog` as a loaded session is
+    /// read, but reached without the load: for a test whose session a
     /// builder put into the state it needs
-    /// (`nova_sim::fixture::SessionBuilder`).
+    /// (`nova_sim::fixture::SessionBuilder`), passed as
+    /// `builder.build().into()` for Nova's collaborators
+    /// ([`SessionFlight::new`]).
     #[cfg(any(test, feature = "fixture"))]
-    pub fn from_session(catalog: C, session: Session) -> Self {
-        Self::read(catalog, Ok(session))
+    pub fn from_session(catalog: C, sim: SessionFlight<C>) -> Self {
+        Self::read(catalog, sim)
     }
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
@@ -153,17 +155,20 @@ impl<
     /// starts landed, so flight's first frame redraws the bar, as
     /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
-        Self::read(catalog, session)
+        Self::read(
+            catalog,
+            SessionFlight::new(session.map_err(|err| err.to_string())),
+        )
     }
 
-    /// The flight of `session` as [`FlightView::flying`] reads it.
+    /// The flight of `sim` as [`FlightView::flying`] reads it.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    fn read(catalog: C, session: Result<Session, StartError>) -> Self {
-        let mut session = session.map_err(|err| err.to_string());
-        if let Ok(session) = &mut session {
+    fn read(catalog: C, mut sim: SessionFlight<C>) -> Self {
+        if let Ok(session) = sim.session_mut() {
             // Sized as the view starts, before anything reads its field.
             session.set_window_width(window_width(VIEW_SIZE));
         }
+        let session = &sim.session;
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some(opening_scene(&catalog, session)),
@@ -235,7 +240,7 @@ impl<
             alert_width,
             view: VIEW_SIZE,
             double_time: false,
-            sim: SessionFlight::new(session),
+            sim,
             scene,
             sheet,
             sheet_ship,

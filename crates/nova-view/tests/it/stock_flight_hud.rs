@@ -572,7 +572,7 @@ fn a_fed_destroyer_flies_under_the_federation_status_bar() {
         .in_ship(ShipId(141))
         .build();
     assert_eq!(session.ship(), ShipId(141));
-    let view = FlightView::from_session(&data, session);
+    let view = FlightView::from_session(&data, session.into());
     let bar = view.status_bar().expect("the Federation status bar reads");
     assert_eq!(bar.layout, data.status_bar(130).expect("reads"));
     assert_eq!(

@@ -1735,7 +1735,7 @@ fn aux_flight(chance: SharedChance) -> View {
         .over(StellarId(128))
         .with_mission(0, accepted)
         .build();
-    FlightView::from_session(catalog, session).with_chance(chance)
+    FlightView::from_session(catalog, session.into()).with_chance(chance)
 }
 
 /// Mission 130's auxiliary ships in `view`.

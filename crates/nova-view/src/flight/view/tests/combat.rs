@@ -2199,7 +2199,7 @@ fn only_a_strict_pilot_ending_play_dying_is_deleted() {
             .strict_play()
             .build();
         let (_, chance) = scripted(&placed(750, 650, 180));
-        let mut view = FlightView::from_session(catalog, session)
+        let mut view = FlightView::from_session(catalog, session.into())
             .with_chance(chance)
             .with_behaviour(Rc::new(Firing));
         view.tick(TICK);

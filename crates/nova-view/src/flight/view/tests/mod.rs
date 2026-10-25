@@ -1747,7 +1747,7 @@ fn docked_pilot(name: &str) -> Pilot {
 /// centre.
 fn flying_as(catalog: FakeCatalog, name: &str) -> View {
     let session = SessionBuilder::flying(&catalog).named(name).build();
-    FlightView::from_session(catalog, session)
+    FlightView::from_session(catalog, session.into())
 }
 
 /// A flight of `catalog`'s pilot Ada resumed over Earth (128), as a load
@@ -1757,7 +1757,7 @@ fn over_earth(catalog: FakeCatalog) -> View {
         .named("Ada")
         .over(StellarId(128))
         .build();
-    FlightView::from_session(catalog, session)
+    FlightView::from_session(catalog, session.into())
 }
 
 /// A view of Ada resumed over Earth and landed there, the landing,
@@ -3085,7 +3085,7 @@ fn escorted_flight(
         .named(name)
         .with_escorts(escorts)
         .build();
-    FlightView::from_session(catalog, session)
+    FlightView::from_session(catalog, session.into())
 }
 
 /// [`boardable`] with ship 130 a fighter (`EscortType` 0) holding

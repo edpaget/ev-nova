@@ -99,7 +99,7 @@ fn refuelling() -> View {
         .with_reserve(nova_sim::Reserve::Fuel, 95.0)
         .build();
     let (_, chance) = scripted(&placed(750, 750, 0));
-    let mut view = FlightView::from_session(catalog, session)
+    let mut view = FlightView::from_session(catalog, session.into())
         .with_chance(chance)
         .with_behaviour(Rc::new(Still))
         .with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));

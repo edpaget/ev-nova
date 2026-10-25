@@ -24,7 +24,7 @@ fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
     let session = SessionBuilder::flying(&catalog)
         .with_course([SystemId(131)])
         .build();
-    let view = FlightView::from_session(catalog, session);
+    let view = FlightView::from_session(catalog, session.into());
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     assert_eq!(view.course_map().current(), Some(SystemId(130)));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));

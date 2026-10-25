@@ -845,7 +845,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
     let mut draws = placed(750, 750, 0).to_vec();
     draws.push(0);
     let (_, chance) = scripted(&draws);
-    FlightView::from_session(catalog, session)
+    FlightView::from_session(catalog, session.into())
         .with_chance(chance)
         .with_behaviour(Rc::new(Inspector::default()))
 }
@@ -1090,7 +1090,7 @@ fn paying(cash: i64, docked: bool) -> View {
     }
     let session = builder.build();
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::from_session(catalog, session)
+    let mut view = FlightView::from_session(catalog, session.into())
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
