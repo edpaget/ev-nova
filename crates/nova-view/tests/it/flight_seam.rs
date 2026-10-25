@@ -12,6 +12,18 @@
 //!
 //! The catalog is built here, in code, so the tests need no `NOVA_DATA`.
 
+use std::io;
+use std::path::Path;
+use std::rc::Rc;
+
+use nova_data::records::character::Character;
+use nova_data::records::ship::Ship;
+use nova_data::records::stellar::Stellar;
+use nova_data::records::system::System;
+use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::{GameData, Record};
+use nova_rsrc::fixture::ForkBuilder;
+use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame};
 use nova_sim::navigation::NavMode;
@@ -20,8 +32,13 @@ use nova_sim::{
     HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipFields, ShipId,
     StarSystem, StartDate, StartError, StellarId, StellarPick, SystemId, Vec2, WeaponRecord,
 };
+use nova_sim::{MissionId, TICK};
+use nova_view::flight::FlightView;
+use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
 use nova_view::flight::{FlightSim, SessionFlight};
+use nova_view::galaxy::SystemId as MapSystemId;
+use nova_view::{Input, Key, MouseButton, Point, Screen};
 
 /// One `chär` flying from system 130, whose one stellar, 128, is in the
 /// nav defaults' first slot.
@@ -222,4 +239,176 @@ fn a_stellar_key_reaches_the_session_and_its_frame_shows_the_selection() {
     );
     flight.frame(&mut frame);
     assert_eq!(frame.nav_mode, NavMode::Stellar(Some(StellarId(128))));
+}
+
+// The course map and the nav keys, through a whole `FlightView` over a
+// real session.
+
+/// One data file, `/data/Nova Data`, holding a fork.
+struct OneFile(Vec<u8>);
+
+impl DirLister for OneFile {
+    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
+        Ok(vec![Listing {
+            name: "Nova Data".into(),
+            kind: EntryKind::File,
+        }])
+    }
+}
+
+impl ForkReader for OneFile {
+    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+        Ok((fork == Fork::Data).then(|| self.0.clone()))
+    }
+}
+
+fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
+    for (i, value) in values.iter().enumerate() {
+        bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+    }
+}
+
+/// The first `chär`: ship 128 from system 128.
+fn character() -> Vec<u8> {
+    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+    bytes
+}
+
+/// A ship that flies.
+fn ship() -> Vec<u8> {
+    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
+    bytes
+}
+
+/// A `sÿst` at map (`x`, 0) with these `Con` links and `NavDefs`.
+fn system(x: i16, links: &[i16], nav_defs: &[i16]) -> Vec<u8> {
+    let mut bytes = vec![0; System::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[x, 0]);
+    put_i16s(&mut bytes, 0x04, &[-1; 32]);
+    put_i16s(&mut bytes, 0x04, links);
+    put_i16s(&mut bytes, 0x24, nav_defs);
+    put_i16s(&mut bytes, 0x66, &[-1]);
+    bytes
+}
+
+/// A still planet anyone may land on, at the centre.
+fn planet() -> Vec<u8> {
+    let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[0, 0, 0]);
+    bytes[0x06..0x0A].copy_from_slice(&1_u32.to_be_bytes());
+    put_i16s(&mut bytes, 0x14, &[-1, 0, -1, -1]);
+    bytes
+}
+
+/// Alpha (128), at the map's centre, holding Alpha Prime (128), linked
+/// both ways to Beta (129), at (100, 0). The first `chär` flies ship 128
+/// from Alpha. Nothing is drawn but what the course map needs.
+fn data() -> Rc<GameData> {
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
+        .resource(
+            System::TYPE,
+            128,
+            Some(b"Alpha"),
+            &system(0, &[129], &[128]),
+        )
+        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[128], &[]))
+        .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &planet())
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// A whole flight view over a real session of [`data`], flying in Alpha.
+fn view() -> FlightView<Rc<GameData>> {
+    let data = data();
+    let session = SessionBuilder::flying(&data).build();
+    FlightView::from_session(data, session.into())
+}
+
+fn key(key: Key, pressed: bool) -> Input {
+    Input::Key {
+        key,
+        pressed,
+        repeat: false,
+    }
+}
+
+fn tap(view: &mut FlightView<Rc<GameData>>, k: Key) {
+    view.input(&key(k, true));
+    view.input(&key(k, false));
+}
+
+/// A left click at `at`.
+fn click(view: &mut FlightView<Rc<GameData>>, at: Point) {
+    for pressed in [true, false] {
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+}
+
+/// Where the open course map draws system `id`.
+fn on_map(view: &FlightView<Rc<GameData>>, id: i16) -> Point {
+    let map = view.course_map();
+    let system = map.model().system(MapSystemId(id)).expect("on the map");
+    map.transform().world_to_screen(system.position())
+}
+
+fn nav_mode(view: &FlightView<Rc<GameData>>) -> NavMode {
+    view.session().expect("flying").nav_mode()
+}
+
+#[test]
+fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
+    let mut view = view();
+    tap(&mut view, Key::Char('m'));
+    assert!(view.map_open());
+    let beta = on_map(&view, 129);
+    view.input(&key(Key::Shift, true));
+    click(&mut view, beta);
+    view.input(&key(Key::Shift, false));
+    assert_eq!(view.session().expect("flying").course(), [SystemId(129)]);
+    assert_eq!(view.course_map().route(), [MapSystemId(129)]);
+}
+
+#[test]
+fn a_slot_key_reaches_the_session_on_the_next_frame() {
+    let mut view = view();
+    tap(&mut view, Key::Char('1'));
+    assert_eq!(nav_mode(&view), NavMode::Off, "the press waits for a frame");
+    view.tick(TICK);
+    assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
+}
+
+#[test]
+fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
+    let mut view = view();
+    tap(&mut view, Key::Char('1'));
+    view.tick(TICK);
+    let opened = nav_mode(&view);
+    assert_eq!(opened, NavMode::Stellar(Some(StellarId(128))));
+    view.open_dialog_map(MapOpener::Offer(MissionId(128)));
+    let beta = on_map(&view, 129);
+    view.port_map_input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at: beta,
+    });
+    view.port_map_input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+        at: beta,
+    });
+    assert_ne!(nav_mode(&view), opened, "the click wrote the nav");
+    view.port_map_input(&key(Key::Char('m'), true));
+    assert!(!view.map_open());
+    assert_eq!(nav_mode(&view), opened, "put back as the map closed");
 }
