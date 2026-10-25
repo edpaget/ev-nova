@@ -193,3 +193,35 @@ pub trait CommSource {}
 /// The spaceport's questions of the flight. None yet: each method will
 /// default to "nothing open".
 pub trait PortSource {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A source with nothing open: every answer its default.
+    struct NothingOpen;
+
+    impl MapSource for NothingOpen {}
+
+    #[test]
+    fn a_source_with_nothing_open_answers_nothing() {
+        let source = NothingOpen;
+        let none = SystemId(130);
+        assert_eq!(source.map_drawing(None, &[], MapMarks::NONE), None);
+        assert_eq!(source.map_panel(Some(none), None), None);
+        assert_eq!(source.map_border_sources(), None);
+        assert_eq!(source.find_map_system("sol"), None);
+        assert_eq!(source.map_mission_systems(), []);
+        assert_eq!(source.map_preselection(), None);
+        assert_eq!(source.floating_preselection(), None);
+        assert_eq!(source.hypergate_cycle(), []);
+        assert_eq!(source.offer_map_marks(MissionId(128)), MapMarks::NONE);
+        assert_eq!(source.computer_map_marks(None), MapMarks::NONE);
+        assert_eq!(source.mission_info_map_marks(Some(0)), MapMarks::NONE);
+        assert_eq!(source.map_nav(), None);
+        assert_eq!(source.text_nav(), None);
+        assert_eq!(source.floating_map_places(), FloatingLinks::default());
+        assert_eq!(source.stellar_name(StellarId(128)), None);
+        assert!(!source.has_explored(none));
+    }
+}

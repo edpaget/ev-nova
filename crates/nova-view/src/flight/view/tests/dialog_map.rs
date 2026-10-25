@@ -38,6 +38,12 @@ fn holding() -> View {
     view
 }
 
+#[test]
+fn the_flights_mission_systems_are_its_sessions() {
+    use crate::flight::sim_port::MapSource as _;
+    assert_eq!(holding().sim.map_mission_systems(), [SystemId(131)]);
+}
+
 /// Closes the map as M does on it.
 fn press_map(view: &mut View) {
     view.port_map_input(&key(MAP, true));

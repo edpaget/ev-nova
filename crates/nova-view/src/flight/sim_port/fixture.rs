@@ -527,6 +527,7 @@ mod tests {
         assert_eq!(fake.find_map_system("sol"), None);
         assert_eq!(fake.offer_map_marks(MissionId(128)), MapMarks::NONE);
         assert_eq!(fake.map_nav(), None);
+        assert_eq!(fake.text_nav(), None);
         assert_eq!(fake.stellar_name(StellarId(128)), None);
         assert!(!fake.has_explored(SystemId(130)));
     }
@@ -747,6 +748,27 @@ mod tests {
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.map_key, *map_key);
+            assert_ne!(other.map_key.system, map_key.system);
+            assert_ne!(other.map_key.nav, map_key.nav);
+        }
+    }
+
+    #[test]
+    fn an_unlike_maps_key_moves_off_the_system_unlike_takes() {
+        // The key already on the system the frame's unlike moves to steps
+        // one below it.
+        for (system, key_system, moved) in [(0, i16::MAX, i16::MAX - 1), (i16::MAX, 0, -1)] {
+            let frame = FlightFrame {
+                system: SystemId(system),
+                map_key: MapKey {
+                    system: SystemId(key_system),
+                    ..MapKey::default()
+                },
+                ..FlightFrame::default()
+            };
+            let other = unlike(&frame);
+            assert_eq!(other.map_key.system, SystemId(moved));
+            assert_ne!(other.map_key.system, frame.map_key.system);
         }
     }
 }

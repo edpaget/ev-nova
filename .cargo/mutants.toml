@@ -16,6 +16,15 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `MapSource`'s defaults are "nothing open": each body is already the
+    # value the mutant puts back (`None`, an empty list, the default
+    # places, `false`), so the replacement is the same function
+    # (`sim_port::tests::a_source_with_nothing_open_answers_nothing`
+    # catches the other replacements).
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::(map_drawing|map_panel|find_map_system|stellar_name) -> Option<[A-Za-z]+> with None$",
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::(map_mission_systems|hypergate_cycle) -> Vec<[A-Za-z<>]+> with vec!\\[\\]$",
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::floating_map_places -> FloatingLinks with Default::default\\(\\)$",
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::has_explored -> bool with false$",
     # The stars' murk level: trunc(murk × 0.9) above 29 is held to 29, so
     # at exactly 29 holding it gives the same 29 (`_HandleStars`
     # @0x2f8cc-0x2f913).

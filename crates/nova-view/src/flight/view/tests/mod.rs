@@ -1030,6 +1030,30 @@ fn flight() -> View {
 }
 
 #[test]
+fn a_shared_catalog_shows_in_its_flights_debug() {
+    let mut flight: SessionFlight<()> = SessionFlight::new(Err("no chär".to_owned()));
+    assert!(format!("{flight:?}").contains("catalog: None"));
+    flight.share_catalog(Rc::new(catalog()));
+    assert!(format!("{flight:?}").contains("catalog: Some(SharedCatalog)"));
+}
+
+/// The flight's floating-map and mission-system answers are its
+/// session's, through the adapter.
+#[test]
+fn the_flights_map_answers_are_its_sessions() {
+    use crate::flight::sim_port::MapSource as _;
+    let mut view = flight();
+    view.sim.apply(FlightCommand::CycleMapSelection);
+    let session = view.session().expect("flying");
+    let preselection = session.floating_preselection();
+    assert!(preselection.is_some(), "the cycle noted a slot");
+    assert_eq!(view.sim.floating_preselection(), preselection);
+    let places = session.floating_map_places();
+    assert!(!places.links.is_empty());
+    assert_eq!(view.sim.floating_map_places(), places);
+}
+
+#[test]
 fn the_view_shares_its_catalog_with_its_flight() {
     let view = flight();
     let shared = view

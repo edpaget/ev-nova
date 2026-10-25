@@ -1858,3 +1858,30 @@ fn in_port_c_clears_the_route_and_the_close_puts_back_the_bars_nav() {
         "the bar's nav put back"
     );
 }
+
+/// A text queued before the nav area's last redraw is older than it: its
+/// nav doesn't replace the nav area as the texts are taken in flight.
+#[test]
+fn a_text_queued_before_the_last_nav_redraw_leaves_the_nav_area_as_redrawn() {
+    let mut catalog = catalog();
+    catalog.missions = vec![errand(130)];
+    catalog.mission_texts = vec![MissionTexts {
+        brief: Some("Off.".to_owned()),
+        ..MissionTexts::named(MissionId(130), "Run")
+    }];
+    let mut view = FlightView::new(catalog);
+    run_set(&mut view, "S130");
+    view.settle_script();
+    view.redraw_status();
+    view.sim
+        .session
+        .as_mut()
+        .expect("flying")
+        .select_stellar(StellarPick::Slot(0));
+    assert_eq!(view.take_mission_texts().len(), 1, "the brief");
+    assert_eq!(
+        view.nav_scene.as_ref().map(|(mode, _)| *mode),
+        Some(NavMode::Stellar(Some(StellarId(128)))),
+        "as the take's redraw drew it, not the text's nav off"
+    );
+}
