@@ -14,9 +14,13 @@
 //! ship somewhere directly; [`sabotage_kill`], for setting off the
 //! player's kill outfit directly; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
-//! landing sites.
+//! landing sites; and [`SessionBuilder`], a session in a given state
+//! reached without the load's rules (see the `builder` module).
 
+mod builder;
 mod walker;
+
+pub use builder::SessionBuilder;
 
 /// The control bits that make a test hold, and the listed stellars a fake
 /// catalog gives, from the catalog crate's test support.

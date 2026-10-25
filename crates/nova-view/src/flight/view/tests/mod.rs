@@ -42,6 +42,7 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::CommCatalog;
 use nova_sim::ShipIff;
+use nova_sim::fixture::SessionBuilder;
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{

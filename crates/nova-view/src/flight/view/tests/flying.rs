@@ -18,6 +18,18 @@ fn it_starts_the_session_in_its_system_at_rest() {
     assert_eq!(view.frame(), Some(0));
 }
 
+#[test]
+fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
+    let catalog = catalog();
+    let session = SessionBuilder::flying(&catalog)
+        .with_course([SystemId(131)])
+        .build();
+    let view = FlightView::from_session(catalog, session);
+    assert_eq!(view.course_map().route(), [SystemId(131)]);
+    assert_eq!(view.course_map().current(), Some(SystemId(130)));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+}
+
 /// [`catalog`] with `dësc`s 3000 "{b5 "set" "clear"}, sir.", 3001
 /// "<SRK128>" and 3002 "{G "<SRK128>" "x"}".
 fn described() -> FakeCatalog {

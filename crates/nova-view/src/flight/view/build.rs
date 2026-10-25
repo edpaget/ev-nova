@@ -78,6 +78,15 @@ impl<
         Self::flying(catalog, session)
     }
 
+    /// The flight of `session`, read from `catalog` as a loaded session
+    /// is read, but reached without the load: for a test whose session a
+    /// builder put into the state it needs
+    /// (`nova_sim::fixture::SessionBuilder`).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn from_session(catalog: C, session: Session) -> Self {
+        Self::read(catalog, Ok(session))
+    }
+
     /// Begins a new pilot's game as [`Session::begin`] does, on the
     /// flight's chance: for a pilot just created, before its first save.
     /// The

@@ -482,6 +482,8 @@ mod fighter_capacity;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
+#[cfg(any(test, feature = "fixture"))]
+mod fixture_setters;
 mod free_cargo;
 mod game_work;
 mod gate_escorts;
