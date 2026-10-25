@@ -17,10 +17,17 @@
 //! [`PortSource`], are empty for now: the course map's, the comm's and
 //! the spaceport's questions will go there, each method defaulting to
 //! "nothing open", so a sim that has none of them open needs no code.
+//!
+//! The `fixture` feature (and this crate's tests) exposes `fixture`:
+//! `FakeFlight`, a scripted sim for the view's component tests, and
+//! `check_contract`, what every sim must honour.
 
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, StepInput, StepReport,
 };
+
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 
 /// The flight the view shows, as the view needs it (see the module
 /// docs).
