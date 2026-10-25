@@ -152,6 +152,8 @@ pub struct Pilot {
     /// The ship's shield, armour and fuel.
     pub reserves: Reserves,
     /// The systems still to jump to, in order, ending at the destination.
+    /// Saved with the pilot; whether a load keeps it is the
+    /// `loaded_course` rule's (read by `nova_sim::Session::load`).
     pub course: Vec<SystemId>,
     /// The system the course was last started or advanced from: the
     /// original's course slot 0 (`_hyperRoute`, 0x3b51c8), where `None`

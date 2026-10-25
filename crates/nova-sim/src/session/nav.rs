@@ -1076,14 +1076,44 @@ mod tests {
         assert_eq!(session.nav_mode(), NavMode::Off);
     }
 
-    #[test]
-    fn a_pilot_loaded_with_a_course_flies_with_the_nav_system_off_and_cannot_jump() {
-        let catalog = catalog();
-        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+    /// A pilot saved with a course, from the system it starts in.
+    fn coursed_pilot(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = Pilot::new(catalog, "").expect("a pilot");
         pilot.course = ids(&[131, 132]);
-        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        pilot.course_start = Some(pilot.system);
+        pilot
+    }
+
+    #[test]
+    fn a_pilot_loaded_with_a_course_flies_with_none_by_the_engine() {
+        let catalog = catalog();
+        let mut session =
+            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.course(), ids(&[]), "the course cleared");
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
+        session.hyperspace_mode();
+        assert_ne!(session.nav_mode(), hyperspace(131), "no course hop cued");
+        let mut session =
+            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_pilot_loaded_with_a_course_keeps_it_with_the_nav_system_off_and_cannot_jump()
+     {
+        let catalog = catalog();
+        let pilot = coursed_pilot(&catalog);
+        let start = pilot.course_start;
+        let rules = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible);
+        let mut session = Session::load(&catalog, pilot, &rules).expect("flies");
         assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.course(), ids(&[131, 132]), "the course kept");
+        assert_eq!(session.pilot().course_start(), start, "the start kept");
+        let mut pressed = Session::load(&catalog, coursed_pilot(&catalog), &rules).expect("flies");
+        pressed.hyperspace_mode();
+        assert_eq!(pressed.nav_mode(), hyperspace(131), "the course hop cued");
         fly_out(&mut session);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }

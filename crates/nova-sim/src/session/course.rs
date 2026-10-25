@@ -27,14 +27,30 @@
 //! `entry` module's `CourseStep::Arrival`). The entry tells
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
+//!
+//! **A load** ([`course_on_load`]): by [`RuleKey::LoadedCourse`]'s engine
+//! reading a pilot opened from a save flies with no course, as the
+//! original's open clears `_hyperRoute` and never restores it; by the
+//! other reading the saved course is kept.
 
 use super::{Chart, Session, Setup};
 use crate::catalog::SystemId;
 use crate::course;
 use crate::pilot::Pilot;
-use crate::rulebook::{RuleKey, RuleSource};
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 impl Session {}
+
+/// A load's course, as [`RuleKey::LoadedCourse`] reads it: by the engine
+/// the hops and the start are cleared, as `_OpenPilotFile` (@0x7673e) and
+/// `_OpenLastPilotFile` (@0x76502) call `_ResetPlayer`, which sets all 32
+/// words of `_hyperRoute` to -1 (@0x1d6bb-0x1d6cd), and `_LoadPilotData`
+/// never writes them back. By the other reading the saved course is kept.
+pub(super) fn course_on_load(pilot: &mut Pilot, rules: &Rulebook) {
+    if rules.source_for(RuleKey::LoadedCourse) == RuleSource::Engine {
+        pilot.clear_course();
+    }
+}
 
 impl Setup {
     /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
@@ -83,7 +99,6 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::hyperspace::MultiJumpRule;
-    use crate::rulebook::Rulebook;
     use crate::session::tests::{
         alternates, at_gate, at_wormhole, bound_for_134, chained, gated, hide, unhide, wormholes,
     };
@@ -102,6 +117,71 @@ mod tests {
         match source {
             RuleSource::Engine => engine,
             RuleSource::Bible => bible,
+        }
+    }
+
+    /// A pilot with `course` from 130.
+    fn coursed(course: &[i16]) -> Pilot {
+        let catalog = catalog();
+        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+        pilot.course = ids(course);
+        pilot.course_start = (!course.is_empty()).then_some(SystemId(130));
+        pilot
+    }
+
+    fn loaded_course(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::LoadedCourse, source)
+    }
+
+    #[test]
+    fn a_load_clears_the_hops_and_the_start_by_the_engine_and_keeps_them_by_the_other_reading() {
+        for source in RuleSource::ALL {
+            let mut pilot = coursed(&[131, 132]);
+            course_on_load(&mut pilot, &loaded_course(source));
+            assert_eq!(
+                pilot.course,
+                by(source, ids(&[]), ids(&[131, 132])),
+                "{source:?}"
+            );
+            assert_eq!(
+                pilot.course_start,
+                by(source, None, Some(SystemId(130))),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_course_loads_as_the_rule_reads_and_the_save_keeps_it() {
+        let catalog = catalog();
+        for source in RuleSource::ALL {
+            let mut pilot = coursed(&[131, 132]);
+            pilot.course_start = Some(pilot.system);
+            let start = pilot.course_start;
+            let saved = crate::save::decode(&crate::save::encode(&pilot)).expect("loads");
+            assert_eq!(saved.course, ids(&[131, 132]), "the save keeps the course");
+            assert_eq!(saved.course_start, start, "the save keeps the start");
+            let session = Session::load(&catalog, saved, &loaded_course(source)).expect("flies");
+            assert_eq!(
+                session.course(),
+                by(source, ids(&[]), ids(&[131, 132])),
+                "{source:?}"
+            );
+            assert_eq!(
+                session.pilot().course_start(),
+                by(source, None, start),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_load_leaves_an_empty_course_empty_under_both_readings() {
+        for source in RuleSource::ALL {
+            let mut pilot = coursed(&[]);
+            course_on_load(&mut pilot, &loaded_course(source));
+            assert_eq!(pilot.course, ids(&[]), "{source:?}");
+            assert_eq!(pilot.course_start, None, "{source:?}");
         }
     }
 

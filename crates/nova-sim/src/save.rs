@@ -8,6 +8,11 @@
 //! reads the current version strictly: a field missing from it is an
 //! error, not a default.
 //!
+//! The course and its start are always saved. Whether a load keeps them
+//! is [`RuleKey::LoadedCourse`](crate::RuleKey::LoadedCourse)'s: by the
+//! engine's reading `Session::load` drops them, as the original's open
+//! clears `_hyperRoute`.
+//!
 //! - Version 1: the name, ship, system, the stellar last landed on, date,
 //!   cash, reserves and course.
 //! - Version 2: adds the explored systems and the legal records, none in

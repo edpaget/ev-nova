@@ -1075,6 +1075,10 @@ impl Session {
     ///   its own, and refusing the pilot would strand one a removed
     ///   plug-in's system held.
     ///
+    /// A pilot saved with a course flies as [`RuleKey::LoadedCourse`]
+    /// reads: by the engine with none, by the other reading with the
+    /// saved course and start.
+    ///
     /// A pilot never landed, its stellar `None`, is not repaired: the
     /// original's stellar -1 fallback (@0x751e9-0x75255) is left out, as
     /// the engine's `None` stellar doesn't mean missing data.
@@ -1097,6 +1101,8 @@ impl Session {
         // `_ResetPlayer` does (@0x1da86), but for those the once-a-pilot
         // reading kept fired (see the `nebulae` module).
         pilot.galaxy.forget_explored_nebulae();
+        // The course, cleared by `_ResetPlayer` too (see `course_on_load`).
+        course::course_on_load(&mut pilot, rules);
         for kept in nebula::kept(&pilot.story_fired) {
             pilot.galaxy.set_nebula_explored(kept, true);
         }
