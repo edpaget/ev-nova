@@ -41,9 +41,11 @@
 //!   afresh about the ship. An `M` or `N` move, a developer tools' move
 //!   and a take-off keep them.
 //!
-//! The session's other outboxes (its sounds, messages, script notes, pay
-//! notes, fighter notes and the rest, each with its own `take_*`) are not
-//! folded into this one; doing so is a possible follow-up.
+//! The session's other one-shot outputs (its sounds, messages, pay notes,
+//! fighter notes and the rest, each with its own `take_*`) are drained
+//! with these in one stream of `FlightEvent`s
+//! ([`Session::drain_events`]; see the `flight_events` module), each
+//! event as [`FlightEvent::Session`](crate::flight_frame::FlightEvent::Session).
 
 use super::{Outbox, Session};
 

@@ -151,7 +151,7 @@ impl Session {
     pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
         // A new run of docked scripts, its failures' `OnFailure` (see
         // [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,

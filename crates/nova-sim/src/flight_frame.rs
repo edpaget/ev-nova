@@ -13,11 +13,21 @@
 
 use std::collections::BTreeSet;
 
+use crate::bay::FighterNote;
+use crate::board::MissionBoardLine;
 use crate::catalog::{StellarId, SystemId};
+use crate::combat::report::SimDiagnostic;
 use crate::geometry::Vec2;
+use crate::grant::Granted;
+use crate::hail::CommNote;
+use crate::hire::PayNote;
 use crate::hyperspace::JumpReadiness;
+use crate::message::SimMessage;
 use crate::navigation::NavMode;
-use crate::session::{MapClicked, MapPress, SavedNav, StellarPick};
+use crate::session::{
+    InterfaceLoad, MapClicked, MapPress, MissionShown, PersonQuote, SavedNav, SessionEvent,
+    StellarPick, TextBar,
+};
 use crate::sound::SimSound;
 use crate::targeting::TargetPick;
 use crate::traffic::npc::NpcId;
@@ -252,12 +262,57 @@ impl Answer {
     }
 }
 
-/// Something the flight raised for the view to act on once: drained from
-/// the port after each step or command.
+/// Something the flight raised for the view to act on once: one of the
+/// session's one-shot outputs, drained in one stream by
+/// [`Session::drain_events`](crate::Session::drain_events), in the order
+/// its docs give. Each wraps the output as the session raised it; the
+/// fight's own events are not among them (they come with each step).
 #[derive(Clone, Debug, PartialEq)]
 pub enum FlightEvent {
     /// A sound to play.
     Sound(SimSound),
+    /// A message for the message line, in the session's terms.
+    Message(SimMessage),
+    /// A change to what the view draws of the session ([`SessionEvent`]).
+    Session(SessionEvent),
+    /// The pilot changed in a way that should be saved.
+    SaveDue,
+    /// The hold after the player's explosion ran out.
+    HoldExpired,
+    /// Game data the simulation does not handle yet, told once a session.
+    Diagnostic(SimDiagnostic),
+    /// What a boarding granted.
+    Grant(Granted),
+    /// The comm line a failed mission's ship said as a board plundered it.
+    BoardLine(MissionBoardLine),
+    /// What an NPC assisting the player did.
+    Comm(CommNote),
+    /// What the player's fighters met as it left a system.
+    FighterNote(FighterNote),
+    /// What paying the escorts did.
+    PayNote(PayNote),
+    /// A hail quote said.
+    Quote(PersonQuote),
+    /// A mission text or offer movie to show, with the status bar as a
+    /// text was queued ([`TextBar`]; none for a movie).
+    MissionShown {
+        /// The text or movie.
+        shown: MissionShown,
+        /// The bar as the text was queued; `None` for a movie.
+        bar: Option<TextBar>,
+    },
+    /// A run of docked scripts began: the `C`, `E` and `H` loads drained
+    /// before it and not yet taken are let go, as the session lets go of
+    /// its own at each run.
+    InterfaceLoadsCleared,
+    /// A `C`, `E` or `H` run while docked ([`InterfaceLoad`]).
+    InterfaceLoad(InterfaceLoad),
+    /// The nav mode as the last take-off began, before its deselect.
+    TakeoffNav(NavMode),
+    /// The escape pod's rescue's `dësc`.
+    RescueDesc(i16),
+    /// The message the last take-off left on, a held `Q`'s.
+    LeaveMessage(String),
 }
 
 /// What one fixed step of the flight is given. Empty until the step moves

@@ -485,6 +485,7 @@ mod fighters;
 mod fire_gates;
 #[cfg(any(test, feature = "fixture"))]
 mod fixture_setters;
+mod flight_events;
 mod frame;
 mod free_cargo;
 mod game_work;
@@ -4501,7 +4502,7 @@ impl Session {
     ) -> OutfitRun {
         // The bar's loads are this order's alone (see
         // [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let follows = self.setup.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
@@ -4924,7 +4925,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
         let (shipyard, record) = self.buyable(ship, chance)?;
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -12927,6 +12928,9 @@ pub(super) mod tests {
                 (button.asked, button.sides_asked),
                 "{source:?}"
             );
+            // The order begins a run of docked scripts, letting go of the
+            // loads before it, which the check alone doesn't.
+            checked.out.begin_docked_run();
             assert!(session == checked, "{source:?}: unchanged past the check");
         }
     }
@@ -14378,7 +14382,11 @@ pub(super) mod tests {
     #[test]
     fn an_outfit_bought_or_sold_makes_a_save_due_and_a_refused_one_changes_nothing() {
         let mut session = outfitted(&outfitting());
-        let before = session.clone();
+        let mut before = session.clone();
+        // Every order begins a run of docked scripts, refused or not,
+        // letting go of the bar's loads before it (see the
+        // `flight_events` module).
+        before.out.begin_docked_run();
         assert_eq!(
             session.outfit(sell(SPEED), &mut NeverFires),
             Err(OutfitRefusal::NoneOwned)

@@ -354,7 +354,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let mut settled = Settled::default();
         if let Some(stellar) = self.run.offer_roll_due.take()
             && self.mode.landed() == Some(stellar)
@@ -563,6 +563,13 @@ impl MissionRun {
     /// (`_PlayerLandOnStellar` @0x63593-0x635e3).
     pub(super) fn left_with_message(&self) -> bool {
         self.queued.left_with.is_some()
+    }
+
+    /// Leaves `text` as the message the last take-off left on, for a
+    /// test that needs one without a `Q` and a take-off.
+    #[cfg(test)]
+    pub(super) fn leave_with(&mut self, text: &str) {
+        self.queued.left_with = Some(text.to_owned());
     }
 
     /// The landing's part: a leave still pending is dropped

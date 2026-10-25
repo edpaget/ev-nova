@@ -358,7 +358,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<u8, AcceptError> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let venue = self
             .run
             .offer_of(self.mode.landed(), mission)
@@ -440,7 +440,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<RefuseShown, NotOffered> {
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let offer = self
             .run
             .offer_of(self.mode.landed(), mission)
@@ -512,7 +512,7 @@ impl Session {
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
     pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let mission = self
             .pilot
             .missions

@@ -636,7 +636,7 @@ impl Session {
     /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)

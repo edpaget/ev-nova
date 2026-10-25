@@ -1,7 +1,10 @@
 //! What the session fills and the view takes: the sounds, messages,
 //! events and notes raised since they were last taken, and the flags the
-//! view asks after, each taken with its `take_*` method. Nothing in the
-//! session reads them back, except to undo its own writes.
+//! view asks after, each taken with its `take_*` method, and all of them
+//! drained as one stream of `FlightEvent`s by
+//! [`Session::drain_events`](super::Session::drain_events)
+//! (see the `flight_events` module). Nothing in the session reads them
+//! back, except to undo its own writes.
 
 use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
@@ -65,6 +68,10 @@ pub(super) struct Outbox {
     /// or ship purchase began, in order (see the `ship_change` module's
     /// [`InterfaceLoad`]); never saved.
     pub(super) interface_loads: Vec<InterfaceLoad>,
+    /// Whether a run of docked scripts began since the last drain, letting
+    /// go of the loads before it (see the `flight_events` module's
+    /// [`Outbox::begin_docked_run`]); never saved.
+    pub(super) interface_loads_cleared: bool,
     /// The nav mode as the last take-off began, before its deselect: what
     /// the original's take-off redraw shows (`_PlayerLandOnStellar`
     /// @0x633a0), until taken
