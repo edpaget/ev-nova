@@ -2,6 +2,7 @@
 //! flight: each comes from what the flight drained, once.
 
 use super::*;
+use crate::flight::escorts::fighters_abandoned_message;
 use nova_sim::flight_frame::FlightEvent;
 
 #[test]
@@ -61,4 +62,70 @@ fn the_flights_diagnostics_follow_the_looks_unread() {
     view.sim.queue_event(FlightEvent::Diagnostic(sim));
     assert_eq!(view.drained_diagnostics(), [unread, Diagnostic::Sim(sim)]);
     assert_eq!(view.drained_diagnostics(), [], "each once");
+}
+
+#[test]
+fn the_fighters_abandoned_are_said_each_for_a_message_slot() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_event(FlightEvent::FighterNote(FighterNote::Abandoned(2)));
+    view.sim
+        .queue_event(FlightEvent::FighterNote(FighterNote::Abandoned(1)));
+    assert_eq!(
+        view.fighters_said(),
+        [
+            (fighters_abandoned_message(2), MESSAGE_TICKS),
+            (fighters_abandoned_message(1), MESSAGE_TICKS),
+        ]
+    );
+    assert_eq!(view.fighters_said(), [], "once");
+}
+
+#[test]
+fn an_arrival_takes_its_fighters_pay_and_messages_and_leaves_the_rest() {
+    let mut view = faked(in_sol());
+    let message = SimMessage::Buoy("Welcome.".to_owned());
+    for event in [
+        FlightEvent::FighterNote(FighterNote::Abandoned(3)),
+        FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
+        FlightEvent::Message(message.clone()),
+        FlightEvent::TakeoffNav(NavMode::Off),
+    ] {
+        view.sim.queue_event(event);
+    }
+    let (fighters, pay, messages) = view.arrival_outputs();
+    assert_eq!(fighters, [(fighters_abandoned_message(3), MESSAGE_TICKS)]);
+    assert_eq!(pay, pay_said(&[nova_sim::PayNote::Defected(1)]));
+    assert!(!pay.is_empty(), "the defection is said");
+    assert_eq!(messages, [message]);
+    let (_, _, held) = view.takeoff_outputs();
+    assert_eq!(held, Some(NavMode::Off), "another kind, kept for its take");
+}
+
+#[test]
+fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.leave_said(), []);
+    let message = SimMessage::Buoy("Hello.".to_owned());
+    for event in [
+        FlightEvent::LeaveMessage("Off you go.".to_owned()),
+        FlightEvent::PayNote(nova_sim::PayNote::Defected(2)),
+        FlightEvent::Message(message.clone()),
+        FlightEvent::TakeoffNav(NavMode::Stellar(Some(StellarId(128)))),
+    ] {
+        view.sim.queue_event(event);
+    }
+    assert_eq!(
+        view.leave_said(),
+        [("Off you go.".to_owned(), SCRIPT_MESSAGE_TICKS)]
+    );
+    let (pay, messages, held) = view.takeoff_outputs();
+    assert_eq!(pay, pay_said(&[nova_sim::PayNote::Defected(2)]));
+    assert_eq!(messages, [message]);
+    assert_eq!(held, Some(NavMode::Stellar(Some(StellarId(128)))));
+    assert_eq!(
+        view.takeoff_outputs(),
+        (Vec::new(), Vec::new(), None),
+        "once"
+    );
 }

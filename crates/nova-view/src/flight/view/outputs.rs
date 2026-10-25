@@ -3,10 +3,13 @@
 //! the router asks after, each drained from the flight into the inbox
 //! (see the `inbox` module) and taken from it.
 
+use nova_sim::{FighterNote, NavMode, SimMessage};
+
+use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
 use crate::{Diagnostic, Sound};
 
-use super::FlightView;
+use super::{FlightView, MESSAGE_TICKS, SCRIPT_MESSAGE_TICKS, Said, pay_said};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether the hold after the player's explosion ran out since this
@@ -33,6 +36,57 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightEvent::SaveDue`]: nova_sim::flight_frame::FlightEvent::SaveDue
     pub fn take_save_due(&mut self) -> bool {
         self.drain().take_save_due()
+    }
+
+    /// How many fighters the player abandoned leaving systems, said for
+    /// [`MESSAGE_TICKS`] each ([`FlightEvent::FighterNote`]).
+    ///
+    /// [`FlightEvent::FighterNote`]: nova_sim::flight_frame::FlightEvent::FighterNote
+    pub(super) fn fighters_said(&mut self) -> Said {
+        self.drain()
+            .take_fighter_notes()
+            .into_iter()
+            .map(|FighterNote::Abandoned(count)| (fighters_abandoned_message(count), MESSAGE_TICKS))
+            .collect()
+    }
+
+    /// What an arrival says after its line: the fighters abandoned
+    /// ([`FlightView::fighters_said`]) and the escorts that defected unpaid
+    /// ([`pay_said`]), and the flight's messages, which the arrival words
+    /// ([`FlightEvent::PayNote`], [`FlightEvent::Message`]).
+    ///
+    /// [`FlightEvent::PayNote`]: nova_sim::flight_frame::FlightEvent::PayNote
+    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    pub(super) fn arrival_outputs(&mut self) -> (Said, Said, Vec<SimMessage>) {
+        let fighters = self.fighters_said();
+        let inbox = self.drain();
+        let pay = pay_said(&inbox.take_pay_notes());
+        (fighters, pay, inbox.take_messages())
+    }
+
+    /// The message the last take-off left on, a held `Q`'s, said for
+    /// [`SCRIPT_MESSAGE_TICKS`] ([`FlightEvent::LeaveMessage`]); none when
+    /// it left on none.
+    ///
+    /// [`FlightEvent::LeaveMessage`]: nova_sim::flight_frame::FlightEvent::LeaveMessage
+    pub(super) fn leave_said(&mut self) -> Said {
+        self.drain()
+            .take_leave_message()
+            .into_iter()
+            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
+            .collect()
+    }
+
+    /// What a take-off says and shows: the escorts that defected for want
+    /// of its pay ([`pay_said`]), the flight's messages, which the
+    /// take-off words, and the nav as the take-off began
+    /// ([`FlightEvent::TakeoffNav`]).
+    ///
+    /// [`FlightEvent::TakeoffNav`]: nova_sim::flight_frame::FlightEvent::TakeoffNav
+    pub(super) fn takeoff_outputs(&mut self) -> (Said, Vec<SimMessage>, Option<NavMode>) {
+        let inbox = self.drain();
+        let pay = pay_said(&inbox.take_pay_notes());
+        (pay, inbox.take_messages(), inbox.take_takeoff_nav())
     }
 
     /// The flight's sounds (thrust, landing, taking off and jumping),

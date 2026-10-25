@@ -8,9 +8,9 @@ use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
-    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder,
-    OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session, Settled, ShipId,
-    ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
+    GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal,
+    OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session, Settled, ShipId, ShipPurchase,
+    ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
 };
 use nova_sim::{PlayerCommand, PlayerFate};
 
@@ -20,7 +20,7 @@ use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{LoopedSounds, Scene};
-use crate::flight::escorts::{EscortMenuLooks, fighters_abandoned_message};
+use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
@@ -32,13 +32,13 @@ use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
     BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
-    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS,
-    NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY,
-    Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message,
-    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
-    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
-    point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
-    stellar_name, window_width,
+    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, NOTHING_OUT_HERE,
+    NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE,
+    TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks,
+    comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
+    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, play_area, point,
+    refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name,
+    window_width,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
@@ -560,15 +560,16 @@ impl<
         // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
         // (`_PlayerEnterWormhole` @0x64307).
         self.map.recentre();
+        if self.sim.session.is_err() {
+            return;
+        }
+        let (fighters, pay, drained) = self.arrival_outputs();
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        self.inbox.drain_session(session);
-        let notes = self.inbox.take_fighter_notes();
-        let pay = self.inbox.take_pay_notes();
         let date = session.long_date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
-        messages.extend(self.inbox.take_messages());
+        messages.extend(drained);
         let scene = self.scene.as_ref();
         let chance = &mut self.sim.chance;
         let worded: Vec<(String, u16)> = messages
@@ -600,10 +601,8 @@ impl<
             .into_iter()
             .collect();
         said.extend(worded);
-        said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
-            (fighters_abandoned_message(count), MESSAGE_TICKS)
-        }));
-        said.extend(pay_said(&pay));
+        said.extend(fighters);
+        said.extend(pay);
         self.say_all(&said);
     }
 
@@ -832,12 +831,7 @@ impl<
     /// what settling it did; gives the stellar left.
     fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
-        let mut said: Vec<(String, u16)> = self
-            .drain()
-            .take_leave_message()
-            .into_iter()
-            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
-            .collect();
+        let mut said = self.leave_said();
         let (line, rest, system) = self.took_off();
         said.extend(line);
         self.say_after(&said, rest);
@@ -930,12 +924,7 @@ impl<
     ///
     /// It gives, last, whether the system was laid out afresh.
     fn took_off(&mut self) -> (Said, Said, bool) {
-        let inbox = self.drain();
-        let (pay, messages, held) = (
-            inbox.take_pay_notes(),
-            inbox.take_messages(),
-            inbox.take_takeoff_nav(),
-        );
+        let (pay, messages, held) = self.takeoff_outputs();
         let nav_texts = self.nav_texts;
         let system = self.catch_up().system;
         self.place_ship();
@@ -954,7 +943,7 @@ impl<
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
         let mut line = self.word(greeting);
-        line.extend(pay_said(&pay));
+        line.extend(pay);
         (line, self.word(rest), system)
     }
 
@@ -1032,10 +1021,7 @@ impl<
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
         if (self.catch_up().system || laid_out) && flying {
-            let notes = self.drain().take_fighter_notes();
-            said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
-                (fighters_abandoned_message(count), MESSAGE_TICKS)
-            }));
+            said.extend(self.fighters_said());
         }
         self.say_all(&said);
         self.say_messages();
