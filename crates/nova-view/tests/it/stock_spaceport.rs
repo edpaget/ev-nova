@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
+use nova_sim::fixture::SessionBuilder;
 use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::image::ImageKey;
@@ -180,14 +181,16 @@ fn stock_spaceports_draw_every_button_greying_what_they_lack() {
     }
 }
 
-/// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
-/// it starts) through a save that says so, and landed there.
+/// A new stock pilot landed at Port Kane (`spöb` 137 in Kania, where it
+/// starts).
 fn at_port_kane(data: &GameData) -> Session {
-    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["stellar"] = serde_json::json!(137);
-    fly(data, &save)
+    let kania = Pilot::new(data, "Stock")
+        .expect("the stock first chär starts")
+        .system();
+    SessionBuilder::flying(data)
+        .named("Stock")
+        .landed_at(kania, StellarId(137))
+        .build()
 }
 
 /// Port Kane's Trade Center: its exchange in the 426 x 252 "Trade"
@@ -280,7 +283,10 @@ fn the_stock_list_colours_are_colr_128s() {
 
 /// A new stock pilot landed at Viking (`spöb` 157 in Tichel, `sÿst` 129).
 fn at_viking(data: &GameData) -> Session {
-    fly(data, &viking_save(data))
+    SessionBuilder::flying(data)
+        .named("Stock")
+        .landed_at(nova_sim::SystemId(129), StellarId(157))
+        .build()
 }
 
 /// A new stock pilot's save, last landed at Viking.

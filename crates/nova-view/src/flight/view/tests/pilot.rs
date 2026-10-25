@@ -652,8 +652,7 @@ fn a_jump_rolls_the_days_events_on_the_chance_given() {
 fn leaving_rolls_the_stays_days_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::with_pilot(eventful(), docked_pilot("Ada"))
-        .with_chance(SharedChance::new(shared));
+    let mut view = over_earth(eventful()).with_chance(SharedChance::new(shared));
     land_now(&mut view);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     always.borrow_mut().asked.clear();

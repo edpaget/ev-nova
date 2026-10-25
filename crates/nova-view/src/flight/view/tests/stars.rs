@@ -109,8 +109,7 @@ fn an_m_move_keeps_the_stars() {
 #[test]
 fn landing_and_taking_off_keep_the_stars() {
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
-    let mut view = FlightView::with_pilot(starry(), docked_pilot("Ada"))
-        .with_effects_chance(SharedChance::new(chance));
+    let mut view = over_earth(starry()).with_effects_chance(SharedChance::new(chance));
     view.tick(Duration::ZERO);
     assert!(stars_of(&view).iter().all(|star| star.shown));
     land_now(&mut view);

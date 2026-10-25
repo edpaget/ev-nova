@@ -6,7 +6,8 @@
 //! derives from it at once.
 
 use super::Session;
-use crate::catalog::SystemId;
+use crate::catalog::{StellarId, SystemId};
+use crate::geometry::Vec2;
 
 impl Session {
     /// Makes `hops` the course, started at the system the ship is in, or
@@ -16,13 +17,34 @@ impl Session {
         self.pilot.course_start = (!hops.is_empty()).then_some(self.pilot.system);
         self.pilot.course = hops;
     }
+
+    /// Puts the ship in flight over `stellar`, one of the system's shown
+    /// stellars, as a load resumes a pilot last landed there: at its
+    /// centre, at rest, it the stellar last landed on and where the ship
+    /// last touched down. Nothing lands. Gives whether the system shows
+    /// `stellar`; nothing changes when it doesn't.
+    pub(crate) fn resume_over(&mut self, stellar: StellarId) -> bool {
+        let Some(site) = self.chart.sites.iter().find(|site| site.id == stellar) else {
+            return false;
+        };
+        let at = site.position;
+        self.ship.player.position = at;
+        self.ship.player.velocity = Vec2::ZERO;
+        self.port.touchdown = at;
+        self.pilot.stellar = Some(stellar);
+        // The load's rebuild places the stellars' sprites from where the
+        // ship resumes.
+        self.place_stellar_sprites();
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::navigation::NavMode;
-    use crate::testkit::catalog;
+    use crate::pilot::Pilot;
+    use crate::testkit::{catalog, land_now};
 
     #[test]
     fn setting_the_course_starts_it_here_and_cues_nothing() {
@@ -34,5 +56,46 @@ mod tests {
         session.set_course(Vec::new());
         assert_eq!(session.course(), []);
         assert_eq!(session.pilot().course_start(), None, "the start cleared");
+    }
+
+    #[test]
+    fn resuming_over_a_stellar_leaves_the_session_as_a_load_resumed_over_it() {
+        let catalog = catalog();
+        let mut session =
+            Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
+        assert!(session.resume_over(StellarId(128)));
+        assert_eq!(session.player().position, Vec2::new(30.0, -40.0));
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+        assert_eq!(session.landed(), None, "in flight");
+        assert_eq!(session.port.touchdown, Vec2::new(30.0, -40.0));
+        let mut saved = Pilot::new(&catalog, "Ada").expect("starts");
+        saved.stellar = Some(StellarId(128));
+        let resumed = Session::fly(&catalog, saved).expect("flies");
+        // Two sessions built apart hold distinct shared strategies, which
+        // compare by pointer, so their state is compared as it prints.
+        assert_eq!(
+            format!("{session:?}"),
+            format!("{resumed:?}"),
+            "as the load resumes it"
+        );
+    }
+
+    #[test]
+    fn resuming_over_a_stellar_not_shown_changes_nothing() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let before = session.clone();
+        assert!(!session.resume_over(StellarId(140)), "Alpha Centauri's");
+        assert!(!session.resume_over(StellarId(999)));
+        assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_ship_resumed_over_a_stellar_lands_on_it_at_once() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(session.resume_over(StellarId(128)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
     }
 }

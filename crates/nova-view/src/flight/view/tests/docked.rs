@@ -1598,12 +1598,7 @@ fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
 
 #[test]
 fn a_pilot_resumed_and_landed_holds_the_gauges_from_its_landing() {
-    let pilot = {
-        let mut view = FlightView::new(outfitting());
-        land_now(&mut view);
-        view.pilot().expect("flying").clone()
-    };
-    let mut view = FlightView::with_pilot(outfitting(), pilot);
+    let mut view = over_earth(outfitting());
     assert_eq!(view.take_landing(), None, "in flight");
     land_now(&mut view);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
@@ -1655,7 +1650,7 @@ fn beginning_runs_on_start_once_and_explores_what_it_sets() {
 #[test]
 fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
     let (script, chance) = scripted(&[123]);
-    let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada")).with_chance(chance);
+    let mut view = over_earth(catalog()).with_chance(chance);
     assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
     view.resume();
     assert_eq!(player(&view).heading, 123.0);

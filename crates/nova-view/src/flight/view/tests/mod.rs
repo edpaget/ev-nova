@@ -1740,11 +1740,22 @@ fn docked_pilot(name: &str) -> Pilot {
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     view.pilot().expect("flying").clone()
 }
+
+/// A flight of `catalog`'s pilot Ada resumed over Earth (128), as a load
+/// resumes one last landed there: in flight at its centre, at rest.
+fn over_earth(catalog: FakeCatalog) -> View {
+    let session = SessionBuilder::flying(&catalog)
+        .named("Ada")
+        .over(StellarId(128))
+        .build();
+    FlightView::from_session(catalog, session)
+}
+
 /// A view of Ada resumed over Earth and landed there, the landing,
 /// its sounds and its message taken, with the systems read so far
 /// forgotten.
 fn landed_view() -> View {
-    let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada"));
+    let mut view = over_earth(catalog());
     land_now(&mut view);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     view.take_sounds();

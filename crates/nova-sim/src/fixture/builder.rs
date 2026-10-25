@@ -14,7 +14,7 @@
 //! setters. None goes through a pilot that is then loaded, and none takes
 //! off.
 
-use crate::catalog::{AsteroidCatalog, CombatCatalog, PilotCatalog, SystemId};
+use crate::catalog::{AsteroidCatalog, CombatCatalog, PilotCatalog, StellarId, SystemId};
 use crate::pilot::Pilot;
 use crate::rulebook::Rulebook;
 use crate::session::Session;
@@ -73,6 +73,40 @@ impl<'c, C: PilotCatalog + CombatCatalog + AsteroidCatalog> SessionBuilder<'c, C
     #[must_use]
     pub fn cued(self) -> Self {
         self.then(|session, _| session.cue_course())
+    }
+
+    /// The ship in flight over `stellar`, one of its system's stellars
+    /// shown, as a load resumes a pilot last landed there: at its centre,
+    /// at rest, `stellar` the one last landed on. Nothing lands.
+    ///
+    /// # Panics
+    ///
+    /// At [`SessionBuilder::build`], when the system shows no `stellar`.
+    #[must_use]
+    pub fn over(self, stellar: StellarId) -> Self {
+        self.then(move |session, _| {
+            assert!(
+                session.resume_over(stellar),
+                "{stellar:?} is not shown in {:?}",
+                session.system()
+            );
+        })
+    }
+
+    /// Landed at `stellar` in `system`, as [`Session::land_at`] lands
+    /// there: docked, the spaceport open, its `Landed` raised for the next
+    /// settling.
+    ///
+    /// # Panics
+    ///
+    /// At [`SessionBuilder::build`], when the landing is refused.
+    #[must_use]
+    pub fn landed_at(self, system: SystemId, stellar: StellarId) -> Self {
+        self.then(move |session, catalog| {
+            if let Err(refusal) = session.land_at(catalog, system, stellar) {
+                panic!("landing at {stellar:?} in {system:?}: {refusal}");
+            }
+        })
     }
 
     /// Adds `step`, applied to the built session after those before it.
@@ -174,6 +208,58 @@ mod tests {
             .build();
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
         assert_eq!(session.course(), [SystemId(131)]);
+    }
+
+    #[test]
+    fn over_rests_on_the_stellars_centre_with_it_last_landed() {
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog)
+            .over(StellarId(128))
+            .build();
+        assert_eq!(session.landed(), None, "in flight");
+        assert_eq!(
+            session.player().position,
+            crate::geometry::Vec2::new(30.0, -40.0)
+        );
+        assert_eq!(session.player().velocity, crate::geometry::Vec2::ZERO);
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+        assert_eq!(session.system(), SystemId(130));
+    }
+
+    #[test]
+    #[should_panic(expected = "is not shown")]
+    fn over_a_stellar_the_system_does_not_show_panics() {
+        let catalog = catalog();
+        let _ = SessionBuilder::flying(&catalog)
+            .over(StellarId(140))
+            .build();
+    }
+
+    #[test]
+    fn landed_at_docks_with_the_port_open() {
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog)
+            .landed_at(SystemId(131), StellarId(140))
+            .build();
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.pilot().stellar(), Some(StellarId(140)));
+        let landed = crate::story::StoryEvent::Landed {
+            stellar: StellarId(140),
+        };
+        assert!(
+            session.story_raised().contains(&landed),
+            "for the next settling"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "landing at")]
+    fn a_refused_landing_panics() {
+        let catalog = catalog();
+        let _ = SessionBuilder::flying(&catalog)
+            .landed_at(SystemId(131), StellarId(128))
+            .build();
     }
 
     #[test]

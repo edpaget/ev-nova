@@ -1190,7 +1190,7 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
         bar: Err("no ïntf 128".to_owned()),
         ..catalog()
     };
-    let view = FlightView::with_pilot(barless, docked_pilot("Ada"));
+    let view = over_earth(barless);
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);
     assert_eq!(bar.len(), 0, "nothing, not even why");

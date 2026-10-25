@@ -209,7 +209,7 @@ fn the_flight_scene_shows_only_the_sessions_stellars() {
 
 #[test]
 fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
-    let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
+    let mut view = over_earth(proxima_in_sol());
     land_now(&mut view);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     move_to(&mut view, 131, 140);
