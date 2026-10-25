@@ -88,7 +88,7 @@ fn the_games_charcoal_draws_at_the_original_sizes_at_1x_and_2x() {
 }
 
 #[test]
-fn the_games_charcoal_draws_every_stem_alike_at_2x() {
+fn the_games_charcoal_draws_every_stem_alike_at_1x_and_2x() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -97,11 +97,15 @@ fn the_games_charcoal_draws_every_stem_alike_at_2x() {
         return;
     }
     let faces = FontFaces::bundled().with_charcoal(open_charcoal(&dir).expect("Charcoal loads"));
-    for size in [9.0, 12.0] {
+    // At 1x, Charcoal's `l`s at 9, 10 and 12pt are too close for every stem
+    // to stand apart (at 12pt some pairs touch, giving 9 runs of ink, not
+    // 12), so 1x is checked at 14pt, the smallest size whose 12 stems all
+    // separate.
+    for (size, scale) in [(14.0, 1), (9.0, 2), (12.0, 2)] {
         let at = Point::new(2.0, 4.0);
-        let Some(picture) = draw_text(&faces, Font::Charcoal, STEMS, at, size, 2) else {
+        let Some(picture) = draw_text(&faces, Font::Charcoal, STEMS, at, size, scale) else {
             return;
         };
-        assert_stems_alike(&picture, &format!("Charcoal {size}pt at 2x"));
+        assert_stems_alike(&picture, &format!("Charcoal {size}pt at {scale}x"));
     }
 }
