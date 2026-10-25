@@ -288,7 +288,7 @@ impl Session {
     /// original's take-off redraw (`_PlayerLandOnStellar` @0x633a0) draws,
     /// as its deselect (@0x674d2) comes later in the same dock request
     /// (see the flight view's `took_off`).
-    pub fn take_takeoff_nav(&mut self) -> Option<NavMode> {
+    pub(crate) fn take_takeoff_nav(&mut self) -> Option<NavMode> {
         self.out.take_takeoff_nav()
     }
 

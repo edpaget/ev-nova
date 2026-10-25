@@ -70,7 +70,7 @@ pub enum SessionEvent {
 impl Session {
     /// The events since they were last taken, in order; taking them
     /// empties the list.
-    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+    pub(crate) fn take_events(&mut self) -> Vec<SessionEvent> {
         self.out.take_events()
     }
 }

@@ -42,7 +42,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
     /// when the bar shown was chosen for another: the original returns at
     /// once for the `ïntf` already loaded (@0x73663-0x73672), and asking
     /// only for another government does the same, as a ship type's
-    /// government picks its `ïntf` ([`Session::interface_government`]).
+    /// government picks its `ïntf` ([`Session::interface_government`](nova_sim::Session::interface_government)).
     pub(super) fn choose_bar(&mut self, government: Option<GovtId>) {
         if self.bar_government == Some(BarFor(government)) {
             return;
@@ -84,7 +84,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
 impl<C: DescriptionSource + DescriptionGraphics> FlightView<C, crate::flight::SessionFlight<C>> {
     /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
     /// that shows it now: read from the catalog, then taken in by the
-    /// session ([`Session::load_description`]), its conditional text
+    /// session ([`Session::load_description`](nova_sim::Session::load_description)), its conditional text
     /// resolved for the pilot, the remembered rank governments reset and
     /// parsed, its movie the last loaded ([`FlightView::loaded_after_movie`]),
     /// and in the `l33t` mode its letters drawn on the flight's chance.

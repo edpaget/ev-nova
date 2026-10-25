@@ -443,7 +443,7 @@ impl Session {
     /// The message the last take-off left on, a held `Q`'s, once: the
     /// take-off line, shown in place of the take-off's greeting, with no
     /// beep (`_DisplayComm` @0x635cf).
-    pub fn take_leave_message(&mut self) -> Option<String> {
+    pub(crate) fn take_leave_message(&mut self) -> Option<String> {
         self.run.take_leave_message()
     }
 

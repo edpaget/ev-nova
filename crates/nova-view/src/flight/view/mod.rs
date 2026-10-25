@@ -468,7 +468,7 @@
 //!   traffic's, by the screen's [`DisableRule`](nova_sim::DisableRule)), and each that is done
 //!   says so, as a message ([`comm_message`]), taken after the step's
 //!   combat tick, which settles the notes in slot order with the frame's
-//!   other lines ([`Session::take_comm`]). During a jump, its pre-jump stage included, Y is
+//!   other lines ([`FlightEvent::Comm`](nova_sim::flight_frame::FlightEvent::Comm)). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).
@@ -1306,7 +1306,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The bar's redraws held for the docked mission texts shown, one for
     /// each, made as each closes ([`FlightView::close_mission_text`]).
     bar_steps: VecDeque<BarStep>,
-    /// The last of [`Session::text_bars`] staged into
+    /// The last of the texts' bars ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)) staged into
     /// [`FlightView::bar_steps`], by its [`TextBar::texts`].
     bars_staged: u64,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'

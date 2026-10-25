@@ -673,7 +673,7 @@ impl Session {
 
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
-    pub fn take_comm(&mut self) -> Vec<CommNote> {
+    pub(crate) fn take_comm(&mut self) -> Vec<CommNote> {
         self.out.take_comm()
     }
 }

@@ -65,7 +65,7 @@ impl Session {
     /// plundered it, on its pickup or assist path, once: taking it leaves
     /// none. Any other board leaves none here: a standing mission's ship
     /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
-    pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
+    pub(crate) fn take_board_line(&mut self) -> Option<MissionBoardLine> {
         self.out.take_board_line()
     }
 

@@ -171,7 +171,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// for the router ([`FlightView::take_boarding`]), and a mission
     /// offered in its place too ([`FlightView::take_offer`]), each letting
     /// go of the flight keys. A failed mission's ship boarded for plunder
-    /// says its pickup or assist line first ([`Session::take_board_line`]).
+    /// says its pickup or assist line first ([`FlightEvent::BoardLine`](nova_sim::flight_frame::FlightEvent::BoardLine)).
     /// Whether the attempt sets the board latch
     /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
     /// every board that passes does).
@@ -218,7 +218,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
                     self.say_for(said, BOARD_LINE_TICKS);
                 }
             }
-            // Its line is the session's message ([`Session::take_messages`]).
+            // Its line is the session's message (`FlightEvent::Message`).
             Ok(Boarding::Recovered(_)) => {}
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
@@ -850,7 +850,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     }
 
     /// The mission texts and offer movies to show since they were last
-    /// taken, as [`Session::take_mission_texts`] gives them; none for a
+    /// taken ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)); none for a
     /// session that failed.
     ///
     /// Docked, nothing is redrawn as they are taken: each text shows over
@@ -871,7 +871,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// ([`FlightView::redraw_status`]): the original's text dialog redraws
     /// it on closing, and flight does not tick under the dialog, so
     /// redrawing as the texts are taken shows the same. The nav area is
-    /// redrawn as the last text noted it ([`Session::text_nav`]) when that
+    /// redrawn as the last text noted it (the inbox's `text_nav`) when that
     /// text was queued after the nav area was last taken: a nav mode other
     /// than the session's shows live anyway ([`FlightView::nav_shown`]),
     /// so this matters only while the take-off's held nav lasts, under
@@ -934,7 +934,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Stages the bar's redraws for a run of docked scripts, given the
     /// `ïntf` changes it made (`changes`, [`FlightView::interface_changes`])
     /// and the mission texts it queued that are not yet staged
-    /// ([`Session::text_bars`]). Each text the original shows docked is
+    /// ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)'s bars). Each text the original shows docked is
     /// modal and followed by its caller's `_RefreshSAT` (`_DoMissionAccept`
     /// @0xa1f13, @0xa1fba, @0xa1bb7; `_OfferOneMission` @0xa2f09;
     /// `_DoMissionSuccess` @0xa0491; `_DoMissionFailure` @0xa03d2;
@@ -1004,7 +1004,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
 
     /// A mission text has closed, the first of those shown that had not:
     /// the whole bar is redrawn as the text noted it as it was queued
-    /// ([`Session::text_bars`]), as the original's caller of
+    /// ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)'s bar), as the original's caller of
     /// `_ShowTextDialog` runs `_RefreshSAT` once it returns; then at each
     /// `C`, `E` or `H` run after it, before the next text, that changed
     /// the `ïntf`, as at its operator, the bar's graphic with it

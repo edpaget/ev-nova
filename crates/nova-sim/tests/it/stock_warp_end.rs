@@ -195,7 +195,7 @@ struct Warp {
 fn passes_to_end(session: &mut Session, double: bool) -> Warp {
     let mut rate = None;
     for _ in 0..10_000 {
-        let sounds = session.take_sounds();
+        let sounds = common::drained_sounds(session);
         if let Some(raised) = sounds.iter().find_map(|sound| match (sound, double) {
             (SimSound::JumpBegan { rate }, false)
             | (SimSound::JumpBeganInDoubleTime { rate }, true) => Some(*rate),
@@ -210,7 +210,7 @@ fn passes_to_end(session: &mut Session, double: bool) -> Warp {
     let mut sounds = Vec::new();
     for passes in 1..10_000 {
         pass(session, Controls::default());
-        sounds.push(session.take_sounds());
+        sounds.push(common::drained_sounds(session));
         if session.warp_end_due() {
             return Warp {
                 rate,
@@ -295,7 +295,7 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
             }
         }
         assert!(session.arrive(&data, &mut NeverFires).is_some(), "{label}");
-        let sounds = session.take_sounds();
+        let sounds = common::drained_sounds(&mut session);
         if expected.natural {
             assert!(sounds.contains(&SimSound::Arrived), "{label}: {sounds:?}");
         } else {
@@ -320,7 +320,7 @@ fn back_to_back_stock_jumps_never_skip_the_warp_out() {
         let _ = passes_to_end(&mut session, double);
         assert!(session.arrive(&data, &mut NeverFires).is_some());
         assert!(
-            session.take_sounds().contains(&SimSound::Arrived),
+            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
             "{double}"
         );
 
@@ -334,10 +334,10 @@ fn back_to_back_stock_jumps_never_skip_the_warp_out() {
             assert!(since < 10_000, "the warp never ended");
         }
         assert!(since * 2 > 151, "{double}: {since} passes");
-        let _ = session.take_sounds();
+        let _ = common::drained(&mut session);
         assert!(session.arrive(&data, &mut NeverFires).is_some());
         assert!(
-            session.take_sounds().contains(&SimSound::Arrived),
+            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
             "{double}"
         );
     }

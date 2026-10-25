@@ -23,9 +23,4 @@ fn the_adapter_drains_what_the_session_raised_once() {
     let mut again = Vec::new();
     flight.drain(&mut again);
     assert_eq!(again, [], "drained");
-    assert_eq!(
-        flight.session_mut().expect("started").take_sounds(),
-        [],
-        "none left to take"
-    );
 }

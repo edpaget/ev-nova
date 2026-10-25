@@ -401,7 +401,7 @@ impl Session {
 
     /// The hail quotes said since they were last taken, in order; taking
     /// them empties the list.
-    pub fn take_quotes(&mut self) -> Vec<PersonQuote> {
+    pub(crate) fn take_quotes(&mut self) -> Vec<PersonQuote> {
         self.out.take_quotes()
     }
 

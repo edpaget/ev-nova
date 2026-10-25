@@ -185,7 +185,7 @@ fn a_federation_ship_outnumbered_in_kania_calls_its_fleet_which_comes_after_its_
             in_kania(&data, &mut chance).map(|session| (session, chance))
         })
         .expect("a seed brings a Federation ship to Kania");
-    let _ = (session.take_messages(), session.take_sounds());
+    let _ = common::drained(&mut session);
     let carrier = |session: &Session| {
         session
             .npcs()
@@ -202,8 +202,8 @@ fn a_federation_ship_outnumbered_in_kania_calls_its_fleet_which_comes_after_its_
         // The combat tick settles the frame's calls (see the session's
         // `comm_calls` module).
         session.tick_combat(nova_sim::Rules::default(), &mut chance);
-        let messages = session.take_messages();
-        let sounds = session.take_sounds();
+        let events = common::drained(&mut session);
+        let (messages, sounds) = (common::messages(&events), common::sounds(&events));
         if messages.contains(&line) {
             assert_eq!(announced, None, "announced once");
             assert!(sounds.contains(&SimSound::ReinforcementsApproaching));

@@ -120,7 +120,7 @@ impl Session {
 
     /// What paying the escorts did since this was last taken, in order;
     /// taking it empties the list.
-    pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
+    pub(crate) fn take_pay_notes(&mut self) -> Vec<PayNote> {
         self.out.take_pay_notes()
     }
 

@@ -269,7 +269,7 @@ impl Session {
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
-    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+    pub(crate) fn take_rescue_desc(&mut self) -> Option<i16> {
         self.ship.take_rescue_desc()
     }
 

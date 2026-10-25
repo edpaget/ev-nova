@@ -482,7 +482,7 @@ impl Session {
 
     /// What the player's fighters met as it left systems since this was
     /// last taken, in order; taking it empties the list.
-    pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
+    pub(crate) fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
         self.out.take_fighter_notes()
     }
 }

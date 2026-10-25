@@ -1785,7 +1785,7 @@ impl Session {
     /// where the sabotage dialogs show over the flight scene
     /// ([`Session::sabotage_death_descs`]).
     /// True once.
-    pub fn take_hold_expired(&mut self) -> bool {
+    pub(crate) fn take_hold_expired(&mut self) -> bool {
         self.out.take_hold_expired()
     }
 
@@ -2879,7 +2879,7 @@ impl Session {
     /// The diagnostics about game data the simulation does not handle yet,
     /// each made once a session, since they were last taken; taking them
     /// empties the list.
-    pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+    pub(crate) fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
         self.space.take_diagnostics(&mut self.out)
     }
 
@@ -3452,13 +3452,13 @@ impl Session {
 
     /// The sounds emitted since they were last taken, in order; taking
     /// them empties the list.
-    pub fn take_sounds(&mut self) -> Vec<SimSound> {
+    pub(crate) fn take_sounds(&mut self) -> Vec<SimSound> {
         self.out.take_sounds()
     }
 
     /// The messages raised since they were last taken, in order; taking
     /// them empties the list.
-    pub fn take_messages(&mut self) -> Vec<SimMessage> {
+    pub(crate) fn take_messages(&mut self) -> Vec<SimMessage> {
         self.out.take_messages()
     }
 
@@ -5006,7 +5006,7 @@ impl Session {
     /// Whether the pilot should be saved: it has landed, taken off,
     /// changed in the spaceport or, playing strictly, been rescued from the
     /// escape pod since this was last taken. Taking it clears it.
-    pub fn take_save_due(&mut self) -> bool {
+    pub(crate) fn take_save_due(&mut self) -> bool {
         self.out.take_save_due()
     }
 
@@ -5379,7 +5379,7 @@ impl Session {
     }
 
     /// What the last boarding granted, once: taking it leaves none.
-    pub fn take_grant(&mut self) -> Option<Granted> {
+    pub(crate) fn take_grant(&mut self) -> Option<Granted> {
         self.out.take_grant()
     }
 

@@ -333,7 +333,7 @@ impl Session {
     /// The mission texts and offer movies to show since they were last
     /// taken, in the order they came. Taking them lets go of the bars
     /// noted with them ([`Session::text_bars`]).
-    pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
+    pub(crate) fn take_mission_texts(&mut self) -> Vec<MissionShown> {
         self.out.take_mission_texts()
     }
 
@@ -398,15 +398,18 @@ impl Session {
     /// (@0xa048c, @0xa0491, then @0xa04f8), has written the bar since.
     /// Taking the texts lets go of them.
     #[must_use]
-    pub fn text_bars(&self) -> &[TextBar] {
+    pub(crate) fn text_bars(&self) -> &[TextBar] {
         self.out.text_bars()
     }
 
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
     /// were last taken was queued, `None` with none: the last of
-    /// [`Session::text_bars`]'s.
+    /// [`Session::text_bars`]'s. The view answers it over the texts it
+    /// drained (see the `flight_events` module); kept for this module's
+    /// tests.
+    #[cfg(test)]
     #[must_use]
-    pub fn text_nav(&self) -> Option<NavMode> {
+    pub(crate) fn text_nav(&self) -> Option<NavMode> {
         self.out.text_nav()
     }
 
@@ -815,6 +818,7 @@ impl Outbox {
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
     /// were last taken was queued, `None` with none: the last of
     /// [`Session::text_bars`]'s.
+    #[cfg(test)]
     #[must_use]
     fn text_nav(&self) -> Option<NavMode> {
         self.text_bars.last().map(|bar| bar.nav)

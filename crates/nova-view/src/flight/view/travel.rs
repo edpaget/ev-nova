@@ -857,7 +857,7 @@ impl<
     /// The whole bar is redrawn once the take-off has let go of the nav
     /// selection. Under [`RuleKey::HudCadence`]'s engine reading, the nav
     /// area then shows the nav as the take-off began
-    /// ([`Session::take_takeoff_nav`]) in the first frame drawn after it
+    /// ([`FlightEvent::TakeoffNav`](nova_sim::flight_frame::FlightEvent::TakeoffNav)) in the first frame drawn after it
     /// and to the end of that frame's tick ([`NavFlash`],
     /// [`FlightView::advance_hud`]), when that differs from the nav now,
     /// as after a landed `M`: built by operator decision on 2026-10-15.

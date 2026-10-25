@@ -493,7 +493,7 @@ impl Session {
     /// a landing's mission checks among what it settles) and a jettison
     /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
     /// or a purchase that is refused before it begins clears nothing.
-    pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
+    pub(crate) fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
         self.out.take_interface_loads()
     }
 

@@ -151,6 +151,7 @@ mod tests {
         ShipRecord, StarSystem, StartDate, StartError, WeaponRecord,
     };
     use nova_sim::fixture::SessionBuilder;
+    use nova_sim::flight_frame::FlightEvent;
     use nova_sim::{Bit, GameDate, Gauge, Reserve, ShipFields, Vec2};
 
     use super::*;
@@ -395,7 +396,7 @@ mod tests {
             session.land().expect("lands");
             session.tick(nova_sim::Controls::default());
         }
-        session.take_save_due();
+        session.drain_events(&mut Vec::new());
         session
     }
 
@@ -501,7 +502,9 @@ mod tests {
         assert_eq!(session.date(), date);
         assert!(session.control_bit(bit(9)));
         assert!(!session.control_bit(bit(10)));
-        assert!(session.take_save_due());
+        let mut events = Vec::new();
+        session.drain_events(&mut events);
+        assert!(events.contains(&FlightEvent::SaveDue));
     }
 
     #[test]
