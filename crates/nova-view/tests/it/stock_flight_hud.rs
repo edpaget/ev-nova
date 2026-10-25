@@ -15,6 +15,8 @@
 
 use crate::common;
 
+use std::rc::Rc;
+
 use nova_data::records::interface::Interface;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
@@ -47,7 +49,7 @@ fn a_new_pilot_flies_under_the_default_status_bar() {
     let Some(data) = open() else {
         return;
     };
-    let view = FlightView::new(&data);
+    let view = FlightView::new(Rc::new(data));
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(
         bar.background,
@@ -555,7 +557,7 @@ fn the_cargo_area_reads_its_stock_strings_and_area() {
             "Passengers"
         ]
     );
-    let view = FlightView::new(&data);
+    let view = FlightView::new(Rc::new(data));
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(bar.layout.cargo, rect(8.0, 458.0, 184.0, 552.0));
 }
@@ -572,7 +574,8 @@ fn a_fed_destroyer_flies_under_the_federation_status_bar() {
         .in_ship(ShipId(141))
         .build();
     assert_eq!(session.ship(), ShipId(141));
-    let view = FlightView::from_session(&data, session.into());
+    let data = Rc::new(data);
+    let view = FlightView::from_session(Rc::clone(&data), session.into());
     let bar = view.status_bar().expect("the Federation status bar reads");
     assert_eq!(bar.layout, data.status_bar(130).expect("reads"));
     assert_eq!(

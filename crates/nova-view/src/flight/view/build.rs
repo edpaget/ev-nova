@@ -56,7 +56,10 @@ impl<
 {
     /// A new, unnamed pilot's flight, read from `catalog`, which the
     /// screen keeps.
-    pub fn new(catalog: C) -> Self {
+    pub fn new(catalog: C) -> Self
+    where
+        C: 'static,
+    {
         let session = Session::start(&catalog);
         Self::flying(catalog, session)
     }
@@ -65,7 +68,10 @@ impl<
     /// pilot last landed on a stellar resumes in flight over it, at rest,
     /// as [`Session::fly`] places it: nothing lands, so no landing is
     /// reported ([`FlightView::take_landing`]) and nothing sounds.
-    pub fn with_pilot(catalog: C, pilot: Pilot) -> Self {
+    pub fn with_pilot(catalog: C, pilot: Pilot) -> Self
+    where
+        C: 'static,
+    {
         let session = Session::fly(&catalog, pilot);
         Self::flying(catalog, session)
     }
@@ -73,7 +79,10 @@ impl<
     /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
     /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
     /// from a save, whose repair [`FlightView::load_repaired`] reports.
-    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self {
+    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self
+    where
+        C: 'static,
+    {
         let session = Session::load(&catalog, pilot, &rules);
         Self::flying(catalog, session)
     }
@@ -85,7 +94,10 @@ impl<
     /// `builder.build().into()` for Nova's collaborators
     /// ([`SessionFlight::new`]).
     #[cfg(any(test, feature = "fixture"))]
-    pub fn from_session(catalog: C, sim: SessionFlight<C>) -> Self {
+    pub fn from_session(catalog: C, sim: SessionFlight<C>) -> Self
+    where
+        C: 'static,
+    {
         Self::read(catalog, sim)
     }
 
@@ -99,7 +111,7 @@ impl<
     /// that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.sim.session {
-            session.begin(&self.catalog, &mut self.sim.chance);
+            session.begin(&*self.catalog, &mut self.sim.chance);
             self.place_ship();
             self.stars_due = true;
         }
@@ -154,7 +166,10 @@ impl<
     /// The flight of `session`, or why it could not start. No session
     /// starts landed, so flight's first frame redraws the bar, as
     /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
-    fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
+    fn flying(catalog: C, session: Result<Session, StartError>) -> Self
+    where
+        C: 'static,
+    {
         Self::read(
             catalog,
             SessionFlight::new(session.map_err(|err| err.to_string())),
@@ -163,7 +178,10 @@ impl<
 
     /// The flight of `sim` as [`FlightView::flying`] reads it.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    fn read(catalog: C, mut sim: SessionFlight<C>) -> Self {
+    fn read(catalog: C, mut sim: SessionFlight<C>) -> Self
+    where
+        C: 'static,
+    {
         if let Ok(session) = sim.session_mut() {
             // Sized as the view starts, before anything reads its field.
             session.set_window_width(window_width(VIEW_SIZE));
@@ -219,6 +237,10 @@ impl<
                 "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
             )));
         }
+        // One handle, the view's and the flight's: the flight's answers
+        // that read the catalog read the one the view draws from.
+        let catalog = Rc::new(catalog);
+        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn PilotCatalog>);
         Self {
             catalog,
             map,
@@ -588,7 +610,7 @@ impl<
         };
         let option = self.held.contains(&Key::Alt);
         match session.hail_key(
-            &self.catalog,
+            &*self.catalog,
             &self.hail_options,
             option,
             &mut self.sim.chance,
@@ -656,7 +678,7 @@ impl<
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.sim.session.as_ref().ok()?;
-        Some(self.marked(session.player_info(&self.catalog)))
+        Some(self.marked(session.player_info(&*self.catalog)))
     }
 
     /// What the main screen's pilot panel says about the pilot, as
@@ -665,7 +687,7 @@ impl<
     #[must_use]
     pub fn pilot_panel(&self) -> Option<PilotPanel> {
         let session = self.sim.session.as_ref().ok()?;
-        Some(session.pilot_panel(&self.catalog))
+        Some(session.pilot_panel(&*self.catalog))
     }
 
     /// The player info dialog opens, as [`Session::open_player_info`] has
@@ -676,7 +698,7 @@ impl<
     /// from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
         let session = self.sim.session.as_mut().ok()?;
-        let info = session.open_player_info(&self.catalog)?;
+        let info = session.open_player_info(&*self.catalog)?;
         Some(self.marked(info))
     }
 
@@ -782,7 +804,7 @@ impl<
             .session
             .as_ref()
             .ok()?
-            .hailing(&self.catalog, &self.hail_options)
+            .hailing(&*self.catalog, &self.hail_options)
     }
 
     /// Presses the `pick`th option listed, through the session
@@ -791,7 +813,7 @@ impl<
         let session = self.sim.session.as_mut().ok()?;
         session.answer(
             pick,
-            &self.catalog,
+            &*self.catalog,
             &self.hail_options,
             &mut self.sim.chance,
         )
@@ -801,7 +823,7 @@ impl<
     /// ([`Session::haggle`]).
     pub fn haggle(&mut self, choice: Haggle) -> Option<HailView> {
         let session = self.sim.session.as_mut().ok()?;
-        session.haggle(choice, &self.catalog, &self.hail_options)
+        session.haggle(choice, &*self.catalog, &self.hail_options)
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
@@ -841,7 +863,7 @@ impl<
         let Ok(session) = &self.sim.session else {
             return;
         };
-        let coming = session.coming_traffic_ships(&self.catalog);
+        let coming = session.coming_traffic_ships(&*self.catalog);
         self.read_traffic_sheets(coming);
     }
 

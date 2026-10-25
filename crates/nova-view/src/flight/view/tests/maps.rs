@@ -104,11 +104,11 @@ fn at_a_shadowed_gate() -> View {
     let mut view = FlightView::new(FakeCatalog {
         reborn: true,
         onward: true,
-        gates: vec![
+        gates: RefCell::new(vec![
             gate_site(300, (0.0, 0.0), 0x1200, &[310, 320], 120),
             gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
             gate_site(320, (-50.0, 0.0), 0x1000, &[], 0),
-        ],
+        ]),
         gate_listers: vec![
             (SystemId(131), StellarId(310)),
             (SystemId(132), StellarId(320)),
@@ -252,7 +252,7 @@ fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
     assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    view.catalog.gates[0].links = [None; 8];
+    view.catalog().gates.borrow_mut()[0].links = [None; 8];
     jiggle_map(&mut view);
     tap(&mut view, Key::Tab);
     assert_eq!(
@@ -530,7 +530,7 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
         (gated_sol(), false, true),
         (gated_sol(), true, true),
     ] {
-        let gate = !catalog.gates.is_empty();
+        let gate = !catalog.gates.borrow().is_empty();
         let mut view = FlightView::new(catalog);
         ticks(&mut view, 3);
         if gate {
@@ -581,7 +581,7 @@ fn without_hyperspace_effects_a_hypergate_flashes_white() {
 #[test]
 fn a_hypergate_without_links_does_nothing() {
     let mut catalog = gated();
-    catalog.gates[0].links = [None; 8];
+    catalog.gates.get_mut()[0].links = [None; 8];
     let mut view = FlightView::new(catalog);
     tap(&mut view, LAND);
     ticks(&mut view, 1);
@@ -596,7 +596,7 @@ fn a_hypergate_without_links_does_nothing() {
 #[test]
 fn a_hypergate_whose_links_lead_nowhere_opens_an_empty_map_that_cancels() {
     let mut catalog = gated();
-    catalog.gates[0].links[0] = Some(StellarId(999));
+    catalog.gates.get_mut()[0].links[0] = Some(StellarId(999));
     let mut view = FlightView::new(catalog);
     land_now(&mut view);
     assert!(view.map_open());
@@ -650,7 +650,7 @@ fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
 #[test]
 fn a_wormhole_with_no_exit_says_why() {
     let mut catalog = holed();
-    catalog.gates.truncate(1);
+    catalog.gates.get_mut().truncate(1);
     let mut view = FlightView::new(catalog);
     land_now(&mut view);
     assert_eq!(system_of(&view), SystemId(130));
@@ -1864,10 +1864,10 @@ fn the_hypergate_maps_panel_prompts_then_titles_a_destination_its_owner_offers()
     let mut view = worded(FlightView::new(FakeCatalog {
         reborn: true,
         near: true,
-        gates: vec![
+        gates: RefCell::new(vec![
             gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
             gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
-        ],
+        ]),
         gate_listers: vec![
             (SystemId(133), StellarId(310)),
             (SystemId(134), StellarId(310)),

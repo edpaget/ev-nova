@@ -1074,8 +1074,10 @@ impl MapSeen {
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
 pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
-    /// What the screen reads: when it is built, and on each arrival.
-    catalog: C,
+    /// What the screen reads: when it is built, and on each arrival. The
+    /// flight holds the same handle for its answers that read the catalog
+    /// ([`SessionFlight`]'s, shared as the view is read).
+    catalog: Rc<C>,
     /// The flight, with the collaborators its calls are handed.
     sim: S,
     /// The session's system, laid out; `None` when the session failed.

@@ -93,7 +93,10 @@ fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
 /// [`beside`] (intact) with the player holding 95 of fuel and NPC 0
 /// refuelling it, hailed and hung up.
 fn refuelling() -> View {
-    let catalog = boardable();
+    let catalog = FakeCatalog {
+        strings: vec![(3000, comm_strings())],
+        ..boardable()
+    };
     let session = SessionBuilder::flying(&catalog)
         .named("Low")
         .with_reserve(nova_sim::Reserve::Fuel, 95.0)
@@ -103,7 +106,6 @@ fn refuelling() -> View {
         .with_chance(chance)
         .with_behaviour(Rc::new(Still))
         .with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));
-    view.catalog.strings = vec![(3000, comm_strings())];
     view.tick(TICK);
     tap(&mut view, TARGET_KEY);
     tap(&mut view, HAIL_KEY);

@@ -25,7 +25,7 @@ use nova_sim::flight_frame::{
 };
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, PointDefenceRule, Session,
+    NovaLaw, PilotCatalog, PointDefenceRule, Session,
 };
 
 use super::SharedChance;
@@ -33,8 +33,9 @@ use super::sim_port::{CommSource, FlightSim, MapSource, PortSource};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
-/// `C` is the catalog the view reads, which the view keeps; it names the
-/// flight the view's default `FlightView<C>` shows.
+/// `C` is the catalog the view reads; it names the flight the view's
+/// default `FlightView<C>` shows. The view shares its handle on it with
+/// the flight as it is read ([`SessionFlight::share_catalog`]).
 #[derive(Clone, Debug)]
 pub struct SessionFlight<C> {
     /// The flight, or why it could not start.
@@ -51,8 +52,25 @@ pub struct SessionFlight<C> {
     pub(in crate::flight) law: Rc<dyn LegalCode>,
     /// Who repels boarders, the capture odds and the capture roll.
     pub(in crate::flight) boarding_rule: Rc<dyn BoardingRule>,
-    /// The catalog the view reads.
-    catalog: PhantomData<C>,
+    /// The catalog the view reads, the same handle as the view's, once
+    /// the view has shared it ([`SessionFlight::share_catalog`]): the
+    /// map's answers that read the catalog read it. `None` before.
+    catalog: Option<SharedCatalog>,
+    /// `C` names the view's catalog: the flight the view's default
+    /// `FlightView<C>` shows.
+    view_catalog: PhantomData<C>,
+}
+
+/// The view's catalog, as the flight reads it: as a `PilotCatalog` only,
+/// so the adapter's `FlightSim` asks nothing of `C`.
+#[derive(Clone)]
+#[allow(dead_code)] // read by the map's answers, which come next
+struct SharedCatalog(Rc<dyn PilotCatalog>);
+
+impl std::fmt::Debug for SharedCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedCatalog")
+    }
 }
 
 impl<C> SessionFlight<C> {
@@ -69,8 +87,23 @@ impl<C> SessionFlight<C> {
             defence_rule: Rc::new(Allegiance),
             law: Rc::new(NovaLaw::default()),
             boarding_rule: Rc::new(NovaBoarding::default()),
-            catalog: PhantomData,
+            catalog: None,
+            view_catalog: PhantomData,
         }
+    }
+
+    /// Shares the view's catalog with the flight: the view's own handle,
+    /// so the flight's answers read the catalog the view draws from, and
+    /// a test that records a read on it sees the flight's too.
+    pub(in crate::flight) fn share_catalog(&mut self, catalog: Rc<dyn PilotCatalog>) {
+        self.catalog = Some(SharedCatalog(catalog));
+    }
+
+    /// The catalog the view shared, if it has
+    /// ([`SessionFlight::share_catalog`]).
+    #[cfg(test)]
+    pub(in crate::flight) fn shared_catalog(&self) -> Option<&Rc<dyn PilotCatalog>> {
+        self.catalog.as_ref().map(|shared| &shared.0)
     }
 
     /// The flight, or why it could not start.

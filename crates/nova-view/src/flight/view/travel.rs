@@ -257,7 +257,7 @@ impl<
             return;
         };
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
-        let panel = session.map_panel(&self.catalog, self.map.selected(), offered);
+        let panel = session.map_panel(&*self.catalog, self.map.selected(), offered);
         self.map.show_panel(panel);
     }
 
@@ -506,7 +506,7 @@ impl<
             return;
         };
         if self.map.mode() == MapMode::Hypergate {
-            let destinations = session.hypergate_cycle(&self.catalog);
+            let destinations = session.hypergate_cycle(&*self.catalog);
             if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
                 self.map.select_gate(pick);
                 self.map.redraw();
@@ -648,12 +648,12 @@ impl<
                             rules,
                             &mut self.sim.chance,
                         );
-                        session.rescue_if_due(&self.catalog, &mut self.sim.chance)
+                        session.rescue_if_due(&*self.catalog, &mut self.sim.chance)
                     } else {
                         let behaviour = &*self.sim.behaviour;
                         let rescued_now = session.game_work(
                             controls,
-                            &self.catalog,
+                            &*self.catalog,
                             behaviour,
                             rules,
                             &mut self.sim.chance,
@@ -676,9 +676,9 @@ impl<
                     // quote clock moving on the advance pass alone.
                     session.answer_strikes(&*self.sim.behaviour);
                     if again {
-                        session.tick_quotes_again(&self.catalog, &mut self.sim.chance);
+                        session.tick_quotes_again(&*self.catalog, &mut self.sim.chance);
                     } else {
-                        session.tick_quotes(&self.catalog, &mut self.sim.chance);
+                        session.tick_quotes(&*self.catalog, &mut self.sim.chance);
                     }
                     quotes.extend(session.take_quotes());
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
@@ -849,7 +849,7 @@ impl<
             return;
         };
         if session
-            .arrive(&self.catalog, &mut self.sim.chance)
+            .arrive(&*self.catalog, &mut self.sim.chance)
             .is_some()
         {
             self.arrived();
@@ -979,7 +979,7 @@ impl<
             self.place_ship();
         }
         if reshown && let Ok(session) = &self.sim.session {
-            self.scene = Some(shown_scene(&self.catalog, session));
+            self.scene = Some(shown_scene(&*self.catalog, session));
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
@@ -1037,7 +1037,7 @@ impl<
             return;
         };
         self.scene = Some({
-            let mut scene = shown_scene(&self.catalog, session);
+            let mut scene = shown_scene(&*self.catalog, session);
             show_gate_frames(&mut scene, session);
             scene
         });
@@ -1081,7 +1081,7 @@ impl<
     /// names the places. `None` when the session failed.
     pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
         let session = self.sim.session.as_mut().ok()?;
-        Some(SessionDesk::new(session, &self.catalog, self.map.model()))
+        Some(SessionDesk::new(session, &*self.catalog, self.map.model()))
     }
 
     /// Draws the ship where the session has it, not on its way from where
@@ -1128,7 +1128,7 @@ impl<
     /// shows as [`FlightView::settle_script`] shows it.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.sim.session.as_mut().ok()?;
-        let departure = session.leave_port(&self.catalog, &mut self.sim.chance)?;
+        let departure = session.leave_port(&*self.catalog, &mut self.sim.chance)?;
         Some(self.departed(departure))
     }
 
@@ -1139,7 +1139,7 @@ impl<
     /// shown over the spaceport holds the leave.
     pub fn leave_if_due(&mut self) -> Option<StellarId> {
         let session = self.sim.session.as_mut().ok()?;
-        let departure = session.leave_if_due(&self.catalog, &mut self.sim.chance)?;
+        let departure = session.leave_if_due(&*self.catalog, &mut self.sim.chance)?;
         Some(self.departed(departure))
     }
 
@@ -1345,7 +1345,7 @@ impl<
             view.sim
                 .session
                 .as_mut()
-                .map(|session| session.settle_script(&view.catalog, &mut view.sim.chance))
+                .map(|session| session.settle_script(&*view.catalog, &mut view.sim.chance))
                 .unwrap_or_default()
         });
         self.show_settled(settled, false);
@@ -1417,7 +1417,7 @@ impl<
             Ok(LandPress::AtGate {
                 kind: GateKind::Hypergate,
                 ..
-            }) => match session.open_hypergate(&self.catalog) {
+            }) => match session.open_hypergate(&*self.catalog) {
                 Ok(offered) => {
                     self.map.offer_gates(offered);
                     self.open_map();
@@ -1427,7 +1427,7 @@ impl<
             Ok(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
-            }) => match session.enter_wormhole(&self.catalog, &mut self.sim.chance) {
+            }) => match session.enter_wormhole(&*self.catalog, &mut self.sim.chance) {
                 Ok(_) => self.came_through(JumpEffect::flash()),
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
@@ -1549,7 +1549,7 @@ impl<
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        match session.enter_hypergate(choice, &self.catalog, &mut self.sim.chance) {
+        match session.enter_hypergate(choice, &*self.catalog, &mut self.sim.chance) {
             Ok(_) => {
                 let effect = JumpEffect::emerging(self.hyperspace_effects);
                 self.came_through(effect);

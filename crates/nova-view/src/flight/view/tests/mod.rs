@@ -202,8 +202,10 @@ struct FakeCatalog {
     /// Sol to show on the floating map, listed by Sol after its other
     /// links and linking back, with no stellars: not by default.
     near: bool,
-    /// Every stellar a gate may lead to: none, by default.
-    gates: Vec<GateSite>,
+    /// Every stellar a gate may lead to: none, by default. Behind a
+    /// `RefCell`, so a test can change a gate's links behind a view
+    /// already built, which shares the catalog with its flight.
+    gates: RefCell<Vec<GateSite>>,
     /// The gates each system lists beyond its stellars: none, by
     /// default.
     gate_listers: Vec<(SystemId, StellarId)>,
@@ -389,7 +391,7 @@ fn catalog() -> FakeCatalog {
         alpha_buoy: -1,
         voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
-        gates: Vec::new(),
+        gates: RefCell::new(Vec::new()),
         gate_listers: Vec::new(),
         lives: Vec::new(),
         missions: Vec::new(),
@@ -589,7 +591,7 @@ impl PilotCatalog for FakeCatalog {
     }
 
     fn gate_sites(&self) -> Vec<GateSite> {
-        self.gates.clone()
+        self.gates.borrow().clone()
     }
 
     fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
@@ -1023,6 +1025,19 @@ impl StatusBars for FakeCatalog {
 
 fn flight() -> View {
     FlightView::new(catalog())
+}
+
+#[test]
+fn the_view_shares_its_catalog_with_its_flight() {
+    let view = flight();
+    let shared = view
+        .sim
+        .shared_catalog()
+        .expect("shared as the view is read");
+    assert!(std::ptr::addr_eq(
+        Rc::as_ptr(shared),
+        Rc::as_ptr(&view.catalog)
+    ));
 }
 
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
@@ -2943,8 +2958,13 @@ fn boardable() -> FakeCatalog {
 /// `y` - 750) facing `heading`, disabled by [`DisablesTheStrong`] on
 /// the first tick unless `intact`, and targeted.
 fn beside(x: u32, y: u32, heading: u32, intact: bool) -> View {
+    beside_in(boardable(), x, y, heading, intact)
+}
+
+/// [`beside`], flying over `catalog`.
+fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -> View {
     let (_, chance) = scripted(&placed(x, y, heading));
-    let mut view = FlightView::new(boardable())
+    let mut view = FlightView::new(catalog)
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     if !intact {
@@ -2998,9 +3018,11 @@ fn comm_strings() -> Vec<String> {
 
 /// [`beside`] with the ship comm strings.
 fn hailable(intact: bool) -> View {
-    let mut view = beside(750, 750, 0, intact);
-    view.catalog.strings = vec![(3000, comm_strings())];
-    view
+    let catalog = FakeCatalog {
+        strings: vec![(3000, comm_strings())],
+        ..boardable()
+    };
+    beside_in(catalog, 750, 750, 0, intact)
 }
 
 /// An option that asks a price, saying nothing.
@@ -3644,10 +3666,10 @@ fn gated() -> FakeCatalog {
                 StellarFlags::CAN_LAND | StellarFlags::STATION,
             )
         }],
-        gates: vec![
+        gates: RefCell::new(vec![
             gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
             gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
-        ],
+        ]),
         gate_listers: vec![(SystemId(131), StellarId(310))],
         ..catalog()
     }
@@ -3661,10 +3683,10 @@ fn holed() -> FakeCatalog {
             flags2: 0x2200,
             ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
         }],
-        gates: vec![
+        gates: RefCell::new(vec![
             gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
             gate_site(410, (-300.0, 40.0), 0x2000, &[], 0),
-        ],
+        ]),
         gate_listers: vec![(SystemId(131), StellarId(410))],
         ..catalog()
     }

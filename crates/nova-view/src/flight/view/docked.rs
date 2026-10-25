@@ -1147,6 +1147,6 @@ impl<C: nova_sim::CommCatalog> FlightView<C, crate::flight::SessionFlight<C>> {
             .session
             .as_mut()
             .map_err(|_| ShipRefusal::NoShipyard)?;
-        session.ship_naming(ship, &self.catalog, &mut self.sim.chance)
+        session.ship_naming(ship, &*self.catalog, &mut self.sim.chance)
     }
 }

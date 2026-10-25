@@ -47,7 +47,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
             return;
         }
         self.status_bar =
-            hud::rechoose_status_bar(&self.catalog, government, self.status_bar.as_ref().ok());
+            hud::rechoose_status_bar(&*self.catalog, government, self.status_bar.as_ref().ok());
         self.bar_government = Some(BarFor(government));
     }
 
@@ -59,7 +59,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
     pub(super) fn interface_now(&self) -> Option<Result<i16, String>> {
         let session = self.sim.session.as_ref().ok()?;
         Some(hud::interface_for(
-            &self.catalog,
+            &*self.catalog,
             session.interface_government(),
         ))
     }
@@ -84,7 +84,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
         let mut loaded = before.cloned();
         let mut changes = Vec::new();
         for load in loads {
-            let interface = hud::interface_for(&self.catalog, load.government);
+            let interface = hud::interface_for(&*self.catalog, load.government);
             if loaded.as_ref() != Some(&interface) {
                 loaded = Some(interface);
                 changes.push(load);

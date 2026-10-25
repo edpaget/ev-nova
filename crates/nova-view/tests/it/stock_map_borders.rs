@@ -12,6 +12,7 @@
 
 use crate::common;
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
@@ -87,7 +88,8 @@ fn a_new_pilots_course_map_shades_the_start_in_the_federations_colour() {
         return;
     };
     let fed = federation(&data);
-    let mut view = FlightView::new(&data);
+    let data = Rc::new(data);
+    let mut view = FlightView::new(Rc::clone(&data));
     let map_key = Input::Key {
         key: Key::Char('m'),
         pressed: true,
