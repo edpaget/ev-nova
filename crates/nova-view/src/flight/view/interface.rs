@@ -5,6 +5,7 @@ use nova_sim::InterfaceLoad;
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::hud::{self};
+use crate::flight::sim_port::FlightSim;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{BarFor, FlightView, Then};
@@ -64,30 +65,6 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
         ))
     }
 
-    /// The `C`, `E` and `H` the session ran while docked since its last
-    /// run of docked scripts began ([`Session::take_interface_loads`])
-    /// that each loaded another `ïntf`, in order, from the `ïntf` loaded
-    /// before them (`before`, [`FlightView::interface_now`]), as
-    /// `_LoadIntfResource` compares each with the one loaded at that
-    /// moment (`_currentIntf`, @0x73663-0x73672); and the `ïntf` loaded
-    /// after them.
-    pub(super) fn interface_changes(
-        &mut self,
-        before: Option<&Result<i16, String>>,
-    ) -> (Vec<InterfaceLoad>, Option<Result<i16, String>>) {
-        let loads = self.drain().take_interface_loads();
-        let mut loaded = before.cloned();
-        let mut changes = Vec::new();
-        for load in loads {
-            let interface = hud::interface_for(&*self.catalog, load.government);
-            if loaded.as_ref() != Some(&interface) {
-                loaded = Some(interface);
-                changes.push(load);
-            }
-        }
-        (changes, loaded)
-    }
-
     /// Runs `run` on the session, as the docked bar sees it: the `ïntf`
     /// loaded before it is noted, and what it ran docked is staged
     /// ([`FlightView::stage_bar`]), the dialog drawing `then` after it. In
@@ -139,5 +116,32 @@ impl<C: DescriptionSource + DescriptionGraphics> FlightView<C, crate::flight::Se
                 nova_sim::text_parse::ParseRules::default(),
             ),
         })
+    }
+}
+
+impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
+    /// The `C`, `E` and `H` the session ran while docked since its last
+    /// run of docked scripts began
+    /// ([`FlightEvent::InterfaceLoad`](nova_sim::flight_frame::FlightEvent::InterfaceLoad))
+    /// that each loaded another `ïntf`, in order, from the `ïntf` loaded
+    /// before them (`before`, [`FlightView::interface_now`]), as
+    /// `_LoadIntfResource` compares each with the one loaded at that
+    /// moment (`_currentIntf`, @0x73663-0x73672); and the `ïntf` loaded
+    /// after them.
+    pub(super) fn interface_changes(
+        &mut self,
+        before: Option<&Result<i16, String>>,
+    ) -> (Vec<InterfaceLoad>, Option<Result<i16, String>>) {
+        let loads = self.drain().take_interface_loads();
+        let mut loaded = before.cloned();
+        let mut changes = Vec::new();
+        for load in loads {
+            let interface = hud::interface_for(&*self.catalog, load.government);
+            if loaded.as_ref() != Some(&interface) {
+                loaded = Some(interface);
+                changes.push(load);
+            }
+        }
+        (changes, loaded)
     }
 }

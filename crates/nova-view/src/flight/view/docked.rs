@@ -9,7 +9,7 @@ use nova_sim::mission::screens::mac_ticks;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, HireList, HireRefusal, Hired,
     InterfaceLoad, MissionComputer, MissionId, MissionInfo, MissionShown, News, NotOffered,
-    RefuseShown, TextBar, VenueOffer,
+    RefuseShown, VenueOffer,
 };
 use nova_sim::{
     Boarding, Market, Order, Outfitter, Pilot, PlunderView, RechargeRefusal, Session, ShipId,
@@ -23,6 +23,7 @@ use crate::time::{sixtieths, ticks};
 use crate::ui::PlunderShown;
 use crate::{Key, Point};
 
+use super::outputs::FlightTexts;
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, BarStep, FlightView, GRANT_TICKS, MESSAGE_TICKS,
     NavFlash, REPELLED, Then, board_refusal_message, grant_message, message_text,
@@ -183,23 +184,25 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             &*self.sim.boarding_rule,
             &mut self.sim.chance,
         );
-        self.inbox.drain_session(session);
-        if let Some(line) = self.inbox.take_board_line() {
+        if let Some(line) = self.drain().take_board_line()
+            && let Ok(session) = &self.sim.session
+        {
             let said = mission_board_message(line, session);
             self.say_for(said, BOARD_LINE_TICKS);
         }
         let latches = boarded
             .as_ref()
             .map_or_else(|refusal| refusal.latches(), |_| true);
-        let Ok(session) = &mut self.sim.session else {
+        if self.sim.session.is_err() {
             return latches;
-        };
+        }
         match boarded {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
                 self.held.clear();
-                self.inbox.drain_session(session);
-                if let Some(granted) = self.inbox.take_grant() {
+                if let Some(granted) = self.drain().take_grant()
+                    && let Ok(session) = &self.sim.session
+                {
                     let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
                     self.say_for(said, GRANT_TICKS);
@@ -208,7 +211,9 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Ok(Boarding::Repelled) => self.say_for(REPELLED, MESSAGE_TICKS),
             Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
             Ok(Boarding::MissionShip(line)) => {
-                if let Some(line) = line {
+                if let Some(line) = line
+                    && let Ok(session) = &self.sim.session
+                {
                     let said = mission_board_message(line, session);
                     self.say_for(said, BOARD_LINE_TICKS);
                 }
@@ -883,17 +888,13 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     {
         if self.docked() {
             self.stage_bar(Vec::new(), Then::Nothing);
-            return self.drain().take_mission_texts();
+            return self.docked_texts();
         }
-        let queued = self.frame_now().texts_queued;
-        let nav_texts = self.nav_texts;
-        let noted = self.drain().text_nav().filter(|_| queued > nav_texts);
-        if self.sim.session.is_err() {
-            return Vec::new();
-        }
-        let bars = self.inbox.text_bars();
-        let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= self.bars_staged);
-        let texts = self.inbox.take_mission_texts();
+        let FlightTexts {
+            texts,
+            staged,
+            noted,
+        } = self.flight_texts();
         if !texts.is_empty() && !staged {
             self.redraw_status();
             if let Some(noted) = noted {
@@ -971,13 +972,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     where
         C: StatusBars,
     {
-        let staged = self.bars_staged;
-        let bars: Vec<TextBar> = self
-            .drain()
-            .text_bars()
-            .into_iter()
-            .filter(|bar| bar.texts > staged)
-            .collect();
+        let bars = self.unstaged_bars();
         let first = bars.first().map_or(u64::MAX, |bar| bar.texts);
         let (now, later): (Vec<_>, Vec<_>) =
             changes.into_iter().partition(|load| load.texts < first);

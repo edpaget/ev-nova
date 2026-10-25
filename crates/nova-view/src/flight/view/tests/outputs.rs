@@ -158,3 +158,105 @@ fn the_steps_comm_then_quotes_are_relayed_the_last_staying_and_nothing_sent() {
     );
     assert_eq!(sent(&view), [], "the session's line left alone");
 }
+
+/// A mission text of `mission`, its bar noted at the `texts`th queued
+/// with the nav `nav`.
+fn queued_text(mission: i16, texts: u64, nav: NavMode) -> FlightEvent {
+    FlightEvent::MissionShown {
+        shown: MissionShown::Text(nova_sim::MissionText {
+            kind: nova_sim::MissionTextKind::Brief,
+            mission: MissionId(mission),
+            text: format!("text {mission}"),
+            graphic: None,
+            movie: None,
+            map: None,
+        }),
+        bar: Some(TextBar {
+            texts,
+            nav,
+            reserves: nova_sim::Reserves::default(),
+        }),
+    }
+}
+
+#[test]
+fn a_text_queued_since_the_nav_was_taken_notes_its_nav_and_an_older_one_none() {
+    let nav = NavMode::Stellar(Some(StellarId(128)));
+    let mut view = faked(FlightFrame {
+        texts_queued: 2,
+        ..in_sol()
+    });
+    view.nav_texts = 1;
+    view.sim.queue_event(queued_text(128, 2, nav));
+    let taken = view.flight_texts();
+    assert_eq!(taken.texts.len(), 1);
+    assert_eq!(taken.noted, Some(nav), "queued since");
+    assert!(!taken.staged, "not staged");
+    view.nav_texts = 2;
+    view.sim.queue_event(queued_text(129, 2, nav));
+    assert_eq!(view.flight_texts().noted, None, "none since");
+    assert_eq!(view.flight_texts().texts, [], "taken");
+}
+
+#[test]
+fn texts_whose_bars_were_all_staged_are_taken_as_staged() {
+    let mut view = faked(in_sol());
+    view.bars_staged = 3;
+    view.sim.queue_event(queued_text(128, 2, NavMode::Off));
+    view.sim.queue_event(queued_text(129, 3, NavMode::Off));
+    assert!(view.flight_texts().staged);
+    view.sim.queue_event(queued_text(130, 3, NavMode::Off));
+    view.sim.queue_event(queued_text(131, 4, NavMode::Off));
+    assert!(!view.flight_texts().staged, "one newer");
+}
+
+#[test]
+fn the_bars_not_yet_staged_are_those_queued_after_the_last_staged() {
+    let mut view = faked(in_sol());
+    view.bars_staged = 1;
+    view.sim.queue_event(queued_text(128, 1, NavMode::Off));
+    view.sim.queue_event(queued_text(129, 2, NavMode::Off));
+    let texts: Vec<u64> = view.unstaged_bars().iter().map(|bar| bar.texts).collect();
+    assert_eq!(texts, [2]);
+    assert_eq!(view.docked_texts().len(), 2, "the bars left the texts be");
+    assert_eq!(view.unstaged_bars(), [], "taken with them");
+}
+
+#[test]
+fn the_interface_changes_are_the_loads_since_the_last_run_that_each_load_another_intf() {
+    let catalog = FakeCatalog {
+        interfaces: vec![(150, 129)],
+        ..catalog()
+    };
+    let mut view = faked_in(catalog, in_sol());
+    let load = |government, texts| InterfaceLoad {
+        government,
+        nav: NavMode::Off,
+        reserves: nova_sim::Reserves::default(),
+        texts,
+    };
+    view.sim
+        .queue_event(FlightEvent::InterfaceLoad(load(None, 0)));
+    view.sim.queue_event(FlightEvent::InterfaceLoadsCleared);
+    let before = hud::interface_for(&*view.catalog, None);
+    for event in [
+        load(None, 1),
+        load(Some(GovtId(150)), 2),
+        load(Some(GovtId(150)), 3),
+    ] {
+        view.sim.queue_event(FlightEvent::InterfaceLoad(event));
+    }
+    let (changes, after) = view.interface_changes(Some(&before));
+    let texts: Vec<u64> = changes.iter().map(|load| load.texts).collect();
+    assert_ne!(
+        hud::interface_for(&*view.catalog, Some(GovtId(150))),
+        before,
+        "the fixture's 150 flies another bar"
+    );
+    assert_eq!(texts, [2], "the cleared one let go, the same intf skipped");
+    assert_eq!(
+        after,
+        Some(hud::interface_for(&*view.catalog, Some(GovtId(150))))
+    );
+    assert_eq!(view.interface_changes(None), (Vec::new(), None), "taken");
+}

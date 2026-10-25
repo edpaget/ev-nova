@@ -3,7 +3,7 @@
 //! the router asks after, each drained from the flight into the inbox
 //! (see the `inbox` module) and taken from it.
 
-use nova_sim::{CommNote, FighterNote, NavMode, PersonQuote, SimMessage};
+use nova_sim::{CommNote, FighterNote, MissionShown, NavMode, PersonQuote, SimMessage, TextBar};
 
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
@@ -13,7 +13,65 @@ use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, pay_said,
 };
 
+/// The mission texts taken over flight ([`FlightView::flight_texts`]),
+/// with what their redraw needs.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FlightTexts {
+    /// The texts and offer movies, in order.
+    pub(super) texts: Vec<MissionShown>,
+    /// Whether every text with a bar was staged already, as a person's
+    /// offer answered over flight stages them: nothing is redrawn for
+    /// them.
+    pub(super) staged: bool,
+    /// The nav as the last text was queued, when that came after the nav
+    /// area was last taken.
+    pub(super) noted: Option<NavMode>,
+}
+
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The mission texts and offer movies to show over flight
+    /// ([`FlightEvent::MissionShown`]), whether their bars were all staged
+    /// already ([`FlightView::stage_bar`]), and the nav the last noted when
+    /// it was queued since the nav area was last taken
+    /// ([`FlightFrame::texts_queued`]): what the concrete
+    /// [`FlightView::take_mission_texts`] redraws in flight from.
+    ///
+    /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown
+    /// [`FlightFrame::texts_queued`]: nova_sim::flight_frame::FlightFrame::texts_queued
+    pub(super) fn flight_texts(&mut self) -> FlightTexts {
+        let queued = self.frame_now().texts_queued;
+        let (nav_texts, bars_staged) = (self.nav_texts, self.bars_staged);
+        let inbox = self.drain();
+        let noted = inbox.text_nav().filter(|_| queued > nav_texts);
+        let bars = inbox.text_bars();
+        let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= bars_staged);
+        FlightTexts {
+            texts: inbox.take_mission_texts(),
+            staged,
+            noted,
+        }
+    }
+
+    /// The bars of the mission texts not yet taken that are not yet staged
+    /// ([`FlightView::stage_bar`]), in order: those queued after the last
+    /// staged.
+    pub(super) fn unstaged_bars(&mut self) -> Vec<TextBar> {
+        let staged = self.bars_staged;
+        self.drain()
+            .text_bars()
+            .into_iter()
+            .filter(|bar| bar.texts > staged)
+            .collect()
+    }
+
+    /// The mission texts and offer movies not yet taken, in order
+    /// ([`FlightEvent::MissionShown`]); taking them lets go of their bars.
+    ///
+    /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown
+    pub(super) fn docked_texts(&mut self) -> Vec<MissionShown> {
+        self.drain().take_mission_texts()
+    }
+
     /// Whether the hold after the player's explosion ran out since this
     /// was last asked ([`FlightEvent::HoldExpired`]): the seam where the
     /// router may show its dialogs over the stopped flight before it
