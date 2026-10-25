@@ -145,8 +145,11 @@ impl ScrollText {
         // The leftover has the sign of the move, so a move cut short at an
         // end leaves it pointing past that end too.
         let last = self.lines.len().saturating_sub(self.visible);
-        if (self.pending < 0.0 && self.first == 0) || (self.pending > 0.0 && self.first == last) {
-            self.pending = 0.0;
+        if self.first == 0 {
+            self.pending = self.pending.max(0.0);
+        }
+        if self.first == last {
+            self.pending = self.pending.min(0.0);
         }
         true
     }
@@ -294,6 +297,15 @@ mod tests {
         assert_eq!(text.first(), 1, "15 units are a line, 3 over");
         text.input(&units(9.0));
         assert_eq!(text.first(), 2, "3 kept and 9 more are a line");
+    }
+
+    #[test]
+    fn whole_lines_of_units_leave_nothing_over() {
+        let mut text = ten_lines();
+        text.input(&units(24.0));
+        assert_eq!(text.first(), 2);
+        text.input(&units(1.0));
+        assert_eq!(text.first(), 2, "1 unit is no line");
     }
 
     #[test]
