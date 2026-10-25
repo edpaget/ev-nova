@@ -9,10 +9,11 @@
 
 use std::collections::VecDeque;
 
+use nova_sim::JumpReadiness;
 use nova_sim::StellarPick;
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, MapKey, StepInput, StepReport,
 };
 use nova_sim::navigation::NavMode;
 
@@ -111,14 +112,54 @@ pub fn refused_command() -> FlightCommand {
 /// leaves a field unwritten then shows in the comparison. The
 /// destructuring names every field, so a field added to [`FlightFrame`]
 /// doesn't compile until it is changed here.
-fn unlike(frame: &FlightFrame) -> FlightFrame {
-    let FlightFrame { nav_mode } = frame;
+pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
+    let FlightFrame {
+        nav_mode,
+        system,
+        course_shown,
+        course_plotted,
+        docked,
+        jump_under_way,
+        jump_readiness,
+        texts_queued,
+        map_key,
+    } = frame;
+    let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
-        nav_mode: if *nav_mode == NavMode::Off {
-            NavMode::Hyperspace(Some(SystemId(i16::MAX)))
+        nav_mode: unlike_nav(*nav_mode),
+        system: other_system,
+        course_shown: if course_shown.is_empty() {
+            vec![other_system]
         } else {
-            NavMode::Off
+            Vec::new()
         },
+        course_plotted: !course_plotted,
+        docked: !docked,
+        jump_under_way: !jump_under_way,
+        jump_readiness: if *jump_readiness == JumpReadiness::Blocked {
+            JumpReadiness::Clear
+        } else {
+            JumpReadiness::Blocked
+        },
+        texts_queued: texts_queued.wrapping_add(1),
+        map_key: MapKey {
+            system: if map_key.system == other_system {
+                SystemId(other_system.0 - 1)
+            } else {
+                other_system
+            },
+            nav: unlike_nav(map_key.nav),
+            ..map_key.clone()
+        },
+    }
+}
+
+/// A nav mode other than `nav`.
+fn unlike_nav(nav: NavMode) -> NavMode {
+    if nav == NavMode::Off {
+        NavMode::Hyperspace(Some(SystemId(i16::MAX)))
+    } else {
+        NavMode::Off
     }
 }
 
@@ -181,6 +222,7 @@ mod tests {
     fn stellar(id: i16) -> FlightFrame {
         FlightFrame {
             nav_mode: NavMode::Stellar(Some(StellarId(id))),
+            ..FlightFrame::default()
         }
     }
 
@@ -360,8 +402,43 @@ mod tests {
 
     #[test]
     fn a_fill_over_an_unlike_frame_changes_every_field() {
-        for frame in [FlightFrame::default(), stellar(128)] {
-            assert_ne!(unlike(&frame).nav_mode, frame.nav_mode);
+        let busy = FlightFrame {
+            system: SystemId(i16::MAX),
+            course_shown: vec![SystemId(131)],
+            course_plotted: true,
+            docked: true,
+            jump_under_way: true,
+            jump_readiness: JumpReadiness::Underway,
+            texts_queued: u64::MAX,
+            map_key: MapKey {
+                system: SystemId(i16::MAX),
+                nav: NavMode::Stellar(None),
+                ..MapKey::default()
+            },
+            ..stellar(128)
+        };
+        for frame in [FlightFrame::default(), stellar(128), busy] {
+            let other = unlike(&frame);
+            let FlightFrame {
+                nav_mode,
+                system,
+                course_shown,
+                course_plotted,
+                docked,
+                jump_under_way,
+                jump_readiness,
+                texts_queued,
+                map_key,
+            } = &frame;
+            assert_ne!(other.nav_mode, *nav_mode);
+            assert_ne!(other.system, *system);
+            assert_ne!(other.course_shown, *course_shown);
+            assert_ne!(other.course_plotted, *course_plotted);
+            assert_ne!(other.docked, *docked);
+            assert_ne!(other.jump_under_way, *jump_under_way);
+            assert_ne!(other.jump_readiness, *jump_readiness);
+            assert_ne!(other.texts_queued, *texts_queued);
+            assert_ne!(other.map_key, *map_key);
         }
     }
 }

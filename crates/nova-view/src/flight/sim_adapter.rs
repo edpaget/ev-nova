@@ -212,10 +212,10 @@ impl<C> PortSource for SessionFlight<C> {}
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::navigation::NavMode;
-    use nova_sim::{StellarId, StellarPick};
+    use nova_sim::StellarPick;
 
     use super::*;
+    use crate::flight::sim_port::fixture::unlike;
 
     fn failed() -> SessionFlight<()> {
         SessionFlight::new(Err("no chär".to_owned()))
@@ -223,9 +223,7 @@ mod tests {
 
     #[test]
     fn a_failed_flight_fills_the_default_frame() {
-        let mut frame = FlightFrame {
-            nav_mode: NavMode::Stellar(Some(StellarId(128))),
-        };
+        let mut frame = unlike(&FlightFrame::default());
         failed().frame(&mut frame);
         assert_eq!(frame, FlightFrame::default());
     }
