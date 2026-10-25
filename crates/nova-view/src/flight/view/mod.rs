@@ -25,16 +25,16 @@
 //! read, once per type for the life of the screen. Each step runs an
 //! advance pass in the original's order ([`Session::game_work`]): the
 //! player's fire and move, the fight's collision passes, the traffic's AI,
-//! its NPCs deciding as the screen's [`Behaviour`] says
+//! its NPCs deciding as the screen's [`Behaviour`](nova_sim::Behaviour) says
 //! ([`FlightView::with_behaviour`]; [`NovaAi`](nova_sim::NovaAi) by default), the shots,
 //! the traffic's motion, the NPCs' fire and the beams, the fight's ships
 //! disabled as the screen's
-//! [`DisableRule`] says ([`FlightView::with_disable_rule`];
+//! [`DisableRule`](nova_sim::DisableRule) says ([`FlightView::with_disable_rule`];
 //! [`NovaDisable`](nova_sim::NovaDisable) by default), their point defence engaging every
 //! missile fired at them, or by the other reading of the `pd_hostility`
-//! rule those its [`PointDefenceRule`] calls hostile
+//! rule those its [`PointDefenceRule`](nova_sim::PointDefenceRule) calls hostile
 //! ([`FlightView::with_point_defence_rule`]; [`Allegiance`](nova_sim::Allegiance) by default),
-//! and the player's crimes judged by its [`LegalCode`]
+//! and the player's crimes judged by its [`LegalCode`](nova_sim::LegalCode)
 //! ([`FlightView::with_law`]; [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
@@ -426,7 +426,7 @@
 //!   of the target; Space and Control fire nothing then (@0x6aaf0,
 //!   @0x6ab75).
 //! - B (a press) boards the target when the session allows it
-//!   ([`Session::board`]), by the screen's [`BoardingRule`]
+//!   ([`Session::board`]), by the screen's [`BoardingRule`](nova_sim::BoardingRule)
 //!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`](nova_sim::NovaBoarding) by default),
 //!   and otherwise says why in the original's words (`STR#` 2002
 //!   #130-132), or nothing when there is no target or the player does not
@@ -465,7 +465,7 @@
 //!   each haggle through [`FlightView::haggle`], and closing the channel
 //!   through [`FlightView::hang_up`]. Each step, the NPCs refuelling the
 //!   player give their help in the traffic's tick (a repair is the
-//!   traffic's, by the screen's [`DisableRule`]), and each that is done
+//!   traffic's, by the screen's [`DisableRule`](nova_sim::DisableRule)), and each that is done
 //!   says so, as a message ([`comm_message`]), taken after the step's
 //!   combat tick, which settles the notes in slot order with the frame's
 //!   other lines ([`Session::take_comm`]). During a jump, its pre-jump stage included, Y is
@@ -634,10 +634,10 @@ use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
-    Behaviour, BoardingRule, Chance, CombatEvent, Condition, DisableRule, FixedStep, GovtId,
-    HailOptions, HailView, HashedRolls, LegalCode, NavMode, NeverFires, Npc, NpcId, OutfitRefusal,
-    OutfitRun, PointDefenceRule, Reselection, Reserves, RuleKey, Session, ShipId, ShipRef,
-    ShipState, SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
+    Chance, CombatEvent, Condition, FixedStep, GovtId, HailOptions, HailView, HashedRolls, NavMode,
+    NeverFires, Npc, NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, RuleKey, Session,
+    ShipId, ShipRef, ShipState, SimMessage, StellarId, SystemId, Vec2, flight::normalized,
+    flight::shortest_turn,
 };
 use nova_sim::{DrawnBox, DrawnShips, HoverPlace};
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
@@ -652,6 +652,8 @@ use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
+use super::sim_adapter::SessionFlight;
+use super::sim_port::FlightSim;
 use super::stars::Starfield;
 use super::target::TargetPanel;
 use super::weapon_glow::WeaponGlows;
@@ -1066,14 +1068,16 @@ impl MapSeen {
     }
 }
 
-/// The player's ship in flight, reading the game data from `C`.
+/// The player's ship in flight, reading the game data from `C`, the
+/// flight itself through the [`FlightSim`] port `S`: by default the
+/// [`SessionFlight`] adapter over a real session.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
-pub struct FlightView<C> {
+pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What the screen reads: when it is built, and on each arrival.
     catalog: C,
-    /// The flight, or why it could not start.
-    session: Result<Session, String>,
+    /// The flight, with the collaborators its calls are handed.
+    sim: S,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
@@ -1153,8 +1157,6 @@ pub struct FlightView<C> {
     pending_leads: Vec<SimMessage>,
     /// The options the comm dialog lists.
     hail_options: HailOptions,
-    /// Who repels boarders, the capture odds and the capture roll.
-    boarding_rule: Rc<dyn BoardingRule>,
     /// The course map, shown or not.
     map: GalaxyMap,
     /// Whether the course map is shown.
@@ -1217,18 +1219,8 @@ pub struct FlightView<C> {
     /// each session it flies before its steps. Never let go with the
     /// flight keys.
     double_time: bool,
-    /// What each day's events and the traffic are rolled on.
-    chance: SharedChance,
     /// What the player's engine glow's flicker rolls on: seed 1.
     glow_rolls: HashedRolls,
-    /// How the NPCs decide.
-    behaviour: Rc<dyn Behaviour>,
-    /// When a ship in the fight is disabled.
-    disable_rule: Rc<dyn DisableRule>,
-    /// Which missiles the ships' point defence engages.
-    defence_rule: Rc<dyn PointDefenceRule>,
-    /// What the player's crimes do to its legal record.
-    law: Rc<dyn LegalCode>,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.

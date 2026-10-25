@@ -37,7 +37,7 @@ impl<
         + StatusBars
         + GalaxyCatalog
         + EscortMenuLooks,
-> Screen for FlightView<C>
+> Screen for FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, P is refused with its beep, and a press
@@ -155,7 +155,7 @@ impl<
                 // the pass (@0x6acf6): the press is taken on the next
                 // step, before a frame is drawn.
                 let backwards = self.held.contains(&Key::Alt);
-                if let Ok(session) = &mut self.session {
+                if let Ok(session) = &mut self.sim.session {
                     session.press_weapon_select(backwards);
                 }
             }
@@ -194,8 +194,8 @@ impl<
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
-        if let Ok(session) = &mut self.session {
-            session.settle_asteroid_field(&mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.settle_asteroid_field(&mut self.sim.chance);
         }
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
@@ -228,7 +228,7 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        if self.session.as_ref().is_ok_and(Session::warp_end_due) {
+        if self.sim.session.as_ref().is_ok_and(Session::warp_end_due) {
             self.arrive();
             self.fade_in = self
                 .jump
@@ -251,6 +251,7 @@ impl<
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
             let in_port = self
+                .sim
                 .session
                 .as_ref()
                 .is_ok_and(|session| session.landed().is_some());
@@ -293,6 +294,7 @@ impl<
     /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
+            .sim
             .session
             .as_mut()
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
@@ -307,14 +309,14 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
-        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
+        !self.map_open && self.sim.session.is_ok() && self.looks.cursor_sheet().is_some()
     }
 
     /// What could not be read of the looks, then the session's
     /// diagnostics, each once.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         let mut diagnostics = std::mem::take(&mut self.unread_looks);
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             let sim = session.take_diagnostics().into_iter();
             diagnostics.extend(sim.map(Diagnostic::Sim));
         }
@@ -345,7 +347,7 @@ impl<
         + StatusBars
         + GalaxyCatalog
         + EscortMenuLooks,
-> FlightView<C>
+> FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// Draws the scene and its HUD, the fades left out: whether there was
     /// a scene to draw, or only why flight could not start. The sprite

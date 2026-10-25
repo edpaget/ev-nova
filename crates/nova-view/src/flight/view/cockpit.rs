@@ -55,7 +55,7 @@ use super::{
     ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading, shown_position, window_width,
 };
 
-impl<C> FlightView<C> {
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// The session's system, as laid out, if the session started.
     #[must_use]
     pub fn scene(&self) -> Option<&SystemScene> {
@@ -100,7 +100,7 @@ impl<C> FlightView<C> {
 
     /// The NPCs, each with where it is drawn and which way it faces.
     pub(super) fn shown_npcs(&self) -> Vec<(&Npc, Point, f32)> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         session
@@ -174,7 +174,7 @@ impl<C> FlightView<C> {
     /// player can target ([`Session::hover`]), the ships boxed where they
     /// are drawn ([`ViewShips`]).
     fn hovering(&self) -> bool {
-        let (Ok(session), Some(at)) = (&self.session, self.cursor.shown_at()) else {
+        let (Ok(session), Some(at)) = (&self.sim.session, self.cursor.shown_at()) else {
             return false;
         };
         let world = self.camera().screen_to_world(at);
@@ -194,7 +194,7 @@ impl<C> FlightView<C> {
     /// is read from the session as the frame is drawn, so nothing waits
     /// past it.
     pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return vec![(SpriteLayer::Ships, Sprite::Ship(ShipRef::Player))];
         };
         sprite_stack(session.draw_layers(), self.shown_shots(camera))
@@ -216,7 +216,7 @@ impl<C> FlightView<C> {
         let player = camera.world_to_screen(self.shown_position());
         let sprites = stacked.iter().filter(|(on, _)| *on == layer);
         for (_, sprite) in sprites {
-            match (sprite, &self.session) {
+            match (sprite, &self.sim.session) {
                 (Sprite::Ship(ShipRef::Player), Ok(session)) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
@@ -378,9 +378,13 @@ impl<C> FlightView<C> {
     /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), the
     /// original's play area centre with no session.
     pub(super) fn anchor(&self) -> Anchor {
-        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(nova_sim::RuleKey::FlightAnchor)
-        });
+        let source = self
+            .sim
+            .session
+            .as_ref()
+            .map_or(RuleSource::Engine, |session| {
+                session.rules().source_for(nova_sim::RuleKey::FlightAnchor)
+            });
         Anchor::in_flight(source)
     }
 
@@ -401,7 +405,7 @@ impl<C> FlightView<C> {
     /// opened before the next step reads its asteroids stored by it.
     pub fn set_view_size(&mut self, view: (f32, f32)) {
         self.view = view;
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.set_window_width(window_width(view));
         }
     }
@@ -412,6 +416,7 @@ impl<C> FlightView<C> {
     /// classic, where the bar and the docked mission dialogs open it.
     pub(super) fn map_offset(&self) -> Point {
         let in_port = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
@@ -429,7 +434,7 @@ impl<C> FlightView<C> {
     #[must_use]
     pub fn frame(&self) -> Option<u16> {
         let sheet = self.sheet.as_ref().ok()?;
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Some(rotation_frame(self.shown_heading(), sheet.rotations));
         };
         let spec = turning(&session.hull().frames, sheet);
@@ -450,6 +455,7 @@ impl<C> FlightView<C> {
     /// they change.
     pub(super) fn reserves_shown(&self) -> Reserves {
         let docked = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
@@ -462,7 +468,8 @@ impl<C> FlightView<C> {
     /// The ship's shield, armour and fuel, or none for a session that
     /// never started.
     pub(super) fn reserves(&self) -> Reserves {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .map(Session::reserves)
             .unwrap_or_default()
@@ -471,7 +478,8 @@ impl<C> FlightView<C> {
     /// The player's ship now, or where it was for a session that never
     /// started.
     fn current(&self) -> ShipState {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .map_or(self.previous, |session| *session.player())
     }
@@ -502,7 +510,8 @@ impl<C> FlightView<C> {
     /// screen whose session failed to start takes every one, as it has
     /// nothing to refuse them with.
     pub(super) fn takes(&self, command: PlayerCommand) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .map_or(true, |session| session.takes(command))
     }
@@ -581,13 +590,14 @@ impl<C> FlightView<C> {
     /// always, H's unless \` without Option is still down, when the
     /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
     pub(super) fn hyperspace_key(&mut self, key: Key) {
-        if self.session.is_err() {
+        if self.sim.session.is_err() {
             return;
         }
         if key == HYPER_SELECT_KEY {
             self.select_latch = false;
             self.select_frame(true);
             if self
+                .sim
                 .session
                 .as_ref()
                 .is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)))
@@ -624,7 +634,8 @@ impl<C> FlightView<C> {
     /// included: the original's +0x50 > 0, which its key blocks test live.
     /// A jump given up is over at once, whatever its effect still shows.
     pub(super) fn jump_under_way(&self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .is_ok_and(|session| session.jumping().is_some() || session.preparing_jump().is_some())
     }
@@ -647,7 +658,7 @@ impl<C> FlightView<C> {
     /// either held through a jump's end acts after it.
     pub(super) fn nav_keys_frame(&mut self, nav_off: bool, option: bool, h: bool) {
         let jumping = self.jump_under_way();
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         if nav_off && option && !self.nav_latch {
@@ -680,14 +691,14 @@ impl<C> FlightView<C> {
             return;
         }
         self.select_latch = true;
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.select_next_system();
         }
     }
 
     /// Makes the stellar `pick` finds the navigation target, if any.
     pub(super) fn select_stellar(&mut self, pick: StellarPick) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.select_stellar(pick);
         }
     }
@@ -708,7 +719,7 @@ impl<C> FlightView<C> {
             return;
         }
         let world = self.camera().screen_to_world(at);
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let ships = ViewShips {
@@ -716,7 +727,7 @@ impl<C> FlightView<C> {
             session,
         };
         let drawn = DrawnNow::of(&ships);
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.click_in_space(Vec2::new(world.x, world.y), &drawn);
         }
     }
@@ -749,7 +760,7 @@ impl<C> FlightView<C> {
         // system as it draws (@0x11338-0x1136d), so the course map opens
         // there next.
         self.map.recentre();
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             self.floating.preselect(session.floating_preselection());
             let missions = session.map_mission_systems();
             let drawing = session.map_drawing(None, &missions, nova_sim::MapMarks::NONE);
@@ -768,7 +779,7 @@ impl<C> FlightView<C> {
     /// it again at the same tick.
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
-        let session = self.session.as_ref();
+        let session = self.sim.session.as_ref();
         let mode_3 =
             session.is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)));
         let h =
@@ -796,7 +807,7 @@ impl<C> FlightView<C> {
         if !self.floating.is_up() || !floating::contains(frame, at) {
             return false;
         }
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return true;
         };
         let galaxy = session.galaxy();
@@ -882,7 +893,7 @@ impl<C> FlightView<C> {
         let Some(level) = self.floating.level(self.mac_now()) else {
             return;
         };
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let current = session.system();
@@ -907,7 +918,7 @@ impl<C> FlightView<C> {
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
     /// a session that failed.
     pub(super) fn escort_rows(&self) -> [ClassRow; 4] {
-        self.session.as_ref().map_or_else(
+        self.sim.session.as_ref().map_or_else(
             |_| {
                 nova_sim::EscortClass::ALL.map(|class| ClassRow {
                     class,
@@ -1032,11 +1043,11 @@ impl<C> FlightView<C> {
     /// which, drawing its speaker on the flight's chance; says what it
     /// changed, and keeps the menu open for it.
     fn command_escorts(&mut self, command: EscortCommand) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let commanded =
-            session.command_escorts(self.escort_menu.group(), command, &mut self.chance);
+            session.command_escorts(self.escort_menu.group(), command, &mut self.sim.chance);
         if let Some(commanded) = commanded {
             self.escort_menu.touch(self.elapsed);
             self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
@@ -1048,7 +1059,7 @@ impl<C> FlightView<C> {
     /// the original checks it on every frame of a jump (@0x6df59).
     pub(super) fn update_escort_menu(&mut self) {
         let rows = self.escort_rows();
-        let flying = self.session.as_ref().is_ok_and(Session::escorts_flying);
+        let flying = self.sim.session.as_ref().is_ok_and(Session::escorts_flying);
         self.escort_menu.update(self.elapsed, &rows, flying);
     }
 
@@ -1066,7 +1077,7 @@ impl<C> FlightView<C> {
 
     /// Picks the target as `pick` says.
     pub(super) fn select_target(&mut self, pick: TargetPick) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.select_target(pick);
         }
     }
@@ -1098,7 +1109,7 @@ impl<C> FlightView<C> {
     /// ([`murk::sprite_murk`], [`Session::effective_murk`]), as
     /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
@@ -1127,7 +1138,7 @@ impl<C> FlightView<C> {
     /// The cargo boxes in space, each where it is drawn: `alpha` of the
     /// way from where it was a step ago, as the shots are.
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
@@ -1150,7 +1161,7 @@ impl<C> FlightView<C> {
     /// way from where it was a step ago, as the cargo boxes are, at its
     /// whole frame.
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
@@ -1171,7 +1182,7 @@ impl<C> FlightView<C> {
 
     /// The beams being fired, each moved with its firer as it is drawn.
     pub(super) fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         session
@@ -1209,7 +1220,7 @@ impl<C> FlightView<C> {
     /// read is bracketed as one with no sprite; a ship's as its crossed
     /// box.
     pub(super) fn draw_brackets(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         if let Some(nav) = session.nav_brackets()
@@ -1234,7 +1245,12 @@ impl<C> FlightView<C> {
     /// brackets and the cursor in the target layer, in the world (see the
     /// `alert` module).
     pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
-        let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
+        let icon = self
+            .sim
+            .session
+            .as_ref()
+            .ok()
+            .and_then(Session::red_alert_icon);
         if let (Some(icon), Some(width)) = (icon, self.alert_width) {
             alert::draw_red_alert(list, icon, width, self.view.0);
         }
@@ -1245,7 +1261,7 @@ impl<C> FlightView<C> {
     /// original redraws it (`_statusRedraw[3]`) on every event that
     /// changes it, so drawing it each frame shows the same.
     fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let origin = hud::bar_origin(bar, view_width);
@@ -1278,7 +1294,7 @@ impl<C> FlightView<C> {
         match &self.sheet {
             Ok(sheet) => {
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let session = self.session.as_ref().ok();
+                let session = self.sim.session.as_ref().ok();
                 let base = session.map_or(0, Session::engine_glow);
                 let sets = session.map_or(Drawn::default(), Session::player_drawn);
                 let spec = session.map_or(FrameSpec::NONE, |session| session.hull().frames);
@@ -1359,7 +1375,7 @@ impl<C> FlightView<C> {
     pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let radar = self.radar_shown();
-        let cargo = self.session.as_ref().ok().map(Session::status_cargo);
+        let cargo = self.sim.session.as_ref().ok().map(Session::status_cargo);
         let state = HudState {
             radar: &radar,
             blink_on: self.hud_cadence.blink_on(),
@@ -1367,6 +1383,7 @@ impl<C> FlightView<C> {
             nav: self.nav_shown(),
             cargo: cargo.as_ref(),
             disabled: self
+                .sim
                 .session
                 .as_ref()
                 .is_ok_and(|session| session.player_condition() == Condition::Disabled),

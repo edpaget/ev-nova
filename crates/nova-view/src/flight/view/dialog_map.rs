@@ -107,7 +107,7 @@ impl MapOpened {
     }
 }
 
-impl<C> FlightView<C> {
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Whether the map shown is a mission dialog's
     /// ([`FlightView::open_dialog_map`]): its input is
     /// [`FlightView::port_map_input`]'s, in port and over flight alike,
@@ -127,7 +127,7 @@ impl<C> FlightView<C> {
         let Some(opened) = opened else {
             return;
         };
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         match opened.by {
@@ -148,7 +148,7 @@ impl<C> FlightView<C> {
     /// The nav as a map opens, which its close in port puts back and a
     /// dialog's opener restores.
     pub(super) fn opening_nav(&self) -> Option<SavedNav> {
-        self.session.as_ref().ok().map(Session::map_nav)
+        self.sim.session.as_ref().ok().map(Session::map_nav)
     }
 }
 
@@ -164,7 +164,7 @@ impl<
         + crate::flight::catalog::StatusBars
         + crate::galaxy::GalaxyCatalog
         + crate::flight::escorts::EscortMenuLooks,
-> FlightView<C>
+> FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// Opens the course map for `opener`, as each mission dialog calls
     /// `_DoSystemMap` on its map key: in
@@ -174,7 +174,7 @@ impl<
     /// [`FlightView::close_map`]'s, then the opener's restore (see the
     /// module docs).
     pub fn open_dialog_map(&mut self, opener: MapOpener) {
-        let marks = match (opener, &self.session) {
+        let marks = match (opener, &self.sim.session) {
             (MapOpener::Briefing(marks), _) => marks,
             (_, Err(_)) => MapMarks::NONE,
             (MapOpener::Offer(mission), Ok(session)) => session.offer_map_marks(mission),

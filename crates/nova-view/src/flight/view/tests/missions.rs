@@ -419,7 +419,7 @@ fn a_jump_clears_the_cargo_boxes() {
     plot(&mut view, 131);
     fly_out(&mut view);
     jump_now(&mut view);
-    if let Ok(session) = &mut view.session {
+    if let Ok(session) = &mut view.sim.session {
         session.jettison_cargo(true, &mut nova_sim::NeverFires);
     }
     assert_eq!(view.session().expect("flying").cargo_boxes().len(), 2);

@@ -15,7 +15,7 @@ use crate::time::ticks;
 
 use super::{FlightView, radar_ships};
 
-impl<C> FlightView<C> {
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// What the radar shows now ([`RadarScene`]): the player's ship and
     /// the other ships where they are drawn, the scene's stellars in nav
     /// order with the shape and sprite width the radar reads, and blank
@@ -25,7 +25,7 @@ impl<C> FlightView<C> {
     /// hyperspace ([`Session::nav_mode`]).
     pub(super) fn radar_now(&self) -> RadarScene {
         // Without a session flight shows only why, never the radar.
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return RadarScene::default();
         };
         let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
@@ -95,7 +95,7 @@ impl<C> FlightView<C> {
     /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
     /// session that failed has no nav to save.
     pub fn open_port_dialog(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.save_port_nav();
         }
     }
@@ -131,7 +131,7 @@ impl<C> FlightView<C> {
     ///   only when it goes through, or any nav redraw.
     pub fn close_port_dialog(&mut self, dialog: PortDialog) {
         self.refresh_status();
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.restore_port_nav();
         }
         if matches!(dialog, PortDialog::Shipyard | PortDialog::Hire) {
@@ -229,7 +229,7 @@ impl<C> FlightView<C> {
     /// What the target panel is drawn for now: the target, its ship type
     /// and its shield; none without a target.
     fn target_drawn(&self) -> Option<Drawn> {
-        let npc = self.session.as_ref().ok()?.target()?;
+        let npc = self.sim.session.as_ref().ok()?.target()?;
         Some(Drawn {
             npc: npc.id,
             ship: npc.ship,
@@ -240,7 +240,7 @@ impl<C> FlightView<C> {
     /// What the target panel shows of the target now (see
     /// [`TargetPanel`]); none without a target.
     pub(super) fn target_now(&self) -> Option<TargetPanel> {
-        let session = self.session.as_ref().ok()?;
+        let session = self.sim.session.as_ref().ok()?;
         let npc = session.target()?;
         let card = self.cards.get(&npc.ship);
         let tag = session.target_tag(npc).and_then(|tag| match tag {
@@ -288,13 +288,14 @@ impl<C> FlightView<C> {
     pub(super) fn retake_nav(&mut self) {
         self.nav_marked = false;
         self.nav_scene = Some((self.nav_mode(), self.nav_now()));
-        self.nav_texts = self.session.as_ref().map_or(0, Session::texts_queued);
+        self.nav_texts = self.sim.session.as_ref().map_or(0, Session::texts_queued);
     }
 
     /// The player's nav mode ([`Session::nav_mode`]); off without a
     /// session.
     pub(super) fn nav_mode(&self) -> NavMode {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .map_or(NavMode::Off, Session::nav_mode)
     }
@@ -315,7 +316,7 @@ impl<C> FlightView<C> {
     /// for none), with whether the ship can jump there now; with the nav
     /// system off, "Nav System Off". Off without a session.
     pub(super) fn nav_display(&self, mode: NavMode) -> NavDisplay {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return NavDisplay::Off;
         };
         match mode {
@@ -369,7 +370,7 @@ impl<C> FlightView<C> {
     /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
     /// tick, which changes no decision the player can see.
     pub(super) fn advance_hud(&mut self) {
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             self.radar_static =
                 radar::static_frame(session.interference(), &mut self.effects_chance);
         }
@@ -435,6 +436,7 @@ impl<C> FlightView<C> {
     /// ([`FlightView::answer_in_flight`]).
     pub(super) fn nav_shown(&self) -> NavDisplay {
         let docked = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
@@ -455,9 +457,13 @@ impl<C> FlightView<C> {
     /// Whether the HUD's content waits for its refreshes: the engine's
     /// reading of [`RuleKey::HudCadence`].
     pub(super) fn hud_waits(&self) -> bool {
-        self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::HudCadence)
-        }) == RuleSource::Engine
+        self.sim
+            .session
+            .as_ref()
+            .map_or(RuleSource::Engine, |session| {
+                session.rules().source_for(RuleKey::HudCadence)
+            })
+            == RuleSource::Engine
     }
 
     /// What the radar shows this frame: by [`RuleKey::HudCadence`]'s

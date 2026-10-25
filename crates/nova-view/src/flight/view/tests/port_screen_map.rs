@@ -31,7 +31,7 @@ fn press_map(view: &mut View) {
 /// Turns the nav off docked, a nav the port dialog's opening didn't
 /// save.
 fn turn_nav_off(view: &mut View) {
-    view.session.as_mut().expect("docked").nav_off();
+    view.sim.session.as_mut().expect("docked").nav_off();
     assert_eq!(nav_mode(view), NavMode::Off);
 }
 

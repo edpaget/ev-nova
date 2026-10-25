@@ -9,10 +9,9 @@ use std::time::Duration;
 use nova_sim::PlayerCommand;
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
-    ALERT_CICN, Allegiance, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog,
-    DisableRule, FixedStep, Haggle, HailOptions, HailView, HashedRolls, LegalCode, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotCatalog, PointDefenceRule, Rulebook, Session,
-    StartError, TrafficCatalog,
+    ALERT_CICN, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog, DisableRule,
+    FixedStep, Haggle, HailOptions, HailView, HashedRolls, LegalCode, Pilot, PilotCatalog,
+    PointDefenceRule, Rulebook, Session, StartError, TrafficCatalog,
 };
 use nova_sim::{
     ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
@@ -27,6 +26,7 @@ use crate::flight::effects::Effects;
 use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
+use crate::flight::sim_adapter::SessionFlight;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
@@ -52,7 +52,7 @@ impl<
         + StatusBars
         + GalaxyCatalog
         + EscortMenuLooks,
-> FlightView<C>
+> FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// A new, unnamed pilot's flight, read from `catalog`, which the
     /// screen keeps.
@@ -96,8 +96,8 @@ impl<
     /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
     /// that failed begins nothing.
     pub fn begin(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.begin(&self.catalog, &mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.begin(&self.catalog, &mut self.sim.chance);
             self.place_ship();
             self.stars_due = true;
         }
@@ -109,7 +109,7 @@ impl<
     /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
     /// failed enters nothing.
     pub fn enter_game(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.enter_game();
             self.stars_due = true;
         }
@@ -121,8 +121,8 @@ impl<
     /// the offers' roll table is drawn, as the load's `_ResetPlayer` draws
     /// it (@0x76502, @0x7673e). A session that failed resumes nothing.
     pub fn resume(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.resume(&mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.resume(&mut self.sim.chance);
         }
     }
 
@@ -132,8 +132,8 @@ impl<
     /// ([`Session::restart_aux_from_main_screen`], @0x1a918-0x1a982) on
     /// the flight's chance. A session that failed opens nothing.
     pub fn open_on_main_screen(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.restart_aux_from_main_screen(&mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.restart_aux_from_main_screen(&mut self.sim.chance);
         }
     }
 
@@ -144,8 +144,8 @@ impl<
     /// (@0x765d4-0x76637), and the player's system is explored (@0x1affe).
     /// A session that failed opens nothing.
     pub fn open_at_launch(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.open_at_launch(&mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.open_at_launch(&mut self.sim.chance);
         }
     }
 
@@ -235,7 +235,7 @@ impl<
             alert_width,
             view: VIEW_SIZE,
             double_time: false,
-            session,
+            sim: SessionFlight::new(session),
             scene,
             sheet,
             sheet_ship,
@@ -262,13 +262,7 @@ impl<
             pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
-            boarding_rule: Rc::new(NovaBoarding::default()),
-            chance: SharedChance::default(),
             glow_rolls: HashedRolls::new(1),
-            behaviour: Rc::new(NovaAi::default()),
-            disable_rule: Rc::new(NovaDisable),
-            defence_rule: Rc::new(Allegiance),
-            law: Rc::new(NovaLaw::default()),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
             unread_looks,
@@ -313,33 +307,28 @@ impl<
     /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
     /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
     #[must_use]
-    pub fn with_rules(self, rules: Rulebook) -> Self {
+    pub fn with_rules(mut self, rules: Rulebook) -> Self {
         let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
         let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
         let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
-        let mut view = Self {
-            session: self.session.map(|session| session.with_rules(rules)),
-            ..self
-        };
-        view.map.set_nebula_pick(pick);
-        view.map.set_border_rules(pace, find);
-        view.show_destroyed();
-        view
+        self.sim.session = self.sim.session.map(|session| session.with_rules(rules));
+        self.map.set_nebula_pick(pick);
+        self.map.set_border_rules(pace, find);
+        self.show_destroyed();
+        self
     }
 
     /// The flight with its ship slots' draw layers and cloned frames
     /// starting from `slot_sprites`, the history an earlier flight of the
     /// same run left ([`Session::with_slot_sprites`]).
     #[must_use]
-    pub fn with_slot_sprites(self, slot_sprites: SlotSprites) -> Self {
-        let mut view = Self {
-            session: self
-                .session
-                .map(|session| session.with_slot_sprites(slot_sprites)),
-            ..self
-        };
-        view.read_npc_sheets();
-        view
+    pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_slot_sprites(slot_sprites));
+        self.read_npc_sheets();
+        self
     }
 
     /// The ship slots' draw-layer and cloned-frame history as the flight
@@ -347,7 +336,7 @@ impl<
     /// never started.
     #[must_use]
     pub fn slot_sprites(&self) -> Option<&SlotSprites> {
-        self.session.as_ref().ok().map(Session::slot_sprites)
+        self.sim.session.as_ref().ok().map(Session::slot_sprites)
     }
 
     /// The flight with its stellar sprite pool carried from `pool`, the
@@ -356,7 +345,7 @@ impl<
     /// a stellar's sprite pointer between pilots.
     #[must_use]
     pub fn with_stellar_sprite_pool(mut self, pool: StellarSpritePool) -> Self {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.carry_stellar_sprite_pool(pool);
         }
         self
@@ -367,17 +356,22 @@ impl<
     /// started.
     #[must_use]
     pub fn stellar_sprite_pool(&self) -> Option<&StellarSpritePool> {
-        self.session.as_ref().ok().map(Session::stellar_sprite_pool)
+        self.sim
+            .session
+            .as_ref()
+            .ok()
+            .map(Session::stellar_sprite_pool)
     }
 
     /// The flight with its traffic's berths starting from `kept`, what an
     /// earlier flight of the same run left ([`Session::with_kept_berths`]).
     #[must_use]
-    pub fn with_kept_berths(self, kept: KeptBerths) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_kept_berths(kept)),
-            ..self
-        }
+    pub fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_kept_berths(kept));
+        self
     }
 
     /// What the flight's traffic's berths keep for the next flight
@@ -385,20 +379,19 @@ impl<
     /// started.
     #[must_use]
     pub fn kept_berths(&self) -> Option<KeptBerths> {
-        self.session.as_ref().ok().map(Session::kept_berths)
+        self.sim.session.as_ref().ok().map(Session::kept_berths)
     }
 
     /// The flight with a new pilot's neighbour pass reading `carried`,
     /// what an earlier flight of the same run left
     /// ([`Session::with_last_refresh`]).
     #[must_use]
-    pub fn with_last_refresh(self, carried: LastRefresh) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_last_refresh(carried)),
-            ..self
-        }
+    pub fn with_last_refresh(mut self, carried: LastRefresh) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_last_refresh(carried));
+        self
     }
 
     /// What the flight's last galaxy refresh left hidden, for a new pilot
@@ -406,47 +399,51 @@ impl<
     /// its session never started.
     #[must_use]
     pub fn last_refresh(&self) -> Option<LastRefresh> {
-        self.session.as_ref().ok().map(Session::last_refresh)
+        self.sim.session.as_ref().ok().map(Session::last_refresh)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
     /// ([`Session::with_hire_terms`]).
     #[must_use]
-    pub fn with_hire_terms(self, terms: Rc<dyn HireTerms>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_hire_terms(terms)),
-            ..self
-        }
+    pub fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_hire_terms(terms));
+        self
     }
 
     /// The flight with `rules` deciding how persons appear
     /// ([`Session::with_person_rules`]).
     #[must_use]
-    pub fn with_person_rules(self, rules: Rc<dyn PersonRules>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_person_rules(rules)),
-            ..self
-        }
+    pub fn with_person_rules(mut self, rules: Rc<dyn PersonRules>) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_person_rules(rules));
+        self
     }
 
     /// The flight with the `T` set operator naming the ship from
     /// `strings`' string lists ([`Session::with_strings`]).
     #[must_use]
-    pub fn with_strings(self, strings: Rc<dyn CommCatalog>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_strings(strings)),
-            ..self
-        }
+    pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_strings(strings));
+        self
     }
 
     /// The flight with `bits` testing a ship's `Availability` for hire
     /// ([`Session::with_control_bits`]).
     #[must_use]
-    pub fn with_control_bits(self, bits: Rc<dyn ControlBits>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_control_bits(bits)),
-            ..self
-        }
+    pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
+        self.sim.session = self
+            .sim
+            .session
+            .map(|session| session.with_control_bits(bits));
+        self
     }
 
     /// The flight with its explosions and debris rolled on `chance`, apart
@@ -504,7 +501,10 @@ impl<
     /// The flight with its NPCs deciding as `behaviour` says.
     #[must_use]
     pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
-        Self { behaviour, ..self }
+        Self {
+            sim: self.sim.with_behaviour(behaviour),
+            ..self
+        }
     }
 
     /// The flight with its ships disabled as `rule` says: in the fight,
@@ -513,10 +513,7 @@ impl<
     #[must_use]
     pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
         Self {
-            session: self
-                .session
-                .map(|session| session.with_disable_rule(Rc::clone(&disable_rule))),
-            disable_rule,
+            sim: self.sim.with_disable_rule(disable_rule),
             ..self
         }
     }
@@ -526,7 +523,7 @@ impl<
     #[must_use]
     pub fn with_point_defence_rule(self, defence_rule: Rc<dyn PointDefenceRule>) -> Self {
         Self {
-            defence_rule,
+            sim: self.sim.with_point_defence_rule(defence_rule),
             ..self
         }
     }
@@ -534,7 +531,10 @@ impl<
     /// The flight with the player's crimes judged by `law`.
     #[must_use]
     pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
-        Self { law, ..self }
+        Self {
+            sim: self.sim.with_law(law),
+            ..self
+        }
     }
 
     /// The flight with its boardings by `rule`: who repels boarders, the
@@ -542,7 +542,7 @@ impl<
     #[must_use]
     pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
         Self {
-            boarding_rule,
+            sim: self.sim.with_boarding_rule(boarding_rule),
             ..self
         }
     }
@@ -578,11 +578,16 @@ impl<
     /// keys; one accepted at once shows nothing, and so does a navigation
     /// stellar that answers, as its comm dialog is not built.
     pub(super) fn hail(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let option = self.held.contains(&Key::Alt);
-        match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
+        match session.hail_key(
+            &self.catalog,
+            &self.hail_options,
+            option,
+            &mut self.sim.chance,
+        ) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
                 self.held.clear();
@@ -623,7 +628,7 @@ impl<
         &mut self,
         button: nova_sim::escort_dialog::EscortButton,
     ) -> Option<nova_sim::escort_dialog::EscortDialogView> {
-        let session = self.session.as_mut().ok()?;
+        let session = self.sim.session.as_mut().ok()?;
         let view = session.press_escort(button);
         if view.is_none() {
             self.redraw_status();
@@ -645,7 +650,7 @@ impl<
     /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
-        let session = self.session.as_ref().ok()?;
+        let session = self.sim.session.as_ref().ok()?;
         Some(self.marked(session.player_info(&self.catalog)))
     }
 
@@ -654,7 +659,7 @@ impl<
     /// changing nothing; `None` for a session that failed.
     #[must_use]
     pub fn pilot_panel(&self) -> Option<PilotPanel> {
-        let session = self.session.as_ref().ok()?;
+        let session = self.sim.session.as_ref().ok()?;
         Some(session.pilot_panel(&self.catalog))
     }
 
@@ -665,7 +670,7 @@ impl<
     /// cheats setting. The router opens the screen on it, from flight and
     /// from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
-        let session = self.session.as_mut().ok()?;
+        let session = self.sim.session.as_mut().ok()?;
         let info = session.open_player_info(&self.catalog)?;
         Some(self.marked(info))
     }
@@ -696,7 +701,7 @@ impl<
     /// ([`Session::press_player_info`], which beeps a refusal); a failed
     /// session takes it, and the router opens nothing for it.
     fn press_player_info(&mut self) -> bool {
-        match &mut self.session {
+        match &mut self.sim.session {
             Ok(session) => session.press_player_info(),
             Err(_) => true,
         }
@@ -720,8 +725,8 @@ impl<
     /// after it (@0x5a725).
     pub fn jettison_all(&mut self) {
         self.run_docked(Then::Nothing, |view| {
-            if let Ok(session) = &mut view.session {
-                session.jettison_cargo(true, &mut view.chance);
+            if let Ok(session) = &mut view.sim.session {
+                session.jettison_cargo(true, &mut view.sim.chance);
             }
         });
         self.say_messages();
@@ -742,7 +747,7 @@ impl<
     /// line after its refusal beep; refused, nothing. A flight whose
     /// session never started says #354 alone, with no session to beep.
     pub(super) fn ask_mission_info(&mut self) {
-        let Ok(session) = self.session.as_mut() else {
+        let Ok(session) = self.sim.session.as_mut() else {
             self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
             return;
         };
@@ -768,7 +773,8 @@ impl<
     /// ([`Session::hailing`]).
     #[must_use]
     pub fn hailing(&self) -> Option<HailView> {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .ok()?
             .hailing(&self.catalog, &self.hail_options)
@@ -777,14 +783,19 @@ impl<
     /// Presses the `pick`th option listed, through the session
     /// ([`Session::answer`]).
     pub fn answer(&mut self, pick: usize) -> Option<HailView> {
-        let session = self.session.as_mut().ok()?;
-        session.answer(pick, &self.catalog, &self.hail_options, &mut self.chance)
+        let session = self.sim.session.as_mut().ok()?;
+        session.answer(
+            pick,
+            &self.catalog,
+            &self.hail_options,
+            &mut self.sim.chance,
+        )
     }
 
     /// Makes `choice` in the haggle dialog, through the session
     /// ([`Session::haggle`]).
     pub fn haggle(&mut self, choice: Haggle) -> Option<HailView> {
-        let session = self.session.as_mut().ok()?;
+        let session = self.sim.session.as_mut().ok()?;
         session.haggle(choice, &self.catalog, &self.hail_options)
     }
 
@@ -796,7 +807,7 @@ impl<
     /// The traffic types' target cards not read yet are asked for in one
     /// batch ([`CombatLooks::target_cards`]), and none when all are read.
     pub(super) fn read_npc_sheets(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let traffic = session.traffic_ships();
@@ -822,7 +833,7 @@ impl<
     /// run's first stepped frame, and the warm-up frame is drawn under
     /// black. A session that failed reads nothing.
     pub fn warm_up_traffic(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let coming = session.coming_traffic_ships(&self.catalog);
@@ -859,7 +870,10 @@ impl<
     /// `chance`.
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
-        Self { chance, ..self }
+        Self {
+            sim: self.sim.with_chance(chance),
+            ..self
+        }
     }
 
     /// The flight with jumps playing their white fades or not, as the
@@ -966,7 +980,7 @@ impl<
     /// [`FlightView::with_sound_prefs`] does.
     pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
         self.sound_prefs = prefs;
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.set_sound_quiet(prefs.alert_quiet());
         }
     }
@@ -983,7 +997,7 @@ impl<
     /// now and every one after it.
     pub fn set_double_time(&mut self, on: bool) {
         self.double_time = on;
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.set_double_time_key(on);
         }
     }

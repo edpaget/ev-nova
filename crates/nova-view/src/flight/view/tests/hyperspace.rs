@@ -411,7 +411,7 @@ fn j_while_disabled_is_silent() {
         },
     ] {
         let mut view = new_pilot(flight());
-        let Ok(session) = &mut view.session else {
+        let Ok(session) = &mut view.sim.session else {
             panic!("flying");
         };
         nova_sim::fixture::set_player_condition(session, condition);
@@ -424,7 +424,7 @@ fn j_while_disabled_is_silent() {
             "{condition:?}: no beep"
         );
         // Made intact again, the same J is told: the gate, not a dead key.
-        let Ok(session) = &mut view.session else {
+        let Ok(session) = &mut view.sim.session else {
             panic!("flying");
         };
         nova_sim::fixture::set_player_condition(session, Condition::Intact);
@@ -556,7 +556,7 @@ fn j_held_by_a_tractor_beam_says_36_with_the_refusal_beep() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     nova_sim::fixture::set_player_tractor(
         session,
         Some(nova_sim::combat::impact::TractorLock::by(
@@ -778,7 +778,7 @@ fn given_up(lit: bool, give_up: fn(&mut Session)) -> View {
     } else {
         assert!(view.session().expect("flying").hyper_gamma() <= 0.0);
     }
-    let Ok(session) = &mut view.session else {
+    let Ok(session) = &mut view.sim.session else {
         panic!("flying");
     };
     give_up(session);
@@ -844,7 +844,7 @@ fn a_jump_given_up_once_the_screen_is_lit_fades_back_from_white() {
 fn a_player_whose_jump_collapsed_can_jump_again_once_intact() {
     for lit in [false, true] {
         let mut view = given_up(lit, disable_player);
-        let Ok(session) = &mut view.session else {
+        let Ok(session) = &mut view.sim.session else {
             panic!("flying");
         };
         nova_sim::fixture::set_player_condition(session, Condition::Intact);

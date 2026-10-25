@@ -1531,7 +1531,8 @@ fn a_plain_take_off_names_the_landed_stellar_for_one_frame() {
 fn a_take_off_with_a_course_names_the_landed_stellar_over_the_cue_for_one_frame() {
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
     let mut view = FlightView::new(port()).with_rules(rules);
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .plot_course(SystemId(131))

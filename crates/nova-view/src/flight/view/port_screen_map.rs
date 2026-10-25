@@ -93,7 +93,7 @@ impl<
         + crate::flight::catalog::StatusBars
         + crate::galaxy::GalaxyCatalog
         + crate::flight::escorts::EscortMenuLooks,
-> FlightView<C>
+> FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// Opens the course map from `screen` over the spaceport, as its
     /// filter's map key does: in

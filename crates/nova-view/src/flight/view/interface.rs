@@ -9,7 +9,7 @@ use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{BarFor, FlightView, Then};
 
-impl<C: StatusBars> FlightView<C> {
+impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Chooses the status bar for the ship's government, as
     /// `_LoadIntfResource` loads it ([`hud::rechoose_status_bar`]), unless
     /// a mission text still shown holds the bar a `C`, `E` or `H` after it
@@ -31,7 +31,7 @@ impl<C: StatusBars> FlightView<C> {
         if self.bar_held() {
             return;
         }
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             let government = session.interface_government();
             self.choose_bar(government);
         }
@@ -57,7 +57,7 @@ impl<C: StatusBars> FlightView<C> {
     /// before and after, as `_LoadIntfResource` redraws the whole bar
     /// only for an `ïntf` other than the one loaded (@0x73663-0x73672).
     pub(super) fn interface_now(&self) -> Option<Result<i16, String>> {
-        let session = self.session.as_ref().ok()?;
+        let session = self.sim.session.as_ref().ok()?;
         Some(hud::interface_for(
             &self.catalog,
             session.interface_government(),
@@ -76,6 +76,7 @@ impl<C: StatusBars> FlightView<C> {
         before: Option<&Result<i16, String>>,
     ) -> (Vec<InterfaceLoad>, Option<Result<i16, String>>) {
         let loads = self
+            .sim
             .session
             .as_mut()
             .map(Session::take_interface_loads)
@@ -108,7 +109,7 @@ impl<C: StatusBars> FlightView<C> {
     }
 }
 
-impl<C: DescriptionSource + DescriptionGraphics> FlightView<C> {
+impl<C: DescriptionSource + DescriptionGraphics> FlightView<C, crate::flight::SessionFlight<C>> {
     /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
     /// that shows it now: read from the catalog, then taken in by the
     /// session ([`Session::load_description`]), its conditional text
@@ -126,15 +127,17 @@ impl<C: DescriptionSource + DescriptionGraphics> FlightView<C> {
         let raw = match self.catalog.description(id) {
             Ok(raw) => raw,
             Err(reason) => {
-                if let Ok(session) = &mut self.session {
-                    let _ = session.load_description(None, None, &mut self.chance);
+                if let Ok(session) = &mut self.sim.session {
+                    let _ = session.load_description(None, None, &mut self.sim.chance);
                 }
                 return Err(reason);
             }
         };
         let movie = self.catalog.description_movie(id);
-        Ok(match &mut self.session {
-            Ok(session) => session.load_description(Some(&raw), movie.as_ref(), &mut self.chance),
+        Ok(match &mut self.sim.session {
+            Ok(session) => {
+                session.load_description(Some(&raw), movie.as_ref(), &mut self.sim.chance)
+            }
             Err(_) => nova_sim::text_parse::conditional_text(
                 &raw,
                 nova_sim::control::Gate::FRESH.pilot,

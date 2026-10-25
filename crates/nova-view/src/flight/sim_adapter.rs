@@ -36,10 +36,6 @@ use super::sim_port::{CommSource, FlightSim, MapSource, PortSource};
 /// `C` is the catalog the view reads, which the view keeps; it names the
 /// flight the view's default `FlightView<C>` shows.
 #[derive(Clone, Debug)]
-#[expect(
-    dead_code,
-    reason = "the view's concrete blocks read the collaborators once it holds a SessionFlight"
-)]
 pub struct SessionFlight<C> {
     /// The flight, or why it could not start.
     pub(in crate::flight) session: Result<Session, String>,

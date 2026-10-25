@@ -65,7 +65,7 @@ impl<
         + StatusBars
         + GalaxyCatalog
         + EscortMenuLooks,
-> FlightView<C>
+> FlightView<C, crate::flight::SessionFlight<C>>
 {
     /// Covers the view, widened or not, in the arrival's fade-in, then in
     /// the jump's fade-out, then in the death's fade to black, as far as
@@ -82,7 +82,7 @@ impl<
     /// Whether the hold after the player's explosion has run out
     /// ([`Session::hold_expired`]): flight steps no more.
     pub(super) fn hold_expired(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::hold_expired)
+        self.sim.session.as_ref().is_ok_and(Session::hold_expired)
     }
 
     /// Whether the hold after the player's explosion ran out since this
@@ -90,13 +90,17 @@ impl<
     /// where the router may show its dialogs over the stopped flight
     /// before it begins the fade. True once.
     pub fn take_hold_expired(&mut self) -> bool {
-        self.session.as_mut().is_ok_and(Session::take_hold_expired)
+        self.sim
+            .session
+            .as_mut()
+            .is_ok_and(Session::take_hold_expired)
     }
 
     /// The escape pod's rescue's `dësc`, once, after the rescue
     /// ([`Session::take_rescue_desc`]): the router shows it over flight.
     pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        self.session
+        self.sim
+            .session
             .as_mut()
             .ok()
             .and_then(Session::take_rescue_desc)
@@ -112,7 +116,8 @@ impl<
     /// ([`Session::sabotage_death_descs`]); none without a session.
     #[must_use]
     pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
     }
@@ -120,7 +125,7 @@ impl<
     /// Begins the fade to black after the hold has expired, over
     /// [`DEATH_FADE_FOR`]; nothing before then ([`Session::begin_fade`]).
     pub fn begin_fade(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         session.begin_fade();
@@ -133,7 +138,8 @@ impl<
     /// returns to the main screen.
     #[must_use]
     pub fn game_over(&self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .is_ok_and(|session| session.player_fate() == PlayerFate::GameOver)
     }
@@ -142,7 +148,7 @@ impl<
     /// not while the player is dying or dead, nor without a session.
     #[must_use]
     pub fn may_save(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::may_save)
+        self.sim.session.as_ref().is_ok_and(Session::may_save)
     }
 
     /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
@@ -150,7 +156,7 @@ impl<
     /// Enter Ship refuses such a pilot. Never without a session.
     #[must_use]
     pub fn is_dying(&self) -> bool {
-        self.session.is_ok() && !self.may_save()
+        self.sim.session.is_ok() && !self.may_save()
     }
 
     /// Whether ending play now deletes the pilot, as
@@ -158,7 +164,8 @@ impl<
     /// dying outside the escape pod. Never without a session.
     #[must_use]
     pub fn deletes_pilot_on_ending_play(&self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .is_ok_and(Session::deletes_pilot_on_ending_play)
     }
@@ -171,7 +178,7 @@ impl<
         };
         fade.advance(dt);
         if fade.done()
-            && let Ok(session) = &mut self.session
+            && let Ok(session) = &mut self.sim.session
         {
             session.end_play();
         }
@@ -200,11 +207,11 @@ impl<
         });
         self.held.clear();
         self.map_open = true;
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             self.map.show_border_sources(session.map_border_sources());
         }
         self.map.opened();
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             self.map.preselect(session.map_preselection());
             self.map_missions = session.map_mission_systems();
             self.map.set_clear_route(
@@ -226,7 +233,7 @@ impl<
     /// ([`MapSeen`]), so the mark itself doesn't take it again. The
     /// panels are taken with it ([`FlightView::retake_map_panel`]).
     fn redraw_map(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
@@ -246,7 +253,7 @@ impl<
     /// `_MapDialogUpdate` draws them after `_DrawMap`: on the hypergate
     /// map with the gate's offers, which title a destination.
     fn retake_map_panel(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
@@ -360,7 +367,7 @@ impl<
         self.map.input(input);
         self.ui_sounds.extend(self.map.take_ui_sounds());
         if let Some(query) = self.map.take_find()
-            && let Ok(session) = &self.session
+            && let Ok(session) = &self.sim.session
         {
             let found = session.find_map_system(&query);
             self.map.show_search(found);
@@ -391,7 +398,7 @@ impl<
     /// the nav area is redrawn at once when the click wrote it
     /// (`_DrawStatus`), as [`FlightView::cycle_map`] does.
     fn answer_map_press(&mut self, press: &PendingPress) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             self.map.answer_press(None);
             return;
         };
@@ -430,7 +437,7 @@ impl<
     /// @0x12dba).
     fn clear_route(&mut self) {
         self.map.route_cleared();
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.clear_route();
             self.map
                 .show_course(session.system(), &session.course_shown());
@@ -448,6 +455,7 @@ impl<
     /// alone, so the filter never sees it.
     fn map_filter_takes(&self, key: Key) -> bool {
         let docked = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
@@ -494,7 +502,7 @@ impl<
     /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
     /// map, nothing changes.
     fn cycle_map(&mut self, cycle: MapCycle) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         if self.map.mode() == MapMode::Hypergate {
@@ -528,7 +536,7 @@ impl<
     /// ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
         self.settle_given_up_jump();
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         match session.begin_jump() {
@@ -598,7 +606,7 @@ impl<
         let mut quotes = Vec::new();
         let mut rescued = false;
         let anchor = self.anchor();
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.set_play_area(play_area(self.view, anchor));
             session.set_window_width(window_width(self.view));
             session.hold_fire(fire.0, fire.1);
@@ -620,9 +628,9 @@ impl<
                     .map(|npc| (npc.id, npc.state))
                     .collect();
                 let rules = Rules {
-                    disable: &*self.disable_rule,
-                    defence: &*self.defence_rule,
-                    law: &*self.law,
+                    disable: &*self.sim.disable_rule,
+                    defence: &*self.sim.defence_rule,
+                    law: &*self.sim.law,
                 };
                 for again in [false, true] {
                     if again && !session.double_time() {
@@ -634,16 +642,21 @@ impl<
                     // it in place of the rest of that pass's player
                     // handling (@0x68ddd).
                     let rescued_now = if again {
-                        session.tick_again(controls, &*self.behaviour, rules, &mut self.chance);
-                        session.rescue_if_due(&self.catalog, &mut self.chance)
+                        session.tick_again(
+                            controls,
+                            &*self.sim.behaviour,
+                            rules,
+                            &mut self.sim.chance,
+                        );
+                        session.rescue_if_due(&self.catalog, &mut self.sim.chance)
                     } else {
-                        let behaviour = &*self.behaviour;
+                        let behaviour = &*self.sim.behaviour;
                         let rescued_now = session.game_work(
                             controls,
                             &self.catalog,
                             behaviour,
                             rules,
-                            &mut self.chance,
+                            &mut self.sim.chance,
                         );
                         notes.extend(session.take_comm());
                         rescued_now
@@ -661,11 +674,11 @@ impl<
                     // (`_ShowPersonHailQuote` @0x89ce1) and runs
                     // `_HandleShip`'s quote roll (@0x33f0f-0x33fba), the
                     // quote clock moving on the advance pass alone.
-                    session.answer_strikes(&*self.behaviour);
+                    session.answer_strikes(&*self.sim.behaviour);
                     if again {
-                        session.tick_quotes_again(&self.catalog, &mut self.chance);
+                        session.tick_quotes_again(&self.catalog, &mut self.sim.chance);
                     } else {
-                        session.tick_quotes(&self.catalog, &mut self.chance);
+                        session.tick_quotes(&self.catalog, &mut self.sim.chance);
                     }
                     quotes.extend(session.take_quotes());
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
@@ -718,7 +731,7 @@ impl<
     /// fade to white once the session's `_hyperGamma` is above 0
     /// ([`Session::hyper_gamma`]).
     pub(super) fn start_jump_effect(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         // `_hyperGamma` goes back to -1 on the first pass after the
@@ -756,7 +769,8 @@ impl<
     /// Whether the ship is braking and turning before a jump.
     #[cfg(test)]
     pub(super) fn preparing_jump(&self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .is_ok_and(|session| session.preparing_jump().is_some())
     }
@@ -814,6 +828,7 @@ impl<
             return;
         }
         let intact = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.player_condition() == Condition::Intact);
@@ -830,10 +845,13 @@ impl<
     /// Ends the jump: the ship arrives in the next system, caught up with
     /// as [`FlightView::arrived`] says.
     pub(super) fn arrive(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
-        if session.arrive(&self.catalog, &mut self.chance).is_some() {
+        if session
+            .arrive(&self.catalog, &mut self.sim.chance)
+            .is_some()
+        {
             self.arrived();
         }
     }
@@ -856,7 +874,7 @@ impl<
         // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
         // (`_PlayerEnterWormhole` @0x64307).
         self.map.recentre();
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let notes = session.take_fighter_notes();
@@ -865,7 +883,7 @@ impl<
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
         let scene = self.scene.as_ref();
-        let chance = &mut self.chance;
+        let chance = &mut self.sim.chance;
         let worded: Vec<(String, u16)> = messages
             .iter()
             .filter_map(|message| {
@@ -922,7 +940,7 @@ impl<
     /// the session between frames calls it last, so its caller sees the
     /// screen caught up at once. Taking the events again finds none.
     pub(super) fn catch_up(&mut self) -> Redrawn {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return Redrawn::default();
         };
         let mut redrawn = Redrawn::default();
@@ -960,7 +978,7 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
-        if reshown && let Ok(session) = &self.session {
+        if reshown && let Ok(session) = &self.sim.session {
             self.scene = Some(shown_scene(&self.catalog, session));
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
@@ -976,7 +994,7 @@ impl<
         // sets, the course and the nav. The flight is paused while it is
         // open, so this is rare: a set expression or the developer tools.
         if self.map_open
-            && let Ok(session) = &self.session
+            && let Ok(session) = &self.sim.session
             && (redrawn.galaxy || self.map_seen.as_ref() != Some(&MapSeen::of(session)))
         {
             self.redraw_map();
@@ -988,7 +1006,7 @@ impl<
     /// the effects' chance, when the session draws the original's
     /// starfield (see the `stars` module).
     fn reset_stars(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         if stars::original(session, &self.looks) {
@@ -1005,7 +1023,7 @@ impl<
     /// Draws each stellar of the scene shown as the session holds it
     /// ([`show_destroyed`]). The scene is not laid out again.
     pub(super) fn show_destroyed(&mut self) {
-        if let (Ok(session), Some(scene)) = (&self.session, &mut self.scene) {
+        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
             show_destroyed(scene, session);
         }
     }
@@ -1015,7 +1033,7 @@ impl<
     /// map's course, and the ship drawn
     /// from where it is, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         self.scene = Some({
@@ -1044,7 +1062,7 @@ impl<
     /// spawn to draw stands for. A `Y`'s carries no sound of its own (see
     /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
     fn show_arrival_explosions(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let scene = effects_scene(session);
@@ -1062,7 +1080,7 @@ impl<
     /// the session, moves read the catalog, and the course map's galaxy
     /// names the places. `None` when the session failed.
     pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
-        let session = self.session.as_mut().ok()?;
+        let session = self.sim.session.as_mut().ok()?;
         Some(SessionDesk::new(session, &self.catalog, self.map.model()))
     }
 
@@ -1071,7 +1089,7 @@ impl<
     /// after a move to another stellar of the system shown, and a
     /// take-off.
     pub(super) fn place_ship(&mut self) {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return;
         };
         self.map
@@ -1109,8 +1127,8 @@ impl<
     /// events rolled on the flight's chance, and what settling them did
     /// shows as [`FlightView::settle_script`] shows it.
     pub fn take_off(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let departure = session.leave_port(&self.catalog, &mut self.chance)?;
+        let session = self.sim.session.as_mut().ok()?;
+        let departure = session.leave_port(&self.catalog, &mut self.sim.chance)?;
         Some(self.departed(departure))
     }
 
@@ -1120,8 +1138,8 @@ impl<
     /// changes, when no leave is due. The router calls it once nothing
     /// shown over the spaceport holds the leave.
     pub fn leave_if_due(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let departure = session.leave_if_due(&self.catalog, &mut self.chance)?;
+        let session = self.sim.session.as_mut().ok()?;
+        let departure = session.leave_if_due(&self.catalog, &mut self.sim.chance)?;
         Some(self.departed(departure))
     }
 
@@ -1131,8 +1149,8 @@ impl<
     /// nothing was sold or upgraded. The router calls it before either
     /// leave.
     pub fn land_escorts(&mut self) -> Option<String> {
-        let session = self.session.as_mut().ok()?;
-        session.land_escorts(&mut self.chance)
+        let session = self.sim.session.as_mut().ok()?;
+        session.land_escorts(&mut self.sim.chance)
     }
 
     /// Catches the screen up with `departure`: the take-off's line, then
@@ -1140,6 +1158,7 @@ impl<
     fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
         let mut said: Vec<(String, u16)> = self
+            .sim
             .session
             .as_mut()
             .ok()
@@ -1160,7 +1179,7 @@ impl<
     /// shown over it holds the leave.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::leave_due)
+        self.sim.session.as_ref().is_ok_and(Session::leave_due)
     }
 
     /// Catches the screen up with the session having taken off: the ship
@@ -1240,6 +1259,7 @@ impl<
     /// It gives, last, whether the system was laid out afresh.
     fn took_off(&mut self) -> (Said, Said, bool) {
         let (pay, messages, held) = self
+            .sim
             .session
             .as_mut()
             .map(|session| {
@@ -1318,13 +1338,14 @@ impl<
     /// their operators, ordered against those texts. With no dialog of
     /// its own, nothing redraws after the last text.
     pub fn settle_script(&mut self) {
-        if self.session.is_err() {
+        if self.sim.session.is_err() {
             return;
         }
         let settled = self.run_docked(Then::Nothing, |view| {
-            view.session
+            view.sim
+                .session
                 .as_mut()
-                .map(|session| session.settle_script(&view.catalog, &mut view.chance))
+                .map(|session| session.settle_script(&view.catalog, &mut view.sim.chance))
                 .unwrap_or_default()
         });
         self.show_settled(settled, false);
@@ -1335,6 +1356,7 @@ impl<
     /// afresh since the settling, before this catches up.
     fn show_settled(&mut self, settled: Settled, laid_out: bool) {
         let flying = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_none());
@@ -1345,6 +1367,7 @@ impl<
             .collect();
         if (self.catch_up().system || laid_out) && flying {
             let notes = self
+                .sim
                 .session
                 .as_mut()
                 .map(Session::take_fighter_notes)
@@ -1371,12 +1394,12 @@ impl<
     /// it. Over a cleared hypergate the course map opens offering its
     /// links, and over a wormhole the ship passes through at once.
     pub(super) fn land(&mut self) {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         let pressed = session.land();
         self.say_messages();
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
         match pressed {
@@ -1404,7 +1427,7 @@ impl<
             Ok(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
-            }) => match session.enter_wormhole(&self.catalog, &mut self.chance) {
+            }) => match session.enter_wormhole(&self.catalog, &mut self.sim.chance) {
                 Ok(_) => self.came_through(JumpEffect::flash()),
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
@@ -1483,6 +1506,7 @@ impl<
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
         let docked = self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some());
@@ -1496,12 +1520,12 @@ impl<
         self.map_key_held = false;
         let opened = self.map_opened.take();
         if self.map.mode() != MapMode::Hypergate {
-            if let Ok(session) = &mut self.session
+            if let Ok(session) = &mut self.sim.session
                 && session.landed().is_some()
             {
                 self.redraw_status();
                 if let (Ok(session), Some(nav)) =
-                    (&mut self.session, opened.and_then(|opened| opened.nav))
+                    (&mut self.sim.session, opened.and_then(|opened| opened.nav))
                 {
                     session.restore_map_selection(nav);
                 }
@@ -1513,7 +1537,7 @@ impl<
             if !by_dialog {
                 self.ui_sounds.push(UiSound::MapClosed);
             }
-            if let Ok(session) = &mut self.session {
+            if let Ok(session) = &mut self.sim.session {
                 session.cue_course();
             }
             self.redraw_status();
@@ -1522,10 +1546,10 @@ impl<
         }
         self.redraw_status();
         let choice = self.map.take_gate_choice();
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return;
         };
-        match session.enter_hypergate(choice, &self.catalog, &mut self.chance) {
+        match session.enter_hypergate(choice, &self.catalog, &mut self.sim.chance) {
             Ok(_) => {
                 let effect = JumpEffect::emerging(self.hyperspace_effects);
                 self.came_through(effect);
@@ -1581,8 +1605,12 @@ impl<
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         self.redraw_status();
         let before = self.interface_now();
-        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        let bought = session.buy_ship(ship, name, &mut self.chance)?;
+        let session = self
+            .sim
+            .session
+            .as_mut()
+            .map_err(|_| ShipRefusal::NoShipyard)?;
+        let bought = session.buy_ship(ship, name, &mut self.sim.chance)?;
         let after = self.interface_now();
         let (changes, loaded) = self.interface_changes(before.as_ref());
         self.stage_bar(
@@ -1609,8 +1637,8 @@ impl<
     /// The bar is redrawn after it (`FlightView::after_outfit_order`).
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
         let before = self.interface_now();
-        let run = match &mut self.session {
-            Ok(session) => session.outfit_counted_run(order, count, &mut self.chance),
+        let run = match &mut self.sim.session {
+            Ok(session) => session.outfit_counted_run(order, count, &mut self.sim.chance),
             Err(_) => no_outfitter(),
         };
         self.after_outfit_order(before.as_ref(), run.button_passed);
@@ -1624,8 +1652,8 @@ impl<
     /// it (`FlightView::after_outfit_order`).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
-        let run = match &mut self.session {
-            Ok(session) => session.outfit_order(order, count, &mut self.chance),
+        let run = match &mut self.sim.session {
+            Ok(session) => session.outfit_order(order, count, &mut self.sim.chance),
             Err(_) => no_outfitter(),
         };
         self.after_outfit_order(before.as_ref(), run.button_passed);
@@ -1693,8 +1721,8 @@ impl<
     /// ship's sprite sheet, once. `None` when no capture awaits its
     /// assignment.
     pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
-        let session = self.session.as_mut().ok()?;
-        let assigned = session.assign(choice, &mut self.chance)?;
+        let session = self.sim.session.as_mut().ok()?;
+        let assigned = session.assign(choice, &mut self.sim.chance)?;
         if assigned == Assigned::MyShip {
             self.previous = *session.player();
             self.alpha = 0.0;
@@ -1713,7 +1741,9 @@ impl<
     /// not tried again. The status bar follows on its own
     /// ([`FlightView::follow_bar`]).
     fn follow_ship(&mut self) {
-        let Ok(session) = &self.session else { return };
+        let Ok(session) = &self.sim.session else {
+            return;
+        };
         let ship = session.ship();
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);

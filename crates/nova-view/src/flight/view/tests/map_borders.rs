@@ -29,7 +29,8 @@ fn bordered() -> FakeCatalog {
 /// `view` with Proxima Near explored and known.
 fn known(mut view: View) -> View {
     run_set(&mut view, "X134");
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .mark_known([SystemId(134)]);
@@ -95,7 +96,8 @@ fn the_maps_next_drawing_takes_the_sources_again() {
     }
     assert!(!view.course_map().place().expect("open").can_zoom_out());
     assert_eq!(govts_shown(&view), [128], "Barnard unknown");
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .mark_known([SystemId(132)]);

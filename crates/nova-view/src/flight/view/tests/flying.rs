@@ -47,7 +47,8 @@ fn described() -> FakeCatalog {
 fn a_loaded_description_reads_the_pilot_as_it_is_now() {
     let mut view = FlightView::new(described());
     assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .set_control_bit(nova_sim::Bit::new(5).expect("a bit"), true);

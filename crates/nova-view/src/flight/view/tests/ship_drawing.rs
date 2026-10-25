@@ -221,7 +221,7 @@ fn an_npcs_glow_brightens_under_thrust_and_fades_coasting_murked() {
         "its steady lights a third as murky"
     );
     // Running out, it thrusts.
-    view.behaviour = Rc::new(Leaving);
+    view.sim.behaviour = Rc::new(Leaving);
     let rising = glows(&mut view, 60);
     assert!(
         rising.windows(2).any(|pair| pair[1] > pair[0]),
@@ -305,13 +305,13 @@ fn lights_drawn(view: &View) -> (Option<Color>, Option<Color>) {
 /// player held there.
 fn both(view: &mut View, to: Condition) {
     condition(view, to);
-    view.disable_rule = if to == Condition::Disabled {
+    view.sim.disable_rule = if to == Condition::Disabled {
         Rc::new(Disabling)
     } else {
         Rc::new(nova_sim::NovaDisable)
     };
     let id = npc_of(view).id;
-    if let Ok(session) = &mut view.session {
+    if let Ok(session) = &mut view.sim.session {
         if to == Condition::Disabled {
             nova_sim::fixture::disable(session, id);
         } else {
@@ -480,7 +480,7 @@ fn a_disabled_0x0020_npcs_alt_stays_where_it_was_drawn_as_the_player_flies_on() 
     assert_eq!(before.len(), 1, "drawn live");
     assert_eq!(before[0].1, placed_of(&view, 2001)[0].1, "on its hull");
     let id = npc_of(&view).id;
-    if let Ok(session) = &mut view.session {
+    if let Ok(session) = &mut view.sim.session {
         nova_sim::fixture::disable(session, id);
     }
     view.input(&key(Key::Up, true));
@@ -489,7 +489,7 @@ fn a_disabled_0x0020_npcs_alt_stays_where_it_was_drawn_as_the_player_flies_on() 
     assert_ne!(hull, before[0].1, "the view moved on");
     assert_eq!(placed_of(&view, 2401), before, "its alt held on screen");
     // Repaired, it is drawn live on its hull again.
-    if let Ok(session) = &mut view.session {
+    if let Ok(session) = &mut view.sim.session {
         nova_sim::fixture::repair(session, id);
     }
     view.tick(TICK);
@@ -503,7 +503,7 @@ fn by_the_other_reading_a_disabled_0x0020_npcs_alt_is_hidden() {
     view.tick(TICK);
     assert_eq!(placed_of(&view, 2401).len(), 1);
     let id = npc_of(&view).id;
-    if let Ok(session) = &mut view.session {
+    if let Ok(session) = &mut view.sim.session {
         nova_sim::fixture::disable(session, id);
     }
     view.tick(TICK);
@@ -985,7 +985,7 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
         ..sheet()
     });
     let mut view = flying_with(catalog, 0, Rc::new(Still), &[]);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     nova_sim::fixture::set_player_ion(
         session,
         nova_sim::combat::ion::Ion {
@@ -1140,7 +1140,7 @@ fn the_players_ship_is_drawn_faint_at_a_full_fade_and_jittered_while_fading() {
     let mut view = flight();
     let (centre, _, _) = player_hull(&view).expect("drawn");
     let set = |view: &mut View, cloak| {
-        let Ok(session) = &mut view.session else {
+        let Ok(session) = &mut view.sim.session else {
             panic!("flying");
         };
         nova_sim::fixture::set_player_cloak(session, cloak);

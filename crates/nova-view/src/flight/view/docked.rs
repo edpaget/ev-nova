@@ -29,7 +29,7 @@ use super::{
     mission_board_message, names, plunder_message,
 };
 
-impl<C> FlightView<C> {
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Where the hover cursor is drawn, or `None` while it isn't.
     #[must_use]
     pub fn cursor_at(&self) -> Option<Point> {
@@ -114,7 +114,7 @@ impl<C> FlightView<C> {
     /// step with the slot.
     pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
         self.relay(text, ticks);
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.comm_shown(ticks);
         }
     }
@@ -143,7 +143,7 @@ impl<C> FlightView<C> {
             .is_some_and(|message| message.text == text)
         {
             self.message = None;
-            if let Ok(session) = &mut self.session {
+            if let Ok(session) = &mut self.sim.session {
                 session.comm_shown(1);
             }
         }
@@ -154,7 +154,7 @@ impl<C> FlightView<C> {
     /// `_HandlePlayer` @0x6dd22-0x6dd65).
     pub(super) fn acknowledge_message(&mut self) {
         self.message = None;
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.comm_acknowledged();
         }
     }
@@ -188,10 +188,14 @@ impl<C> FlightView<C> {
     /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
     /// every board that passes does).
     pub(super) fn board(&mut self) -> bool {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return false;
         };
-        let boarded = session.board(&*self.law, &*self.boarding_rule, &mut self.chance);
+        let boarded = session.board(
+            &*self.sim.law,
+            &*self.sim.boarding_rule,
+            &mut self.sim.chance,
+        );
         if let Some(line) = session.take_board_line() {
             let said = mission_board_message(line, session);
             self.say_for(said, BOARD_LINE_TICKS);
@@ -199,7 +203,7 @@ impl<C> FlightView<C> {
         let latches = boarded
             .as_ref()
             .map_or_else(|refusal| refusal.latches(), |_| true);
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return latches;
         };
         match boarded {
@@ -252,7 +256,7 @@ impl<C> FlightView<C> {
     /// refreshes the HUD as the original's comm dialog does on closing
     /// ([`FlightView::redraw_status`]).
     pub fn hang_up(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.hang_up();
         }
         self.redraw_status();
@@ -271,7 +275,7 @@ impl<C> FlightView<C> {
     /// is open ([`Session::boarding`]).
     #[must_use]
     pub fn boarding(&self) -> Option<PlunderView> {
-        self.session.as_ref().ok()?.boarding()
+        self.sim.session.as_ref().ok()?.boarding()
     }
 
     /// What the plunder dialog shows while it is open: [`Self::boarding`]
@@ -279,7 +283,7 @@ impl<C> FlightView<C> {
     /// [`Self::plunder`]'s messages name them.
     #[must_use]
     pub fn plunder_shown(&self) -> Option<PlunderShown> {
-        let session = self.session.as_ref().ok()?;
+        let session = self.sim.session.as_ref().ok()?;
         let view = session.boarding()?;
         let (good, outfit) = names(
             session,
@@ -310,10 +314,10 @@ impl<C> FlightView<C> {
     /// passed since it was shown, `TickCount` moving on under the dialog
     /// (@0x30262-0x30285).
     pub fn plunder_held(&mut self, take: Take, held: Duration) -> Taken {
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return Taken::Nothing;
         };
-        let taken = session.plunder(take, &*self.boarding_rule, &mut self.chance);
+        let taken = session.plunder(take, &*self.sim.boarding_rule, &mut self.sim.chance);
         let open = session.boarding().is_some();
         let (good, outfit) = match taken {
             Taken::Cargo { good, .. } => names(session, Some(good), None),
@@ -325,7 +329,7 @@ impl<C> FlightView<C> {
             // The session's pass counted the line it had; the take's own
             // comes first in the original (`_DisplayComm`, then
             // `_HandleComm`).
-            if open && let Ok(session) = &mut self.session {
+            if open && let Ok(session) = &mut self.sim.session {
                 session.comm_ticked();
             }
         }
@@ -343,7 +347,7 @@ impl<C> FlightView<C> {
     /// ([`Session::let_go_of_boarding`]): the router's way out when it
     /// cannot lay the plunder dialog out.
     pub fn let_go_of_boarding(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.let_go_of_boarding();
         }
     }
@@ -374,6 +378,7 @@ impl<C> FlightView<C> {
     /// The session's messages since they were last taken, worded.
     fn worded_messages(&mut self) -> Vec<(String, u16)> {
         let messages = self
+            .sim
             .session
             .as_mut()
             .map(Session::take_messages)
@@ -386,12 +391,12 @@ impl<C> FlightView<C> {
     /// waits for its arrival to be caught up with
     /// ([`FlightView::arrived`]), which leads with it.
     pub(super) fn word(&mut self, messages: Vec<SimMessage>) -> Vec<(String, u16)> {
-        let Ok(session) = &self.session else {
+        let Ok(session) = &self.sim.session else {
             return Vec::new();
         };
         let mut said = Vec::new();
         for message in messages {
-            match message_text(&message, session, self.scene.as_ref(), &mut self.chance) {
+            match message_text(&message, session, self.scene.as_ref(), &mut self.sim.chance) {
                 Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
@@ -407,15 +412,15 @@ impl<C> FlightView<C> {
             return;
         }
         let all = !self.held.contains(&Key::Alt);
-        if let Ok(session) = &mut self.session {
-            session.jettison_cargo(all, &mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.jettison_cargo(all, &mut self.sim.chance);
         }
         self.say_messages();
     }
 
     /// The flight, or why it could not start.
     pub fn session(&self) -> Result<&Session, &str> {
-        self.session.as_ref().map_err(String::as_str)
+        self.sim.session.as_ref().map_err(String::as_str)
     }
 
     /// Whether the pilot's load had to fall back for data the save
@@ -423,27 +428,27 @@ impl<C> FlightView<C> {
     /// false for a session that failed.
     #[must_use]
     pub fn load_repaired(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::load_repaired)
+        self.sim.session.as_ref().is_ok_and(Session::load_repaired)
     }
 
     /// The pilot flying, if the flight started.
     #[must_use]
     pub fn pilot(&self) -> Option<&Pilot> {
-        self.session.as_ref().ok().map(Session::pilot)
+        self.sim.session.as_ref().ok().map(Session::pilot)
     }
 
     /// Whether the pilot flying has seen the intro screen
     /// ([`Session::seen_intro`]); false when the flight never started.
     #[must_use]
     pub fn seen_intro(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::seen_intro)
+        self.sim.session.as_ref().is_ok_and(Session::seen_intro)
     }
 
     /// Marks the pilot flying as having seen the intro screen
     /// ([`Session::mark_intro_seen`]); nothing when the flight never
     /// started.
     pub fn mark_intro_seen(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.mark_intro_seen();
         }
     }
@@ -451,7 +456,8 @@ impl<C> FlightView<C> {
     /// Changes the pilot with `change` while landed, as
     /// [`Session::transact`] does, and says whether it did.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
-        self.session
+        self.sim
+            .session
             .as_mut()
             .is_ok_and(|session| session.transact(change))
     }
@@ -460,7 +466,7 @@ impl<C> FlightView<C> {
     /// it; none for a session that failed.
     #[must_use]
     pub fn market(&self) -> Option<Market> {
-        self.session.as_ref().ok()?.market()
+        self.sim.session.as_ref().ok()?.market()
     }
 
     /// Trades as [`Session::trade`] does; a session that failed has no
@@ -468,7 +474,7 @@ impl<C> FlightView<C> {
     /// `_DrawStatus` (@0x5e33a, @0x5e59e), which draws the nav when the
     /// shipyard's restore marked it ([`FlightView::close_port_dialog`]).
     pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
-        let traded = match &mut self.session {
+        let traded = match &mut self.sim.session {
             Ok(session) => session.trade(order)?,
             Err(_) => return Err(TradeRefusal::NoMarket),
         };
@@ -480,13 +486,17 @@ impl<C> FlightView<C> {
     /// gives it, the day's rolls drawn on the flight's chance; none for a
     /// session that failed.
     pub fn outfitter(&mut self) -> Option<Outfitter> {
-        self.session.as_mut().ok()?.outfitter(&mut self.chance)
+        self.sim
+            .session
+            .as_mut()
+            .ok()?
+            .outfitter(&mut self.sim.chance)
     }
 
     /// The outfitter opens, as [`Session::open_outfitter`] has it; a
     /// session that failed has none.
     pub fn open_outfitter(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.open_outfitter();
         }
     }
@@ -494,7 +504,7 @@ impl<C> FlightView<C> {
     /// The outfitter closes, as [`Session::close_outfitter`] has it; a
     /// session that failed has none.
     pub fn close_outfitter(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.close_outfitter();
         }
     }
@@ -502,7 +512,7 @@ impl<C> FlightView<C> {
     /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
     /// session that failed has no bar.
     pub fn close_hire(&mut self) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.close_hire();
         }
     }
@@ -515,7 +525,7 @@ impl<C> FlightView<C> {
     /// marked it ([`FlightView::close_port_dialog`]). A refused recharge
     /// draws nothing.
     pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
-        let paid = match &mut self.session {
+        let paid = match &mut self.sim.session {
             Ok(session) => session.recharge()?,
             Err(_) => return Err(RechargeRefusal::NoFuel),
         };
@@ -532,47 +542,52 @@ impl<C> FlightView<C> {
     /// fuel.
     #[must_use]
     pub fn recharge_enabled(&self) -> bool {
-        self.session.as_ref().is_ok_and(Session::recharge_enabled)
+        self.sim
+            .session
+            .as_ref()
+            .is_ok_and(Session::recharge_enabled)
     }
 
     /// The ships for hire in the bar of the stellar landed on, as
     /// [`Session::escorts_for_hire`] gives them, the day's rolls drawn on
     /// the flight's chance; none for a session that failed.
     pub fn escorts_for_hire(&mut self) -> Option<HireList> {
-        self.session
+        self.sim
+            .session
             .as_mut()
             .ok()?
-            .escorts_for_hire(&mut self.chance)
+            .escorts_for_hire(&mut self.sim.chance)
     }
 
     /// Opens the bar of the stellar landed on as [`Session::open_bar`]
     /// does, drawing the visit's news on the flight's chance; false for a
     /// session that failed, or not landed at a bar.
     pub fn open_bar(&mut self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_mut()
-            .is_ok_and(|session| session.open_bar(&mut self.chance))
+            .is_ok_and(|session| session.open_bar(&mut self.sim.chance))
     }
 
     /// The news of the bar visit under way, as [`Session::news`] gives
     /// it; none for a session that failed.
     #[must_use]
     pub fn news(&self) -> Option<&News> {
-        self.session.as_ref().ok()?.news()
+        self.sim.session.as_ref().ok()?.news()
     }
 
     /// The picture the bar's news is drawn over, as
     /// [`Session::news_picture`] gives it; none for a session that failed.
     #[must_use]
     pub fn news_picture(&self) -> Option<i16> {
-        self.session.as_ref().ok()?.news_picture()
+        self.sim.session.as_ref().ok()?.news_picture()
     }
 
     /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
     /// session that failed has no bar.
     pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
-        match &mut self.session {
-            Ok(session) => session.hire(ship, &mut self.chance),
+        match &mut self.sim.session {
+            Ok(session) => session.hire(ship, &mut self.sim.chance),
             Err(_) => Err(HireRefusal::NoBar),
         }
     }
@@ -585,7 +600,7 @@ impl<C> FlightView<C> {
     ///
     /// The [`ComputerRefusal`] that applies.
     pub fn mission_computer(&self) -> Result<MissionComputer, ComputerRefusal> {
-        match &self.session {
+        match &self.sim.session {
             Ok(session) => session.mission_computer(),
             Err(_) => Err(ComputerRefusal::NoneAvailable),
         }
@@ -599,7 +614,7 @@ impl<C> FlightView<C> {
     ///
     /// The [`ComputerRefusal`] that applies.
     pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
-        match &mut self.session {
+        match &mut self.sim.session {
             Ok(session) => session.open_mission_computer(),
             Err(_) => Err(ComputerRefusal::NoneAvailable),
         }
@@ -609,8 +624,8 @@ impl<C> FlightView<C> {
     /// loaded, as [`Session::show_computer_row`] gives it on the flight's
     /// chance; none for a session that failed.
     pub fn show_computer_row(&mut self, mission: MissionId) -> Option<ComputerRow> {
-        match &mut self.session {
-            Ok(session) => session.show_computer_row(mission, &mut self.chance),
+        match &mut self.sim.session {
+            Ok(session) => session.show_computer_row(mission, &mut self.sim.chance),
             Err(_) => None,
         }
     }
@@ -620,7 +635,8 @@ impl<C> FlightView<C> {
     /// failed.
     #[must_use]
     pub fn loaded_after_movie(&self) -> Option<nova_sim::DescMovie> {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .ok()
             .and_then(Session::loaded_after_movie)
@@ -631,8 +647,8 @@ impl<C> FlightView<C> {
     /// [`Session::reload_offer_desc`] does on the flight's chance; nothing
     /// for a session that failed.
     pub fn reload_offer_desc(&mut self, mission: MissionId) {
-        if let Ok(session) = &mut self.session {
-            session.reload_offer_desc(mission, &mut self.chance);
+        if let Ok(session) = &mut self.sim.session {
+            session.reload_offer_desc(mission, &mut self.sim.chance);
         }
     }
 
@@ -640,8 +656,8 @@ impl<C> FlightView<C> {
     /// [`Session::show_info_row`] gives it on the flight's chance; none
     /// for a session that failed.
     pub fn show_info_row(&mut self, slot: u8) -> Option<String> {
-        match &mut self.session {
-            Ok(session) => session.show_info_row(slot, &mut self.chance),
+        match &mut self.sim.session {
+            Ok(session) => session.show_info_row(slot, &mut self.sim.chance),
             Err(_) => None,
         }
     }
@@ -686,14 +702,14 @@ impl<C> FlightView<C> {
         C: StatusBars,
     {
         if !self.docked() {
-            return self.answer_in_flight(|view| match &mut view.session {
-                Ok(session) => session.accept_mission(mission, &mut view.chance),
+            return self.answer_in_flight(|view| match &mut view.sim.session {
+                Ok(session) => session.accept_mission(mission, &mut view.sim.chance),
                 Err(_) => Err(AcceptError::NotOffered),
             });
         }
         self.redraw_before_answer(mission);
-        self.run_docked(Then::Redraw, |view| match &mut view.session {
-            Ok(session) => session.accept_mission(mission, &mut view.chance),
+        self.run_docked(Then::Redraw, |view| match &mut view.sim.session {
+            Ok(session) => session.accept_mission(mission, &mut view.sim.chance),
             Err(_) => Err(AcceptError::NotOffered),
         })
     }
@@ -733,6 +749,7 @@ impl<C> FlightView<C> {
     /// after it, so ours redraws either way.
     fn redraw_before_answer(&mut self, mission: MissionId) {
         if self
+            .sim
             .session
             .as_ref()
             .is_ok_and(|session| session.refusable_offer_dialog(mission))
@@ -765,14 +782,14 @@ impl<C> FlightView<C> {
         C: StatusBars,
     {
         if !self.docked() {
-            return self.answer_in_flight(|view| match &mut view.session {
-                Ok(session) => session.refuse_mission(mission, &mut view.chance),
+            return self.answer_in_flight(|view| match &mut view.sim.session {
+                Ok(session) => session.refuse_mission(mission, &mut view.sim.chance),
                 Err(_) => Err(NotOffered),
             });
         }
         self.redraw_before_answer(mission);
-        self.run_docked(Then::Redraw, |view| match &mut view.session {
-            Ok(session) => session.refuse_mission(mission, &mut view.chance),
+        self.run_docked(Then::Redraw, |view| match &mut view.sim.session {
+            Ok(session) => session.refuse_mission(mission, &mut view.sim.chance),
             Err(_) => Err(NotOffered),
         })
     }
@@ -780,7 +797,7 @@ impl<C> FlightView<C> {
     /// The mission info screen's view, as [`Session::mission_info`] gives
     /// it; nothing listed for a session that failed.
     pub fn mission_info(&self) -> MissionInfo {
-        match &self.session {
+        match &self.sim.session {
             Ok(session) => session.mission_info(),
             Err(_) => MissionInfo {
                 rows: Vec::new(),
@@ -804,8 +821,8 @@ impl<C> FlightView<C> {
     where
         C: StatusBars,
     {
-        self.run_docked(Then::Nothing, |view| match &mut view.session {
-            Ok(session) => session.abort_mission(slot, &mut view.chance),
+        self.run_docked(Then::Nothing, |view| match &mut view.sim.session {
+            Ok(session) => session.abort_mission(slot, &mut view.sim.chance),
             Err(_) => Err(AbortError::NotActive),
         })
     }
@@ -821,17 +838,18 @@ impl<C> FlightView<C> {
         C: StatusBars,
     {
         self.run_docked(Then::Nothing, |view| {
-            view.session
+            view.sim
+                .session
                 .as_mut()
                 .ok()?
-                .next_offer(loc, &mut view.chance)
+                .next_offer(loc, &mut view.sim.chance)
         })
     }
 
     /// Enters venue `loc` for its offers, as
     /// [`Session::enter_offer_venue`] does.
     pub fn enter_offer_venue(&mut self, loc: i16) {
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.enter_offer_venue(loc);
         }
     }
@@ -839,7 +857,7 @@ impl<C> FlightView<C> {
     /// The wait before a venue's next offer, drawn on the flight's chance
     /// ([`offer_gap`]).
     pub fn offer_gap(&mut self) -> Duration {
-        mac_ticks(offer_gap(&mut self.chance))
+        mac_ticks(offer_gap(&mut self.sim.chance))
     }
 
     /// The mission texts and offer movies to show since they were last
@@ -882,12 +900,13 @@ impl<C> FlightView<C> {
         if self.docked() {
             self.stage_bar(Vec::new(), Then::Nothing);
             return self
+                .sim
                 .session
                 .as_mut()
                 .map(Session::take_mission_texts)
                 .unwrap_or_default();
         }
-        let Ok(session) = &mut self.session else {
+        let Ok(session) = &mut self.sim.session else {
             return Vec::new();
         };
         let noted = session
@@ -926,7 +945,8 @@ impl<C> FlightView<C> {
     /// Whether the ship is docked: the bar is the port's, held between
     /// its redraws.
     pub(super) fn docked(&self) -> bool {
-        self.session
+        self.sim
+            .session
             .as_ref()
             .is_ok_and(|session| session.landed().is_some())
     }
@@ -972,7 +992,7 @@ impl<C> FlightView<C> {
     where
         C: StatusBars,
     {
-        let bars: Vec<TextBar> = self.session.as_ref().map_or_else(
+        let bars: Vec<TextBar> = self.sim.session.as_ref().map_or_else(
             |_| Vec::new(),
             |session| {
                 session
@@ -1084,7 +1104,11 @@ impl<C> FlightView<C> {
     /// gives it, the day's rolls drawn on the flight's chance; none for a
     /// session that failed.
     pub fn shipyard(&mut self) -> Option<Shipyard> {
-        self.session.as_mut().ok()?.shipyard(&mut self.chance)
+        self.sim
+            .session
+            .as_mut()
+            .ok()?
+            .shipyard(&mut self.sim.chance)
     }
 
     /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
@@ -1092,7 +1116,7 @@ impl<C> FlightView<C> {
     /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
     pub fn decline_ship(&mut self, ship: ShipId) {
         self.redraw_status();
-        if let Ok(session) = &mut self.session {
+        if let Ok(session) = &mut self.sim.session {
             session.decline_ship(ship);
         }
     }
@@ -1100,25 +1124,29 @@ impl<C> FlightView<C> {
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
     /// says; taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
-        self.session.as_mut().is_ok_and(Session::take_save_due)
+        self.sim.session.as_mut().is_ok_and(Session::take_save_due)
     }
 }
 
 /// The mission computer's cut offer names are filled by the session, as
 /// [`Session::offer_text`] fills them; a session that failed fills none.
-impl<C> crate::spaceport::OfferNames for FlightView<C> {
+impl<C> crate::spaceport::OfferNames for FlightView<C, crate::flight::SessionFlight<C>> {
     fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
-        self.session.as_ref().ok()?.offer_text(mission, raw)
+        self.sim.session.as_ref().ok()?.offer_text(mission, raw)
     }
 }
 
-impl<C: nova_sim::CommCatalog> FlightView<C> {
+impl<C: nova_sim::CommCatalog> FlightView<C, crate::flight::SessionFlight<C>> {
     /// The prompt for naming a ship of class `ship` before it is bought,
     /// as [`Session::ship_naming`] gives it, its words read from the
     /// flight's catalog, on the flight's chance; a session that failed
     /// has no shipyard.
     pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        session.ship_naming(ship, &self.catalog, &mut self.chance)
+        let session = self
+            .sim
+            .session
+            .as_mut()
+            .map_err(|_| ShipRefusal::NoShipyard)?;
+        session.ship_naming(ship, &self.catalog, &mut self.sim.chance)
     }
 }

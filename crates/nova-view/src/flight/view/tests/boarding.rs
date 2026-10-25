@@ -176,7 +176,7 @@ fn holding_b_over_a_former_escort_repairs_it_once_and_latches_until_released() {
     // A board that passes the checks latches (`*0xdee18` @0x6504c), so the
     // escort repaired, intact now, isn't boarded again while B is held.
     let mut view = beside(750, 750, 0, false);
-    let Ok(session) = &mut view.session else {
+    let Ok(session) = &mut view.sim.session else {
         panic!("flying");
     };
     let record = nova_sim::Escort {
@@ -222,7 +222,7 @@ fn a_held_b_while_cloaked_boards_when_the_cloak_drops() {
     // The cloak returns before the latch is set (@0x6503f → @0x6504c).
     let mut view = beside(750, 750, 0, false);
     let cloak = |view: &mut View, to| {
-        let Ok(session) = &mut view.session else {
+        let Ok(session) = &mut view.sim.session else {
             panic!("flying");
         };
         nova_sim::fixture::set_player_cloak(session, to);

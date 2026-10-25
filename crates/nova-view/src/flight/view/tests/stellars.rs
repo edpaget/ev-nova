@@ -19,7 +19,7 @@ fn the_hull_redraws_from_the_event_on_the_next_frame() {
 
     let mut view = captured();
     let asked = sheets(&view).len();
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     assert_eq!(
         session.assign(Assignment::MyShip, &mut NeverFires),
         Some(Assigned::MyShip)
@@ -35,7 +35,7 @@ fn the_hull_redraws_from_the_event_on_the_next_frame() {
 
     let mut view = FlightView::new(shipbuying());
     land_now(&mut view);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     session
         .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
         .expect("bought");
@@ -59,7 +59,7 @@ fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
     assert_eq!(bars_read(&view), [128, 129], "once");
 
     let mut view = captured_in(governed(boardable(), 129, 129));
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     assert_eq!(
         session.assign(Assignment::MyShip, &mut NeverFires),
         Some(Assigned::MyShip)
@@ -70,7 +70,7 @@ fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
 
     let mut view = FlightView::new(governed(shipbuying(), 129, 129));
     land_now(&mut view);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     session
         .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
         .expect("bought");
@@ -151,7 +151,7 @@ fn several_moves_before_a_frame_lay_out_once_the_last_system() {
 fn a_system_entered_supersedes_a_stellar_moved_to_before_the_frame() {
     let mut view = landed_view();
     move_to(&mut view, 130, 129);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     assert_eq!(
         session.take_off(&view.catalog, &mut NeverFires),
         Some(StellarId(129))
@@ -265,7 +265,7 @@ fn the_course_map_shows_the_course_as_it_is_flown() {
     change_galaxy(&mut view, hiding(131));
     view.tick(TICK);
     assert_eq!(view.course_map().route(), [], "no system at its place");
-    let session = view.session.as_ref().expect("flying");
+    let session = view.sim.session.as_ref().expect("flying");
     assert_eq!(session.course(), [SystemId(131)], "kept");
 }
 
@@ -579,7 +579,7 @@ fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     view.settle_script();
     assert_eq!(view.message(), None, "no layout from this settling");
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     assert_eq!(
         session.take_fighter_notes(),
         [FighterNote::Abandoned(2)],

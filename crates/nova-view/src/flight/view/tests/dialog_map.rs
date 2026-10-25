@@ -167,7 +167,8 @@ fn in_flight_an_offers_map_puts_back_the_nav_it_opened_with_keeping_the_course()
     ] {
         let mut view = flight();
         let before = NavMode::Stellar(Some(StellarId(129)));
-        view.session
+        view.sim
+            .session
             .as_mut()
             .expect("flying")
             .select_stellar(nova_sim::StellarPick::Slot(1));
@@ -208,7 +209,8 @@ fn in_flight_mission_infos_map_keeps_the_clicks_nav_and_cues_the_course() {
     );
     // A plain click's mode 3 stands too, with no course to cue.
     let mut view = holding();
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .select_stellar(nova_sim::StellarPick::Slot(1));

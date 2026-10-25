@@ -60,7 +60,8 @@ fn double_time_reaches_the_session_on_the_next_tick_and_when_set() {
     let mut view = flight();
     view.set_double_time(true);
     assert!(view.session().expect("flying").double_time(), "when set");
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .set_double_time_key(false);
@@ -340,7 +341,7 @@ fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
             ..trafficked(&[130], 1, 129, 3)
         };
         let (mut view, id) = flight_with_npc(catalog);
-        let session = view.session.as_mut().expect("flying");
+        let session = view.sim.session.as_mut().expect("flying");
         nova_sim::fixture::cloak(session, id, CLOAKED);
         let session = view.session().expect("flying");
         assert!(!session.scanner().on_screen, "cannot see it");
@@ -392,7 +393,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
         })
     };
     assert!(near(&drawn(&view)), "drawn while shown");
-    nova_sim::fixture::hide(view.session.as_mut().expect("flying"), id);
+    nova_sim::fixture::hide(view.sim.session.as_mut().expect("flying"), id);
     assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
     assert!(!near(&drawn(&view)), "not drawn hidden");
     view.input(&Input::PointerMoved(over));
@@ -427,7 +428,7 @@ fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
     let engine = Rulebook::default;
     let hover = |rules: Rulebook, off: f32| {
         let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-        let session = view.session.as_mut().expect("flying");
+        let session = view.sim.session.as_mut().expect("flying");
         nova_sim::fixture::hide(session, id);
         let berth = session
             .npcs()
@@ -499,7 +500,7 @@ fn refilled(rules: Rulebook) -> (View, NpcId, Point, Point) {
     let (view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let mut view = view.with_rules(rules);
     let was = npc_on_screen(&view, id);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     let at = session
         .npcs()
         .iter()

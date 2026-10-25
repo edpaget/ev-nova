@@ -55,7 +55,7 @@ use crate::{Color, DrawList, Point};
 use super::FlightView;
 use super::stars;
 
-impl<C> FlightView<C> {
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Draws the sprite world, pass by pass in [`WORLD_PASSES`]' order
     /// (see the module docs). The message line's box is drawn over the
     /// stars and its text with the floaters; the text, the floating map's
@@ -63,9 +63,13 @@ impl<C> FlightView<C> {
     /// ([`DrawList::world`]).
     pub(super) fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
         let beams = self.shown_beams(camera);
-        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::LightningZigZag)
-        });
+        let zig_zag = self
+            .sim
+            .session
+            .as_ref()
+            .map_or(RuleSource::Engine, |session| {
+                session.rules().source_for(RuleKey::LightningZigZag)
+            });
         let lightning = (zig_zag, self.shot_looks.lightning());
         let stacked = self.sprites_stacked(camera);
         let npcs = self.shown_npcs();
@@ -118,7 +122,7 @@ impl<C> FlightView<C> {
             self.cursor.draw(list, &self.looks, self.play_rect());
         }
         self.draw_red_alert(list);
-        if self.session.as_ref().is_ok_and(Session::double_time) {
+        if self.sim.session.as_ref().is_ok_and(Session::double_time) {
             alert::draw_double_time(list);
         }
     }
@@ -164,13 +168,18 @@ impl<C> FlightView<C> {
     /// erases the background frame's message rect. Its text is drawn
     /// with the floaters ([`FlightView::draw_floaters`]).
     fn draw_stars_and_message(&self, list: &mut DrawList, camera: &Camera) {
-        let source = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::FlightStarfield)
-        });
+        let source = self
+            .sim
+            .session
+            .as_ref()
+            .map_or(RuleSource::Engine, |session| {
+                session.rules().source_for(RuleKey::FlightStarfield)
+            });
         stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
         if self.message().is_some() {
             let background = message_background(
-                self.session
+                self.sim
+                    .session
                     .as_ref()
                     .ok()
                     .and_then(Session::system_background),
@@ -182,7 +191,7 @@ impl<C> FlightView<C> {
     /// Draws the smoke puffs, murked as the player sees them; none without
     /// a session.
     fn draw_smoke(&self, list: &mut DrawList, camera: &Camera) {
-        if let Ok(session) = &self.session {
+        if let Ok(session) = &self.sim.session {
             let viewer = session.player().position;
             let murk = session.effective_murk();
             self.shot_looks.draw_smoke(list, camera, viewer, murk);
@@ -192,7 +201,7 @@ impl<C> FlightView<C> {
     /// Draws the explosions, murked as the player sees them; unmurked, as
     /// seen from the camera's centre, without a session.
     fn draw_explosions(&self, list: &mut DrawList, camera: &Camera) {
-        let (viewer, murk) = self.session.as_ref().map_or_else(
+        let (viewer, murk) = self.sim.session.as_ref().map_or_else(
             |_| {
                 let centre = camera.center();
                 (Vec2::new(centre.x, centre.y), 0)

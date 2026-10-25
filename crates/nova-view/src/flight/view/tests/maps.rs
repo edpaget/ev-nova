@@ -776,7 +776,7 @@ fn the_escort_menu_closes_once_its_only_mission_escort_is_disabled() {
         .expect("a mission escort");
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open(), "a mission escort opens it");
-    nova_sim::fixture::disable(view.session.as_mut().expect("flying"), escort);
+    nova_sim::fixture::disable(view.sim.session.as_mut().expect("flying"), escort);
     view.tick(TICK);
     let session = view.session().expect("flying");
     assert!(
@@ -908,7 +908,7 @@ fn a_hired_and_a_mission_escort_draw_in_the_escorts_layer() {
 #[test]
 fn a_disabled_ship_draws_under_the_escorts() {
     let (mut view, ships) = escorted_on_a_mission();
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     nova_sim::fixture::disable(session, ships.traffic);
     // Laid out at its display step (@0x444ad, @0x2bd24).
     session.tick_combat(nova_sim::Rules::default(), &mut NeverFires);
@@ -920,7 +920,7 @@ fn a_disabled_ship_draws_under_the_escorts() {
 #[test]
 fn a_fully_cloaked_escort_is_drawn_at_its_full_fades_translucency() {
     let (mut view, ships) = escorted_on_a_mission();
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
     let list = drawn(&view);
     let at = npc_on_screen(&view, ships.mission);
@@ -1553,7 +1553,8 @@ fn the_floating_map_draws_the_sessions_selection_clipped_to_the_frame() {
 #[test]
 fn the_floating_map_draws_the_course_as_its_show_took_it() {
     let mut view = flight();
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .plot_course(SystemId(131))
@@ -1578,7 +1579,7 @@ fn the_floating_map_draws_the_course_as_its_show_took_it() {
          over it, and over its own grey"
     );
     assert_eq!(rects_of(&drawn(&view), LESS_DARK_GREY), []);
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     let _ = session.plot_course(SystemId(130));
     assert_ne!(session.course(), [SystemId(131)], "the course changed");
     assert_eq!(
@@ -2164,7 +2165,8 @@ fn the_map_opens_with_clear_route_enabled_by_a_course_and_never_on_the_hypergate
     tap(&mut view, MAP);
     assert!(clear_route_enabled(&view), "a course");
     let mut view = FlightView::new(gated());
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .plot_course(SystemId(131))

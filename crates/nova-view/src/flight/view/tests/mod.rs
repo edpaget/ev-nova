@@ -5,9 +5,10 @@ use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
 use nova_sim::flight::player_step;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, FlightRules, GateSite, Handling,
-    JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
-    ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
+    Behaviour, BoardingRule, CharacterStart, CommodityStrings, DateAffixes, DisableRule,
+    DisasterRecord, FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId,
+    OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound,
+    StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
 
 use super::*;
@@ -1512,7 +1513,8 @@ fn planner(view: View) -> View {
 
 /// Marks system `id` known, as a map or a visit would.
 fn know(view: &mut View, id: i16) {
-    view.session
+    view.sim
+        .session
         .as_mut()
         .expect("flying")
         .mark_known([SystemId(id)]);
@@ -2032,7 +2034,8 @@ fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
     let mut view = FlightView::new(catalog).with_rules(rules);
     if let Some(to) = course {
-        view.session
+        view.sim
+            .session
             .as_mut()
             .expect("flying")
             .plot_course(SystemId(to))
@@ -3310,7 +3313,7 @@ fn peopled() -> FakeCatalog {
 /// Runs set expression `text` on `view`'s session.
 fn run_set(view: &mut View, text: &str) {
     let expr = nova_sim::SetExpr::parse(text).expect("parses");
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     session.run_set(&expr, &mut NeverFires);
 }
 
@@ -3333,7 +3336,7 @@ fn systems_read(view: &View) -> Vec<SystemId> {
 
 /// Settles `view`'s session by itself, not through the view.
 fn settle_session(view: &mut View) {
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     let _ = session.settle_script(&view.catalog, &mut NeverFires);
 }
 
@@ -3343,7 +3346,7 @@ fn bar_shown(view: &View) -> Option<i16> {
 }
 /// Changes `view`'s galaxy by itself, not through the view.
 fn change_galaxy(view: &mut View, change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay)) {
-    let session = view.session.as_mut().expect("flying");
+    let session = view.sim.session.as_mut().expect("flying");
     assert!(session.change_galaxy(&view.catalog, change));
 }
 
@@ -3833,7 +3836,7 @@ fn count(view: &mut View, sound: SimSound) -> usize {
 
 /// Sets the player's condition in `view` to `to`.
 fn condition(view: &mut View, to: Condition) {
-    let Ok(session) = &mut view.session else {
+    let Ok(session) = &mut view.sim.session else {
         panic!("flying");
     };
     nova_sim::fixture::set_player_condition(session, to);
