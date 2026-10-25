@@ -172,6 +172,44 @@ fn holding_b_after_a_refusal_says_it_once_until_released() {
 }
 
 #[test]
+fn holding_b_over_a_former_escort_repairs_it_once_and_latches_until_released() {
+    // A board that passes the checks latches (`*0xdee18` @0x6504c), so the
+    // escort repaired, intact now, isn't boarded again while B is held.
+    let mut view = beside(750, 750, 0, false);
+    let Ok(session) = &mut view.session else {
+        panic!("flying");
+    };
+    let record = nova_sim::Escort {
+        ship: ShipId(129),
+        reserves: nova_sim::reserves::Reserves::full(30.0, 45.0, 300.0),
+        order: None,
+        carried: false,
+        wage: Some(30),
+        person: None,
+        mark: None,
+    };
+    nova_sim::fixture::remember_escort(session, NpcId(0), record);
+    view.take_sounds();
+    view.input(&key(BOARD_KEY, true));
+    ticks(&mut view, 5);
+    assert_eq!(view.message(), Some(ESCORT_REPAIRED));
+    let sounds = view.take_sounds();
+    let count = |sound: SimSound| {
+        sounds
+            .iter()
+            .filter(|&&heard| heard == Sound::Sim(sound))
+            .count()
+    };
+    assert_eq!(count(SimSound::EscortRepaired), 1, "{sounds:?}");
+    assert_eq!(count(SimSound::Refused), 0, "no second attempt: {sounds:?}");
+    assert_eq!(view.take_boarding(), None, "no plunder");
+    view.input(&key(BOARD_KEY, false));
+    ticks(&mut view, 1);
+    view.input(&key(BOARD_KEY, true));
+    assert_eq!(refusals(&mut view), 1, "released and pressed again");
+}
+
+#[test]
 fn a_tap_of_b_still_boards() {
     // Pressed and released before the next frame, through the press.
     let mut view = beside(750, 750, 0, false);

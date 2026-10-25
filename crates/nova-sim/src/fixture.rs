@@ -7,6 +7,7 @@
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
+//! [`remember_escort`], for making a ship the player's former escort;
 //! [`cloak`] and [`set_player_cloak`], for setting a ship's or the
 //! player's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
@@ -82,6 +83,15 @@ pub fn set_player_tractor(session: &mut Session, lock: Option<crate::combat::imp
 /// test that boards a ship without flying to it.
 pub fn put_player_over(session: &mut Session, id: NpcId) {
     session.put_player_over(id);
+}
+
+/// Makes NPC `id` in `session`, if it is in the system, remember being
+/// the player's escort of `record` ([`Npc::former`](crate::traffic::npc::Npc::former)): for a test that
+/// boards a former escort back without losing it in a fight.
+pub fn remember_escort(session: &mut Session, id: NpcId, record: crate::pilot::Escort) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.former = Some(crate::self_repair::FormerEscort { record });
+    }
 }
 
 /// Sets the player's cloak in `session` to `to`: for a test that draws
